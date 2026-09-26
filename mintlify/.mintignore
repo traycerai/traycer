@@ -1,0 +1,3 @@
+# Agent instruction files. Mintlify would otherwise publish them.
+AGENTS.md
+CLAUDE.md

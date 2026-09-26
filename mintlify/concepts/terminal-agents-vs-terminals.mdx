@@ -1,0 +1,96 @@
+---
+title: "Terminal Agents VS Terminals"
+description: "Understand the difference between an agent on the Terminal interface and a plain shell terminal."
+---
+
+Traycer has two terminal-looking surfaces with very different roles. One is an **agent** using the Terminal interface; the other is a plain shell.
+
+Throughout this page, "Terminal Agent" is shorthand for _an agent you interact with through the Terminal interface_. It is not a separate kind of entity from the agents in the [Agents](/panels/agents) panel - it is one of the two interfaces those agents can use.
+
+| Difference             | Terminal Agent                                                                                                                                                                                                                                       | Terminal                                                                                |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| **What it is**         | A coding-agent session that runs through a terminal-style interface.                                                                                                                                                                                 | A plain shell session that you control directly.                                        |
+| **Traycer context**    | Receives Task context, artifact guidance, skills, and agent-to-agent instructions. Every Terminal Agent is referenceable; its transcript is readable by the same user on its owning Host; only Claude Code can also receive agent-to-agent messages. | Does not receive agent prompts, skills, artifact instructions, or agent-to-agent tools. |
+| **Setup**              | Starts with a workspace folder or worktree, coding agent, model, thinking effort, and optional CLI arguments.                                                                                                                                        | Starts with a workspace folder and shell command.                                       |
+| **After launch**       | Launch choices stay fixed for that Terminal Agent.                                                                                                                                                                                                   | You control the shell directly.                                                         |
+| **Session continuity** | Traycer stores the coding agent's upstream session id and uses it to resume the same agent session when reopened on its original Host.                                                                                                               | No coding-agent session id; it is just a PTY shell.                                     |
+| **Listed in**          | [Agents](/panels/agents), because it is an agent.                                                                                                                                                                                                    | [Terminals](/panels/terminals), because it is a shell session.                          |
+
+They can look similar because both use a terminal surface. The difference is that a Terminal Agent is still a Traycer agent, while a Terminal is just a shell.
+
+## Terminal Agents
+
+A **Terminal Agent** runs a coding agent in a PTY, but Traycer still wraps that session with Task context.
+
+Terminal Agents can receive:
+
+- Traycer's system prompt
+- the Task id and agent identity
+- artifact instructions for specs, tickets, stories, and reviews
+- guidance for creating or updating artifacts as markdown files
+- Traycer skills and planning/execution instructions
+- agent-to-agent communication instructions, and message-receiving tools when the coding agent supports them
+
+That means a Terminal Agent is not the same as opening the coding-agent CLI yourself. Traycer prepares the session so the agent understands the Task, the artifact model, and the multi-agent environment.
+
+## Coding Agents That Support The Terminal Interface
+
+The Terminal interface currently works with:
+
+| Coding agent    | Can back the Terminal interface |
+| --------------- | ------------------------------- |
+| **Claude Code** | Yes                             |
+| **Codex**       | Yes                             |
+| **OpenCode**    | Yes                             |
+
+This table is about which coding agents can _run_ on the Terminal interface. It is a different question from which of them can receive agent-to-agent messages - see [Agent-to-Agent](/concepts/agent-to-agent).
+
+For the full interface compatibility matrix, see [Agents & Models](/agents-and-models/coding-agents).
+
+## Plain Terminals
+
+A **Terminal** is a shell session.
+
+Use it to run commands yourself: package scripts, tests, dev servers, logs, local debugging, or one-off shell work.
+
+A plain Terminal does not receive Traycer's agent prompt, does not use Traycer skills, does not create artifacts by itself, and does not participate in agent-to-agent communication. It is still part of the Task, but it is not an agent session.
+
+## Launch Setup
+
+When you create an agent on the Terminal interface, you choose its launch setup:
+
+- workspace folder or worktree
+- coding agent
+- model, when supported
+- thinking effort, when supported
+- Terminal interface CLI arguments, when supplied
+
+Those choices stay fixed after launch. Start a new Terminal Agent when you need a different workspace folder, worktree, coding agent, model, thinking effort, or argument set.
+
+Worktree choices are covered in [Worktrees](/concepts/worktrees).
+
+Traycer also keeps the upstream coding-agent session id for the Terminal Agent. When the app or Host restarts and the same Terminal Agent is reopened on its original Host, Traycer resumes the underlying coding-agent session instead of starting from scratch.
+
+Plain Terminals do not have a coding agent, model, thinking effort, or artifact behavior. They only need the shell/workspace context used to start the terminal.
+
+In **Start a new agent**, choose **Switch to Terminal**, configure the launch, then click **Start**.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Configure and start a Terminal-interface agent">
+  <source src="https://assets.traycer.ai/docs/videos/terminal-agent-launch.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+## Agent-To-Agent Communication
+
+Referencing an agent, reading its transcript, and sending it a message are separate capabilities with separate requirements.
+
+- **Every** Terminal Agent is referenceable by `@` mention, with no further conditions.
+- A Terminal Agent's **transcript** is readable by the same user, **on the Host that owns that agent**. Traycer reads it from the coding agent's own session history rather than terminal scrollback, so the record survives the terminal closing - but reading it still needs the owning Host to be reachable and that provider history to still exist.
+- Only **Claude Code** Terminal Agents have an inbox for agent-to-agent **messages**. Codex and OpenCode Terminal Agents run terminal-style work and can be referenced and read, but a message has nowhere to be delivered.
+- **Delivery** additionally requires the same user and that both the sending and receiving agent are local to the same Host, whatever the coding agent - see [Hosts](/concepts/hosts).
+
+Every Terminal Agent appears in the Task's agent hierarchy either way, so you can always see where delegated terminal work came from.
+
+The coordination model is covered in [Agent-to-Agent](/concepts/agent-to-agent). Multi-agent defaults are configured in [Settings > Agent selection](/settings/agents). Supported coding agents are listed in [Agents & Models](/agents-and-models/coding-agents).
+
+If you are looking for a terminal-style coding agent, create an agent on the **Terminal** interface from the **Agents** panel. If you are looking for a shell you operate yourself, use **Terminals**.

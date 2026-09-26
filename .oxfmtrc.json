@@ -5,6 +5,8 @@
   "tabWidth": 2,
   "trailingComma": "all",
   "ignorePatterns": [
+    "mintlify/**/*.mdx",
+    "mintlify/snippets/model-pricing-catalog.generated.js",
     "clients/gui-app/src/lib/cn-tables.ts",
     "clients/desktop/src/electron-main/browser-view/annotation/browser-annotation-overlay-guest.generated.ts",
     "protocol/**/__fixtures__/**",

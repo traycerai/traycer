@@ -1,0 +1,42 @@
+---
+title: "Composer"
+description: "Add context, stash prompts, quote replies, and manage conversation context."
+---
+
+The composer is where you write the next message on the Chat interface. Pick a [coding agent and model](/agents-and-models/coding-agents#models) and [permissions](/panels/agents#permissions) before sending.
+
+## Mention Context
+
+Type `@` to open the mention picker. Browse a category or type to search across files, folders, agents, terminals, and artifacts. Select a result to insert an inline mention and continue writing. You can include several kinds of context in one message.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Mention a file, agent, and artifact">
+  <source src="https://assets.traycer.ai/docs/videos/mention-pickers.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+You can also drag a file from File Tree into the composer to insert an inline file mention. See the [file context demo](/panels/agents#attachments-and-voice).
+
+## Stash A Prompt
+
+In the landing composer, press **Cmd+S** on macOS or **Ctrl+S** on Windows and Linux to stash a draft. The composer clears and the **Stash** count increases. Open **Stashed prompts** and choose **Insert** to bring a saved prompt back into the composer, or **Delete** to remove it.
+
+
+## Quote A Reply
+
+Select text in an assistant reply and click **Quote**. The selection becomes a blockquote in the composer, with space below it for your follow-up.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Quote part of an assistant reply">
+  <source src="https://assets.traycer.ai/docs/videos/quote-selection.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+## Context Usage
+
+When usage is available, the context chip shows how much of the conversation's context window remains. Click it to inspect the token breakdown. The separate **Compact** button beside the chip summarizes the conversation to free space; progress and the resulting token counts appear in the transcript.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Inspect context usage and compact a conversation">
+  <source src="https://assets.traycer.ai/docs/videos/context-usage-compact.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+While an agent is running, use the [Message queue](/panels/agents/message-queue) to prepare follow-ups or steer the current turn.

@@ -1,0 +1,21 @@
+---
+title: "Remote hosts"
+description: "Connect a Host on another machine and activate it for this window."
+---
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Connect and activate a remote Host">
+  <source src="https://assets.traycer.ai/docs/videos/remote-host-add.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+A Host on another machine runs agents and accesses files on that machine. Open **Settings**, then the host switcher, and choose **Add host…**.
+
+## Connect And Activate
+
+1. Follow the dialog's commands on the other machine to install the Traycer CLI, sign in, and install and start the Host.
+2. Wait for **Host connected**, then choose **Set up host** to inspect the new Host's settings.
+3. Click **Activate** on its identity card. The button becomes an **Active** tag.
+
+The switcher lists Hosts without health dots. Connection status appears on the identity card and the **Host connected** card in the dialog.
+
+Activating a Host changes the current Host for this window. Existing chats and terminals remain bound to the Host where they started. To continue a chat on another Host, clone the agent; terminal sessions cannot migrate. See [Current Host and Tab Host](/concepts/hosts#current-host-and-tab-host).

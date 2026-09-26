@@ -1,0 +1,71 @@
+---
+title: "Panels"
+description: "Understand the sidebar panels inside a Task."
+---
+
+Panels are the sidebar navigators inside a Task. They help you find and organize agents, artifacts, terminals, files, git changes, sharing, and comments.
+
+You can use panels one at a time, stack them together, or rearrange them around the sidebar as the Task changes.
+
+## Sidebar Panels
+
+| Panel | What it shows |
+|---|---|
+| [Agents](/panels/agents) | Every agent in the Task, on the Chat or Terminal interface. |
+| [Terminals](/panels/terminals) | Plain shell sessions. |
+| [Artifacts](/panels/artifacts) | Specs, tickets, stories, and reviews. |
+| [Git Diff](/panels/git-diff) | Changed files for a selected worktree. |
+| [File Tree](/panels/file-tree) | Project files and folders. |
+| [Sharing](/panels/sharing) | People and teams with access to the Task. |
+| [Comments](/panels/comments) | Comment threads for the active artifact. |
+
+Each panel has a header. Headers can collapse or expand the panel, and panels with creation actions show a `+` control.
+
+## Rearranging Panels
+
+Panels can be reorganized from the sidebar.
+
+You can drag a panel to:
+
+- move it above another panel
+- move it below another panel
+- combine it with another panel group
+
+Combining panels keeps both panels visible in the same sidebar area. This is useful when two views belong together for the work you are doing, such as keeping **Agents** near **Artifacts**, or **Git Diff** near **File Tree**.
+
+When multiple panels are combined, resize handles let you adjust how much vertical space each panel gets.
+
+Drag a panel by its rail icon or its header. A line shows where it will land.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Combine two sidebar panels and reorder them">
+  <source src="https://assets.traycer.ai/docs/videos/panels-rearrange.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+## Work Side By Side
+
+Split the canvas into groups to keep agents, terminals, or artifacts visible side by side. See the [split groups demo](/settings/keybindings#split-groups).
+
+You can also drag a tab. Drop it on the edge of a group to split that group, or in the middle of a group to move the tab into it. An outline shows where the tab will land.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Drag tabs to split a group and to join another group">
+  <source src="https://assets.traycer.ai/docs/videos/tile-drag.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+## Drag And Drop Inside Panels
+
+Some panels also support drag and drop for the items they contain.
+
+Common uses include:
+
+- moving artifacts in the artifact hierarchy
+- nesting an agent under another agent
+- keeping related follow-up work near the spec, ticket, story, or review it belongs to
+
+Drag and drop changes organization. It does not turn an agent into an artifact, or an agent into a plain terminal. Agents and artifacts live in separate panels, so an agent cannot be dropped under an artifact.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Drag an agent onto another agent to nest it">
+  <source src="https://assets.traycer.ai/docs/videos/dnd-agent-under-artifact.mp4" type="video/mp4" />
+  Unable to load video.
+</video>

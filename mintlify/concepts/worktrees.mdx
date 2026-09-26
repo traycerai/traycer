@@ -1,0 +1,86 @@
+---
+title: "Worktrees"
+description: "Understand how Traycer uses workspace folders and git worktrees for agents and diffs."
+---
+
+A **worktree** is a separate checkout of the same git repository. Traycer uses worktrees so agent work can run in an isolated folder without changing the main workspace folder.
+
+Worktree choices are made per workspace folder. A Task can include more than one workspace folder, and each folder can use its own run location.
+
+## Run Locations
+
+When Traycer asks where an agent should run, each workspace folder can use one of these locations:
+
+| Location | What it does | When it is available |
+|---|---|---|
+| **Local** | Runs against the workspace folder itself. | Always available. For non-git folders, this is the only option. |
+| **New worktree** | Creates a new git worktree for the run. | Available for git repositories. |
+| **Existing worktree** | Uses an already-created worktree for that repo. | Available when the Host finds existing worktrees for the workspace folder. |
+
+For a **New worktree**, you can choose the branch source. If the current working tree has uncommitted changes, the branch picker can show a **Working tree** source. Choose that source when you want Traycer to carry those changes into the new worktree.
+
+For an **Existing worktree**, the branch is fixed by that worktree. Traycer uses it as-is.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Choose a new worktree and branch">
+  <source src="https://assets.traycer.ai/docs/videos/worktree-run-location.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+## New Worktree Branch Options
+
+When you choose **New worktree**, the branch picker shows source branches. The source you choose controls whether Traycer creates a new branch, checks out an existing branch, or carries current changes.
+
+| Source | What happens |
+|---|---|
+| **Current branch** | Traycer creates a new branch from the current branch and checks it out in a fresh worktree. This is the default clean path. |
+| **Working tree** | Traycer creates a new branch from the current branch and carries uncommitted changes. This appears when the working tree has changes to carry. |
+| **Other local branch** | If you leave the new branch name blank, Traycer checks out that branch in a fresh worktree. If you enter a new branch name, Traycer creates a new branch from that source branch. |
+| **Remote branch** | Traycer creates a local branch from the remote source. The branch name is required and is prefilled from the remote branch name. |
+
+Branches that are already checked out in another worktree appear under **Existing worktree**, not as checkout options in the **New worktree** branch picker.
+
+## Where You Choose A Worktree
+
+Worktree choices appear in the places where Traycer starts agent work:
+
+| Place | What you can choose |
+|---|---|
+| **New Task / first agent** | Workspace folders and the run location for each folder. |
+| **Existing agent** | The run location for the next agent turn. |
+| **New agent in an existing Task** | The starting run location for that new agent. |
+| **Terminal interface launch** | Workspace folder, run location, coding agent, model, thinking effort, and Terminal interface CLI arguments. These choices stay fixed after launch. |
+| **Git Diff** | Which worktree's changed files to inspect. |
+
+On the Chat interface, worktree changes apply to the next agent turn. If Traycer needs to create or set up a worktree first, the agent shows setup progress before continuing. The Terminal interface is different: an agent's workspace and worktree choices are fixed when it starts.
+
+## Worktree Setup
+
+When Traycer creates a worktree, it can run setup and teardown scripts for that workspace folder.
+
+The setup controls let you:
+
+- edit setup and teardown scripts for a folder
+- create a new branch in a fresh worktree
+- check out an existing branch in a fresh worktree
+- create a worktree from the **Working tree** source when uncommitted changes should be carried over
+- use an existing worktree instead of creating a new one
+
+Setup can show states such as **Creating worktree**, **Setting up worktree**, **Worktree ready**, **Setup failed**, or **Setup cancelled**. Troubleshooting those states is covered in [Troubleshooting](/reference/troubleshooting#worktree-setup).
+
+## Existing Worktrees
+
+Existing worktrees are useful when you already have a checkout for a branch and want Traycer to use that folder instead of creating another one.
+
+When you select an existing worktree:
+
+- Traycer runs in that existing checkout
+- the branch is read-only in the picker because it belongs to the selected worktree
+- the worktree can appear in Git Diff and file-related views for that Task
+
+## Managing Worktrees
+
+[Sweep](/concepts/sweep) cleans up worktrees belonging to one or more Tasks while keeping the Tasks, conversations, and artifacts. Open it from a Task's status row or History to review what will be removed. Sweep preselects idle worktrees whose work is proven safe to remove and shows additional consequences for shared, active, or unverified work.
+
+[Settings > Worktrees](/settings/worktrees) is for management: reviewing worktrees on a Host, refreshing the list, and deleting worktrees when they are safe to remove.
+
+The CLI can also create worktree paths without creating an agent. See [CLI](/cli/commands#workspace-and-worktree-commands).
