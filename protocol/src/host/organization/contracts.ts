@@ -203,7 +203,9 @@ export const organizationSubscribeV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: organizationReadSchema,
   serverFrameSchema: lazySchema(() =>
-    organizationSubscribeV10.serverFrameSchema.extend({
+    z.object({
+      kind: z.literal("snapshot"),
+      hasBinaryPayload: z.literal(false),
       view: organizationViewSchema,
     }),
   ),
