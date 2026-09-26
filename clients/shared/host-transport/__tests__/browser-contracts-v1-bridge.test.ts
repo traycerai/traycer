@@ -150,6 +150,26 @@ describe("browser-contracts-v1-bridge", () => {
     ).not.toThrow();
   });
 
+  it("ignores the 2.2-only demand frames, which the frozen line has no reader for", () => {
+    // A strict `@1` host would drop either one whole, so neither may be
+    // forwarded. Ignored, not refused: neither carries a requestId to answer.
+    for (const frame of [
+      {
+        kind: "electronTabLifecycleReadyOnDemand",
+        hasBinaryPayload: false,
+        coLocatedHostId: "host-1",
+        desktopWindowId: "window-1",
+      },
+      { kind: "requestSnapshot", hasBinaryPayload: false },
+    ]) {
+      expect(
+        projectBrowserSessionsClientFrameToV10(
+          browserSessionsClientFrameSchema.parse(frame),
+        ),
+      ).toEqual({ kind: "ignored" });
+    }
+  });
+
   it("refuses attachTab and moveTab, which this line has no spelling for", () => {
     for (const kind of ["attachTab", "moveTab"] as const) {
       const projected = projectBrowserSessionsClientFrameToV10(

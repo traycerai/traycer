@@ -95,8 +95,22 @@ export class BrowserSessionsStreamClient {
     });
   }
 
+  supportsDemandPlacement(): boolean {
+    const version = this.session.getNegotiatedSchemaVersion();
+    return (
+      version !== null &&
+      (version.major > 2 || (version.major === 2 && version.minor >= 2))
+    );
+  }
+
   sendClientFrame(frame: BrowserSessionsClientFrame): void {
     if (this.closed) return;
+    if (
+      (frame.kind === "electronTabLifecycleReadyOnDemand" ||
+        frame.kind === "requestSnapshot") &&
+      !this.supportsDemandPlacement()
+    )
+      return;
     const version = this.session.getNegotiatedSchemaVersion();
     const viewportSupported =
       version !== null &&

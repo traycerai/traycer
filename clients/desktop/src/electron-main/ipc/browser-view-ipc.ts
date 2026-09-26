@@ -1,3 +1,6 @@
+import { BrowserDesktopControl } from "../browser-sessions/browser-desktop-control";
+import { localStreamOwnerIdentity } from "@traycer-clients/shared/host-transport/local-stream-owner-identity";
+import type { BrowserSessionsRegistryDeps } from "../browser-sessions/browser-sessions-owner";
 import {
   BrowserWindow,
   app,
@@ -129,6 +132,7 @@ const PRIMARY_PROFILE_REQUEST: BrowserSessionProfileRequest = {
 export interface BrowserViewIpcRegistration {
   readonly manager: BrowserViewManager;
   readonly sessions: BrowserSessionsRegistry;
+  readonly preparation: BrowserDesktopControl;
 }
 
 export function registerBrowserViewIpc(
@@ -601,23 +605,27 @@ export function registerBrowserViewIpc(
     listRegisteredHosts: fetchRegisteredHostsViaHttp,
     now: () => Date.now(),
   });
+  const openBrowserTransport: BrowserSessionsRegistryDeps["openTransport"] = (
+    target,
+    userId,
+  ) =>
+    openBrowserSessionsTransport(target, userId, {
+      authnBaseUrl: () => bridge.options.authnBaseUrl,
+      endpoint: () => browserSessionsDirectory.endpoint(target.hostId),
+      bearer: () => {
+        const principal = jarPlanePrincipal();
+        if (principal === null) return null;
+        return {
+          getBearerToken: () => principal.token,
+          identity: { userId: principal.userId },
+        };
+      },
+      cloudAuthorized: () => jarPlanePrincipal() !== null,
+      appVersion: app.getVersion(),
+    });
   const sessions = new BrowserSessionsRegistry({
     directory: browserSessionsDirectory,
-    openTransport: (target, userId) =>
-      openBrowserSessionsTransport(target, userId, {
-        authnBaseUrl: () => bridge.options.authnBaseUrl,
-        endpoint: () => browserSessionsDirectory.endpoint(target.hostId),
-        bearer: () => {
-          const principal = jarPlanePrincipal();
-          if (principal === null) return null;
-          return {
-            getBearerToken: () => principal.token,
-            identity: { userId: principal.userId },
-          };
-        },
-        cloudAuthorized: () => jarPlanePrincipal() !== null,
-        appVersion: app.getVersion(),
-      }),
+    openTransport: openBrowserTransport,
     jar: {
       // Behind the boot reconciliation, and it is the ONE jar read that has
       // to be: every write queues on the jar serializer, but a whole-jar
@@ -709,6 +717,46 @@ export function registerBrowserViewIpc(
         RunnerHostEvent.browserViewSessionsEvent,
         envelope,
       );
+    },
+  });
+
+  const desktopControl = new BrowserDesktopControl({
+    directory: browserSessionsDirectory,
+    openTransport: openBrowserTransport,
+    userId: () => jarPlanePrincipal()?.userId ?? null,
+    localHostId: () => bridge.options.host.getSnapshot()?.hostId ?? null,
+    subscribeLocalHostChange: (listener) => {
+      bridge.options.host.on("change", listener);
+      return () => {
+        bridge.options.host.off("change", listener);
+      };
+    },
+    subscribeBearerRotation: (listener) => {
+      bridge.authSession.on("change", listener);
+      return () => {
+        bridge.authSession.off("change", listener);
+      };
+    },
+    prepare: (epicId, onUnavailable) => {
+      const userId = jarPlanePrincipal()?.userId;
+      const hostId = bridge.options.host.getSnapshot()?.hostId;
+      if (userId === undefined || hostId === undefined) return null;
+      const ownerId = bridge.ownership.getOwnerForEpic(epicId);
+      const owner =
+        ownerId === null ? null : bridge.windowRegistry.getRecordById(ownerId);
+      const record = owner ?? bridge.windowRegistry.getMruRecord();
+      if (record === null) return null;
+      manager.windows.ensureResetListener(record.windowId);
+      const release = sessions.acquirePreparation(
+        record.windowId,
+        {
+          scope: { kind: "epic", epicId },
+          hostId,
+          identityKey: localStreamOwnerIdentity(hostId, userId),
+        },
+        onUnavailable,
+      );
+      return release === null ? null : { windowId: record.windowId, release };
     },
   });
 
@@ -1194,11 +1242,12 @@ export function registerBrowserViewIpc(
   );
 
   bridge.disposeFns.push(() => {
+    desktopControl.dispose();
     sessions.dispose();
     manager.dispose();
     clearAllAttachmentGrants();
   });
-  return { manager, sessions };
+  return { manager, sessions, preparation: desktopControl };
 }
 
 export function requestRendererGuestMount(
