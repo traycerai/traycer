@@ -228,6 +228,7 @@ export const ModelPricingCalculator = () => {
           output: 1,
         },
         estimatedCredits: feature.baseCredits,
+        longContextCredits: feature.baseCredits * longContext.multiplier,
       };
     }
 
@@ -253,6 +254,7 @@ export const ModelPricingCalculator = () => {
           output: 1,
         },
         estimatedCredits: feature.baseCredits,
+        longContextCredits: feature.baseCredits * longContext.multiplier,
       };
     }
 

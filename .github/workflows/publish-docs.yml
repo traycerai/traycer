@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: write
+      actions: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -42,7 +42,25 @@ jobs:
           git config --global user.name "Traycer Ops"
           git config --global user.email devops@traycer.ai
 
+      # The concurrency group stops two runs pushing at once, but runs can
+      # enter it out of dispatch order. Run numbers follow dispatch order, so a
+      # run stands down when a later dispatch is still queued or running, or
+      # has already published. Re-dispatching an older ref is still how a
+      # rollback is published: that dispatch is the newest run.
+      - name: Check for a newer dispatch
+        id: freshness
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          newer="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/publish-docs.yml/runs?event=workflow_dispatch&per_page=50" \
+            --jq "[.workflow_runs[] | select(.run_number > ${GITHUB_RUN_NUMBER}) | select(.status != \"completed\" or .conclusion == \"success\")] | length")"
+          if [ "${newer}" -gt 0 ]; then
+            echo "::notice::A newer Publish Docs dispatch exists, so this run does not publish."
+            echo "stale=true" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Publish Docs
+        if: steps.freshness.outputs.stale != 'true'
         run: |
           git checkout -B mintlify
           git push -f origin mintlify
