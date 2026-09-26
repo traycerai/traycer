@@ -1,8 +1,10 @@
 import Fuse, { type IFuseOptions } from "fuse.js";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   readableModelMatch,
   resolveModelBySlug,
 } from "@traycer/protocol/host/agent/gui/model-slug-resolution";
+import type { ProfileDropdownUsageEntry } from "@/components/providers/profile-dropdown-usage";
 import {
   type HarnessModelSelection,
   type HarnessOption,
@@ -60,6 +62,80 @@ export interface HarnessModelRow {
   readonly searchProviderId: string;
   readonly searchOpenCodeProviderLabel: string;
   readonly searchOpenCodeProviderId: string;
+}
+
+/**
+ * A catalog model row as the picker's list carries it, beside the rows an
+ * embedding injects. The search index and every helper below keep working on
+ * the bare {@link HarnessModelRow}; only the list tags it.
+ */
+export type HarnessModelListRow = { readonly kind: "model" } & HarnessModelRow;
+
+/** What confirming a suggestion does, beyond moving the picker's selection. */
+export type SuggestionAction =
+  | {
+      readonly kind: "switch";
+      /**
+       * The run tuple the host built for this destination. The row commits
+       * its (harness, model, profile) and this effort to the store, so the
+       * rail, the model list and the effort footer follow it. `null` for a
+       * destination the host could not build a tuple for - such a row is
+       * never selectable, and is listed for the reason it carries.
+       */
+      readonly target: ChatRunSettings | null;
+    }
+  | { readonly kind: "retry" }
+  | { readonly kind: "wait"; readonly resetsAt: number };
+
+/**
+ * A suggestion's usage cell. `none` draws nothing (a row with no account to
+ * read, or a provider this client cannot check); `not-checked` is a check
+ * that failed, and carries the refresh that asks again.
+ */
+export type SuggestionUsage =
+  | { readonly kind: "none" }
+  | { readonly kind: "checking" }
+  | { readonly kind: "reading"; readonly entry: ProfileDropdownUsageEntry }
+  | { readonly kind: "not-checked"; readonly onRefresh: () => void };
+
+/**
+ * A row an embedding puts above the browsed provider's models - the routing
+ * chooser's "Suggested" destinations. Rendered by `SuggestionItem`, and in the
+ * same list as the model rows so arrows, Enter and the active descendant treat
+ * both alike.
+ */
+export interface SuggestionRow {
+  readonly kind: "suggestion";
+  readonly id: string;
+  readonly harnessId: ProviderId;
+  /** The slug a `switch` commits; `""` for a row with nothing to commit. */
+  readonly modelId: string;
+  readonly profileId: string | null;
+  readonly title: string;
+  readonly subtitle: string | null;
+  /** One short reason, shown under the title - why a row is dimmed, most often. */
+  readonly note: string | null;
+  readonly usage: SuggestionUsage;
+  readonly selectable: boolean;
+  readonly recommended: boolean;
+  readonly action: SuggestionAction;
+}
+
+/** The non-selectable item that heads the injected rows. */
+export interface SuggestionHeadingRow {
+  readonly kind: "suggestion-heading";
+  readonly id: string;
+}
+
+export type HarnessModelPickerRow =
+  | HarnessModelListRow
+  | SuggestionRow
+  | SuggestionHeadingRow;
+
+export function toModelListRows(
+  rows: ReadonlyArray<HarnessModelRow>,
+): ReadonlyArray<HarnessModelListRow> {
+  return rows.map((row) => ({ kind: "model", ...row }));
 }
 
 export interface HarnessModelRowSection {

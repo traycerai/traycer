@@ -2076,6 +2076,73 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                           "type": "null"
                                                         }
                                                       ]
+                                                    },
+                                                    "receipt": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "causeLabel": {
+                                                              "type": "string"
+                                                            },
+                                                            "steps": {
+                                                              "type": "array",
+                                                              "items": {
+                                                                "type": "object",
+                                                                "properties": {
+                                                                  "kind": {
+                                                                    "type": "string",
+                                                                    "enum": [
+                                                                      "switch",
+                                                                      "wait",
+                                                                      "retry"
+                                                                    ]
+                                                                  },
+                                                                  "providerLabel": {
+                                                                    "type": "string"
+                                                                  },
+                                                                  "modelLabel": {
+                                                                    "type": "string"
+                                                                  },
+                                                                  "profileLabel": {
+                                                                    "type": "string"
+                                                                  },
+                                                                  "resumedAt": {
+                                                                    "anyOf": [
+                                                                      {
+                                                                        "type": "number"
+                                                                      },
+                                                                      {
+                                                                        "type": "null"
+                                                                      }
+                                                                    ]
+                                                                  },
+                                                                  "endedLabel": {
+                                                                    "type": "string"
+                                                                  }
+                                                                },
+                                                                "required": [
+                                                                  "kind",
+                                                                  "providerLabel",
+                                                                  "modelLabel",
+                                                                  "profileLabel",
+                                                                  "resumedAt",
+                                                                  "endedLabel"
+                                                                ],
+                                                                "additionalProperties": false
+                                                              }
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "causeLabel",
+                                                            "steps"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
                                                     }
                                                   },
                                                   "required": [

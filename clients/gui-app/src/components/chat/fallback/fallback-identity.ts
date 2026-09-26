@@ -185,12 +185,11 @@ function fallbackProviderLabelForHarness(harnessId: GuiHarnessId): string {
  * "Claude Code · default" - a chat's provider and model, and nothing else.
  *
  * The subject of every sentence about what a chat IS rather than where it is
- * going: the error card's explanation of a withheld switch, and the destination
- * menu's empty state. Deliberately WITHOUT the account and without the effort
- * that {@link fallbackDestinationRowTitle} and
- * {@link fallbackDestinationSentence} carry - "No other model is set up for
- * Claude Code · opus · high on work" reads as a claim about that account at
- * that effort, when the fact is about the model.
+ * going: the error card's explanation of a withheld switch, and the routing
+ * chooser's empty state. Deliberately WITHOUT the account and without the
+ * effort that {@link fallbackDestinationSentence} carries - "No other model is
+ * set up for Claude Code · opus · high on work" reads as a claim about that
+ * account at that effort, when the fact is about the model.
  *
  * One function for both surfaces on purpose. They are explaining one host
  * verdict, and the rule this file exists to enforce is that two surfaces
@@ -811,26 +810,6 @@ export function fallbackDestinationOfModelTarget(
     modelIsFamily: model === null,
     effortLabel: normalizedEffort(target.reasoningEffort),
   };
-}
-
-/**
- * "Codex · gpt-6-astra · high" - a destination menu row's title.
- *
- * The provider is always named here even though the section heading groups
- * these rows, because the heading says "Equivalent models" and not which
- * provider each one lives on; two rows from two providers are otherwise
- * distinguishable only by their glyph, which is decorative.
- */
-export function fallbackDestinationRowTitle(
-  destination: FallbackDestinationDescription,
-): string {
-  return [
-    destination.providerLabel,
-    destination.modelLabel,
-    destination.effortLabel,
-  ]
-    .filter((part): part is string => part !== null)
-    .join(" · ");
 }
 
 /**

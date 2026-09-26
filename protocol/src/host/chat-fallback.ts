@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -190,7 +193,10 @@ export type ChatFallbackChooseTargetResponse = z.infer<
  * `rung_target_unavailable`. The last three are three DIFFERENT facts and are
  * separate values precisely so a renderer stops having to pick one sentence for
  * all of them; see their entries in {@link FALLBACK_ACTION_OUTCOMES} for which
- * one may claim the chat advanced.
+ * one may claim the chat advanced. Since `1.1`, the two refusals the host can
+ * explain carry a `detail` beside the outcome
+ * ({@link chatFallbackRunManualRungResponseSchema}); the outcome vocabulary
+ * itself did not grow.
  *
  * Deliberately NOT a {@link fallbackTraversalRefSchema}: this verb runs where
  * there is no dispatch-holding traversal to name - a terminal failure, an
@@ -287,8 +293,141 @@ export const chatFallbackRunManualRungRequestSchema = lazySchema(() =>
 export type ChatFallbackRunManualRungRequest = z.infer<
   typeof chatFallbackRunManualRungRequestSchema
 >;
-export const chatFallbackRunManualRungResponseSchema =
-  fallbackActionResponseSchema;
+
+/**
+ * The refusal kinds a host emits on {@link fallbackRungRefusalDetailSchema}'s
+ * `kind`, and the one vocabulary both peers name them by.
+ *
+ * NOT bound on the wire - the wire field is an open string, for the reason
+ * that schema records. Parse `kind` with {@link fallbackRungRefusalKindSchema}
+ * to branch, and render the host's `label` when it does not match; a consumer
+ * keeps compile-time exhaustiveness by mapping its copy over
+ * {@link FallbackRungRefusalKind} with no `default` arm. Same arrangement as
+ * `tierRungSkipReasonSchema` beside `fallbackTargetSkipSchema.reason`.
+ *
+ * Adding a kind here is not a wire change, but it IS a copy change: every
+ * client mapping over this type stops compiling until it says something for
+ * the new kind, which is the point. `unknown` is the host's own residue - it
+ * logs the real cause and sends this.
+ */
+export const FALLBACK_RUNG_REFUSAL_KINDS = [
+  /** Eligibility: a turn is running or activating. */
+  "turn_running",
+  /** Eligibility: the traversal record holds dispatch. */
+  "routing_active",
+  /** Replacement preparation: the chat's worktree is gone. */
+  "worktree_missing",
+  /** Replacement preparation: no workspace binding. */
+  "no_workspace",
+  /** Replacement preparation: the user message was trimmed or edited. */
+  "message_changed",
+  /** Replacement preparation: a permanent pre-launch error. */
+  "prelaunch_failed",
+  /** `wait_once`: the verified boundary is already in the past. */
+  "reset_passed",
+  /** `wait_once`: no verified reset within the cap. */
+  "no_verified_reset",
+  /** The redispatch could not start: admission closed or shutting down. */
+  "host_unavailable",
+  /** `retry`: the chat has no run settings. */
+  "settings_missing",
+  /** The traversal record or settlement write failed. */
+  "storage_failed",
+  /** On `rung_target_unavailable`: the tuple stopped validating. */
+  "target_unusable",
+  /** Anything else; the host logs the real cause. */
+  "unknown",
+] as const;
+export const fallbackRungRefusalKindSchema = lazySchema(() =>
+  z.enum(FALLBACK_RUNG_REFUSAL_KINDS),
+);
+export type FallbackRungRefusalKind = z.infer<
+  typeof fallbackRungRefusalKindSchema
+>;
+
+/**
+ * Why a manual rung was refused, beside the outcome that says it was
+ * (`chat.fallback.runManualRung@1.1`).
+ *
+ * `kind` is an OPEN string, for the reason written at the top of this file and
+ * on {@link fallbackTargetSkipSchema}: a strict enum is strict on the CLIENT,
+ * so a kind a released build has never heard of would fail the whole response
+ * over a field that is only rendered. A client parses it with
+ * {@link fallbackRungRefusalKindSchema}, maps the kinds it knows to its own
+ * copy, and falls back to `label` for the rest.
+ *
+ * `label` is a FIXED sentence per kind, written by the host's copy table -
+ * never a raw error message. A provider string can carry a path or an account
+ * email, and this label lands on a card and in the bug reports copied from it.
+ * The real cause goes to the host's log, keyed by chat and traversal.
+ *
+ * `retryable` says whether pressing the same action again can succeed without
+ * the user doing anything else first.
+ */
+export const fallbackRungRefusalDetailSchema = lazySchema(() =>
+  z.object({
+    kind: z.string(),
+    label: z.string(),
+    retryable: z.boolean(),
+  }),
+);
+export type FallbackRungRefusalDetail = z.infer<
+  typeof fallbackRungRefusalDetailSchema
+>;
+
+/**
+ * `chat.fallback.runManualRung@1.0`'s response, hand-written: the outcome and
+ * nothing else. `1.0` stays bound to this pre-image so its surface cannot
+ * follow the live response below - it is NOT an alias of that schema, and NOT
+ * an `.omit()` of it. The outcome enum is the one every fallback verb shares;
+ * growing it is governed by the note above the `V10` contracts.
+ */
+export const chatFallbackRunManualRungResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    outcome: fallbackActionOutcomeSchema,
+  }),
+);
+export type ChatFallbackRunManualRungResponseV10 = z.infer<
+  typeof chatFallbackRunManualRungResponseSchemaV10
+>;
+
+/**
+ * `chat.fallback.runManualRung@1.1`'s response: the outcome, plus `detail` -
+ * why the host refused, on the two outcomes that are refusals the host can
+ * explain.
+ *
+ * The refinement is deliberately ONE-directional. A non-null `detail` on any
+ * outcome other than `rung_unavailable` / `rung_target_unavailable` is
+ * rejected: `applied` has nothing to explain, and `attempt_not_latest` is a
+ * fact about the chat, not a refusal of this action. The other direction - a
+ * `null` detail on those two - stays LEGAL, because the contract produces it
+ * itself: the `1.0` upgrade path lifts an older host's refusal to
+ * `detail: null`, and that is the value the client's neutral sentence ("that
+ * action isn't available right now") is the branch for. Refusing it here would
+ * make the canonical schema reject its own upgrade path's output. That a `1.1`
+ * host always sends a detail on those two outcomes is the HOST's obligation,
+ * pinned by its per-kind tests, not something this schema can see.
+ */
+export const chatFallbackRunManualRungResponseSchema = lazySchema(() =>
+  z
+    .object({
+      outcome: fallbackActionOutcomeSchema,
+      detail: fallbackRungRefusalDetailSchema.nullable(),
+    })
+    .superRefine((response, ctx) => {
+      // The two refusals a detail may ride on, and only those.
+      const isRefusal =
+        response.outcome === "rung_unavailable" ||
+        response.outcome === "rung_target_unavailable";
+      if (response.detail !== null && !isRefusal) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `outcome '${response.outcome}' must carry a null detail`,
+          path: ["detail"],
+        });
+      }
+    }),
+);
 export type ChatFallbackRunManualRungResponse = z.infer<
   typeof chatFallbackRunManualRungResponseSchema
 >;
@@ -339,6 +478,38 @@ export type ChatFallbackReturnToPreferredResponse = z.infer<
   typeof chatFallbackReturnToPreferredResponseSchema
 >;
 
+/**
+ * "Switch now", "Wait now" and "Retry now" - `chat.fallback.proceed`. One verb
+ * for all three, because all three mean the same thing: end the countdown NOW
+ * and let the step the host already planned run.
+ *
+ * It ends the hold through the EXPIRY path - the same transition the grace
+ * timer takes when it runs out - so the traversal carries on exactly as if the
+ * user had waited: the planned rung runs, and the rest of the ladder stays
+ * behind it. That is why neither existing verb could do this.
+ * `runManualRung` settles the live traversal as superseded and arms a fresh
+ * one-step run, dropping the ladder; a `chooseTarget` pick records the host's
+ * own plan as a USER pick, and fails `choice_lease_stale` while another window
+ * holds the picker.
+ *
+ * Admitted in `hold` and `choosing`. It carries no lease token, unlike
+ * `chooseTarget`: it does not pick anything, it lets the host's own plan run,
+ * so `revision` is the whole staleness check - a card that is looking at a
+ * traversal that moved gets `traversal_advanced`, as every verb here does.
+ *
+ * Outcomes: `applied` (the hold ended and the planned step is running or
+ * deciding), `no_active_traversal`, `traversal_advanced` (the revision is not
+ * current, or the traversal is in neither admitted state).
+ */
+export const chatFallbackProceedRequestSchema = fallbackTraversalRefSchema;
+export type ChatFallbackProceedRequest = z.infer<
+  typeof chatFallbackProceedRequestSchema
+>;
+export const chatFallbackProceedResponseSchema = fallbackActionResponseSchema;
+export type ChatFallbackProceedResponse = z.infer<
+  typeof chatFallbackProceedResponseSchema
+>;
+
 // New optional methods, off the released floor. A client meeting an older host
 // degrades to not offering the affordance rather than failing - which is why
 // every one of them is registered `degrade: { kind: "unsupported" }`. Any later
@@ -363,7 +534,36 @@ export const chatFallbackRunManualRungV10 = defineRpcContract({
   method: "chat.fallback.runManualRung",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: chatFallbackRunManualRungRequestSchema,
+  responseSchema: chatFallbackRunManualRungResponseSchemaV10,
+});
+
+/**
+ * `chat.fallback.runManualRung@1.1` - the response gains the refusal `detail`.
+ * The request is unchanged.
+ *
+ * A `1.0` client meeting a `1.1` host is served by the ordinary same-major
+ * downgrade: the response is reparsed through `1.0`'s non-strict schema, which
+ * strips `detail`. A `1.1` client meeting a `1.0` host is lifted by the
+ * upgrade path below, so it reads `null`, never `undefined`.
+ */
+export const chatFallbackRunManualRungV11 = defineRpcContract({
+  method: "chat.fallback.runManualRung",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: chatFallbackRunManualRungRequestSchema,
   responseSchema: chatFallbackRunManualRungResponseSchema,
+});
+
+// A `1.0` host has no refusal taxonomy: every outcome it sends reads as "no
+// detail", which is the neutral sentence on the client. The request needs no
+// lift - both minors send the same one.
+export const chatFallbackRunManualRungUpgradeV10ToV11 = defineUpgradePath<
+  typeof chatFallbackRunManualRungV10,
+  typeof chatFallbackRunManualRungV11
+>({
+  from: chatFallbackRunManualRungV10.schemaVersion,
+  to: chatFallbackRunManualRungV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, detail: null }),
 });
 
 export const chatFallbackReturnToPreferredV10 = defineRpcContract({
@@ -371,6 +571,13 @@ export const chatFallbackReturnToPreferredV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: chatFallbackReturnToPreferredRequestSchema,
   responseSchema: chatFallbackReturnToPreferredResponseSchema,
+});
+
+export const chatFallbackProceedV10 = defineRpcContract({
+  method: "chat.fallback.proceed",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: chatFallbackProceedRequestSchema,
+  responseSchema: chatFallbackProceedResponseSchema,
 });
 
 /**

@@ -22,13 +22,14 @@ import type {
 import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
-import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
+import type { HarnessModelPickerRow } from "@/components/home/data/harness-model-search";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import type { VirtuosoHandle } from "react-virtuoso";
 import {
   useCallback,
   useState,
   type KeyboardEvent,
+  type ReactNode,
   type RefObject,
 } from "react";
 import {
@@ -85,7 +86,9 @@ interface HarnessModelPickerPanelProps {
   readonly onClosePicker: () => void;
   readonly listRef: RefObject<VirtuosoHandle | null>;
   readonly listKey: string;
-  readonly visibleRows: ReadonlyArray<HarnessModelRow>;
+  readonly visibleRows: ReadonlyArray<HarnessModelPickerRow>;
+  /** The injected section's heading content, or `null` (no injected rows). */
+  readonly suggestionHeading: ReactNode | null;
   readonly selectedRowId: string;
   readonly effectiveActiveRowId: string;
   readonly hoveredRowId: string;
@@ -98,7 +101,7 @@ interface HarnessModelPickerPanelProps {
   readonly activeProvider: GuiHarnessCatalogEntry | null;
   readonly onHoverRow: (rowId: string) => void;
   readonly onActiveRow: (rowId: string) => void;
-  readonly onSelectRow: (row: HarnessModelRow) => void;
+  readonly onSelectRow: (row: HarnessModelPickerRow) => void;
   readonly reasoningFooter: ReasoningFooterConfig | null;
   /** The picker's `visibleOpen`, for the footer's max treatment. */
   readonly reasoningPickerOpen: boolean;
@@ -126,6 +129,8 @@ interface HarnessModelPickerPanelProps {
    * returns focus to the surface's face instead.
    */
   readonly closeFocusesComposer: boolean;
+  /** An embedding's own footer, under the effort footer; `null` for none. */
+  readonly footer: ReactNode | null;
 }
 
 export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
@@ -165,6 +170,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     listRef,
     listKey,
     visibleRows,
+    suggestionHeading,
     selectedRowId,
     effectiveActiveRowId,
     hoveredRowId,
@@ -184,6 +190,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     createProfileDisabledReason,
     profileAdmission,
     closeFocusesComposer,
+    footer,
   } = props;
   const openAddProfile = useProviderProfileAddFlowStore(
     (state) => state.openForHarness,
@@ -318,6 +325,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
               listRef={listRef}
               listKey={listKey}
               rows={visibleRows}
+              suggestionHeading={suggestionHeading}
               selectedRowId={selectedRowId}
               activeRowId={effectiveActiveRowId}
               hoveredRowId={hoveredRowId}
@@ -342,6 +350,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
             pickerOpen={reasoningPickerOpen}
             serviceTier={serviceTierFooter}
           />
+          {footer}
         </div>
       </div>
     </PopoverContent>

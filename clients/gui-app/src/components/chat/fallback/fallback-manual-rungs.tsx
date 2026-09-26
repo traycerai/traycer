@@ -1,4 +1,5 @@
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
+import { useIsMutating } from "@tanstack/react-query";
 import { create, useStore } from "zustand";
 import type {
   ChatRunSettings,
@@ -13,21 +14,18 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { formatWaitTime, useSampledNow } from "@/lib/relative-time";
+import { chatFallbackMutationKeys } from "@/lib/query-keys";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import {
-  HOST_UNREACHABLE_LABEL,
   SWITCH_LABEL,
-  describeFallbackOutcome,
   describeSwitchDisposition,
   describeWaitDisposition,
-  switchConsequencesText,
 } from "./fallback-copy";
 import {
   fallbackProviderModelLabel,
   useFallbackModelLabels,
   type FallbackModelLabelResolver,
 } from "./fallback-identity";
-import { FallbackDestinationMenu } from "./fallback-destination-menu";
 import { FallbackNoticeSettingsLink } from "./fallback-notice-attribution";
 import { useFallbackRunManualRung } from "./use-fallback-actions";
 import {
@@ -36,6 +34,7 @@ import {
 } from "./use-last-failed-attempt";
 import { usePublishConfirmedManualFallbackAction } from "./use-confirmed-manual-action";
 import { usePublishUnattendedFallbackOutcome } from "./use-unattended-fallback-outcome";
+import { RoutingDestinationPicker } from "./routing-destination-picker";
 
 /**
  * The error row's manual affordances: Retry, Switch…, and "Wait until <time>".
@@ -247,7 +246,10 @@ export function FallbackGraceRungActions({
   );
 }
 
-type ChatActSlice = Pick<ChatSessionState, "access" | "connectionStatus">;
+type ChatActSlice = Pick<
+  ChatSessionState,
+  "access" | "connectionStatus" | "chat"
+>;
 
 /**
  * Stand-in for a chat with no live session - the same shape and the same
@@ -262,6 +264,7 @@ type ChatActSlice = Pick<ChatSessionState, "access" | "connectionStatus">;
 const noSessionActSlice = create<ChatActSlice>()(() => ({
   access: null,
   connectionStatus: "closed",
+  chat: null,
 }));
 
 /**
@@ -309,6 +312,24 @@ function useChatFallbackActionsCanAct(input: {
     store,
     (state) =>
       state.connectionStatus === "open" && state.access?.canAct === true,
+  );
+}
+
+/**
+ * What the chooser seeds from when the host named no failed tuple: the chat's
+ * own persisted settings. `null` when neither exists - there is then nothing
+ * to stage a switch FROM, and the switch is not offered.
+ */
+function useChatPersistedSettings(input: {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly hostId: string;
+}): ChatRunSettings | null {
+  const { epicId, chatId, hostId } = input;
+  const handle = useExistingChatSessionHandle(epicId, chatId, hostId);
+  const store = handle === null ? noSessionActSlice : handle.store;
+  return useStore(store, (state) =>
+    state.chat === null ? null : state.chat.settings,
   );
 }
 
@@ -362,7 +383,7 @@ function manualRungCatalogueRead(failedTuple: ChatRunSettings | null): {
  * so a returning attempt cannot reopen a menu onto a stale refusal either.
  * Losing the in-flight mutation costs nothing - the Mutation lives in the query
  * cache and its hook-level `onSuccess` runs whether or not this subtree is
- * still here, which is exactly how {@link FallbackWaitingMenu} already gets
+ * still here, which is exactly how `RoutingDestinationPicker` already gets
  * this right.
  */
 /**
@@ -378,7 +399,7 @@ function manualRungCatalogueRead(failedTuple: ChatRunSettings | null): {
  *
  * ## The grace card draws no switch
  *
- * That card's own leased menu (`<FallbackGraceMenu>`) is the switch there, and
+ * That card's own leased chooser (`<RoutingDestinationPicker>`) is the switch there, and
  * it is not a duplicate of this one: it takes a grace-hold lease that pauses
  * the countdown while the popover is open. Rendering both would put two switch
  * controls side by side and the wrong one would be the leaseless one.
@@ -457,7 +478,7 @@ function ManualRungAffordances({
    *
    * `error_card` is durable transcript and owns the whole set. `grace_card` is
    * the countdown in the composer, which already has a destination menu of its
-   * own - `<FallbackGraceMenu>`, in its `menu` slot - and that menu is not a
+   * own - `<RoutingDestinationPicker>`, in its `menu` slot - and that one is not a
    * duplicate of this one: it takes a grace-hold LEASE that pauses the
    * countdown while the popover is open. Rendering both would put two
    * switch controls side by side, and the wrong one would be the leaseless one.
@@ -498,14 +519,22 @@ function ManualRungAffordances({
     catalogueRead.subjects,
     catalogueRead.enabled,
   );
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [refusal, setRefusal] = useState<string | null>(null);
+  // The bare Retry / Wait buttons. The chooser owns its own instance of this
+  // verb, so the two are joined below through the shared mutation key.
   const runManualRung = useFallbackRunManualRung(
     client,
     chatId,
     publishConfirmed,
-    { inlineMenuOpen: menuOpen, publishUnattended },
+    { inlineMenuOpen: false, publishUnattended },
   );
+  const switchSeed = useChatPersistedSettings({ epicId, chatId, hostId });
+  const seedTuple = attempt.failedTuple ?? switchSeed;
+  // Any rung in flight for this chat - a bare button here or a pick in the
+  // chooser - quiets every control, so one press cannot race another.
+  const rungsInFlight =
+    useIsMutating({
+      mutationKey: chatFallbackMutationKeys.runManualRung(chatId),
+    }) > 0;
 
   const run = useCallback(
     (rung: "retry" | "wait_once") => {
@@ -531,74 +560,6 @@ function ManualRungAffordances({
     [attempt, chatId, epicId, runManualRung],
   );
 
-  const onMenuOpenChange = useCallback((next: boolean) => {
-    setMenuOpen(next);
-    setRefusal(null);
-  }, []);
-
-  const onPickTarget = useCallback(
-    (target: ChatRunSettings) => {
-      runManualRung.mutate(
-        {
-          epicId,
-          chatId,
-          rung: "switch",
-          target,
-          // BOTH ids, and from the DTO rather than from anything this row could
-          // reconstruct: the reuse path re-sends the same persisted user message
-          // across retries, so `userMessageId` alone cannot tell an attempt from
-          // its retry and a successful replay would look like this one.
-          userMessageId: attempt.userMessageId,
-          turnId: attempt.turnId,
-        },
-        {
-          // INLINE and deliberately NOT a toast, unlike the two rungs above.
-          // The menu is still open and is the surface the click came from, so
-          // it is the honest place to answer - and a toast beside it would
-          // report one refusal twice.
-          //
-          // This handler is the OPEN-menu branch of the hook's rule, not a
-          // second channel beside it: the hook returns without reporting while
-          // `inlineMenuOpen`, and takes over the moment this popover closes or
-          // this row goes. Both facts have to stay true together - a per-call
-          // handler that ran when the hook also reported would say it twice.
-          onSuccess: (response) => {
-            const message = describeFallbackOutcome(response.outcome);
-            if (message === null) {
-              setMenuOpen(false);
-              return;
-            }
-            // `rung_unavailable` is the one that actually lands here, and it is
-            // a NORMAL outcome: `eligibleRungs` was an upper bound computed at
-            // frame time and already stale when this click arrived.
-            setRefusal(message);
-          },
-          // The answer this menu had NO line for, exactly as on the two card
-          // menus in `fallback-card-menus.tsx` - every `outcome` above arrives
-          // in a SUCCESSFUL response, so a request that got no response at all
-          // left `refusal` unset, `picking` fell back to false, the rows
-          // re-enabled, and the surface the click came from said nothing
-          // whatever about a click that failed.
-          //
-          // Beside, not instead of, the hook's `errorMessage` toast: a per-call
-          // handler is the OBSERVER's, so this one runs only while the popover
-          // is still mounted - which is precisely when the inline line is the
-          // right channel - and the toast is what remains once the row has
-          // gone.
-          //
-          // `HOST_UNREACHABLE_LABEL` rather than a second wording, for the
-          // reason the card menus give: this menu already prints exactly this
-          // sentence when the LISTING cannot reach the host, and one
-          // unreachable host is one fact.
-          onError: () => {
-            setRefusal(HOST_UNREACHABLE_LABEL);
-          },
-        },
-      );
-    },
-    [attempt, chatId, epicId, runManualRung],
-  );
-
   // The shared minute clock, for one decision only: whether a wait or reset
   // time is far enough out to need its weekday (`formatWaitTime`).
   const now = useSampledNow();
@@ -615,7 +576,7 @@ function ManualRungAffordances({
   // already made (`triggerDisabled={!canAct}`): the affordances are what the
   // host said this failure admits, and that is still true - what is missing is
   // this reader's standing to use them.
-  const busy = runManualRung.isPending || !canAct;
+  const busy = runManualRung.isPending || rungsInFlight || !canAct;
   // Why there is no wait button, in the host's own terms. Never inferred from
   // the failure payload: `resetsAt` is PRESENT for a boundary past the user's
   // cap and ABSENT for one nobody verified, so the two states a user can act
@@ -677,88 +638,20 @@ function ManualRungAffordances({
       />
       <div className="flex flex-wrap items-center gap-2">
         {switchLeads ? null : retryButton}
-        {offersSwitch ? (
-          <FallbackDestinationMenu
+        {offersSwitch && seedTuple !== null ? (
+          <RoutingDestinationPicker
+            // The ATTEMPT, not a traversal: this row renders where no
+            // dispatch-holding traversal exists, which is why the switch is
+            // `runManualRung` bound to the failed attempt.
+            entry={{ kind: "failed-turn", attempt, seedTuple }}
             triggerLabel={SWITCH_LABEL}
-            triggerDisabled={busy}
-            // Emphasized where switching is the thing that helps; see the prop's
-            // own doc for why this is not one fixed weight.
+            // Emphasized where switching is the thing that helps.
             triggerVariant={switchLeads ? "secondary" : "ghost"}
-            // `null` for the count, and that is the honest answer rather than a
-            // gap: this card acts on a failed ATTEMPT, and `lastFailedAttempt`
-            // carries no queue figure - the traversal that would have counted
-            // one is over. The copy says the queue moves without naming a
-            // number it does not have.
-            header={switchConsequencesText(null)}
-            // The ATTEMPT selector, not a traversal one. This card renders where
-            // there is no dispatch-holding traversal to name - a terminal failure,
-            // an exhausted ladder, a `completed_awaiting_return` left over from an
-            // earlier success - which is the whole reason `runManualRung` is bound
-            // to the failed attempt instead.
-            selector={{
-              kind: "attempt",
-              userMessageId: attempt.userMessageId,
-              turnId: attempt.turnId,
-            }}
+            triggerDisabled={runManualRung.isPending || rungsInFlight}
+            canAct={canAct}
             epicId={epicId}
             chatId={chatId}
-            client={client}
-            open={menuOpen}
-            onOpenChange={onMenuOpenChange}
-            onPick={onPickTarget}
-            // `busy`, not `runManualRung.isPending`: `picking` is the channel the
-            // menu ORs into every row's own `disabled`, and the trigger going
-            // quiet is not enough on its own. A stream that drops while this
-            // popover is already OPEN leaves the rows behind it clickable, and
-            // each of them sends the same `runManualRung` the buttons outside
-            // were just refused.
-            picking={busy}
-            // No hold to take: there is no countdown here to freeze.
-            preparing={false}
-            refusal={refusal}
-            // The one entry point that HAS the rungs to repeat, so it does. The
-            // two card menus pass `null` because their equivalents are already on
-            // the card the popover is anchored to.
-            emptyStateActions={
-              <div className="flex w-full flex-col gap-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  {/* The SAME element the card renders, not a second copy of it.
-                    These two were hand-duplicated, so the in-flight spinner
-                    would have landed on one of them and the empty menu would
-                    have kept answering a press with nothing. */}
-                  {retryButton}
-                  {waitUntil === null ? null : (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={busy}
-                      onClick={() => {
-                        run("wait_once");
-                      }}
-                    >
-                      {waitUntil}
-                    </Button>
-                  )}
-                </div>
-                {/*
-                 * The SAME disposition the card renders, repeated here because
-                 * this is where its absence is confusing. The empty menu offers
-                 * Retry and (sometimes) a wait button; when the wait button is
-                 * missing, the reader is looking at the one surface that could
-                 * explain why and previously said nothing - the sentence lived
-                 * only on the card BEHIND the popover. F6 promised both halves
-                 * and shipped one.
-                 *
-                 * Same string, one source (`describeWaitDisposition`), so the
-                 * two surfaces cannot drift into two explanations of one fact.
-                 */}
-                {waitExplanation === null ? null : (
-                  <div className="text-ui-xs text-muted-foreground">
-                    {waitExplanation}
-                  </div>
-                )}
-              </div>
-            }
+            hostId={hostId}
           />
         ) : null}
         {switchLeads ? retryButton : null}

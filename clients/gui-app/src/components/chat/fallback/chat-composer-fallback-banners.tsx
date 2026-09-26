@@ -3,7 +3,10 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import { ChatComposerBannerPortal } from "@/components/chat/composer/chat-composer-banner-portal";
 import type { ComposerTopBannerKind } from "@/components/chat/composer/chat-composer-top-banner";
 import type { HostRpcRegistry } from "@/lib/host";
-import { FallbackGraceMenu, FallbackWaitingMenu } from "./fallback-card-menus";
+import {
+  CHOOSE_DIFFERENTLY_LABEL,
+  SWITCH_INSTEAD_LABEL,
+} from "./fallback-copy";
 import { FallbackGraceCard } from "./fallback-grace-card";
 import { FallbackReturnBanner } from "./fallback-return-banner";
 import {
@@ -21,6 +24,7 @@ import {
   type RoutingCardKind,
 } from "./use-dismissed-routing-cards";
 import { FallbackWaitingCard } from "./fallback-waiting-card";
+import { RoutingDestinationPicker } from "./routing-destination-picker";
 
 /**
  * Which dismissible card this frame would put in the composer.
@@ -178,13 +182,17 @@ function FallbackPendingBanner({
           hostId={hostId}
           canAct={canAct}
           menu={
-            <FallbackWaitingMenu
-              pending={pending}
-              client={client}
+            <RoutingDestinationPicker
+              entry={{ kind: "waiting", pending }}
+              triggerLabel={SWITCH_INSTEAD_LABEL}
+              // Quiet: "Stop waiting" is the card's own answer and this is the
+              // alternative to it.
+              triggerVariant="ghost"
+              triggerDisabled={false}
+              canAct={canAct}
               epicId={epicId}
               chatId={chatId}
               hostId={hostId}
-              canAct={canAct}
             />
           }
         />
@@ -202,13 +210,19 @@ function FallbackPendingBanner({
           hostId={hostId}
           canAct={canAct}
           menu={
-            <FallbackGraceMenu
-              pending={pending}
-              client={client}
+            <RoutingDestinationPicker
+              entry={{ kind: "countdown", pending }}
+              triggerLabel={CHOOSE_DIFFERENTLY_LABEL}
+              // Quiet: a plan is already in motion and this is the escape
+              // from it, so the card's own refusal stays the louder control.
+              triggerVariant="ghost"
+              // `switching` has committed: no window left to hold, no choice
+              // left to make.
+              triggerDisabled={pending.state === "switching"}
+              canAct={canAct}
               epicId={epicId}
               chatId={chatId}
               hostId={hostId}
-              canAct={canAct}
             />
           }
         />

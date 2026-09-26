@@ -1,4 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { SuggestionRow } from "@/components/home/data/harness-model-search";
 import { resetPaneActivationFocusIntentsForTests } from "@/components/epic-canvas/pane-activation";
 
 // The picker's provider-settings gear opens the settings modal through router
@@ -99,6 +109,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { matchDigitAction } from "@/lib/keybindings/dispatch";
 import type {
@@ -4895,6 +4906,10 @@ describe("<HarnessModelPicker />", () => {
         providerSwitchModel: embeddingSwitchModel,
         selectionMarked: input.selectionMarked,
         openRef: input.openRef,
+        closeRef: null,
+        onOpenChange: null,
+        suggestions: null,
+        footer: null,
       };
     }
 
@@ -5152,6 +5167,493 @@ describe("<HarnessModelPicker />", () => {
           .getByRole("option", { name: /GPT-5\.5/ })
           .getAttribute("aria-selected"),
       ).toBe("true");
+    });
+
+    describe("with injected suggestions, a footer and open/close hooks", () => {
+      const CLAUDE_TARGET: ChatRunSettings = {
+        harnessId: "claude",
+        model: "claude-sonnet-4-6",
+        permissionMode: "supervised",
+        reasoningEffort: "high",
+        serviceTier: null,
+        agentMode: "regular",
+        profileId: "work-profile",
+      };
+
+      function suggestion(
+        overrides: Partial<SuggestionRow> & { readonly id: string },
+      ): SuggestionRow {
+        return {
+          kind: "suggestion",
+          harnessId: "codex",
+          modelId: "gpt-5.5",
+          profileId: null,
+          title: overrides.id,
+          subtitle: null,
+          note: null,
+          usage: { kind: "none" },
+          selectable: true,
+          recommended: false,
+          action: { kind: "retry" },
+          ...overrides,
+        };
+      }
+
+      const CLAUDE_ROW = suggestion({
+        id: "model:claude",
+        title: "Sonnet suggestion",
+        harnessId: "claude",
+        modelId: "claude-sonnet-4-6",
+        profileId: "work-profile",
+        recommended: true,
+        action: { kind: "switch", target: CLAUDE_TARGET },
+      });
+      const RETRY_ROW = suggestion({
+        id: "action:retry",
+        title: "Retry suggestion",
+        action: { kind: "retry" },
+      });
+      const WAIT_ROW = suggestion({
+        id: "action:wait",
+        title: "Wait suggestion",
+        action: { kind: "wait", resetsAt: 1_900_000_000_000 },
+      });
+      const DIMMED_ROW = suggestion({
+        id: "model:dimmed",
+        title: "Dimmed suggestion",
+        harnessId: "claude",
+        modelId: "claude-opus-4-7",
+        selectable: false,
+        note: "Rate limited",
+        action: { kind: "switch", target: CLAUDE_TARGET },
+      });
+      const NO_TARGET_ROW = suggestion({
+        id: "model:no-target",
+        title: "No tuple suggestion",
+        harnessId: "claude",
+        modelId: "claude-opus-4-7",
+        selectable: false,
+        action: { kind: "switch", target: null },
+      });
+
+      interface SuggestionSpies {
+        readonly onStageAction: Mock<(row: SuggestionRow | null) => void>;
+        readonly onHiddenByQuery: Mock<() => void>;
+        readonly onOpenChange: Mock<(open: boolean) => void>;
+      }
+
+      function spies(): SuggestionSpies {
+        return {
+          onStageAction: vi.fn(),
+          onHiddenByQuery: vi.fn(),
+          onOpenChange: vi.fn(),
+        };
+      }
+
+      function suggestionEmbedding(input: {
+        readonly rows: ReadonlyArray<SuggestionRow>;
+        readonly spies: SuggestionSpies;
+        readonly stagedRowId: string | null;
+        readonly closeRef: RefObject<(() => void) | null> | null;
+        readonly footer: ReactNode | null;
+        readonly selectionMarked: boolean;
+      }): HarnessModelPickerEmbedding {
+        return {
+          trigger: <button type="button">Routing face</button>,
+          providerSwitchModel: embeddingSwitchModel,
+          selectionMarked: input.selectionMarked,
+          openRef: { current: null },
+          closeRef: input.closeRef,
+          onOpenChange: input.spies.onOpenChange,
+          suggestions: {
+            heading: <div>Suggested heading</div>,
+            rows: input.rows,
+            stagedRowId: input.stagedRowId,
+            onStageAction: input.spies.onStageAction,
+            onHiddenByQuery: input.spies.onHiddenByQuery,
+          },
+          footer: input.footer,
+        };
+      }
+
+      function renderSuggested(input: {
+        readonly rows: ReadonlyArray<SuggestionRow>;
+        readonly stagedRowId: string | null;
+        readonly closeRef: RefObject<(() => void) | null> | null;
+        readonly footer: ReactNode | null;
+        // `false` leaves no row checked, so the first navigable row - the
+        // first suggestion - is where the arrows start.
+        readonly selectionMarked: boolean;
+      }): PickerHarness & { readonly spies: SuggestionSpies } {
+        const spy = spies();
+        const harness = renderPicker({
+          embedding: suggestionEmbedding({ ...input, spies: spy }),
+          storeModels: codexModels(),
+          selection: {
+            harnessId: "codex",
+            modelSlug: "gpt-5.5",
+            profileId: null,
+          },
+        });
+        return { ...harness, spies: spy };
+      }
+
+      function activeOptionText(input: HTMLInputElement): string {
+        const id = input.getAttribute("aria-activedescendant");
+        if (id === null) throw new Error("no active descendant");
+        const element = document.getElementById(id);
+        if (element === null) throw new Error("active descendant not found");
+        return element.textContent;
+      }
+
+      function optionNames(): string[] {
+        return screen
+          .getAllByRole("option")
+          .map((option) => option.textContent);
+      }
+
+      it("puts the heading and the suggestions above the provider's models, and the heading is not an option", async () => {
+        renderSuggested({
+          rows: [CLAUDE_ROW, RETRY_ROW],
+          stagedRowId: null,
+          closeRef: null,
+          footer: null,
+          selectionMarked: true,
+        });
+        await openPickerByTriggerName("Routing face");
+
+        expect(screen.getByText("Suggested heading")).not.toBeNull();
+        const names = optionNames();
+        expect(names[0]).toContain("Sonnet suggestion");
+        expect(names[1]).toContain("Retry suggestion");
+        expect(names[2]).toContain("GPT-5.5");
+        expect(
+          screen
+            .getAllByRole("option")
+            .some((option) => option.textContent === "Suggested heading"),
+        ).toBe(false);
+      });
+
+      it("keeps the suggestions on screen when the rail browses another provider", async () => {
+        renderSuggested({
+          rows: [CLAUDE_ROW, RETRY_ROW],
+          stagedRowId: null,
+          closeRef: null,
+          footer: null,
+          selectionMarked: true,
+        });
+        await openPickerByTriggerName("Routing face");
+        fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+        const names = optionNames();
+        expect(names[0]).toContain("Sonnet suggestion");
+        expect(names[1]).toContain("Retry suggestion");
+        expect(names.some((name) => name.includes("Claude Opus 4.7"))).toBe(
+          true,
+        );
+      });
+
+      it("reaches every suggestion with the arrows, never lands on the heading, and Enter picks the active one", async () => {
+        const { store, spies: spy } = renderSuggested({
+          rows: [CLAUDE_ROW, RETRY_ROW, WAIT_ROW],
+          stagedRowId: null,
+          closeRef: null,
+          footer: null,
+          selectionMarked: false,
+        });
+        const input = await openPickerByTriggerName("Routing face");
+
+        expect(activeOptionText(input)).toContain("Sonnet suggestion");
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        expect(activeOptionText(input)).toContain("Retry suggestion");
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        expect(activeOptionText(input)).toContain("Wait suggestion");
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        expect(activeOptionText(input)).toContain("GPT-5.5");
+        // Back up through the section and stop at its first row: the arrow
+        // never lands on the heading above it.
+        fireEvent.keyDown(input, { key: "ArrowUp" });
+        fireEvent.keyDown(input, { key: "ArrowUp" });
+        fireEvent.keyDown(input, { key: "ArrowUp" });
+        expect(activeOptionText(input)).toContain("Sonnet suggestion");
+        fireEvent.keyDown(input, { key: "ArrowUp" });
+        expect(activeOptionText(input)).toContain("Sonnet suggestion");
+
+        fireEvent.keyDown(input, { key: "End" });
+        expect(activeOptionText(input)).toContain("GPT-4.1");
+        fireEvent.keyDown(input, { key: "Home" });
+        expect(activeOptionText(input)).toContain("Sonnet suggestion");
+
+        fireEvent.keyDown(input, { key: "Enter" });
+        expect(store.getState().selection).toEqual({
+          harnessId: "claude",
+          modelSlug: "claude-sonnet-4-6",
+          profileId: "work-profile",
+        });
+        expect(spy.onStageAction).toHaveBeenLastCalledWith(null);
+      });
+
+      it("Enter on a staged-kind suggestion hands it to the surface and moves no selection", async () => {
+        const { selections, spies: spy } = renderSuggested({
+          rows: [RETRY_ROW, WAIT_ROW],
+          stagedRowId: null,
+          closeRef: null,
+          footer: null,
+          selectionMarked: false,
+        });
+        const input = await openPickerByTriggerName("Routing face");
+        selections.length = 0;
+
+        fireEvent.keyDown(input, { key: "Enter" });
+        expect(spy.onStageAction).toHaveBeenCalledTimes(1);
+        expect(spy.onStageAction).toHaveBeenCalledWith(RETRY_ROW);
+        expect(selections).toEqual([]);
+      });
+
+      it("a cross-provider switch suggestion moves the store's harness, model, account and effort, and the rail follows", async () => {
+        const { store, spies: spy } = renderSuggested({
+          rows: [CLAUDE_ROW, RETRY_ROW],
+          stagedRowId: null,
+          closeRef: null,
+          footer: null,
+          selectionMarked: true,
+        });
+        await openPickerByTriggerName("Routing face");
+        expect(
+          screen
+            .getByRole("tab", { name: "Codex" })
+            .getAttribute("aria-selected"),
+        ).toBe("true");
+
+        fireEvent.click(
+          screen.getByRole("option", { name: /Sonnet suggestion/ }),
+        );
+
+        expect(store.getState().selection).toEqual({
+          harnessId: "claude",
+          modelSlug: "claude-sonnet-4-6",
+          profileId: "work-profile",
+        });
+        expect(store.getState().values.reasoning).toBe("high");
+        expect(
+          screen
+            .getByRole("tab", { name: "Claude" })
+            .getAttribute("aria-selected"),
+        ).toBe("true");
+        expect(spy.onStageAction).toHaveBeenLastCalledWith(null);
+        // The suggestion is the row that reads as chosen, not the catalog row
+        // for the same model.
+        expect(
+          screen
+            .getByRole("option", { name: /Sonnet suggestion/ })
+            .getAttribute("aria-selected"),
+        ).toBe("true");
+      });
+
+      it("a retry or wait suggestion is handed to the surface and touches neither the selection nor the effort", async () => {
+        const {
+          store,
+          selections,
+          reasoningChanges,
+          spies: spy,
+        } = renderSuggested({
+          rows: [CLAUDE_ROW, RETRY_ROW, WAIT_ROW],
+          stagedRowId: null,
+          closeRef: null,
+          footer: null,
+          selectionMarked: true,
+        });
+        await openPickerByTriggerName("Routing face");
+        const before = store.getState().selection;
+        selections.length = 0;
+        reasoningChanges.length = 0;
+
+        fireEvent.click(
+          screen.getByRole("option", { name: /Retry suggestion/ }),
+        );
+        expect(spy.onStageAction).toHaveBeenLastCalledWith(RETRY_ROW);
+        fireEvent.click(
+          screen.getByRole("option", { name: /Wait suggestion/ }),
+        );
+        expect(spy.onStageAction).toHaveBeenLastCalledWith(WAIT_ROW);
+
+        expect(spy.onStageAction).toHaveBeenCalledTimes(2);
+        expect(store.getState().selection).toBe(before);
+        expect(selections).toEqual([]);
+        expect(reasoningChanges).toEqual([]);
+      });
+
+      it("a model row commits and tells the surface nothing is staged any more", async () => {
+        const { store, spies: spy } = renderSuggested({
+          rows: [RETRY_ROW],
+          stagedRowId: RETRY_ROW.id,
+          closeRef: null,
+          footer: null,
+          selectionMarked: true,
+        });
+        await openPickerByTriggerName("Routing face");
+
+        fireEvent.click(screen.getByRole("option", { name: /GPT-4\.1/ }));
+
+        expect(store.getState().selection.modelSlug).toBe("gpt-4.1");
+        expect(spy.onStageAction).toHaveBeenCalledTimes(1);
+        expect(spy.onStageAction).toHaveBeenCalledWith(null);
+      });
+
+      it("a non-selectable suggestion does nothing on click or Enter - no selection, no stage", async () => {
+        const { selections, spies: spy } = renderSuggested({
+          rows: [DIMMED_ROW, NO_TARGET_ROW],
+          stagedRowId: null,
+          closeRef: null,
+          footer: null,
+          selectionMarked: false,
+        });
+        const input = await openPickerByTriggerName("Routing face");
+        selections.length = 0;
+
+        const dimmed = screen.getByRole("option", {
+          name: /Dimmed suggestion/,
+        });
+        expect(dimmed.getAttribute("aria-disabled")).toBe("true");
+        expect(dimmed.textContent).toContain("Rate limited");
+        fireEvent.click(dimmed);
+        fireEvent.click(
+          screen.getByRole("option", { name: /No tuple suggestion/ }),
+        );
+        // The dimmed row is still reachable, and Enter on it is the no-op.
+        expect(activeOptionText(input)).toContain("Dimmed suggestion");
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        expect(selections).toEqual([]);
+        expect(spy.onStageAction).not.toHaveBeenCalled();
+      });
+
+      it("a query hides the section, tells the surface once on the empty-to-non-empty edge, and nothing is checked from it", async () => {
+        const { spies: spy } = renderSuggested({
+          rows: [CLAUDE_ROW, RETRY_ROW],
+          stagedRowId: RETRY_ROW.id,
+          closeRef: null,
+          footer: null,
+          selectionMarked: true,
+        });
+        const input = await openPickerByTriggerName("Routing face");
+        expect(
+          screen
+            .getByRole("option", { name: /Retry suggestion/ })
+            .getAttribute("aria-selected"),
+        ).toBe("true");
+        expect(spy.onHiddenByQuery).not.toHaveBeenCalled();
+
+        fireEvent.change(input, { target: { value: "g" } });
+        expect(spy.onHiddenByQuery).toHaveBeenCalledTimes(1);
+        expect(screen.queryByText("Suggested heading")).toBeNull();
+        expect(
+          screen.queryByRole("option", { name: /Retry suggestion/ }),
+        ).toBeNull();
+        expect(
+          screen.queryByRole("option", { name: /Sonnet suggestion/ }),
+        ).toBeNull();
+        // The staged row's check went with the section: no result is the pick.
+        expect(
+          screen
+            .getAllByRole("option")
+            .filter(
+              (option) => option.getAttribute("aria-selected") === "true",
+            ),
+        ).toEqual([]);
+
+        // Only the edge reports: typing on does not.
+        fireEvent.change(input, { target: { value: "gp" } });
+        expect(spy.onHiddenByQuery).toHaveBeenCalledTimes(1);
+
+        // Clearing brings the section back; the next query is a new edge.
+        fireEvent.change(input, { target: { value: "" } });
+        expect(screen.getByText("Suggested heading")).not.toBeNull();
+        fireEvent.change(input, { target: { value: "gp" } });
+        expect(spy.onHiddenByQuery).toHaveBeenCalledTimes(2);
+      });
+
+      it("renders the footer inside the popover, under the list", async () => {
+        renderSuggested({
+          rows: [RETRY_ROW],
+          stagedRowId: null,
+          closeRef: null,
+          footer: <div>Routing footer</div>,
+          selectionMarked: true,
+        });
+        expect(screen.queryByText("Routing footer")).toBeNull();
+        await openPickerByTriggerName("Routing face");
+
+        const dialog = screen.getByRole("dialog", { name: "Select model" });
+        expect(within(dialog).getByText("Routing footer")).not.toBeNull();
+      });
+
+      it("reports every visible open and close - trigger, Escape, an outside press and closeRef - and nothing on mount", async () => {
+        const closeRef: RefObject<(() => void) | null> = { current: null };
+        const { spies: spy } = renderSuggested({
+          rows: [RETRY_ROW],
+          stagedRowId: null,
+          closeRef,
+          footer: null,
+          selectionMarked: true,
+        });
+        expect(spy.onOpenChange).not.toHaveBeenCalled();
+        expect(closeRef.current).not.toBeNull();
+
+        const input = await openPickerByTriggerName("Routing face");
+        expect(spy.onOpenChange.mock.calls).toEqual([[true]]);
+
+        fireEvent.keyDown(input, { key: "Escape" });
+        await waitFor(() => {
+          expect(spy.onOpenChange.mock.calls).toEqual([[true], [false]]);
+        });
+
+        await openPickerByTriggerName("Routing face");
+        expect(spy.onOpenChange).toHaveBeenLastCalledWith(true);
+        act(() => {
+          closeRef.current?.();
+        });
+        await waitFor(() => {
+          expect(spy.onOpenChange).toHaveBeenLastCalledWith(false);
+        });
+        expect(spy.onOpenChange).toHaveBeenCalledTimes(4);
+
+        await openPickerByTriggerName("Routing face");
+        expect(spy.onOpenChange).toHaveBeenCalledTimes(5);
+        // Radix arms its outside-press listener a tick after mounting.
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+        const outside = document.createElement("div");
+        document.body.append(outside);
+        fireEvent.pointerDown(outside, { button: 0, pointerType: "mouse" });
+        fireEvent.mouseDown(outside);
+        fireEvent.click(outside);
+        await waitFor(() => {
+          expect(spy.onOpenChange).toHaveBeenCalledTimes(6);
+        });
+        expect(spy.onOpenChange).toHaveBeenLastCalledWith(false);
+        outside.remove();
+      });
+
+      it("clears closeRef on unmount", () => {
+        const closeRef: RefObject<(() => void) | null> = { current: null };
+        const spy = spies();
+        const harness = pickerHarness({
+          embedding: suggestionEmbedding({
+            rows: [],
+            spies: spy,
+            stagedRowId: null,
+            closeRef,
+            footer: null,
+            selectionMarked: true,
+          }),
+        });
+        const { unmount } = render(harness.element(false, undefined));
+        expect(closeRef.current).not.toBeNull();
+        unmount();
+        expect(closeRef.current).toBeNull();
+      });
     });
   });
 });

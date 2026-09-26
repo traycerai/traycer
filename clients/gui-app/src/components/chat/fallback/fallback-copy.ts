@@ -232,22 +232,7 @@ export function siblingSwitchingText(count: number): string | null {
 }
 
 /**
- * The destination menu's two section headings.
- *
- * Neither names the policy structure the candidates came from. A group is
- * STRUCTURE, and the vocabulary table bans "tier"/"ladder"/"rung" for exactly
- * that reason; a heading naming the group would be the same thing in a
- * friendlier word, and one rendering the raw `groupId` would put an internal
- * identifier in front of a user. `groupId` keeps same-group rows adjacent and
- * stably ordered here, and nothing more.
- */
-export const OTHER_PROFILES_HEADING = "Other profiles";
-export const EQUIVALENT_MODELS_HEADING = "Equivalent models";
-/** The one row the ladder would take next, marked so the default is visible. */
-export const RECOMMENDED_LABEL = "Recommended";
-export const FINDING_DESTINATIONS_LABEL = "Finding destinations…";
-/**
- * The grace card's menu between the click and the host's answer.
+ * The countdown chooser between the click and the host's answer.
  *
  * Said while `fallback.holdForChoice` is in flight, and it is deliberately in
  * the PRESENT progressive: the countdown is still running until the host says
@@ -257,7 +242,7 @@ export const FINDING_DESTINATIONS_LABEL = "Finding destinations…";
  */
 export const PAUSING_COUNTDOWN_LABEL = "Pausing the countdown…";
 /**
- * The hold the host declined - the menu says so and closes.
+ * The hold the host declined - the chooser says so.
  *
  * NO CAUSE, deliberately (D220). This used to end "— this chat has moved on",
  * which is one cause stated as the only one and unproven at every site that
@@ -272,47 +257,15 @@ export const PAUSING_COUNTDOWN_LABEL = "Pausing the countdown…";
  */
 export const COUNTDOWN_NOT_PAUSED_LABEL = "Couldn't pause the countdown.";
 /**
- * The empty menu, when the host gave no rung-level explanation.
- *
- * Says what is true of BOTH lists, because the menu offers both and a user
- * reading "no equivalent model" would reasonably ask about their other
- * account. When `modelTargetsSkip` is present its host-written label is
- * rendered instead - it is the more specific fact, and `no-group` (the
- * commonest ineligibility, being what a user sees after deleting or narrowing
- * their groups) is precisely the case a generic sentence would fail.
- */
-export const NO_DESTINATIONS_LABEL =
-  "No other profile or equivalent model is available right now.";
-/**
- * The menu that FOUND candidates and can offer none of them.
- *
- * A different sentence from {@link NO_DESTINATIONS_LABEL} because the rows are
- * still on screen underneath, each with the host's own reason. "No other
- * profile … is available" above a list of profiles would read as a
- * contradiction; this names what the user is actually looking at.
- */
-export const NO_SELECTABLE_DESTINATIONS_LABEL =
-  "None of these can be used right now.";
-/**
- * The one transport FAILURE this menu can hit, as opposed to every `outcome`
+ * The one transport FAILURE the chooser can hit, as opposed to every `outcome`
  * above - all of which arrive in a successful response.
  *
- * A constant because the popup's status region has to announce the same
- * sentence the body renders, and two copies of one line is how the ear and the
+ * A constant because the chooser's status region has to announce the same
+ * sentence its heading renders, and two copies of one line is how the ear and the
  * eye start disagreeing.
  */
 export const HOST_UNREACHABLE_LABEL =
   "Couldn't reach this chat's host just now.";
-/**
- * The destination popup's accessible NAME.
- *
- * Radix gives the content `role="dialog"`, so without this it announced as an
- * unnamed dialog - "dialog", and nothing about what opened. One name for all
- * three entry points because it is one dialog doing one thing; what differs
- * between them is the consequence copy in the header, which is its
- * DESCRIPTION.
- */
-export const DESTINATION_MENU_DIALOG_LABEL = "Choose a destination";
 
 /**
  * The one sentence that may claim the chat advanced.

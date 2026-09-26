@@ -9,7 +9,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
 import type { PendingFallback } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { ChatFallbackListTargetsResponse } from "@traycer/protocol/host/chat-fallback";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import {
   createChatSessionStore,
@@ -22,33 +21,96 @@ import {
   disposeAllChatSessions,
   getChatSessionRegistry,
 } from "@/lib/registries/chat-session-registry";
-import { FallbackGraceMenu } from "@/components/chat/fallback/fallback-card-menus";
-import {
-  CHOOSE_DIFFERENTLY_LABEL,
-  PAUSING_COUNTDOWN_LABEL,
-} from "@/components/chat/fallback/fallback-copy";
+import { RoutingDestinationPicker } from "@/components/chat/fallback/routing-destination-picker";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   FAILED_CLAUDE_TUPLE,
   TARGET_CODEX_TUPLE,
   fallbackProfileTarget,
   listTargetsResponse,
   pendingFallback,
-} from "@/components/chat/fallback/__tests__/fallback-fixtures";
+} from "./fallback-fixtures";
+import { kit, resetKit } from "./routing-picker-kit";
 
 /**
- * B1 + B-RECONNECT, through the REAL store and the REAL
- * `useFallbackChoiceLease` hook - the seam `fallback-destination-menu.test.tsx`
- * cannot witness, since that file mocks that hook wholesale (D219 once
- * already this batch; not repeating it). Only the hooks with nothing to do
- * with the lease (list-targets, profile labels, the mutation transport) are
- * mocked below.
+ * B1 + B-RECONNECT, through the REAL session store and the REAL
+ * `useFallbackChoiceLease` hook, against the routing chooser that replaced the
+ * grace card's menu. `routing-destination-picker.test.tsx` mocks the lease
+ * hook wholesale, so it cannot witness the seam this file is for: the
+ * chooser's open/close/unmount/retire calls landing on the store's own
+ * `fallbackHoldForChoice` / `fallbackReleaseChoice`, and the store's answer
+ * (a token, a refusal, a retirement on reconnect) coming back as the
+ * chooser's readiness. Only what has nothing to do with the lease is doubled:
+ * the catalog and providers reads, the listing and the mutation transport.
+ *
+ * "Ready" here is what the chooser shows: the status line says the countdown
+ * is paused, and stops saying it is pausing.
  */
 
 const EPIC_ID = "epic-lease-integration";
 const CHAT_ID = "chat-lease-integration";
 const HOST_ID = "host-lease-integration";
 const TRAVERSAL_ID = "traversal-lease-integration";
+const PAUSING = "Pausing the countdown…";
+const PAUSED = "Countdown paused while you choose.";
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", async () =>
+  (await import("./routing-picker-kit")).hostClientModule(),
+);
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", async () =>
+  (await import("./routing-picker-kit")).catalogModule(),
+);
+vi.mock("@/hooks/providers/use-providers-list-query", async () =>
+  (await import("./routing-picker-kit")).providersListModule(),
+);
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", async () =>
+  (await import("./routing-picker-kit")).providersEnsurePackModule(),
+);
+vi.mock(
+  "@/hooks/providers/use-providers-set-profile-enabled-mutation",
+  async () =>
+    (await import("./routing-picker-kit")).providersSetProfileEnabledModule(),
+);
+vi.mock("@/hooks/host/use-reactive-host-readiness", async () =>
+  (await import("./routing-picker-kit")).reactiveHostReadinessModule(),
+);
+vi.mock("@/hooks/agent/use-host-reachability", async () =>
+  (await import("./routing-picker-kit")).hostReachabilityModule(),
+);
+vi.mock("@/hooks/host/use-addressable-host-id", async () =>
+  (await import("./routing-picker-kit")).addressableHostIdModule(),
+);
+vi.mock("@/hooks/host/use-host-directory-list-query", async () =>
+  (await import("./routing-picker-kit")).hostDirectoryListModule(),
+);
+vi.mock("@/hooks/rate-limits/use-profile-usage-comparison", async () =>
+  (await import("./routing-picker-kit")).usageComparisonModule(),
+);
+vi.mock("@/components/chat/fallback/use-fallback-targets", async () =>
+  (await import("./routing-picker-kit")).listTargetsModule(),
+);
+vi.mock("@/hooks/host/use-host-scoped-mutation", async () =>
+  (await import("./routing-picker-kit")).hostScopedMutationModule(),
+);
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) =>
+    (await import("./routing-picker-kit")).identityModule(
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >(),
+    ),
+);
+vi.mock("@/stores/tabs/use-system-tab-modal", async () =>
+  (await import("./routing-picker-kit")).systemTabModalModule(),
+);
+vi.mock("react-virtuoso", async () =>
+  (await import("./routing-picker-kit")).virtuosoModule(),
+);
+vi.mock("sonner", async () => ({
+  toast: (await import("./routing-picker-kit")).kit.toast,
+}));
 
 function fallbackDto(input: {
   readonly state: PendingFallback["state"];
@@ -234,80 +296,13 @@ function releaseFrames(sent: ChatOwnerActionFrame[]): ChatOwnerActionFrame[] {
   return sent.filter((frame) => frame.kind === "fallback.releaseChoice");
 }
 
-const LISTED_ONE_ROW: ChatFallbackListTargetsResponse = listTargetsResponse({
-  outcome: "listed",
-  failedTuple: FAILED_CLAUDE_TUPLE,
-  profileTargets: [
-    fallbackProfileTarget({
-      profileId: "sibling-profile",
-      label: "sibling-account",
-      severity: "ok",
-      usedPercent: 10,
-      recommended: false,
-      selectable: true,
-      skip: null,
-    }),
-  ],
-  modelTargets: [],
-  modelTargetsSkip: null,
-});
-
-vi.mock("@/components/chat/fallback/use-fallback-targets", () => ({
-  useFallbackListTargets: () => ({
-    data: LISTED_ONE_ROW,
-    isPending: false,
-    isError: false,
-  }),
-}));
-
-vi.mock("@/hooks/providers/use-providers-list-query", () => ({
-  useProvidersListForClient: () => ({ data: undefined }),
-}));
-
-/**
- * `useFallbackModelLabels` alone, kept real everywhere else in the module - see
- * `fallback-grace-card.test.tsx`'s copy of this double for the argument.
- *
- * This file is about the LEASE, not about copy: it renders no assertion on a
- * model string. The double exists only so the real resolver's TanStack queries
- * do not demand a `QueryClientProvider` this suite deliberately does not have -
- * its host plumbing is a hand-built stream, not a query cache. A pass-through
- * is therefore the whole of it.
- */
-vi.mock(
-  "@/components/chat/fallback/fallback-identity",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@/components/chat/fallback/fallback-identity")
-      >();
-    return {
-      ...actual,
-      useFallbackModelLabels: () => (_harnessId: string, model: string) =>
-        model,
-    };
-  },
-);
-
-vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
-  useHostScopedMutationForClient: () => ({
-    mutate: vi.fn(),
-    isPending: false,
-  }),
-}));
-
-vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
-  useSystemTabModalActions: () => ({ openSettings: vi.fn() }),
-}));
-
 /**
  * Reads `pendingFallback` LIVE off the real store and hands it to the real
- * `FallbackGraceMenu` - the same wiring the card does, minus everything about
- * this scenario that is not the lease. `pending === undefined` renders
- * nothing rather than throwing: a frame that clears the DTO entirely (not
- * exercised by any case below) should not crash the harness.
+ * chooser - the wiring the composer's card does, minus everything about this
+ * scenario that is not the lease. A frame that clears the DTO renders
+ * nothing rather than throwing.
  */
-function GraceMenuHarness({
+function ChooserHarness({
   handle,
 }: {
   readonly handle: ChatSessionStoreHandle;
@@ -315,35 +310,74 @@ function GraceMenuHarness({
   const pending = handle.store((state) => state.pendingFallback);
   if (pending === undefined) return null;
   return (
-    <FallbackGraceMenu
-      pending={pending}
-      client={null}
-      epicId={EPIC_ID}
-      chatId={CHAT_ID}
-      hostId={HOST_ID}
-      canAct
-    />
+    <TooltipProvider>
+      <TabHostProvider hostId={HOST_ID}>
+        <RoutingDestinationPicker
+          entry={{ kind: "countdown", pending }}
+          triggerLabel="Choose differently…"
+          triggerVariant="ghost"
+          triggerDisabled={false}
+          canAct
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId={HOST_ID}
+        />
+      </TabHostProvider>
+    </TooltipProvider>
   );
 }
 
-function renderGraceMenu(handle: ChatSessionStoreHandle) {
-  return render(
-    <TabHostProvider hostId={HOST_ID}>
-      <GraceMenuHarness handle={handle} />
-    </TabHostProvider>,
-  );
+function renderChooser(handle: ChatSessionStoreHandle) {
+  return render(<ChooserHarness handle={handle} />);
 }
 
-function openMenu(): void {
-  fireEvent.click(
-    screen.getByRole("button", { name: CHOOSE_DIFFERENTLY_LABEL }),
-  );
+/** The trigger toggles the popover: the same click opens and closes it. */
+function toggleChooser(): void {
+  fireEvent.click(screen.getByRole("button", { name: "Choose differently…" }));
 }
 
-function closeMenu(): void {
-  fireEvent.click(
-    screen.getByRole("button", { name: CHOOSE_DIFFERENTLY_LABEL }),
-  );
+function expectPausing(): void {
+  expect(screen.getByText(PAUSING)).toBeDefined();
+  expect(screen.queryByText(PAUSED)).toBeNull();
+}
+
+function expectPaused(): void {
+  expect(screen.queryByText(PAUSING)).toBeNull();
+  expect(screen.getByText(PAUSED)).toBeDefined();
+}
+
+function setUp() {
+  resetKit();
+  kit.listData = listTargetsResponse({
+    outcome: "listed",
+    failedTuple: FAILED_CLAUDE_TUPLE,
+    profileTargets: [
+      fallbackProfileTarget({
+        profileId: "sibling-profile",
+        label: "sibling-account",
+        severity: "ok",
+        usedPercent: 10,
+        recommended: false,
+        selectable: true,
+        skip: null,
+      }),
+    ],
+    modelTargets: [],
+    modelTargetsSkip: null,
+  });
+  const harness = createHarness();
+  registerHarness(harness);
+  const callbacks = harness.callbacks();
+  emitSnapshot(callbacks, HOLD);
+  return { harness, callbacks };
+}
+
+function firstHoldFrame(harness: Harness) {
+  const frame = holdFrames(harness.sent)[0];
+  if (frame.kind !== "fallback.holdForChoice") {
+    throw new Error("expected a hold frame");
+  }
+  return frame;
 }
 
 afterEach(() => {
@@ -351,23 +385,17 @@ afterEach(() => {
   disposeAllChatSessions();
 });
 
-describe("B1: FallbackGraceMenu over the real lease, five ticket cases", () => {
+describe("B1: the routing chooser over the real lease, five ticket cases", () => {
   it("close-before-ack: the token is released and reopening reuses the in-flight hold, ending held", () => {
-    const harness = createHarness();
-    registerHarness(harness);
-    const callbacks = harness.callbacks();
-    emitSnapshot(callbacks, HOLD);
-    renderGraceMenu(harness.handle);
+    const { harness, callbacks } = setUp();
+    renderChooser(harness.handle);
 
-    openMenu();
+    toggleChooser();
     expect(holdFrames(harness.sent)).toHaveLength(1);
-    const firstClientActionId = holdFrames(harness.sent)[0];
-    if (firstClientActionId.kind !== "fallback.holdForChoice") {
-      throw new Error("expected a hold frame");
-    }
+    const first = firstHoldFrame(harness);
 
     // Close before the ack lands.
-    closeMenu();
+    toggleChooser();
     // The host already took the freeze by the time this close's release
     // would land - the DTO moves to `choosing`.
     act(() => {
@@ -375,42 +403,35 @@ describe("B1: FallbackGraceMenu over the real lease, five ticket cases", () => {
     });
 
     // Reopen: must reuse the in-flight request, never stall.
-    openMenu();
+    toggleChooser();
     expect(holdFrames(harness.sent)).toHaveLength(1);
 
     act(() => {
       emitActionAck(callbacks, {
-        clientActionId: firstClientActionId.clientActionId,
+        clientActionId: first.clientActionId,
         status: "accepted",
         token: "tok-close-before-ack",
       });
     });
 
-    // Falsification: revert `fallbackHoldForChoice`'s `choosing` admission
-    // (see `chat-session-store-choice-lease.test.ts`'s own falsifier) and this
-    // reopen returns `null` - the menu is stuck on the label below forever.
-    expect(screen.queryByText(PAUSING_COUNTDOWN_LABEL)).toBeNull();
+    // Falsification: revert `fallbackHoldForChoice`'s `choosing` admission and
+    // this reopen returns `null` - the chooser is stuck on "Pausing" forever.
+    expectPaused();
     expect(screen.getByText("sibling-account")).toBeDefined();
   });
 
   it("snapshot-before-ack: a same-connection resnapshot to `choosing` while the ack is outstanding does not disturb the pending lease", () => {
-    const harness = createHarness();
-    registerHarness(harness);
-    const callbacks = harness.callbacks();
-    emitSnapshot(callbacks, HOLD);
-    renderGraceMenu(harness.handle);
+    const { harness, callbacks } = setUp();
+    renderChooser(harness.handle);
 
-    openMenu();
-    const pendingHold = holdFrames(harness.sent)[0];
-    if (pendingHold.kind !== "fallback.holdForChoice") {
-      throw new Error("expected a hold frame");
-    }
+    toggleChooser();
+    const pendingHold = firstHoldFrame(harness);
 
     act(() => {
       emitSnapshot(callbacks, CHOOSING);
     });
-    // Still preparing - no token yet - but not stuck once the ack arrives.
-    expect(screen.getByText(PAUSING_COUNTDOWN_LABEL)).toBeDefined();
+    // Still pausing - no token yet - but not stuck once the ack arrives.
+    expectPausing();
 
     act(() => {
       emitActionAck(callbacks, {
@@ -420,23 +441,16 @@ describe("B1: FallbackGraceMenu over the real lease, five ticket cases", () => {
       });
     });
 
-    expect(screen.queryByText(PAUSING_COUNTDOWN_LABEL)).toBeNull();
-    expect(screen.getByText("sibling-account")).toBeDefined();
+    expectPaused();
     expect(holdFrames(harness.sent)).toHaveLength(1);
   });
 
   it("snapshot-after-ack: a same-connection resnapshot to `choosing` after the hold is granted keeps the held token", () => {
-    const harness = createHarness();
-    registerHarness(harness);
-    const callbacks = harness.callbacks();
-    emitSnapshot(callbacks, HOLD);
-    renderGraceMenu(harness.handle);
+    const { harness, callbacks } = setUp();
+    renderChooser(harness.handle);
 
-    openMenu();
-    const heldHold = holdFrames(harness.sent)[0];
-    if (heldHold.kind !== "fallback.holdForChoice") {
-      throw new Error("expected a hold frame");
-    }
+    toggleChooser();
+    const heldHold = firstHoldFrame(harness);
     act(() => {
       emitActionAck(callbacks, {
         clientActionId: heldHold.clientActionId,
@@ -445,8 +459,8 @@ describe("B1: FallbackGraceMenu over the real lease, five ticket cases", () => {
       });
     });
     // The token is held, but the DTO itself has not moved to `choosing` yet -
-    // `preparing` needs BOTH, so this is still the pausing label, not rows.
-    expect(screen.getByText(PAUSING_COUNTDOWN_LABEL)).toBeDefined();
+    // ready needs BOTH, so this is still the pausing line.
+    expectPausing();
 
     act(() => {
       emitSnapshot(callbacks, CHOOSING);
@@ -454,30 +468,22 @@ describe("B1: FallbackGraceMenu over the real lease, five ticket cases", () => {
 
     // Falsification: revert the snapshot write's lease reconciliation to the
     // old unconditional `fallbackChoiceLease: null` - the held token is wiped
-    // here and the menu falls back to "Pausing the countdown…" despite
-    // already holding a valid token.
-    expect(screen.queryByText(PAUSING_COUNTDOWN_LABEL)).toBeNull();
-    expect(screen.getByText("sibling-account")).toBeDefined();
+    // here and the chooser falls back to "Pausing" despite holding a token.
+    expectPaused();
     expect(holdFrames(harness.sent)).toHaveLength(1);
   });
 
   it("reopen-during-release: closing and reopening before the release/ack race resolves reuses the same hold", () => {
-    const harness = createHarness();
-    registerHarness(harness);
-    const callbacks = harness.callbacks();
-    emitSnapshot(callbacks, HOLD);
-    renderGraceMenu(harness.handle);
+    const { harness, callbacks } = setUp();
+    renderChooser(harness.handle);
 
-    openMenu();
-    const firstHold = holdFrames(harness.sent)[0];
-    if (firstHold.kind !== "fallback.holdForChoice") {
-      throw new Error("expected a hold frame");
-    }
-    closeMenu();
+    toggleChooser();
+    const firstHold = firstHoldFrame(harness);
+    toggleChooser();
     act(() => {
       emitSnapshot(callbacks, CHOOSING);
     });
-    openMenu();
+    toggleChooser();
     // The reopen must not mint a second lease.
     expect(holdFrames(harness.sent)).toHaveLength(1);
 
@@ -490,21 +496,15 @@ describe("B1: FallbackGraceMenu over the real lease, five ticket cases", () => {
     });
     // The reopen withdrew the release obligation, so the ack must not send one.
     expect(releaseFrames(harness.sent)).toHaveLength(0);
-    expect(screen.queryByText(PAUSING_COUNTDOWN_LABEL)).toBeNull();
+    expectPaused();
   });
 
-  it("genuine detach: a reconnect that retires the held lease under an open menu re-asks and recovers on the same stream", () => {
-    const harness = createHarness();
-    registerHarness(harness);
-    const callbacks = harness.callbacks();
-    emitSnapshot(callbacks, HOLD);
-    renderGraceMenu(harness.handle);
+  it("genuine detach: a reconnect that retires the held lease under an open chooser re-asks and recovers on the same stream", () => {
+    const { harness, callbacks } = setUp();
+    renderChooser(harness.handle);
 
-    openMenu();
-    const firstHold = holdFrames(harness.sent)[0];
-    if (firstHold.kind !== "fallback.holdForChoice") {
-      throw new Error("expected a hold frame");
-    }
+    toggleChooser();
+    const firstHold = firstHoldFrame(harness);
     act(() => {
       emitActionAck(callbacks, {
         clientActionId: firstHold.clientActionId,
@@ -514,17 +514,16 @@ describe("B1: FallbackGraceMenu over the real lease, five ticket cases", () => {
     });
     // Settle fully - held token AND the DTO agrees the window is frozen -
     // before the detach, so the detach is a regression from a genuinely
-    // steady state rather than from the still-preparing moment.
+    // steady state rather than from the still-pausing moment.
     act(() => {
       emitSnapshot(callbacks, CHOOSING);
     });
-    expect(screen.queryByText(PAUSING_COUNTDOWN_LABEL)).toBeNull();
+    expectPaused();
 
     // A REAL detach: connection drops (bumps connectionEpoch), then the host
     // reports the same traversal back at `hold` WHILE THE STREAM IS STILL
     // DOWN - `emitTurnState`, not `emitSnapshot`, so nothing silently repairs
-    // `connectionStatus` before the reacquire effect's own `hold()` attempt
-    // runs. Retires the lease under the still-open menu.
+    // `connectionStatus` before the reacquire effect's own `hold()` attempt.
     act(() => {
       callbacks.onConnectionStatus("reconnecting", null, null);
     });
@@ -532,9 +531,9 @@ describe("B1: FallbackGraceMenu over the real lease, five ticket cases", () => {
       emitTurnState(callbacks, fallbackDto({ state: "hold", revision: 3 }));
     });
 
-    // The connection is still not `open` at this instant, so the reacquire
-    // effect's own `hold()` attempt fails to send - the menu is briefly stuck.
-    expect(screen.getByText(PAUSING_COUNTDOWN_LABEL)).toBeDefined();
+    // The connection is not `open` at this instant, so the reacquire attempt
+    // fails to send - the chooser is briefly stuck.
+    expectPausing();
 
     // The stream comes back and the host resends the timed hold.
     act(() => {
@@ -561,29 +560,80 @@ describe("B1: FallbackGraceMenu over the real lease, five ticket cases", () => {
         token: "tok-detach-2",
       });
     });
-    // The host confirms the freeze on the new connection - `pending.state`
-    // moves to `choosing` again, exactly as after the first hold.
+    // The host confirms the freeze on the new connection.
     act(() => {
       emitSnapshot(callbacks, fallbackDto({ state: "choosing", revision: 5 }));
     });
 
-    // Falsification: delete the reacquire effect in `FallbackGraceMenu`
-    // entirely - the menu sits on "Pausing the countdown…" forever from the
-    // first `onConnectionStatus("reconnecting", ...)` onward.
-    expect(screen.queryByText(PAUSING_COUNTDOWN_LABEL)).toBeNull();
+    // Falsification: delete the reacquire effect in the chooser entirely - it
+    // sits on "Pausing" forever from the first reconnecting status onward.
+    expectPaused();
     expect(screen.getByText("sibling-account")).toBeDefined();
+  });
+
+  it("the confirm goes out with the token the real store minted, and only once both halves are true", () => {
+    const { harness, callbacks } = setUp();
+    renderChooser(harness.handle);
+
+    toggleChooser();
+    fireEvent.click(screen.getByRole("option", { name: /sibling-account/ }));
+    const switchButton = screen.getByRole("button", { name: "Switch" });
+    if (!(switchButton instanceof HTMLButtonElement)) {
+      throw new Error("expected a Switch button");
+    }
+    expect(switchButton.disabled).toBe(true);
+
+    act(() => {
+      emitActionAck(callbacks, {
+        clientActionId: firstHoldFrame(harness).clientActionId,
+        status: "accepted",
+        token: "tok-confirm",
+      });
+    });
+    expect(switchButton.disabled).toBe(true);
+    act(() => {
+      emitSnapshot(callbacks, CHOOSING);
+    });
+    expect(switchButton.disabled).toBe(false);
+    fireEvent.click(switchButton);
+
+    expect(kit.mutations).toHaveLength(1);
+    expect(kit.mutations[0].variables).toMatchObject({
+      traversalId: TRAVERSAL_ID,
+      revision: 2,
+      leaseToken: "tok-confirm",
+    });
+  });
+
+  it("unmounting the open chooser hands the frozen window back through the real store", () => {
+    const { harness, callbacks } = setUp();
+    const view = renderChooser(harness.handle);
+
+    toggleChooser();
+    act(() => {
+      emitActionAck(callbacks, {
+        clientActionId: firstHoldFrame(harness).clientActionId,
+        status: "accepted",
+        token: "tok-unmount",
+      });
+    });
+    expect(releaseFrames(harness.sent)).toHaveLength(0);
+
+    view.unmount();
+
+    expect(releaseFrames(harness.sent)).toHaveLength(1);
   });
 });
 
 /**
  * B-RECONNECT, precisely: the effect's dependency array is `[open, lease,
  * pending, hold]` - on the WHOLE `pendingFallback` object, not its `state`/
- * `traversalId` fields - because a failed send leaves the lease slot
- * (and therefore `lease`, the guard) untouched, and only a NEW `pending`
- * object (the next authoritative frame) makes the effect re-run to retry.
- * Counted here via a spy on the store's own `fallbackHoldForChoice`, since
- * this file deliberately does not mock `useFallbackChoiceLease` and the hook
- * exposes no call-count of its own.
+ * `traversalId` fields - because a failed send leaves the lease slot (and
+ * therefore `lease`, the guard) untouched, and only a NEW `pending` object (the
+ * next authoritative frame) makes the effect re-run to retry. Counted here via
+ * a spy on the store's own `fallbackHoldForChoice`, since this file
+ * deliberately does not mock `useFallbackChoiceLease` and the hook exposes no
+ * call-count of its own.
  */
 describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-null render", () => {
   function spyOnHold(handle: ChatSessionStoreHandle): {
@@ -598,22 +648,17 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
   }
 
   it("arm 1 (success): retires once, re-asks exactly once, and does not spin on further frames", () => {
-    const harness = createHarness();
-    registerHarness(harness);
-    const callbacks = harness.callbacks();
-    emitSnapshot(callbacks, HOLD);
-    renderGraceMenu(harness.handle);
+    const { harness, callbacks } = setUp();
+    renderChooser(harness.handle);
     const spy = spyOnHold(harness.handle);
 
-    openMenu();
+    toggleChooser();
+    // The store hands the lease back in the same commit, so the retire guard
+    // finds one and does not ask a second time.
     expect(spy.calls()).toBe(1);
-    const firstHold = holdFrames(harness.sent)[0];
-    if (firstHold.kind !== "fallback.holdForChoice") {
-      throw new Error("expected a hold frame");
-    }
     act(() => {
       emitActionAck(callbacks, {
-        clientActionId: firstHold.clientActionId,
+        clientActionId: firstHoldFrame(harness).clientActionId,
         status: "accepted",
         token: "tok-arm1",
       });
@@ -636,41 +681,29 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
     act(() => {
       emitSnapshot(callbacks, fallbackDto({ state: "hold", revision: 5 }));
     });
-    // Falsification: revert the effect's deps to
-    // `[open, lease, pending.state, pending.traversalId, hold]` - this
-    // assertion stays green regardless (nothing here changes `pending.state`
-    // or `.traversalId`), which is exactly why arm 1 alone cannot catch the
-    // regression; arm 2 below is what catches it.
     expect(spy.calls()).toBe(2);
   });
 
   it("arm 2 (stuck send recovers): a failed hold attempt retries on the NEXT frame instead of going silent", () => {
-    const harness = createHarness();
-    registerHarness(harness);
-    const callbacks = harness.callbacks();
-    emitSnapshot(callbacks, HOLD);
-    renderGraceMenu(harness.handle);
+    const { harness, callbacks } = setUp();
+    renderChooser(harness.handle);
     const spy = spyOnHold(harness.handle);
 
-    openMenu();
+    toggleChooser();
     expect(spy.calls()).toBe(1);
-    const firstHold = holdFrames(harness.sent)[0];
-    if (firstHold.kind !== "fallback.holdForChoice") {
-      throw new Error("expected a hold frame");
-    }
     act(() => {
       emitActionAck(callbacks, {
-        clientActionId: firstHold.clientActionId,
+        clientActionId: firstHoldFrame(harness).clientActionId,
         status: "accepted",
         token: "tok-arm2",
       });
     });
 
     // Retirement. The connection is `reconnecting`, and this frame is
-    // delivered via `emitTurnState` rather than `emitSnapshot` specifically so
-    // nothing silently repairs `connectionStatus` before the effect's own
-    // `hold()` call below runs and FAILS to send (`canSendAction` reads
-    // `connectionStatus === "open"`) - the lease slot stays `null`.
+    // delivered via `emitTurnState` rather than `emitSnapshot` so nothing
+    // repairs `connectionStatus` before the effect's own `hold()` call runs
+    // and FAILS to send (`canSendAction` reads `connectionStatus === "open"`)
+    // - the lease slot stays `null`.
     act(() => {
       callbacks.onConnectionStatus("reconnecting", null, null);
     });
@@ -680,18 +713,12 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
     expect(spy.calls()).toBe(2);
     expect(harness.handle.store.getState().fallbackChoiceLease).toBeNull();
 
-    // A SECOND frame arrives while still not `open` - the connection has not
-    // recovered yet, so this must retry AGAIN rather than sit silent because
-    // `lease` never changed on the failed attempt above.
+    // A SECOND frame arrives while still not `open`: it must retry AGAIN
+    // rather than sit silent because `lease` never changed on the failed
+    // attempt above. With the whole `pending` object in the deps this is 3.
     act(() => {
       emitTurnState(callbacks, fallbackDto({ state: "hold", revision: 4 }));
     });
-    // Falsification: revert the deps to
-    // `[open, lease, pending.state, pending.traversalId, hold]`. `pending`
-    // (the object) changed here but `.state`/`.traversalId` did not (both
-    // frames are `hold`/the same traversal), so the reverted effect never
-    // re-runs and this stays at 2 - which is the bug this message exists to
-    // prevent, not a leak to guard against. With the real deps this must be 3.
     expect(spy.calls()).toBe(3);
 
     // Now the connection genuinely recovers and the retry succeeds.
@@ -705,21 +732,14 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
   });
 
   it("control: pending.state === choosing under the same retirement requests nothing (a live window is required to freeze)", () => {
-    const harness = createHarness();
-    registerHarness(harness);
-    const callbacks = harness.callbacks();
-    emitSnapshot(callbacks, HOLD);
-    renderGraceMenu(harness.handle);
+    const { harness, callbacks } = setUp();
+    renderChooser(harness.handle);
     const spy = spyOnHold(harness.handle);
 
-    openMenu();
-    const firstHold = holdFrames(harness.sent)[0];
-    if (firstHold.kind !== "fallback.holdForChoice") {
-      throw new Error("expected a hold frame");
-    }
+    toggleChooser();
     act(() => {
       emitActionAck(callbacks, {
-        clientActionId: firstHold.clientActionId,
+        clientActionId: firstHoldFrame(harness).clientActionId,
         status: "accepted",
         token: "tok-control-choosing",
       });
@@ -738,22 +758,15 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
     expect(spy.calls()).toBe(1);
   });
 
-  it("control: a refused lease is non-null, so it requests nothing and cannot loop", () => {
-    const harness = createHarness();
-    registerHarness(harness);
-    const callbacks = harness.callbacks();
-    emitSnapshot(callbacks, HOLD);
-    renderGraceMenu(harness.handle);
+  it("control: a refused lease is non-null, so it requests nothing and cannot loop - and the chooser says the countdown was not paused", () => {
+    const { harness, callbacks } = setUp();
+    renderChooser(harness.handle);
     const spy = spyOnHold(harness.handle);
 
-    openMenu();
-    const firstHold = holdFrames(harness.sent)[0];
-    if (firstHold.kind !== "fallback.holdForChoice") {
-      throw new Error("expected a hold frame");
-    }
+    toggleChooser();
     act(() => {
       emitActionAck(callbacks, {
-        clientActionId: firstHold.clientActionId,
+        clientActionId: firstHoldFrame(harness).clientActionId,
         status: "rejected",
         token: null,
       });
@@ -762,6 +775,7 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
       "refused",
     );
     expect(spy.calls()).toBe(1);
+    expect(screen.getByText("Couldn't pause the countdown.")).toBeDefined();
 
     // Several further frames on the SAME (non-retired) connection: a refused
     // lease is not `null`, so the effect's own guard excludes it every time.

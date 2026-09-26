@@ -344,13 +344,16 @@ export function useFallbackRunManualRung(
       }
       const message = describeFallbackOutcome(data.outcome);
       if (message === null) return;
+      // An OPEN chooser answers every rung on its own footer line - a Retry or
+      // Wait staged there as much as a switch - so it is the channel while it
+      // is open, whichever rung was sent.
+      if (reportingRef.current.inlineMenuOpen) return;
       if (variables.rung !== "switch") {
-        // Retry / wait-until: bare buttons on a row that does not change, so
-        // the toast is the only channel - and now an unconditional one.
+        // Retry / wait-until from a bare button on a row that does not
+        // change: the toast is the only channel.
         toast(message);
         return;
       }
-      if (reportingRef.current.inlineMenuOpen) return;
       reportingRef.current.publishUnattended(message);
     },
     captureContext: undefined,

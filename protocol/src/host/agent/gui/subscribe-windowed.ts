@@ -8,6 +8,7 @@ import {
   messageSchemaPreMessageDelivery,
   messageSchemaPreBrowser,
   messageSchemaPreFallback,
+  messageSchemaPreReceipt,
   messageSchemaPreShellHost,
 } from "@traycer/protocol/persistence/epic/messages";
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
@@ -841,6 +842,23 @@ export const chatTranscriptWindowSchemaPreBrowser = lazySchema(() =>
 );
 
 /**
+ * Wire-freeze copy of the tail bound to `chat.subscribe@1.15`-`@1.17`: the
+ * live tail with `messages` swapped for `messageSchemaPreReceipt`, so a settled
+ * notice's `receipt` (`1.18`) reaches none of those lines' body channels.
+ * Hand-frozen field-for-field, in the live key order.
+ */
+export const chatTranscriptWindowSchemaPreReceipt = lazySchema(() =>
+  z.object({
+    fromOrdinal: z.number().int().nonnegative(),
+    rowIds: z.array(z.string()).optional(),
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(messageSchemaPreReceipt),
+    events: z.array(chatEventSchema),
+    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+  }),
+);
+
+/**
  * A slice of the skeleton.
  *
  * The skeleton is delivered in chunks rather than inline on the snapshot for
@@ -1037,6 +1055,28 @@ export const chatRangeResponseSchema = lazySchema(() =>
   }),
 );
 export type ChatRangeResponse = z.infer<typeof chatRangeResponseSchema>;
+
+/**
+ * Wire-freeze copy of the range response bound to `chat.subscribe@1.15`-
+ * `@1.17`, for the reason {@link chatTranscriptWindowSchemaPreReceipt} exists:
+ * a scrolled-back range is the second channel a message body reaches those
+ * lines on. Hand-frozen field-for-field, in the live key order.
+ */
+export const chatRangeResponseSchemaPreReceipt = lazySchema(() =>
+  z.object({
+    requestId: rangeRequestIdSchema,
+    epoch: z.number().int().nonnegative(),
+    fromOrdinal: z.number().int().nonnegative(),
+    rowIds: z.array(z.string()),
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(messageSchemaPreReceipt),
+    events: z.array(chatEventSchema),
+    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    reachedStart: z.boolean(),
+    reachedEnd: z.boolean(),
+    truncatedAtOrdinal: z.number().int().nonnegative().optional(),
+  }),
+);
 
 /**
  * Wire-freeze copy of the `range` response bound to `chat.subscribe@1.9` -

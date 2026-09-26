@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -9,6 +10,7 @@ import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileRateLimitSwitchPrompt } from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
 import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
+import type { RoutingDestinationPicker } from "@/components/chat/fallback/routing-destination-picker";
 import { ChatComposerFallbackBanners } from "@/components/chat/fallback/chat-composer-fallback-banners";
 import {
   composerRateLimitAdvisory,
@@ -26,17 +28,26 @@ import {
   providerProfile,
 } from "./fallback-fixtures";
 
-// The banners fill both cards' `menu` slots, so the real destination menu
-// mounts here even while closed - and its list query reaches for a QueryClient
-// this suite has no reason to stand up. Faked at the same seam the menu and
-// manual-rung suites use. Nothing moves: what THIS suite pins is which CARD
-// renders for a given state, and the menu's own behaviour has its own file.
-vi.mock("@/components/chat/fallback/use-fallback-targets", () => ({
-  useFallbackListTargets: () => ({
-    data: undefined,
-    isPending: false,
-    isError: false,
-  }),
+// The banners fill both cards' `menu` slots with the routing chooser. Its own
+// behaviour (rows, hold, confirm) has its own suite; what THIS suite pins is
+// which CARD renders for a given state and what each card hands its chooser -
+// so the chooser is a recording button, which needs no QueryClient and no
+// TabHostProvider.
+const chooser = vi.hoisted(() => ({
+  props: [] as ComponentProps<typeof RoutingDestinationPicker>[],
+}));
+
+vi.mock("@/components/chat/fallback/routing-destination-picker", () => ({
+  RoutingDestinationPicker: (
+    props: ComponentProps<typeof RoutingDestinationPicker>,
+  ) => {
+    chooser.props.push(props);
+    return (
+      <button type="button" disabled={props.triggerDisabled || !props.canAct}>
+        {props.triggerLabel}
+      </button>
+    );
+  },
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
@@ -146,6 +157,7 @@ function visiblePrompt(input: {
 describe("ChatComposerFallbackBanners", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    chooser.props = [];
     // Session-scoped, module-level state - see the store's own doc for why
     // it is deliberately NOT persisted. A dismissal from one test would
     // otherwise hide every later test's card for the same
@@ -177,6 +189,53 @@ describe("ChatComposerFallbackBanners", () => {
     });
     expect(screen.getByTestId("fallback-waiting-card")).toBeDefined();
     expect(screen.queryByTestId("fallback-grace-card")).toBeNull();
+  });
+
+  it("gives the grace card a countdown chooser labelled 'Choose differently…', quiet once switching", () => {
+    const hold = pendingAt("hold");
+    renderBanners({
+      topBannerKind: "fallback",
+      pending: hold,
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    const props = chooser.props.at(-1);
+    expect(props?.entry).toEqual({ kind: "countdown", pending: hold });
+    expect(props?.triggerLabel).toBe("Choose differently…");
+    expect(props?.triggerVariant).toBe("ghost");
+    expect(props?.triggerDisabled).toBe(false);
+    expect(props?.canAct).toBe(true);
+    expect(props?.hostId).toBe("tab-host-b");
+    expect(
+      screen.getByRole("button", { name: "Choose differently…" }),
+    ).toBeDefined();
+    cleanup();
+
+    chooser.props = [];
+    renderBanners({
+      topBannerKind: "fallback",
+      pending: pendingAt("switching"),
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    expect(chooser.props.at(-1)?.triggerDisabled).toBe(true);
+  });
+
+  it("gives the waiting card a waiting chooser labelled 'Switch instead…'", () => {
+    const waiting = pendingAt("waiting");
+    renderBanners({
+      topBannerKind: "fallback",
+      pending: waiting,
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    const props = chooser.props.at(-1);
+    expect(props?.entry).toEqual({ kind: "waiting", pending: waiting });
+    expect(props?.triggerLabel).toBe("Switch instead…");
+    expect(props?.triggerVariant).toBe("ghost");
+    expect(
+      screen.getByRole("button", { name: "Switch instead…" }),
+    ).toBeDefined();
   });
 
   it("renders neither card for retrying even when the fallback slot is claimed", () => {

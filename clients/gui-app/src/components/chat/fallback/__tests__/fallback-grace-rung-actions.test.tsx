@@ -19,14 +19,16 @@ const USER_MESSAGE_ID = "user-msg-grace-rung";
  * `turnId`/`TabHostProvider` gate (the grace card is one per chat and takes
  * its props directly, not through `ChatTranscriptContext`), and no
  * `use-fallback-targets` double, since a `grace_card` surface never mounts
- * `<FallbackDestinationMenu>` at all (see `surface`'s own doc on
- * `ManualRungAffordances`).
+ * `<RoutingDestinationPicker>` from the row (see `surface`'s own doc on
+ * `ManualRungAffordances`). `useIsMutating` is doubled to 0 because the row
+ * reads it through a QueryClient this suite does not stand up.
  */
 const harness = vi.hoisted(() => {
   type Slice = {
     lastFailedAttempt: LastFailedAttempt | undefined;
     access: { readonly canAct: boolean } | null;
     connectionStatus: "connecting" | "open" | "reconnecting" | "closed";
+    chat: null;
     publishConfirmedManualFallbackAction: (input: unknown) => void;
     publishUnattendedFallbackOutcome: (input: unknown) => void;
   };
@@ -34,6 +36,7 @@ const harness = vi.hoisted(() => {
     lastFailedAttempt: undefined,
     access: { canAct: true },
     connectionStatus: "open",
+    chat: null,
     publishConfirmedManualFallbackAction: () => {},
     publishUnattendedFallbackOutcome: () => {},
   });
@@ -57,7 +60,17 @@ const harness = vi.hoisted(() => {
   return { mutate: vi.fn(), store };
 });
 
-vi.mock("@/lib/registries/chat-session-registry", () => ({
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
+  // The row reads "is any rung in flight" through the QueryClient; this suite
+  // mocks the mutation itself and has no client, so nothing is ever in flight.
+  useIsMutating: () => 0,
+}));
+
+vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/registries/chat-session-registry")
+  >()),
   useExistingChatSessionHandle: () => ({ store: harness.store }),
 }));
 
@@ -162,7 +175,7 @@ describe("FallbackGraceRungActions", () => {
   });
 
   // The load-bearing negative: the grace card's own `menu` slot
-  // (`<FallbackGraceMenu>`, leased so it pauses the countdown while the
+  // (`<RoutingDestinationPicker>`, holding the countdown while the
   // popover is open) is the switch control here. `ManualRungAffordances`
   // must never draw its OWN `Switch…` trigger for `surface: "grace_card"`,
   // even when the attempt's `eligibleRungs` includes `"switch"` - two switch

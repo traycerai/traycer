@@ -74,8 +74,8 @@ export function FallbackGraceCard({
   readonly hostId: string;
   readonly canAct: boolean;
   /**
-   * The destination menu, trigger and all - `<FallbackGraceMenu>` in the
-   * composer, `null` where there is no menu to open.
+   * The destination chooser, trigger and all - `<RoutingDestinationPicker>`
+   * in the composer, `null` where there is no chooser to open.
    *
    * A SLOT rather than an `onChooseDifferently` callback. The menu takes a
    * grace-hold LEASE, and the lease's whole lifecycle - the frame, the ack that

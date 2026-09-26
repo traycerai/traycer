@@ -65,8 +65,8 @@ export function FallbackWaitingCard({
   readonly hostId: string;
   readonly canAct: boolean;
   /**
-   * The destination menu, trigger and all - `<FallbackWaitingMenu>` in the
-   * composer, `null` where there is no menu to open.
+   * The destination chooser, trigger and all - `<RoutingDestinationPicker>`
+   * in the composer, `null` where there is no chooser to open.
    *
    * A SLOT rather than an `onSwitchInstead` callback, because the menu owns
    * state this card has no business holding: its open flag, its lease (none,
@@ -220,7 +220,7 @@ export function FallbackWaitingCard({
  * Entering the wait is NOT announced from here, and this region could not do it
  * anyway: it mounts already carrying the deadline, and a live region that
  * arrives with its text announces nothing - the same rule
- * `fallback-destination-menu.tsx` states for its own regions, and the reason
+ * `routing-destination-picker.tsx` states for its own regions, and the reason
  * `FallbackWaitHeadline`'s two returns keep one element at one position rather
  * than swapping the region out. Entry is spoken by the chat's announcer, from
  * the `waiting` sentence in `stores/chats/chat-announcements.ts`. What this

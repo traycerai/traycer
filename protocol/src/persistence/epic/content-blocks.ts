@@ -265,7 +265,101 @@ export type ProviderNoticeNormalizedMetadata = z.infer<
   typeof providerNoticeNormalizedMetadataSchema
 >;
 
+/**
+ * One hop of a settled fallback traversal, as the settled card lists it.
+ *
+ * Every string is host-RENDERED, never an id: the card prints them verbatim,
+ * and a raw profile id or error message would put an account identifier on a
+ * card and into the bug reports it is copied into. `endedLabel` is an open
+ * string for the reason `fallbackTargetSkipSchema.reason` is one - a strict
+ * enum is strict on the CLIENT, and a reason a released build has never heard
+ * of would fail the whole row over a field that is only rendered.
+ */
+export const providerNoticeReceiptStepSchema = lazySchema(() =>
+  z.object({
+    kind: z.enum(["switch", "wait", "retry"]),
+    providerLabel: z.string(),
+    modelLabel: z.string(),
+    profileLabel: z.string(),
+    /** When a `wait` step resumed; `null` on `switch` / `retry`. */
+    resumedAt: z.number().nullable(),
+    endedLabel: z.string(),
+  }),
+);
+export type ProviderNoticeReceiptStep = z.infer<
+  typeof providerNoticeReceiptStepSchema
+>;
+
+/**
+ * The structured account of a traversal that ENDED, carried on the one
+ * `fallback_settled` notice a failure settlement writes onto the latest
+ * attempt's row. The settled card composes on a receipt being present
+ * (`(receipt ?? null) !== null`): every superseded notice shares the
+ * `fallback_settled` kind and carries `null`, so the kind alone cannot tell
+ * the card from a divider.
+ */
+export const providerNoticeReceiptSchema = lazySchema(() =>
+  z.object({
+    causeLabel: z.string(),
+    steps: z.array(providerNoticeReceiptStepSchema),
+  }),
+);
+export type ProviderNoticeReceipt = z.infer<typeof providerNoticeReceiptSchema>;
+
 export const providerNoticeMetadataSchema = lazySchema(() =>
+  z
+    .object({
+      harnessId: harnessIdSchema,
+      noticeKind: providerNoticeKindSchema,
+      tone: providerNoticeToneSchema,
+      title: z.string(),
+      message: z.string().nullable(),
+      details: z.array(providerNoticeDetailSchema),
+      metadata: providerNoticeNormalizedMetadataSchema.nullable(),
+      // A KEY, not a new notice kind or metadata arm (`chat.subscribe@1.18`):
+      // a peer that predates it strips the key and keeps the row, where a new
+      // union member would fail the row whole. Lines `1.10`-`1.17` bind the
+      // hand-frozen `providerNoticeMetadataSchemaPreReceipt` below.
+      //
+      // ABSENT means NOT RECORDED - a notice persisted before the key, or
+      // written by a host too old to know it - and `null` means "recorded,
+      // no receipt", which is what every superseded settlement notice
+      // carries. Neither is a settled card; a reader folds both with
+      // `?? null`. Spelled `.optional()` rather than `.default(null)`, as
+      // `assistantMessageSchema.turnProfile` is and for its reason: a
+      // defaulted key is REQUIRED on the inferred type, and a notice is
+      // written as an object literal across the host, the GUI and their
+      // suites, none of which has a receipt to state. The cost of that
+      // choice is that the compiler no longer notices a copy that drops the
+      // key, so anything rebuilding a notice must spread it, never pick its
+      // fields.
+      receipt: providerNoticeReceiptSchema.nullable().optional(),
+    })
+    .superRefine((notice, ctx) => {
+      if (
+        notice.metadata !== null &&
+        notice.noticeKind !== notice.metadata.type
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "noticeKind must match metadata.type",
+          path: ["metadata", "type"],
+        });
+      }
+    }),
+);
+export type ProviderNoticeMetadata = z.infer<
+  typeof providerNoticeMetadataSchema
+>;
+
+/**
+ * Wire-freeze copy of the notice metadata as `chat.subscribe@1.10` through
+ * `@1.17` ship it: the live shape without the `receipt` that `1.18` added.
+ * Hand-copied field-for-field, NOT `.omit()`-derived from the live object, so
+ * a later key cannot reach those lines through it. Bound through the frozen
+ * text blocks below (`textBlockSchemaPreReceipt`, `textBlockSchemaPreBrowser`).
+ */
+export const providerNoticeMetadataSchemaPreReceipt = lazySchema(() =>
   z
     .object({
       harnessId: harnessIdSchema,
@@ -289,9 +383,6 @@ export const providerNoticeMetadataSchema = lazySchema(() =>
       }
     }),
 );
-export type ProviderNoticeMetadata = z.infer<
-  typeof providerNoticeMetadataSchema
->;
 
 export const browserSessionReferenceSchema = lazySchema(() =>
   z.object({
@@ -329,13 +420,31 @@ export type TextBlock = z.infer<typeof textBlockSchema>;
 
 // Wire-freeze copy from before browser-session references. Released chat
 // snapshots must retain the text fallback without absorbing this live-only
-// enrichment through a shared text-block schema.
+// enrichment through a shared text-block schema. Its notice is the pre-receipt
+// freeze too: every line that binds this block (`1.10`-`1.12`) predates `1.18`.
 const textBlockSchemaPreBrowser = lazySchema(() =>
   z.object({
     ...baseBlockFields,
     type: z.literal("text"),
     text: z.string(),
-    providerNotice: providerNoticeMetadataSchema.nullable().default(null),
+    providerNotice: providerNoticeMetadataSchemaPreReceipt
+      .nullable()
+      .default(null),
+  }),
+);
+
+// Wire-freeze copy of the text block as `chat.subscribe@1.13`-`@1.17` ship it:
+// the browser-session reference present, the notice's `receipt` absent. Bound
+// through `contentBlockSchemaPreReceipt`.
+const textBlockSchemaPreReceipt = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("text"),
+    text: z.string(),
+    providerNotice: providerNoticeMetadataSchemaPreReceipt
+      .nullable()
+      .default(null),
+    browserSession: browserSessionReferenceSchema.optional(),
   }),
 );
 
@@ -2356,6 +2465,33 @@ export const contentBlockSchemaPreShellHost = lazySchema(() =>
 export const contentBlockSchemaPreBrowser = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchemaPreBrowser,
+    reasoningBlockSchema,
+    toolCallBlockSchema,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    planBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    steerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
+
+// ── Wire-freeze variant (pre-receipt, `chat.subscribe@1.13`-`@1.17`) ───────
+//
+// Those lines ship the full live block vocabulary of their day and hold back
+// exactly one thing `1.18` added: the settled `receipt` on a provider notice
+// (`textBlockSchemaPreReceipt`). Every other member binds its live schema, so
+// a field added to one of them later reaches these lines too - the checkpoint
+// digests catch it: freeze the member here before adding it.
+export const contentBlockSchemaPreReceipt = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textBlockSchemaPreReceipt,
     reasoningBlockSchema,
     toolCallBlockSchema,
     fileChangeBlockSchema,

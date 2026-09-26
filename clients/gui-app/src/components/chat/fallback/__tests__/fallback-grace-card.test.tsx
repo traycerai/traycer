@@ -97,6 +97,7 @@ const sessionRegistry = vi.hoisted(() => {
     lastFailedAttempt: LastFailedAttempt | undefined;
     access: { readonly canAct: boolean } | null;
     connectionStatus: "connecting" | "open" | "reconnecting" | "closed";
+    chat: null;
     publishConfirmedManualFallbackAction: (input: unknown) => void;
     publishUnattendedFallbackOutcome: (input: unknown) => void;
   };
@@ -104,6 +105,7 @@ const sessionRegistry = vi.hoisted(() => {
     lastFailedAttempt: undefined,
     access: { canAct: true },
     connectionStatus: "open",
+    chat: null,
     publishConfirmedManualFallbackAction: () => {},
     publishUnattendedFallbackOutcome: () => {},
   });
@@ -127,7 +129,17 @@ const sessionRegistry = vi.hoisted(() => {
   return { store };
 });
 
-vi.mock("@/lib/registries/chat-session-registry", () => ({
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
+  // The row reads "is any rung in flight" through the QueryClient; this suite
+  // mocks the mutation itself and has no client, so nothing is ever in flight.
+  useIsMutating: () => 0,
+}));
+
+vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/registries/chat-session-registry")
+  >()),
   useExistingChatSessionHandle: () => ({ store: sessionRegistry.store }),
 }));
 
