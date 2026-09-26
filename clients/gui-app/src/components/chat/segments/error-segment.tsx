@@ -1,15 +1,26 @@
 import { useCallback } from "react";
 import { AlertTriangle } from "lucide-react";
-import { ENV_CREDENTIAL_AUTH_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
+import {
+  ENV_CREDENTIAL_AUTH_ERROR_CODE,
+  QUEUE_PAUSED_AFTER_ERROR_CODE,
+} from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
-import type { AgentFailure } from "@traycer/protocol/persistence/epic/content-blocks";
-import { FallbackNoticeSettingsLink } from "@/components/chat/fallback/fallback-notice-attribution";
+import type {
+  AgentFailure,
+  AgentFailureReason,
+} from "@traycer/protocol/persistence/epic/content-blocks";
 import { FallbackManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
+import {
+  RoutingSettledCard,
+  type RoutingSettledNotice,
+} from "@/components/chat/fallback/routing-settled-card";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { Button } from "@/components/ui/button";
 import {
   agentFailureHeadline,
   agentFailurePresentation,
+  presentationForUntypedCode,
+  type AgentFailurePresentation,
 } from "@/components/chat/segments/agent-failure-presentation";
 import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -74,10 +85,9 @@ interface ErrorSegmentProps {
    * The host's typed description of why the turn died, or `null` on a row from
    * before the payload existed (or one no turn produced).
    *
-   * What it decides here is which remedy the row offers. A signed-out failure
-   * gets the fallback policy link and nothing more - the re-auth banner is the
-   * path back, and a second "retry" beside it would send the same request to
-   * the same dead account.
+   * What it decides here is how the row presents, and which action leads on
+   * the failed-turn card: Switch after a rate limit or billing stop, Retry
+   * after anything else, a sign-out included (spec Flow 4).
    */
   failure: AgentFailure | null;
   /**
@@ -87,23 +97,39 @@ interface ErrorSegmentProps {
    * attempts offers them once rather than three times.
    */
   turnId: string | null;
+  /**
+   * The settled routing notice this row absorbs, or `null` - set only on the
+   * anchor error of a row the projection paired with a receipt-carrying notice
+   * (`ChatMessage.routingSettledNoticeId`). The row then renders the settled
+   * card instead of the plain failed-turn card.
+   */
+  settledNotice: RoutingSettledNotice | null;
+  /** The absorbed notice's own find unit, painted by the settled card. */
+  settledNoticeFindUnitId: string | null;
 }
 
 /**
- * The one remedy an `auth` failure's row offers.
+ * How the row presents, and its headline when it is an interruption.
  *
- * Deliberately a LINK and not an action. The chat is signed out of the account
- * this turn ran on: a retry would fail identically, and a switch would be the
- * fallback policy's decision to make rather than a button's. What the row can
- * usefully say is where the policy that governs the next failure lives - the
- * composer's re-auth banner owns the actual way back in.
+ * A typed reason decides it; a row with none is red unless its CODE is one the
+ * client can vouch for (`presentationForUntypedCode` - a torn-down session is
+ * "Session ended", not an error).
  */
-function FallbackAuthSettingsAction() {
-  return (
-    <div className="mt-1 flex">
-      <FallbackNoticeSettingsLink />
-    </div>
-  );
+function errorRowPresentation(
+  reason: AgentFailureReason | null,
+  code: string | null,
+): {
+  readonly presentation: AgentFailurePresentation;
+  readonly headline: string | null;
+} {
+  if (reason === null) {
+    const untyped = presentationForUntypedCode(code);
+    if (untyped !== null) return untyped;
+  }
+  return {
+    presentation: agentFailurePresentation(reason),
+    headline: agentFailureHeadline(reason),
+  };
 }
 
 /**
@@ -156,7 +182,21 @@ function ErrorSegmentHeading({
 // Static error row. Auth errors (`code: "auth"`) render here like any other
 // error - the durable transcript row is what keeps a headless (A2A-triggered)
 // auth failure visible after the composer's re-auth banner clears.
-export function ErrorSegment({
+//
+// The queue-pause notice renders NOTHING. It is an error block by type only -
+// "N queued messages were held" - and the Message Queue panel's paused pill
+// already says it, with the Resume button beside it (user ruling, 2026-09-26:
+// the panel is the one surface for a held queue). A second red card saying
+// the same thing in the transcript was the other half of the "two errors for
+// one failure" report. Checked before any hook, and a component rather than a
+// caller's filter, so every transcript that still carries one - persisted rows
+// included - renders it the same way.
+export function ErrorSegment(props: ErrorSegmentProps) {
+  if (props.code === QUEUE_PAUSED_AFTER_ERROR_CODE) return null;
+  return <ErrorSegmentCard {...props} />;
+}
+
+function ErrorSegmentCard({
   code,
   findUnitId,
   message,
@@ -164,6 +204,8 @@ export function ErrorSegment({
   harnessId,
   failure,
   turnId,
+  settledNotice,
+  settledNoticeFindUnitId,
 }: ErrorSegmentProps) {
   // Built at CLICK time, never at render. This row is durable transcript: it
   // mounts whenever the chat is opened, which is one or more commits BEFORE
@@ -195,23 +237,50 @@ export function ErrorSegment({
       ),
     [code, message, recoverable],
   );
+  const reportAction = (
+    <ReportIssueAction
+      context={buildReportContext}
+      presentation="icon"
+      className="-mt-1 -mr-1 shrink-0"
+    />
+  );
+  const actions =
+    turnId === null ? null : <FallbackManualRungActions turnId={turnId} />;
+  // Routing tried everything on this turn and settled: ONE card carrying the
+  // routing account and this row's actions, where this error was. The notice
+  // itself renders nothing beside it (`AssistantMessageBody`).
+  if (settledNotice !== null) {
+    return (
+      <RoutingSettledCard
+        notice={settledNotice}
+        noticeFindUnitId={settledNoticeFindUnitId}
+        errorMessage={message}
+        errorCode={code}
+        reportAction={reportAction}
+        actions={actions}
+      />
+    );
+  }
   // Which of the two rows this is. A provider refusing a turn is not a crash,
   // and rendering it as one - red rule, uppercase ERROR, the raw reason code in
   // a red monospace chip - made the commonest thing that happens to a working
   // setup look like something broke. See `agent-failure-presentation.ts` for
   // why this classification is its own question rather than routing eligibility
   // reused for colour.
-  const presentation = agentFailurePresentation(failure?.reason ?? null);
+  const { presentation, headline } = errorRowPresentation(
+    failure?.reason ?? null,
+    code,
+  );
   const interrupted = presentation === "interrupted";
-  const headline = agentFailureHeadline(failure?.reason ?? null);
   return (
     <div
       data-chat-find-unit={findUnitId ?? undefined}
       data-failure-presentation={presentation}
       className={cn(
         "flex w-full flex-col gap-2 rounded-md border px-3 py-2 text-ui-sm",
+        // The status recipe (AGENTS.md "Status colors"), one class per role.
         interrupted
-          ? "border-warning/40 bg-warning/5"
+          ? "border-warning/30 bg-warning/10"
           : "border-destructive/30 bg-destructive/5",
       )}
     >
@@ -235,16 +304,9 @@ export function ErrorSegment({
           {code === ENV_CREDENTIAL_AUTH_ERROR_CODE ? (
             <EnvCredentialSettingsAction harnessId={harnessId} />
           ) : null}
-          {failure?.reason === "auth" ? <FallbackAuthSettingsAction /> : null}
-          {turnId === null ? null : (
-            <FallbackManualRungActions turnId={turnId} />
-          )}
+          {actions}
         </div>
-        <ReportIssueAction
-          context={buildReportContext}
-          presentation="icon"
-          className="-mt-1 -mr-1 shrink-0"
-        />
+        {reportAction}
       </div>
     </div>
   );

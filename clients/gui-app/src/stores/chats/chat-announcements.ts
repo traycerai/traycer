@@ -9,12 +9,17 @@ import type { ProviderNoticeDetail } from "@traycer/protocol/persistence/epic/co
 import type { ChatMessage } from "@/stores/composer/chat-store";
 import {
   DONT_SWITCH_LABEL,
+  DONT_WAIT_LABEL,
   FRESH_SESSION_HELPER,
+  SIGN_IN_INSTEAD_LABEL,
   STOP_WAITING_LABEL,
   queuedMessagesMovingText,
   queuedMessagesReturningText,
 } from "@/components/chat/fallback/fallback-copy";
-import { pendingFallbackResumesFailedTuple } from "@/components/chat/fallback/fallback-identity";
+import {
+  pendingFallbackOffersSignIn,
+  pendingFallbackResumesFailedTuple,
+} from "@/components/chat/fallback/fallback-identity";
 import { isFallbackNoticeKind } from "@/components/chat/fallback/fallback-notice-kinds";
 import { formatWaitTime } from "@/lib/relative-time";
 
@@ -339,12 +344,30 @@ function fallbackTupleAnnouncementKey(tuple: ChatRunSettings | null): string {
 }
 
 /**
+ * The button the countdown card offers to refuse this plan, as it is labelled.
+ *
+ * The card names what it refuses - "Don't wait" over a wait - and a signed-out
+ * traversal's refusal is "Sign in instead", so an announcer pointing at a
+ * fixed "Don't switch" would name a button that is not there. Same predicates
+ * as the card (`countdownRefusalLabel`, `pendingFallbackOffersSignIn`).
+ */
+function countdownRefusalAction(
+  pending: PendingFallback,
+  plan: FallbackAnnouncementPlan | null,
+): string {
+  if (pendingFallbackOffersSignIn(pending)) {
+    return `Select ${SIGN_IN_INSTEAD_LABEL} to cancel and sign in.`;
+  }
+  const label = plan?.action === "wait" ? DONT_WAIT_LABEL : DONT_SWITCH_LABEL;
+  return `Select ${label} to cancel.`;
+}
+
+/**
  * The countdown clause, and the one part of it that is not rung-agnostic.
  *
  * Two of the three forms say nothing about WHAT is due, and are true on every
- * rung: "cancel" is honest whatever the plan would have done, and
- * `DONT_SWITCH_LABEL` names a button the grace card renders unconditionally,
- * so pointing at it is never a lie even where the plan is not a switch.
+ * rung: "cancel" is honest whatever the plan would have done, and the refusal
+ * named is the one the card draws for this plan ({@link countdownRefusalAction}).
  *
  * The due-now form named a switch, and only one rung has one. `retry` attempts
  * the same tuple again, `wait` parks until a reset, `notify` stops and leaves
@@ -358,8 +381,8 @@ function cancelOpportunityText(
   deadline: number | null,
   now: number,
   planIsSwitch: boolean,
+  action: string,
 ): string {
-  const action = `Select ${DONT_SWITCH_LABEL} to cancel.`;
   if (deadline === null) return action;
   const seconds = Math.max(0, Math.ceil((deadline - now) / 1_000));
   if (seconds === 0) {
@@ -445,7 +468,12 @@ function fallbackHoldText(
   // it waits for one; this clause only claims a switch is coming, which is
   // true of the rung from the moment the host names it.
   parts.push(
-    cancelOpportunityText(pending.deadline, now, plan?.action === "switch"),
+    cancelOpportunityText(
+      pending.deadline,
+      now,
+      plan?.action === "switch",
+      countdownRefusalAction(pending, plan),
+    ),
   );
   // Everything this wrapper adds - the fresh-session line, the queued-message
   // count, the countdown - names no tuple, so the identities are the inner

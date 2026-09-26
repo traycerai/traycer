@@ -1,6 +1,9 @@
-import type {
-  ChatFallbackListTargetsResponse,
-  FallbackActionOutcome,
+import {
+  fallbackRungRefusalKindSchema,
+  type ChatFallbackListTargetsResponse,
+  type FallbackActionOutcome,
+  type FallbackRungRefusalDetail,
+  type FallbackRungRefusalKind,
 } from "@traycer/protocol/host/chat-fallback";
 import type {
   FallbackSwitchDisposition,
@@ -15,14 +18,19 @@ import type { ProfileRateLimitSeverity } from "@/lib/rate-limits/rate-limit-scop
  *
  * Centralised because the vocabulary is FIXED by the UX spec's table and is the
  * kind of thing that drifts one card at a time. The words that must never
- * appear anywhere below: "tier", "ladder", "rung", "grace", "Inherit", a raw
- * reason code, or a time this client invented. The words that must: "profile",
- * "Terminal account", "equivalent model", "Don't switch", "Stop waiting", and
- * provider names from `PROVIDER_DISPLAY_NAMES`.
+ * appear anywhere below: "tier", "ladder", "rung", "grace", "fallback",
+ * "Inherit", a raw reason code, or a time this client invented. The words that
+ * must: "profile", "Terminal account", "equivalent model", "Don't switch",
+ * "Stop waiting", and provider names from `PROVIDER_DISPLAY_NAMES`.
  *
- * A bare "Cancel" is banned for the two card actions on purpose: both keep the
- * error and leave the queue paused, so "Cancel" would read as a no-op undo of
- * something that has not happened yet.
+ * A bare "Cancel" is banned for the card refusals on purpose: every one keeps
+ * the error and leaves the queue paused, so "Cancel" would read as a no-op
+ * undo of something that has not happened yet.
+ *
+ * No text-link actions (user ruling, 2026-09-26). Every label below that names
+ * an action is rendered on a real `Button` with a variant - one filled primary
+ * per card, the rest outlined - and never as a link or a ghost caption. A
+ * routing card's settings entry is its gear icon, not a "Model routing" link.
  */
 
 /**
@@ -50,48 +58,81 @@ export function fallbackReasonLabelFor(reason: string): string | null {
   return REASON_LABEL_BY_CODE.get(reason) ?? null;
 }
 
-/** "Don't switch" - the grace card's refusal. Never "Cancel". */
+/** "Don't switch" - the countdown card's refusal for a switch. Never "Cancel". */
 export const DONT_SWITCH_LABEL = "Don't switch";
+/** The countdown card's refusal when the plan is a wait. */
+export const DONT_WAIT_LABEL = "Don't wait";
 /** "Stop waiting" - the waiting card's and the background row's refusal. */
 export const STOP_WAITING_LABEL = "Stop waiting";
-export const CHOOSE_DIFFERENTLY_LABEL = "Choose differently…";
-export const SWITCH_INSTEAD_LABEL = "Switch instead…";
 /**
- * The error card's own menu trigger.
- *
- * Shorter than its two card siblings on purpose: "Switch instead" and "Choose
- * differently" are both answers to something already in motion, and there is
- * nothing in motion on a failed row - the switch IS the action, not an
- * alternative to one.
+ * The countdown card's productive action, one per plan: end the countdown now
+ * and let the step the host planned run (`chat.fallback.proceed`). Two, not
+ * three: a countdown never plans a retry (the transient series arms straight
+ * into `retrying`, with no window to end early).
  */
-export const SWITCH_LABEL = "Switch…";
-export const SIGN_IN_INSTEAD_LABEL = "Sign in instead";
+export const SWITCH_NOW_LABEL = "Switch now";
+export const WAIT_NOW_LABEL = "Wait now";
 /**
- * The link every routing surface carries back to its settings page.
+ * The picker's entry where there is no destination chip to click: beside the
+ * tuple on a wait plan, and as the waiting card's filled button.
+ */
+export const CHOOSE_ANOTHER_MODEL_LABEL = "Choose another model…";
+/**
+ * The failed-turn card's picker trigger.
  *
- * "Model routing", not "Fallback settings". Two changes in one string, both
- * deliberate:
+ * Nothing is in motion on a failed row, so the switch IS the action rather than
+ * an alternative to one - hence a verb and a destination to come, not
+ * "instead" or "another".
+ */
+export const SWITCH_LABEL = "Switch to…";
+export const SIGN_IN_INSTEAD_LABEL = "Sign in instead";
+/** The return card's three answers, in the order the card draws them. */
+export const SWITCH_BACK_LABEL = "Switch back";
+export const DONT_ASK_FOR_CHAT_LABEL = "Don't ask for this chat";
+/**
+ * Beside a disabled action row while the chat stream is down (or this reader
+ * cannot steer the chat). Without it the greyed buttons read as broken.
+ */
+export const RECONNECTING_LABEL = "Reconnecting…";
+/** Beside the countdown card's disabled row while the host resolves its plan. */
+export const DECIDING_LABEL = "Deciding…";
+/**
+ * The routing card's hide control, as its tooltip says it. Hiding cancels
+ * nothing - the countdown or the wait runs on - which is the one thing a user
+ * might fear a × does here.
+ */
+export const HIDE_ROUTING_CARD_LABEL = "Hide. Routing continues.";
+/** The gear's accessible name: what the icon opens. */
+export const ROUTING_SETTINGS_LABEL = "Model routing settings";
+/** The waiting card's pill: a wait moves nothing. */
+export const SAME_SESSION_LABEL = "same settings, same session";
+/**
+ * The settings entry on surfaces that still carry one as a labelled button -
+ * the divider notices' expanded details and the resumed-turn marker. Routing
+ * cards carry a gear instead ({@link ROUTING_SETTINGS_LABEL}).
  *
- *   - **the noun.** "Fallback" named a mechanism and taught a reader nothing;
- *     the feature is a routing table the user authors, and "routing" is the
- *     word the category already uses for exactly this. It is the ONE place the
- *     feature's name is spelled in chat, which is why it lives as a constant.
- *   - **no trailing "settings".** The card is already this feature. A chip
- *     reading "Model routing settings" inside a routing card names the noun
- *     twice; the chip is a link to the page, and the page is called this.
+ * "Model routing", not "Fallback settings": "fallback" named a mechanism, and
+ * the feature is a routing table the user authors.
  */
 export const FALLBACK_SETTINGS_LABEL = "Model routing";
+/** The settled card's receipt when routing ran no step at all. */
+export const NOTHING_COULD_BE_TRIED_LABEL = "Nothing could be tried";
+/** The settled card's disclosure over the host's raw detail rows. */
+export const BUG_REPORT_DETAILS_LABEL = "Details for a bug report";
+/**
+ * The Message Queue panel's paused pill when the host paused it because a turn
+ * failed (`queue.pausedReason` `turn_error` / `routing`), and its tooltip.
+ */
+export const QUEUE_PAUSED_AFTER_ERROR_LABEL = "Paused after an error";
+export const QUEUE_PAUSED_AFTER_ERROR_TOOLTIP =
+  "Held because the last turn failed. Retry or switch sends it after; Resume sends it now.";
 
 /**
- * The consequence helper both refusals carry.
- *
- * Says what is KEPT rather than what is stopped, because that is the part a
- * user cannot see: the error is already in the transcript and the queue is
- * already paused, so pressing either button changes nothing about the turn -
- * it only ends the host's attempt to rescue it.
+ * "New session from this transcript" - the cost line's own form of
+ * {@link FRESH_SESSION_HELPER}, one clause among others on a line joined with
+ * " · " rather than a sentence of its own.
  */
-export const KEEPS_THE_ERROR_HELPER =
-  "keeps the error — you can retry from the message";
+export const NEW_SESSION_CLAUSE = "New session from this transcript";
 
 /**
  * What a switch costs, stated on every surface that offers one.
@@ -146,34 +187,19 @@ export function switchConsequencesText(
 }
 
 /**
- * "N queued messages are waiting with it."
- *
- * The waiting card's counterpart to {@link queuedMessagesMovingText}, and a
- * separate sentence rather than the same one reworded: a wait moves nothing.
- * The queue is held on the tuple it already carries and resumes on that same
- * tuple, so "will run on the new settings" would promise a change that a wait
- * is specifically the alternative to. Hidden at zero for the same reason.
- */
-export function queuedMessagesWaitingText(count: number): string | null {
-  if (count <= 0) return null;
-  return count === 1
-    ? "1 queued message is waiting with it."
-    : `${count} queued messages are waiting with it.`;
-}
-
-/**
  * "and moves N queued messages back".
  *
- * The third member of the family, and a clause rather than a sentence: the
- * return banner states the whole consequence in one line ("Applies to your next
- * message and moves 2 queued messages back"), because switching back moving the
- * queue too is the one rule that copy has to carry. Leaving the queue on the
- * fallback while the next fresh send routes to the preferred account would
- * interleave two providers in one chat with nobody told.
+ * A clause rather than a sentence: the announcer states the return's whole
+ * consequence in one line ("Applies to your next message and moves 2 queued
+ * messages back"), because switching back moving the queue too is the one
+ * rule that copy has to carry. Leaving the queue on the previous account while
+ * the next fresh send routes to the preferred one would interleave two
+ * providers in one chat with nobody told.
  *
- * All three helpers say deliberately DIFFERENT things and must not converge: a
+ * The queue helpers say deliberately DIFFERENT things and must not converge: a
  * wait moves nothing, a switch moves messages forward onto new settings, and a
- * return moves them back. Hidden at zero like its siblings.
+ * return moves them back (see {@link queuedWaitingClause} and its siblings for
+ * the cards' forms). Hidden at zero.
  */
 export function queuedMessagesReturningText(count: number): string | null {
   if (count <= 0) return null;
@@ -219,16 +245,60 @@ export function fallbackLowUsageClause(input: {
 }
 
 /**
- * "N other chats in this task are also switching."
+ * "N other chats in this task are also switching" - a cost-line clause.
  *
  * Informational only - there is no action, and deliberately so: picks are per
  * chat (the task-wide variant was designed and dropped). Hidden at zero.
  */
-export function siblingSwitchingText(count: number): string | null {
+export function siblingSwitchingClause(count: number): string | null {
   if (count <= 0) return null;
   return count === 1
-    ? "1 other chat in this task is also switching."
-    : `${count} other chats in this task are also switching.`;
+    ? "1 other chat in this task is also switching"
+    : `${count} other chats in this task are also switching`;
+}
+
+/**
+ * The routing cards' cost-line clauses. Each is a CLAUSE, joined with the
+ * others by " · " on one line that appears only when one of them is true -
+ * never a row of sentences stacked under the buttons.
+ *
+ * The three queue clauses say deliberately different things, for the reason
+ * {@link queuedMessagesReturningText} gives: a switch moves the queue forward
+ * onto new settings, a wait moves nothing, a return moves it back. Hidden at
+ * zero, like their sentence siblings.
+ */
+export function queuedMovingClause(count: number): string | null {
+  if (count <= 0) return null;
+  return count === 1
+    ? "1 queued message moves with it"
+    : `${count} queued messages move with it`;
+}
+
+export function queuedWaitingClause(count: number): string | null {
+  if (count <= 0) return null;
+  return count === 1
+    ? "1 queued message waits with it"
+    : `${count} queued messages wait with it`;
+}
+
+export function queuedReturningClause(count: number): string | null {
+  if (count <= 0) return null;
+  return count === 1
+    ? "moves 1 queued message back"
+    : `moves ${count} queued messages back`;
+}
+
+/** The countdown card's pointer at its picker, while the picker can open. */
+export const CHANGE_DESTINATION_CLAUSE = "click the destination to change it";
+/** The return card's timing: a switch-back takes effect on the next send. */
+export const APPLIES_TO_NEXT_MESSAGE_CLAUSE = "Applies to your next message";
+
+/** The clauses that are true, as one line - or `null` when none is. */
+export function joinCostClauses(
+  clauses: ReadonlyArray<string | null>,
+): string | null {
+  const present = clauses.filter((clause): clause is string => clause !== null);
+  return present.length === 0 ? null : present.join(" · ");
 }
 
 /**
@@ -501,4 +571,243 @@ export function describeFallbackOutcome(
       // closing silently as though it had worked.
       return "Couldn't switch back — see the note in the transcript.";
   }
+}
+
+/**
+ * Which of the failed-turn card's actions survive a refusal.
+ *
+ * `none` removes the action row and leaves the sentence; `retry_and_switch`
+ * and `switch` keep those buttons (a wait that was refused is not offered
+ * again); `all` keeps the row as it was, because pressing again can work.
+ */
+export type RefusalRemainingActions =
+  | "none"
+  | "retry_and_switch"
+  | "switch"
+  | "all";
+
+/** What the failed-turn card says, inline, where a refused action was. */
+export interface RefusalNoteCopy {
+  /**
+   * The sentence, or `null` where another surface is already saying it - a
+   * refusal because routing is handling the turn has the countdown or the
+   * waiting card on screen, and a second line here would be the same fact
+   * twice.
+   */
+  readonly text: string | null;
+  readonly remaining: RefusalRemainingActions;
+}
+
+/**
+ * The actions each refusal kind leaves when the host says pressing again will
+ * NOT help (`retryable: false`). Total over the vocabulary with no default,
+ * so a kind the protocol adds is a compile error here rather than a card that
+ * silently keeps or drops its buttons.
+ */
+const REFUSAL_REMAINING_BY_KIND: Readonly<
+  Record<FallbackRungRefusalKind, RefusalRemainingActions>
+> = {
+  turn_running: "none",
+  routing_active: "none",
+  worktree_missing: "none",
+  no_workspace: "none",
+  message_changed: "none",
+  prelaunch_failed: "retry_and_switch",
+  reset_passed: "retry_and_switch",
+  no_verified_reset: "retry_and_switch",
+  host_unavailable: "all",
+  settings_missing: "none",
+  storage_failed: "all",
+  target_unusable: "switch",
+  unknown: "all",
+};
+
+/**
+ * The two kinds whose row goes away whatever `retryable` says: the chat is
+ * busy with something else, and the host brings the actions back itself (by
+ * naming the attempt again) once it is not.
+ */
+const ROW_HIDDEN_KINDS: ReadonlySet<FallbackRungRefusalKind> = new Set([
+  "turn_running",
+  "routing_active",
+]);
+
+/**
+ * The sentence for one refusal kind. `hostLabel` is the TAB host's directory
+ * label - never anything from the detail, whose strings are the host's fixed
+ * copy and carry no identifiers by contract.
+ */
+function refusalKindText(
+  kind: FallbackRungRefusalKind,
+  hostLabel: string | null,
+): string | null {
+  switch (kind) {
+    case "turn_running":
+      return "This chat is busy. The actions come back when the current turn ends.";
+    case "routing_active":
+      return null;
+    case "worktree_missing":
+      return hostLabel === null
+        ? "This chat's worktree no longer exists on its host. Start a new chat from this task."
+        : `This chat's worktree no longer exists on ${hostLabel}. Start a new chat from this task.`;
+    case "no_workspace":
+      return "This chat has no folder to run in any more. Start a new chat from this task.";
+    case "message_changed":
+      return "The original message changed, so it can't be replayed. Send it again from the composer.";
+    case "prelaunch_failed":
+      return "Couldn't start the replacement turn. Try again, or switch.";
+    case "reset_passed":
+      return "That limit has reset. Retry instead.";
+    case "no_verified_reset":
+      return describeWaitDisposition("no_verified_reset", null);
+    case "host_unavailable":
+      return "This chat's host is restarting. Try again in a moment.";
+    case "settings_missing":
+      return "This chat has no model set. Pick one in the composer and send again.";
+    case "storage_failed":
+      return "Couldn't save this chat's state just now. Try again.";
+    case "target_unusable":
+      return "That model can't be used right now. Pick another.";
+    case "unknown":
+      return null;
+  }
+}
+
+/**
+ * What the failed-turn card says when the host refused a manual action and
+ * said why (`chat.fallback.runManualRung@1.1`'s `detail`).
+ *
+ * The kind is an OPEN string on the wire, so it is parsed here: a kind this
+ * build knows maps to its own copy, and one it does not - or `unknown`, the
+ * host's residue - renders the host's `label`, a fixed sentence per kind
+ * written by the host's copy table, and keeps every button. `retryable` is the
+ * host's word on whether pressing again can work, so it keeps the row whole;
+ * the table above is what remains when it cannot.
+ */
+export function describeRefusalDetail(
+  detail: FallbackRungRefusalDetail,
+  hostLabel: string | null,
+): RefusalNoteCopy {
+  // A blank label is no sentence at all; the caller then says the neutral one.
+  const hostSentence = detail.label.trim() === "" ? null : detail.label;
+  const parsed = fallbackRungRefusalKindSchema.safeParse(detail.kind);
+  if (!parsed.success) return { text: hostSentence, remaining: "all" };
+  const kind = parsed.data;
+  const text =
+    refusalKindText(kind, hostLabel) ??
+    (kind === "unknown" ? hostSentence : null);
+  if (ROW_HIDDEN_KINDS.has(kind)) return { text, remaining: "none" };
+  return {
+    text,
+    remaining: detail.retryable ? "all" : REFUSAL_REMAINING_BY_KIND[kind],
+  };
+}
+
+/** The manual actions the failed-turn card sends. */
+export type ManualRungKind = "retry" | "wait_once" | "switch";
+
+/**
+ * The neutral sentence for a refusal the host did not explain - an older host
+ * (`detail: null` from the `1.0` upgrade path), or one whose detail is
+ * missing. It names the action and claims no cause, and the button stays, so
+ * the user can press again. It is never the only sentence for every reason:
+ * a host that explains itself gets {@link describeRefusalDetail}.
+ */
+function neutralRefusalText(rung: ManualRungKind): string {
+  switch (rung) {
+    case "retry":
+      return "Couldn't retry just now.";
+    case "wait_once":
+      return "Couldn't start the wait just now.";
+    case "switch":
+      return "Couldn't switch just now.";
+  }
+}
+
+/**
+ * What the failed-turn card says, inline, for any non-`applied` answer to a
+ * manual action - or `null` for `applied`, whose feedback is the frame that
+ * follows.
+ *
+ * `attempt_not_latest` is a fact about the chat rather than a refusal of this
+ * action, and the one outcome allowed to say the chat moved on; the two
+ * explainable refusals go through {@link describeRefusalDetail}; everything
+ * else keeps its outcome sentence and every button.
+ */
+export function describeManualRungRefusal(input: {
+  readonly outcome: FallbackActionOutcome;
+  readonly detail: FallbackRungRefusalDetail | null;
+  readonly rung: ManualRungKind;
+  readonly hostLabel: string | null;
+}): RefusalNoteCopy | null {
+  const { outcome, detail, rung, hostLabel } = input;
+  if (outcome === "applied") return null;
+  if (outcome === "attempt_not_latest") {
+    // The card has room for the next step, which a toast or a picker footer
+    // does not (spec Flow 4's table).
+    return {
+      text: `${CHAT_MOVED_ON_LABEL} Send a new message to continue.`,
+      remaining: "none",
+    };
+  }
+  if (detail !== null) {
+    const copy = describeRefusalDetail(detail, hostLabel);
+    // An unexplained refusal that leaves the buttons still says something -
+    // "Couldn't retry just now" - so a press never ends in silence. The one
+    // silent kind (`routing_active`) hides the row, and the routing card on
+    // screen is its explanation.
+    if (copy.text === null && copy.remaining !== "none") {
+      return { text: neutralRefusalText(rung), remaining: copy.remaining };
+    }
+    return copy;
+  }
+  if (outcome === "rung_target_unavailable") {
+    return { text: describeFallbackOutcome(outcome), remaining: "switch" };
+  }
+  if (outcome === "rung_unavailable") {
+    return { text: neutralRefusalText(rung), remaining: "all" };
+  }
+  return { text: describeFallbackOutcome(outcome), remaining: "all" };
+}
+
+/**
+ * The routing chooser's switch consequence, split around the destination so
+ * the footer can set it apart. Read in order and joined with single spaces:
+ * "Replays this message on | Fable · high on Surya | in a new session from
+ * this transcript. 1 queued message moves with it."
+ */
+export interface SwitchDestinationConsequenceCopy {
+  readonly lead: string;
+  readonly destination: string;
+  readonly trail: string;
+}
+
+/**
+ * What a switch to one named destination does - Flow 3's footer.
+ *
+ * {@link switchConsequencesText} names no destination ("the destination you
+ * pick"); the chooser rewrites this one with every selection change, so it is
+ * the confirm's own tuple read back. The queue clause says the same thing that
+ * one does: "Any queued messages" where the host gives no count, nothing at
+ * zero.
+ */
+export function switchDestinationConsequence(
+  destination: string,
+  queuedItemsMoving: number | null,
+): SwitchDestinationConsequenceCopy {
+  const replay = "in a new session from this transcript.";
+  const queued = queuedMovesWithItText(queuedItemsMoving);
+  return {
+    lead: "Replays this message on",
+    destination,
+    trail: queued === null ? replay : `${replay} ${queued}`,
+  };
+}
+
+function queuedMovesWithItText(count: number | null): string | null {
+  if (count === null) return "Any queued messages move with it.";
+  if (count <= 0) return null;
+  return count === 1
+    ? "1 queued message moves with it."
+    : `${count} queued messages move with it.`;
 }

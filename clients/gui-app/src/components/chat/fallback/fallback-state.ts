@@ -1,7 +1,9 @@
 import type {
+  ChatRunSettings,
   PendingFallback,
   PendingReturn,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { pendingFallbackResumesFailedTuple } from "./fallback-identity";
 
 /**
  * A chat's provider-fallback surface state, as the tile hands it down.
@@ -41,11 +43,11 @@ export const NO_PROVIDER_FALLBACK: ChatProviderFallbackState = {
 };
 
 /**
- * The traversal states the grace card renders.
+ * The traversal states the countdown card renders.
  *
- * `retrying` has its own transient row at the turn tail and `waiting` has its
- * own card - both say something different enough that folding them in would
- * need a second set of copy inside one component.
+ * `retrying` has its own transient row at the turn tail and `waiting` is the
+ * routing card's waiting state - both say something different enough that
+ * folding them into the countdown would need a second set of copy.
  */
 const GRACE_CARD_STATES: ReadonlySet<PendingFallback["state"]> = new Set([
   "hold",
@@ -53,10 +55,90 @@ const GRACE_CARD_STATES: ReadonlySet<PendingFallback["state"]> = new Set([
   "switching",
 ]);
 
+/**
+ * What the host's plan for a countdown is, as the card names it.
+ *
+ * - `switch`: a destination is named (committed, or planned for when the
+ *   window ends) and it is somewhere else.
+ * - `resume`: the destination IS the tuple that failed - the wait rung's
+ *   resume, which runs the switching phases onto the account it never left.
+ * - `wait`: park on the failed tuple until its reset - the rung that moves
+ *   nothing.
+ * - `deciding`: the host has not resolved the plan yet (the candidate walk or
+ *   a reset check is out, or a switch rung has no target yet).
+ * - `nothing`: the host can name no takeable step - the traversal is about to
+ *   settle.
+ *
+ * There is no `retry` plan. The rung enum carries `retry` for the transient
+ * pre-retry series, and that series arms straight into `retrying` with no
+ * grace window - a `hold` never plans one, so a countdown never offers
+ * "Retry now".
+ */
+export type RoutingCountdownPlan =
+  | { readonly kind: "switch"; readonly destination: ChatRunSettings }
+  | { readonly kind: "resume" }
+  | { readonly kind: "wait"; readonly resumesAt: number | null }
+  | { readonly kind: "deciding" }
+  | { readonly kind: "nothing" };
+
+/**
+ * The countdown's plan, read off one frame. The committed target first and the
+ * host's prediction second - the order `fallback-identity.ts` fixes for every
+ * surface that names a destination.
+ */
+export function routingCountdownPlan(
+  pending: PendingFallback,
+): RoutingCountdownPlan {
+  const impending = pending.impendingAction;
+  const destination = pending.targetTuple ?? impending?.target ?? null;
+  if (destination !== null && pendingFallbackResumesFailedTuple(pending)) {
+    return { kind: "resume" };
+  }
+  if (impending === null) {
+    return destination === null
+      ? { kind: "nothing" }
+      : { kind: "switch", destination };
+  }
+  if (impending.pending !== null) return { kind: "deciding" };
+  switch (impending.rung) {
+    case "wait":
+      return { kind: "wait", resumesAt: impending.resumesAt };
+    // Not a plan a countdown carries (see the type): the neutral arm, so a
+    // frame that ever did carry one names nothing it cannot back.
+    case "retry":
+      return { kind: "deciding" };
+    case "notify":
+      return { kind: "nothing" };
+    case "profile":
+    case "tier":
+      return destination === null
+        ? { kind: "deciding" }
+        : { kind: "switch", destination };
+  }
+}
+
+/**
+ * Whether the countdown card renders for this frame.
+ *
+ * Not for a countdown with NOTHING to try (spec Flow 1: "no countdown card;
+ * the failed-turn card shows instead"). The host does not arm such a hold -
+ * a walk that comes up empty refuses to arm - and ends a window early when a
+ * probe's answer leaves nothing to take, so this is the moment between that
+ * answer and the settle. A card whose only true headline is "nothing else to
+ * try" over a refusal that refuses nothing is the dead end the spec removed.
+ * `switching` still renders whatever the plan: it has committed, and its
+ * "Switching…" is the one frame the user sees before the result.
+ */
 export function fallbackGraceCardVisible(
   pending: PendingFallback | undefined,
 ): boolean {
-  return pending !== undefined && GRACE_CARD_STATES.has(pending.state);
+  if (pending === undefined || !GRACE_CARD_STATES.has(pending.state)) {
+    return false;
+  }
+  return (
+    pending.state === "switching" ||
+    routingCountdownPlan(pending).kind !== "nothing"
+  );
 }
 
 export function fallbackWaitingCardVisible(

@@ -168,10 +168,32 @@ const CLAUDE_MODELS: ReadonlyArray<ModelOption> = [
     slug: "claude-opus-4",
     label: "Claude Opus 4",
   }),
+  // The one model that advertises efforts AND a default: on it a raw "" effort
+  // derives to "high", which is what the effort-match tests need to be able to
+  // tell apart from a committed null.
+  model({
+    harnessId: "claude",
+    slug: "claude-haiku-4",
+    label: "Claude Haiku 4",
+    defaultReasoningEffort: "high",
+    supportedReasoningEfforts: [
+      { id: "low", label: "Low", description: null },
+      { id: "high", label: "High", description: null },
+    ],
+  }),
 ];
 
 const CODEX_MODELS: ReadonlyArray<ModelOption> = [
-  model({ harnessId: "codex", slug: "gpt-5", label: "GPT-5" }),
+  model({
+    harnessId: "codex",
+    slug: "gpt-5",
+    label: "GPT-5",
+    supportedReasoningEfforts: [
+      { id: "low", label: "Low", description: null },
+      { id: "medium", label: "Medium", description: null },
+      { id: "high", label: "High", description: null },
+    ],
+  }),
   model({ harnessId: "codex", slug: "gpt-4.1", label: "GPT-4.1" }),
 ];
 
@@ -203,7 +225,11 @@ export const kit = {
   mutations: [] as MutationCall[],
   mutationResult: { outcome: "applied", detail: null } as {
     readonly outcome: string;
-    readonly detail: null;
+    readonly detail: {
+      readonly kind: string;
+      readonly label: string;
+      readonly retryable: boolean;
+    } | null;
   },
   mutationFails: false,
   deferResponses: false,
@@ -527,6 +553,21 @@ export function hostReachabilityModule() {
 
 export function addressableHostIdModule() {
   return { useAddressableHostId: () => "local" };
+}
+
+export function hostDirectoryEntryModule() {
+  return {
+    useHostDirectoryEntry: (hostId: string | null) =>
+      hostId === null
+        ? null
+        : {
+            hostId,
+            kind: "local",
+            label: hostId === SESSION_HOST_ID ? "Session host" : "Tab host",
+            transportDialability: "dialable",
+            websocketUrl: "ws://127.0.0.1:1",
+          },
+  };
 }
 
 export function hostDirectoryListModule() {

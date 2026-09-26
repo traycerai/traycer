@@ -923,6 +923,45 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     expect(previews[0]?.textContent).toContain("My own message");
   });
 
+  // `foldedQueue` rebuilds the queue when it drops the received rows. The
+  // rebuild once named `status` and `items` only; `pausedReason` is an optional
+  // key, so the compiler cannot notice a copy that loses it - the held row's
+  // pill would quietly go back to a bare "Paused".
+  it("keeps the queue's pausedReason through the fold, so the held row still says why", () => {
+    useLayoutStore.setState({
+      composer: { ...DEFAULT_COMPOSER_LAYOUT, activeAgents: "compact" },
+    });
+    const props = surfacesProps({
+      restoreContext: EMPTY_RESTORE,
+      queueItems: [
+        receivedAgentQueueItem("received-1", "Received prompt one"),
+        { ...queuedItem("queue-held", "Held message"), status: "paused" },
+      ],
+      backgroundItems: [],
+    });
+
+    renderSurfaces({
+      ...props,
+      queue: {
+        ...props.queue,
+        value: {
+          ...props.queue.value,
+          status: "paused",
+          pausedReason: "turn_error",
+        },
+      },
+    });
+
+    // The fold happened: only the user-typed row is left in the dock.
+    const queueRows = screen.getByTestId("queued-message-rows");
+    expect(
+      within(queueRows).getAllByTestId("queued-message-content-preview"),
+    ).toHaveLength(1);
+    expect(
+      within(queueRows).getByTestId("queued-message-status-badge").textContent,
+    ).toBe("Paused after an error");
+  });
+
   // The roster is bounded by fleet size, so an uncapped join would read a
   // paragraph out before the count a listener actually wanted.
   it("names at most three agents in the chip's label and counts the rest", () => {

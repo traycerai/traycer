@@ -81,6 +81,9 @@ vi.mock("@/hooks/agent/use-host-reachability", async () =>
 vi.mock("@/hooks/host/use-addressable-host-id", async () =>
   (await import("./routing-picker-kit")).addressableHostIdModule(),
 );
+vi.mock("@/hooks/host/use-host-directory-entry", async () =>
+  (await import("./routing-picker-kit")).hostDirectoryEntryModule(),
+);
 vi.mock("@/hooks/host/use-host-directory-list-query", async () =>
   (await import("./routing-picker-kit")).hostDirectoryListModule(),
 );
@@ -315,7 +318,8 @@ function ChooserHarness({
         <RoutingDestinationPicker
           entry={{ kind: "countdown", pending }}
           triggerLabel="Choose differently…"
-          triggerVariant="ghost"
+          triggerVariant="outline"
+          triggerAriaLabel={null}
           triggerDisabled={false}
           canAct
           epicId={EPIC_ID}

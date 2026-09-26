@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import type {
   ChatRunSettings,
   LastFailedAttempt,
@@ -204,7 +204,8 @@ export function chooser(
         <RoutingDestinationPicker
           entry={entry}
           triggerLabel="Choose differently…"
-          triggerVariant="ghost"
+          triggerVariant="outline"
+          triggerAriaLabel={null}
           triggerDisabled={false}
           canAct={canAct}
           epicId={EPIC_ID}
@@ -213,6 +214,36 @@ export function chooser(
         />
       </TabHostProvider>
     </TooltipProvider>
+  );
+}
+
+/** The trigger's three props, for the tests that are about the trigger. */
+export interface TriggerProps {
+  readonly label: ReactNode;
+  readonly ariaLabel: string | null;
+  readonly variant: "default" | "outline" | "route-chip";
+}
+
+export function mountTrigger(
+  entry: RoutingDestinationEntry,
+  trigger: TriggerProps,
+) {
+  return render(
+    <TooltipProvider>
+      <TabHostProvider hostId={TAB_HOST_ID}>
+        <RoutingDestinationPicker
+          entry={entry}
+          triggerLabel={trigger.label}
+          triggerVariant={trigger.variant}
+          triggerAriaLabel={trigger.ariaLabel}
+          triggerDisabled={false}
+          canAct
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId={SESSION_HOST_ID}
+        />
+      </TabHostProvider>
+    </TooltipProvider>,
   );
 }
 

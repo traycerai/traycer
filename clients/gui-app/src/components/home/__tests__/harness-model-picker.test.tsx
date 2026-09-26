@@ -7,6 +7,7 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import { userEvent } from "@testing-library/user-event";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { SuggestionRow } from "@/components/home/data/harness-model-search";
 import { resetPaneActivationFocusIntentsForTests } from "@/components/epic-canvas/pane-activation";
@@ -5271,6 +5272,7 @@ describe("<HarnessModelPicker />", () => {
             stagedRowId: input.stagedRowId,
             onStageAction: input.spies.onStageAction,
             onHiddenByQuery: input.spies.onHiddenByQuery,
+            reasoningFallback: "model-default",
           },
           footer: input.footer,
         };
@@ -5653,6 +5655,174 @@ describe("<HarnessModelPicker />", () => {
         expect(closeRef.current).not.toBeNull();
         unmount();
         expect(closeRef.current).toBeNull();
+      });
+
+      it("Enter on a focused footer button is the button's own activation: the spy fires once, and the list's active row is neither picked nor staged", async () => {
+        const onFooterAction = vi.fn();
+        const {
+          store,
+          selections,
+          spies: spy,
+        } = renderSuggested({
+          rows: [CLAUDE_ROW, RETRY_ROW],
+          stagedRowId: null,
+          closeRef: null,
+          footer: (
+            <button type="button" onClick={onFooterAction}>
+              Footer action
+            </button>
+          ),
+          selectionMarked: false,
+        });
+        const input = await openPickerByTriggerName("Routing face");
+        const before = store.getState().selection;
+        // The active row is the Retry suggestion, so a list handler that saw
+        // this Enter would stage it.
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        expect(activeOptionText(input)).toContain("Retry suggestion");
+
+        act(() => {
+          screen.getByRole("button", { name: "Footer action" }).focus();
+        });
+        await userEvent.keyboard("{Enter}");
+
+        expect(onFooterAction).toHaveBeenCalledTimes(1);
+        expect(spy.onStageAction).not.toHaveBeenCalled();
+        expect(selections).toEqual([]);
+        expect(store.getState().selection).toEqual(before);
+      });
+
+      describe("the check mark follows the effort", () => {
+        function codexTarget(effort: string): ChatRunSettings {
+          return {
+            harnessId: "codex",
+            model: "gpt-5.5",
+            permissionMode: "supervised",
+            reasoningEffort: effort,
+            serviceTier: null,
+            agentMode: "regular",
+            profileId: null,
+          };
+        }
+        const HIGH_ROW = suggestion({
+          id: "model:high",
+          title: "High effort row",
+          action: { kind: "switch", target: codexTarget("high") },
+        });
+        const LOW_ROW = suggestion({
+          id: "model:low",
+          title: "Low effort row",
+          action: { kind: "switch", target: codexTarget("low") },
+        });
+
+        function renderEfforts() {
+          const spy = spies();
+          const harness = renderPicker({
+            embedding: suggestionEmbedding({
+              rows: [HIGH_ROW, LOW_ROW],
+              spies: spy,
+              stagedRowId: null,
+              closeRef: null,
+              footer: null,
+              selectionMarked: true,
+            }),
+            storeModels: [
+              model({
+                slug: "gpt-5.5",
+                label: "GPT-5.5",
+                supportedReasoningEfforts: [
+                  { id: "low", label: "Low", description: null },
+                  { id: "medium", label: "Medium", description: null },
+                  { id: "high", label: "High", description: null },
+                ],
+              }),
+            ],
+            selection: {
+              harnessId: "codex",
+              modelSlug: "gpt-5.5",
+              profileId: null,
+            },
+          });
+          return harness;
+        }
+
+        function checked(title: string): string | null {
+          return screen
+            .getByRole("option", { name: new RegExp(title) })
+            .getAttribute("aria-selected");
+        }
+
+        it("checks a row whose target effort is the catalog model's DEFAULT when a plain click on that model resolves to it, reached by clicks only", async () => {
+          const spy = spies();
+          const row = suggestion({
+            id: "model:default-effort",
+            title: "Default effort row",
+            action: { kind: "switch", target: codexTarget("medium") },
+          });
+          renderPicker({
+            embedding: suggestionEmbedding({
+              rows: [row],
+              spies: spy,
+              stagedRowId: null,
+              closeRef: null,
+              footer: null,
+              selectionMarked: true,
+            }),
+            storeModels: [
+              model({
+                slug: "gpt-5.5",
+                label: "GPT-5.5",
+                defaultReasoningEffort: "medium",
+                supportedReasoningEfforts: [
+                  { id: "low", label: "Low", description: null },
+                  { id: "medium", label: "Medium", description: null },
+                  { id: "high", label: "High", description: null },
+                ],
+              }),
+              model({ slug: "gpt-4.1", label: "GPT-4.1" }),
+            ],
+            selection: {
+              harnessId: "codex",
+              modelSlug: "gpt-4.1",
+              profileId: null,
+            },
+          });
+          await openPickerByTriggerName("Routing face");
+          expect(checked("Default effort row")).toBe("false");
+
+          // A PLAIN catalog click: no effort of its own, so the store resolves
+          // the model's default - the row's explicit effort.
+          const plain = screen
+            .getAllByRole("option", { name: /GPT-5\.5/ })
+            .filter((option) => !option.hasAttribute("data-suggestion-action"));
+          expect(plain).toHaveLength(1);
+          fireEvent.click(plain[0]);
+
+          expect(checked("Default effort row")).toBe("true");
+        });
+
+        it("checks only the row whose target effort is the store's, and no row once the effort is a third level", async () => {
+          const { store } = renderEfforts();
+          act(() => {
+            store.getState().setReasoning("low");
+          });
+          await openPickerByTriggerName("Routing face");
+
+          expect(checked("Low effort row")).toBe("true");
+          expect(checked("High effort row")).toBe("false");
+
+          act(() => {
+            store.getState().setReasoning("high");
+          });
+          expect(checked("High effort row")).toBe("true");
+          expect(checked("Low effort row")).toBe("false");
+
+          act(() => {
+            store.getState().setReasoning("medium");
+          });
+          expect(checked("High effort row")).toBe("false");
+          expect(checked("Low effort row")).toBe("false");
+        });
       });
     });
   });

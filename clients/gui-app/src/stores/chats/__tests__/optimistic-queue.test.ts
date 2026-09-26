@@ -10,6 +10,8 @@ import {
   appendOptimisticQueuedItem,
   mergeQueueWithOptimisticQueuedItems,
   optimisticQueuedItemId,
+  removeOptimisticQueuedItemByClientActionId,
+  removeOptimisticQueuedItemByMessageId,
 } from "@/stores/chats/optimistic-queue";
 
 const CONTENT: JsonContent = {
@@ -77,6 +79,70 @@ describe("optimistic-queue managed-command items", () => {
     // A content-free chip can never be the host's echo of this send, so the
     // optimistic row must still be appended.
     expect(next.items).toEqual([managed, send]);
+  });
+});
+
+// Every rebuild in this module must SPREAD the queue it starts from:
+// `pausedReason` is an optional key, so a copy that names its fields compiles
+// and quietly drops it - and with it the "Paused after an error" pill.
+describe("optimistic-queue keeps the queue's pausedReason", () => {
+  const pausedReason = "turn_error";
+
+  it("appendOptimisticQueuedItem keeps it on the queue it appends to", () => {
+    const queue: ChatQueueState = {
+      status: "paused",
+      items: [managedCommandItem("queue-managed")],
+      pausedReason,
+    };
+
+    const next = appendOptimisticQueuedItem(queue, optimisticPromptItem("a-1"));
+
+    expect(next.items).toHaveLength(2);
+    expect(next.pausedReason).toBe(pausedReason);
+  });
+
+  it("mergeQueueWithOptimisticQueuedItems keeps the AUTHORITATIVE queue's reason, not the stale current one", () => {
+    const send = optimisticPromptItem("a-1");
+    const current: ChatQueueState = {
+      status: "running",
+      items: [send],
+      pausedReason: null,
+    };
+    const authoritative: ChatQueueState = {
+      status: "paused",
+      items: [],
+      pausedReason,
+    };
+
+    const merged = mergeQueueWithOptimisticQueuedItems(
+      authoritative,
+      current,
+      new Set(["a-1"]),
+    );
+
+    expect(merged.items).toEqual([send]);
+    expect(merged.status).toBe("paused");
+    expect(merged.pausedReason).toBe(pausedReason);
+  });
+
+  it("removing an optimistic item by client action id or message id keeps it", () => {
+    const send = optimisticPromptItem("a-1");
+    const queue: ChatQueueState = {
+      status: "paused",
+      items: [managedCommandItem("queue-managed"), send],
+      pausedReason,
+    };
+
+    const byAction = removeOptimisticQueuedItemByClientActionId(queue, "a-1");
+    const byMessage = removeOptimisticQueuedItemByMessageId(
+      queue,
+      send.messageId,
+    );
+
+    for (const next of [byAction, byMessage]) {
+      expect(next.items).toHaveLength(1);
+      expect(next.pausedReason).toBe(pausedReason);
+    }
   });
 });
 

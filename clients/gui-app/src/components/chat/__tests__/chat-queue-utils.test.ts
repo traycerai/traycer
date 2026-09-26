@@ -5,6 +5,7 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   queuedPromptMessageIds,
+  queuePausedAfterError,
   queueWithoutPersistedPrompts,
 } from "@/components/chat/chat-queue-utils";
 
@@ -154,5 +155,49 @@ describe("queueWithoutPersistedPrompts", () => {
 
     expect(visible.items).toEqual([held]);
     expect(visible.status).toBe("running");
+  });
+});
+
+describe("queueWithoutPersistedPrompts keeps the queue's optional keys", () => {
+  it("carries pausedReason through the rebuild that drops a handed-off prompt", () => {
+    const held = { ...promptItem("message-held"), status: "paused" as const };
+    const handoff = promptItem("message-accepted");
+    const input: ChatQueueState = {
+      status: "running",
+      items: [held, handoff],
+      pausedReason: "turn_error",
+    };
+
+    const visible = queueWithoutPersistedPrompts(input, [
+      { role: "user", messageId: "message-held" },
+      { role: "user", messageId: "message-accepted" },
+    ]);
+
+    expect(visible.items).toEqual([held]);
+    expect(visible.pausedReason).toBe("turn_error");
+  });
+});
+
+describe("queuePausedAfterError", () => {
+  it("is true for the two reasons that mean a turn failed", () => {
+    for (const pausedReason of ["turn_error", "routing"]) {
+      expect(queuePausedAfterError({ ...queue([]), pausedReason })).toBe(true);
+    }
+  });
+
+  it("is false for any other reason, a null reason and an absent one", () => {
+    expect(queuePausedAfterError({ ...queue([]), pausedReason: "user" })).toBe(
+      false,
+    );
+    expect(
+      queuePausedAfterError({
+        ...queue([]),
+        pausedReason: "some_future_reason",
+      }),
+    ).toBe(false);
+    expect(queuePausedAfterError({ ...queue([]), pausedReason: null })).toBe(
+      false,
+    );
+    expect(queuePausedAfterError(queue([]))).toBe(false);
   });
 });

@@ -233,7 +233,13 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
       // open-autofocus takes it whether or not the panel's search effect runs.
       // Both halves have to move together or the gate is a no-op.
       onOpenAutoFocus={coarseOpenAutoFocus}
-      onKeyDown={onKeyDown}
+      onKeyDown={(event) => {
+        // The embedding footer's controls answer their own keys: Enter on a
+        // focused confirm is that button's activation, never "select the
+        // active row", which would cancel the click it was about to make.
+        if (isInsideEmbeddingFooter(event.target)) return;
+        onKeyDown(event);
+      }}
       onEscapeKeyDown={(event) => {
         if (trimmedQuery.length === 0) return;
         event.preventDefault();
@@ -350,9 +356,21 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
             pickerOpen={reasoningPickerOpen}
             serviceTier={serviceTierFooter}
           />
-          {footer}
+          {footer === null ? null : (
+            <div data-picker-embedding-footer="">{footer}</div>
+          )}
         </div>
       </div>
     </PopoverContent>
+  );
+}
+
+/** The embedding footer's subtree, which the list key handling skips. */
+const EMBEDDING_FOOTER_SELECTOR = "[data-picker-embedding-footer]";
+
+function isInsideEmbeddingFooter(target: EventTarget): boolean {
+  return (
+    target instanceof Element &&
+    target.closest(EMBEDDING_FOOTER_SELECTOR) !== null
   );
 }

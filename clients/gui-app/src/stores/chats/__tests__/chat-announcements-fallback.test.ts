@@ -15,7 +15,9 @@ import type {
 } from "@/stores/composer/chat-store";
 import {
   DONT_SWITCH_LABEL,
+  DONT_WAIT_LABEL,
   FRESH_SESSION_HELPER,
+  SIGN_IN_INSTEAD_LABEL,
   STOP_WAITING_LABEL,
 } from "@/components/chat/fallback/fallback-copy";
 import { formatClockTime, formatResetDateTime } from "@/lib/relative-time";
@@ -156,6 +158,7 @@ function providerNoticeSegment(input: {
   return {
     id: input.id,
     kind: "provider_notice",
+    receipt: null,
     status: input.status,
     noticeKind: input.noticeKind,
     tone: "info",
@@ -381,6 +384,76 @@ describe("fallbackTraversalAnnouncement", () => {
     expect(dueNow(null)).not.toContain("The countdown is up.");
   });
 
+  describe("hold: the refusal the announcer names is the one the card draws", () => {
+    const holdAnnouncement = (
+      pending: PendingFallback,
+      planned: FallbackAnnouncementPlan,
+    ): string | undefined =>
+      fallbackTraversalAnnouncement({
+        pending,
+        plan: planned,
+        failedIdentity: FAILED_IDENTITY,
+        targetIdentity: TARGET_IDENTITY,
+        now: NOW,
+      })?.text;
+
+    const hold = pendingFallback({
+      state: "hold",
+      traversalId: "t-refusal",
+      revision: 1,
+      deadline: NOW + 10_000,
+      queuedItemsMoving: 0,
+    });
+
+    it("a wait plan is refused with Don't wait", () => {
+      const text = holdAnnouncement(
+        hold,
+        plan({
+          planId: "plan-wait-refusal",
+          action: "wait",
+          destination: null,
+          resumesAt: NOW + 3_600_000,
+        }),
+      );
+      expect(text).toContain(`Select ${DONT_WAIT_LABEL} to cancel.`);
+      expect(text).not.toContain(DONT_SWITCH_LABEL);
+    });
+
+    it("a switch plan is still refused with Don't switch", () => {
+      const text = holdAnnouncement(
+        hold,
+        plan({
+          planId: "plan-switch-refusal",
+          action: "switch",
+          destination: TARGET_IDENTITY,
+          resumesAt: null,
+        }),
+      );
+      expect(text).toContain(`Select ${DONT_SWITCH_LABEL} to cancel.`);
+      expect(text).not.toContain(DONT_WAIT_LABEL);
+    });
+
+    it("a signed-out traversal points at Sign in instead, whatever the plan", () => {
+      const signedOut: PendingFallback = { ...hold, reason: "auth" };
+      for (const action of ["switch", "wait"] as const) {
+        const text = holdAnnouncement(
+          signedOut,
+          plan({
+            planId: `plan-auth-${action}`,
+            action,
+            destination: action === "switch" ? TARGET_IDENTITY : null,
+            resumesAt: action === "wait" ? NOW + 3_600_000 : null,
+          }),
+        );
+        expect(text).toContain(
+          `Select ${SIGN_IN_INSTEAD_LABEL} to cancel and sign in.`,
+        );
+        expect(text).not.toContain(`Select ${DONT_WAIT_LABEL}`);
+        expect(text).not.toContain(`Select ${DONT_SWITCH_LABEL}`);
+      }
+    });
+  });
+
   it("hold: a due-now deadline names no switch on retry or wait either - the class is every non-switch rung, not just notify", () => {
     // CodeRabbit flagged `notify`. The predicate is wider: `retry` attempts
     // the same tuple and `wait` parks until a reset, so neither has a switch
@@ -408,13 +481,16 @@ describe("fallbackTraversalAnnouncement", () => {
         now: NOW,
       })?.text;
 
-    for (const text of [
-      dueNowFor("retry", null),
-      dueNowFor("wait", NOW + 3_600_000),
-    ]) {
+    // The refusal named is the one the card draws for THAT plan: a wait plan's
+    // card refuses with "Don't wait", every other plan's with "Don't switch".
+    const refusals: ReadonlyArray<readonly [string | undefined, string]> = [
+      [dueNowFor("retry", null), DONT_SWITCH_LABEL],
+      [dueNowFor("wait", NOW + 3_600_000), DONT_WAIT_LABEL],
+    ];
+    for (const [text, refusal] of refusals) {
       expect(text).toContain("The countdown is up.");
       expect(text).not.toContain("switch is due");
-      expect(text).toContain(`Select ${DONT_SWITCH_LABEL} to cancel.`);
+      expect(text).toContain(`Select ${refusal} to cancel.`);
     }
     // And each still names its own rung's subject, unchanged by this fix.
     expect(dueNowFor("retry", null)).toContain(

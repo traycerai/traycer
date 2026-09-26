@@ -155,6 +155,27 @@ export function fallbackKnownHarnessFor(
   );
 }
 
+/**
+ * The harness behind a provider DISPLAY NAME, or `null`.
+ *
+ * For the settled receipt, whose steps carry host-rendered strings and no ids:
+ * `providerLabel` is `PROVIDER_DISPLAY_NAMES`' own word ("Claude Code"), and
+ * the step's `modelLabel` is the raw slug the host did not resolve (it does not
+ * read the catalogue on the settle path). Naming that slug the way every other
+ * routing surface does needs the harness whose catalogue to ask, and the
+ * display name is the only key the step has. An unrecognised name - a provider
+ * this build does not know - answers `null`, and the slug stays a slug.
+ */
+export function fallbackHarnessForProviderLabel(
+  providerLabel: string,
+): FallbackTupleIdentity["harnessId"] | null {
+  return (
+    ORDERED_PROVIDERS.find(
+      (provider) => providerDisplayName(provider.providerId) === providerLabel,
+    )?.harnessId ?? null
+  );
+}
+
 export function fallbackHarnessLabelFor(harnessId: string): string {
   const known = ORDERED_PROVIDERS.find(
     (provider) => provider.harnessId === harnessId,
@@ -935,6 +956,23 @@ export function pendingFallbackResumesFailedTuple(
     destination.harnessId === failed.harnessId &&
     destination.model === failed.model &&
     destination.profileId === failed.profileId
+  );
+}
+
+/**
+ * Whether the countdown's refusal is "Sign in instead" rather than a plain
+ * "Don't switch".
+ *
+ * Only a signed-out traversal, and only one that HAS somewhere to sign in: a
+ * harness with no provider-CLI account (`providerCliIdForHarness` → `null`)
+ * would cancel the switch and then open nothing. One predicate for the card
+ * that draws the button and the announcer that names it, so the spoken
+ * instruction can never point at a button the card does not have.
+ */
+export function pendingFallbackOffersSignIn(pending: PendingFallback): boolean {
+  return (
+    pending.reason === "auth" &&
+    providerCliIdForHarness(pending.failedTuple.harnessId) !== null
   );
 }
 

@@ -1210,6 +1210,99 @@ describe("<QueuedMessagePanel />", () => {
   });
 });
 
+describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
+  afterEach(cleanup);
+
+  const TOOLTIP =
+    "Held because the last turn failed. Retry or switch sends it after; Resume sends it now.";
+
+  function pausedQueue(pausedReason: string | null | undefined) {
+    const queue: ChatSessionState["queue"] = {
+      status: "paused",
+      items: [queuedItem("queue-held", "Held prompt", "paused")],
+    };
+    // `undefined` is the ABSENT key: a host that predates `pausedReason`.
+    return pausedReason === undefined ? queue : { ...queue, pausedReason };
+  }
+
+  function badge(): HTMLElement {
+    return within(screen.getByTestId("queued-message-row")).getByTestId(
+      "queued-message-status-badge",
+    );
+  }
+
+  function renderHeld(pausedReason: string | null | undefined) {
+    renderPanel({
+      queue: pausedQueue(pausedReason),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+  }
+
+  it.each(["turn_error", "routing"])(
+    "says 'Paused after an error' and why on hover when pausedReason is %s",
+    (reason) => {
+      renderHeld(reason);
+
+      expect(badge().textContent).toBe("Paused after an error");
+      expect(tooltipTextNear(badge())).toBe(TOOLTIP);
+      // Focusable, so the reason is reachable without a pointer.
+      expect(badge().tabIndex).toBe(0);
+    },
+  );
+
+  it.each([
+    ["another reason", "user"],
+    ["a reason this build has not heard of", "some_future_reason"],
+    ["a null reason", null],
+    ["an absent reason (an older host)", undefined],
+  ])("keeps a plain 'Paused' with no tooltip for %s", (_name, reason) => {
+    renderHeld(reason);
+
+    expect(badge().textContent).toBe("Paused");
+    expect(tooltipTextNear(badge())).toBeNull();
+    expect(badge().hasAttribute("tabindex")).toBe(false);
+  });
+
+  it("gives a paused managed-command row the same pill", () => {
+    renderPanel({
+      queue: {
+        status: "paused",
+        pausedReason: "turn_error",
+        items: [
+          {
+            ...managedCommandQueuedItem("queue-managed", "bun test"),
+            status: "paused",
+          },
+        ],
+      },
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    expect(badge().textContent).toBe("Paused after an error");
+  });
+
+  it("leaves a row that is not paused alone, whatever the queue's reason", () => {
+    renderPanel({
+      queue: {
+        status: "paused",
+        pausedReason: "turn_error",
+        items: [queuedItem("queue-pending", "Pending prompt", "pending")],
+      },
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const row = screen.getByTestId("queued-message-row");
+    expect(within(row).queryByText("Paused after an error")).toBeNull();
+    expect(within(row).queryByText("Paused")).toBeNull();
+  });
+});
+
 function renderPanel(input: {
   readonly queue: ChatSessionState["queue"];
   readonly readOnly: boolean;

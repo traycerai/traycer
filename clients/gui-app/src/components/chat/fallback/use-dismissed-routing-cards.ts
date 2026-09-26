@@ -2,11 +2,13 @@ import { create } from "zustand";
 import type { PendingFallback } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
- * The two cards that render a dismiss ×, and therefore the two things a
- * dismissal can be ABOUT.
+ * The two routing-card states that render a hide control, and therefore the
+ * two things a dismissal can be ABOUT.
  *
- * `countdown` is `<FallbackGraceCard>` across all three of its states;
- * `waiting` is `<FallbackWaitingCard>`.
+ * `countdown` is `<RoutingCard>`'s countdown state across all three of its
+ * traversal states (`hold`, `choosing`, `switching`); `waiting` is its waiting
+ * state. The switch-back offer has no hide control: every answer to it ends
+ * the traversal.
  */
 export type RoutingCardKind = "countdown" | "waiting";
 

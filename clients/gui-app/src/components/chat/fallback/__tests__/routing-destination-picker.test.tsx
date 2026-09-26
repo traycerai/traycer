@@ -15,6 +15,16 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import { userEvent } from "@testing-library/user-event";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  describeFallbackOutcome,
+  describeManualRungRefusal,
+} from "@/components/chat/fallback/fallback-copy";
+import {
+  DEFAULT_COMPOSER_LAYOUT,
+  useLayoutStore,
+} from "@/stores/settings/layout-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { formatClockTime } from "@/lib/relative-time";
@@ -25,6 +35,7 @@ import {
   TAB_CLIENT_ID,
   TAB_HOST_ID,
   TRAVERSAL_ID,
+  countdownPending,
   heldLease,
   kit,
   resetKit,
@@ -49,13 +60,18 @@ import {
   listing,
   mount,
   mountAs,
+  mountTrigger,
   open,
   option,
   seedProviders,
   statusLines,
   waiting,
 } from "./routing-picker-scene";
-import { listTargetsResponse } from "./fallback-fixtures";
+import {
+  fallbackModelTarget,
+  fallbackProfileTarget,
+  listTargetsResponse,
+} from "./fallback-fixtures";
 
 /**
  * The routing chooser as a unit: the wrapper around the composer's model
@@ -93,6 +109,9 @@ vi.mock("@/hooks/agent/use-host-reachability", async () =>
 );
 vi.mock("@/hooks/host/use-addressable-host-id", async () =>
   (await import("./routing-picker-kit")).addressableHostIdModule(),
+);
+vi.mock("@/hooks/host/use-host-directory-entry", async () =>
+  (await import("./routing-picker-kit")).hostDirectoryEntryModule(),
 );
 vi.mock("@/hooks/host/use-host-directory-list-query", async () =>
   (await import("./routing-picker-kit")).hostDirectoryListModule(),
@@ -174,6 +193,87 @@ function lastStore(): ComposerToolbarStore {
   return entry.store;
 }
 
+/** The footer's switch sentence, destination included, as one string. */
+function consequence(): string {
+  return screen.getByText(/^Replays this message on/).textContent;
+}
+
+/** Only the Suggested rows: the ones the wrapper injected. */
+function suggested(): HTMLElement[] {
+  return screen
+    .getAllByRole("option")
+    .filter((row) => row.hasAttribute("data-suggestion-action"));
+}
+
+/** A catalog row: an option the wrapper did NOT inject. */
+function catalogRow(name: RegExp): HTMLElement {
+  const rows = screen
+    .getAllByRole("option", { name })
+    .filter((row) => !row.hasAttribute("data-suggestion-action"));
+  expect(rows).toHaveLength(1);
+  return rows[0];
+}
+
+/** One Codex model row whose HOST target the client branch cannot rebuild. */
+function listingWithModelTarget(target: ChatRunSettings) {
+  return listTargetsResponse({
+    outcome: "listed",
+    failedTuple: FAILED,
+    profileTargets: [],
+    modelTargets: [
+      fallbackModelTarget({
+        groupId: "grp-internal-secret",
+        harnessId: target.harnessId,
+        modelFamily: target.model,
+        model: target.model,
+        reasoningEffort: target.reasoningEffort,
+        profileId: target.profileId,
+        severity: "ok",
+        usedPercent: 20,
+        target,
+        warnings: [],
+        selectable: true,
+        skip: null,
+      }),
+    ],
+    modelTargetsSkip: null,
+  });
+}
+
+const HAIKU_SEED: ChatRunSettings = {
+  ...FAILED,
+  model: "claude-haiku-4",
+  reasoningEffort: null,
+};
+
+function haikuEntry(seed: ChatRunSettings) {
+  return {
+    kind: "failed-turn" as const,
+    attempt: failedAttempt(["switch"]),
+    seedTuple: seed,
+  };
+}
+
+function haikuModelRow(input: {
+  readonly groupId: string;
+  readonly target: ChatRunSettings;
+}) {
+  return fallbackModelTarget({
+    groupId: input.groupId,
+    harnessId: input.target.harnessId,
+    modelFamily: input.target.model,
+    model: input.target.model,
+    reasoningEffort: input.target.reasoningEffort,
+    profileId: input.target.profileId,
+    severity: "ok",
+    usedPercent: 10,
+    target: input.target,
+    warnings: [],
+    selectable: true,
+    skip: null,
+  });
+}
+
 describe("RoutingDestinationPicker", () => {
   beforeEach(() => {
     resetKit();
@@ -181,6 +281,7 @@ describe("RoutingDestinationPicker", () => {
     seedProviders();
     kit.listData = listing({ recommendedWork: false });
     useComposerHarnessMemoryStore.getState().resetForTests();
+    useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
   });
 
   afterEach(() => {
@@ -229,10 +330,12 @@ describe("RoutingDestinationPicker", () => {
       });
       await open();
 
+      // Re-seeded from the failed tuple, then the preselect lands the first
+      // usable row again - the abandoned GPT-4.1 pick is what does not return.
       expect(lastStore().getState().selection).toEqual({
         harnessId: "claude",
         modelSlug: "claude-sonnet-4",
-        profileId: FAILED_PROFILE,
+        profileId: WORK_PROFILE,
       });
     });
 
@@ -495,6 +598,12 @@ describe("RoutingDestinationPicker", () => {
     });
 
     it("is disabled while nothing has moved, and for a viewer who cannot act", async () => {
+      // No usable suggested row, so nothing is preselected.
+      kit.listData = {
+        ...listing({ recommendedWork: false }),
+        profileTargets: [],
+        modelTargets: [],
+      };
       const view = mount(failedTurn(["switch"]));
       await open();
       expect(footerConfirm().disabled).toBe(true);
@@ -517,7 +626,7 @@ describe("RoutingDestinationPicker", () => {
       fireEvent.click(option(/Codex · Codex Team/));
       expect(
         screen.getByText(
-          "Replays this message on the destination you pick. Starts a fresh session from this transcript. 2 queued messages will run on the new settings too.",
+          /in a new session from this transcript\. 2 queued messages move with it\.$/,
         ),
       ).toBeDefined();
       fireEvent.click(footerConfirm());
@@ -527,10 +636,128 @@ describe("RoutingDestinationPicker", () => {
       fireEvent.click(footerConfirm());
       expect(kit.mutations).toHaveLength(1);
     });
+
+    it("Enter on the focused footer Switch is the button's own activation: one send, the picked target, and the list's active row is not selected by it", async () => {
+      kit.lease = heldLease("held", "tok-1");
+      mount(countdown());
+      const dialog = await open();
+      fireEvent.click(option(/Codex · Codex Team/));
+      const picked = lastStore().getState().selection;
+      // Walk the list's ACTIVE row somewhere else, so a stray row selection
+      // by the Enter would be visible as a moved store.
+      const search = within(dialog).getByRole("textbox");
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+
+      act(() => {
+        footerConfirm().focus();
+      });
+      await userEvent.keyboard("{Enter}");
+
+      expect(kit.mutations).toHaveLength(1);
+      expect(kit.mutations[0]).toMatchObject({
+        method: "chat.fallback.chooseTarget",
+        variables: { target: TARGET, leaseToken: "tok-1" },
+      });
+      expect(lastStore().getState().selection).toEqual(picked);
+    });
+
+    it("Enter on the focused footer Retry confirm sends exactly one runManualRung retry", async () => {
+      mount(failedTurn(["retry", "switch"]));
+      const dialog = await open();
+      fireEvent.click(option(/Try Personal again/));
+      const before = lastStore().getState().selection;
+      fireEvent.keyDown(within(dialog).getByRole("textbox"), {
+        key: "ArrowDown",
+      });
+
+      act(() => {
+        footerConfirm().focus();
+      });
+      await userEvent.keyboard("{Enter}");
+
+      expect(kit.mutations).toHaveLength(1);
+      expect(kit.mutations[0]).toMatchObject({
+        method: "chat.fallback.runManualRung",
+        variables: { rung: "retry", target: null },
+      });
+      expect(lastStore().getState().selection).toEqual(before);
+    });
+
+    it("the switch sentence names the destination and moves with the selection: account, then another provider, then an effort", async () => {
+      kit.lease = heldLease("held", "tok-1");
+      mount(countdown());
+      await open();
+
+      // The preselect: the recommended account, on the failed model.
+      expect(consequence()).toBe(
+        "Replays this message on claude-sonnet-4 on Work in a new session from this transcript. 2 queued messages move with it.",
+      );
+
+      fireEvent.click(option(/Codex · Codex Team/));
+      expect(consequence()).toBe(
+        "Replays this message on Codex · gpt-5 on Codex Team in a new session from this transcript. 2 queued messages move with it.",
+      );
+
+      act(() => {
+        lastStore().getState().setReasoning("high");
+      });
+      expect(consequence()).toBe(
+        "Replays this message on Codex · gpt-5 · high on Codex Team in a new session from this transcript. 2 queued messages move with it.",
+      );
+    });
+
+    it("the queue clause follows the frame's count: one, none, and no count at all on the error row", async () => {
+      kit.lease = heldLease("held", "tok-1");
+      const one = mount(
+        countdownAt(
+          countdownPending({
+            state: "choosing",
+            revision: 2,
+            queuedItemsMoving: 1,
+          }),
+        ),
+      );
+      await open();
+      expect(consequence()).toMatch(
+        /transcript\. 1 queued message moves with it\.$/,
+      );
+      one.unmount();
+
+      const none = mount(
+        countdownAt(
+          countdownPending({
+            state: "choosing",
+            revision: 2,
+            queuedItemsMoving: 0,
+          }),
+        ),
+      );
+      await open();
+      expect(consequence()).toMatch(/from this transcript\.$/);
+      none.unmount();
+
+      mount(failedTurn(["switch"]));
+      await open();
+      expect(consequence()).toMatch(
+        /from this transcript\. Any queued messages move with it\.$/,
+      );
+    });
   });
 
   describe("what a confirm sends", () => {
     it("a Suggested pick sends the host-built target unchanged: a cross-provider model row, over the countdown, with the lease token", async () => {
+      // A host target the client branch could not have produced: a different
+      // permission mode, and a service tier. The client branch keeps the FAILED
+      // tuple's permission mode (`auto_accept_edits`) and nulls a tier the
+      // picked model does not offer (the kit's Codex model offers none), so a
+      // send that rebuilt the tuple would come out with both fields wrong.
+      const hostTarget: ChatRunSettings = {
+        ...TARGET,
+        permissionMode: "full_access",
+        serviceTier: "fast",
+      };
+      kit.listData = listingWithModelTarget(hostTarget);
       kit.lease = heldLease("held", "tok-1");
       mount(countdown());
       await open();
@@ -548,11 +775,258 @@ describe("RoutingDestinationPicker", () => {
             chatId: CHAT_ID,
             traversalId: TRAVERSAL_ID,
             revision: 2,
-            target: TARGET,
+            target: hostTarget,
             leaseToken: "tok-1",
           },
         },
       ]);
+      expect(kit.mutations[0].variables).toMatchObject({
+        target: { permissionMode: "full_access", serviceTier: "fast" },
+      });
+    });
+
+    it("changing the effort after picking a Suggested row that names one sends the CLIENT tuple: the new effort, the failed tuple's permission and agent mode, not the row's host target", async () => {
+      const hostTarget: ChatRunSettings = {
+        ...TARGET,
+        permissionMode: "full_access",
+        reasoningEffort: "high",
+      };
+      kit.listData = listingWithModelTarget(hostTarget);
+      kit.lease = heldLease("held", "tok-1");
+      mount(countdown());
+      await open();
+      fireEvent.click(option(/Codex · Codex Team/));
+      // The row is what is checked while its own effort stands.
+      expect(suggested()[0].getAttribute("aria-selected")).toBe("true");
+
+      act(() => {
+        lastStore().getState().setReasoning("low");
+      });
+      // ...and stops being checked the moment the effort is somewhere else.
+      expect(suggested()[0].getAttribute("aria-selected")).toBe("false");
+      fireEvent.click(footerConfirm());
+
+      expect(kit.mutations).toHaveLength(1);
+      expect(kit.mutations[0].variables.target).toEqual({
+        ...FAILED,
+        harnessId: "codex",
+        model: TARGET.model,
+        profileId: TARGET.profileId,
+        reasoningEffort: "low",
+        serviceTier: null,
+      });
+    });
+
+    it("a Suggested row whose target effort is null is still the checked row, and its host target is what is sent, on a model that advertises efforts and a default", async () => {
+      // The failed tuple's model advertises low/high with default "high" and
+      // the tuple itself has effort null ("model default"). The preselect
+      // commits the account row with a raw effort of "", which the store
+      // DERIVES to "high". Matching on the derived value would leave the row
+      // unchecked and send a client tuple with "high".
+      const seed: ChatRunSettings = {
+        ...FAILED,
+        model: "claude-haiku-4",
+        reasoningEffort: null,
+      };
+      kit.listData = listTargetsResponse({
+        outcome: "listed",
+        failedTuple: seed,
+        profileTargets: [
+          fallbackProfileTarget({
+            profileId: WORK_PROFILE,
+            label: "Work",
+            severity: "ok",
+            usedPercent: 10,
+            recommended: true,
+            selectable: true,
+            skip: null,
+          }),
+        ],
+        modelTargets: [],
+        modelTargetsSkip: null,
+      });
+      mount({
+        kind: "failed-turn",
+        attempt: failedAttempt(["switch"]),
+        seedTuple: seed,
+      });
+      await open();
+
+      expect(lastStore().getState().selection.profileId).toBe(WORK_PROFILE);
+      expect(lastStore().getState().reasoning).toBe("high");
+      expect(lastStore().getState().values.reasoning).toBe("");
+      const row = suggested()[0];
+      expect(row.textContent).toContain("Recommended");
+      expect(row.getAttribute("aria-selected")).toBe("true");
+      // Not the catalog row for the same model.
+      expect(
+        catalogRow(/Claude Haiku 4/).getAttribute("aria-selected"),
+      ).not.toBe("true");
+
+      fireEvent.click(footerConfirm());
+
+      expect(kit.mutations).toHaveLength(1);
+      expect(kit.mutations[0].variables.target).toEqual({
+        ...seed,
+        profileId: WORK_PROFILE,
+      });
+      expect(kit.mutations[0].variables).toMatchObject({
+        target: { reasoningEffort: null },
+      });
+    });
+
+    it("R2-3a: an explicit-effort Suggested row is the checked row when plain clicks land on the same model at the effort it resolves to, and its host target is sent", async () => {
+      // The kit's Codex has one account, so the picker shows no account strip
+      // and a plain catalog click commits the ambient account: the row is on
+      // that account (`profileId: null`) for "same account" to hold.
+      const hostTarget: ChatRunSettings = {
+        ...TARGET,
+        profileId: null,
+        reasoningEffort: "low",
+        permissionMode: "full_access",
+        serviceTier: "fast",
+      };
+      kit.listData = listingWithModelTarget(hostTarget);
+      kit.lease = heldLease("held", "tok-1");
+      mount(countdown());
+      await open();
+
+      fireEvent.click(suggested()[0]);
+      // A plain catalog row on the same provider and account, then back.
+      fireEvent.click(catalogRow(/GPT-4\.1/));
+      fireEvent.click(catalogRow(/GPT-5/));
+
+      // gpt-5 advertises low/medium/high and no default, so an unset effort
+      // resolves to "low" - the row's own.
+      expect(lastStore().getState().values.reasoning).toBe("");
+      expect(lastStore().getState().reasoning).toBe("low");
+      expect(suggested()[0].getAttribute("aria-selected")).toBe("true");
+      expect(catalogRow(/GPT-5/).getAttribute("aria-selected")).not.toBe(
+        "true",
+      );
+
+      fireEvent.click(footerConfirm());
+      expect(kit.mutations).toHaveLength(1);
+      expect(kit.mutations[0].variables.target).toEqual(hostTarget);
+      expect(kit.mutations[0].variables).toMatchObject({
+        target: {
+          permissionMode: "full_access",
+          serviceTier: "fast",
+          reasoningEffort: "low",
+        },
+      });
+    });
+
+    it("R2-3a: the same for a real explicit model default - a Suggested claude-haiku-4 row at its default 'high', reached from another model by plain clicks", async () => {
+      const hostTarget: ChatRunSettings = {
+        ...FAILED,
+        model: "claude-haiku-4",
+        reasoningEffort: "high",
+        permissionMode: "full_access",
+        serviceTier: "fast",
+      };
+      kit.listData = listingWithModelTarget(hostTarget);
+      kit.lease = heldLease("held", "tok-1");
+      mount(countdown());
+      await open();
+
+      fireEvent.click(suggested()[0]);
+      fireEvent.click(catalogRow(/Claude Opus 4/));
+      fireEvent.click(catalogRow(/Claude Haiku 4/));
+
+      expect(lastStore().getState().values.reasoning).toBe("");
+      expect(lastStore().getState().reasoning).toBe("high");
+      expect(suggested()[0].getAttribute("aria-selected")).toBe("true");
+      expect(
+        catalogRow(/Claude Haiku 4/).getAttribute("aria-selected"),
+      ).not.toBe("true");
+
+      fireEvent.click(footerConfirm());
+      expect(kit.mutations).toHaveLength(1);
+      expect(kit.mutations[0].variables.target).toEqual(hostTarget);
+    });
+
+    it("R2-3b: clicking a null-effort row again after choosing an effort restores the model default, checks the row, and sends its null-effort target", async () => {
+      useLayoutStore.getState().setComposerReasoningFooterControl("list");
+      kit.listData = listTargetsResponse({
+        outcome: "listed",
+        failedTuple: HAIKU_SEED,
+        profileTargets: [
+          fallbackProfileTarget({
+            profileId: WORK_PROFILE,
+            label: "Work",
+            severity: "ok",
+            usedPercent: 10,
+            recommended: true,
+            selectable: true,
+            skip: null,
+          }),
+        ],
+        modelTargets: [],
+        modelTargetsSkip: null,
+      });
+      mount(haikuEntry(HAIKU_SEED));
+      await open();
+      expect(suggested()[0].getAttribute("aria-selected")).toBe("true");
+
+      fireEvent.click(screen.getByRole("button", { name: "Low" }));
+      expect(lastStore().getState().values.reasoning).toBe("low");
+      expect(suggested()[0].getAttribute("aria-selected")).toBe("false");
+
+      fireEvent.click(suggested()[0]);
+      expect(lastStore().getState().values.reasoning).toBe("");
+      expect(lastStore().getState().reasoning).toBe("high");
+      expect(suggested()[0].getAttribute("aria-selected")).toBe("true");
+
+      fireEvent.click(footerConfirm());
+      expect(kit.mutations).toHaveLength(1);
+      expect(kit.mutations[0].variables.target).toEqual({
+        ...HAIKU_SEED,
+        profileId: WORK_PROFILE,
+      });
+      expect(kit.mutations[0].variables).toMatchObject({
+        target: { reasoningEffort: null },
+      });
+    });
+
+    it("R2-3b: two Suggested rows for one (harness, model, account) - explicit low and no effort - are checked one at a time by click, and the confirm sends the checked one's target", async () => {
+      const lowTarget: ChatRunSettings = {
+        ...HAIKU_SEED,
+        profileId: WORK_PROFILE,
+        reasoningEffort: "low",
+      };
+      const nullTarget: ChatRunSettings = {
+        ...HAIKU_SEED,
+        profileId: WORK_PROFILE,
+        reasoningEffort: null,
+        permissionMode: "full_access",
+      };
+      kit.listData = listTargetsResponse({
+        outcome: "listed",
+        failedTuple: HAIKU_SEED,
+        profileTargets: [],
+        modelTargets: [
+          haikuModelRow({ groupId: "grp-low", target: lowTarget }),
+          haikuModelRow({ groupId: "grp-null", target: nullTarget }),
+        ],
+        modelTargetsSkip: null,
+      });
+      mount(haikuEntry(HAIKU_SEED));
+      await open();
+      expect(suggested()).toHaveLength(2);
+      const [low, none] = suggested();
+
+      fireEvent.click(low);
+      expect(suggested()[0].getAttribute("aria-selected")).toBe("true");
+      expect(suggested()[1].getAttribute("aria-selected")).toBe("false");
+
+      fireEvent.click(none);
+      expect(suggested()[1].getAttribute("aria-selected")).toBe("true");
+      expect(suggested()[0].getAttribute("aria-selected")).toBe("false");
+
+      fireEvent.click(footerConfirm());
+      expect(kit.mutations).toHaveLength(1);
+      expect(kit.mutations[0].variables.target).toEqual(nullTarget);
     });
 
     it("a Suggested profile row sends the failed tuple with only the account swapped", async () => {
@@ -741,7 +1215,7 @@ describe("RoutingDestinationPicker", () => {
       kit.mutationResult = { outcome: "rung_unavailable", detail: null };
       fireEvent.click(footerConfirm());
 
-      expect(statusLines()).toContain("That action isn't available right now.");
+      expect(statusLines()).toContain("Couldn't switch just now.");
       expect(
         screen.getByRole("dialog", { name: "Select model" }),
       ).toBeDefined();
@@ -772,16 +1246,14 @@ describe("RoutingDestinationPicker", () => {
       fireEvent.click(option(/Codex · Codex Team/));
       kit.mutationResult = { outcome: "rung_unavailable", detail: null };
       fireEvent.click(footerConfirm());
-      expect(statusLines()).toContain("That action isn't available right now.");
+      expect(statusLines()).toContain("Couldn't switch just now.");
 
       kit.mutationResult = { outcome: "attempt_not_latest", detail: null };
       fireEvent.click(footerConfirm());
 
-      expect(statusLines()).not.toContain(
-        "That action isn't available right now.",
-      );
+      expect(statusLines()).not.toContain("Couldn't switch just now.");
       expect(statusLines()).toContain(
-        "This chat has moved on since that message.",
+        "This chat has moved on since that message. Send a new message to continue.",
       );
     });
 
@@ -816,15 +1288,186 @@ describe("RoutingDestinationPicker", () => {
       expect(kit.toast).not.toHaveBeenCalled();
     });
 
-    it("a refused Retry answers inline while the chooser is open - the bare-button toast is for a row that cannot write", async () => {
+    it("a refused Retry answers inline while the chooser is open - the announcer is for a chooser that has gone", async () => {
       mount(failedTurn(["retry", "switch"]));
       await open();
       fireEvent.click(option(/Try Personal again/));
       kit.mutationResult = { outcome: "rung_unavailable", detail: null };
       fireEvent.click(footerConfirm());
 
-      expect(statusLines()).toContain("That action isn't available right now.");
+      expect(statusLines()).toContain("Couldn't retry just now.");
       expect(kit.toast).not.toHaveBeenCalled();
+      expect(kit.unattended).toEqual([]);
+    });
+  });
+
+  describe("what a refused manual rung says", () => {
+    async function sendSwitchRefusedWith(
+      outcome: string,
+      detail: { kind: string; label: string; retryable: boolean } | null,
+    ): Promise<void> {
+      mount(failedTurn(["retry", "switch"]));
+      await open();
+      fireEvent.click(option(/Codex · Codex Team/));
+      kit.mutationResult = { outcome, detail };
+      fireEvent.click(footerConfirm());
+    }
+
+    it("(a) an error-row switch refused with a detail prints the card's own sentence, the host's name included", async () => {
+      const detail = {
+        kind: "worktree_missing",
+        label: "The worktree is gone.",
+        retryable: false,
+      };
+      await sendSwitchRefusedWith("rung_unavailable", detail);
+
+      const expected = describeManualRungRefusal({
+        outcome: "rung_unavailable",
+        detail,
+        rung: "switch",
+        hostLabel: "Session host",
+      })?.text;
+      expect(expected).toBe(
+        "This chat's worktree no longer exists on Session host. Start a new chat from this task.",
+      );
+      expect(statusLines()).toContain(expected);
+      expect(kit.toast).not.toHaveBeenCalled();
+    });
+
+    it("(b) a staged Retry refused with no detail prints the neutral sentence for retry", async () => {
+      mount(failedTurn(["retry", "switch"]));
+      await open();
+      fireEvent.click(option(/Try Personal again/));
+      kit.mutationResult = { outcome: "rung_unavailable", detail: null };
+      fireEvent.click(footerConfirm());
+
+      expect(statusLines()).toContain("Couldn't retry just now.");
+    });
+
+    it("(c) a refusal whose copy has no text leaves the refusal region empty, and the chooser open", async () => {
+      // `routing_active` is the silent kind: the routing card on screen is
+      // its explanation.
+      await sendSwitchRefusedWith("rung_unavailable", {
+        kind: "routing_active",
+        label: "Routing is active.",
+        retryable: false,
+      });
+
+      expect(
+        describeManualRungRefusal({
+          outcome: "rung_unavailable",
+          detail: {
+            kind: "routing_active",
+            label: "Routing is active.",
+            retryable: false,
+          },
+          rung: "switch",
+          hostLabel: "Session host",
+        })?.text,
+      ).toBeNull();
+      // Only the announcer's row count is left: the refusal region is empty.
+      expect(statusLines()).toEqual(["3 suggested destinations available."]);
+      expect(
+        screen.getByRole("dialog", { name: "Select model" }),
+      ).toBeDefined();
+    });
+
+    it("(d) a chooseTarget refusal still shows the outcome sentence", async () => {
+      mount(waiting());
+      await open();
+      fireEvent.click(option(/Codex · Codex Team/));
+      kit.mutationResult = { outcome: "traversal_advanced", detail: null };
+      fireEvent.click(footerConfirm());
+
+      expect(statusLines()).toContain(
+        describeFallbackOutcome("traversal_advanced"),
+      );
+    });
+
+    it("(e) rung_target_unavailable on the error-row switch prints the host's sentence and still dims the row that was sent", async () => {
+      await sendSwitchRefusedWith("rung_target_unavailable", {
+        kind: "target_unusable",
+        label: "unused",
+        retryable: false,
+      });
+
+      expect(statusLines()).toContain(
+        "That model can't be used right now. Pick another.",
+      );
+      const dimmed = option(/Codex · Codex Team/);
+      expect(dimmed.getAttribute("aria-disabled")).toBe("true");
+      expect(dimmed.textContent).toContain("Not available right now.");
+    });
+  });
+
+  describe("the trigger", () => {
+    it("renders a ReactNode label inside the trigger button", () => {
+      mountTrigger(failedTurn(["switch"]), {
+        label: (
+          <span data-testid="label-node">
+            <svg aria-hidden="true" data-testid="label-icon" />
+            Route
+          </span>
+        ),
+        ariaLabel: null,
+        variant: "outline",
+      });
+
+      const button = screen.getByRole("button", { name: "Route" });
+      expect(within(button).getByTestId("label-node")).toBeDefined();
+      expect(within(button).getByTestId("label-icon")).toBeDefined();
+    });
+
+    it("names the trigger by triggerAriaLabel when given, and by its content when null", () => {
+      const view = mountTrigger(failedTurn(["switch"]), {
+        label: "Route",
+        ariaLabel: "Change destination: Claude Sonnet 4",
+        variant: "outline",
+      });
+      expect(
+        screen.getByRole("button", {
+          name: "Change destination: Claude Sonnet 4",
+        }),
+      ).toBeDefined();
+      expect(screen.queryByRole("button", { name: "Route" })).toBeNull();
+      view.unmount();
+
+      mountTrigger(failedTurn(["switch"]), {
+        label: "Route",
+        ariaLabel: null,
+        variant: "outline",
+      });
+      expect(screen.getByRole("button", { name: "Route" })).toBeDefined();
+    });
+
+    it("gives the route-chip variant the route-chip size and every other variant size sm", () => {
+      const chip = mountTrigger(failedTurn(["switch"]), {
+        label: "Route",
+        ariaLabel: null,
+        variant: "route-chip",
+      });
+      let button = screen.getByRole("button", { name: "Route" });
+      expect(button.getAttribute("data-variant")).toBe("route-chip");
+      expect(button.getAttribute("data-size")).toBe("route-chip");
+      chip.unmount();
+
+      const outline = mountTrigger(failedTurn(["switch"]), {
+        label: "Route",
+        ariaLabel: null,
+        variant: "outline",
+      });
+      button = screen.getByRole("button", { name: "Route" });
+      expect(button.getAttribute("data-variant")).toBe("outline");
+      expect(button.getAttribute("data-size")).toBe("sm");
+      outline.unmount();
+
+      mountTrigger(failedTurn(["switch"]), {
+        label: "Route",
+        ariaLabel: null,
+        variant: "default",
+      });
+      button = screen.getByRole("button", { name: "Route" });
+      expect(button.getAttribute("data-size")).toBe("sm");
     });
   });
 
@@ -949,6 +1592,85 @@ describe("RoutingDestinationPicker", () => {
         profileId: FAILED_PROFILE,
       });
       expect(footerConfirm().disabled).toBe(true);
+    });
+
+    it("a query typed before the listing arrives cancels the preselect for the rest of that open - the listing landing later, and the query clearing, move nothing", async () => {
+      kit.listData = undefined;
+      const view = mount(failedTurn(["switch"]));
+      await open();
+      fireEvent.change(screen.getByRole("textbox", { name: /^Search/ }), {
+        target: { value: "opus" },
+      });
+
+      kit.listData = listing({ recommendedWork: true });
+      view.rerenderWith(failedTurn(["switch"]));
+      expect(lastStore().getState().selection).toEqual({
+        harnessId: FAILED.harnessId,
+        modelSlug: FAILED.model,
+        profileId: FAILED_PROFILE,
+      });
+      expect(footerConfirm().disabled).toBe(true);
+
+      fireEvent.change(screen.getByRole("textbox", { name: /^Search/ }), {
+        target: { value: "" },
+      });
+      // Nothing on screen offered the row while the query hid the section, so
+      // committing it now would enable Switch for a destination nobody chose.
+      expect(lastStore().getState().selection.profileId).toBe(FAILED_PROFILE);
+      expect(footerConfirm().disabled).toBe(true);
+    });
+
+    it("preselects the one usable model row when no sibling account is usable, so Switch is enabled and confirm sends its host target", async () => {
+      kit.listData = {
+        ...listing({ recommendedWork: false }),
+        profileTargets: [],
+      };
+      mount(failedTurn(["switch"]));
+      await open();
+
+      expect(lastStore().getState().selection).toEqual({
+        harnessId: "codex",
+        modelSlug: TARGET.model,
+        profileId: TARGET.profileId,
+      });
+      expect(footerConfirm().disabled).toBe(false);
+      fireEvent.click(footerConfirm());
+      expect(kit.mutations[0].variables.target).toEqual(TARGET);
+    });
+
+    it("R2-3b: a preselect that commits a same-model row with no effort resets a stale raw effort, so the row is checked and its null-effort target is sent", async () => {
+      const seed: ChatRunSettings = {
+        ...HAIKU_SEED,
+        reasoningEffort: "low",
+      };
+      const rowTarget: ChatRunSettings = {
+        ...seed,
+        profileId: WORK_PROFILE,
+        reasoningEffort: null,
+      };
+      kit.listData = listTargetsResponse({
+        outcome: "listed",
+        failedTuple: seed,
+        profileTargets: [],
+        modelTargets: [
+          haikuModelRow({ groupId: "grp-same-pair", target: rowTarget }),
+        ],
+        modelTargetsSkip: null,
+      });
+      mount(haikuEntry(seed));
+      await open();
+
+      expect(lastStore().getState().values.reasoning).toBe("");
+      expect(lastStore().getState().reasoning).toBe("high");
+      expect(suggested()[0].getAttribute("aria-selected")).toBe("true");
+      expect(footerConfirm().disabled).toBe(false);
+
+      fireEvent.click(footerConfirm());
+      expect(kit.mutations).toHaveLength(1);
+      expect(kit.mutations[0].variables.target).toEqual(rowTarget);
+      expect(kit.mutations[0].variables).toMatchObject({
+        target: { reasoningEffort: null },
+      });
     });
 
     it("a query does NOT revert a pick the user made after the preselect", async () => {

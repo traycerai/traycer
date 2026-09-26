@@ -10,8 +10,11 @@ import {
   type HarnessOption,
   type ModelOption,
   type ProviderId,
+  type ReasoningFallback,
+  type ReasoningLevel,
   modelDisplayLabel,
   modelMetadataString,
+  normalizeReasoningForModel,
 } from "@/components/home/data/landing-options";
 
 export interface HarnessModelSource {
@@ -131,6 +134,54 @@ export type HarnessModelPickerRow =
   | HarnessModelListRow
   | SuggestionRow
   | SuggestionHeadingRow;
+
+/** The store's pick, as {@link suggestionIsPick} compares it. */
+export interface SuggestionPickState {
+  readonly selection: HarnessModelSelection;
+  /** The store's DERIVED effort: what a turn on the pick would run at. */
+  readonly reasoning: ReasoningLevel;
+  readonly selectedModel: ModelOption | null;
+  /** The fallback the surface's store resolves an unset effort through. */
+  readonly reasoningFallback: ReasoningFallback;
+}
+
+/**
+ * Whether a suggestion IS the store's current pick: a selectable `switch` row
+ * naming the same (harness, model, account) at the same EFFECTIVE effort.
+ *
+ * One definition for the two questions that must agree - which row the list
+ * checks, and whether the confirm sends that row's host-built tuple. Effort is
+ * part of it because two rows can differ in nothing else, and a row checked
+ * after its effort changed would be a check mark over a tuple the confirm
+ * does not send.
+ *
+ * Effective on both sides, never the raw representation. The store's side is
+ * its derived effort. The row's is its target's effort or, where the target
+ * names none ("the model's default"), what the store derives `""` to on that
+ * model under its own fallback. So a plain model pick that resolves to a row's
+ * explicit effort matches that row, and a row with no effort matches the store
+ * that committed it - a raw `""` the derive has already turned into the
+ * default's name on any model that advertises efforts.
+ */
+export function suggestionIsPick(
+  row: SuggestionRow,
+  pick: SuggestionPickState,
+): boolean {
+  if (!row.selectable || row.action.kind !== "switch") return false;
+  const target = row.action.target;
+  if (target === null) return false;
+  if (
+    row.harnessId !== pick.selection.harnessId ||
+    row.modelId !== pick.selection.modelSlug ||
+    row.profileId !== pick.selection.profileId
+  ) {
+    return false;
+  }
+  const rowEffort =
+    target.reasoningEffort ??
+    normalizeReasoningForModel("", pick.selectedModel, pick.reasoningFallback);
+  return rowEffort === pick.reasoning;
+}
 
 export function toModelListRows(
   rows: ReadonlyArray<HarnessModelRow>,

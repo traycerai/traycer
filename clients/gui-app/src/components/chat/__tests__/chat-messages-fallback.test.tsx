@@ -287,6 +287,7 @@ function providerNoticeSegment(input: {
   return {
     id: input.id,
     kind: "provider_notice",
+    receipt: null,
     status: "completed",
     noticeKind: input.noticeKind,
     tone: "info",
@@ -745,9 +746,62 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+// The routing chooser (opened from the waiting card's "Choose another model…")
+// reads the host through these hooks. The picker suites' shared doubles stand
+// in for them here, and nothing else changes: the store, the announcer and the
+// pick's mutation lifecycle - what this file proves - stay real.
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", async () =>
+  (await import("../fallback/__tests__/routing-picker-kit")).catalogModule(),
+);
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).providersEnsurePackModule(),
+);
+vi.mock(
+  "@/hooks/providers/use-providers-set-profile-enabled-mutation",
+  async () =>
+    (
+      await import("../fallback/__tests__/routing-picker-kit")
+    ).providersSetProfileEnabledModule(),
+);
+vi.mock("@/hooks/host/use-reactive-host-readiness", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).reactiveHostReadinessModule(),
+);
+vi.mock("@/hooks/agent/use-host-reachability", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).hostReachabilityModule(),
+);
+vi.mock("@/hooks/host/use-addressable-host-id", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).addressableHostIdModule(),
+);
+vi.mock("@/hooks/host/use-host-directory-entry", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).hostDirectoryEntryModule(),
+);
+vi.mock("@/hooks/host/use-host-directory-list-query", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).hostDirectoryListModule(),
+);
+vi.mock("@/hooks/rate-limits/use-profile-usage-comparison", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).usageComparisonModule(),
+);
+vi.mock("react-virtuoso", async () =>
+  (await import("../fallback/__tests__/routing-picker-kit")).virtuosoModule(),
+);
+
 /**
  * `useFallbackModelLabels` alone, kept real everywhere else in the module -
- * same double as `fallback-grace-card.test.tsx`, and for the same reason:
+ * same double as the retired grace-card suite used, and for the same reason:
  * this file's real `HostClient`/`MockHostMessenger` has no
  * `agent.gui.listHarnesses`/`agent.gui.listModels` handler, so the real hook
  * would hit an unhandled-method `HostRpcError` on every mount - which is
@@ -2422,7 +2476,9 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       const deferred = makeDeferred<ChooseTargetResponse>();
       chooseTargetState.handler = () => deferred.promise;
 
-      fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Choose another model…" }),
+      );
       // The chooser stages a pick and the footer's Switch sends it.
       fireEvent.click(screen.getByRole("option", { name: /gpt-6-astra-mini/ }));
       act(() => {
@@ -2484,7 +2540,9 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       const deferred = makeDeferred<ChooseTargetResponse>();
       chooseTargetState.handler = () => deferred.promise;
 
-      fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Choose another model…" }),
+      );
       // The chooser stages a pick and the footer's Switch sends it.
       fireEvent.click(screen.getByRole("option", { name: /gpt-6-astra-mini/ }));
       act(() => {
@@ -2515,7 +2573,9 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       const deferred = makeDeferred<ChooseTargetResponse>();
       chooseTargetState.handler = () => deferred.promise;
 
-      fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Choose another model…" }),
+      );
       // The chooser stages a pick and the footer's Switch sends it.
       fireEvent.click(screen.getByRole("option", { name: /gpt-6-astra-mini/ }));
       act(() => {
@@ -3123,7 +3183,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // and (module-mocked) the exact same resolver function the announcer
     // above just read.
     renderBanners(pending, chat.queryClient);
-    const card = screen.getByTestId("fallback-grace-card").textContent;
+    const card = screen.getByTestId("routing-card").textContent;
     expect(card).toContain("Astra Mini");
     expect(card).not.toContain(TARGET_TUPLE.model);
   });

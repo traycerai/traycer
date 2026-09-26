@@ -12,6 +12,7 @@ import {
   type HarnessOption,
   type ModelOption,
   type ProviderId,
+  type ReasoningFallback,
   type ReasoningLevel,
   type ReasoningLevelOption,
 } from "@/components/home/data/landing-options";
@@ -38,6 +39,7 @@ import {
   flattenModelRowSections,
   sectionModelRowsByProviderRank,
   selectedModelRowId,
+  suggestionIsPick,
   toModelListRows,
   type HarnessModelListRow,
   type HarnessModelPickerRow,
@@ -233,6 +235,12 @@ export interface HarnessModelPickerSuggestions {
   readonly onStageAction: (row: SuggestionRow | null) => void;
   /** The search went from empty to non-empty, hiding the section. */
   readonly onHiddenByQuery: () => void;
+  /**
+   * The fallback the surface created its store with. A row whose target names
+   * no effort runs at the model's default, and the check mark resolves that
+   * default the way this store resolves an unset effort (`suggestionIsPick`).
+   */
+  readonly reasoningFallback: ReasoningFallback;
 }
 
 interface HarnessModelPickerProps {
@@ -949,8 +957,16 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     [visibleRows],
   );
   const selectedRowId = useMemo(
-    () => markedRowId(embedding, selection, rows, hasQuery),
-    [embedding, hasQuery, rows, selection],
+    () =>
+      markedRowId({
+        embedding,
+        selection,
+        reasoning,
+        selectedModel,
+        rows,
+        hasQuery,
+      }),
+    [embedding, hasQuery, reasoning, rows, selectedModel, selection],
   );
   const { effectiveActiveRowId, initialTopMostItemIndex } = resolveRowAnchors({
     visibleRows,
@@ -1356,31 +1372,37 @@ function providerSwitchSlug(
  * row" answer, which an embedding asks for until it has a selection to mark.
  *
  * With injected rows on screen, a staged row is the choice outright (it moved
- * no selection to match), and otherwise a selectable `switch` suggestion
- * naming the selection's (harness, model, account) is checked rather than the
- * catalog row for the same model: it is the row the user picked. A query
- * hides the section, and with it the staged row's check - nothing in the
- * results is the pick then.
+ * no selection to match), and otherwise the suggestion that IS the pick -
+ * `suggestionIsPick`, the same test the surface's confirm applies, effective
+ * effort included - is checked rather than the catalog row for the same
+ * model. A query hides the section, and with it the staged row's check -
+ * nothing in the results is the pick then.
  */
-function markedRowId(
-  embedding: HarnessModelPickerEmbedding | null,
-  selection: HarnessModelSelection,
-  rows: ReadonlyArray<HarnessModelRow>,
-  hasQuery: boolean,
-): string {
+function markedRowId(input: {
+  readonly embedding: HarnessModelPickerEmbedding | null;
+  readonly selection: HarnessModelSelection;
+  /** The store's DERIVED effort, as `suggestionIsPick` compares it. */
+  readonly reasoning: ReasoningLevel;
+  readonly selectedModel: ModelOption | null;
+  readonly rows: ReadonlyArray<HarnessModelRow>;
+  readonly hasQuery: boolean;
+}): string {
+  const { embedding, selection, reasoning, selectedModel, rows, hasQuery } =
+    input;
   const suggestions = embedding === null ? null : embedding.suggestions;
   if (suggestions !== null && suggestions.stagedRowId !== null) {
     return hasQuery ? "" : suggestions.stagedRowId;
   }
   if (embedding !== null && !embedding.selectionMarked) return "";
   if (suggestions !== null && !hasQuery) {
-    const matching = suggestions.rows.find(
-      (row) =>
-        row.selectable &&
-        row.action.kind === "switch" &&
-        row.harnessId === selection.harnessId &&
-        row.modelId === selection.modelSlug &&
-        row.profileId === selection.profileId,
+    const pick = {
+      selection,
+      reasoning,
+      selectedModel,
+      reasoningFallback: suggestions.reasoningFallback,
+    };
+    const matching = suggestions.rows.find((row) =>
+      suggestionIsPick(row, pick),
     );
     if (matching !== undefined) return matching.id;
   }
@@ -1430,8 +1452,10 @@ function selectSuggestionRow(input: {
   // A row with no tuple is never selectable; the guard is the type's half.
   if (action.target === null) return;
   commitSelection(store, row.harnessId, row.modelId, row.profileId);
-  const effort = action.target.reasoningEffort;
-  if (effort !== null) store.getState().setReasoning(effort);
+  // Always written, `""` for a row with no effort of its own: a setting store
+  // keeps its current effort on a same-model commit, and a row that asks for
+  // the model's default must not inherit an effort picked before it.
+  store.getState().setReasoning(action.target.reasoningEffort ?? "");
   input.onRailEntry(row.harnessId, row.profileId);
   suggestions.onStageAction(null);
 }

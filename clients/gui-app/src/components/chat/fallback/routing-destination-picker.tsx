@@ -18,6 +18,7 @@ import type {
   FallbackActionOutcome,
   FallbackModelTarget,
   FallbackProfileTarget,
+  FallbackRungRefusalDetail,
   FallbackTargetSkip,
 } from "@traycer/protocol/host/chat-fallback";
 import { tierRungSkipReasonSchema } from "@traycer/protocol/host/fallback-policy";
@@ -30,12 +31,16 @@ import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/ho
 import {
   DEFAULT_PERMISSION,
   normalizeServiceTierForModel,
+  type HarnessModelSelection,
+  type ModelOption,
   type ProviderId,
   type ReasoningFallback,
+  type ReasoningLevel,
 } from "@/components/home/data/landing-options";
-import type {
-  SuggestionRow,
-  SuggestionUsage,
+import {
+  suggestionIsPick,
+  type SuggestionRow,
+  type SuggestionUsage,
 } from "@/components/home/data/harness-model-search";
 import {
   HarnessModelPicker,
@@ -52,6 +57,7 @@ import {
   useGuiHarnessesQueryForClient,
   useGuiHarnessModelsQueryForClient,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usage-presentation";
@@ -70,11 +76,16 @@ import {
   PAUSING_COUNTDOWN_LABEL,
   describeFallbackOutcome,
   describeListTargetsOutcome,
+  describeManualRungRefusal,
   noSwitchDestinationText,
   switchConsequencesText,
+  switchDestinationConsequence,
+  type ManualRungKind,
 } from "./fallback-copy";
 import {
   fallbackDestinationOfModelTarget,
+  fallbackDestinationOfTuple,
+  fallbackDestinationSentence,
   fallbackHarnessLabelFor,
   fallbackKnownHarnessFor,
   fallbackProviderModelLabel,
@@ -161,14 +172,23 @@ const NO_IDS: ReadonlySet<string> = new Set();
  */
 export function RoutingDestinationPicker(props: {
   readonly entry: RoutingDestinationEntry;
-  readonly triggerLabel: string;
   /**
-   * How much weight the trigger carries. On the composer cards a plan is
-   * already in motion and this is the escape from it (`ghost`); on the error
-   * row switching is what helps when the failure is a spent quota
-   * (`secondary`).
+   * The trigger's content: a label, or a whole destination - the countdown's
+   * "to" chip is the trigger, glyph, emphasised segments and chevron included.
    */
-  readonly triggerVariant: "secondary" | "ghost";
+  readonly triggerLabel: ReactNode;
+  /**
+   * The trigger's accessible name, where its content alone does not say what
+   * it opens (a chip reading only a destination); `null` lets the content
+   * name it.
+   */
+  readonly triggerAriaLabel: string | null;
+  /**
+   * How much weight the trigger carries: the card's one filled action
+   * (`default`), a secondary one (`outline`), or the destination chip itself
+   * (`route-chip`, which also takes the chip's size).
+   */
+  readonly triggerVariant: "default" | "outline" | "route-chip";
   /**
    * The trigger alone: a card in `switching`, or a row whose own rung is in
    * flight. Never the open popover - a pick answered while its surface is open
@@ -271,22 +291,22 @@ export function RoutingDestinationPicker(props: {
 
   const closeRef = useRef<(() => void) | null>(null);
   const openRef = useRef<(() => void) | null>(null);
+  const hostLabel = useHostDirectoryEntry(hostId)?.label ?? null;
   const onAnswer = useCallback(
-    (outcome: FallbackActionOutcome, sentRowId: string | null) => {
-      const message = describeFallbackOutcome(outcome);
-      if (message === null) {
-        // Applied: the frame that follows is the feedback, and the traversal
-        // has advanced - there is no frozen remainder left to hand back.
+    (answer: RoutingAnswer, sentRowId: string | null) => {
+      if (answer.outcome === "applied") {
+        // The frame that follows is the feedback, and the traversal has
+        // advanced - there is no frozen remainder left to hand back.
         skipNextRelease();
         closeRef.current?.();
         return;
       }
-      setRefusal(message);
-      if (outcome === "rung_target_unavailable" && sentRowId !== null) {
+      setRefusal(answerRefusalText(answer, hostLabel));
+      if (answer.outcome === "rung_target_unavailable" && sentRowId !== null) {
         setUnavailableIds((current) => new Set(current).add(sentRowId));
       }
     },
-    [skipNextRelease],
+    [hostLabel, skipNextRelease],
   );
   const onTransportError = useCallback(() => {
     setRefusal(HOST_UNREACHABLE_LABEL);
@@ -359,6 +379,7 @@ export function RoutingDestinationPicker(props: {
         setStagedRowId(row === null ? null : row.id);
       },
       onHiddenByQuery: preselect.revert,
+      reasoningFallback: ROUTING_REASONING_FALLBACK,
     }),
     [heading, preselect.revert, rows, stagedRow],
   );
@@ -378,16 +399,19 @@ export function RoutingDestinationPicker(props: {
     isFetching: listing.isFetching,
     rows,
   });
-  const switchConsequence = switchConsequencesText(entryQueuedCount(entry));
+  const queuedCount = entryQueuedCount(entry);
   const staged = stagedConsequence(stagedRow, now);
   const footer = useMemo(
     () => (
       <RoutingConfirmFooter
         store={store}
         failedTuple={failedTuple}
+        rows={rows}
+        labelFor={labelFor}
+        modelLabelFor={modelLabelFor}
+        queuedCount={queuedCount}
         stagedRow={stagedRow}
         stagedConsequence={staged}
-        switchConsequence={switchConsequence}
         statusLine={footerStatus}
         refusal={footerRefusal}
         announcement={footerAnnouncement}
@@ -403,28 +427,33 @@ export function RoutingDestinationPicker(props: {
       footerAnnouncement,
       footerRefusal,
       footerStatus,
+      labelFor,
       lease.ready,
+      modelLabelFor,
       onConfirm,
+      queuedCount,
+      rows,
       staged,
       stagedRow,
       store,
-      switchConsequence,
       verbs.busy,
     ],
   );
 
-  const { triggerDisabled, triggerLabel, triggerVariant } = props;
+  const { triggerAriaLabel, triggerDisabled, triggerLabel, triggerVariant } =
+    props;
   const trigger = useMemo(
     () => (
       <Button
-        size="sm"
+        size={triggerVariant === "route-chip" ? "route-chip" : "sm"}
         variant={triggerVariant}
         disabled={triggerDisabled || !canAct}
+        aria-label={triggerAriaLabel ?? undefined}
       >
         {triggerLabel}
       </Button>
     ),
-    [canAct, triggerDisabled, triggerLabel, triggerVariant],
+    [canAct, triggerAriaLabel, triggerDisabled, triggerLabel, triggerVariant],
   );
   const embedding = useMemo<HarnessModelPickerEmbedding>(
     () => ({
@@ -587,7 +616,11 @@ function routingRequestFor(input: {
       attempt,
     };
   }
-  const pick = confirmTarget(input.store, input.rows, input.failedTuple);
+  const pick = confirmTarget(
+    input.store.getState(),
+    input.rows,
+    input.failedTuple,
+  );
   if (pick === null) return null;
   if (entry.kind === "failed-turn") {
     return {
@@ -610,6 +643,40 @@ function routingRequestFor(input: {
 }
 
 /**
+ * A verb's answer. A manual rung's carries the host's refusal detail and the
+ * rung it answers, which the failed-turn card's own sentence is built from.
+ */
+type RoutingAnswer =
+  | { readonly verb: "choose"; readonly outcome: FallbackActionOutcome }
+  | {
+      readonly verb: "manual";
+      readonly outcome: FallbackActionOutcome;
+      readonly detail: FallbackRungRefusalDetail | null;
+      readonly rung: ManualRungKind;
+    };
+
+/**
+ * The footer's line for a refused answer. A manual rung's is the failed-turn
+ * card's own sentence (`describeManualRungRefusal`) - the host's reason and the
+ * host's name included - so the chooser and the card never word one refusal
+ * two ways; `null` where another surface already says it. A choose keeps its
+ * outcome sentence.
+ */
+function answerRefusalText(
+  answer: RoutingAnswer,
+  hostLabel: string | null,
+): string | null {
+  if (answer.verb === "choose") return describeFallbackOutcome(answer.outcome);
+  const copy = describeManualRungRefusal({
+    outcome: answer.outcome,
+    detail: answer.detail,
+    rung: answer.rung,
+    hostLabel,
+  });
+  return copy === null ? null : copy.text;
+}
+
+/**
  * The two verbs, and where their answers go.
  *
  * While the chooser is open its footer line is the channel (`inlineMenuOpen`),
@@ -624,10 +691,7 @@ function useRoutingVerbs(input: {
   readonly chatId: string;
   readonly hostId: string;
   readonly open: boolean;
-  readonly onAnswer: (
-    outcome: FallbackActionOutcome,
-    sentRowId: string | null,
-  ) => void;
+  readonly onAnswer: (answer: RoutingAnswer, sentRowId: string | null) => void;
   /** A request that got no response at all - every `outcome` is a response. */
   readonly onTransportError: () => void;
 }) {
@@ -667,7 +731,15 @@ function useRoutingVerbs(input: {
           },
           {
             onSuccess: (response) => {
-              onAnswer(response.outcome, null);
+              onAnswer(
+                {
+                  verb: "manual",
+                  outcome: response.outcome,
+                  detail: response.detail,
+                  rung: request.rung,
+                },
+                null,
+              );
             },
             onError: onTransportError,
           },
@@ -688,7 +760,15 @@ function useRoutingVerbs(input: {
           },
           {
             onSuccess: (response) => {
-              onAnswer(response.outcome, request.rowId);
+              onAnswer(
+                {
+                  verb: "manual",
+                  outcome: response.outcome,
+                  detail: response.detail,
+                  rung: "switch",
+                },
+                request.rowId,
+              );
             },
             onError: onTransportError,
           },
@@ -706,7 +786,10 @@ function useRoutingVerbs(input: {
           },
           {
             onSuccess: (response) => {
-              onAnswer(response.outcome, request.rowId);
+              onAnswer(
+                { verb: "choose", outcome: response.outcome },
+                request.rowId,
+              );
             },
             onError: onTransportError,
           },
@@ -999,7 +1082,8 @@ interface PreselectHandle {
   readonly reset: () => void;
   /**
    * A query hid the section: put the store back on the failed tuple, if it
-   * still holds the preselect - a pick the user made since is theirs.
+   * still holds the preselect - a pick the user made since is theirs - and
+   * make no preselect for the rest of this open.
    */
   readonly revert: () => void;
 }
@@ -1043,6 +1127,10 @@ function usePreselectRecommended(input: {
     preselectedRef.current = null;
   }, []);
   const revert = useCallback(() => {
+    // A query can arrive BEFORE the listing: the section is hidden, so no
+    // preselect may land for the rest of this open - one committed later
+    // would enable Switch for a destination nothing on screen shows.
+    doneRef.current = true;
     const preselected = preselectedRef.current;
     preselectedRef.current = null;
     if (preselected === null) return;
@@ -1077,7 +1165,10 @@ function useClearStagedOnSelection(
 
 /**
  * The picker's own commit, for a suggestion chosen outside a click (the
- * preselect): selection, then the row's effort.
+ * preselect): selection, then the row's effort - always written, `""` for a
+ * row that names none, exactly as a click writes it. The setting store keeps
+ * its effort on a same-model commit, so a skipped write would leave the
+ * row's model-default ask carrying whatever effort was set before.
  */
 function commitSuggestion(
   store: ComposerToolbarStore,
@@ -1094,12 +1185,23 @@ function commitSuggestion(
     serviceTier: "",
   });
   const effort = target === null ? null : target.reasoningEffort;
-  if (effort !== null) store.getState().setReasoning(effort);
+  store.getState().setReasoning(effort ?? "");
 }
 
 /* ------------------------------------------------------------------------- */
 /* Confirm                                                                   */
 /* ------------------------------------------------------------------------- */
+
+/**
+ * What of the store the confirm reads: the pick, its derived effort, and the
+ * catalog model it resolved to (for a null-effort row's default and the
+ * fast-mode check). `ComposerToolbarState` is one.
+ */
+interface RoutingPick {
+  readonly selection: HarnessModelSelection;
+  readonly reasoning: ReasoningLevel;
+  readonly selectedModel: ModelOption | null;
+}
 
 /**
  * What the confirm sends for the store's current pick.
@@ -1112,34 +1214,39 @@ function commitSuggestion(
  * whose permission and agent mode it keeps - never the chat composer's - and
  * its fast mode only where the picked model offers it.
  *
+ * The row test is `suggestionIsPick`, the one the picker's check mark uses,
+ * so the row that shows checked is the row whose target is sent; its effort
+ * equality is EFFECTIVE (a row's `null` is the model's default under this
+ * store's own fallback), never raw. Pure over a
+ * {@link RoutingPick} rather than the store, so the footer can read back the
+ * tuple its confirm would send - its sentence names it.
+ *
  * `null` while the store's model is still resolving: a `""` model never
  * reaches the wire.
  */
 function confirmTarget(
-  store: ComposerToolbarStore,
+  pick: RoutingPick,
   rows: ReadonlyArray<SuggestionRow>,
   failedTuple: ChatRunSettings,
 ): { readonly target: ChatRunSettings; readonly rowId: string | null } | null {
-  const state = store.getState();
-  const selection = state.selection;
+  const { selection, reasoning } = pick;
   if (selection.modelSlug.length === 0) return null;
-  const effort = state.reasoning.length === 0 ? null : state.reasoning;
-  for (const row of rows) {
-    if (!row.selectable || row.action.kind !== "switch") continue;
-    const target = row.action.target;
-    if (target === null) continue;
-    if (
-      row.harnessId === selection.harnessId &&
-      row.modelId === selection.modelSlug &&
-      row.profileId === selection.profileId &&
-      target.reasoningEffort === effort
-    ) {
-      return { target, rowId: row.id };
-    }
+  const matching = rows.find((row) =>
+    suggestionIsPick(row, {
+      selection,
+      reasoning,
+      selectedModel: pick.selectedModel,
+      reasoningFallback: ROUTING_REASONING_FALLBACK,
+    }),
+  );
+  if (matching !== undefined && matching.action.kind === "switch") {
+    const target = matching.action.target;
+    if (target !== null) return { target, rowId: matching.id };
   }
+  const effort = reasoning.length === 0 ? null : reasoning;
   const tier = normalizeServiceTierForModel(
     failedTuple.serviceTier ?? "",
-    state.selectedModel,
+    pick.selectedModel,
   ).trim();
   return {
     target: {
@@ -1157,9 +1264,12 @@ function confirmTarget(
 function RoutingConfirmFooter({
   store,
   failedTuple,
+  rows,
+  labelFor,
+  modelLabelFor,
+  queuedCount,
   stagedRow,
   stagedConsequence,
-  switchConsequence,
   statusLine,
   refusal,
   announcement,
@@ -1170,9 +1280,13 @@ function RoutingConfirmFooter({
 }: {
   readonly store: ComposerToolbarStore;
   readonly failedTuple: ChatRunSettings;
+  readonly rows: ReadonlyArray<SuggestionRow>;
+  readonly labelFor: FallbackProfileLabelResolver;
+  readonly modelLabelFor: FallbackModelLabelResolver;
+  /** The queue a switch moves; `null` where the host gives no count. */
+  readonly queuedCount: number | null;
   readonly stagedRow: SuggestionRow | null;
   readonly stagedConsequence: string | null;
-  readonly switchConsequence: string;
   readonly statusLine: string | null;
   readonly refusal: string | null;
   readonly announcement: string;
@@ -1182,6 +1296,8 @@ function RoutingConfirmFooter({
   readonly onConfirm: () => void;
 }) {
   const selection = useStore(store, (state) => state.selection);
+  const reasoning = useStore(store, (state) => state.reasoning);
+  const selectedModel = useStore(store, (state) => state.selectedModel);
   // The RAW effort, not the derived one: the store clamps an effort the model
   // does not advertise, and a clamp is not the user choosing a new one. Every
   // open re-seeds this to the failed tuple's own value.
@@ -1190,8 +1306,23 @@ function RoutingConfirmFooter({
     !selectionIsTuple(selection, failedTuple) ||
     rawReasoning !== (failedTuple.reasoningEffort ?? "");
   const action = footerAction(stagedRow, moved);
+  // The sentence reads back the tuple the confirm would send - through the
+  // same `confirmTarget` - so it moves with every row, account, provider and
+  // effort change and can never name a place the button does not go.
   const consequence =
-    action === "switch" ? switchConsequence : stagedConsequence;
+    action === "switch"
+      ? switchConsequence({
+          pick: confirmTarget(
+            { selection, reasoning, selectedModel },
+            rows,
+            failedTuple,
+          ),
+          failedTuple,
+          labelFor,
+          modelLabelFor,
+          queuedCount,
+        })
+      : stagedConsequence;
   const disabled =
     busy ||
     !canAct ||
@@ -1237,6 +1368,53 @@ function RoutingConfirmFooter({
       </div>
     </div>
   );
+}
+
+/**
+ * What a switch to the pick does, naming the destination (Flow 3's footer):
+ * the destination as every fallback surface names it, the provider only when
+ * the switch crosses providers, and the effort only when it differs from the
+ * failed tuple's. The generic sentence stands in only while the store's model
+ * is still resolving, when there is no tuple to name yet.
+ */
+function switchConsequence(input: {
+  readonly pick: { readonly target: ChatRunSettings } | null;
+  readonly failedTuple: ChatRunSettings;
+  readonly labelFor: FallbackProfileLabelResolver;
+  readonly modelLabelFor: FallbackModelLabelResolver;
+  readonly queuedCount: number | null;
+}): ReactNode {
+  const { pick, failedTuple, queuedCount } = input;
+  if (pick === null) return switchConsequencesText(queuedCount);
+  const target = pick.target;
+  const described = fallbackDestinationOfTuple(
+    target,
+    input.labelFor,
+    input.modelLabelFor,
+  );
+  const effortMoved =
+    trimmedEffort(target.reasoningEffort) !==
+    trimmedEffort(failedTuple.reasoningEffort);
+  const sentence = switchDestinationConsequence(
+    fallbackDestinationSentence(
+      { ...described, effortLabel: effortMoved ? described.effortLabel : null },
+      target.harnessId !== failedTuple.harnessId,
+    ),
+    queuedCount,
+  );
+  return (
+    <>
+      {sentence.lead}{" "}
+      <span className="font-medium text-foreground">
+        {sentence.destination}
+      </span>{" "}
+      {sentence.trail}
+    </>
+  );
+}
+
+function trimmedEffort(effort: string | null): string {
+  return (effort ?? "").trim();
 }
 
 function footerAction(
@@ -1389,7 +1567,10 @@ function buildSuggestionRows(input: {
       if (row !== null) rows.push(row);
     }
   }
-  if (attempt !== null && attempt.failure.reason !== "auth") {
+  // The host's eligible rungs alone decide Retry and Wait - a sign-out
+  // included (Flow 4: Retry leads for any cause but a rate limit or a billing
+  // stop), so this section agrees with the failed-turn card beside it.
+  if (attempt !== null) {
     const account = labelFor(failedTuple.profileId);
     const resetsAt = attempt.failure.resetsAt;
     if (attempt.eligibleRungs.includes("wait_once") && resetsAt !== undefined) {
@@ -1417,7 +1598,31 @@ function buildSuggestionRows(input: {
       );
     }
   }
-  return rows;
+  return withRecommendation(rows);
+}
+
+/**
+ * Flow 3's default: the first USABLE row in routing order is Recommended, and
+ * so is what the chooser preselects.
+ *
+ * The host's pick among the sibling accounts stands while it is usable. When
+ * it is not - every sibling dimmed, or no sibling at all and only equivalent
+ * models listed - the first usable switch row takes it, so a listing of one
+ * usable model still has a default for Enter to confirm. A dimmed row never
+ * keeps the badge: Recommended on a row that cannot be picked would point the
+ * user at a dead end.
+ */
+function withRecommendation(
+  rows: ReadonlyArray<SuggestionRow>,
+): ReadonlyArray<SuggestionRow> {
+  const usable = (row: SuggestionRow): boolean =>
+    row.selectable && row.action.kind === "switch";
+  const pick =
+    rows.find((row) => row.recommended && usable(row)) ?? rows.find(usable);
+  return rows.map((row) => {
+    const recommended = row === pick;
+    return row.recommended === recommended ? row : { ...row, recommended };
+  });
 }
 
 const NO_USAGE: SuggestionUsage = { kind: "none" };

@@ -94,6 +94,9 @@ vi.mock("@/hooks/agent/use-host-reachability", async () =>
 vi.mock("@/hooks/host/use-addressable-host-id", async () =>
   (await import("./routing-picker-kit")).addressableHostIdModule(),
 );
+vi.mock("@/hooks/host/use-host-directory-entry", async () =>
+  (await import("./routing-picker-kit")).hostDirectoryEntryModule(),
+);
 vi.mock("@/hooks/host/use-host-directory-list-query", async () =>
   (await import("./routing-picker-kit")).hostDirectoryListModule(),
 );
@@ -415,6 +418,110 @@ describe("RoutingDestinationPicker rows and listing", () => {
       ).toBeDefined();
     });
 
+    describe("the recommendation falls back to the first usable row", () => {
+      const USABLE_MODEL = modelRow({
+        harnessId: "codex",
+        modelFamily: "gpt-5",
+        model: TARGET_CODEX_TUPLE.model,
+        reasoningEffort: null,
+        target: TARGET,
+        selectable: true,
+        skip: null,
+        warnings: [],
+      });
+
+      function expectOnlyTheModelRowRecommended(): void {
+        const rows = suggestionOptions();
+        const recommended = rows.filter(
+          (row) => within(row).queryByText("Recommended") !== null,
+        );
+        expect(recommended).toHaveLength(1);
+        expect(recommended[0].textContent).toContain("Codex · Codex Team");
+        // A dimmed row never keeps the badge, and the usable model row is the
+        // preselected one, so Switch is enabled with nothing clicked.
+        for (const row of rows) {
+          if (row.getAttribute("aria-disabled") === "true") {
+            expect(within(row).queryByText("Recommended")).toBeNull();
+          }
+        }
+        expect(recommended[0].getAttribute("aria-selected")).toBe("true");
+        expect(footerConfirm().disabled).toBe(false);
+      }
+
+      it("recommends and preselects the one usable model row when there is no sibling account at all", async () => {
+        kit.listData = listed({
+          profileTargets: [],
+          modelTargets: [USABLE_MODEL],
+        });
+        mount(failedTurn(["switch"]));
+        await open();
+
+        expectOnlyTheModelRowRecommended();
+      });
+
+      it("recommends and preselects it when every sibling account is unselectable or rate-limited - and the host's own pick, being dimmed, loses the badge", async () => {
+        kit.listData = listed({
+          profileTargets: [
+            profileRow({
+              profileId: "blocked",
+              label: "blocked-account",
+              selectable: false,
+              skip: fallbackSkip({
+                reason: "already-tried",
+                label: "Already tried",
+              }),
+              recommended: false,
+            }),
+            profileRow({
+              profileId: "limited",
+              label: "rate-limited-account",
+              selectable: true,
+              skip: fallbackSkip({
+                reason: "rate-limited",
+                label: "Limit reached right now",
+              }),
+              recommended: true,
+            }),
+          ],
+          modelTargets: [USABLE_MODEL],
+        });
+        mount(failedTurn(["switch"]));
+        await open();
+
+        expectOnlyTheModelRowRecommended();
+      });
+
+      it("keeps the badge on a usable host-recommended account even when an earlier model row is also usable", async () => {
+        kit.listData = listed({
+          profileTargets: [
+            profileRow({
+              profileId: "plain",
+              label: "plain-account",
+              selectable: true,
+              skip: null,
+              recommended: false,
+            }),
+            profileRow({
+              profileId: WORK_PROFILE,
+              label: "work-account",
+              selectable: true,
+              skip: null,
+              recommended: true,
+            }),
+          ],
+          modelTargets: [USABLE_MODEL],
+        });
+        mount(failedTurn(["switch"]));
+        await open();
+
+        const rows = suggestionOptions();
+        expect(within(rows[1]).getByText("Recommended")).toBeDefined();
+        expect(within(rows[0]).queryByText("Recommended")).toBeNull();
+        expect(within(rows[2]).queryByText("Recommended")).toBeNull();
+        expect(rows[1].getAttribute("aria-selected")).toBe("true");
+      });
+    });
+
     it("orders the rows: sibling accounts, equivalent models, then Wait, then Try again", async () => {
       kit.listData = listed({
         profileTargets: [
@@ -560,15 +667,29 @@ describe("RoutingDestinationPicker rows and listing", () => {
       expect(unknown.textContent).toContain("Host skip label verbatim");
     });
 
-    it("picks nothing from a dimmed row: no selection moves, no confirm, no send", async () => {
+    it("picks nothing from a dimmed row: the preselected row stays the pick, and no send happens", async () => {
       await openWithSkips();
       const before = kit.mutations.length;
+      // The first usable row is preselected on open; a dimmed row must not
+      // take that from it.
+      expect(option(/plain-account/).getAttribute("aria-selected")).toBe(
+        "true",
+      );
 
-      fireEvent.click(option(/rate-limited-account/));
-      fireEvent.click(option(/blocked-account/));
-      fireEvent.click(option(/Codex · Codex Team/));
-
-      expect(footerConfirm().disabled).toBe(true);
+      for (const name of [
+        /rate-limited-account/,
+        /blocked-account/,
+        /Codex · Codex Team/,
+      ]) {
+        fireEvent.click(option(name));
+        expect(option(name).getAttribute("aria-selected"), String(name)).toBe(
+          "false",
+        );
+        expect(
+          option(/plain-account/).getAttribute("aria-selected"),
+          String(name),
+        ).toBe("true");
+      }
       expect(kit.mutations).toHaveLength(before);
     });
 
@@ -797,7 +918,7 @@ describe("RoutingDestinationPicker rows and listing", () => {
       expect(suggestionOptions()).toHaveLength(1);
     });
 
-    it("hides the Retry and Wait rows for an auth failure, and each without its own eligibility", async () => {
+    it("offers Retry and Wait on a signed-out attempt when the host makes them eligible, and hides each without its own eligibility", async () => {
       kit.listData = listed({ profileTargets: [], modelTargets: [] });
       const authAttempt: LastFailedAttempt = lastFailedAttempt({
         userMessageId: ATTEMPT_MESSAGE_ID,
@@ -818,7 +939,18 @@ describe("RoutingDestinationPicker rows and listing", () => {
         seedTuple: FAILED,
       });
       await open();
-      expect(suggestionOptions()).toEqual([]);
+      // The host's eligible rungs decide, a sign-out included: both rows, in
+      // their usual order (Wait, then Try again), each pickable.
+      const authRows = suggestionOptions();
+      expect(
+        authRows.map((row) => row.getAttribute("data-suggestion-action")),
+      ).toEqual(["wait", "retry"]);
+      expect(authRows[0].textContent).toContain("Wait until");
+      expect(authRows[1].textContent).toContain("Try Personal again");
+      expect(authRows.map((row) => row.getAttribute("aria-disabled"))).toEqual([
+        "false",
+        "false",
+      ]);
       view.unmount();
       cleanup();
 
@@ -1108,7 +1240,7 @@ describe("RoutingDestinationPicker rows and listing", () => {
 
       expect(
         screen.getByText(
-          "Replays this message on the destination you pick. Starts a fresh session from this transcript. Any queued messages move with it.",
+          /in a new session from this transcript\. Any queued messages move with it\.$/,
         ),
       ).toBeDefined();
     });
@@ -1126,7 +1258,7 @@ describe("RoutingDestinationPicker rows and listing", () => {
       );
       expect(
         screen.getByText(
-          /3 queued messages will run on the new settings too\./,
+          /from this transcript\. 3 queued messages move with it\.$/,
         ),
       ).toBeDefined();
       cleanup();
@@ -1141,7 +1273,9 @@ describe("RoutingDestinationPicker rows and listing", () => {
         ),
       );
       expect(
-        screen.getByText(/1 queued message will run on the new settings too\./),
+        screen.getByText(
+          /from this transcript\. 1 queued message moves with it\.$/,
+        ),
       ).toBeDefined();
       cleanup();
 
@@ -1155,9 +1289,7 @@ describe("RoutingDestinationPicker rows and listing", () => {
         ),
       );
       expect(
-        screen.getByText(
-          "Replays this message on the destination you pick. Starts a fresh session from this transcript.",
-        ),
+        screen.getByText(/in a new session from this transcript\.$/),
       ).toBeDefined();
     });
 
@@ -1243,7 +1375,7 @@ describe("RoutingDestinationPicker rows and listing", () => {
     expect(kit.toast).not.toHaveBeenCalled();
   });
 
-  it("answers a bare Retry sent after the chooser has closed with a toast, once, and nothing to the announcer (MF11)", async () => {
+  it("answers a bare Retry sent after the chooser has closed on the announcer, once, with the card's neutral sentence and no toast (MF11)", async () => {
     kit.listData = listed({ profileTargets: [], modelTargets: [] });
     kit.deferResponses = true;
     kit.mutationResult = { outcome: "rung_unavailable", detail: null };
@@ -1256,11 +1388,15 @@ describe("RoutingDestinationPicker rows and listing", () => {
       kit.pendingResponses[0]();
     });
 
-    expect(kit.toast).toHaveBeenCalledTimes(1);
-    expect(kit.toast).toHaveBeenCalledWith(
-      "That action isn't available right now.",
-    );
-    expect(kit.unattended).toEqual([]);
+    expect(kit.unattended).toEqual([
+      {
+        hostId: "host-session",
+        epicId: "epic-routing",
+        chatId: "chat-routing",
+        text: "Couldn't retry just now.",
+      },
+    ]);
+    expect(kit.toast).not.toHaveBeenCalled();
   });
 
   it("a confirmed switch is recorded for the announcer whether or not the chooser is still there", async () => {

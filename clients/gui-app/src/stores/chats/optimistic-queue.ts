@@ -28,7 +28,12 @@ export function appendOptimisticQueuedItem(
   item: ChatQueuedPromptItem,
 ): ChatQueueState {
   if (queueContainsQueuedSend(queue, item)) return queue;
+  // Every rebuild here SPREADS the queue it starts from: the host's queue
+  // grows optional keys (`pausedReason`, `chat.subscribe@1.18`), and a copy
+  // that names its fields drops each new one without the compiler noticing -
+  // here, the reason a paused queue's pill gives for being paused.
   return {
+    ...queue,
     status: queueStatusWithOptimisticItems(queue.status, queue.status),
     items: [...queue.items, item],
   };
@@ -48,6 +53,7 @@ export function mergeQueueWithOptimisticQueuedItems(
   );
   if (retainedOptimisticItems.length === 0) return authoritativeQueue;
   return {
+    ...authoritativeQueue,
     status: queueStatusWithOptimisticItems(
       authoritativeQueue.status,
       currentQueue.status,
@@ -110,6 +116,7 @@ function withoutOptimisticQueuedItems(
   );
   if (items.length === queue.items.length) return queue;
   return {
+    ...queue,
     status: items.length === 0 ? "idle" : queue.status,
     items,
   };

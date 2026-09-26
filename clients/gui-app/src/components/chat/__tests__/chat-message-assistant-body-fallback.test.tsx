@@ -26,6 +26,7 @@ function renderBody(ui: ReactNode) {
 const WAIT_RESUMED: MessageSegment = {
   id: "seg-wait-resumed",
   kind: "provider_notice",
+  receipt: null,
   status: "completed",
   noticeKind: "fallback_wait_resumed",
   tone: "info",
@@ -38,6 +39,7 @@ const WAIT_RESUMED: MessageSegment = {
 const FALLBACK_APPLIED: MessageSegment = {
   id: "seg-applied",
   kind: "provider_notice",
+  receipt: null,
   status: "completed",
   noticeKind: "fallback_applied",
   tone: "info",
@@ -112,6 +114,7 @@ function Body({
       nextStepActions={null}
       forkAction={null}
       interviewDeliveryRetry={null}
+      routingSettledNoticeId={null}
     />
   );
 }

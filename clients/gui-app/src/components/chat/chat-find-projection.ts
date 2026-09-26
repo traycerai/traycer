@@ -1,4 +1,5 @@
 import { lexer, type MarkedToken, type Token, type Tokens } from "marked";
+import { QUEUE_PAUSED_AFTER_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import {
   buildChatActivityTimeline,
   hidesSoleReasoningHeader,
@@ -167,10 +168,15 @@ function chatFindUnitsForMessage(
 ): ReadonlyArray<ChatFindUnit> {
   if (message.role === "assistant") {
     const turnState = message.runState === null ? "complete" : "active";
+    const settled = settledCardSegmentIds(message);
     return buildChatActivityTimeline(message.segments, {
       turnState,
       promotedToolBlockIds,
-    }).flatMap((item) => timelineItemSearchUnits(item, tileInstanceId));
+    }).flatMap((item) =>
+      settled !== null && item.kind === "segment"
+        ? settledCardSearchUnits(item.segment, settled, tileInstanceId)
+        : timelineItemSearchUnits(item, tileInstanceId),
+    );
   }
 
   if (message.role === "user" && message.agentSenderInfo !== null) {
@@ -214,6 +220,48 @@ function chatFindUnitsForMessage(
       owningChain: [],
     }),
   ]);
+}
+
+/**
+ * The two segments a settled routing card paints as one, or `null` when the
+ * row has no such card (`ChatMessage.routingSettledNoticeId`, set only beside
+ * the anchor).
+ */
+function settledCardSegmentIds(
+  message: ChatMessageModel,
+): { readonly noticeId: string; readonly anchorId: string } | null {
+  const noticeId = message.routingSettledNoticeId ?? null;
+  const anchorId = message.manualRungAnchorId ?? null;
+  if (noticeId === null || anchorId === null) return null;
+  return { noticeId, anchorId };
+}
+
+/**
+ * Find units for a row whose settled card absorbs its notice and anchor error.
+ *
+ * The card paints the notice's title and message in the notice's own unit,
+ * and nothing of the error outside its closed "Details for a bug report"
+ * disclosure - so the notice indexes exactly those two strings (its details
+ * rows sit in that disclosure too), and the error indexes nothing. Indexing
+ * either the way their standalone rows do would count matches the highlighter
+ * has no text to paint.
+ */
+function settledCardSearchUnits(
+  segment: MessageSegment,
+  settled: { readonly noticeId: string; readonly anchorId: string },
+  tileInstanceId: string,
+): ReadonlyArray<ChatFindUnit> {
+  if (segment.id === settled.anchorId) return [];
+  if (segment.id === settled.noticeId && segment.kind === "provider_notice") {
+    return compactUnits([
+      chatFindUnit({
+        unitId: chatFindSegmentUnitId(segment.id),
+        text: [segment.title, segment.message ?? ""].join(" "),
+        owningChain: [],
+      }),
+    ]);
+  }
+  return segmentSearchUnits(segment, tileInstanceId);
 }
 
 function timelineItemSearchUnits(
@@ -444,6 +492,10 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
     case "todo":
       return todoSegmentSearchText(segment);
     case "error":
+      // The queue-pause notice renders nothing (`ErrorSegment`; the Message
+      // Queue panel's paused pill says it), so it indexes nothing: a match
+      // with no painted text to highlight is a hit the user cannot find.
+      if (segment.code === QUEUE_PAUSED_AFTER_ERROR_CODE) return [];
       return [
         normalizeSearchableText([segment.message, segment.code].join(" ")),
       ];

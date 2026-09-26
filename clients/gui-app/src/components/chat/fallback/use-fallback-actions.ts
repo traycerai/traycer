@@ -11,7 +11,10 @@ import { toast } from "sonner";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { chatFallbackMutationKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
-import { describeFallbackOutcome } from "./fallback-copy";
+import {
+  describeFallbackOutcome,
+  describeManualRungRefusal,
+} from "./fallback-copy";
 import type { ConfirmedManualActionPublisher } from "./use-confirmed-manual-action";
 import type { UnattendedFallbackOutcomePublisher } from "./use-unattended-fallback-outcome";
 
@@ -99,7 +102,8 @@ type FallbackMethod =
   | "chat.fallback.cancel"
   | "chat.fallback.chooseTarget"
   | "chat.fallback.runManualRung"
-  | "chat.fallback.returnToPreferred";
+  | "chat.fallback.returnToPreferred"
+  | "chat.fallback.proceed";
 
 export type FallbackActionResult<Method extends FallbackMethod> =
   UseMutationResult<
@@ -110,22 +114,18 @@ export type FallbackActionResult<Method extends FallbackMethod> =
   >;
 
 /**
- * Reports a non-`applied` outcome as a toast.
+ * Reports a non-`applied` outcome of a COMPOSER-card verb as a toast.
  *
- * A toast rather than inline text: by the time a refusal lands the card it was
- * pressed on has usually gone - that is what the refusal MEANS - so there is no
- * surface left to write on, and a toast is not anchored to one. The destination
- * menu is the exception; it renders its own inline line and then closes.
+ * A toast rather than inline text: by the time a refusal of a cancel, a
+ * proceed or a switch-back lands, the card it was pressed on has usually gone -
+ * that is what the refusal MEANS - so there is no surface left to write on, and
+ * a toast is not anchored to one.
  *
- * Called only from HOOK-level `onSuccess` handlers now (MF11). It used to be
- * exported for `useFallbackRunManualRung`'s two bare rungs to pass as a
- * PER-CALL handler, on the argument that the channel is chosen per call rather
- * than per verb. The channel still is - what was wrong is where the choosing
- * happened: a per-call handler is the OBSERVER's, and TanStack skips it once
- * that observer has no listeners. So the one case the toast exists for - the
- * row is gone by the time the host answers - was the one case it did not fire.
- * The rung is on `variables`, so the hook can pick the channel and still
- * survive its call site.
+ * Never for a manual rung. The failed-turn card answers those inline, where the
+ * button was, and the chat's announcer takes the answer once that card is gone
+ * (see `useFallbackRunManualRung`): a toast was the only sentence the user got
+ * for twenty different refusals, which is the complaint the inline note
+ * answers.
  */
 function toastFallbackOutcome(response: {
   readonly outcome: FallbackActionOutcome;
@@ -174,30 +174,38 @@ export const IGNORE_FALLBACK_OUTCOME = (): void => undefined;
 /**
  * Where a non-`applied` answer goes, decided once for both pick verbs.
  *
- * The rule the three channels implement, in order:
+ * The rule the two channels implement, in order:
  *
- * 1. an OPEN destination menu answers on its own inline line, because that is
- *    where the click came from and where the user is looking;
- * 2. the bare rungs (retry, wait-until) toast, because a button press with an
- *    unchanged row has nowhere to write;
- * 3. anything else - a pick whose menu has closed or whose card the traversal
- *    has already removed - reaches the chat's persistent announcer.
+ * 1. a surface that is ON SCREEN and answers inline - an open chooser's footer
+ *    line, or the failed-turn card's refusal note under its buttons - answers
+ *    there, because that is where the click came from and where the user is
+ *    looking;
+ * 2. anything else - a pick whose chooser has closed, a card the traversal or
+ *    a newer turn has already removed - reaches the chat's persistent
+ *    announcer.
+ *
+ * There is no toast branch any more. The bare Retry and Wait buttons used to
+ * toast, on the argument that an unchanged row had nowhere to write; the
+ * failed-turn card now writes the refusal where the button was (spec Flow 4:
+ * "a toast never carries a refusal").
  *
  * `inlineMenuOpen` rather than "is the component mounted", because mounted is
- * not the question. A menu still mounted with its popover CLOSED renders a
+ * not the question - and the name predates the failed-turn card's note, which
+ * sets it `true` for as long as its buttons are on screen: read it as "an
+ * inline surface answers". A chooser still mounted with its popover CLOSED renders a
  * refusal into a subtree nobody can see, which is the same non-delivery as no
  * surface at all; and after unmount the hook forces this false itself, since a
  * torn-down surface is showing nothing whatever its last render said.
  *
  * That last clause is a claim about UNMOUNTING, so a caller whose surface stops
  * rendering WITHOUT unmounting defeats the whole rule: the cleanup never runs,
- * this stays `true`, and branch 3 defers forever to an inline line that is not
+ * this stays `true`, and branch 2 defers forever to an inline line that is not
  * on screen. `ManualRungAffordances` exists to make that impossible for the
  * error row - see the "why this is a THIRD component" note in
  * `fallback-manual-rungs.tsx`. A new caller must be a component that genuinely
  * unmounts when its affordances stop rendering.
  *
- * **Branch 3 is the announcer alone, and deliberately not a toast beside it.**
+ * **Branch 2 is the announcer alone, and deliberately not a toast beside it.**
  * One outcome, one channel. The announcer is `sr-only`, so this branch is heard
  * and not seen - which is the right trade rather than a gap: the cases that
  * reach it are cases where the surface the user was looking at has just changed
@@ -207,7 +215,7 @@ export const IGNORE_FALLBACK_OUTCOME = (): void => undefined;
  * defect this rule exists to remove.
  */
 export interface FallbackOutcomeReporting {
-  /** The popover is open, so its own inline line is the feedback channel. */
+  /** A surface on screen renders the answer itself, so it is the channel. */
   readonly inlineMenuOpen: boolean;
   readonly publishUnattended: UnattendedFallbackOutcomePublisher;
 }
@@ -220,13 +228,13 @@ export interface FallbackOutcomeReporting {
  * Mutation in the query cache and run after the call site's last render - a
  * value captured in the options closure would be whatever the component last
  * rendered before it went away, including an `inlineMenuOpen: true` that is now
- * a claim about a popover that no longer exists.
+ * a claim about a surface that no longer exists.
  *
  * LAYOUT effects, not passive ones, and that is not a style choice. A passive
  * cleanup is scheduled after paint, while an RPC response is a microtask - so a
  * pick answered in the window between the commit that removed this surface and
  * the passive cleanup would read `inlineMenuOpen: true`, hand the sentence to a
- * popover that no longer exists, and lose it. That window is precisely the one
+ * surface that no longer exists, and lose it. That window is precisely the one
  * MF11 is about: the frame that removes the surface is usually the same frame
  * whose arrival makes the pick lose.
  */
@@ -328,10 +336,10 @@ export function useFallbackRunManualRung(
     // `attempt_not_latest` MEANS.
     //
     // The report used to be a per-call handler at the two call sites, which
-    // made both channels die with the row (MF11's class): the bare rungs'
-    // toast never fired for the refusal it exists for, and the menu's inline
-    // line had nowhere to render. The per-call handler that remains is the
-    // menu's, and only for the open-popover case this arm hands back to it.
+    // made both channels die with the row (MF11's class). The per-call
+    // handlers that remain are the on-screen surfaces' - the open chooser's
+    // footer and the failed-turn card's refusal note - and only for the case
+    // this arm hands back to them.
     onSuccess: (data, variables) => {
       if (data.outcome === "applied") {
         onConfirmed({
@@ -342,20 +350,47 @@ export function useFallbackRunManualRung(
         });
         return;
       }
-      const message = describeFallbackOutcome(data.outcome);
-      if (message === null) return;
-      // An OPEN chooser answers every rung on its own footer line - a Retry or
-      // Wait staged there as much as a switch - so it is the channel while it
-      // is open, whichever rung was sent.
+      // An inline surface answers every rung itself while it is on screen - a
+      // Retry or Wait staged in the chooser, or pressed on the failed-turn
+      // card, as much as a switch.
       if (reportingRef.current.inlineMenuOpen) return;
-      if (variables.rung !== "switch") {
-        // Retry / wait-until from a bare button on a row that does not
-        // change: the toast is the only channel.
-        toast(message);
-        return;
-      }
-      reportingRef.current.publishUnattended(message);
+      // The surface is gone, so the announcer speaks the answer - in the same
+      // words the card would have used, host reason included. No host label
+      // here: this hook has no tab host, and the sentence stands without it.
+      const copy = describeManualRungRefusal({
+        outcome: data.outcome,
+        detail: data.detail,
+        rung: variables.rung,
+        hostLabel: null,
+      });
+      if (copy === null || copy.text === null) return;
+      reportingRef.current.publishUnattended(copy.text);
     },
+    captureContext: undefined,
+  });
+}
+
+/**
+ * "Switch now", "Wait now" and "Retry now" - end the countdown and let the
+ * step the host already planned run (`chat.fallback.proceed`).
+ *
+ * The card that sends it is the countdown card, which the applied answer
+ * removes (the traversal leaves `hold`), so a refusal is TOASTED from here,
+ * like a cancel's: the surface it was pressed on is usually the thing that
+ * moved. The only outcomes are `applied`, `traversal_advanced` and
+ * `no_active_traversal`, and both refusals are facts about the chat, never a
+ * cause this client made up.
+ */
+export function useFallbackProceed(
+  client: HostClient<HostRpcRegistry> | null,
+  chatId: string,
+): FallbackActionResult<"chat.fallback.proceed"> {
+  return useHostScopedMutationForClient(client, {
+    method: "chat.fallback.proceed",
+    mutationKey: chatFallbackMutationKeys.proceed(chatId),
+    errorMessage: "Couldn't reach this chat's host just now.",
+    invalidateMethods: [],
+    onSuccess: toastFallbackOutcome,
     captureContext: undefined,
   });
 }
