@@ -24,7 +24,7 @@ import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import {
-  organizationSubscribeV10,
+  organizationSubscribeV11,
   type OrganizationAction,
   type OrganizationCommand,
   type OrganizationView,
@@ -235,18 +235,7 @@ export function OrganizationProvider({
       void queryClient.invalidateQueries({
         predicate: (entry) =>
           entry.queryKey.includes("cloud.listTasks") &&
-          entry.queryKey.includes(userId) &&
-          entry.queryKey.some(
-            (part) =>
-              typeof part === "object" &&
-              part !== null &&
-              "filters" in part &&
-              typeof part.filters === "object" &&
-              part.filters !== null &&
-              ("labelNames" in part.filters ||
-                "groupIds" in part.filters ||
-                "includeUngrouped" in part.filters),
-          ),
+          entry.queryKey.includes(userId),
       });
     }
     current.confirmedView = view;
@@ -396,7 +385,7 @@ function OrganizationSubscription(props: {
     });
     session.onServerFrame((envelope) => {
       const result =
-        organizationSubscribeV10.serverFrameSchema.safeParse(envelope);
+        organizationSubscribeV11.serverFrameSchema.safeParse(envelope);
       if (active && result.success) {
         receivedFrame.current = true;
         accept(result.data.view, taskIds);
@@ -453,12 +442,22 @@ function organizationFiltersChanged(
   previous: OrganizationView,
   next: OrganizationView,
 ): boolean {
+  if (previous.historyInvalidation !== next.historyInvalidation) return true;
   if (
     JSON.stringify([previous.groups, previous.catalog]) !==
     JSON.stringify([next.groups, next.catalog])
   )
     return true;
   // Loading metadata for a new page must not invalidate the page that loaded it.
+  if (
+    previous.appearances.some((appearance) => {
+      const current = next.appearances.find(
+        (row) => row.taskId === appearance.taskId,
+      );
+      return JSON.stringify(appearance) !== JSON.stringify(current);
+    })
+  )
+    return true;
   return Object.entries(previous.taskLabels).some(
     ([id, labels]) =>
       Object.hasOwn(next.taskLabels, id) &&

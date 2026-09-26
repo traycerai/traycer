@@ -18,6 +18,11 @@
  * {@link autoJudgeTarget}.
  */
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import {
+  autoJudgeGetV13,
+  autoJudgeSetV13,
+} from "@traycer/protocol/host/auto-mode/contracts";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
 import type {
   AutoJudgeBlocked,
@@ -28,6 +33,8 @@ import type {
   GuiHarnessId,
   GuiHarnessOption,
 } from "@traycer/protocol/host/index";
+import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
+import { effectiveJudgeReasoningEffort } from "@traycer/protocol/host/agent/gui/reasoning-effort-order";
 import {
   ORDERED_PROVIDERS,
   guiHarnessIdToProviderId,
@@ -66,14 +73,22 @@ export type AutoJudgeBilling =
    * A judge runs and is billed to Traycer credits (`traycer`) or to the user's
    * own account at that vendor (`provider`). `modelLabel` is the display name
    * of the model it runs on, resolved through that harness's catalog, or the
-   * raw slug when the catalog has no row for it.
+   * raw slug when the catalog has no row for it. `effortLabel` is the
+   * reasoning effort the judge runs that model at - the stored pick, or the
+   * host's default of the lowest the model advertises - and `null` when the
+   * model advertises none or the host predates judge efforts.
    */
-  | { readonly kind: "traycer"; readonly modelLabel: string }
+  | {
+      readonly kind: "traycer";
+      readonly modelLabel: string;
+      readonly effortLabel: string | null;
+    }
   | {
       readonly kind: "provider";
       readonly harnessId: string;
       readonly harnessLabel: string;
       readonly modelLabel: string;
+      readonly effortLabel: string | null;
     }
   /**
    * The run's OWN provider reviews its own commands, and Traycer's judge never
@@ -300,6 +315,11 @@ export function autoJudgeBillingForRun(input: {
    */
   readonly judgeModelLabel: string | null;
   /**
+   * The label of the effort the judge runs at, from
+   * {@link autoJudgeEffortLabel}; `null` when there is none to name.
+   */
+  readonly judgeEffortLabel: string | null;
+  /**
    * A CLIENT-DETECTED reason the stored judge cannot run - today an explicit
    * profile its provider no longer offers, or a model its harness no longer
    * lists.
@@ -345,10 +365,88 @@ export function autoJudgeBillingForRun(input: {
   if (judgeRecordUnrunnable) return BLOCKED_BILLING;
   if (target.kind === "unknown") return null;
   const modelLabel = input.judgeModelLabel ?? target.modelSlug;
+  const effortLabel = input.judgeEffortLabel;
   const pocket = autoJudgeBillingFor(target.harnessId);
   return pocket.kind === "traycer"
-    ? { kind: "traycer", modelLabel }
-    : { ...pocket, modelLabel };
+    ? { kind: "traycer", modelLabel, effortLabel }
+    : { ...pocket, modelLabel, effortLabel };
+}
+
+/**
+ * Whether a negotiated method version has reached `line`: the same major, at
+ * or past its minor.
+ *
+ * Pinned to the major like every other version predicate in the tree: a later
+ * major's relationship to a field one minor added is not knowable from here.
+ * `null` - no handshake yet - reads as NOT reached, the safe direction.
+ */
+export function negotiatedLineReaches(
+  version: SchemaVersion | null,
+  line: SchemaVersion,
+): boolean {
+  return (
+    version !== null &&
+    version.major === line.major &&
+    version.minor >= line.minor
+  );
+}
+
+/**
+ * Whether the negotiated `autoJudge.get` line is one whose host runs the judge
+ * at a reasoning effort of its own (`1.3`, where the selection carries one and
+ * the host defaults to the model's lowest). Below it the host runs the model's
+ * own default, so no LABEL - the composer's Auto row, the judge tile's face or
+ * Settings' "Now:" line - may name an effort it does not apply.
+ */
+export function autoJudgeGetKnowsReasoningEffort(
+  version: SchemaVersion | null,
+): boolean {
+  return negotiatedLineReaches(version, autoJudgeGetV13.schemaVersion);
+}
+
+/**
+ * Whether the negotiated `autoJudge.set` line can STORE a reasoning effort
+ * (`1.3`, the line that added the field). Below it the request upgrade resets
+ * the effort to the model's default, so the judge picker's effort footer would
+ * write something the host silently discards; the footer is hidden instead and
+ * the write carries `null`.
+ */
+export function autoJudgeSetStoresReasoningEffort(
+  version: SchemaVersion | null,
+): boolean {
+  return negotiatedLineReaches(version, autoJudgeSetV13.schemaVersion);
+}
+
+/**
+ * The display label of the effort the judge runs `target`'s model at:
+ * the stored selection's effort when the target IS the stored judge and the
+ * model still advertises that effort, else the lowest the model advertises
+ * (the host's default). The same protocol rule the host resolves with
+ * (`effectiveJudgeReasoningEffort`), so the two cannot disagree.
+ *
+ * `null` for every "nothing to name": the target is not a judge, the host
+ * predates judge efforts, the catalog has not answered, or the model
+ * advertises no efforts.
+ */
+export function autoJudgeEffortLabel(input: {
+  readonly target: AutoJudgeTarget;
+  readonly selection: AutoJudgeSelection | null;
+  readonly hostKnowsEffort: boolean;
+  readonly models: ReadonlyArray<GuiAgentModelOption> | undefined;
+}): string | null {
+  const { target, selection } = input;
+  if (target.kind !== "judge" || !input.hostKnowsEffort) return null;
+  if (input.models === undefined) return null;
+  const requested =
+    selection !== null &&
+    selection.harnessId === target.harnessId &&
+    selection.model === target.modelSlug
+      ? selection.reasoningEffort
+      : null;
+  return (
+    effectiveJudgeReasoningEffort(input.models, target.modelSlug, requested)
+      ?.label ?? null
+  );
 }
 
 /**
@@ -439,14 +537,14 @@ export const COPILOT_PREMIUM_REQUESTS_PER_HOUR = "60–350";
 export function autoJudgeMetaLine(billing: AutoJudgeBilling): string {
   switch (billing.kind) {
     case "traycer":
-      return `Reviewed by ${billing.modelLabel} on Traycer · uses credits`;
+      return `Reviewed by ${judgeModelWithEffort(billing)} on Traycer · uses credits`;
     case "provider":
       // The metered case is named with its range, whether the user picked
       // Copilot or Automatic fell back to a Copilot conversation.
       if (billing.harnessId === COPILOT_JUDGE_HARNESS_ID) {
-        return `Reviewed by ${billing.modelLabel} on Copilot · uses premium requests (${COPILOT_PREMIUM_REQUESTS_PER_HOUR} per hour)`;
+        return `Reviewed by ${judgeModelWithEffort(billing)} on Copilot · uses premium requests (${COPILOT_PREMIUM_REQUESTS_PER_HOUR} per hour)`;
       }
-      return `Reviewed by ${billing.modelLabel} on ${billing.harnessLabel} · your account`;
+      return `Reviewed by ${judgeModelWithEffort(billing)} on ${billing.harnessLabel} · your account`;
     case "provider-native":
       return `Reviewed by ${billing.harnessLabel}'s built-in classifier · no extra cost`;
     // Says what HAPPENS, not what is missing: a user about to turn Auto on
@@ -454,6 +552,16 @@ export function autoJudgeMetaLine(billing: AutoJudgeBilling): string {
     case "blocked":
       return "No judge available on this machine · asks you instead";
   }
+}
+
+/** "Sonnet 5 (Low)" - the model, and the effort it reviews at when named. */
+function judgeModelWithEffort(billing: {
+  readonly modelLabel: string;
+  readonly effortLabel: string | null;
+}): string {
+  return billing.effortLabel === null
+    ? billing.modelLabel
+    : `${billing.modelLabel} (${billing.effortLabel})`;
 }
 
 /**

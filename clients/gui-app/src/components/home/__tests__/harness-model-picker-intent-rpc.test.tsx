@@ -401,6 +401,7 @@ function renderPickerWithFixture(
 ): ComposerToolbarStore {
   const store = createComposerToolbarStore({
     purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: "picker-intent-rpc-test",
     values: {
       permission: "supervised",

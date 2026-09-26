@@ -216,7 +216,11 @@ describe("<PermissionsPicker /> - the four labels and one-line descriptions", ()
 describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
   it("shows the traycer meta line naming the model", () => {
     renderPicker({
-      judgeBilling: { kind: "traycer", modelLabel: "Sonnet 5" },
+      judgeBilling: {
+        kind: "traycer",
+        modelLabel: "Sonnet 5",
+        effortLabel: null,
+      },
     });
     openMenu();
 
@@ -232,6 +236,7 @@ describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
         harnessId: "claude",
         harnessLabel: "Claude Code",
         modelLabel: "Sonnet",
+        effortLabel: null,
       },
     });
     openMenu();
@@ -248,6 +253,7 @@ describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
         harnessId: "copilot",
         harnessLabel: "Copilot",
         modelLabel: "GPT-5",
+        effortLabel: null,
       },
     });
     openMenu();
@@ -291,6 +297,7 @@ describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
         harnessId: "codex",
         harnessLabel: "Codex",
         modelLabel: "codex-judge-default",
+        effortLabel: null,
       },
     });
     openMenu();
@@ -315,6 +322,7 @@ describe("<PermissionsPicker /> - mid-turn notice", () => {
   const SETTLED_BILLING: AutoJudgeBilling = {
     kind: "traycer",
     modelLabel: "Sonnet 5",
+    effortLabel: null,
   };
 
   it("shows the notice when a turn is active and the current value is not auto", () => {
@@ -441,7 +449,11 @@ describe("<PermissionsPicker /> - mid-turn lock", () => {
 
   it("does not lock Auto for traycer billing, and keeps the mid-turn notice", () => {
     renderPicker({
-      judgeBilling: { kind: "traycer", modelLabel: "Sonnet 5" },
+      judgeBilling: {
+        kind: "traycer",
+        modelLabel: "Sonnet 5",
+        effortLabel: null,
+      },
       turnActive: true,
       value: "supervised",
     });

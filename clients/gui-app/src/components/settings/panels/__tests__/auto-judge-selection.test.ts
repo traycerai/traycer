@@ -240,7 +240,12 @@ describe("offeredJudgeProfileIds", () => {
 
 describe("judgeWarningCause", () => {
   const healthy = {
-    stored: { harnessId: "claude", model: "opus", profileId: "work" },
+    stored: {
+      harnessId: "claude",
+      model: "opus",
+      profileId: "work",
+      reasoningEffort: null,
+    },
     blocked: null,
     harnesses: [harness({})],
     offeredModels: [model("opus")],
@@ -248,7 +253,12 @@ describe("judgeWarningCause", () => {
   };
   const allGone = {
     ...healthy,
-    stored: { harnessId: "claude", model: "gone", profileId: "gone" },
+    stored: {
+      harnessId: "claude",
+      model: "gone",
+      profileId: "gone",
+      reasoningEffort: null,
+    },
   };
 
   it("is null for a healthy record", () => {
@@ -305,7 +315,12 @@ describe("judgeWarningCause", () => {
     expect(
       judgeWarningCause({
         ...healthy,
-        stored: { harnessId: "claude", model: "opus", profileId: "gone" },
+        stored: {
+          harnessId: "claude",
+          model: "opus",
+          profileId: "gone",
+          reasoningEffort: null,
+        },
       }),
     ).toEqual({ kind: "profile" });
   });
@@ -329,6 +344,7 @@ describe("judgeWarningCause", () => {
           harnessId: "claude",
           model: "claude-opus-5",
           profileId: null,
+          reasoningEffort: null,
         },
         offeredModels: [aliased],
       }),
@@ -349,7 +365,12 @@ describe("judgeWarningCause", () => {
     expect(
       judgeWarningCause({
         ...healthy,
-        stored: { harnessId: "claude", model: "opus", profileId: null },
+        stored: {
+          harnessId: "claude",
+          model: "opus",
+          profileId: null,
+          reasoningEffort: null,
+        },
         offeredProfileIds: [],
       }),
     ).toBeNull();

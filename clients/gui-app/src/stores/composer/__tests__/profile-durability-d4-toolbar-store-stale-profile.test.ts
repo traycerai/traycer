@@ -77,6 +77,7 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
   it("a seed with a profileId that no longer exists anywhere else still survives untouched, with no crash - by design, the store has no profiles[] channel to judge it against", () => {
     const store = createComposerToolbarStore({
       purpose: "run",
+      reasoningFallback: "model-default",
       seedKey: "seed-tombstoned",
       values: {
         permission: "supervised",
@@ -119,6 +120,7 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
     // own "profile belongs to the harness being rerouted OFF of" contract.
     const store = createComposerToolbarStore({
       purpose: "run",
+      reasoningFallback: "model-default",
       seedKey: "seed-unavailable-harness",
       values: {
         permission: "supervised",

@@ -160,6 +160,7 @@ function mountSubmit(args: {
 }) {
   const toolbarStore = createComposerToolbarStore({
     purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: "hash-first-image-submit",
     values: {
       permission: "supervised",

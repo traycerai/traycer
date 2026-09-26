@@ -2,23 +2,25 @@ import { describe, expect, it } from "vitest";
 import {
   autoJudgeGetUpgradeV10ToV11,
   autoJudgeGetUpgradeV11ToV12,
+  autoJudgeGetUpgradeV12ToV13,
   autoJudgeGetV10,
   autoJudgeGetV11,
   autoJudgeGetV12,
   autoJudgeSetUpgradeV10ToV11,
   autoJudgeSetUpgradeV11ToV12,
+  autoJudgeSetUpgradeV12ToV13,
   autoJudgeSetV10,
   autoJudgeSetV11,
   autoJudgeSetV12,
   projectAutoJudgeGetResponseToV10,
   projectAutoJudgeSetResponseToV10,
   type AutoJudgeGetRequest,
-  type AutoJudgeGetResponse,
+  type AutoJudgeGetResponseV12,
   type AutoJudgeGetResponseV10,
   type AutoJudgeGetResponseV11,
-  type AutoJudgeSelection,
-  type AutoJudgeSetRequest,
-  type AutoJudgeSetResponse,
+  type AutoJudgeSelectionPreEffort,
+  type AutoJudgeSetRequestPreEffort,
+  type AutoJudgeSetResponseV12,
   type AutoJudgeSetResponseV10,
   type AutoJudgeSetResponseV11,
 } from "@traycer/protocol/host/auto-mode/contracts";
@@ -27,9 +29,13 @@ import {
  * `autoJudge.get` / `autoJudge.set`'s `1.2` line: the optional `lastSelection`
  * key, the `1.1` -> `1.2` upgrade that cannot invent it, and the `1.0`
  * projection that never copies it. See `contracts.ts`'s module docblock.
+ *
+ * `1.2` is a FIXED line since `1.3` opened (the judge's `reasoningEffort`):
+ * its selection is the pre-effort triple, bound through the `...V12` objects.
+ * `auto-judge-v13-contracts.test.ts` covers the head.
  */
 
-const selection: AutoJudgeSelection = {
+const selection: AutoJudgeSelectionPreEffort = {
   harnessId: "claude",
   model: "claude-sonnet",
   profileId: null,
@@ -129,18 +135,18 @@ describe("autoJudge.get/set@1.1 -> 1.2: the upgrade", () => {
       getRequest,
     );
 
-    const setRequest: AutoJudgeSetRequest = { selection };
+    const setRequest: AutoJudgeSetRequestPreEffort = { selection };
     expect(autoJudgeSetUpgradeV11ToV12.upgradeRequest(setRequest)).toBe(
       setRequest,
     );
-    const setNull: AutoJudgeSetRequest = { selection: null };
+    const setNull: AutoJudgeSetRequestPreEffort = { selection: null };
     expect(autoJudgeSetUpgradeV11ToV12.upgradeRequest(setNull)).toBe(setNull);
   });
 });
 
 describe("autoJudge.get/set@1.1 parse of a 1.2 answer", () => {
   it("drops lastSelection as an object and otherwise equals the input minus the key", () => {
-    const v12: AutoJudgeGetResponse = {
+    const v12: AutoJudgeGetResponseV12 = {
       selection,
       effective: selectionEffective,
       blocked: null,
@@ -154,7 +160,7 @@ describe("autoJudge.get/set@1.1 parse of a 1.2 answer", () => {
       blocked: null,
     });
 
-    const setV12: AutoJudgeSetResponse = {
+    const setV12: AutoJudgeSetResponseV12 = {
       selection,
       effective: selectionEffective,
       blocked: null,
@@ -170,7 +176,7 @@ describe("autoJudge.get/set@1.1 parse of a 1.2 answer", () => {
   });
 
   it("drops lastSelection: null the same way", () => {
-    const v12: AutoJudgeGetResponse = {
+    const v12: AutoJudgeGetResponseV12 = {
       selection,
       effective: selectionEffective,
       blocked: null,
@@ -184,7 +190,7 @@ describe("autoJudge.get/set@1.1 parse of a 1.2 answer", () => {
       blocked: null,
     });
 
-    const setV12: AutoJudgeSetResponse = {
+    const setV12: AutoJudgeSetResponseV12 = {
       selection,
       effective: selectionEffective,
       blocked: null,
@@ -200,7 +206,7 @@ describe("autoJudge.get/set@1.1 parse of a 1.2 answer", () => {
   });
 });
 
-describe("autoJudge.get/set@1.2 head schema", () => {
+describe("autoJudge.get/set@1.2 schema", () => {
   it("accepts lastSelection as an object, as null, and absent (absent stays absent)", () => {
     const asObject = autoJudgeGetV12.responseSchema.parse({
       selection: null,
@@ -265,7 +271,7 @@ describe("autoJudge.get/set 1.0 projection ignores lastSelection", () => {
   // 1.2 existed, written out rather than recomputed, so a change to the
   // projection itself fails here and not only a leak of the new key.
   const cases: readonly {
-    input: AutoJudgeGetResponse;
+    input: AutoJudgeGetResponseV12;
     expected: AutoJudgeGetResponseV10;
   }[] = [
     {
@@ -322,8 +328,13 @@ describe("autoJudge.get/set 1.0 projection ignores lastSelection", () => {
   it("serves autoJudge.get's 1.0 caller today's answer whether lastSelection is present, null, or absent", () => {
     for (const { input, expected } of cases) {
       for (const lastSelection of [selection, null, undefined]) {
+        // The 1.0 projection takes the head's answer: a 1.2 answer reaches
+        // it through the 1.2 -> 1.3 upgrade (effort `null`, which the
+        // projection strips again).
         const projected = projectAutoJudgeGetResponseToV10(
-          lastSelection === undefined ? input : { ...input, lastSelection },
+          autoJudgeGetUpgradeV12ToV13.upgradeResponse(
+            lastSelection === undefined ? input : { ...input, lastSelection },
+          ),
         );
         expect(projected).toStrictEqual(expected);
         expect(Object.hasOwn(projected, "lastSelection")).toBe(false);
@@ -336,13 +347,15 @@ describe("autoJudge.get/set 1.0 projection ignores lastSelection", () => {
 
   it("does the same for autoJudge.set's echo", () => {
     for (const { input, expected } of cases) {
-      const setInput: AutoJudgeSetResponse = input;
+      const setInput: AutoJudgeSetResponseV12 = input;
       const setExpected: AutoJudgeSetResponseV10 = expected;
       for (const lastSelection of [selection, null, undefined]) {
         const projected = projectAutoJudgeSetResponseToV10(
-          lastSelection === undefined
-            ? setInput
-            : { ...setInput, lastSelection },
+          autoJudgeSetUpgradeV12ToV13.upgradeResponse(
+            lastSelection === undefined
+              ? setInput
+              : { ...setInput, lastSelection },
+          ),
         );
         expect(projected).toStrictEqual(setExpected);
         expect(Object.hasOwn(projected, "lastSelection")).toBe(false);

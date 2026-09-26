@@ -3957,12 +3957,54 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       - Nothing interactive is nested inside the radio. The model control is
         its sibling.
     - **The model control is the composer's `HarnessModelPicker`**, minus its
-      effort and Fast footers (`withReasoning` / `withServiceTier` off). It is
-      the composer's picker in behaviour: a click on a provider, an account
-      or a model saves at once and keeps the panel open, and only an outside
-      click or Esc closes it. The rail commits only a provider that can run
-      here. One that cannot shows its sign-in or install steps and saves
-      nothing.
+      Fast footer (`withServiceTier` off). It is the composer's picker in
+      behaviour: a click on a provider, an account or a model saves at once
+      and keeps the panel open, and only an outside click or Esc closes it.
+      The rail commits only a provider that can run here. One that cannot
+      shows its sign-in or install steps and saves nothing.
+      - **Its effort footer is the judge's Effort control** (`withReasoning`
+        on while the host's negotiated `autoJudge.set` is `1.3` or later,
+        `autoJudgeSetStoresReasoningEffort`, AND the seed is the pick on
+        show, `judgeSelectionMarked`). It is hidden below that line, where
+        the request upgrade would reset the effort anyway and every write
+        then carries `reasoningEffort: null`; and it is hidden in the rows
+        whose seed is not a pick - "Choose a model", a last pick that cannot
+        run, a stored harness this build does not know - because a footer
+        change saves the store's selection, and there that would save the
+        placeholder, or a pick with an account the provider no longer has,
+        as the judge. Once a pick made in the panel lands, the row is Picked
+        and the footer appears. The footer shows the level the host RUNS:
+        the stored effort while the model still advertises it, else the
+        lowest the model advertises by the canonical ladder
+        (`effectiveJudgeReasoningEffort`, the host's own rule, so the two
+        cannot disagree). That is the store's `reasoningFallback: "lowest"`
+        (`normalizeReasoningForModel`): a composer's store restores the
+        vendor's default for an effort the model does not carry, and Grok's
+        default is High, the level a stage-1 verdict measured 14.4 s at
+        against 8 s at Low - the reason the judge has an effort at all. A
+        model that advertises no efforts disables the footer, as in the
+        composer, and its pick carries `null`. Changing the footer saves at
+        once, like every other click in the panel. A fresh pick - another
+        model, or a provider switch - saves the new model's lowest, as the
+        spec rules for a pick with no effort of its own; the footer's level
+        is kept only while the (provider, model) pair is unchanged: a
+        re-click of the checked row, a same-provider rail click that keeps
+        the model, an account change. That is the `"setting"` store's own
+        rule in `applyComposerSelection`: it ignores the effort the picker's
+        funnel (`commitSelection`) passes in, because that funnel reads
+        composer memory, which the judge must not inherit. The catalog
+        `hostId` is `null`, but the memory store's pre-host `legacy` tier
+        still answers a `null` host, so an old composer effort for the same
+        model would otherwise move the judge on a click that changed
+        nothing. The stored value is explicit, so a later catalog change to
+        the model's ladder is resolved by the host's rule above rather than
+        by whatever the file happens to say.
+      - The face names the effort after the model - "Grok 4.7 Build Fast ·
+        Low" - and the Automatic tile's "Now:" line names it in parentheses,
+        both only on a host whose `autoJudge.get` is `1.3` or later
+        (`autoJudgeGetKnowsReasoningEffort`): an older host runs the model's
+        own default, and no label may name an effort the host does not
+        apply. The composer's Auto row follows the same rule.
       - It is hosted through the picker's `embedding` prop. The card draws
         the face, so the picker draws no chip and no tooltip. A provider
         switch (rail click, ⌘-digit, an account on another provider) commits
@@ -4003,12 +4045,24 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         the models of the STORE's own harness, read only while that harness
         is available. Its writer, installed through `setOnSettingsChange`,
         is `useJudgePick`'s `request`, and it never sends `model: ""`. It
-        also sends nothing that names the pick already on show, so a
-        re-commit of the same selection is a no-op, as in the composer.
-      - The seed key is `[row, seed selection]`, where the row is the tile
-        state below. A re-seed from what is saved while the seed itself has
-        not changed (dropping a switch, settling a close) applies a key of its
-        own, since re-applying an unchanged key is a no-op.
+        also sends nothing that names the pick already on show at the effort
+        the host already runs for it, so a re-commit of the same selection
+        is a no-op, as in the composer, whether or not the footer has been
+        touched; a footer change on the pick on show is a write. The
+        comparison is against the level the host RUNS, not the file's raw
+        value: choosing Low in the footer while the file names a level the
+        model no longer advertises (so the footer already shows Low) is the
+        same no-op, and the file keeps its stale value, which the host
+        resolves to Low by the same rule until that provider advertises the
+        level again. Before the store's provider catalog has answered, the
+        store emits the stored effort unclamped and the no-op compares
+        against that same value, so a same-provider rail click while the
+        catalog loads writes nothing.
+      - The seed key is `[row, seed selection, stored effort]`, where the
+        row is the tile state below. A re-seed from what is saved while the
+        seed itself has not changed (dropping a switch, settling a close)
+        applies a key of its own, since re-applying an unchanged key is a
+        no-op.
     - **Tile states** (`judgeTileState`). The card is Loading until the
       machine has answered: the record, the harness list and the providers
       list, each with data or an error. Before then a last pick that cannot
@@ -4039,15 +4093,16 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         pick. The dimming is the wrapper's opacity, lifted while the picker
         is open from it.
       - The face for a pick is `HarnessModelTrigger`: the provider icon, the
-        model's catalog label (else its slug), and the account (name and
-        accent dot) only when that provider has more than one here, as the
-        composer's chip. "Choose a model" is a `muted-outline` `Button` with
+        model's catalog label (else its slug), the effort the host runs it at
+        (above), and the account (name and accent dot) only when that
+        provider has more than one here, as the composer's chip. "Choose a model" is a `muted-outline` `Button` with
         a chevron. A harness id this build does not know has no icon, so its
         face is the text alone.
       - With no last pick, the store is seeded with Traycer on
         `effective.model` when `effective.source` is `default`, else the
         first provider that can run here with `""`. That only decides where
-        the picker opens; nothing saves until something in it is clicked.
+        the picker opens; nothing saves until a provider, account or model
+        in it is clicked, and the effort footer is not drawn until then.
 
       The rows:
 

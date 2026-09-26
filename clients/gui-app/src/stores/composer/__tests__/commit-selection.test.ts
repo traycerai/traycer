@@ -42,6 +42,7 @@ describe("commitProfileSelection", () => {
     }> = [];
     const store = createComposerToolbarStore({
       purpose: "run",
+      reasoningFallback: "model-default",
       seedKey: "seed-1",
       values: {
         permission: "supervised",
@@ -114,6 +115,7 @@ describe("commitSelection - provider switch", () => {
     const emitted: Array<{ modelSlug: string; profileId: string | null }> = [];
     const store = createComposerToolbarStore({
       purpose: "run",
+      reasoningFallback: "model-default",
       seedKey: "seed-1",
       values: {
         permission: "supervised",
@@ -169,6 +171,7 @@ describe("commitSelection - host scoping", () => {
 
     const store = createComposerToolbarStore({
       purpose: "run",
+      reasoningFallback: "model-default",
       seedKey: "seed-host-b",
       values: {
         permission: "supervised",
@@ -196,6 +199,7 @@ describe("commitSelection - host scoping", () => {
   it("commits and records against the store's own host, leaving other hosts untouched", () => {
     const store = createComposerToolbarStore({
       purpose: "run",
+      reasoningFallback: "model-default",
       seedKey: "seed-host-a",
       values: {
         permission: "supervised",
@@ -230,6 +234,7 @@ describe("commitSelection - host scoping", () => {
   it("drops the memory write entirely when the store's catalog has no resolved host yet", () => {
     const store = createComposerToolbarStore({
       purpose: "run",
+      reasoningFallback: "model-default",
       seedKey: "seed-null-host",
       values: {
         permission: "supervised",

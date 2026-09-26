@@ -175,6 +175,7 @@ describe("ComposerOptionsSheet", () => {
   const SETTLED_BILLING: AutoJudgeBilling = {
     kind: "traycer",
     modelLabel: "Sonnet 5",
+    effortLabel: null,
   };
 
   it("shows the same mid-turn notice string as the desktop picker for a mid-turn supervised user", () => {
