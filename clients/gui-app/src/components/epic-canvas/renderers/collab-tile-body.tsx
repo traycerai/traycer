@@ -208,6 +208,32 @@ export function CollabTileBody(props: CollabTileBodyProps) {
     fragment === null ||
     fragmentDoc === null ||
     artifactRoomAwareness === null;
+
+  /**
+   * Whether this tile has shown THIS artifact's body in its editor, latched
+   * with the same derived-state idiom as `bodyAnsweredOnce` above.
+   *
+   * It is what tells a reconnect from a first open, and nothing else can: both
+   * arrive here as `retrying` with no fragment. A room that leaves `ready`
+   * discards its local replica (`applyAvailability` -> `tier.invalidate`), so
+   * the fragment goes `null` and a mounted editor falls back to this
+   * pre-editor path - that is a real lost connection, and the reader is owed a
+   * sentence. A tile that has never had a body is waiting on its first open
+   * attempt, which the host also reports as `retrying`, and is owed the
+   * skeleton. See `collabTileNotice`.
+   *
+   * Keyed by artifact id rather than a boolean, so a tile that is handed a
+   * different artifact does not carry the previous one's history into the new
+   * document's first open.
+   */
+  const [bodyShownForId, setBodyShownForId] = useState<string | null>(
+    bodyPending ? null : props.node.id,
+  );
+  if (!bodyPending && bodyShownForId !== props.node.id) {
+    setBodyShownForId(props.node.id);
+  }
+  const bodyShownOnce = bodyShownForId === props.node.id;
+
   // Invariant 6. The artifact room is doc-scoped rather than host-scoped, so
   // this bounds on the node itself rather than reaching for a host lease -
   // there is no host here whose name would tell the reader anything.
@@ -222,6 +248,7 @@ export function CollabTileBody(props: CollabTileBodyProps) {
         testId={props.testId}
         bodyAvailability={bodyAvailability}
         subscribeAnswered={bodyAnsweredOnce}
+        bodyShownOnce={bodyShownOnce}
         budgetElapsed={loadBudgetElapsed}
       />
     );
@@ -238,7 +265,7 @@ export function CollabTileBody(props: CollabTileBodyProps) {
 }
 
 /**
- * The three pre-editor states, which used to be ONE.
+ * The pre-editor states, which used to be ONE.
  *
  * `unavailable` and `loading` rendered byte-identical markup - the same three
  * pulsing bars - distinguished only by a `data-testid` suffix no reader can
@@ -246,22 +273,26 @@ export function CollabTileBody(props: CollabTileBodyProps) {
  * document that was about to appear, and the only way to tell them apart was
  * to keep waiting: indefinitely, since neither state ended.
  *
- * Now each says which one it is, and the wait has a deadline (invariant 6).
- * The pulsing bars are kept for the short, genuinely-loading window - they
- * are a good placeholder for content that is coming - and retired the moment
- * the answer is anything else.
+ * Now a refusal says so, a lost connection says so, and the wait has a
+ * deadline (invariant 6). The pulsing bars are kept for the genuinely-loading
+ * window - they are a good placeholder for content that is coming - and that
+ * window includes a FIRST open reported `retrying`, which on the wire is an
+ * open attempt in flight and not a lost connection. `collabTileNotice` holds
+ * the copy and the reasoning.
  *
  * "The answer", precisely: `subscribeAnswered` is false until the body plane
  * has stated something about this artifact, and an UNANSWERED tile is a
- * loading one however `bodyAvailability` reads. The two are separate props
- * rather than one pre-collapsed value so the DOM carries both - a tile that
- * looks stuck can be told apart from one that was refused without re-running
- * the app.
+ * loading one however `bodyAvailability` reads. `bodyShownOnce` is what
+ * separates a reconnect from a first open. All three are separate props
+ * rather than one pre-collapsed value so the DOM carries each - a tile that
+ * looks stuck can be told apart from one that was refused, or one that lost
+ * its connection, without re-running the app.
  */
 function CollabTileSkeleton(props: {
   readonly testId: string;
   readonly bodyAvailability: EpicArtifactRoomAvailability;
   readonly subscribeAnswered: boolean;
+  readonly bodyShownOnce: boolean;
   readonly budgetElapsed: boolean;
 }) {
   const testIdSuffix =
@@ -272,6 +303,7 @@ function CollabTileSkeleton(props: {
     props.bodyAvailability,
     props.budgetElapsed,
     props.subscribeAnswered,
+    props.bodyShownOnce,
   );
 
   return (
@@ -279,6 +311,7 @@ function CollabTileSkeleton(props: {
       data-testid={`${props.testId}-${testIdSuffix}`}
       data-artifact-room-availability={props.bodyAvailability}
       data-body-subscribe-answered={props.subscribeAnswered ? "true" : "false"}
+      data-body-shown-once={props.bodyShownOnce ? "true" : "false"}
       data-budget-elapsed={props.budgetElapsed ? "true" : "false"}
       className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 py-8"
     >
