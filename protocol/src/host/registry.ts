@@ -333,11 +333,17 @@ import {
   hostRestartV12,
 } from "@traycer/protocol/host/restart/contracts";
 import {
+  providersFallbackPolicyGetUpgradeV10ToV11,
   providersFallbackPolicyGetV10,
+  providersFallbackPolicyGetV11,
+  providersFallbackPolicyPreviewTierGroupsUpgradeV10ToV11,
   providersFallbackPolicyPreviewTierGroupsV10,
+  providersFallbackPolicyPreviewTierGroupsV11,
   providersFallbackPolicyResetV10,
   providersFallbackPolicyRestoreTierGroupsV10,
+  providersFallbackPolicySetUpgradeV10ToV11,
   providersFallbackPolicySetV10,
+  providersFallbackPolicySetV11,
 } from "@traycer/protocol/host/fallback-policy";
 import {
   chatFallbackCancelV10,
@@ -730,7 +736,9 @@ import {
   browserScreencastV21,
   browserSessionsV20,
   browserSessionsV21,
+  browserSessionsV22,
 } from "@traycer/protocol/host/browser/contracts";
+import { browserDesktopControlV10 } from "@traycer/protocol/host/browser/desktop-control";
 import {
   browserScreencastV10,
   browserSessionsV10,
@@ -10546,11 +10554,15 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   "providers.fallbackPolicy.get": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersFallbackPolicyGetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: providersFallbackPolicyGetV11,
+          upgradeFromPreviousVersion: providersFallbackPolicyGetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -10559,11 +10571,15 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   "providers.fallbackPolicy.set": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersFallbackPolicySetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: providersFallbackPolicySetV11,
+          upgradeFromPreviousVersion: providersFallbackPolicySetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -10598,11 +10614,16 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   "providers.fallbackPolicy.previewTierGroups": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersFallbackPolicyPreviewTierGroupsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: providersFallbackPolicyPreviewTierGroupsV11,
+          upgradeFromPreviousVersion:
+            providersFallbackPolicyPreviewTierGroupsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -11730,6 +11751,12 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // client that drops the frame. The GUI feature-detects browser support by
   // these two NAMES in the host's openAck manifest, so a served major is the
   // only way to evolve them (`released-stream-surface-compat.test.ts`).
+  "host.browserPreparation.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: { 0: { contract: browserDesktopControlV10 } },
+    },
+  },
   "browser.sessions": {
     1: {
       latestMinor: 0,
@@ -11740,13 +11767,16 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: browserSessionsV20,
         },
         1: {
           contract: browserSessionsV21,
+        },
+        2: {
+          contract: browserSessionsV22,
         },
       },
     },

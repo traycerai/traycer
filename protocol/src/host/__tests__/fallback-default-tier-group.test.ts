@@ -20,14 +20,14 @@ import {
 const FRONTIER: TierGroup = {
   id: "frontier",
   candidates: [
-    { harnessId: "claude", modelFamily: "opus", reasoningEffort: null },
+    { harnessId: "claude", modelFamily: "*opus*", reasoningEffort: null },
   ],
 };
 
 const STANDARD: TierGroup = {
   id: "standard",
   candidates: [
-    { harnessId: "codex", modelFamily: "gpt", reasoningEffort: null },
+    { harnessId: "codex", modelFamily: "*gpt*", reasoningEffort: null },
   ],
 };
 
@@ -74,9 +74,9 @@ describe("fallbackPolicySchema: defaultTierGroupId", () => {
 });
 
 describe("createDefaultFallbackPolicy", () => {
-  // A configuration the user makes, never a seed - see the field's own doc
-  // comment. Falsification: a seeding change that pointed new users at one of
-  // the seeded groups by default would go unnoticed without this pin.
+  // The bare default has no groups, so it names none. The host's seeding sets
+  // the seeded default alongside the seeded groups; this function must never
+  // name a group that is not in its own list.
   it("defaults defaultTierGroupId to null", () => {
     expect(createDefaultFallbackPolicy().defaultTierGroupId).toBeNull();
   });
@@ -92,6 +92,7 @@ describe("routeTierGroupForFailedTuple", () => {
         defaultTierGroupId: "standard",
         harnessId: "claude",
         model: "claude-opus-5",
+        catalog: null,
       }),
     ).toEqual(FRONTIER);
   });
@@ -103,6 +104,7 @@ describe("routeTierGroupForFailedTuple", () => {
         defaultTierGroupId: "standard",
         harnessId: "claude",
         model: "claude-haiku-5",
+        catalog: null,
       }),
     ).toEqual(STANDARD);
   });
@@ -114,6 +116,7 @@ describe("routeTierGroupForFailedTuple", () => {
         defaultTierGroupId: null,
         harnessId: "claude",
         model: "claude-haiku-5",
+        catalog: null,
       }),
     ).toBeNull();
   });
@@ -127,6 +130,7 @@ describe("routeTierGroupForFailedTuple", () => {
         defaultTierGroupId: "ghost",
         harnessId: "claude",
         model: "claude-haiku-5",
+        catalog: null,
       }),
     ).toBeNull();
   });
@@ -140,6 +144,7 @@ describe("tierGroupsNameDestinationFor with a default group", () => {
         defaultTierGroupId: "standard",
         harnessId: "claude",
         model: "claude-haiku-5",
+        catalog: null,
       }),
     ).toBe(true);
   });
@@ -148,7 +153,11 @@ describe("tierGroupsNameDestinationFor with a default group", () => {
     const soloDefault: TierGroup = {
       id: "solo",
       candidates: [
-        { harnessId: "claude", modelFamily: "haiku", reasoningEffort: null },
+        {
+          harnessId: "claude",
+          modelFamily: "claude-haiku-5",
+          reasoningEffort: null,
+        },
       ],
     };
     expect(
@@ -157,6 +166,7 @@ describe("tierGroupsNameDestinationFor with a default group", () => {
         defaultTierGroupId: "solo",
         harnessId: "claude",
         model: "claude-haiku-5",
+        catalog: null,
       }),
     ).toBe(false);
   });
@@ -168,6 +178,7 @@ describe("tierGroupsNameDestinationFor with a default group", () => {
         defaultTierGroupId: null,
         harnessId: "claude",
         model: "claude-haiku-5",
+        catalog: null,
       }),
     ).toBe(false);
   });

@@ -20,8 +20,9 @@ export type UpdateHostVersionPolicyMutation = UseMutationResult<
  * and two `useUpdateHostVersionPolicy` instances do not serialize against each
  * other. It used to be guaranteed structurally, by the two rows living inside
  * one component. Splitting them — so the Overview could put the policy switch
- * on its Updates tab while the drain gate stays on Status, the tab the page
- * opens on — is what turned an invariant into something a caller can get wrong.
+ * on its Updates tab while the drain gate sits in the notices strip above the
+ * tab bar, on every tab — is what turned an invariant into something a caller
+ * can get wrong.
  *
  * Its own module rather than a second export beside those components: a `.tsx`
  * that exports both components and a hook loses Fast Refresh for the whole file.

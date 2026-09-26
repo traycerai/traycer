@@ -1,5 +1,13 @@
 import { z } from "zod";
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
+import {
+  agentModeSchema,
+  guiHarnessIdSchema,
+  permissionModeSchema,
+} from "@traycer/protocol/persistence/epic/foundation";
 import { harnessIdSchema, type HarnessId } from "./agent/shared";
 import {
   HOST_NOTIFICATION_STOPPED_REASONS,
@@ -39,7 +47,11 @@ export const fallbackLadderSchema = lazySchema(() =>
 export const tierCandidateSchema = lazySchema(() =>
   z.object({
     harnessId: harnessIdSchema,
-    // Store family intent; resolution against the live catalog is host-owned.
+    // A model PATTERN (see `modelMatchesPattern`): `*` is the only wildcard,
+    // and a pattern with none names one model exactly. The wire name predates
+    // patterns and is kept, because renaming a stored and transmitted field
+    // would break every released host and client that reads a policy.
+    // Resolution against the live catalog is host-owned.
     modelFamily: z.string().trim().min(1),
     reasoningEffort: z.string().trim().min(1).nullable(),
   }),
@@ -57,12 +69,11 @@ export type TierGroup = z.infer<typeof tierGroupSchema>;
 /**
  * Whether `haystack` contains `family` as a whole word.
  *
- * THE definition of "belongs to this model family", and the reason it lives in
- * the protocol rather than beside either of its callers: the host matches a
- * failed model against a group with it, and the settings panel has to answer
- * the same question about a DRAFT the host has never seen. A second copy on the
- * client would be a second answer, and it would diverge on exactly the inputs
- * that are hard - which is what the boundary rule below exists for.
+ * The agent-selection guide's definition of "belongs to this model family"
+ * (`dynamic-default.ts`). Fallback tier rows no longer use it: they hold
+ * patterns, matched by {@link modelMatchesPattern}, which has no word boundary.
+ * The two answer different questions and must stay separate - a family word is
+ * a vendor vocabulary guess, a pattern is exactly what the user typed.
  *
  * A plain `includes()` is wrong for short family names: `omp` is a substring of
  * "c-omp-uter" and `pi` of "co-pi-lot". The boundary is letter-vs-non-letter
@@ -92,55 +103,145 @@ function escapeRegExpLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function candidateFamilyMatchesSlug(family: string, slug: string): boolean {
-  const needle = family.trim().toLowerCase();
-  if (needle.length === 0) return false;
-  return needle === slug || haystackHasFamilyWord(slug, needle);
+/**
+ * A catalog model as the pattern matcher sees it: its ID and its display name.
+ *
+ * Structural on purpose, so the host's `GuiAgentModelOption` and the settings
+ * editor's catalog rows pass as they are rather than through a projection.
+ */
+export type TierModelIdentity = {
+  readonly slug: string;
+  readonly label: string;
+};
+
+/**
+ * Whether a tier row's `pattern` matches `model` - THE definition of "this row
+ * covers this model", in the protocol so the engine's routing and walk, the
+ * settings editor and its Test panel cannot give two answers about one
+ * pattern.
+ *
+ *  - `*` matches any run of characters, including none. Nothing else is
+ *    special: `.`, `(`, `[`, `+`, `?` and `$` are literal characters.
+ *  - Case-insensitive. Whitespace around the pattern is ignored, as the stored
+ *    schema trims it anyway.
+ *  - Matched against the WHOLE ID or the WHOLE display name, never a
+ *    substring of either: `opus` names a model called exactly "opus", and
+ *    `*opus*` is how to say "contains opus". A pattern with no `*` is therefore
+ *    an exact pick, by ID or by name, so an old exact pick survives a vendor
+ *    re-IDing a model that keeps its name.
+ *  - `*` alone matches every model. A blank pattern matches none.
+ *
+ * No regular expression is built, so there is nothing to escape and nothing
+ * to backtrack into: the pattern is split on `*` and the pieces are placed left
+ * to right with `startsWith`, `indexOf` and `endsWith`, which is bounded by the
+ * pattern's length times the subject's. A user-typed `(a+)+$` is six literal
+ * characters, not a catastrophic regex on the failure path. Placing each middle
+ * piece at its LEFTMOST occurrence is exact for `*`-only globs, since a later
+ * placement can only leave less room for the pieces after it.
+ *
+ * Not {@link haystackHasFamilyWord}, which stays the agent-selection guide's
+ * whole-word family test. There is no word boundary here, by design: `*pi*`
+ * matches "copilot", and the editor shows what a pattern really catches.
+ */
+export function modelMatchesPattern(
+  pattern: string,
+  model: TierModelIdentity,
+): boolean {
+  const pieces = patternPieces(pattern);
+  if (pieces === null) return false;
+  return (
+    piecesMatchWhole(pieces, model.slug.toLowerCase()) ||
+    piecesMatchWhole(pieces, model.label.toLowerCase())
+  );
+}
+
+/** The pattern lower-cased and split on `*`; `null` for a blank pattern. */
+function patternPieces(pattern: string): readonly string[] | null {
+  const needle = pattern.trim().toLowerCase();
+  if (needle.length === 0) return null;
+  return needle.split("*");
+}
+
+/**
+ * Whether `subject` is exactly `pieces[0]`, anything, `pieces[1]`, anything,
+ * ..., `pieces[n-1]`. One piece means the pattern had no `*`, so it must equal
+ * the subject.
+ */
+function piecesMatchWhole(pieces: readonly string[], subject: string): boolean {
+  const first = pieces[0];
+  if (pieces.length === 1) return first === subject;
+  const last = pieces[pieces.length - 1];
+  // The fixed prefix and suffix must both fit without overlapping.
+  if (first.length + last.length > subject.length) return false;
+  if (!subject.startsWith(first) || !subject.endsWith(last)) return false;
+  const end = subject.length - last.length;
+  let cursor = first.length;
+  for (let index = 1; index < pieces.length - 1; index += 1) {
+    const piece = pieces[index];
+    if (piece.length === 0) continue;
+    const at = subject.indexOf(piece, cursor);
+    if (at === -1 || at + piece.length > end) return false;
+    cursor = at + piece.length;
+  }
+  return true;
+}
+
+/**
+ * The failed model as routing matches it: its ID, plus the display name the
+ * failed harness's `catalog` gives that ID. With no catalog, or no entry for
+ * the ID, the "name" is the ID again, which makes the match ID-only.
+ *
+ * Exported because a surface that explains a routing answer has to name the
+ * row the router matched - the settings Test panel's "is in it through
+ * <pattern> (row n)" - and it can only find that row with the SAME identity
+ * {@link findTierGroupForFailedTuple} matched against. A copy of this rule
+ * that drifted (a trim, another field) would pick a group here and find no row
+ * in it there.
+ */
+export function failedModelRoutingIdentity(
+  model: string,
+  catalog: readonly TierModelIdentity[] | null,
+): TierModelIdentity {
+  const slug = model.toLowerCase();
+  const entry =
+    catalog === null
+      ? undefined
+      : catalog.find((candidate) => candidate.slug.toLowerCase() === slug);
+  return { slug: model, label: entry === undefined ? model : entry.label };
 }
 
 /**
  * Step 1 of the tier walk: the group a failed tuple belongs to, or `null`.
  *
  * A candidate matches the failed tuple when it names the same harness and its
- * family matches the failed model. `null` makes the rung ineligible rather than
- * falling back to "walk every group": without a group the host has no statement
- * that any other model is equivalent to this one, and walking the rest would
- * move a chat from a standard model to a frontier one - or the reverse - on no
- * evidence at all.
+ * pattern matches the failed model ({@link modelMatchesPattern}). `null` makes
+ * the rung ineligible rather than falling back to "walk every group": without a
+ * group the host has no statement that any other model is equivalent to this
+ * one, and walking the rest would move a chat from a standard model to a
+ * frontier one - or the reverse - on no evidence at all.
  *
- * Matched against the failed model's SLUG only, while step 3
- * (`resolveModelFamilyAgainstCatalog`, host-side) matches slug and label
- * together. The asymmetry is deliberate: the label would have to come from the
- * FAILED harness's catalog, which is the one catalog most likely to be
- * unreadable there because its provider has just died, and every family a
- * seeded group names - `opus`, `sonnet`, `gpt`, `grok` - appears in the slug of
- * the models it describes. Trading a rare label-only match for a new failure
- * mode on the hop path is the wrong way round.
+ * ## ID, plus the display name when a catalog is supplied
  *
- * The consequence is real and known: `claude/default` is a live slug whose
- * family lives ONLY in its catalog label (`Default (Sonnet 4.5)`), so it
- * belongs to no group under this rule, and a chat on it has no equivalent-model
- * destination. That is the fact the settings hint and the error card both
- * report; changing this rule is a separate decision with its own failure mode.
+ * `catalog` is the FAILED harness's model list, or `null`. With it the failed
+ * model is matched by its ID and by the name that catalog gives the ID; with
+ * `null`, by ID only. The function stays pure and its callers acquire the
+ * catalog cache-only: the failed provider is the one most likely to be dead,
+ * and probing it on every failure is the cost the old slug-only rule existed to
+ * avoid. The two answers differ only where a pattern reaches a model through
+ * its name alone - Claude's `default`, which `*opus*` matches through the label
+ * "Default (Opus 5.5)" and which, with no catalog, belongs to no group and
+ * routes through the default group instead.
  *
- * The MOST SPECIFIC match wins across all groups: of every candidate whose
- * harness and family match, the one whose family token is LONGEST decides the
- * group. Ties go to the earlier group. Group order is otherwise not
- * load-bearing (D128).
+ * ## First-listed wins
  *
- * First-match was the obvious rule and it was wrong, because families nest.
- * The seeded groups name codex `gpt` in the frontier group and codex `spark` in
- * the standard one, and `gpt` is a whole word in every codex slug there is.
- * Under first-match a rate-limited light-model chat was routed to `frontier`
- * and offered opus at effort high: the exact harm the paragraph above says this
- * step exists to prevent, produced by the step itself.
- *
- * Requiring the seeded families to be DISJOINT instead was considered and
- * rejected on evidence - codex's live catalog carries no stable tier
- * vocabulary, so disjointness forces generation codenames (`astra`), and most
- * live codex slugs would then match no family at all and get no tier fallback
- * whatsoever. Mis-routing one model is a worse offer; matching nothing is no
- * offer. Length is the tiebreak because a longer family is a narrower claim.
+ * A model is meant to be in one group. When more than one group matches it
+ * anyway - a new release, a catalog the editor could not read, a policy saved
+ * before patterns - the FIRST-LISTED group handles it, and
+ * {@link findTierConflicts} is how a surface shows the overlap. This retires
+ * the most-specific-match rule (D128), which existed because family WORDS
+ * nested (`gpt` is a whole word in every codex slug, `spark` included). A
+ * pattern is the user's own claim, the editor refuses a choice that would
+ * overlap, and list order is the one tiebreak a user can see.
  *
  * In the PROTOCOL because three surfaces ask it and must not disagree: the
  * engine's hop, the destination menu behind it, and the settings ladder
@@ -151,27 +252,22 @@ export function findTierGroupForFailedTuple(
   groups: readonly TierGroup[],
   harnessId: HarnessId,
   model: string,
+  catalog: readonly TierModelIdentity[] | null,
 ): TierGroup | null {
-  const slug = model.toLowerCase();
-  let best: { readonly group: TierGroup; readonly length: number } | null =
-    null;
-  for (const group of groups) {
-    for (const candidate of group.candidates) {
-      if (candidate.harnessId !== harnessId) continue;
-      const needle = candidate.modelFamily.trim().toLowerCase();
-      if (!candidateFamilyMatchesSlug(candidate.modelFamily, slug)) continue;
-      // Strictly greater, so an equal-length match in a LATER group never
-      // displaces the earlier one - that is the documented tie rule.
-      if (best === null || needle.length > best.length) {
-        best = { group, length: needle.length };
-      }
-    }
-  }
-  return best?.group ?? null;
+  const blocked = failedModelRoutingIdentity(model, catalog);
+  return (
+    groups.find((group) =>
+      group.candidates.some(
+        (candidate) =>
+          candidate.harnessId === harnessId &&
+          modelMatchesPattern(candidate.modelFamily, blocked),
+      ),
+    ) ?? null
+  );
 }
 
 /**
- * The group a failed tuple ROUTES to: its own group under the most-specific
+ * The group a failed tuple ROUTES to: its own group under the first-listed
  * match above, else the user's default group, else nothing.
  *
  * The default is a CONFIGURATION, not a guess. A model in no group used to be
@@ -193,11 +289,14 @@ export function routeTierGroupForFailedTuple(input: {
   readonly defaultTierGroupId: string | null;
   readonly harnessId: HarnessId;
   readonly model: string;
+  /** The failed harness's catalog, or `null` for ID-only - see {@link findTierGroupForFailedTuple}. */
+  readonly catalog: readonly TierModelIdentity[] | null;
 }): TierGroup | null {
   const matched = findTierGroupForFailedTuple(
     input.groups,
     input.harnessId,
     input.model,
+    input.catalog,
   );
   if (matched !== null) return matched;
   if (input.defaultTierGroupId === null) return null;
@@ -228,11 +327,25 @@ export function routeTierGroupForFailedTuple(input: {
  * it about a draft policy that has not been saved, which no host call could
  * answer.
  *
- * The failed model's own entry is not somewhere else to go - matched at
- * FAMILY level here rather than on a resolved slug, because
- * resolving a slug is exactly the catalog read this function exists not to do.
- * Family-level is the coarser of the two in the safe direction: it can only
- * discard a candidate that is very likely the model itself, never invent one.
+ * `catalog` is the failed harness's list as the caller already holds it (the
+ * host reads it cache-only at failure time; the settings panel passes the
+ * editor's cached one), never a read this function makes.
+ *
+ * ## The failed model's own row is not somewhere else to go
+ *
+ * A row on another harness always counts. A row on the failed harness counts
+ * unless it provably names ONLY the failed model: its pattern matches the
+ * failed model and nothing else is known to match it - with a `catalog`, no
+ * OTHER model in it matches; with `null`, the pattern has no `*`, so it is an
+ * exact pick of that one model. A wildcard row with no catalog to check it
+ * against therefore counts, which can over-offer: "Switch…" for a pattern that
+ * turns out to reach only the failed model, a hop the walk's same-as-failed
+ * step then declines. That is the safe direction for a FROZEN verdict - a
+ * control withheld wrongly stays withheld for as long as the card is on
+ * screen, while one offered wrongly costs a refused hop. A row that matches
+ * nothing at all still counts, as it did before patterns: "that pattern is
+ * empty right now" is a fact about the catalog, and this is a question about
+ * configuration.
  */
 export function tierGroupsNameDestinationFor(input: {
   readonly groups: readonly TierGroup[];
@@ -240,16 +353,124 @@ export function tierGroupsNameDestinationFor(input: {
   readonly defaultTierGroupId: string | null;
   readonly harnessId: HarnessId;
   readonly model: string;
+  /** The failed harness's catalog, or `null` for ID-only - see {@link findTierGroupForFailedTuple}. */
+  readonly catalog: readonly TierModelIdentity[] | null;
 }): boolean {
   const group = routeTierGroupForFailedTuple(input);
   if (group === null) return false;
-  const slug = input.model.toLowerCase();
-  return group.candidates.some((candidate) => {
-    return !(
-      candidate.harnessId === input.harnessId &&
-      candidateFamilyMatchesSlug(candidate.modelFamily, slug)
-    );
-  });
+  const blocked = failedModelRoutingIdentity(input.model, input.catalog);
+  return group.candidates.some(
+    (candidate) =>
+      !(
+        candidate.harnessId === input.harnessId &&
+        patternNamesOnlyBlockedModel(
+          candidate.modelFamily,
+          blocked,
+          input.catalog,
+        )
+      ),
+  );
+}
+
+/**
+ * Whether a row on the failed harness names the failed model and provably
+ * nothing else - the exclusion rule {@link tierGroupsNameDestinationFor}
+ * documents.
+ */
+function patternNamesOnlyBlockedModel(
+  pattern: string,
+  blocked: TierModelIdentity,
+  catalog: readonly TierModelIdentity[] | null,
+): boolean {
+  if (!modelMatchesPattern(pattern, blocked)) return false;
+  if (catalog === null) return !pattern.includes("*");
+  const blockedSlug = blocked.slug.toLowerCase();
+  return !catalog.some(
+    (entry) =>
+      entry.slug.toLowerCase() !== blockedSlug &&
+      modelMatchesPattern(pattern, entry),
+  );
+}
+
+/** One group's claim on a model, inside a {@link TierConflict}. */
+export type TierConflictClaim = {
+  /** The group's position in the list. The lowest one handles the model. */
+  readonly tierIndex: number;
+  readonly tierId: string;
+  /** The group's rows whose pattern matches the model, in row order. */
+  readonly candidateIndexes: readonly number[];
+};
+
+/** A model that more than one group claims. */
+export type TierConflict = {
+  readonly harnessId: HarnessId;
+  /** The catalog entry, exactly as the catalog passed in gives it. */
+  readonly model: TierModelIdentity;
+  /**
+   * Two or more claims, in group order. `tiers[0]` is the group that handles
+   * the model until the overlap is fixed: it is the first-listed match, which
+   * is where {@link findTierGroupForFailedTuple} routes this model.
+   */
+  readonly tiers: readonly TierConflictClaim[];
+};
+
+/**
+ * Every model that more than one group claims - the "one model, one tier" rule
+ * as data, with no I/O.
+ *
+ * Shared by every surface that draws the rule: the editor's red rows, the
+ * picker that refuses an overlapping choice, and the Test panel's "in two
+ * tiers" line. A conflict is rendered state, never a save gate, and never a
+ * per-candidate skip reason: routing already has an answer for it (the
+ * first-listed group), so it is a fact about the policy rather than a verdict
+ * on a row.
+ *
+ *  - Exact picks count. An exact `gpt-5.6-terra` in one group and `*gpt*` in
+ *    another is a conflict on Terra.
+ *  - Two rows of the SAME group matching one model are not a conflict.
+ *  - Only models in a supplied catalog are checked, matched by ID or display
+ *    name. A harness with no entry in `catalogsByHarness` contributes nothing:
+ *    which models a pattern reaches is unknowable without the list.
+ *
+ * Ordered by harness, in the order harnesses first appear among the groups'
+ * rows, then by catalog order within a harness.
+ */
+export function findTierConflicts(
+  groups: readonly TierGroup[],
+  catalogsByHarness: ReadonlyMap<HarnessId, readonly TierModelIdentity[]>,
+): readonly TierConflict[] {
+  const harnesses: HarnessId[] = [];
+  for (const group of groups) {
+    for (const candidate of group.candidates) {
+      if (!harnesses.includes(candidate.harnessId)) {
+        harnesses.push(candidate.harnessId);
+      }
+    }
+  }
+  const conflicts: TierConflict[] = [];
+  for (const harnessId of harnesses) {
+    const catalog = catalogsByHarness.get(harnessId);
+    if (catalog === undefined) continue;
+    for (const model of catalog) {
+      const tiers: TierConflictClaim[] = [];
+      groups.forEach((group, tierIndex) => {
+        const candidateIndexes: number[] = [];
+        group.candidates.forEach((candidate, candidateIndex) => {
+          if (
+            candidate.harnessId === harnessId &&
+            modelMatchesPattern(candidate.modelFamily, model)
+          ) {
+            candidateIndexes.push(candidateIndex);
+          }
+        });
+        if (candidateIndexes.length > 0) {
+          tiers.push({ tierIndex, tierId: group.id, candidateIndexes });
+        }
+      });
+      if (tiers.length > 1) conflicts.push({ harnessId, model, tiers });
+    }
+  }
+  return conflicts;
 }
 
 /**
@@ -268,6 +489,12 @@ export function tierGroupsNameDestinationFor(input: {
  * all, so there are no candidates to have verdicts. It never describes a
  * candidate - it describes an EMPTY list - which is why a response carries it
  * beside the array rather than inside it.
+ *
+ * `family-unmatched` keeps its id although rows now hold patterns: released
+ * clients colour exactly that id red, so renaming it would silently un-red the
+ * one state the user has to fix. Its rendered copy is "no model matches this
+ * pattern". There is deliberately no reason for "in two tiers": a conflict is a
+ * fact about the policy ({@link findTierConflicts}), not a verdict on a row.
  *
  * `already-tried` is not a property of the candidate either: it is a fact about
  * the traversal that is asking. It is in this union so a surface rendering "why
@@ -371,9 +598,9 @@ export function createDefaultFallbackPolicy(): FallbackPolicy {
     returnToPreferred: "prompt",
     // Tier seeding owns the distinction between never seeded and user emptied.
     tierGroups: [],
-    // A configuration the user makes, never a seed: the seeded groups are a
-    // starting point, and silently routing every unlisted model into one of
-    // them would be a decision taken on their behalf.
+    // No groups, so no group to name. The host's tier seeding owns the seeded
+    // default, set alongside the seeded groups and only when the user has not
+    // chosen one; this bare default must not name a group that is not in it.
     defaultTierGroupId: null,
   };
 }
@@ -571,6 +798,51 @@ export const providersFallbackPolicySetV10 = defineRpcContract({
   responseSchema: providersFallbackPolicySetResponseSchema,
 });
 
+// 1.1 changes MEANING, not shape: from 1.1 a tier row's `modelFamily` is a
+// pattern (`modelMatchesPattern`), where on 1.0 it was a family word matched on
+// word boundaries. The bytes are identical, so both lines share one schema and
+// the upgrades are identities. The minor exists so a client can ask what a
+// host will DO with a row: a pattern editor on a 1.0 host would save `*opus*`,
+// which that host's word matcher never matches, so the editor gates on the
+// negotiated line and keeps the select-only cell below 1.1. An old client on a
+// new host shows a pattern as an opaque pick, which is acceptable.
+//
+// Still off `released-baseline-surface.json`, like the 1.0 line, so the minor
+// is unconstrained by the released floor.
+export const providersFallbackPolicyGetV11 = defineRpcContract({
+  method: "providers.fallbackPolicy.get",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: providersFallbackPolicyGetRequestSchema,
+  responseSchema: providersFallbackPolicyGetResponseSchema,
+});
+
+export const providersFallbackPolicyGetUpgradeV10ToV11 = defineUpgradePath<
+  typeof providersFallbackPolicyGetV10,
+  typeof providersFallbackPolicyGetV11
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 1, minor: 1 },
+  upgradeRequest: (request) => ({ ...request }),
+  upgradeResponse: (response) => ({ ...response }),
+});
+
+export const providersFallbackPolicySetV11 = defineRpcContract({
+  method: "providers.fallbackPolicy.set",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: providersFallbackPolicySetRequestSchema,
+  responseSchema: providersFallbackPolicySetResponseSchema,
+});
+
+export const providersFallbackPolicySetUpgradeV10ToV11 = defineUpgradePath<
+  typeof providersFallbackPolicySetV10,
+  typeof providersFallbackPolicySetV11
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 1, minor: 1 },
+  upgradeRequest: (request) => ({ ...request }),
+  upgradeResponse: (response) => ({ ...response }),
+});
+
 // ---------------------------------------------------------------------------
 // Settings-only methods (ticket 08). Their own section below the get/set pair
 // rather than interleaved with it, so a compile error in any symbol from here
@@ -585,13 +857,15 @@ export const providersFallbackPolicySetV10 = defineRpcContract({
 // ---------------------------------------------------------------------------
 
 /**
- * "Restore the default model groups" - the groups editor's empty state.
+ * "Restore the default tiers" - the tiers editor's empty state, and its footer
+ * behind a confirm.
  *
- * Empty request: the seed is DERIVED host-side from the live provider set, and
- * the client has no business proposing what the defaults are. It is not the
- * same operation as `.set` with a hand-built list, which is why it is a method
- * rather than a client-side convenience: only the host can build a seed that
- * matches what a first read would have produced for this user.
+ * Empty request: the seed is OWNED host-side - the three pattern tiers and the
+ * default tier a first read writes - and the client has no business proposing
+ * what the defaults are. It is not the same operation as `.set` with a
+ * hand-built list, which is why it is a method rather than a client-side
+ * convenience: only the host knows the seed a first read would have written,
+ * and a restore writes exactly that, default tier included.
  */
 export const providersFallbackPolicyRestoreTierGroupsRequestSchema = lazySchema(
   () => z.object({}),
@@ -654,15 +928,22 @@ export type ProvidersFallbackPolicyResetResponse = z.infer<
  * strict enum would fail the whole response on a client that has not heard of a
  * newly added reason, blanking a preview that was otherwise fine. Parse it with
  * that schema to branch; render `skipLabel` when it does not match.
+ *
+ * Frozen: the `previewTierGroups@1.0` row. {@link tierCandidatePreviewSchema}
+ * is the live (1.1) row, which adds `matches`.
  */
-export const tierCandidatePreviewSchema = lazySchema(() =>
+export const tierCandidatePreviewSchemaV10 = lazySchema(() =>
   z.object({
     groupId: z.string(),
     candidateIndex: z.number().int().nonnegative(),
     harnessId: harnessIdSchema,
     modelFamily: z.string(),
     reasoningEffort: z.string().nullable(),
-    /** The slug the family resolved to, or `null` when it resolved to nothing. */
+    /**
+     * The first model the row resolved to, or `null` when it resolved to
+     * nothing. From 1.1 it equals the first USABLE entry of `matches`, so a
+     * client that reads only this field renders as it always did.
+     */
     resolvedModel: z.string().nullable(),
     profileId: z.string().nullable(),
     skipReason: z.string().nullable(),
@@ -671,7 +952,93 @@ export const tierCandidatePreviewSchema = lazySchema(() =>
     warnings: z.array(z.string()),
   }),
 );
+export type TierCandidatePreviewV10 = z.infer<
+  typeof tierCandidatePreviewSchemaV10
+>;
+
+/**
+ * One model a row's pattern matched, in the provider's catalog order - which is
+ * the order the walk tries them in - with its own verdict. `skipReason` /
+ * `skipLabel` follow the row-level rule above: an open string beside a
+ * host-rendered label.
+ */
+export const tierCandidatePreviewMatchSchema = lazySchema(() =>
+  z.object({
+    model: z.string(),
+    profileId: z.string().nullable(),
+    skipReason: z.string().nullable(),
+    skipLabel: z.string().nullable(),
+  }),
+);
+export type TierCandidatePreviewMatch = z.infer<
+  typeof tierCandidatePreviewMatchSchema
+>;
+
+/**
+ * The live (1.1) preview row: the 1.0 row plus `matches`, every model the
+ * row's pattern reaches in try order. Empty when the row matched nothing, in
+ * which case the row-level `skipReason` says why. Required rather than
+ * optional, because the transport returns an equal-minor response unparsed: an
+ * optional field could not tell "this host does not list matches" from "this
+ * row has none", and the negotiated line already answers the first question.
+ */
+export const tierCandidatePreviewSchema = lazySchema(() =>
+  tierCandidatePreviewSchemaV10.extend({
+    matches: z.array(tierCandidatePreviewMatchSchema),
+  }),
+);
 export type TierCandidatePreview = z.infer<typeof tierCandidatePreviewSchema>;
+
+/**
+ * A draft row as the 1.1 preview accepts it: the stored row, except that the
+ * pattern may be BLANK. The editor's "Add model or pattern" creates a blank
+ * row, and the preview has to answer for it ("blank, skipped") instead of
+ * failing the whole request, or every verdict's `candidateIndex` would stop
+ * pairing with the row on screen. Widened as a union that keeps the stored
+ * form as its first arm, so the 1.0 → 1.1 request stays additive; a
+ * whitespace-only pattern trims to `""` through the second arm.
+ */
+export const tierCandidateDraftSchema = lazySchema(() =>
+  tierCandidateSchema.extend({
+    modelFamily: z.union([z.string().trim().min(1), z.string().trim().max(0)]),
+  }),
+);
+
+/** A draft group for the 1.1 preview: the stored group over draft rows. */
+export const tierGroupDraftSchema = lazySchema(() =>
+  tierGroupSchema.extend({
+    candidates: z.array(tierCandidateDraftSchema),
+  }),
+);
+
+/** What kind of failure a Test-panel simulation stands for. */
+export const TIER_PREVIEW_FAILURE_KINDS = ["rate_limit", "other"] as const;
+
+/**
+ * The hypothetical blocked run tuple the Test panel asks about.
+ *
+ * A full run tuple rather than a harness and model, because the host runs the
+ * live walk against it: same-as-failed needs the model, permission-mode fit
+ * needs the permission and agent modes, and the sibling-after-rate-limit rule
+ * needs the failed account (`profileId`) and the failure `kind`. Reasoning
+ * effort is not part of it - the walk takes each target's effort from the
+ * row, not from the failed tuple.
+ */
+export const tierPreviewBlockedTupleSchema = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    model: z.string().min(1),
+    /** `null` is the ambient login, as on `ChatRunSettings`. */
+    profileId: z.string().nullable(),
+    permissionMode: permissionModeSchema,
+    agentMode: agentModeSchema,
+    serviceTier: z.string().nullable(),
+    kind: z.enum(TIER_PREVIEW_FAILURE_KINDS),
+  }),
+);
+export type TierPreviewBlockedTuple = z.infer<
+  typeof tierPreviewBlockedTupleSchema
+>;
 
 /**
  * Preview the DRAFT groups, which is why they travel in the request rather than
@@ -683,11 +1050,41 @@ export type TierCandidatePreview = z.infer<typeof tierCandidatePreviewSchema>;
  * can persist through `.set`, whose `tierGroups` is uncapped too. A cap only
  * here would produce a policy that can be saved and then not previewed, which is
  * a worse failure than a slow preview.
+ *
+ * Frozen: the `previewTierGroups@1.0` request, whose rows need a non-blank
+ * pattern.
+ */
+export const providersFallbackPolicyPreviewTierGroupsRequestSchemaV10 =
+  lazySchema(() =>
+    z.object({
+      groups: z.array(tierGroupSchema),
+    }),
+  );
+
+/**
+ * The live (1.1) request: draft rows, blank patterns included, and an optional
+ * `blocked` tuple.
+ *
+ * Without `blocked` this is the settings preview: every draft group is
+ * enumerated and nothing is routed. With it, the host runs the walk as if that
+ * tuple had just failed - routing to one group, same-as-failed, permission-mode
+ * fit and the sibling rule - which is what the Test panel draws. Optional
+ * rather than defaulted so the editor's existing call, which has no tuple to
+ * send, is unchanged.
  */
 export const providersFallbackPolicyPreviewTierGroupsRequestSchema = lazySchema(
   () =>
     z.object({
-      groups: z.array(tierGroupSchema),
+      groups: z.array(tierGroupDraftSchema),
+      /**
+       * The draft's default tier; absent means none, and only a `blocked`
+       * request routes. A blocked model that no row matches is walked in this
+       * tier, exactly as the live walk routes it through the policy's
+       * `defaultTierGroupId` - so the Test panel simulates the draft the user
+       * is looking at, default included, rather than the stored policy.
+       */
+      defaultTierGroupId: z.string().nullable().optional(),
+      blocked: tierPreviewBlockedTupleSchema.optional(),
     }),
 );
 export type ProvidersFallbackPolicyPreviewTierGroupsRequest = z.infer<
@@ -702,6 +1099,24 @@ export type ProvidersFallbackPolicyPreviewTierGroupsRequest = z.infer<
  * No `rungSkipReason` beside the array: that field exists to carry `no-group`,
  * which is step 1 routing a FAILED TUPLE, and this surface passes none. A field
  * that is structurally always `null` is one a reader has to disprove.
+ *
+ * Frozen: the `previewTierGroups@1.0` response.
+ */
+export const providersFallbackPolicyPreviewTierGroupsResponseSchemaV10 =
+  lazySchema(() =>
+    z.object({
+      candidates: z.array(tierCandidatePreviewSchemaV10),
+    }),
+  );
+
+/**
+ * The live (1.1) response: the 1.0 response over rows that carry `matches`.
+ *
+ * Still no `rungSkipReason`, although a `blocked` request does route: a tuple
+ * that belongs to no group and has no default group yields an empty list, and
+ * WHICH group a tuple routes to is answered client-side by the pure
+ * {@link routeTierGroupForFailedTuple} over the same draft, so the wire does
+ * not carry a second copy of that verdict.
  */
 export const providersFallbackPolicyPreviewTierGroupsResponseSchema =
   lazySchema(() =>
@@ -730,6 +1145,56 @@ export const providersFallbackPolicyResetV10 = defineRpcContract({
 export const providersFallbackPolicyPreviewTierGroupsV10 = defineRpcContract({
   method: "providers.fallbackPolicy.previewTierGroups",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersFallbackPolicyPreviewTierGroupsRequestSchemaV10,
+  responseSchema: providersFallbackPolicyPreviewTierGroupsResponseSchemaV10,
+});
+
+// 1.1 accepts blank draft rows and a `blocked` tuple, and answers every match
+// per row. A client gates the first two on the negotiated line being >= 1.1: a
+// 1.0 host refuses a blank row (the client's same-major projection fails
+// before sending, as `DOWNGRADE_UNSUPPORTED`) and would silently ignore
+// `blocked`, which the request projection strips.
+export const providersFallbackPolicyPreviewTierGroupsV11 = defineRpcContract({
+  method: "providers.fallbackPolicy.previewTierGroups",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: providersFallbackPolicyPreviewTierGroupsRequestSchema,
   responseSchema: providersFallbackPolicyPreviewTierGroupsResponseSchema,
 });
+
+/**
+ * A 1.0 request is a 1.1 request with no `blocked` tuple, no default tier and
+ * no blank rows. With no `blocked` tuple nothing is routed, so the absent
+ * default changes nothing about the answer.
+ *
+ * A 1.0 response gains `matches` built from the one model 1.0 reports: a
+ * single entry for a row that resolved, carrying the row's own verdict, and
+ * none for a row that did not - whose row-level `skipReason` still says why.
+ * That is exactly what a 1.0 host knows, so a 1.1 client renders one shape on
+ * either host and learns from the negotiated line, not from the response,
+ * that it cannot have more.
+ */
+export const providersFallbackPolicyPreviewTierGroupsUpgradeV10ToV11 =
+  defineUpgradePath<
+    typeof providersFallbackPolicyPreviewTierGroupsV10,
+    typeof providersFallbackPolicyPreviewTierGroupsV11
+  >({
+    from: { major: 1, minor: 0 },
+    to: { major: 1, minor: 1 },
+    upgradeRequest: (request) => ({ groups: request.groups }),
+    upgradeResponse: (response) => ({
+      candidates: response.candidates.map((candidate) => ({
+        ...candidate,
+        matches:
+          candidate.resolvedModel === null
+            ? []
+            : [
+                {
+                  model: candidate.resolvedModel,
+                  profileId: candidate.profileId,
+                  skipReason: candidate.skipReason,
+                  skipLabel: candidate.skipLabel,
+                },
+              ],
+      })),
+    }),
+  });

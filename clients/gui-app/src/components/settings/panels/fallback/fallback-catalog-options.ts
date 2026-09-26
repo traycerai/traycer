@@ -1,14 +1,18 @@
 import { useMemo } from "react";
-import type {
-  TierCandidate,
-  TierGroup,
+import {
+  modelMatchesPattern,
+  type TierCandidate,
+  type TierGroup,
 } from "@traycer/protocol/host/fallback-policy";
 import type {
   AgentReasoningEffortOption,
   GuiAgentModelOption,
   GuiHarnessId,
 } from "@traycer/protocol/host/index";
-import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
+import {
+  guiHarnessIdSchema,
+  type HarnessId,
+} from "@traycer/protocol/host/agent/shared";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useGuiHarnessesQuery } from "@/hooks/harnesses/use-gui-harness-catalog";
@@ -29,13 +33,37 @@ export interface FallbackCatalogOptions {
     harnessId: TierCandidate["harnessId"],
   ) => readonly GuiAgentModelOption[];
   /**
+   * The same catalog, or `null` while it has not answered - the distinction
+   * {@link FallbackCatalogOptions.modelsFor} folds away.
+   *
+   * The pattern cell and the routing hint both need it: "matches 0 models" is
+   * a claim about a catalog that answered, and passing an empty list to the
+   * protocol's router in place of "no catalog" would make every wildcard row
+   * look like it reaches only the failed model.
+   */
+  readonly catalogFor: (
+    harnessId: TierCandidate["harnessId"],
+  ) => readonly GuiAgentModelOption[] | null;
+  /**
+   * Every catalog that has answered, keyed by harness - the shape
+   * `findTierConflicts` takes. A harness missing from it contributes no
+   * conflicts, which is the protocol's own rule for a catalog it cannot see.
+   */
+  readonly catalogsByHarness: ReadonlyMap<
+    HarnessId,
+    readonly GuiAgentModelOption[]
+  >;
+  /**
    * The effort levels to offer beside `modelFamily` on `harnessId`.
    *
-   * A family that IS a catalog slug names one model, so the offer is that
-   * model's own levels. Anything else names a FAMILY, which resolves to
-   * whichever model matches at hop time - so the offer is the union across the
-   * harness's models, since narrowing it to today's match would hide a level
-   * that is valid for the model the row will actually reach.
+   * A value that IS a catalog slug names one model, so the offer is that
+   * model's own levels. Anything else is a PATTERN (or an exact value the
+   * catalog does not list), which the walk applies to every model it matches -
+   * so the offer is the union over those matches, since narrowing it to one of
+   * them would hide a level that is valid for another model the row tries. A
+   * pattern that matches nothing today falls back to the union across the
+   * harness's models, so a row written ahead of a release can still carry an
+   * effort in the provider's vocabulary.
    */
   readonly effortsFor: (
     harnessId: TierCandidate["harnessId"],
@@ -46,6 +74,40 @@ export interface FallbackCatalogOptions {
 const NO_MODELS: readonly GuiAgentModelOption[] = [];
 const NO_EFFORTS: readonly AgentReasoningEffortOption[] = [];
 const NO_HARNESS_IDS: readonly GuiHarnessId[] = [];
+
+/**
+ * The union of `models`' effort levels, deduped by id with first-seen order
+ * kept: the catalog lists the levels in the order the provider advertises
+ * them, which is the order a user has seen everywhere else in the app.
+ */
+function effortUnion(
+  models: readonly GuiAgentModelOption[],
+): readonly AgentReasoningEffortOption[] {
+  const seen = new Map<string, AgentReasoningEffortOption>();
+  for (const model of models) {
+    for (const effort of model.supportedReasoningEfforts) {
+      if (!seen.has(effort.id)) seen.set(effort.id, effort);
+    }
+  }
+  return [...seen.values()];
+}
+
+/**
+ * The effort levels a row offers, given its provider's catalog - the rule
+ * {@link FallbackCatalogOptions.effortsFor} documents, as a pure function so
+ * a test fixture can share it rather than restate it.
+ */
+export function effortsForRowValue(
+  models: readonly GuiAgentModelOption[],
+  modelFamily: string,
+): readonly AgentReasoningEffortOption[] {
+  const picked = catalogModelForFamily(models, modelFamily);
+  if (picked !== null) return picked.supportedReasoningEfforts;
+  const matches = models.filter((model) =>
+    modelMatchesPattern(modelFamily, model),
+  );
+  return effortUnion(matches.length > 0 ? matches : models);
+}
 const NO_REQUESTS: ReadonlyArray<{
   readonly method: "agent.gui.listModels";
   readonly params: {
@@ -189,49 +251,34 @@ export function useFallbackCatalogOptions(
   });
 
   const byHarnessId = useMemo(() => {
-    const map = new Map<
-      GuiHarnessId,
-      {
-        readonly models: readonly GuiAgentModelOption[];
-        /** The union across `models`, built once per catalog rather than per row render. */
-        readonly efforts: readonly AgentReasoningEffortOption[];
-      }
-    >();
+    // Typed on the wire's WIDER harness union, which is the key type
+    // `findTierConflicts` takes - every entry is still a GUI harness.
+    const map = new Map<HarnessId, readonly GuiAgentModelOption[]>();
     harnessIds.forEach((harnessId, index) => {
       // `requests` is memoised straight off `harnessIds`, so the two arrays are
       // the same length in every render this runs in - the entry is missing
       // only in the sense that its query has not answered yet.
       const models = modelQueries[index].data?.models;
       if (models === undefined) return;
-      // Deduped by id, first-seen order kept: the catalog lists the levels in
-      // the order the provider advertises them, which is the order a user has
-      // seen everywhere else in the app.
-      const seen = new Map<string, AgentReasoningEffortOption>();
-      for (const model of models) {
-        for (const effort of model.supportedReasoningEfforts) {
-          if (!seen.has(effort.id)) seen.set(effort.id, effort);
-        }
-      }
-      map.set(harnessId, { models, efforts: [...seen.values()] });
+      map.set(harnessId, models);
     });
     return map;
   }, [harnessIds, modelQueries]);
 
   return useMemo(() => {
-    const entryFor = (harnessId: TierCandidate["harnessId"]) => {
-      const parsed = guiHarnessIdSchema.safeParse(harnessId);
-      if (!parsed.success) return null;
-      return byHarnessId.get(parsed.data) ?? null;
-    };
+    const catalogFor = (
+      harnessId: TierCandidate["harnessId"],
+    ): readonly GuiAgentModelOption[] | null =>
+      byHarnessId.get(harnessId) ?? null;
     return {
-      modelsFor: (harnessId) => entryFor(harnessId)?.models ?? NO_MODELS,
+      modelsFor: (harnessId) => catalogFor(harnessId) ?? NO_MODELS,
+      catalogFor,
+      catalogsByHarness: byHarnessId,
       effortsFor: (harnessId, modelFamily) => {
-        const entry = entryFor(harnessId);
-        if (entry === null) return NO_EFFORTS;
-        const picked = catalogModelForFamily(entry.models, modelFamily);
-        return picked === null
-          ? entry.efforts
-          : picked.supportedReasoningEfforts;
+        const models = catalogFor(harnessId);
+        return models === null
+          ? NO_EFFORTS
+          : effortsForRowValue(models, modelFamily);
       },
     };
   }, [byHarnessId]);

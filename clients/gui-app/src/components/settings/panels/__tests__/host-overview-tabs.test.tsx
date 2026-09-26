@@ -316,14 +316,20 @@ afterEach(() => {
 });
 
 describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
-  it("opens on Status", () => {
+  it("opens on Installation, ahead of Updates, Data and Ports", () => {
     const fixture = buildFixture("host-a");
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    expect(activeTabTestId()).toBe("host-overview-tab-status");
+    expect(activeTabTestId()).toBe("host-overview-tab-installation");
+    expect(HOST_OVERVIEW_TABS).toEqual([
+      "installation",
+      "updates",
+      "data",
+      "ports",
+    ]);
   });
 
   it("a tab named in the open intent opens that tab, and spends the intent", () => {
@@ -334,18 +340,36 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     armSettingsOpenIntent({
       section: "host",
       resetToGeneral: false,
-      tab: "installation",
+      tab: "updates",
       draft: null,
       hostId: null,
     });
     renderPanel();
 
-    expect(activeTabTestId()).toBe("host-overview-tab-installation");
+    expect(activeTabTestId()).toBe("host-overview-tab-updates");
+    expect(useSettingsOpenIntentStore.getState().intent).toBeNull();
+  });
+
+  it("an open intent naming the retired 'status' tab opens Updates instead", () => {
+    const fixture = buildFixture("host-a");
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    armSettingsOpenIntent({
+      section: "host",
+      resetToGeneral: false,
+      tab: "status",
+      draft: null,
+      hostId: null,
+    });
+    renderPanel();
+
+    expect(activeTabTestId()).toBe("host-overview-tab-updates");
     expect(useSettingsOpenIntentStore.getState().intent).toBeNull();
   });
 
   describe("a link into the Overview", () => {
-    it("brings a page open on another tab back to Status", async () => {
+    it("brings a page open on another tab to Updates", async () => {
       const fixture = buildFixture("host-a");
       recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
       hostBindingMock.current = bindingWith(fixture.client);
@@ -355,11 +379,11 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Open host update" }));
 
-      expect(activeTabTestId()).toBe("host-overview-tab-status");
+      expect(activeTabTestId()).toBe("host-overview-tab-updates");
       expect(useSettingsOpenIntentStore.getState().intent).toBeNull();
     });
 
-    it("brings it back to Status when it moves the page to another host", async () => {
+    it("brings it to Updates when it moves the page to another host", async () => {
       const fixtureA = buildFixture("host-a");
       const fixtureB = buildFixture("host-b");
       recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
@@ -378,11 +402,11 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
       fireEvent.click(screen.getByRole("button", { name: "Open host update" }));
 
       expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-b");
-      expect(activeTabTestId()).toBe("host-overview-tab-status");
+      expect(activeTabTestId()).toBe("host-overview-tab-updates");
     });
   });
 
-  it("ignores a tab name the page does not have, and stays on Status", () => {
+  it("ignores a tab name the page does not have, and stays on Installation", () => {
     const fixture = buildFixture("host-a");
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = bindingWith(fixture.client);
@@ -396,7 +420,7 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     });
     renderPanel();
 
-    expect(activeTabTestId()).toBe("host-overview-tab-status");
+    expect(activeTabTestId()).toBe("host-overview-tab-installation");
     expect(useSettingsOpenIntentStore.getState().intent).toBeNull();
   });
 
@@ -436,7 +460,7 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     fireEvent.change(retentionInput, { target: { value: "45" } });
     expect(retentionInput).toHaveProperty("value", "45");
 
-    await selectHostOverviewTab("status");
+    await selectHostOverviewTab("installation");
     await selectHostOverviewTab("data");
 
     expect(screen.getByLabelText("Days")).toHaveProperty("value", "45");
@@ -548,10 +572,11 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     ).toBe(true);
   });
 
-  it("renders all five tab triggers under a connecting host", async () => {
+  it("renders all four tab triggers under a connecting host", async () => {
     scopeOverrides.current = coldConnectingScope();
     renderPanel();
 
+    expect(HOST_OVERVIEW_TABS).toHaveLength(4);
     for (const tab of HOST_OVERVIEW_TABS) {
       expect(
         await screen.findByTestId(`host-overview-tab-${tab}`),
@@ -559,17 +584,19 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     }
   });
 
-  it("shows Status's loading shape under a cold connecting host, not an empty body", async () => {
+  it("shows Installation's loading shape under a cold connecting host, not an empty body", async () => {
     scopeOverrides.current = coldConnectingScope();
     renderPanel();
 
-    const status = await screen.findByTestId("host-overview-status-tab");
+    const installation = await screen.findByTestId(
+      "host-overview-tab-panel-installation",
+    );
     expect(
-      within(status).getByTestId("host-scope-connecting").textContent,
+      within(installation).getByTestId("host-scope-connecting").textContent,
     ).toContain("Connecting to host-a");
   });
 
-  it("keeps retained update progress on Status while the host connects, in place of the loading shape", async () => {
+  it("keeps retained update progress in the notices strip while the host connects, independent of the tab body's own loading shape", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -591,13 +618,20 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     };
     panel.rerender();
 
-    const status = screen.getByTestId("host-overview-status-tab");
+    const notices = screen.getByTestId("host-overview-notices");
     await waitFor(() => {
       expect(
-        within(status).getByTestId("host-overview-operation-phase").textContent,
+        within(notices).getByTestId("host-overview-operation-phase")
+          .textContent,
       ).toContain("Downloading update to v2.1.0");
     });
-    expect(within(status).queryByTestId("host-scope-connecting")).toBeNull();
+    // The strip is not the tab body's own loading shape: Installation (the
+    // default tab) still shows its independent connecting placeholder.
+    expect(
+      within(
+        screen.getByTestId("host-overview-tab-panel-installation"),
+      ).getByTestId("host-scope-connecting"),
+    ).not.toBeNull();
   });
 });
 

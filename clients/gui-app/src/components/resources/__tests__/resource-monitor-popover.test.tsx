@@ -4641,6 +4641,26 @@ describe("ResourceMonitorPopover · host picker", () => {
     ).not.toBeNull();
   });
 
+  it("'Manage hosts…' opens the Overview on Updates, not the retired Status tab", () => {
+    hostScopeMock.scope = watchingSecondHostScope({});
+    hostScopeMock.hasExplicitPick = true;
+    hostScopeMock.streamBinding = fakeScopedStreamBinding();
+    installStubFactory();
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher-manage"));
+
+    expect(systemTabModalMock.openSettings).toHaveBeenCalledWith({
+      section: "host",
+      resetToGeneral: false,
+      tab: "updates",
+      draft: null,
+      hostId: null,
+    });
+  });
+
   it("routes an Other-root kill to the watched host, not the active one", () => {
     hostScopeMock.scope = watchingSecondHostScope({});
     hostScopeMock.hasExplicitPick = true;

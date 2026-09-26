@@ -1,5 +1,6 @@
 /**
- * Docs: see ../SETTINGS.md (Host ▸ Overview ▸ Status).
+ * Docs: see ../SETTINGS.md (Host ▸ Overview ▸ Updates ▸ Version card, and The
+ * notices strip).
  * Update that file whenever this settings surface changes.
  */
 import { describeLastSeenUpdateClause } from "@/components/home/host-update-operation-copy";
@@ -10,17 +11,15 @@ import type {
 } from "@/lib/host/fleet-update/fleet-update-view";
 
 /**
- * The Status tab's decisions that are not about rendering: which tag the
- * version card wears, whether an update is in flight, and what the offline
- * notice says.
+ * The version card's and the notices strip's decisions that are not about
+ * rendering: which tag the version card wears, whether an update is in
+ * flight, and what the offline notice says.
  */
 
 export type HostOverviewVersionTag =
   | "latest"
   | "available"
   | "checking"
-  | "updating"
-  | "waiting-on-work"
   | "restart-to-finish"
   | "needs-cli"
   | "last-reported";
@@ -38,39 +37,33 @@ export const HOST_OVERVIEW_VERSION_TAG: Record<
   latest: { label: "Latest", tone: "success" },
   available: { label: "Update available", tone: "info" },
   checking: { label: "Checking…", tone: "muted" },
-  updating: { label: "Updating…", tone: "info" },
-  "waiting-on-work": { label: "Waiting on work", tone: "warning" },
   "restart-to-finish": { label: "Restart to finish", tone: "warning" },
   "needs-cli": { label: "Needs newer CLI tools", tone: "warning" },
   "last-reported": { label: "Last reported", tone: "muted" },
 };
 
 /**
- * The tag an update in flight puts on the version card, keyed by the view's
- * kind. Non-null is exactly "in flight": running, waiting or restarting. A
- * finished or failed update, and every state that is not an update at all,
- * is `null`, and the card's buttons come back.
+ * Whether each view kind is an update in flight: running, waiting or
+ * restarting. A finished or failed update, and every state that is not an
+ * update at all, is not, and the version card's buttons come back.
  */
-const IN_FLIGHT_TAG: Record<
-  FleetUpdateViewKind,
-  HostOverviewVersionTag | null
-> = {
-  updating: "updating",
-  downloading: "updating",
-  preparing: "updating",
-  applying: "updating",
-  restarting: "updating",
-  reconnecting: "updating",
-  verifying: "updating",
-  "waiting-for-work": "waiting-on-work",
-  "waiting-to-activate": "restart-to-finish",
-  complete: null,
-  failed: null,
-  "finalizing-record": null,
-  "verification-refused": null,
-  unavailable: null,
-  idle: null,
-  unknown: null,
+const IN_FLIGHT: Record<FleetUpdateViewKind, boolean> = {
+  updating: true,
+  downloading: true,
+  preparing: true,
+  applying: true,
+  restarting: true,
+  reconnecting: true,
+  verifying: true,
+  "waiting-for-work": true,
+  "waiting-to-activate": true,
+  complete: false,
+  failed: false,
+  "finalizing-record": false,
+  "verification-refused": false,
+  unavailable: false,
+  idle: false,
+  unknown: false,
 };
 
 /** The tag the update ANSWER puts on the card when nothing is in flight. */
@@ -116,7 +109,7 @@ export function inFlightUpdateKind(
   if (view === null) return null;
   const kind = describedKind(view);
   if (kind === null) return null;
-  return IN_FLIGHT_TAG[kind] === null ? null : kind;
+  return IN_FLIGHT[kind] ? kind : null;
 }
 
 /**
@@ -124,9 +117,11 @@ export function inFlightUpdateKind(
  *
  * In order: an unreachable host's version is only "Last reported"; a host
  * whose updates are not managed here wears no tag, because every tag is a
- * claim about updates; an update in flight says what it is doing, unless the
- * page can no longer vouch for the phase, when it says nothing; otherwise the
- * answer decides.
+ * claim about updates; an update in flight wears none either, because the
+ * update card in the notices strip above the tab bar is on screen for exactly
+ * that span (an in-flight kind is never a quiet view) and already says what
+ * it is doing - "Update installed — restart host to finish" over a "Restart to
+ * finish" tag was the same sentence twice; otherwise the answer decides.
  */
 export function deriveHostOverviewVersionTag(input: {
   /** The host can't be reached, for a reason other than a restart. */
@@ -134,33 +129,12 @@ export function deriveHostOverviewVersionTag(input: {
   /** Updates are not manageable here: the card shows one sentence instead. */
   readonly unmanaged: boolean;
   readonly view: FleetUpdateView | null;
-  readonly cliFloorBlocked: boolean;
   /** The update answer's kind, or `null` when there is no answer to read. */
   readonly answerKind: HostOverviewAnswerKind | null;
 }): HostOverviewVersionTag | null {
   if (input.offline) return "last-reported";
   if (input.unmanaged) return null;
-  const inFlight = inFlightUpdateKind(input.view);
-  if (inFlight !== null) {
-    // The same floor that turns the park's sentence into "Update waits for
-    // Traycer's command-line tools" and the pill into "Update waiting on CLI
-    // tools".
-    if (inFlight === "waiting-for-work" && input.cliFloorBlocked) {
-      return "needs-cli";
-    }
-    // A phase the page can no longer vouch for (retained on an `unknown`
-    // view, or `qualified`) still hides the buttons, but it is not a
-    // present-tense claim: the pill reads "Last seen: …" and the operation
-    // card goes neutral, so the card wears no tag. The floor above stays,
-    // because it is a live fact about the catalog, not about the phase.
-    if (
-      input.view !== null &&
-      (input.view.kind === "unknown" || input.view.qualified)
-    ) {
-      return null;
-    }
-    return IN_FLIGHT_TAG[inFlight];
-  }
+  if (inFlightUpdateKind(input.view) !== null) return null;
   return input.answerKind === null ? null : ANSWER_TAG[input.answerKind];
 }
 

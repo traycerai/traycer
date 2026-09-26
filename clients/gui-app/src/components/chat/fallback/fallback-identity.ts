@@ -740,15 +740,21 @@ export interface FallbackDestinationDescription {
   readonly providerLabel: string;
   /** The profile's label, "Terminal account", or a short id prefix. */
   readonly profileLabel: string;
-  /** The RESOLVED slug when the host resolved one; the family when it did not. */
+  /**
+   * The RESOLVED model's label when the host resolved one; the tier row's
+   * pattern (`modelFamily`, e.g. `*luna*`) when it did not.
+   */
   readonly modelLabel: string;
   /**
-   * Whether {@link modelLabel} is a family rather than a resolved slug.
+   * Whether {@link modelLabel} is a tier row's PATTERN rather than a resolved
+   * model - the destination menu then draws it with the `*` badge
+   * (`FallbackPatternGlyph`) in the pattern's own mono face, the way the tier
+   * editor draws a pattern row, instead of passing it off as a model name.
    *
    * Carried rather than inferred from the string, because the two are
-   * indistinguishable by inspection - `gpt-5`'s family is `gpt-5` - and a
-   * surface that wanted to qualify an unresolved name would have no way to
-   * know it needed to.
+   * indistinguishable by inspection - an exact pick `gpt-5` is a pattern with
+   * no `*` and also a slug - and a surface that wanted to qualify an
+   * unresolved name would have no way to know it needed to.
    */
   readonly modelIsFamily: boolean;
   /** The effort as it was configured, or `null` when the tuple carries none. */
@@ -804,13 +810,18 @@ export function fallbackDestinationOfTuple(
  * catalog - never from the failed tuple, which may not have an equivalent
  * there at all.
  *
- * `modelLabelFor` resolves the CONCRETE model and nothing else. The family arm
- * is deliberately left raw: `modelFamily` is an equivalence-GROUP name the user
- * typed into Settings, not a catalogue slug, and the two are not
+ * `modelLabelFor` resolves the CONCRETE model and nothing else. The pattern arm
+ * is deliberately left raw: `modelFamily` is the tier row's PATTERN as the user
+ * wrote it in Settings, not a catalogue slug, and the two are not
  * interchangeable even when they happen to spell the same string. Passing a
- * family through a slug resolver would relabel `gpt-5` - a family that is also
- * a slug - as that model's catalogue label, and the row would then claim to
- * name a model the host explicitly could not resolve. {@link
+ * pattern through a slug resolver would relabel `gpt-5` - an exact pick that
+ * is also a slug - as that model's catalogue label, and the row would then
+ * claim to name a model the host explicitly could not resolve.
+ *
+ * One `listTargets` row is one destination. A pattern that matches several
+ * models comes back as one row PER match, each with its own resolved `model`,
+ * so the menu draws exactly the rows the host listed; only a row the host
+ * could not resolve at all keeps the pattern. {@link
  * FallbackDestinationDescription.modelIsFamily} keeps its meaning for the same
  * reason: it says which of the two arms produced the label, and the resolver
  * changes neither arm's identity.

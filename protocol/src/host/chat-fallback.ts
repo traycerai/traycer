@@ -658,7 +658,15 @@ export const fallbackProfileTargetSchema = lazySchema(() =>
 );
 export type FallbackProfileTarget = z.infer<typeof fallbackProfileTargetSchema>;
 
-/** An equivalent model on ANOTHER provider - the tier rung. */
+/**
+ * An equivalent model on ANOTHER provider - the tier rung.
+ *
+ * One row per MATCH, not per group row: a row whose pattern matches several
+ * models yields one of these for each, in the provider's catalog order (the
+ * order the walk tries them). The shape is unchanged, so a released client
+ * simply sees more rows; `modelFamily` repeats the row's pattern on each, and
+ * `model` is the match.
+ */
 export const fallbackModelTargetSchema = lazySchema(() =>
   z.object({
     /**

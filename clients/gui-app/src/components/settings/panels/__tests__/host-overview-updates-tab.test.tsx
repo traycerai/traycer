@@ -447,8 +447,9 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
         screen.getByTestId("host-overview-version-install-refused").textContent,
       ).toContain("host-a's CLI can't downgrade to v1.5.0");
     });
-    // … and once under the Status answer, from the SAME failure — Status was
-    // the page's default-open tab, so its content stayed mounted underneath.
+    // … and once under the version card's own answer, from the SAME
+    // failure — the version card leads this same Updates tab, directly
+    // above the list, so its content stays mounted right alongside it.
     expect(
       screen.getByTestId("host-overview-update-attempt-failed").textContent,
     ).toContain("host-a's CLI can't downgrade to v1.5.0");
@@ -468,7 +469,7 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     ).toBe("active");
   });
 
-  it("the no-list state's Check now runs the exact check Status uses, refreshing both surfaces from one request", async () => {
+  it("the no-list state's Check now runs the exact check the version card uses, refreshing both from one request", async () => {
     let checkCalls = 0;
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
@@ -520,15 +521,15 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     await waitFor(() => expect(checkCalls).toBe(2));
 
     // Both surfaces read the SAME answer from that one request: the list now
-    // has a row, and the Status answer (mounted underneath, Status being the
-    // page's default-open tab) names the same version.
+    // has a row, and the version card's own answer sentence — leading this
+    // same Updates tab, not a separate Status tab — names the same version.
     await waitFor(() => {
       const rows = within(screen.getByTestId("host-version-rows"));
       expect(rows.getByText("v1.6.0")).toBeTruthy();
     });
-    expect(
-      screen.getByTestId("host-overview-tab-panel-status").textContent,
-    ).toContain("v1.6.0 is available.");
+    expect(screen.getByTestId("host-overview-updates").textContent).toContain(
+      "v1.6.0 is available.",
+    );
   });
 
   it("a structurally not-manageable host replaces the version list with its reason but keeps the auto-update row", async () => {
@@ -559,20 +560,19 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
 
     await selectHostOverviewTab("updates");
 
-    // Scoped to the Updates pane: the SAME sentence also reads on Status
-    // (`HostOverviewNotice`, mounted underneath since Status is the
-    // page's default-open tab), which is expected and not what this test is
-    // about — Updates getting its own copy of the reason in the list's place
-    // is.
+    // Scoped to the Updates pane, and exactly ONE copy. The version card
+    // leads this tab and states the reason itself (`VersionCardAnswer`'s
+    // degrade note); the version list used to add the same sentence as its
+    // own fallback directly under it, which read as the same notice twice.
     const updatesPane = within(
       screen.getByTestId("host-overview-tab-panel-updates"),
     );
     await waitFor(() => {
       expect(
-        updatesPane.getByText(
+        updatesPane.getAllByText(
           "host-a has no Traycer CLI installed to run this, so it can't be done over the connection.",
         ),
-      ).toBeTruthy();
+      ).toHaveLength(1);
     });
     expect(screen.queryByTestId("host-overview-version-picker")).toBeNull();
     // The reason replaces the LIST; the account-backed auto-update row is

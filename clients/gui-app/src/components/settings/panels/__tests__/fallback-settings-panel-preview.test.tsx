@@ -138,6 +138,8 @@ vi.mock(
       ...actual,
       useFallbackCatalogOptions: () => ({
         modelsFor: () => [],
+        catalogFor: () => null,
+        catalogsByHarness: new Map(),
         effortsFor: () => [],
       }),
     };
@@ -232,6 +234,22 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => ({ data: providersListMocks.data }),
 }));
 
+/**
+ * Pin 10's own line: whether a blank draft row may ride the preview request.
+ * Defaults to the pre-1.1 gate (`false`); the Pin 10 describe block below
+ * flips it to exercise the 1.1 arm.
+ */
+const patternLines = vi.hoisted(
+  (): { patterns: boolean; blankPreviewRows: boolean } => ({
+    patterns: false,
+    blankPreviewRows: false,
+  }),
+);
+
+vi.mock("@/hooks/providers/use-fallback-policy-pattern-lines", () => ({
+  useFallbackPolicyPatternLines: () => patternLines,
+}));
+
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
 import {
   openFallbackTab,
@@ -280,6 +298,7 @@ function previewRow(
     profileId: null,
     skipReason: null,
     skipLabel: null,
+    matches: [],
     warnings: [],
     ...overrides,
   };
@@ -324,6 +343,8 @@ beforeEach(() => {
     { profileId: WORK_PROFILE_ID, label: "Work" },
     { profileId: HOME_PROFILE_ID, label: "Home" },
   ]);
+  patternLines.patterns = false;
+  patternLines.blankPreviewRows = false;
 });
 
 afterEach(() => {
@@ -371,14 +392,21 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
     const lines = previewLines();
     expect(lines).toHaveLength(4);
     // The row's own family ("opus") differs from what it resolved to
-    // ("claude-opus-5"), so the line is the "matches ... today" sentence
-    // (`previewSentence` in `fallback-tier-group-card.tsx`), not the old
-    // permanent "resolves to" line every row used to carry.
-    expect(lines[0].textContent).toContain("matches");
-    expect(lines[0].textContent).toContain("today");
+    // ("claude-opus-5"), so the line is the "Tries ..." walk
+    // (`rowStatusLine`/`RowStatus` in `fallback-model-patterns.ts` /
+    // `fallback-tier-group-card.tsx`), not the old permanent "resolves to"
+    // line every row used to carry.
+    expect(lines[0].textContent).toContain("Tries");
     expect(lines[0].textContent).toContain("claude-opus-5");
-    expect(lines[0].textContent).toContain("on Work");
-    expect(lines[1].textContent).toContain("No model matches this family");
+    expect(lines[0].textContent).toContain("· Work");
+    // `family-unmatched` is the one verdict that is the USER's row to fix, so
+    // the client builds its OWN sentence off the pattern rather than echoing
+    // the host's `skipLabel` verbatim (`RowStatus`'s `unmatched` arm) -
+    // unlike the two rows below, which are exactly this test's point: a
+    // reason this client cannot parse still surfaces the host's own label.
+    expect(lines[1].textContent).toContain("No Claude Code model matches");
+    expect(lines[1].textContent).toContain("ghost");
+    expect(lines[1].textContent).toContain("Traycer will skip this row");
     expect(lines[2].textContent).toContain("Claude is unavailable");
     expect(lines[3].textContent).toContain("Held back by the provider");
   });
@@ -415,7 +443,7 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
       (line) => line.getAttribute("data-unmatched") === "true",
     );
     expect(red).toHaveLength(1);
-    expect(red[0].textContent).toContain("No model matches this family");
+    expect(red[0].textContent).toContain("No Claude Code model matches");
     expect(lines[0].getAttribute("data-unmatched")).toBeNull();
     expect(lines[2].getAttribute("data-unmatched")).toBeNull();
     // The unknown reason is muted too, and deliberately: an unparseable reason
@@ -466,7 +494,7 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
     openFallbackTab("equivalentModels");
 
     const lines = previewLines();
-    expect(lines[0].textContent).toContain("on Work");
+    expect(lines[0].textContent).toContain("· Work");
     // The assertion the finding is actually about: the uuid must not be on
     // screen anywhere in that row.
     expect(lines[0].textContent).not.toContain(WORK_PROFILE_ID);
@@ -477,9 +505,11 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
     expect(lines[1].textContent).toContain(ORPHAN_PROFILE_ID.slice(0, 8));
     expect(lines[1].textContent).not.toContain(ORPHAN_PROFILE_ID);
 
-    // And `null` keeps the clause off rather than naming anything.
+    // And `null` keeps the clause off rather than naming anything - no known
+    // account label leaks into a row with no account to report.
     expect(lines[2].textContent).toContain("claude-haiku-5");
-    expect(lines[2].textContent).not.toContain(" on ");
+    expect(lines[2].textContent).not.toContain("Work");
+    expect(lines[2].textContent).not.toContain("Home");
   });
 
   it("prints the plain label when no other account shares it", () => {
@@ -496,7 +526,7 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
     // "Work" and "Home" are distinct here, so the plain label is what shows.
     // The shared-label branch, which appends a bracketed prefix, is the
     // separate cell below.
-    expect(previewLines()[0].textContent).toContain("on Work");
+    expect(previewLines()[0].textContent).toContain("· Work");
     expect(previewLines()[0].textContent).not.toContain("[");
   });
 
@@ -522,7 +552,7 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
     // label, whatever the roster looks like) passes every OTHER cell in this
     // file unchanged and reddens only here.
     expect(previewLines()[0].textContent).toContain(
-      `on Work [${WORK_PROFILE_ID.slice(0, 8)}]`,
+      `· Work [${WORK_PROFILE_ID.slice(0, 8)}]`,
     );
   });
 
@@ -544,9 +574,122 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
     // free text, and it moves the exact same `keyedTierGroups` the panel's
     // gate (`keyedGroupsMatch`) reads.
     openFallbackTab("equivalentModels");
-    fireEvent.change(screen.getByLabelText("Group name"), {
+    fireEvent.change(screen.getByLabelText("Tier name"), {
       target: { value: "frontie" },
     });
     expect(previewMocks.previewSpy).toHaveBeenLastCalledWith(null);
+  });
+});
+
+describe("FallbackSettingsPanel - Pin 10: the preview gate on a blank-row-capable (1.1) host", () => {
+  beforeEach(() => {
+    patternLines.patterns = true;
+    patternLines.blankPreviewRows = true;
+  });
+
+  it("sends the draft WITH its blank row once one is added, and keeps every other row's line untouched", () => {
+    renderPanel();
+    openFallbackTab("equivalentModels");
+    previewMocks.previewSpy.mockClear();
+
+    // "Add model or pattern" is the 1.1 wording (`patternsSupported` true),
+    // confirming this really is the blank-row-capable arm and not a stale
+    // gate reading `blankPreviewRows` off the wrong line.
+    const addButtons = screen.getAllByRole("button", {
+      name: "Add model or pattern",
+    });
+    fireEvent.click(addButtons[0]);
+
+    // Falsification: revert `previewableTierGroups`'s `blankRowsTravel` arm
+    // to the old `keyedGroupsMatch(keyed, persisted) ? draft : null` gate
+    // (fallback-settings-panel.tsx) - adding a row then makes `keyed` differ
+    // from `persisted` even after setting blank rows aside, since the gate
+    // would compare the FULL keyed list (blank row included) against the
+    // persisted one instead of filtering it out first, and this assertion
+    // would see `null` instead of the five-candidate draft.
+    const lastCall: readonly TierGroup[] | null =
+      previewMocks.previewSpy.mock.calls.at(-1)?.[0] ?? null;
+    expect(lastCall).not.toBeNull();
+    const sentGroup = lastCall?.find((group) => group.id === GROUP_ID);
+    expect(sentGroup).toBeDefined();
+    const sentFamilies = (sentGroup?.candidates ?? []).map(
+      (candidate) => candidate.modelFamily,
+    );
+    expect(sentFamilies).toEqual(["opus", "ghost", "sonnet", "nova", ""]);
+  });
+
+  it("CONTROL: on a 1.0 host (`blankPreviewRows` false), the same blank row sends NO preview request at all", () => {
+    patternLines.patterns = false;
+    patternLines.blankPreviewRows = false;
+    renderPanel();
+    openFallbackTab("equivalentModels");
+    previewMocks.previewSpy.mockClear();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Add model" })[0]);
+
+    expect(previewMocks.previewSpy).toHaveBeenLastCalledWith(null);
+  });
+
+  it("R8: a blank row moved ABOVE a filled row is still sent in place, and the filled row below still renders its OWN preview line", () => {
+    // The blank row (post-move, candidateIndex 3) is skipped, the way a real
+    // host skips a blank row's slot rather than reporting on it - only nova's
+    // own post-move candidateIndex (4) carries matches.
+    previewMocks.previewData = {
+      candidates: [
+        previewRow(4, {
+          modelFamily: "nova",
+          matches: [
+            {
+              model: "nova",
+              profileId: null,
+              skipReason: null,
+              skipLabel: null,
+            },
+            {
+              model: "nova-backup",
+              profileId: null,
+              skipReason: null,
+              skipLabel: null,
+            },
+          ],
+        }),
+      ],
+    };
+    renderPanel();
+    openFallbackTab("equivalentModels");
+    previewMocks.previewSpy.mockClear();
+
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Add model or pattern" })[0],
+    );
+    // The new blank row lands last (index 4, after opus/ghost/sonnet/nova).
+    // One "Move up" swaps it with nova, so the draft becomes
+    // opus, ghost, sonnet, BLANK, nova - the blank now sits ABOVE a filled
+    // row, the one position the original Pin 10 (blank added and left last)
+    // could not distinguish from a stripped-blanks request.
+    fireEvent.click(screen.getAllByRole("button", { name: "Move up" })[4]);
+
+    // Falsification: `previewableTierGroups` (fallback-settings-panel.tsx)
+    // returning the non-blank `withoutBlankRows`-projected groups instead of
+    // `draft` - the sent payload would then drop the blank row entirely,
+    // shifting nova back to position 3 there instead of 4.
+    const lastCall: readonly TierGroup[] | null =
+      previewMocks.previewSpy.mock.calls.at(-1)?.[0] ?? null;
+    expect(lastCall).not.toBeNull();
+    const sentGroup = lastCall?.find((group) => group.id === GROUP_ID);
+    const sentFamilies = (sentGroup?.candidates ?? []).map(
+      (candidate) => candidate.modelFamily,
+    );
+    expect(sentFamilies).toEqual(["opus", "ghost", "sonnet", "", "nova"]);
+
+    // The filled row, now rendered below the blank one, still shows its own
+    // "Tries …" line, paired by ITS post-move position (4) - the blank row
+    // above it (position 3) renders no line at all, since `rowStatusLine`
+    // returns `null` for a blank `modelFamily` before any preview is even
+    // consulted.
+    const lines = previewLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0].textContent).toContain("Tries");
+    expect(lines[0].textContent).toContain("nova-backup");
   });
 });
