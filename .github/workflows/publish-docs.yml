@@ -2,7 +2,8 @@ name: Publish Docs
 
 # Publishes the public docs site (mintlify/, served at docs.traycer.ai).
 # Mintlify deploys the `mintlify` branch, reading docs.json from mintlify/.
-# This workflow checks links, then force-pushes the dispatched ref there.
+# This workflow checks links, then publishes the dispatched ref's mintlify/
+# tree there as a docs-only commit.
 
 on:
   workflow_dispatch:
@@ -59,8 +60,17 @@ jobs:
             echo "stale=true" >> "${GITHUB_OUTPUT}"
           fi
 
+      # The branch holds only mintlify/, never the rest of the repo. GITHUB_TOKEN
+      # cannot push commits that change .github/workflows/, and a docs-only tree
+      # never does. Each publish is a new commit on top of the current tip, so
+      # the push is a fast-forward and fails if another run published first.
       - name: Publish Docs
         if: steps.freshness.outputs.stale != 'true'
         run: |
-          git checkout -B mintlify
-          git push -f origin mintlify
+          tree="$(printf '040000 tree %s\tmintlify\n' "$(git rev-parse HEAD:mintlify)" | git mktree)"
+          parent=()
+          if git fetch --quiet origin mintlify; then
+            parent=(-p FETCH_HEAD)
+          fi
+          commit="$(git commit-tree "${tree}" "${parent[@]}" -m "Publish docs from ${GITHUB_SHA}")"
+          git push origin "${commit}:refs/heads/mintlify"

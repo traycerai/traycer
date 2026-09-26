@@ -26,8 +26,8 @@ published.
 Mintlify deploys the `mintlify` branch, reading `docs.json` from this
 directory. The Publish Docs workflow
 (`.github/workflows/publish-docs.yml`) runs `mint broken-links` here, then
-force-pushes the triggering ref to that branch. Nothing is live until that
-workflow runs.
+commits this directory, and nothing else from the repo, to that branch.
+Nothing is live until that workflow runs.
 
 Feature videos are hosted at `https://assets.traycer.ai/docs/videos/`, not
 committed here.
