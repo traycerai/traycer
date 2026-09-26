@@ -299,7 +299,14 @@ export class BrowserViewEntryFactory {
     entry.currentTitle = entry.webContents.getTitle();
     this.observePrimaryProfileOrigin(url, entry.webContents, entry.profile);
     entry.certificateError = null;
-    this.setStatus(entry, "ready", null);
+    // Agent/CDP navigation does not pass through navigate(), so the entry may
+    // already be ready. Publish the committed URL even without a later title
+    // event (an untitled page may never emit one).
+    if (entry.status === "ready" && entry.statusReason === null) {
+      this.emitStatus(entry);
+    } else {
+      this.setStatus(entry, "ready", null);
+    }
     this.refreshViewport(entry);
     // Recovery for a tab something is driving - never an attach of its own.
     void entry.debugSession?.enableWhileLeased().catch(() => undefined);

@@ -63,6 +63,8 @@ type PassedThroughClientFrameKind = Exclude<
   | "attachTab"
   | "moveTab"
   | "electronTabLifecycleReady"
+  | "electronTabLifecycleReadyOnDemand"
+  | "requestSnapshot"
   | "setViewport"
   | "reportViewport"
   | "electronViewportResult"
@@ -256,6 +258,8 @@ export function projectBrowserSessionsClientFrameToV10(
   switch (frame.kind) {
     case "reportViewport":
     case "electronViewportResult":
+    case "electronTabLifecycleReadyOnDemand":
+    case "requestSnapshot":
       return { kind: "ignored" };
     case "setViewport":
     case "attachTab":

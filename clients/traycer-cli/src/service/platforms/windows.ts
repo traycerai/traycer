@@ -57,6 +57,7 @@ import type {
   ServiceStatus,
   UninstallServiceOptions,
 } from "../index";
+import { requestCooperativeShutdownReporting } from "./desktop-agent-shutdown";
 
 // Windows service controller - per-user Scheduled Task. Per the Tech
 // Plan we never elevate; if a future change ever needed admin we'd
@@ -109,17 +110,24 @@ export function createWindowsController(
     uninstall: (options) => uninstallService(options, run, deps),
     status: (label) => statusService(label),
     stop: (label, options) =>
-      stopService(label, run, deps, options.onHostAddressed ?? null),
+      stopService(
+        label,
+        run,
+        deps,
+        options.force,
+        "stop",
+        options.onHostAddressed ?? null,
+      ),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run, deps),
     hostStartAdoptionLabel: (label) => Promise.resolve(label.id),
     // No Desktop/SMAppService split on Windows, so the restart halves are the
     // stop and start `host restart` already performed - the named seam exists
     // so the command has one shape on every platform. `forcedRecycle` is
-    // never set: `stopService` kills the tree and waits, so nothing survives
+    // never set: `stopService` verifies the slot is empty, so nothing survives
     // to need a recycle.
-    stopForRestart: async (label) => {
-      await stopService(label, run, deps, null);
+    stopForRestart: async (label, options) => {
+      await stopService(label, run, deps, options.force, "restart", null);
       return { forcedRecycle: false };
     },
     relaunchAfterRestart: (label) =>
@@ -523,13 +531,43 @@ async function stopService(
   label: ServiceLabel,
   run: ProcessRunner,
   deps: WindowsControllerDeps,
+  force: boolean,
+  operation: "stop" | "restart",
   // See `StopServiceOptions.onHostAddressed`: reported from this route's own
   // read of the record, immediately before the task is ended.
   onHostAddressed: (() => void) | null,
 ): Promise<void> {
+  let reportRemaining = onHostAddressed;
+  if (!force) {
+    // Windows signals terminate the process without running its shutdown
+    // handler. Reuse the host's cooperative RPC before ending the task, so
+    // browser realms and port forwards get the same cleanup as on POSIX.
+    const outcome = await requestCooperativeShutdownReporting(
+      label.environment,
+      operation,
+      operation === "restart" ? "restart" : "shutdown",
+      () => {
+        reportRemaining?.();
+        reportRemaining = null;
+      },
+    );
+    if (outcome.kind === "busy") {
+      throw cliError({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message:
+          "The host has work in progress. Retry once it finishes, or use --force to stop it anyway.",
+        details: { label: label.id },
+        exitCode: 1,
+      });
+    }
+    // If the endpoint is missing, unreachable or hung, retain the existing
+    // verified stop fallback. This also keeps stopping an absent host
+    // idempotent. A positive busy refusal above never reaches the fallback.
+    // After a clean exit, the scan only reaps leftover slot processes.
+  }
   const before = await readHostPidMetadataEvidence(label.environment);
   if (before.kind === "read" && !publishedHostProcessGone(before.metadata)) {
-    onHostAddressed?.();
+    reportRemaining?.();
   }
   await run("schtasks", ["/End", "/TN", windowsTaskName(label)], {
     env: undefined,
@@ -1335,16 +1373,7 @@ async function restartService(
   run: ProcessRunner,
   deps: WindowsControllerDeps,
 ): Promise<void> {
-  const taskName = windowsTaskName(label);
-  await run("schtasks", ["/End", "/TN", taskName], {
-    env: undefined,
-    cwd: undefined,
-    timeoutMs: WINDOWS_SCHTASKS_END_TIMEOUT_MS,
-    tolerateNonZeroExit: true,
-  });
-  // Reap the orphaned host tree before re-running, otherwise the old node keeps
-  // its port + install dir and the fresh task races a stale host.
-  await killHostProcessTree(label, run, deps);
+  await stopService(label, run, deps, false, "restart", null);
   // Restart reuses the verified start path (baseline + post-/Run evidence)
   // so a stop-then-start that the scheduler accepts but never spawns fails
   // with Last Run Result instead of a silent no-op.
