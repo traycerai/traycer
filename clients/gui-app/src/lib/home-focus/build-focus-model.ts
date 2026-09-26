@@ -14,6 +14,8 @@ import {
 import type {
   FocusBackgroundRow,
   FocusBrowserRow,
+  FocusDegradedHost,
+  FocusDegradedReason,
   FocusModel,
   FocusPromptRow,
   FocusTaskRow,
@@ -79,7 +81,7 @@ export const EMPTY_FOCUS_MODEL: FocusModel = Object.freeze({
   browsers: Object.freeze<FocusBrowserRow[]>([]),
   coverage: Object.freeze({
     activity: "unknown",
-    degradedHostIds: Object.freeze<string[]>([]),
+    degradedHosts: Object.freeze<FocusDegradedHost[]>([]),
     notifications: "local",
     backgroundIsMountedOnly: true,
     browsersAreMountedOnly: true,
@@ -109,12 +111,12 @@ export interface BuildFocusModelInput {
   readonly browsers: FocusBrowsersInput;
   readonly activity: FocusActivityHealth;
   /**
-   * The hosts whose OWN slice is degraded, sorted, from the fold that compared
-   * them. A separate input from `activity` rather than a field on it:
-   * `FocusActivityHealth` is the set of inputs the coverage VERDICT is computed
-   * from, and this is an attribution the verdict throws away.
+   * The hosts whose OWN slice is degraded, sorted by host id, from the fold
+   * that compared them. A separate input from `activity` rather than a field
+   * on it: `FocusActivityHealth` is the set of inputs the coverage VERDICT is
+   * computed from, and this is an attribution the verdict throws away.
    */
-  readonly degradedHostIds: ReadonlyArray<string>;
+  readonly degradedHosts: ReadonlyArray<FocusDegradedHost>;
   readonly feedMode: NotificationFeedMode;
 }
 
@@ -156,12 +158,12 @@ export function buildFocusModel(
     // Reused by identity when the set is unchanged, so a page whose hosts are
     // all healthy frame after frame does not mint a new coverage object (and
     // therefore a new model) on every activity frame.
-    degradedHostIds: sameIds(
-      input.degradedHostIds,
-      previous.coverage.degradedHostIds,
+    degradedHosts: sameDegradedHosts(
+      input.degradedHosts,
+      previous.coverage.degradedHosts,
     )
-      ? previous.coverage.degradedHostIds
-      : input.degradedHostIds,
+      ? previous.coverage.degradedHosts
+      : input.degradedHosts,
     notifications: focusNotificationCoverage(input.feedMode),
     backgroundIsMountedOnly: true,
     browsersAreMountedOnly: true,
@@ -178,8 +180,17 @@ export function buildFocusModel(
   return shallowEqualRow(next, previous) ? previous : next;
 }
 
-function sameIds(a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean {
-  return a.length === b.length && a.every((id, index) => id === b[index]);
+function sameDegradedHosts(
+  a: ReadonlyArray<FocusDegradedHost>,
+  b: ReadonlyArray<FocusDegradedHost>,
+): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (host, index) =>
+        host.hostId === b[index].hostId && host.reason === b[index].reason,
+    )
+  );
 }
 
 /**
@@ -219,11 +230,11 @@ function sameIds(a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean {
 export function focusActivityCoverage(
   health: FocusActivityHealth,
 ): FocusModel["coverage"]["activity"] {
-  if (health.connectionStatus === "closed") return "disconnected";
-  if (health.connectionStatus !== "open") return "reconnecting";
+  const reason = focusActivityDegradedReason(health);
+  if (reason === "host-lost" || reason === "cloud-disconnected")
+    return "disconnected";
+  if (reason !== null) return "reconnecting";
   if (!health.stateFrameSeenThisEpoch) return "unknown";
-  if (health.cloudSyncStatus === "reconnecting") return "reconnecting";
-  if (health.cloudSyncStatus === "disconnected") return "disconnected";
   if (
     health.cloudSyncStatus !== "connected" &&
     (!health.connectableHostsResolved || health.connectableHostCount > 1)
@@ -231,6 +242,27 @@ export function focusActivityCoverage(
     return "unknown";
   }
   return "live";
+}
+
+/**
+ * Which link a slice is missing, or `null` when it is not degraded. The
+ * coverage verdict above is derived from this, so the reason a notice names is
+ * always the one that raised it. A socket that is open but has not yet had
+ * this epoch's `state` frame is not degraded - that is `unknown` - so the
+ * cloud stamp is only read once the frame has arrived.
+ */
+export function focusActivityDegradedReason(
+  health: Pick<
+    FocusActivityHealth,
+    "connectionStatus" | "cloudSyncStatus" | "stateFrameSeenThisEpoch"
+  >,
+): FocusDegradedReason | null {
+  if (health.connectionStatus === "closed") return "host-lost";
+  if (health.connectionStatus !== "open") return "host-reconnecting";
+  if (!health.stateFrameSeenThisEpoch) return null;
+  if (health.cloudSyncStatus === "reconnecting") return "cloud-reconnecting";
+  if (health.cloudSyncStatus === "disconnected") return "cloud-disconnected";
+  return null;
 }
 
 /**
