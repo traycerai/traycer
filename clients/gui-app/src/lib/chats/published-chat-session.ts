@@ -258,6 +258,8 @@ export function publishedChatSessionState(
     // showed a reconnecting spinner over a complete transcript would be
     // promising something that is never going to arrive.
     connectionStatus: "closed",
+    // Closed by construction rather than put to sleep: nothing can wake it.
+    asleep: false,
     fatalClose: null,
     // The whole point - the transcript is here, so the surface renders it
     // rather than a loading gate.
@@ -420,6 +422,7 @@ export function publishedChatSessionState(
     // perfectly well go on reading.
     refreshMissingWorktreePaths: () => undefined,
     retry: () => undefined,
+    sleep: () => undefined,
     retryFromUser: () => undefined,
     wake: () => undefined,
     // A published copy is complete: every ordinal is hydrated by construction,

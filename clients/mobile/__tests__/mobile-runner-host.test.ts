@@ -2267,4 +2267,66 @@ describe("MobileRunnerHost", () => {
       });
     });
   });
+
+  describe("onSystemSuspended", () => {
+    let state: DocumentVisibilityState = "visible";
+
+    beforeEach(() => {
+      state = "visible";
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => state,
+      });
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(document, "visibilityState");
+    });
+
+    it("iOS: fires once per pause, paired with the resume that closes it", () => {
+      const host = runner(null);
+      const events: string[] = [];
+      const suspended = host.onSystemSuspended(() => events.push("suspend"));
+      const resumed = host.onSystemResumed(() => events.push("resume"));
+
+      fireAppPause();
+      // Level-triggered: a duplicate pause is not a second episode.
+      fireAppPause();
+      fireAppResume();
+      fireAppPause();
+
+      expect(events).toEqual(["suspend", "resume", "suspend"]);
+      suspended.dispose();
+      resumed.dispose();
+    });
+
+    it("stops delivering after dispose", () => {
+      const host = runner(null);
+      const events: string[] = [];
+      const suspended = host.onSystemSuspended(() => events.push("suspend"));
+      suspended.dispose();
+
+      fireAppPause();
+
+      expect(events).toEqual([]);
+    });
+
+    it("dev browser (DOM pair): a hidden edge fires, a boot that STARTS hidden does not", () => {
+      capacitorEventMocks.platform = "web";
+      state = "hidden";
+      const host = runner(null);
+      const events: string[] = [];
+      const suspended = host.onSystemSuspended(() => events.push("suspend"));
+
+      expect(events).toEqual([]);
+
+      state = "visible";
+      document.dispatchEvent(new Event("visibilitychange"));
+      state = "hidden";
+      document.dispatchEvent(new Event("visibilitychange"));
+
+      expect(events).toEqual(["suspend"]);
+      suspended.dispose();
+    });
+  });
 });

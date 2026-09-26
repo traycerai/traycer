@@ -351,6 +351,30 @@ export class TerminalSessionRegistry {
   }
 
   /**
+   * Dispose every lingering plain terminal - lease-free and not a running
+   * terminal-agent - now instead of when its linger window elapses. Returns
+   * how many went.
+   *
+   * The app-suspend release: the linger window is a clock, and a suspended
+   * runtime's clocks do not run. Nothing is lost - the PTY runs host-side and
+   * a reattach replays scrollback. Leased terminals stay (a tile holds them),
+   * and so do lease-free terminal-agents, which this plane keeps warm for as
+   * long as the agent works.
+   */
+  disposeLingeringPlainTerminals(): number {
+    let disposed = 0;
+    this.sessions.transact(() => {
+      for (const entry of this.sessions.entries()) {
+        if (entry.demand > 0) continue;
+        if (shouldKeepLeaseFree(entry.session.handle)) continue;
+        this.sessions.discard(entry.key, "idle-expired");
+        disposed += 1;
+      }
+    });
+    return disposed;
+  }
+
+  /**
    * Drops a lease-free entry whose session became unreattachable (exited, or
    * a plain terminal whose stream closed for good). Leased entries are left
    * alone: the mounted tile observes the same status and owns the response

@@ -365,6 +365,41 @@ function retryDeferredEpicParksOnce(): void {
 }
 
 /**
+ * Park every open epic that is not in a front pane NOW, instead of when its
+ * hidden window elapses. Returns how many were parked.
+ *
+ * The app-suspend release. The window is measured on a clock, and once the OS
+ * suspends the runtime that clock stops: a backgrounded phone never reaches
+ * the end of a five-minute window, so every hidden epic it held stayed
+ * resident for the whole background - which is what the OS weighs when it
+ * picks a process to kill.
+ *
+ * Only the WINDOW is skipped. Eligibility is still `attemptPark`'s, so an epic
+ * with unsynced edits, an agent working, or a draft the release would unmount
+ * is refused exactly as it is when the window elapses, and waits on the same
+ * eligibility watch to be parked once that settles.
+ *
+ * "In a front pane" deliberately ignores the document gate
+ * {@link isEpicVisibleAnywhere} applies. The caller runs as the app is sent to
+ * the background, when the document is hidden and that gate would claim no
+ * epic is on screen; the epic the user was looking at stays live so coming
+ * back to it is instant, and its own window still arms from the hidden edge.
+ */
+export function parkUnwatchedEpicsNow(): number {
+  let parked = 0;
+  for (const [epicId, entry] of Array.from(entries)) {
+    if (entry.parked) continue;
+    if (isEpicSurfaceVisible(epicId) || isEpicVisibleInAnotherWindow(epicId)) {
+      continue;
+    }
+    cancelParkWindow(entry);
+    attemptPark(epicId, entry);
+    if (isEpicParked(epicId)) parked += 1;
+  }
+  return parked;
+}
+
+/**
  * A provider found a live session under a parked epic and could not release
  * it, so the epic is not parked after all.
  *

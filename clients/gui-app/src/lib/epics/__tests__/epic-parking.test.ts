@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __resetEpicParkingForTests,
   isEpicParked,
+  parkUnwatchedEpicsNow,
 } from "@/lib/epics/epic-parking";
 import { __syncEpicParkingOpenTabsForTests } from "@/lib/epics/epic-parking-open-tabs";
 import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
@@ -4767,6 +4768,100 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
       expect(isEpicParked(EPIC)).toBe(true);
       expect(epicHandle.disposed).toBe(true);
       expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+});
+
+// ── App suspend: park now, skip the window ───────────────────────────────────
+//
+// A suspended runtime's clock stops, so the window never elapses while a phone
+// is in the background. `parkUnwatchedEpicsNow` is the suspend edge's release:
+// it skips the window and nothing else.
+
+describe("epic-parking - parkUnwatchedEpicsNow (app suspend)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __setAgentActivityPlaneAnsweringForTests();
+  });
+
+  afterEach(() => {
+    __resetEpicParkingForTests();
+    __getOpenEpicRegistryForTests().disposeAll();
+    resetAgentActivity();
+    resetCanvasStore();
+    vi.useRealTimers();
+    setDocumentVisibilityState("visible");
+  });
+
+  it("parks a hidden tab at once and keeps the epic in the front pane live", () => {
+    const HIDDEN = "epic-suspend-hidden";
+    const FRONT = "epic-suspend-front";
+    const hidden = buildParkableEpicHandle(HIDDEN, false);
+    const front = buildParkableEpicHandle(FRONT, false);
+    __getOpenEpicRegistryForTests().acquireMounted(HIDDEN, () => hidden.handle);
+    __getOpenEpicRegistryForTests().acquireMounted(FRONT, () => front.handle);
+    openEpicTab("tab-suspend-hidden", HIDDEN);
+    openEpicTab("tab-suspend-front", FRONT);
+    try {
+      setEpicSurfaceVisibility(HIDDEN, "view-suspend-hidden", false);
+      setEpicSurfaceVisibility(FRONT, "view-suspend-front", true);
+      // The app going to the background hides the document before (or as)
+      // the suspend edge lands; the front pane must still count as on screen.
+      setDocumentVisibilityState("hidden");
+
+      expect(parkUnwatchedEpicsNow()).toBe(1);
+
+      expect(isEpicParked(HIDDEN)).toBe(true);
+      expect(hidden.disposed).toBe(true);
+      expect(isEpicParked(FRONT)).toBe(false);
+      expect(front.disposed).toBe(false);
+    } finally {
+      closeEpicTab("tab-suspend-hidden");
+      closeEpicTab("tab-suspend-front");
+    }
+  });
+
+  it("refuses a hidden tab with unsynced edits, and parks it once they settle", () => {
+    const EPIC = "epic-suspend-dirty";
+    const TAB = "tab-suspend-dirty";
+    const dirty = buildParkableEpicHandle(EPIC, true);
+    __getOpenEpicRegistryForTests().acquireMounted(EPIC, () => dirty.handle);
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-suspend-dirty", false);
+
+      expect(parkUnwatchedEpicsNow()).toBe(0);
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(dirty.disposed).toBe(false);
+
+      // No timer: the refusal waits on the registry's own eligibility edge.
+      dirty.handle.store.setState({
+        ...dirty.handle.store.getState(),
+        isDirty: false,
+      });
+
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(dirty.disposed).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  it("refuses a hidden tab whose agent is working", () => {
+    const EPIC = "epic-suspend-busy";
+    const TAB = "tab-suspend-busy";
+    const busy = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(EPIC, () => busy.handle);
+    markAgentWorking(EPIC, "agent-1");
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-suspend-busy", false);
+
+      expect(parkUnwatchedEpicsNow()).toBe(0);
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(busy.disposed).toBe(false);
     } finally {
       closeEpicTab(TAB);
     }

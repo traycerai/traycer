@@ -1117,6 +1117,16 @@ export class DesktopRunnerHost implements IRunnerHost {
     };
   }
 
+  onSystemSuspended(handler: () => void): Disposable {
+    // A hidden or minimised desktop window keeps running and keeps its own
+    // timers, so there is no suspension edge to report. No-op subscription
+    // per the IRunnerHost contract.
+    void handler;
+    return {
+      dispose: () => undefined,
+    };
+  }
+
   onNetworkPathChanged(handler: () => void): Disposable {
     // Desktop has no native reachability edge to bridge; its consumers cover
     // the equivalent transitions with `window 'online'` and the OS-wake

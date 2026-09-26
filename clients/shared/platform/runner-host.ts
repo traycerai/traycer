@@ -521,6 +521,22 @@ export interface IRunnerHost {
   onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable;
 
   /**
+   * Subscribes to the app being sent to the background: the edge that opens
+   * the episode {@link onSystemResumed} closes.
+   *
+   * Only a shell whose runtime the OS SUSPENDS in the background raises it.
+   * Mobile fires it on the same evidence source its resume uses (iOS `pause`,
+   * Android `appStateChange(false)`, DOM `hidden` in the dev browser), once
+   * per episode. What makes the edge worth a signal of its own is what comes
+   * after it: timers stop, so work scheduled for "a few minutes after the app
+   * is hidden" never runs, and whatever the renderer still holds is what the
+   * OS weighs when it picks a process to kill. Desktop and web install a
+   * no-op whose handler never fires: a hidden desktop window keeps running
+   * and keeps its own timers.
+   */
+  onSystemSuspended(handler: () => void): Disposable;
+
+  /**
    * Subscribes to network-path changes the shell can observe natively:
    * connectivity coming back, or the interface type changing under live
    * connectivity (Wi-Fi -> cellular). Both are moments an existing socket is
