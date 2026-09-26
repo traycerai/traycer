@@ -10,10 +10,12 @@ import {
   type PermissionMode,
 } from "@/components/home/data/landing-options";
 import {
-  autoJudgeMetaLine,
+  autoJudgeRowFace,
   autoModeMidTurnLock,
   type AutoJudgeBilling,
+  type AutoJudgeRowFace,
 } from "@/lib/auto-mode/auto-judge-billing";
+import { AutoJudgeLine } from "@/components/home/pickers/auto-judge-line";
 import {
   Drawer,
   DrawerContent,
@@ -134,12 +136,12 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
                   // through the same helpers: this sheet reads the desktop
                   // picker's registries rather than restating them, so the copy
                   // and the gating stay in one place.
-                  metaLine={
+                  judgeFace={
                     isSupported &&
                     !lockedMidTurn &&
                     option.id === "auto" &&
                     props.judgeBilling !== null
-                      ? autoJudgeMetaLine(props.judgeBilling)
+                      ? autoJudgeRowFace(props.judgeBilling)
                       : null
                   }
                   notice={
@@ -205,8 +207,8 @@ interface OptionRowProps {
   readonly icon: ReactNode;
   readonly label: string;
   readonly description: string;
-  /** The `auto` row's billing disclosure; `null` on every other row. */
-  readonly metaLine: string | null;
+  /** The `auto` row's judge and billing disclosure; `null` on every other row. */
+  readonly judgeFace: AutoJudgeRowFace | null;
   /** The `auto` row's mid-turn notice; `null` on every other row. */
   readonly notice: string | null;
   readonly selected: boolean;
@@ -237,13 +239,11 @@ function OptionRow(props: OptionRowProps) {
         <span className="text-ui-xs text-muted-foreground">
           {props.description}
         </span>
-        {props.metaLine !== null ? (
-          <span
-            data-testid="composer-options-permission-meta"
-            className="text-ui-xs text-muted-foreground"
-          >
-            {props.metaLine}
-          </span>
+        {props.judgeFace !== null ? (
+          <AutoJudgeLine
+            face={props.judgeFace}
+            testId="composer-options-permission-meta"
+          />
         ) : null}
         {props.notice !== null ? (
           <span
