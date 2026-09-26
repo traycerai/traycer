@@ -34,6 +34,7 @@ describe("approvalCardText", () => {
     expect(approvalCardText("bash", "git status", "   ", null)).toEqual({
       inputSummary: "git status",
       headline: null,
+      inputDetail: null,
     });
   });
 
@@ -41,6 +42,7 @@ describe("approvalCardText", () => {
     expect(approvalCardText("bash", "git status", " bash ", null)).toEqual({
       inputSummary: "git status",
       headline: null,
+      inputDetail: null,
     });
   });
 
@@ -48,6 +50,7 @@ describe("approvalCardText", () => {
     expect(approvalCardText("bash", null, "Run  a\nthing", null)).toEqual({
       inputSummary: null,
       headline: "Run  a\nthing",
+      inputDetail: null,
     });
   });
 
@@ -56,6 +59,7 @@ describe("approvalCardText", () => {
       {
         inputSummary: "echo hi",
         headline: null,
+        inputDetail: null,
       },
     );
   });
@@ -68,7 +72,11 @@ describe("approvalCardText", () => {
         "echo a &&\n  echo b",
         null,
       ),
-    ).toEqual({ inputSummary: "echo a && echo b", headline: null });
+    ).toEqual({
+      inputSummary: "echo a && echo b",
+      headline: null,
+      inputDetail: null,
+    });
   });
 
   it("shows a long command once, in full, when the summary is its truncation", () => {
@@ -84,6 +92,7 @@ describe("approvalCardText", () => {
     ).toEqual({
       inputSummary: null,
       headline: LONG_COMMAND,
+      inputDetail: null,
     });
   });
 
@@ -93,6 +102,7 @@ describe("approvalCardText", () => {
     ).toEqual({
       inputSummary: "something else…",
       headline: "git status",
+      inputDetail: null,
     });
   });
 
@@ -100,6 +110,7 @@ describe("approvalCardText", () => {
     expect(approvalCardText("bash", "…", "git status", null)).toEqual({
       inputSummary: "…",
       headline: "git status",
+      inputDetail: null,
     });
   });
 
@@ -114,10 +125,11 @@ describe("approvalCardText", () => {
     ).toEqual({
       inputSummary: "git status",
       headline: "Show working tree status",
+      inputDetail: null,
     });
   });
 
-  it("keeps the cut summary when the description only shares its prefix", () => {
+  it("keeps the cut summary and offers the whole command when the description only shares its prefix", () => {
     const shared = `echo ${"a".repeat(90)}`;
     const command = `${shared}; rm -rf ~`;
     const summary = truncatedSummary(command);
@@ -129,10 +141,32 @@ describe("approvalCardText", () => {
         `${shared} # tidy`,
         commandDetail(command),
       ),
-    ).toEqual({ inputSummary: summary, headline: `${shared} # tidy` });
+    ).toEqual({
+      inputSummary: summary,
+      headline: `${shared} # tidy`,
+      inputDetail: commandDetail(command),
+    });
   });
 
-  it("drops the cut summary when the description equals the whole command", () => {
+  it("offers the whole command beside a cut summary and a prose description", () => {
+    const command = `cd /Users/someone/${"w".repeat(90)} && ls`;
+    const summary = truncatedSummary(command);
+    expect(summary.endsWith("…")).toBe(true);
+    expect(
+      approvalCardText(
+        "Bash",
+        summary,
+        "List the worktree",
+        commandDetail(command),
+      ),
+    ).toEqual({
+      inputSummary: summary,
+      headline: "List the worktree",
+      inputDetail: commandDetail(command),
+    });
+  });
+
+  it("drops the cut summary for a description that is the whole command collapsed, and still offers the command as written", () => {
     const command = `echo ${"b".repeat(100)}\n  && ls`;
     const summary = truncatedSummary(command);
     expect(
@@ -142,7 +176,29 @@ describe("approvalCardText", () => {
         command.replace(/\s+/g, " "),
         commandDetail(command),
       ),
-    ).toEqual({ inputSummary: null, headline: command.replace(/\s+/g, " ") });
+    ).toEqual({
+      inputSummary: null,
+      headline: command.replace(/\s+/g, " "),
+      inputDetail: commandDetail(command),
+    });
+  });
+
+  it("offers a short multi-line command whose summary put it on one line", () => {
+    const command = "rm -rf build\ntouch done";
+    const summary = truncatedSummary(command);
+    expect(summary).toBe("rm -rf build touch done");
+    expect(
+      approvalCardText(
+        "run_command",
+        summary,
+        "Clean the build",
+        commandDetail(command),
+      ),
+    ).toEqual({
+      inputSummary: summary,
+      headline: "Clean the build",
+      inputDetail: commandDetail(command),
+    });
   });
 
   it("drops the cut summary when the description equals a lone field's value", () => {
@@ -150,7 +206,7 @@ describe("approvalCardText", () => {
     const summary = `${value.slice(0, 79)}…`;
     expect(
       approvalCardText("fetch", summary, value, fieldsDetail([value])),
-    ).toEqual({ inputSummary: null, headline: value });
+    ).toEqual({ inputSummary: null, headline: value, inputDetail: null });
   });
 
   it("keeps the summary for a multi-field detail, which has no single whole text", () => {
@@ -158,14 +214,22 @@ describe("approvalCardText", () => {
     const summary = `${value.slice(0, 79)}…`;
     expect(
       approvalCardText("fetch", summary, value, fieldsDetail([value, "x"])),
-    ).toEqual({ inputSummary: summary, headline: value });
+    ).toEqual({
+      inputSummary: summary,
+      headline: value,
+      inputDetail: fieldsDetail([value, "x"]),
+    });
   });
 
   it("keeps the summary when there is no input detail", () => {
     const summary = `${LONG_COMMAND.slice(0, 79)}…`;
     expect(
       approvalCardText("run_command", summary, LONG_COMMAND, null),
-    ).toEqual({ inputSummary: summary, headline: LONG_COMMAND });
+    ).toEqual({
+      inputSummary: summary,
+      headline: LONG_COMMAND,
+      inputDetail: null,
+    });
   });
 });
 
