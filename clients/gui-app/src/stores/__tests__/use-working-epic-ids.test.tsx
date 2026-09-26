@@ -13,7 +13,10 @@ import {
   resetAgentActivity,
 } from "@/__tests__/agent-activity-harness";
 import { epicActivityStatusFromSources } from "@/hooks/epic/use-epic-activity-status";
-import { useWorkingEpicIds } from "@/stores/use-working-epic-ids";
+import {
+  useTurnEpicIds,
+  useWorkingEpicIds,
+} from "@/stores/use-working-epic-ids";
 
 // Spy only: the real rule still runs, so the assertions below are about HOW OFTEN
 // the aggregate scan asks it, not about what it answers.
@@ -121,6 +124,48 @@ describe("useWorkingEpicIds", () => {
       handle.store.setState({ chats: { allIds: [AGENT_ID], byId: {} } });
     });
 
+    expect(result.current.has(EPIC_ID)).toBe(true);
+  });
+});
+
+function publishBackgroundOnly(agentIds: readonly string[]): void {
+  publishAgentActivity([
+    {
+      hostId: "host-a",
+      byEpic: { [EPIC_ID]: { working: agentIds, turn: [] } },
+    },
+  ]);
+}
+
+describe("useTurnEpicIds", () => {
+  it("counts an epic with an agent turn in progress", () => {
+    const { result } = renderHook(() => useTurnEpicIds());
+    act(() => {
+      publishWorking([AGENT_ID]);
+    });
+    expect([...result.current]).toEqual([EPIC_ID]);
+  });
+
+  it("leaves out an epic whose only activity is background work, which useWorkingEpicIds still counts", () => {
+    const turn = renderHook(() => useTurnEpicIds());
+    const working = renderHook(() => useWorkingEpicIds());
+    act(() => {
+      publishBackgroundOnly([AGENT_ID]);
+    });
+    expect(turn.result.current.has(EPIC_ID)).toBe(false);
+    expect(working.result.current.has(EPIC_ID)).toBe(true);
+  });
+
+  it("notifies when a background-only epic starts a turn", () => {
+    const { result } = renderHook(() => useTurnEpicIds());
+    act(() => {
+      publishBackgroundOnly([AGENT_ID]);
+    });
+    expect(result.current.has(EPIC_ID)).toBe(false);
+
+    act(() => {
+      publishWorking([AGENT_ID]);
+    });
     expect(result.current.has(EPIC_ID)).toBe(true);
   });
 });
