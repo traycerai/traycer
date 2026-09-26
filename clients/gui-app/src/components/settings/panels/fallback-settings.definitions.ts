@@ -137,7 +137,8 @@ export const FALLBACK = defineSettingsSection("fallback", {
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,
-    keywords: [],
+    // The section's own vocabulary: its rows are tiers of models and patterns.
+    keywords: ["tier", "tiers", "pattern", "frontier", "flagship", "standard"],
   },
   advanced: {
     kind: "group",

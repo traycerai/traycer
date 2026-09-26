@@ -4615,75 +4615,215 @@ min`): "The judge didn't finish in time, so it's asking you instead."
   - **Equivalent models** is the user's statement about which models are
     interchangeable, and the only thing that makes the "equivalent model" step
     possible - the host will not move a chat between a standard and a frontier
-    model on its own guess. Each row is **provider + model + optional
-    effort**, and **both Model and Effort are selects over the provider's
-    catalog**, not free text: an unrestricted input whose only hint was a
-    placeholder made the user guess a provider-specific spelling, and a typo was
-    accepted, saved as policy, and then silently dropped or unmatched at
-    resolution - so the value on screen did not mean what the fallback would
-    run. Model lists the catalog by label (the composer picker's own models)
-    and stores the SLUG; a stored value that is not a catalog slug - the
-    seeded family names (`opus`), or a retired slug - is pinned as the first
-    option and stays selected, tagged "family" once the catalog has answered.
-    The row's verdict line renders only when it adds something: a family's
-    "matches Claude Opus 5 today", or a problem. Effort offers the chosen
-    model's own `supportedReasoningEfforts` when Model names a slug and the
-    union across the harness's models when it names a family (the effort
-    applies to whichever model the family resolves to at hop time); the
-    catalogs come from `agent.gui.listModels`, read once per DISTINCT harness
-    in the draft through the same cache-only slots the model pickers use and
-    gated on availability (`fallback-catalog-options.ts`). Changing a row's
-    provider clears its model and effort, since both are one catalog's
-    vocabulary. **A default group** (`defaultTierGroupId`, one select above the
-    list, a `Default` pill on the card) is the group the step uses for a model
-    in NO group - a configuration the user makes, never seeded; "None" keeps
-    the old behaviour, where the step is skipped for an unlisted model. The
-    editor carries the marker through a rename, clears it on a delete and
-    restores it on that delete's Undo; the schema refuses a default naming no
-    group. The per-row preview cannot
-    supply this: with no failed tuple the engine's walk stops at the resolved
-    slug and never reaches effort normalisation, so it returns no effort
-    information and no warnings. A stored value outside the set keeps an option
-    of its own and stays selected, marked as not offered - the same range-render
-    rule the provider select and the timings use. When nothing answers (an older
-    host, a harness the user no longer has, a cold slot) the text input stands,
-    because a select built from nothing would take away a level the user can
-    legitimately type. The provider select offers the GUI-capable harnesses only - the
-    rung skips anything else with `harness-not-gui`, so a terminal-only vendor
-    here would be a row the user can choose and the engine will never walk - and
-    a stored id outside that set still gets an option of its own, under the same
-    range-render rule the timings use.
-    Candidate ORDER inside a group is load-bearing (the rung walks it and takes
-    the first usable target) so rows carry ▲▼; GROUP order is not (D128 routes
-    by most-specific family match, not position), so there is deliberately no
-    group reordering - a control that changed nothing would be worse than none.
-    There is deliberately **no drag surface here**: the step editor stays the
-    only one, because a candidate list is unbounded and nested inside a
-    scrolling pane, which is where drag is worst, and ▲▼ is the keyboard and
-    touch path either way.
+    model on its own guess. The vocabulary is **tier**: the seed is three tiers,
+    **Frontier**, **Flagship** and **Standard**, and each tier is a list of rows
+    tried top to bottom. Each row is **provider + model or pattern + optional
+    effort**, with a `#` rank in front of it.
+    **The Model cell is a combobox over the provider's catalog**
+    (`fallback-model-pattern-combobox.tsx`, composed from `command.tsx` and
+    `popover.tsx`) on a host whose `providers.fallbackPolicy.get` line is 1.1 or
+    later - read off the NEGOTIATED line (`useFallbackPolicyPatternLines`),
+    never inferred from a preview response carrying `matches`, which the
+    1.0 → 1.1 upgrade synthesises. What it saves depends on what was typed:
+    an exact model id or label puts that model first and picking it stores its
+    SLUG; three or more other characters make the first option **Any model
+    containing "…"**, which saves `*text*`; and a typed `*` builds the pattern
+    as written (`*` is the only wildcard, matched case-insensitively against
+    slug and label by the protocol's `modelMatchesPattern`). A bare `*` is
+    named **Any <provider> model** ("Any Codex model") in the option, the
+    cell and its accessible name, beside the mono `*`, so the row says it
+    claims the whole provider. The models the pattern reaches are numbered in
+    the order they would be tried, and while a pattern is being typed the
+    input row counts how many it reaches. A pattern row wears the `*` badge
+    (text alternative "pattern") where the old "family" tag was, and the
+    trigger's pill - "2 models", or "1 conflict" - is part of the trigger's
+    accessible name. The trigger declares `aria-haspopup="dialog"`: what opens
+    is the popover, which holds the list's own combobox input and listbox.
+    A catalog that answers while the list is open re-seeds the highlight as a
+    fresh open would, so Enter on an exact pick still picks the model.
+    **A model can be in only one tier.** A model another tier already owns is
+    listed as **in <tier>** and cannot be picked; a pattern that would reach
+    one is offered disabled, with the reason ("GPT-6-Astra is in frontier and
+    GPT-6-Sol is in flagship") as its description, and Enter on it announces
+    that reason through the editor's `role="status"` region rather than
+    saving; its hint suggests a narrower pattern that is free (for example
+    `*gpt-6-luna*`). The keyboard reaches refused options - the list drives its
+    own arrows, since cmdk's skip `aria-disabled` items - so a refusal can be
+    heard. A stored policy that breaks the rule anyway (written by an older
+    client, or by an edit elsewhere) is RENDERED, never refused: both rows get a
+    red **conflict block** naming the other tier, saying the first tier
+    handles the model because it is listed first, with **Edit pattern** (or
+    **Change model** on an exact-pick row) and **Go to the <tier> row**. The
+    block is `role="alert"` only on the conflict's FIRST appearance in the
+    panel (`fallback-conflict-announcements.tsx`, keyed by harness, model slug
+    and the set of tier ids, and held for the policy editor's lifetime): the
+    Equivalent models tab unmounts when left, and a permanent alert re-read
+    every conflict on every visit. **Go to the <tier> row** moves focus to that
+    row's Model cell, addressed by the row's draft key like the removal
+    handoff below. Conflicts are computed draft state
+    (`fallbackTierConflicts` over `findTierConflicts` and the catalogs the
+    editor already holds), never a validation error: **there is no save gate
+    anywhere** - the master switch, the timings and every other tier still
+    commit while a conflict stands, and an Undo that brings one back is not
+    refused.
+    **Each row's status line** comes from the preview's `matches[]`, falling
+    back to `resolvedModel`: "Tries A → B → …" in try order, a match the walk
+    would skip struck through with an amber `warning` pill, "No <provider>
+    model matches <pattern>" in red for a pattern that matches nothing, and
+    "Can't check right now: …" in neutral when the check itself was skipped
+    for an environmental reason. An exact pick that resolves to itself says
+    nothing - the line appears only when it adds something.
+    Effort offers the picked model's own `supportedReasoningEfforts` for an
+    exact pick, the UNION over the pattern's matches for a pattern, and the
+    union across the harness's models when the pattern matches nothing yet
+    (the effort applies to whichever model the hop takes); the catalogs come
+    from `agent.gui.listModels`, read once per DISTINCT harness in the draft
+    through the same cache-only slots the model pickers use and gated on
+    availability (`fallback-catalog-options.ts`). Changing a row's provider
+    clears its model and effort, since both are one catalog's vocabulary.
+    **On a 1.0 host the Model cell is the old select**, unchanged: it lists
+    the catalog by label and stores the slug, a stored value that is not a
+    catalog slug is pinned as the first option and tagged "family", and no
+    conflict is drawn - "one model, one tier" is a pattern-era rule a 1.0
+    host's word matcher does not apply. The try line renders on both.
+    **The preview** is asked only for the tiers on screen. On a
+    `previewTierGroups` 1.1 line a blank draft row travels in the request and
+    comes back as a skipped row, so adding a row no longer blanks every other
+    row's line; on 1.0 a blank row still closes the gate, since the 1.0
+    request cannot encode one.
+    **The default tier** ("For a model not in any tier", one select above the
+    list, a `Default` pill on the card) is the tier the step uses for a model
+    in NO tier. The seed sets it to **flagship**, so an unlisted light model
+    (a Haiku, a mini) is now tried against Flagship models rather than skipped;
+    "None - skip this step" keeps the old behaviour. The editor carries the
+    marker through a rename, clears it on a delete and restores it on that
+    delete's Undo; the schema refuses a default naming no tier. The Ladder
+    tab's step hint asks the same question the error card's verdict does
+    (`tierGroupsNameDestinationFor`), over the DRAFT and the editor's cached
+    catalog for the last-run harness. On a 1.0 host it asks the released
+    rule instead (`fallback-legacy-family-routing.ts`), because that host
+    reads a row as a family word: a whole word in the model's ID (never its
+    name), the longest family deciding the tier, then the default tier. The
+    pattern answer there would tell a user whose `gpt` row routes
+    `gpt-6-sol` to a Claude model that nothing is set up. The per-row preview cannot supply
+    effort normalisation: with no failed tuple the engine's walk stops at the
+    resolved slug and never reaches it, so it returns no effort information.
+    A stored effort outside the offered set keeps an option of its own and
+    stays selected, marked as not offered - the same range-render rule the
+    provider select and the timings use. Effort is ALWAYS a select - there is
+    no free-text effort input. When nothing is offered (an older host, a
+    harness the user no longer has, a cold slot) it still renders: disabled
+    on "Any effort" when that is the stored value, since there is nothing to
+    pick, and enabled when a value IS stored, so the one edit still possible -
+    clearing it back to "Any effort" - stays possible. The provider select offers the GUI-capable
+    harnesses only - the rung skips anything else with `harness-not-gui` - and
+    a stored id outside that set still gets an option of its own.
+    **Test a model** (`fallback-test-model-panel.tsx`, pure half in
+    `fallback-test-model.ts`) is a button in the section header that opens an
+    INLINE panel under it - not a dialog, so the tiers it tests stay on screen.
+    It reads "If <provider> <model> is blocked by <a rate limit | another
+    error> …", with the account (that provider's last-used, checked against its
+    live accounts, else the first account listed - never a disabled Terminal
+    account; no control for a provider with none) and the permission mode (the
+    user's default, clamped to what the provider honours) beneath; agent mode
+    and fast mode are carried from the defaults, as the new-conversation modal
+    seeds them. A model catalog that fails to load says so in the Model picker
+    and offers "Try again". It answers for the DRAFT, blank rows and an unsaved
+    default tier included. The tier comes from the protocol's
+    `routeTierGroupForFailedTuple` with the editor's cached catalog - the
+    readable-catalog answer - as "Traycer uses the <tier> tier · <model> is in
+    it through <pattern> (row n)"; the "(row n)" lookup uses the router's own
+    identity (`failedModelRoutingIdentity`). Every row of that tier follows
+    with each match in try order, from `previewTierGroups`@1.1 called with
+    `blocked` set to the tuple, so the host runs the live walk (same-as-failed,
+    permission-mode fit, the sibling rule after a rate limit): **switches
+    here** (`success`), **then**, and **skipped · …** - neutral for the blocked
+    model itself and a blank row ("blank, skipped"), amber `warning` for the
+    world, red for a pattern that matches nothing. The wireframe's own words
+    where it names one ("the blocked model"), the host's label otherwise. At
+    phone width a pill drops under its model and wraps inside itself (`Badge
+wrap`). Each row names the account its first usable match runs on, the
+    Terminal account included. The walk is asked about the tiers as last
+    COMMITTED (the draft reducer's `committedTiers`), so a tier rename typed
+    into the name field sends nothing until it commits on blur, while the
+    header follows the live draft at once. When the walk comes back without
+    the routed tier's rows - the host read the model's name from its own
+    catalog and routed it elsewhere - one line says which tier the host would
+    use, never a named tier over empty rows. Below the rows, "If none of these
+    work: …" is the draft's steps after the equivalent-model step for that
+    failure. "Another error" stands for every failure other than a rate limit
+    that can reach the equivalent-model step (auth, billing, model
+    unavailable, provider unavailable), each on its own effective ladder (its
+    override, else the main order, narrowed to the steps that failure can
+    take): when they agree the line says so, and when they differ it says
+    "depends on the error; see Overrides". Three footers cover what the header
+    alone would hide: a model in no tier goes to the default tier; with the
+    default set to None there is no equivalent-model step and it goes straight
+    to the next step; a model in two tiers is handled by the first-listed, with
+    a red **fix** that moves focus to that tier's row (the conflict block's
+    go-to-row). A failure whose steps leave out the equivalent-model step (or
+    turn them all off) says so in one line, naming the step it goes straight
+    to, instead of a tier that never runs. With **Route automatically** off the
+    host arms nothing, so the verdict leads with "Route automatically is off,
+    so nothing switches on its own. With it on:" and still shows the dry run.
+    Escape and ✕ close the panel and return focus to the button. The verdict
+    is announced as ONE sentence through a visually hidden polite status
+    mounted with the panel (the tier, and where the chat switches to); the
+    visible rows and pills are not a live region. It is offered only on a
+    `get`@1.1 host, since its router reads rows as patterns, and the dry run is
+    asked only on a host whose negotiated `previewTierGroups` line is 1.1 or
+    later - gated in the hook itself, and read off the line, never off whether
+    `matches` is present. Below it the walk cannot be asked for, so the panel
+    shows the tier verdict and each row's first match from the editor's own
+    preview, with "This host can't simulate the walk; showing what your tiers
+    say."
+    Row ORDER inside a tier is load-bearing (the rung walks it and takes the
+    first usable target) so rows carry ▲▼. TIER order is not a routing
+    control: a model belongs to one tier, and when a draft breaks that rule the
+    fix is the pattern, not the order - so there is deliberately no tier
+    reordering, and the conflict block's "listed first" is a description of
+    what happens until the fix, not an invitation to reorder. There is
+    deliberately **no drag surface here**: the step editor stays the only one,
+    because a row list is unbounded and nested inside a scrolling pane, which is
+    where drag is worst, and ▲▼ is the keyboard and touch path either way.
+    **Narrow panes stack each row** (the editor is an `@container`; below
+    `@2xl` a row is rank · provider · effort on one line, then the Model cell,
+    the status line and the row actions), with fluid sizing only.
     Empty is a state a user can REACH, and it is not the same as never having
-    had groups: the host seeds on first read and marks the user, so the empty
-    state offers **Restore the default groups**, which calls the RESTORE op
+    had tiers: the host seeds on first read and marks the user, so the empty
+    state offers **Restore the default tiers**, which calls the RESTORE op
     rather than saving a client-built list - only the host can build the seed a
-    first read would have produced. Deleting a group or a row offers **Undo**,
+    first read would have produced - and on a `get`@1.1 host the restore also
+    writes the default tier (`flagship`). On a `get`@1.1 host the same control
+    also sits in the footer beside **Add tier** while tiers exist, behind the
+    shared destructive confirm ("Replace your N tiers with the default
+    Frontier, Flagship and Standard tiers? This also sets the default tier to
+    flagship."), since there it replaces work and has no Undo; focus returns
+    to the button once the restore settles. A 1.0 host gets no footer
+    restore, as in the released editor: its restore writes its own older
+    seed and keeps the current default, so that confirm would be untrue, and
+    it refuses the restore outright when the default names a tier of the
+    user's own. The empty state's button restores directly on every host -
+    there is nothing to lose, and no tier is left for a default to name. Deleting a
+    tier or a row offers **Undo**,
     and undo dispatches the INVERSE of that one removal into the current draft -
     not the policy as it stood when the toast was raised. A toast outlives its
     render, so a captured snapshot also reverted every unrelated setting changed
     since it appeared (the maximum wait adjusted while the toast was still up),
     and an older toast's Undo resurrected a row deleted after it. The inverse
-    carries the removed group or row WITH its identity and its index, so undo
+    carries the removed tier or row WITH its identity and its index, so undo
     brings back the same row rather than a lookalike, at the position it held -
     position being the one thing a user cannot retype - and answers "already
-    back" or "its group is gone" by doing nothing.
+    back" or "its tier is gone" by doing nothing.
     **Removal hands the keyboard on.** Filtering out the focused button's own
     subtree left focus on `document.body`: a keyboard user was returned to the
     top of the page and a screen-reader user was told nothing, after a gesture
     they made deliberately. `useRemovalFocus` takes an ordered list of selectors
     and focuses the first that exists once the removal has rendered - the row
     that takes the removed one's place, its neighbour if it was last, then the
-    `Add` control. Rows are addressed by their draft key, never by a group's
-    editable name. A new row's family starts
-    EMPTY (invalid until typed, so an invented default is never saved as a
+    `Add` control. Rows are addressed by their draft key, never by a tier's
+    editable name. A new row's model or pattern starts
+    EMPTY (invalid until chosen, so an invented default is never saved as a
     choice) while its provider is SEEDED - a closed union with a control right
     there is a starting point, not a fabricated answer.
     **Candidate rows carry a client-side identity** (`fallback-tier-group-keys.ts`),
@@ -4740,14 +4880,16 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     underlying reason, so the guard makes its reason explicit instead of
     incidental.
   - **When an edit is SAVED depends on the control kind.** Switches, selects,
-    ▲▼ and buttons produce a complete value per interaction and commit
-    immediately. **Text fields (group name, model family, and the effort input
-    where no catalog levels are available) commit on BLUR or Enter**, because
-    their intermediate states are not values anyone means: "opus" passes through "o", "op", "opu", and a save per character
-    persists three model families nobody chose and spends a catalog read per
-    candidate previewing each. Local validation still runs per keystroke, so the
-    inline message under a blank family appears as it goes blank rather than
-    when the field is left. Enter does not also blur - the field is not a form.
+    ▲▼, buttons and the Model combobox (a value is saved only when an option is
+    picked - typing into its search saves nothing) produce a complete value per
+    interaction and commit immediately. **The one text field, the tier name,
+    commits on BLUR or Enter**, because its intermediate states are not
+    values anyone means:
+    "fast" passes through "f", "fa", "fas", and a save per character persists
+    three tier names nobody chose and spends a catalog read per candidate
+    previewing each. Local validation still runs per keystroke, so the inline
+    message under a blank tier name appears as it goes blank rather than when
+    the field is left. Enter does not also blur - the field is not a form.
   - **A save's echo cannot overwrite a newer draft, and TWO saves cannot be
     confused.** Every edit bumps a `revision`; every dispatched save gets a
     request id minted at the call site (the reducer has not run yet, so the

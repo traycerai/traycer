@@ -2,6 +2,7 @@ import {
   act,
   cleanup,
   fireEvent,
+  render,
   screen,
   waitFor,
   within,
@@ -18,13 +19,18 @@ import {
 } from "vitest";
 import {
   createDefaultFallbackPolicy,
+  fallbackPolicySchema,
+  findTierConflicts,
   type FallbackPolicy,
   type ProvidersFallbackPolicyGetResponse,
   type ProvidersFallbackPolicyResetResponse,
   type ProvidersFallbackPolicyRestoreTierGroupsResponse,
   type ProvidersFallbackPolicySetResponse,
+  type TierConflict,
   type TierGroup,
 } from "@traycer/protocol/host/fallback-policy";
+import type { FallbackCatalogOptions } from "@/components/settings/panels/fallback/fallback-catalog-options";
+import type { GuiAgentModelOption } from "@traycer/protocol/host/index";
 import {
   HostRpcError,
   HostTransportFailureError,
@@ -215,6 +221,21 @@ vi.mock("@/hooks/providers/use-fallback-in-flight-count-query", () => ({
 // is kept REAL (not stubbed): the card imports it directly, alongside the
 // hook, to render the pinned-value and preview-label cases, and it is a pure
 // function over its arguments - nothing here needs it faked.
+/**
+ * Pin 5's own catalog: empty (`new Map()`) everywhere else in this file, and
+ * populated with a codex model by the Pin 5 describe block below so
+ * `fallbackTierConflicts` (which contributes nothing for a harness missing
+ * from this map - `fallback-policy-draft.ts`'s own doc) has something to find
+ * a genuine "one model, one tier" conflict over.
+ */
+const catalogsByHarnessFixture = vi.hoisted(
+  (): {
+    value: Map<string, ReadonlyArray<{ slug: string; label: string }>>;
+  } => ({
+    value: new Map(),
+  }),
+);
+
 vi.mock(
   "@/components/settings/panels/fallback/fallback-catalog-options",
   async (importOriginal) => {
@@ -226,6 +247,9 @@ vi.mock(
       ...actual,
       useFallbackCatalogOptions: () => ({
         modelsFor: () => [],
+        catalogFor: (harnessId: string) =>
+          catalogsByHarnessFixture.value.get(harnessId) ?? null,
+        catalogsByHarness: catalogsByHarnessFixture.value,
         effortsFor: () => [],
       }),
     };
@@ -333,7 +357,26 @@ vi.mock(
   },
 );
 
+/**
+ * Pin 5 and Pin 9's own line: whether this host reads a tier row's
+ * `modelFamily` as a pattern. `false` (the pre-1.1 default) everywhere else in
+ * this file; the Pin 5 describe block below flips it on to put a genuine
+ * "one model, one tier" conflict on screen without gating any commit on it.
+ */
+const patternLines = vi.hoisted(
+  (): { patterns: boolean; blankPreviewRows: boolean } => ({
+    patterns: false,
+    blankPreviewRows: false,
+  }),
+);
+
+vi.mock("@/hooks/providers/use-fallback-policy-pattern-lines", () => ({
+  useFallbackPolicyPatternLines: () => patternLines,
+}));
+
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
+import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
+import { toKeyedGroups } from "@/components/settings/panels/fallback/fallback-tier-group-keys";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import {
   openFallbackTab,
@@ -427,6 +470,9 @@ beforeEach(() => {
   fallbackMocks.refetchMock.mockImplementation(() =>
     Promise.resolve({ isSuccess: true, data: fallbackMocks.queryData }),
   );
+  patternLines.patterns = false;
+  patternLines.blankPreviewRows = false;
+  catalogsByHarnessFixture.value = new Map();
 });
 
 afterEach(() => {
@@ -767,7 +813,7 @@ describe("FallbackSettingsPanel - a text field commits on blur/Enter, not per ke
     openFallbackTab("equivalentModels");
 
     const nameInputs = () =>
-      screen.getAllByLabelText<HTMLInputElement>("Group name");
+      screen.getAllByLabelText<HTMLInputElement>("Tier name");
     const input = nameInputs()[0];
     input.focus();
 
@@ -799,7 +845,7 @@ describe("FallbackSettingsPanel - a text field commits on blur/Enter, not per ke
   });
 
   // The Model cell is a Select now and commits immediately on pick - the
-  // Group name input is the only text field left on the card, so this pins
+  // Tier name input is the only text field left on the card, so this pins
   // the same draft/commit lifecycle through it instead of a candidate's
   // family.
   it("sends exactly one save carrying the full typed value, only once the field is left - unlike an immediate control", () => {
@@ -818,7 +864,7 @@ describe("FallbackSettingsPanel - a text field commits on blur/Enter, not per ke
     openFallbackTab("equivalentModels");
 
     const nameInput = () =>
-      screen.getByLabelText<HTMLInputElement>("Group name");
+      screen.getByLabelText<HTMLInputElement>("Tier name");
 
     // Five keystrokes, each its own `change` event - the draft moves each
     // time, and nothing is sent while typing is in progress.
@@ -1299,7 +1345,7 @@ describe("FallbackSettingsPanel - F18 Undo restores exactly the deleted row on t
     renderPanel();
     openFallbackTab("equivalentModels");
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete tier" })[0]);
     await waitFor(() => {
       expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(1);
     });
@@ -1352,7 +1398,7 @@ describe("FallbackSettingsPanel - F18 Undo restores exactly the deleted row on t
     renderPanel();
     openFallbackTab("equivalentModels");
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete tier" })[0]);
     await screen.findByTestId("fallback-host-error");
     // The revert restored it.
     expect(screen.getByTestId("fallback-tier-group-fast")).toBeDefined();
@@ -1413,14 +1459,14 @@ describe("FallbackSettingsPanel - F18 Undo restores exactly the deleted row on t
     renderPanel();
     openFallbackTab("equivalentModels");
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete tier" })[0]);
     await screen.findByTestId("fallback-host-error");
     expect(screen.getByTestId("fallback-tier-group-fast")).toBeDefined();
 
     // Rename the restored group. The commit-on-blur rule (R6, above) means
     // this is a SECOND, successful save - distinct from the refused deletion.
     const nameInput =
-      screen.getAllByLabelText<HTMLInputElement>("Group name")[0];
+      screen.getAllByLabelText<HTMLInputElement>("Tier name")[0];
     fireEvent.change(nameInput, { target: { value: "fastest" } });
     fireEvent.blur(nameInput);
     await waitFor(() => {
@@ -1478,7 +1524,7 @@ describe("FallbackSettingsPanel - P2 Undo must not overwrite a later explicit 'N
     // Delete "fast" (index 0), the policy's default. This clears the marker
     // and raises the Undo toast, which closes over `wasDefault: true` and the
     // default-choice generation AS OF THIS MOMENT.
-    fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete tier" })[0]);
     await waitFor(() => {
       expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(1);
     });
@@ -1488,7 +1534,7 @@ describe("FallbackSettingsPanel - P2 Undo must not overwrite a later explicit 'N
     expect(screen.queryByTestId("fallback-tier-group-fast")).toBeNull();
 
     // The user picks "cheap" as the default for a model in no group...
-    openCombobox("For a model not in any group");
+    openCombobox("For a model not in any tier");
     chooseOption("cheap");
     await waitFor(() => {
       expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(2);
@@ -1501,7 +1547,7 @@ describe("FallbackSettingsPanel - P2 Undo must not overwrite a later explicit 'N
     // step". This is the LATER, deliberate fact - and it lands on the SAME
     // `null` the deletion itself produced, which a value comparison alone
     // cannot tell apart from "nothing has happened since".
-    openCombobox("For a model not in any group");
+    openCombobox("For a model not in any tier");
     chooseOption("None - skip this step");
     await waitFor(() => {
       expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(3);
@@ -1548,7 +1594,7 @@ describe("FallbackSettingsPanel - P2 Undo must not overwrite a later explicit 'N
     renderPanel();
     openFallbackTab("equivalentModels");
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete tier" })[0]);
     await waitFor(() => {
       expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(1);
     });
@@ -2123,7 +2169,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     //
     // Driven through the GROUP NAME field rather than a candidate's family:
     // the Model cell is a Select now and commits immediately on pick, so it
-    // cannot sit mid-keystroke the way this pin needs. Group name is the only
+    // cannot sit mid-keystroke the way this pin needs. Tier name is the only
     // remaining text field on the card and reaches `editDraft` (revision
     // moves, nothing sent) exactly the way the family field used to.
     fallbackMocks.queryData = respond(
@@ -2190,7 +2236,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     // produces - the focus was only ever flavour.
     const savesBeforeTyping = fallbackMocks.setMutateAsync.mock.calls.length;
     openFallbackTab("equivalentModels");
-    const nameInput = screen.getByLabelText<HTMLInputElement>("Group name");
+    const nameInput = screen.getByLabelText<HTMLInputElement>("Tier name");
     fireEvent.change(nameInput, { target: { value: "opus" } });
     expect(fallbackMocks.setMutateAsync.mock.calls.length).toBe(
       savesBeforeTyping,
@@ -2199,7 +2245,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     // B is refused. It carried revision 2 and has never contained "opus".
     saveB.rejectWith(refusedByHost("policy is out of date"));
     await flushHostReplies();
-    expect(screen.getByLabelText<HTMLInputElement>("Group name").value).toBe(
+    expect(screen.getByLabelText<HTMLInputElement>("Tier name").value).toBe(
       "opus",
     );
 
@@ -2224,7 +2270,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     // host's policy and replacing "opus" with the stored "fast" while the
     // cursor is still in the field. The switch reads `true` either way, which
     // is exactly why it cannot be the assertion.
-    expect(screen.getByLabelText<HTMLInputElement>("Group name").value).toBe(
+    expect(screen.getByLabelText<HTMLInputElement>("Tier name").value).toBe(
       "opus",
     );
     expect(automaticFallback().getAttribute("aria-checked")).toBe("true");
@@ -2285,9 +2331,9 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
   });
 });
 
-describe("FallbackSettingsPanel - F24 a Group name input keeps its identity across an async-rejected save", () => {
+describe("FallbackSettingsPanel - F24 a Tier name input keeps its identity across an async-rejected save", () => {
   it("stays the same DOM node and keeps focus once the rejection reverts the row", async () => {
-    // Driven through Group name rather than a candidate's family: the Model
+    // Driven through Tier name rather than a candidate's family: the Model
     // cell is a Select now, which commits and reverts as a complete value with
     // no keystroke-held DOM identity to lose, so it cannot exercise this pin.
     // `revertKeyedGroups`'s own doc calls a rename one of the three edits this
@@ -2311,7 +2357,7 @@ describe("FallbackSettingsPanel - F24 a Group name input keeps its identity acro
     renderPanel();
     openFallbackTab("equivalentModels");
 
-    const nameInput = screen.getByLabelText<HTMLInputElement>("Group name");
+    const nameInput = screen.getByLabelText<HTMLInputElement>("Tier name");
     nameInput.focus();
     fireEvent.change(nameInput, { target: { value: "opus" } });
     fireEvent.keyDown(nameInput, { key: "Enter" });
@@ -2323,7 +2369,7 @@ describe("FallbackSettingsPanel - F24 a Group name input keeps its identity acro
     // value-only edit would then be treated as a foreign list (identical
     // shape, different VALUE fails that stricter check) and re-seed, remounting
     // this exact input out from under the keystroke that was rejected.
-    expect(screen.getByLabelText("Group name")).toBe(nameInput);
+    expect(screen.getByLabelText("Tier name")).toBe(nameInput);
     expect(document.activeElement).toBe(nameInput);
   });
 });
@@ -2421,11 +2467,11 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     // C is typed and left uncommitted, which moves the revision past B without
     // sending anything - the only way B's echo can land on the MOVED-ON path
     // with a notice still up, since `edited` clears the notice itself. Driven
-    // through Group name: the Model cell is a Select now and commits
+    // through Tier name: the Model cell is a Select now and commits
     // immediately, so it cannot sit uncommitted the way this pin needs -
-    // Group name is the only remaining field that reaches `editDraft`.
+    // Tier name is the only remaining field that reaches `editDraft`.
     openFallbackTab("equivalentModels");
-    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Group name"), {
+    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Tier name"), {
       target: { value: "opus" },
     });
 
@@ -2460,7 +2506,7 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     });
     expect(screen.queryByTestId("fallback-check-again")).toBeNull();
     // C was never the subject of any of it and is still in the field.
-    expect(screen.getByLabelText<HTMLInputElement>("Group name").value).toBe(
+    expect(screen.getByLabelText<HTMLInputElement>("Tier name").value).toBe(
       "opus",
     );
   });
@@ -2536,10 +2582,10 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     // blank.
     fireEvent.click(automaticFallback());
     openFallbackTab("equivalentModels");
-    fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
-    ).toContain("Model 1 in “fast” needs a model.");
+    ).toContain("Row 1 in “fast” needs a model or pattern.");
 
     // A's reply is lost. It carried revision 1 and has never seen the blank
     // model row, so it has judged nothing the user is looking at.
@@ -2551,7 +2597,7 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     // field with nothing beside it and reads as accepted.
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
-    ).toContain("Model 1 in “fast” needs a model.");
+    ).toContain("Row 1 in “fast” needs a model or pattern.");
     // The row is still unselected - the invalid edit was never sent, so
     // nothing could have put a value into it.
     expect(
@@ -2840,11 +2886,11 @@ describe("FallbackSettingsPanel - R8/R10 fifth pass: the page's claims match the
     fireEvent.click(automaticFallback());
     fireEvent.click(automaticFallback());
     // C is typed into the group name field and never committed. Driven
-    // through Group name, not a candidate's family: the Model cell is a
+    // through Tier name, not a candidate's family: the Model cell is a
     // Select now and commits immediately, so it cannot sit uncommitted the
     // way this pin needs.
     openFallbackTab("equivalentModels");
-    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Group name"), {
+    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Tier name"), {
       target: { value: "opus" },
     });
     // A's reply is lost, and its read-back lands - keeping C, and stamping
@@ -2866,7 +2912,7 @@ describe("FallbackSettingsPanel - R8/R10 fifth pass: the page's claims match the
     // holds the group named "fast".
     expect(notice.textContent).toContain("still unsaved");
     expect(notice.textContent).not.toContain("in force");
-    expect(screen.getByLabelText<HTMLInputElement>("Group name").value).toBe(
+    expect(screen.getByLabelText<HTMLInputElement>("Tier name").value).toBe(
       "opus",
     );
   });
@@ -3550,10 +3596,10 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
 
     // An invalid edit: kept on screen, sent nowhere - `commit` returns after
     // `edited` because the new candidate's family is blank.
-    fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
-    ).toContain("Model 1 in “fast” needs a model.");
+    ).toContain("Row 1 in “fast” needs a model or pattern.");
 
     fallbackMocks.resetMutateAsync.mockRejectedValueOnce(lostTheReply());
     fallbackMocks.refetchMock.mockResolvedValue({
@@ -3585,7 +3631,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
     // what was lost, so a restore described as "the reset" would be this
     // panel's own recurring defect with a different noun.
     //
-    // ZERO groups, because "Restore the default groups" is the tier-group
+    // ZERO groups, because "Restore the default tiers" is the tier-group
     // editor's EMPTY-STATE button and renders nowhere else. The first draft of
     // this pin seeded a group and made an invalid edit - scaffolding carried
     // over from the reset pin without asking whether it was needed. It is not,
@@ -3606,7 +3652,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
       data: fallbackMocks.queryData,
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "Restore the default groups" }),
+      screen.getByRole("button", { name: "Restore the default tiers" }),
     );
     await flushHostReplies();
 
@@ -3615,7 +3661,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
     // both no-draft operations the reset's sentence. The page then reports a
     // reset that never happened.
     expect(notice.textContent).toContain(
-      "whether the default model groups were restored",
+      "whether the default tiers were restored",
     );
     expect(notice.textContent).not.toContain("whether model routing was reset");
     // Re-specified under D353 (ninth pass). This asserted
@@ -3631,7 +3677,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
     expect(notice.textContent).not.toContain("a newer edit");
   });
 
-  it("#16: a refused RESTORE reports 'Couldn't restore the default groups', not 'Couldn't save'", async () => {
+  it("#16: a refused RESTORE reports 'Couldn't restore the default tiers', not 'Couldn't save'", async () => {
     // Same empty-groups setup as the lost-reply RESTORE pin above, but the
     // host actually ANSWERS and refuses this time - `refusalPrefix("restore")`
     // rather than the unknown-outcome sentence.
@@ -3651,7 +3697,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
       }),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "Restore the default groups" }),
+      screen.getByRole("button", { name: "Restore the default tiers" }),
     );
     await flushHostReplies();
 
@@ -3660,7 +3706,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
     // save" - this assertion catches it even though the plain reason text
     // ("restore refused") would still appear in a longer, still-wrong string.
     expect(notice.textContent).toContain(
-      "Couldn't restore the default groups: restore refused",
+      "Couldn't restore the default tiers: restore refused",
     );
     expect(notice.textContent).not.toContain("Couldn't save");
   });
@@ -3783,10 +3829,10 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     // invalid draft is reached by adding a fresh, unselected row instead -
     // `commit` returns after `edited` because the new candidate's family is
     // blank.
-    fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
-    ).toContain("Model 1 in “fast” needs a model.");
+    ).toContain("Row 1 in “fast” needs a model or pattern.");
 
     // Reset lives on `plan`, and a reset stamps `activeField: "danger"` - so
     // from here the panel's one status line renders THERE, not beside the
@@ -3817,7 +3863,7 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     // BOTH alerts, asserted together: the eighth-pass reset pin checked the
     // local one only BEFORE the reset, which is why this survived it.
     expect(screen.getByTestId("fallback-local-error").textContent).toContain(
-      "Model 1 in “fast” needs a model.",
+      "Row 1 in “fast” needs a model or pattern.",
     );
     const notice = screen.getByTestId("fallback-host-error");
     expect(notice.textContent).toContain("whether model routing was reset");
@@ -3851,7 +3897,7 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     // TEXT-field path, moves the draft while sending nothing. `uncommitted` is
     // therefore reachable from a text edit and from nothing else, which also
     // makes it unreachable under a RESTORE: that button is the tier-group
-    // editor's empty state and the Group name field - the only text field left
+    // editor's empty state and the Tier name field - the only text field left
     // on the card - only exists inside a group. The operation here is the
     // reset for that reason, not by preference.
     //
@@ -3860,14 +3906,14 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     // sits above the notice already saying the edit was not sent. Strip that
     // second voice and the notice has to carry the claim alone.
     //
-    // Driven through Group name rather than a candidate's family: the Model
+    // Driven through Tier name rather than a candidate's family: the Model
     // cell is a Select now and commits (and validates) immediately on pick, so
     // it cannot produce a VALID, UNSENT edit the way a text field can.
     fallbackMocks.queryData = respond(groupsPolicy());
     renderPanel();
     openFallbackTab("equivalentModels");
 
-    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Group name"), {
+    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Tier name"), {
       target: { value: "opus" },
     });
     // No `save-started` behind this: a valid text edit is still only an edit.
@@ -4094,10 +4140,10 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
     // C: an unsent, INVALID draft. Nothing dispatches it - `commit` returns
     // after `edited` because the new candidate's family is blank.
     openFallbackTab("equivalentModels");
-    fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
-    ).toContain("Model 2 in “fast” needs a model.");
+    ).toContain("Row 2 in “fast” needs a model or pattern.");
 
     // The reset is refused. It carried defaults; it never carried C. Reset and
     // everything the refusal then says are on `plan` (see the sibling MATRIX
@@ -4123,7 +4169,7 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
     // true, the read-back adopts over it, and both assertions below fail
     // together - the empty field is gone AND the error that explained it is.
     expect(screen.getByTestId("fallback-local-error").textContent).toContain(
-      "Model 2 in “fast” needs a model.",
+      "Row 2 in “fast” needs a model or pattern.",
     );
     openFallbackTab("equivalentModels");
     // Both rows are still there - the adopt did not replace them with the
@@ -4137,11 +4183,11 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
     // The ninth pass argued this cell was impossible - the Restore button lives
     // in the zero-group empty state, and a "Model family" field only exists
     // inside a group. Both halves of that are true and the conclusion is still
-    // wrong: only the Restore BUTTON takes `restorePending`. "Add a group"
+    // wrong: only the Restore BUTTON takes `restorePending`. "Add tier"
     // renders outside `EmptyGroups` and is never disabled, so groups can be
     // built while the restore's RPC is in flight.
     //
-    // "Add a model" is what makes the draft UNSENT, and it is needed: an empty
+    // "Add model" is what makes the draft UNSENT, and it is needed: an empty
     // group is schema-valid (`candidates` has no `.min(1)`), so adding a group
     // alone dispatches a save and the display would be `sent-unknown`. The new
     // candidate's family is deliberately blank, so `commit` returns after
@@ -4158,13 +4204,13 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
     openFallbackTab("equivalentModels");
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Restore the default groups" }),
+      screen.getByRole("button", { name: "Restore the default tiers" }),
     );
     await flushHostReplies();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add a group" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add tier" }));
     await flushHostReplies();
-    fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
     await flushHostReplies();
 
     failEveryRead();
@@ -4175,7 +4221,7 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
     // The cell renders, which is the reachability claim itself: both accounts
     // are present and each names its own subject.
     expect(notice.textContent).toContain(
-      "whether the default model groups were restored",
+      "whether the default tiers were restored",
     );
     expect(notice.textContent).toContain("haven't been sent");
   });
@@ -4494,10 +4540,10 @@ describe("FallbackSettingsPanel - AX8: the master switch names its own consequen
 });
 
 describe("FallbackSettingsPanel - R-OSS-2: reset completion must not steal focus mid-edit or save a half-typed draft", () => {
-  it("a Group name input focused while Reset is pending keeps its focus, and no draft save fires, when the reset is refused", async () => {
-    // Driven through Group name rather than a candidate's family: the Model
+  it("a Tier name input focused while Reset is pending keeps its focus, and no draft save fires, when the reset is refused", async () => {
+    // Driven through Tier name rather than a candidate's family: the Model
     // cell is a Select now, which has no "half-typed, not yet blurred" state
-    // for a forced blur to catch - Group name is the only remaining field
+    // for a forced blur to catch - Tier name is the only remaining field
     // this guard can be pinned through.
     fallbackMocks.queryData = respond(
       policy({
@@ -4538,7 +4584,7 @@ describe("FallbackSettingsPanel - R-OSS-2: reset completion must not steal focus
     // assertion not been there the cell would have gone on to "prove" that the
     // guard preserved a focus the test never established.
     openFallbackTab("equivalentModels");
-    const nameInput = screen.getByLabelText<HTMLInputElement>("Group name");
+    const nameInput = screen.getByLabelText<HTMLInputElement>("Tier name");
     nameInput.focus();
     fireEvent.change(nameInput, { target: { value: "fas" } });
     expect(document.activeElement).toBe(nameInput);
@@ -4607,7 +4653,7 @@ describe("the tab rail: what splitting one page into four has to keep true", () 
   const REFUSAL = "model groups are managed for this host";
 
   /**
-   * A refused save that belongs to a tab OTHER than Plan. "Add a group" is the
+   * A refused save that belongs to a tab OTHER than Plan. "Add tier" is the
    * driver because it commits on the click: an empty group is schema-valid
    * (`candidates` has no `.min(1)`), so no text edit is needed to send it.
    */
@@ -4617,7 +4663,7 @@ describe("the tab rail: what splitting one page into four has to keep true", () 
     renderPanel();
 
     openFallbackTab("equivalentModels");
-    fireEvent.click(screen.getByRole("button", { name: "Add a group" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add tier" }));
     await flushHostReplies();
   }
 
@@ -4787,5 +4833,538 @@ describe("FallbackSettingsPanel - the equivalent-models step hint", () => {
         /No other model is set up for Claude Code · claude-fable-5-1\[1m\]/,
       ),
     ).toBeDefined();
+  });
+});
+
+describe("FallbackSettingsPanel - Pin 5: no save gate over a rendered tier conflict", () => {
+  it("commits the master switch AND a timing control while a genuine conflict is on screen, with no blocking validation message", async () => {
+    // A 1.1-negotiated host, so the conflict block is even computed
+    // (`FallbackPolicyEditor`'s `conflicts` memo gates on `patternLines.patterns`).
+    patternLines.patterns = true;
+    // "gpt-5.6-terra" is both an exact pick (standard) and matched by "*gpt*"
+    // (frontier) - a genuine "one model, one tier" conflict.
+    catalogsByHarnessFixture.value = new Map([
+      ["codex", [{ slug: "gpt-5.6-terra", label: "GPT-5.6-Terra" }]],
+    ]);
+    const conflictingTiers: TierGroup[] = [
+      {
+        id: "frontier",
+        candidates: [
+          { harnessId: "codex", modelFamily: "*gpt*", reasoningEffort: null },
+        ],
+      },
+      {
+        id: "standard",
+        candidates: [
+          {
+            harnessId: "codex",
+            modelFamily: "gpt-5.6-terra",
+            reasoningEffort: null,
+          },
+        ],
+      },
+    ];
+    fallbackMocks.queryData = respond(
+      policy({ tierGroups: conflictingTiers, maxWaitMinutes: 360 }),
+    );
+    // Echo the sent policy back, like the other panel tests do - a fixed
+    // resolved value would replace the draft's conflicting tierGroups with
+    // whatever it names, hiding the very conflict this pin holds through.
+    fallbackMocks.setMutateAsync.mockImplementation((input) =>
+      Promise.resolve({ policy: input.policy }),
+    );
+    renderPanel();
+    openFallbackTab("equivalentModels");
+
+    // The conflict really is on screen - the state this pin has to hold
+    // through, not merely a policy that COULD conflict.
+    expect(
+      screen.getAllByTestId("fallback-tier-conflict").length,
+    ).toBeGreaterThan(0);
+
+    // The master switch commits.
+    //
+    // Falsification: add any `localError`/conflict-derived guard around
+    // `FallbackPolicyEditor`'s master-switch `onCommit` (or around `commit`
+    // generally) that refuses to send while `conflicts.length > 0` - this
+    // assertion would then see `setMutateAsync` never called.
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Route automatically" }),
+    );
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(1);
+    });
+    // What was SENT is the toggle over the conflicting tiers as they stand -
+    // not a save that went through only because something quietly "fixed"
+    // the conflict first.
+    const toggled = fallbackMocks.setMutateAsync.mock.calls[0][0].policy;
+    expect(toggled.enabled).toBe(false);
+    expect(toggled.tierGroups).toEqual(conflictingTiers);
+
+    // A timing control commits too - it lives on the Plan tab, not
+    // Equivalent models, so switch there to reach it.
+    openFallbackTab("plan");
+    openCombobox("Longest wait for a usage limit to reset");
+    chooseOption("1 day");
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(2);
+    });
+    const timed = fallbackMocks.setMutateAsync.mock.calls[1][0].policy;
+    expect(timed.maxWaitMinutes).toBe(1440);
+    expect(timed.tierGroups).toEqual(conflictingTiers);
+    expect(screen.queryByTestId("fallback-local-error")).toBeNull();
+
+    // The conflict block is still rendered on Equivalent models (nothing
+    // about either save resolved or hid it) - there is no save gate over a
+    // conflict (spec decision 2).
+    openFallbackTab("equivalentModels");
+    expect(
+      screen.getAllByTestId("fallback-tier-conflict").length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByTestId("fallback-local-error")).toBeNull();
+  });
+});
+
+describe("FallbackSettingsPanel - Pin 9: deleting the flagship (default) tier", () => {
+  const FRONTIER: TierGroup = {
+    id: "frontier",
+    candidates: [
+      { harnessId: "claude", modelFamily: "*fable*", reasoningEffort: "high" },
+      { harnessId: "codex", modelFamily: "*astra*", reasoningEffort: "high" },
+    ],
+  };
+  const FLAGSHIP: TierGroup = {
+    id: "flagship",
+    candidates: [
+      { harnessId: "claude", modelFamily: "*opus*", reasoningEffort: "high" },
+      { harnessId: "codex", modelFamily: "*sol*", reasoningEffort: "high" },
+      { harnessId: "grok", modelFamily: "*grok*", reasoningEffort: null },
+    ],
+  };
+  const STANDARD: TierGroup = {
+    id: "standard",
+    candidates: [
+      { harnessId: "claude", modelFamily: "*sonnet*", reasoningEffort: null },
+      {
+        harnessId: "codex",
+        modelFamily: "*terra*",
+        reasoningEffort: "medium",
+      },
+    ],
+  };
+
+  function seededPolicy(): FallbackPolicy {
+    return policy({
+      tierGroups: [FRONTIER, FLAGSHIP, STANDARD],
+      defaultTierGroupId: "flagship",
+    });
+  }
+
+  function committedPolicies(): readonly FallbackPolicy[] {
+    return fallbackMocks.setMutateAsync.mock.calls.map(
+      (call) => call[0].policy,
+    );
+  }
+
+  it("deletes flagship with defaultTierGroupId: null in the SAME commit, Undo restores the marker, and every committed policy parses under the real wire schema", async () => {
+    fallbackMocks.queryData = respond(seededPolicy());
+    fallbackMocks.setMutateAsync.mockImplementation((input) =>
+      Promise.resolve({ policy: input.policy }),
+    );
+    renderPanel();
+    openFallbackTab("equivalentModels");
+
+    // Cards render in tier order (frontier, flagship, standard); "Delete
+    // tier" carries no per-tier name (`FALLBACK_GROUP_DELETE_ATTRIBUTE` keys
+    // it by draft key instead), so the button is addressed by position.
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete tier" })[1]);
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(1);
+    });
+    // Falsification: have the deletion clear `defaultTierGroupId` in a
+    // SEPARATE follow-up commit (or not at all) rather than in the same one
+    // that removes the tier - this would then see the first commit's
+    // `defaultTierGroupId` still `"flagship"`, a marker naming a tier the
+    // very same policy no longer has.
+    const afterDelete = committedPolicies()[0];
+    expect(afterDelete.tierGroups.map((g) => g.id)).toEqual([
+      "frontier",
+      "standard",
+    ]);
+    expect(afterDelete.defaultTierGroupId).toBeNull();
+
+    const undo = toastSuccess.mock.calls.at(-1)?.[1];
+    undo?.action.onClick();
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(2);
+    });
+    // Undo's own commit restores the marker alongside the tier.
+    const afterUndo = committedPolicies()[1];
+    expect(afterUndo.tierGroups.map((g) => g.id)).toEqual([
+      "frontier",
+      "flagship",
+      "standard",
+    ]);
+    expect(afterUndo.defaultTierGroupId).toBe("flagship");
+
+    for (const committed of committedPolicies()) {
+      expect(fallbackPolicySchema.safeParse(committed).success).toBe(true);
+    }
+  });
+
+  it("deleting all three tiers one by one never commits a policy whose defaultTierGroupId names a tier that is no longer present", async () => {
+    fallbackMocks.queryData = respond(seededPolicy());
+    fallbackMocks.setMutateAsync.mockImplementation((input) =>
+      Promise.resolve({ policy: input.policy }),
+    );
+    renderPanel();
+    openFallbackTab("equivalentModels");
+
+    // frontier=0, flagship=1, standard=2 - delete flagship first (index 1),
+    // then the remaining two both collapse to index 0 as each disappears.
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete tier" })[1]);
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(1);
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete tier" })[0]);
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(2);
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete tier" })[0]);
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(3);
+    });
+
+    for (const committed of committedPolicies()) {
+      const remaining = new Set(committed.tierGroups.map((g) => g.id));
+      if (committed.defaultTierGroupId !== null) {
+        expect(remaining.has(committed.defaultTierGroupId)).toBe(true);
+      }
+      expect(fallbackPolicySchema.safeParse(committed).success).toBe(true);
+    }
+  });
+});
+
+describe("FallbackSettingsPanel - R9: Undo of a removal is never refused for reintroducing a conflict", () => {
+  it("removing standard's row, turning frontier into a covering pattern, then Undo restores BOTH conflicting rows", async () => {
+    // A 1.1-negotiated host with a codex catalog wide enough for `*gpt*` to
+    // genuinely reach both models - the same shape Pin 5 uses.
+    patternLines.patterns = true;
+    catalogsByHarnessFixture.value = new Map([
+      [
+        "codex",
+        [
+          { slug: "gpt-6-astra", label: "GPT-6-Astra" },
+          { slug: "gpt-5.6-terra", label: "GPT-5.6-Terra" },
+        ],
+      ],
+    ]);
+    // Stored: frontier's exact `gpt-6-astra` and standard's exact
+    // `gpt-5.6-terra` - two different models, so nothing conflicts yet.
+    fallbackMocks.queryData = respond(
+      policy({
+        tierGroups: [
+          {
+            id: "frontier",
+            candidates: [
+              {
+                harnessId: "codex",
+                modelFamily: "gpt-6-astra",
+                reasoningEffort: null,
+              },
+            ],
+          },
+          {
+            id: "standard",
+            candidates: [
+              {
+                harnessId: "codex",
+                modelFamily: "gpt-5.6-terra",
+                reasoningEffort: null,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    fallbackMocks.setMutateAsync.mockImplementation((input) =>
+      Promise.resolve({ policy: input.policy }),
+    );
+    renderPanel();
+    openFallbackTab("equivalentModels");
+
+    // 1. Remove standard's only row - the toast's Undo action is what R9
+    // exercises below.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove gpt-5.6-terra" }),
+    );
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(1);
+    });
+    const removalToast = toastSuccess.mock.calls.at(-1);
+    expect(removalToast).toBeDefined();
+
+    // 2. Commit frontier's row as a covering pattern through the combobox -
+    // nothing else claims a codex model right now (standard is empty), so
+    // this save goes through with no blocker.
+    fireEvent.click(screen.getByTestId("fallback-model-pattern-trigger"));
+    const patternInput = screen.getByTestId("fallback-model-pattern-input");
+    fireEvent.change(patternInput, { target: { value: "*gpt*" } });
+    fireEvent.keyDown(patternInput, { key: "Enter" });
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(2);
+    });
+    expect(
+      fallbackMocks.setMutateAsync.mock.calls[1][0].policy.tierGroups.find(
+        (group) => group.id === "frontier",
+      )?.candidates[0].modelFamily,
+    ).toBe("*gpt*");
+
+    // 3. Press Undo on the removal toast raised in step 1.
+    //
+    // Falsification: any conflict-refusing guard added to `undoGroupsChange`
+    // / `applyGroupsInverse` (fallback-settings-panel.tsx) - e.g. returning
+    // early when `fallbackTierConflicts(next…)` is non-empty - would leave
+    // `setMutateAsync` uncalled a third time and standard's row un-restored.
+    removalToast?.[1].action.onClick();
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(3);
+    });
+
+    const undone = fallbackMocks.setMutateAsync.mock.calls[2][0].policy;
+    const frontierAfter = undone.tierGroups.find(
+      (group) => group.id === "frontier",
+    );
+    const standardAfter = undone.tierGroups.find(
+      (group) => group.id === "standard",
+    );
+    expect(frontierAfter?.candidates.map((c) => c.modelFamily)).toEqual([
+      "*gpt*",
+    ]);
+    expect(standardAfter?.candidates.map((c) => c.modelFamily)).toEqual([
+      "gpt-5.6-terra",
+    ]);
+
+    // 4. Both rows now genuinely conflict (frontier's `*gpt*` reaches
+    // standard's exact `gpt-5.6-terra` too) and both show it - the Undo did
+    // not refuse to reintroduce the conflict.
+    await waitFor(() => {
+      expect(screen.getAllByTestId("fallback-tier-conflict")).toHaveLength(2);
+    });
+  });
+});
+
+/** Shared by both R2 describe blocks below. */
+const R2_CONFLICTING_TIERS: TierGroup[] = [
+  {
+    id: "frontier",
+    candidates: [
+      { harnessId: "codex", modelFamily: "*gpt*", reasoningEffort: null },
+    ],
+  },
+  {
+    id: "standard",
+    candidates: [
+      {
+        harnessId: "codex",
+        modelFamily: "gpt-5.6-terra",
+        reasoningEffort: null,
+      },
+    ],
+  },
+];
+
+describe("FallbackSettingsPanel - R2: a conflict block is role=alert only on its first appearance", () => {
+  beforeEach(() => {
+    patternLines.patterns = true;
+    catalogsByHarnessFixture.value = new Map([
+      ["codex", [{ slug: "gpt-5.6-terra", label: "GPT-5.6-Terra" }]],
+    ]);
+  });
+
+  it("both conflict blocks are role=alert on first render, and NEITHER is after leaving and returning to the tab", () => {
+    fallbackMocks.queryData = respond(
+      policy({ tierGroups: R2_CONFLICTING_TIERS }),
+    );
+    renderPanel();
+    openFallbackTab("equivalentModels");
+
+    const first = screen.getAllByTestId("fallback-tier-conflict");
+    expect(first).toHaveLength(2);
+    for (const block of first) {
+      expect(block.getAttribute("role")).toBe("alert");
+    }
+
+    // `TabsContent` has no `forceMount`, so leaving unmounts the blocks and
+    // returning mounts them fresh.
+    openFallbackTab("plan");
+    openFallbackTab("equivalentModels");
+
+    const again = screen.getAllByTestId("fallback-tier-conflict");
+    expect(again).toHaveLength(2);
+    for (const block of again) {
+      // Falsification: `useConflictFirstAppearance`'s initializer returning
+      // `true` unconditionally, or the panel body rendered without
+      // `FallbackConflictAnnouncementsProvider` (fallback-settings-panel.tsx)
+      // - either would leave `role="alert"` here too.
+      expect(block.getAttribute("role")).toBeNull();
+    }
+  });
+
+  it("deleting an unrelated EARLIER tier re-keys the conflict blocks (ConflictBlock's key is the other tier's index) without re-announcing them", async () => {
+    fallbackMocks.queryData = respond(
+      policy({
+        tierGroups: [
+          // A claude row that conflicts with nothing - deleting it shifts
+          // frontier/standard's tierIndex by one, re-keying their
+          // `ConflictBlock`s, without the conflict itself changing.
+          {
+            id: "scratch",
+            candidates: [
+              {
+                harnessId: "claude",
+                modelFamily: "*fable*",
+                reasoningEffort: null,
+              },
+            ],
+          },
+          ...R2_CONFLICTING_TIERS,
+        ],
+      }),
+    );
+    fallbackMocks.setMutateAsync.mockImplementation((input) =>
+      Promise.resolve({ policy: input.policy }),
+    );
+    renderPanel();
+    openFallbackTab("equivalentModels");
+
+    for (const block of screen.getAllByTestId("fallback-tier-conflict")) {
+      expect(block.getAttribute("role")).toBe("alert");
+    }
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete tier" })[0]);
+
+    await waitFor(() => {
+      const blocks = screen.getAllByTestId("fallback-tier-conflict");
+      expect(blocks).toHaveLength(2);
+      for (const block of blocks) {
+        // Falsification: the same two ablations as above - either would
+        // treat the re-keyed (remounted) block as a fresh first appearance.
+        expect(block.getAttribute("role")).toBeNull();
+      }
+    });
+  });
+});
+
+describe("FallbackSettingsPanel - R2 CONTROL: role=alert on every mount with no announcements provider", () => {
+  it("FallbackTierGroupsEditor rendered on its own (no FallbackConflictAnnouncementsProvider) keeps role=alert on both blocks", () => {
+    // Documented `null`-context behaviour: outside the provider, every block
+    // is treated as a first appearance, which is what a history-less render
+    // is. This is the control that isolates the OTHER two tests' subject -
+    // without it, a mutant that always renders `role="alert"` (the same
+    // mutant the first test above falsifies) would look identical to this
+    // one passing for an unrelated reason.
+    const groups = R2_CONFLICTING_TIERS;
+    const codexModel: GuiAgentModelOption = {
+      harnessId: "codex",
+      slug: "gpt-5.6-terra",
+      label: "GPT-5.6-Terra",
+      description: null,
+      contextWindow: null,
+      maxOutputTokens: null,
+      defaultReasoningEffort: null,
+      supportedReasoningEfforts: [],
+      defaultServiceTier: null,
+      supportedServiceTiers: [],
+      metadata: {},
+    };
+    const catalogsByHarness = new Map<
+      TierGroup["candidates"][number]["harnessId"],
+      readonly GuiAgentModelOption[]
+    >([["codex", [codexModel]]]);
+    const conflicts: readonly TierConflict[] = findTierConflicts(
+      groups,
+      catalogsByHarness,
+    );
+    const catalog: FallbackCatalogOptions = {
+      modelsFor: (harnessId) => catalogsByHarness.get(harnessId) ?? [],
+      catalogFor: (harnessId) => catalogsByHarness.get(harnessId) ?? null,
+      catalogsByHarness,
+      effortsFor: () => [],
+    };
+    render(
+      <FallbackTierGroupsEditor
+        policy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
+        groups={toKeyedGroups(groups)}
+        preview={null}
+        labelFor={(id) => id}
+        catalog={catalog}
+        patternsSupported
+        conflicts={conflicts}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={() => {}}
+        onCommit={() => {}}
+        onUndo={() => {}}
+        onRestoreDefaults={() => {}}
+        restorePending={false}
+        status={null}
+        headerAction={null}
+        testPanel={null}
+      />,
+    );
+    const blocks = screen.getAllByTestId("fallback-tier-conflict");
+    expect(blocks).toHaveLength(2);
+    for (const block of blocks) {
+      expect(block.getAttribute("role")).toBe("alert");
+    }
+  });
+});
+
+/**
+ * R5, at the real panel boundary: `patternLines.patterns` is what the panel
+ * passes through to `FallbackTierGroupsEditor` as `patternsSupported`
+ * (`fallback-settings-panel.tsx`), so this is the same gate the editor-level
+ * RED 3/4/GUARD E/F cases exercise, driven from the top instead.
+ */
+describe("FallbackSettingsPanel - R5: the populated-list footer restore is gated on patternsSupported", () => {
+  function policyWithCustomDefault(): FallbackPolicy {
+    return policy({
+      tierGroups: [
+        { id: "frontier", candidates: [] },
+        { id: "standard", candidates: [] },
+        { id: "cheap", candidates: [] },
+      ],
+      defaultTierGroupId: "cheap",
+    });
+  }
+
+  it("RED 5: patterns false, a populated policy with a custom tier as the default - no 'Restore the default tiers' button, and restoreMutateAsync is never called", () => {
+    patternLines.patterns = false;
+    // The file's `beforeEach` does not reset this double, so it still carries
+    // the calls of every restore test above; the assertion below is about THIS
+    // render only.
+    fallbackMocks.restoreMutateAsync.mockClear();
+    fallbackMocks.queryData = respond(policyWithCustomDefault());
+    renderPanel();
+    openFallbackTab("equivalentModels");
+    // Falsification: this is RED on the unmodified panel, which passes
+    // `patternsSupported` through unchanged but the editor itself renders the
+    // footer restore for any non-empty `groups` regardless of that prop.
+    expect(
+      screen.queryByRole("button", { name: "Restore the default tiers" }),
+    ).toBeNull();
+    expect(fallbackMocks.restoreMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("GUARD G: patterns true, the same policy - the button is present", () => {
+    patternLines.patterns = true;
+    fallbackMocks.queryData = respond(policyWithCustomDefault());
+    renderPanel();
+    openFallbackTab("equivalentModels");
+    expect(
+      screen.getByRole("button", { name: "Restore the default tiers" }),
+    ).not.toBeNull();
   });
 });
