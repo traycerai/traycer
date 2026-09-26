@@ -212,6 +212,63 @@ function firstCallUnsupportedClient(): {
   };
 }
 
+/**
+ * A client whose `drafts.putBlob` requests all park on a promise this helper
+ * controls, keyed by the request's OWN digest - so a test can settle one
+ * particular in-flight request (by the `sha256` it carries) while every other
+ * one stays parked forever. `deferredTrackingClient` above releases every
+ * open request together; this one is for the case that needs to single out
+ * exactly one of several concurrent requests, such as a refusal landing on
+ * one call's digest while a sibling call's digests never answer at all.
+ */
+function digestGatingClient(): {
+  readonly client: DraftBlobClient;
+  readonly calls: () => number;
+  /** Reject the pending request for this digest with `error`. Throws if none is pending. */
+  readonly rejectDigest: (sha256: string, error: Error) => void;
+  /** Resolve every still-pending request as `{ ok: true }`. */
+  readonly releaseAll: () => void;
+} {
+  let calls = 0;
+  const resolvers = new Map<string, () => void>();
+  const settlers = new Map<string, (error: Error) => void>();
+  const requestWithOptions = ((_method, params) => {
+    calls += 1;
+    const { sha256 } = params as { readonly sha256: string };
+    return new Promise<{ readonly ok: true }>((resolve, reject) => {
+      resolvers.set(sha256, () => {
+        resolve({ ok: true });
+      });
+      settlers.set(sha256, (error: Error) => {
+        reject(error);
+      });
+    });
+  }) as HostRequester<HostRpcRegistry>["requestWithOptions"];
+  const request = (() =>
+    Promise.reject(
+      new Error("digestGatingClient: unexpected request() call"),
+    )) as HostRequester<HostRpcRegistry>["request"];
+  return {
+    client: { request, requestWithOptions },
+    calls: () => calls,
+    rejectDigest: (sha256, error) => {
+      const reject = settlers.get(sha256);
+      if (reject === undefined) {
+        throw new Error(`digestGatingClient: no pending request for ${sha256}`);
+      }
+      settlers.delete(sha256);
+      resolvers.delete(sha256);
+      reject(error);
+    },
+    releaseAll: () => {
+      const toRelease = [...resolvers.values()];
+      resolvers.clear();
+      settlers.clear();
+      for (const release of toRelease) release();
+    },
+  };
+}
+
 /** One macrotask - enough for a FileReader/IndexedDB callback queued this tick to run. */
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1083,6 +1140,78 @@ describe("draft blob transport", () => {
     // Nothing the siblings settled after the call returned was reported to the
     // progress listener.
     expect(progress.length).toBe(progressCountAtResolution);
+  });
+
+  it("a refusal observed by one call releases every other call waiting on the same host", async () => {
+    // Call A carries two digests, call B a distinct third - three digests
+    // total, so every one of them fits in the per-host gate (cap 3) at once
+    // and nothing here is gated on waiting for a slot. The client parks
+    // EVERY request until told to settle a specific one, so the refusal can
+    // be delivered to exactly B's digest while A's two requests never answer
+    // at all. The verdict is the HOST's: `putDraftBlobsWithProgress` must
+    // still resolve A, because every call registered on that host's verdict
+    // wakes, not only the call whose own request was the one refused.
+    const a1 = await putImage(pngBytesTagged(240));
+    const a2 = await putImage(pngBytesTagged(241));
+    const b1 = await putImage(pngBytesTagged(242));
+    const gating = digestGatingClient();
+
+    const progressA: DraftBlobUploadProgress[] = [];
+    let resolvedA: ReadonlyArray<string> | null = null;
+    void putDraftBlobsWithProgress({
+      hostId: HOST,
+      client: gating.client,
+      hashes: [a1, a2],
+      ownerUserId: OWNER,
+      onProgress: (update) => progressA.push(update),
+    }).then((value) => {
+      resolvedA = value;
+    });
+
+    let resolvedB: ReadonlyArray<string> | null = null;
+    void putDraftBlobs(HOST, gating.client, [b1], OWNER).then((value) => {
+      resolvedB = value;
+    });
+
+    await vi.waitFor(() => {
+      expect(gating.calls()).toBe(3);
+    });
+
+    // Negative control: before the refusal is delivered, neither call has
+    // resolved - proves what unblocks A below is the broadcast, not a timer
+    // or a coincidence of the fan-out's own shape.
+    for (let index = 0; index < 5; index += 1) await tick();
+    expect(resolvedA).toBeNull();
+    expect(resolvedB).toBeNull();
+
+    // Refuse only B's request. A's two requests stay parked forever - they
+    // are released only at the very end, and by then A must already have
+    // resolved.
+    gating.rejectDigest(b1, unsupportedError("drafts.putBlob"));
+
+    await vi.waitFor(() => {
+      expect(resolvedA).not.toBeNull();
+      expect(resolvedB).not.toBeNull();
+    });
+    // The broadcast: A resolves to no confirmations at all, though neither of
+    // ITS requests ever answered.
+    expect(resolvedA).toEqual([]);
+    expect(resolvedB).toEqual([]);
+    expect(hostWithholdsDraftBlobs(HOST)).toBe(true);
+    const progressCountAtResolution = progressA.length;
+
+    // A's own two requests are still on the wire, holding their slots - it
+    // returned WITHOUT waiting for them.
+    expect(draftBlobUploadsInFlight(HOST)).toBeGreaterThan(0);
+
+    gating.releaseAll();
+    await vi.waitFor(() => {
+      expect(draftBlobUploadsInFlight(HOST)).toBe(0);
+    });
+
+    // Nothing the released siblings settled after A had already resolved
+    // reached its progress listener.
+    expect(progressA.length).toBe(progressCountAtResolution);
   });
 
   // ─── F7: no detached unhandled rejection ────────────────────────────────

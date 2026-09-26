@@ -178,6 +178,7 @@ export function resetDraftBlobTransportForTests(): void {
   unbridgeableBlobs.clear();
   blobEpochs.clear();
   uploadGates.clear();
+  verdictWaiters.clear();
 }
 
 /**
@@ -323,8 +324,33 @@ export function hostWithholdsDraftBlobs(hostId: string): boolean {
   return blobUnsupportedHosts.has(hostId);
 }
 
+/**
+ * Calls waiting on a host's capability verdict; see
+ * `putDraftBlobsWithProgress`. Per HOST, like the gate and the flag it is
+ * the notification for: the verdict is one fact about the host, and every
+ * call with digests up on it is entitled to it the moment it is known, not
+ * only the call whose own request happened to be the one refused.
+ */
+const verdictWaiters = new Map<string, Set<() => void>>();
+
 function markBlobUnsupported(hostId: string): void {
   blobUnsupportedHosts.add(hostId);
+  const waiters = verdictWaiters.get(hostId);
+  if (waiters === undefined) return;
+  verdictWaiters.delete(hostId);
+  for (const wake of waiters) wake();
+}
+
+function awaitVerdict(hostId: string, wake: () => void): () => void {
+  const waiters = verdictWaiters.get(hostId) ?? new Set<() => void>();
+  verdictWaiters.set(hostId, waiters);
+  waiters.add(wake);
+  return () => {
+    waiters.delete(wake);
+    if (waiters.size === 0 && verdictWaiters.get(hostId) === waiters) {
+      verdictWaiters.delete(hostId);
+    }
+  };
 }
 
 function isBlobUnsupported(error: unknown): boolean {
@@ -451,10 +477,18 @@ export async function putDraftBlobsWithProgress(input: {
   // does the same by racing the fan-out against the verdict. The siblings
   // finish on their own (their flights never reject and release their slots
   // in `finally`), and nothing they settle after this returns is reported.
+  //
+  // The verdict is the HOST's, delivered by `markBlobUnsupported` to every
+  // call waiting on that host - not only to the call whose own request was
+  // the refused one. Overlapping calls share the gate and the flag, so a
+  // call whose requests are all delayed, with no digest left in its queue
+  // to observe the flag, would otherwise wait its whole budget on a
+  // fallback another call had already decided for it.
   let resolveVerdict: () => void = () => undefined;
   const verdict = new Promise<void>((resolve) => {
     resolveVerdict = resolve;
   });
+  const stopAwaitingVerdict = awaitVerdict(hostId, resolveVerdict);
   // Every digest queues on the HOST's gate (see "The per-host upload gate"),
   // not on a pool of this call's own, so the limit holds across overlapping
   // callers. Each digest still settles into this call's own progress count.
@@ -497,14 +531,17 @@ export async function putDraftBlobsWithProgress(input: {
         }
       }
       if (acknowledged && !settled) confirmed.push(sha256);
-      if (blobUnsupportedHosts.has(hostId)) resolveVerdict();
       if (settled) return;
       completed += 1;
       onProgress?.({ completed, total });
     }),
   );
-  await Promise.race([fanOut, verdict]);
-  settled = true;
+  try {
+    await Promise.race([fanOut, verdict]);
+  } finally {
+    settled = true;
+    stopAwaitingVerdict();
+  }
   return confirmed;
 }
 
