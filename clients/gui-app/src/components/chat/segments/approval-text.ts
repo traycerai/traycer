@@ -42,13 +42,14 @@ export interface ApprovalCardText {
   /**
    * The first line's `· summary`: `null` when there is none, and when the
    * headline IS the input, in full - a long command is shown once, uncut,
-   * rather than cut on one line and whole on the next. The complete text is
-   * the one kept because it is what the user is approving: the tail a cut
-   * hides is exactly where `; rm -rf …` would sit. That is also why the
-   * headline must equal the whole input and not merely begin like it: the
-   * description comes from the harness or the model, not from the input, and
-   * one that shares the input's first 79 characters can still end
-   * differently - dropping the summary for it would hide the real tail.
+   * rather than cut on one line and whole on the next. Otherwise a summary
+   * cut by its length cap is replaced by the whole input, so the card never
+   * shows only a cut command. The complete text is the one kept because it
+   * is what the user is approving: the tail a cut hides is exactly where
+   * `; rm -rf …` would sit. That is also why the headline must equal the
+   * whole input and not merely begin like it: the description comes from the
+   * harness or the model, not from the input, and one that shares the
+   * input's first 79 characters can still end differently.
    */
   readonly inputSummary: string | null;
   /** The line under it: `null` when it would only repeat the first line. */
@@ -70,14 +71,13 @@ export function approvalCardText(
     return { inputSummary, headline: null };
   }
   const fullInput = singleDetailText(inputDetail);
-  if (
-    fullInput !== null &&
-    headline === collapse(fullInput) &&
-    isTruncationOf(inputSummary, fullInput)
-  ) {
+  if (fullInput === null || !isTruncationOf(inputSummary, fullInput)) {
+    return { inputSummary, headline: description };
+  }
+  if (headline === collapse(fullInput)) {
     return { inputSummary: null, headline: description };
   }
-  return { inputSummary, headline: description };
+  return { inputSummary: fullInput, headline: description };
 }
 
 /** The resolved row's expanded body, before its decision reason. */

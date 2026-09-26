@@ -259,13 +259,17 @@ function ApprovalRow(props: ApprovalRowProps) {
         <ApprovalWaitLine requestedAt={approval.requestedAt} />
       ) : null}
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-code-sm text-foreground/80">
-        <span className="shrink-0">{approval.toolName}</span>
+        {/* Some harnesses name the call by its whole title (an ACP
+            `Execute \`<command>\``), so the name wraps like the summary does. */}
+        <span className="min-w-0 break-words">{approval.toolName}</span>
         {inputSummary !== null ? (
           <>
             <span aria-hidden className="shrink-0 text-muted-foreground/40">
               ·
             </span>
-            <span className="min-w-0 break-words text-muted-foreground">
+            {/* Can be the whole input, lines and all; the cap keeps a long
+                script from pushing the composer off screen. */}
+            <span className="max-h-[30vh] min-w-0 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground">
               {inputSummary}
             </span>
           </>

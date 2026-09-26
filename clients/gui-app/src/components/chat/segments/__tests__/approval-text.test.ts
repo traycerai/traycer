@@ -117,7 +117,7 @@ describe("approvalCardText", () => {
     });
   });
 
-  it("keeps the cut summary when the description only shares its prefix", () => {
+  it("shows the whole command when the description only shares its prefix", () => {
     const shared = `echo ${"a".repeat(90)}`;
     const command = `${shared}; rm -rf ~`;
     const summary = truncatedSummary(command);
@@ -129,7 +129,21 @@ describe("approvalCardText", () => {
         `${shared} # tidy`,
         commandDetail(command),
       ),
-    ).toEqual({ inputSummary: summary, headline: `${shared} # tidy` });
+    ).toEqual({ inputSummary: command, headline: `${shared} # tidy` });
+  });
+
+  it("shows the whole command in place of a cut summary beside a prose description", () => {
+    const command = `cd /Users/someone/${"w".repeat(90)} && ls`;
+    const summary = truncatedSummary(command);
+    expect(summary.endsWith("…")).toBe(true);
+    expect(
+      approvalCardText(
+        "Bash",
+        summary,
+        "List the worktree",
+        commandDetail(command),
+      ),
+    ).toEqual({ inputSummary: command, headline: "List the worktree" });
   });
 
   it("drops the cut summary when the description equals the whole command", () => {

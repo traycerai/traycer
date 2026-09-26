@@ -391,15 +391,37 @@ describe("<ComposerSlotApprovalQueue /> approval text", () => {
     expect(row.textContent).not.toContain("…");
   });
 
-  it("keeps the cut summary when the description only shares the command's prefix", () => {
+  it("shows the whole command when the description only shares the command's prefix", () => {
     const shared = `echo ${"a".repeat(90)}`;
+    const command = `${shared}; rm -rf ~`;
     const row = renderOne({
       toolName: "run_command",
-      input: { command: `${shared}; rm -rf ~` },
+      input: { command },
       description: `${shared} # tidy`,
     });
     expect(within(row).getAllByText(`${shared} # tidy`)).toHaveLength(1);
-    expect(row.textContent).toContain("…");
+    expect(within(row).getAllByText(command)).toHaveLength(1);
+    expect(row.textContent).not.toContain("…");
+  });
+
+  it("shows a long command in full beside a prose description", () => {
+    const command = `cd /Users/someone/${"w".repeat(90)} && ls`;
+    const row = renderOne({
+      toolName: "Bash",
+      input: { command },
+      description: "List the worktree",
+    });
+    expect(within(row).getByText("List the worktree")).toBeTruthy();
+    expect(within(row).getAllByText(command)).toHaveLength(1);
+    expect(row.textContent).not.toContain("…");
+  });
+
+  it("lets a long tool name wrap inside the card", () => {
+    const toolName = `Execute \`rtk ls -d ${"/Users/someone/dir ".repeat(12)}\``;
+    const row = renderOne({ toolName, input: {}, description: toolName });
+    const name = within(row).getByText(toolName);
+    expect(name.className).toContain("min-w-0");
+    expect(name.className).not.toContain("shrink-0");
   });
 });
 
