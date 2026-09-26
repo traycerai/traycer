@@ -18,6 +18,7 @@ import {
   patternMatchCount,
   rowConflictsFor,
   rowStatusLine,
+  tierCountPhrase,
   tierDisplayName,
   type TierClaim,
 } from "@/components/settings/panels/fallback/fallback-model-patterns";
@@ -530,6 +531,20 @@ describe("patternMatchCount / tierDisplayName", () => {
     // this would read "tier 2" instead of "tier 3" for index 2.
     expect(tierDisplayName("", 2)).toBe("tier 3");
     expect(tierDisplayName("   ", 0)).toBe("tier 1");
+  });
+});
+
+describe("tierCountPhrase", () => {
+  it("spells out two through five", () => {
+    expect(tierCountPhrase(2)).toBe("two tiers");
+    expect(tierCountPhrase(3)).toBe("three tiers");
+    expect(tierCountPhrase(4)).toBe("four tiers");
+    expect(tierCountPhrase(5)).toBe("five tiers");
+  });
+
+  it("falls back to digits beyond five", () => {
+    expect(tierCountPhrase(6)).toBe("6 tiers");
+    expect(tierCountPhrase(7)).toBe("7 tiers");
   });
 });
 

@@ -34,6 +34,7 @@ import {
 } from "@/components/settings/panels/fallback/fallback-catalog-options";
 import {
   isModelPattern,
+  tierCountPhrase,
   tierDisplayName,
 } from "@/components/settings/panels/fallback/fallback-model-patterns";
 import { effectiveLadderFor } from "@/components/settings/panels/fallback/fallback-overrides-model";
@@ -865,7 +866,7 @@ function routedSentence(
       : `Traycer uses the ${model.tierName} tier`;
   const conflict =
     model.routing.kind === "own-tier" && model.routing.conflict !== null
-      ? ` It is in two tiers; ${tierDisplayName(model.routing.conflict[0].tierId, model.routing.conflict[0].tierIndex)} handles it until you fix the conflict.`
+      ? ` It is in ${tierCountPhrase(model.routing.conflict.length)}; ${tierDisplayName(model.routing.conflict[0].tierId, model.routing.conflict[0].tierIndex)} handles it until you fix the conflict.`
       : "";
   return `${routedAnswerSentence(model, start)}${conflict}`;
 }

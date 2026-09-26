@@ -79,6 +79,7 @@ import {
   isAnyModelPattern,
   isModelPattern,
   joinWithAnd,
+  tierCountPhrase,
   tierDisplayName,
 } from "@/components/settings/panels/fallback/fallback-model-patterns";
 import { FallbackPatternGlyph } from "@/components/settings/panels/fallback/fallback-pattern-glyph";
@@ -1463,7 +1464,9 @@ function ConflictFooter(props: {
       className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-destructive/30 px-3 py-2 text-ui-xs"
       data-testid="fallback-test-model-footer-conflict"
     >
-      <span className="text-muted-foreground">In two tiers:</span>
+      <span className="text-muted-foreground">
+        In {tierCountPhrase(claims.length)}:
+      </span>
       <BlockedModel blocked={blocked} />
       <span className="text-muted-foreground">
         <span aria-hidden>→ </span>matched in{" "}

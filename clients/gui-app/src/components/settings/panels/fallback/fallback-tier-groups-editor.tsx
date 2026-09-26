@@ -92,8 +92,9 @@ export interface FallbackTierGroupsEditorProps {
   /**
    * Whether the host reads tier rows as PATTERNS - `providers.fallbackPolicy.get`
    * negotiated at 1.1 or later (`useFallbackPolicyPatternLines`). Below it the
-   * Model cell stays the select-only cell, and the copy does not offer the
-   * pattern syntax the host would not read.
+   * Model cell stays the select-only cell, the copy does not offer the
+   * pattern syntax the host would not read, and the populated list offers no
+   * Restore (see `RestoreDefaultTiers`).
    */
   readonly patternsSupported: boolean;
   /**
@@ -493,9 +494,11 @@ export function FallbackTierGroupsEditor(
           >
             Add tier
           </Button>
-          {groups.length === 0 ? null : (
+          {groups.length === 0 || !patternsSupported ? null : (
             // The empty state carries its own direct Restore; this one sits
-            // over tiers the user has, so it confirms first.
+            // over tiers the user has, so it confirms first. A pattern-era
+            // host only: see `RestoreDefaultTiers` for what a 1.0 host's
+            // restore does instead.
             <RestoreDefaultTiers
               tierCount={groups.length}
               onRestoreDefaults={onRestoreDefaults}
@@ -932,6 +935,16 @@ function PatternCode(props: { readonly children: ReactNode }): ReactNode {
  * tier removal it has no Undo - there is no draft inverse for a list the host
  * built. So the confirm says exactly that, with the count the user is about to
  * lose.
+ *
+ * Offered only where `patternsSupported` - a host whose `get` line is 1.1 -
+ * because the confirm is a claim about what the HOST writes, and the restore
+ * request is the same empty `{}` everywhere. A 1.0 host restores its own older
+ * seed and keeps the current default, so the confirm would promise tiers and a
+ * default it never writes; and when that default names a tier of the user's
+ * own, the host refuses the restore outright, since the tier is gone from the
+ * list it writes. The released editor had no footer restore there, and a 1.0
+ * host keeps that shape: its empty state still restores directly, and there
+ * the default is always None, since there is no tier left for it to name.
  *
  * Focus comes back to this button afterwards. A cancel is the shared dialog's
  * own return. A confirm is the case it cannot cover: confirming closes the

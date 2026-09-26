@@ -62,6 +62,7 @@ import {
   type FallbackCatalogOptions,
 } from "@/components/settings/panels/fallback/fallback-catalog-options";
 import { useFallbackPolicyPatternLines } from "@/hooks/providers/use-fallback-policy-pattern-lines";
+import { legacyFamilyTiersNameDestinationFor } from "@/components/settings/panels/fallback/fallback-legacy-family-routing";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import {
@@ -1191,7 +1192,11 @@ function FallbackPolicyEditor(props: {
                 // moment the user adds a destination for their own model. A host
                 // call could only answer for what is saved.
                 tierStepHint={
-                  <TierStepHint policy={state.draft} catalog={catalog} />
+                  <TierStepHint
+                    policy={state.draft}
+                    catalog={catalog}
+                    patternsSupported={patternLines.patterns}
+                  />
                 }
               />
               {saveStatusFor("ladder", "mt-3")}
@@ -1772,6 +1777,14 @@ function ProfileStepHint(): ReactNode {
  * protocol FOR this call site: the question is asked about a draft that has
  * never been saved, which no RPC can answer.
  *
+ * That holds only on a host that routes by patterns. A host whose `get` line
+ * is 1.0 reads the same row as a family WORD, and the pattern predicate then
+ * contradicts it: the old seed's `gpt` row routes `gpt-6-sol` to a tier with a
+ * Claude model on that host, while the exact matcher finds no tier and this
+ * sentence would say nothing is set up. So below 1.1 the question goes to the
+ * released rule (`legacyFamilyTiersNameDestinationFor`), the same line the
+ * editor and the Test panel already gate on.
+ *
  * ## Which catalog the predicate is given
  *
  * The editor's cached one for the last-run harness (`catalogFor`), or `null`
@@ -1782,7 +1795,8 @@ function ProfileStepHint(): ReactNode {
  * exactly a draft whose harness set - the editor's read - includes it. With no
  * such row the answer comes from the default tier and the catalog changes
  * nothing. `null` is the protocol's ID-only answer, the safe direction it
- * documents.
+ * documents. The released rule takes no catalog at all: a 1.0 host matched
+ * the model's ID and never its name.
  *
  * ## Why the model label is its own read
  *
@@ -1805,9 +1819,18 @@ function ProfileStepHint(): ReactNode {
 function TierStepHint({
   policy,
   catalog,
+  patternsSupported,
 }: {
   readonly policy: FallbackPolicy;
   readonly catalog: FallbackCatalogOptions;
+  /**
+   * The negotiated `providers.fallbackPolicy.get` line reaches 1.1, so the
+   * host reads a row as a PATTERN. Below it the row is a family word, and the
+   * question is asked of the released rule instead - see
+   * `legacyFamilyTiersNameDestinationFor` for why the pattern answer is wrong
+   * there, not merely different.
+   */
+  readonly patternsSupported: boolean;
 }): ReactNode {
   const hostId = useAddressableHostId();
   // `useOptionalHostClient()`, not `useHostClient()`, and the reason is this
@@ -1844,17 +1867,21 @@ function TierStepHint({
     resolvable,
   );
   if (lastRun === null) return null;
-  if (
-    tierGroupsNameDestinationFor({
-      groups: policy.tierGroups,
-      defaultTierGroupId: policy.defaultTierGroupId,
-      harnessId: lastRun.harnessId,
-      model: lastRun.model,
-      catalog: catalog.catalogFor(lastRun.harnessId),
-    })
-  ) {
-    return null;
-  }
+  const namesDestination = patternsSupported
+    ? tierGroupsNameDestinationFor({
+        groups: policy.tierGroups,
+        defaultTierGroupId: policy.defaultTierGroupId,
+        harnessId: lastRun.harnessId,
+        model: lastRun.model,
+        catalog: catalog.catalogFor(lastRun.harnessId),
+      })
+    : legacyFamilyTiersNameDestinationFor({
+        groups: policy.tierGroups,
+        defaultTierGroupId: policy.defaultTierGroupId,
+        harnessId: lastRun.harnessId,
+        model: lastRun.model,
+      });
+  if (namesDestination) return null;
   return (
     <p className="text-ui-sm text-muted-foreground">
       {/* The SAME sentence the error card prints when it withholds "Switch…",

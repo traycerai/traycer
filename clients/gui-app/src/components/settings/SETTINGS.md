@@ -4645,7 +4645,12 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     delete's Undo; the schema refuses a default naming no tier. The Ladder
     tab's step hint asks the same question the error card's verdict does
     (`tierGroupsNameDestinationFor`), over the DRAFT and the editor's cached
-    catalog for the last-run harness. The per-row preview cannot supply
+    catalog for the last-run harness. On a 1.0 host it asks the released
+    rule instead (`fallback-legacy-family-routing.ts`), because that host
+    reads a row as a family word: a whole word in the model's ID (never its
+    name), the longest family deciding the tier, then the default tier. The
+    pattern answer there would tell a user whose `gpt` row routes
+    `gpt-6-sol` to a Claude model that nothing is set up. The per-row preview cannot supply
     effort normalisation: with no failed tuple the engine's walk stops at the
     resolved slug and never reaches it, so it returns no effort information.
     A stored effort outside the offered set keeps an option of its own and
@@ -4733,13 +4738,18 @@ wrap`). Each row names the account its first usable match runs on, the
     had tiers: the host seeds on first read and marks the user, so the empty
     state offers **Restore the default tiers**, which calls the RESTORE op
     rather than saving a client-built list - only the host can build the seed a
-    first read would have produced - and the restore also writes the default
-    tier (`flagship`). The same control sits in the footer beside **Add tier**
-    while tiers exist, behind the shared destructive confirm ("Replace your N
-    tiers with the default Frontier, Flagship and Standard tiers? This also
-    sets the default tier to flagship."), since there it replaces work and has
-    no Undo; focus returns to the button once the restore settles. The empty
-    state's button restores directly - there is nothing to lose. Deleting a
+    first read would have produced - and on a `get`@1.1 host the restore also
+    writes the default tier (`flagship`). On a `get`@1.1 host the same control
+    also sits in the footer beside **Add tier** while tiers exist, behind the
+    shared destructive confirm ("Replace your N tiers with the default
+    Frontier, Flagship and Standard tiers? This also sets the default tier to
+    flagship."), since there it replaces work and has no Undo; focus returns
+    to the button once the restore settles. A 1.0 host gets no footer
+    restore, as in the released editor: its restore writes its own older
+    seed and keeps the current default, so that confirm would be untrue, and
+    it refuses the restore outright when the default names a tier of the
+    user's own. The empty state's button restores directly on every host -
+    there is nothing to lose, and no tier is left for a default to name. Deleting a
     tier or a row offers **Undo**,
     and undo dispatches the INVERSE of that one removal into the current draft -
     not the policy as it stood when the toast was raised. A toast outlives its

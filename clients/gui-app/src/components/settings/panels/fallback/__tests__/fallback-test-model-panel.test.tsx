@@ -803,6 +803,69 @@ describe("FallbackTestModelPanel - the three footers", () => {
     expect(footer.textContent).toContain("In two tiers");
     expect(footer.textContent).toContain("frontier");
     expect(footer.textContent).toContain("standard");
+    const status = screen.getByRole("status");
+    expect(status.textContent).toContain("It is in two tiers;");
+    const fixButton = within(footer).getByTestId("fallback-test-model-fix");
+    fixButton.click();
+    expect(onGoToRow).toHaveBeenCalledWith(0, 0);
+  });
+
+  it("shows the conflict footer and status sentence naming three tiers when three claim the model", () => {
+    resetMocks();
+    mocks.lastRunHarness = "codex";
+    mocks.lastRunModel = "gpt-5.6-terra";
+    const frontierWithGpt: TierGroup = {
+      id: "frontier",
+      candidates: [
+        { harnessId: "codex", modelFamily: "*gpt*", reasoningEffort: "high" },
+      ],
+    };
+    const standardWithTerra: TierGroup = {
+      id: "standard",
+      candidates: [
+        {
+          harnessId: "codex",
+          modelFamily: "gpt-5.6-terra",
+          reasoningEffort: "medium",
+        },
+      ],
+    };
+    const budgetWithTerra: TierGroup = {
+      id: "budget",
+      candidates: [
+        {
+          harnessId: "codex",
+          modelFamily: "*terra*",
+          reasoningEffort: null,
+        },
+      ],
+    };
+    const policy = seededPolicy({
+      tierGroups: [frontierWithGpt, standardWithTerra, budgetWithTerra],
+      defaultTierGroupId: null,
+    });
+    const conflicts = findTierConflicts(
+      policy.tierGroups,
+      new Map<HarnessId, readonly GuiAgentModelOption[]>([
+        ["codex", CODEX_MODELS],
+      ]),
+    );
+    expect(conflicts).not.toHaveLength(0);
+    expect(conflicts[0].tiers).toHaveLength(3);
+    mocks.testQueryData = [];
+    const onGoToRow = vi.fn();
+    renderPanel({ policy, conflicts, onGoToRow });
+    const footer = screen.getByTestId("fallback-test-model-footer-conflict");
+    expect(footer.textContent).toContain("In three tiers");
+    expect(footer.textContent).not.toContain("two tiers");
+    expect(footer.textContent).toContain("frontier");
+    expect(footer.textContent).toContain("standard");
+    expect(footer.textContent).toContain("budget");
+    const status = screen.getByRole("status");
+    expect(status.textContent).toContain("It is in three tiers;");
+    expect(status.textContent).toContain(
+      "frontier handles it until you fix the conflict",
+    );
     const fixButton = within(footer).getByTestId("fallback-test-model-fix");
     fixButton.click();
     expect(onGoToRow).toHaveBeenCalledWith(0, 0);

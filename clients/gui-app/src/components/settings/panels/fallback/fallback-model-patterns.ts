@@ -304,6 +304,16 @@ export function joinWithAnd(items: readonly string[]): string {
   return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
+const TIER_COUNT_WORDS = ["two", "three", "four", "five"];
+
+/**
+ * "two tiers", "three tiers", "6 tiers": how many tiers claim a conflicting
+ * model. A conflict is two claims or more, so the count is never below two.
+ */
+export function tierCountPhrase(count: number): string {
+  return `${TIER_COUNT_WORDS[count - 2] ?? String(count)} tiers`;
+}
+
 const ONE_TIER_RULE = "A model can be in only one tier.";
 
 /** How many blocked models a refusal names before summarising the rest. */

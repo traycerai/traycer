@@ -6,6 +6,7 @@ import {
   screen,
   waitFor,
   within,
+  type RenderResult,
 } from "@testing-library/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -1243,6 +1244,7 @@ describe("FallbackTierGroupsEditor - P2 a rename must not steal the default mark
 function RestoreHarness(props: {
   readonly restorePending: boolean;
   readonly onRestoreDefaults: () => void;
+  readonly patternsSupported: boolean;
 }): ReactNode {
   const groups: TierGroup[] = [
     tierGroup("frontier", []),
@@ -1256,7 +1258,7 @@ function RestoreHarness(props: {
       preview={null}
       labelFor={(profileId) => profileId}
       catalog={NO_CATALOG}
-      patternsSupported={false}
+      patternsSupported={props.patternsSupported}
       conflicts={[]}
       previewPending={false}
       previewUnavailable={false}
@@ -1280,6 +1282,7 @@ describe("FallbackTierGroupsEditor - Pin 8: 'Restore the default tiers' confirm 
       <RestoreHarness
         restorePending={false}
         onRestoreDefaults={onRestoreDefaults}
+        patternsSupported
       />,
     );
     fireEvent.click(screen.getByTestId("fallback-tier-groups-restore"));
@@ -1303,6 +1306,7 @@ describe("FallbackTierGroupsEditor - Pin 8: 'Restore the default tiers' confirm 
       <RestoreHarness
         restorePending={false}
         onRestoreDefaults={onRestoreDefaults}
+        patternsSupported
       />,
     );
     const restoreButton = screen.getByTestId("fallback-tier-groups-restore");
@@ -1334,6 +1338,7 @@ describe("FallbackTierGroupsEditor - Pin 8: 'Restore the default tiers' confirm 
       <RestoreHarness
         restorePending={false}
         onRestoreDefaults={onRestoreDefaults}
+        patternsSupported
       />,
     );
     fireEvent.click(screen.getByTestId("fallback-tier-groups-restore"));
@@ -1349,7 +1354,11 @@ describe("FallbackTierGroupsEditor - Pin 8: 'Restore the default tiers' confirm 
     // landing focus on `document.body`.
     act(() => {
       view.rerender(
-        <RestoreHarness restorePending onRestoreDefaults={onRestoreDefaults} />,
+        <RestoreHarness
+          restorePending
+          onRestoreDefaults={onRestoreDefaults}
+          patternsSupported
+        />,
       );
     });
     await act(async () => {
@@ -1364,6 +1373,7 @@ describe("FallbackTierGroupsEditor - Pin 8: 'Restore the default tiers' confirm 
         <RestoreHarness
           restorePending={false}
           onRestoreDefaults={onRestoreDefaults}
+          patternsSupported
         />,
       );
     });
@@ -1413,6 +1423,140 @@ describe("FallbackTierGroupsEditor - Pin 8: 'Restore the default tiers' confirm 
     // appear where there is nothing yet to lose.
     expect(onRestoreDefaults).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+  });
+});
+
+/**
+ * R5 - the populated-list footer "Restore the default tiers" currently
+ * renders on every host (`groups.length === 0 ? null : <RestoreDefaultTiers …
+ * />` in `fallback-tier-groups-editor.tsx`, with no `patternsSupported`
+ * check). A get@1.0 host's restore writes the OLD two tiers and KEEPS the
+ * existing default, and REJECTS the restore when the default names a custom
+ * tier - so the confirm's promise ("the default Frontier, Flagship and
+ * Standard tiers", "sets the default tier to flagship") is false on that
+ * host, and the released GUI never offered this footer control at all. The
+ * fix renders it only when `patternsSupported` is true; the empty state's
+ * direct button is unaffected (GUARD E).
+ */
+describe("FallbackTierGroupsEditor - R5: a get@1.0 host keeps the released populated-list behaviour", () => {
+  function legacyGroups(): TierGroup[] {
+    return [tierGroup("frontier", []), tierGroup("standard", [])];
+  }
+
+  function legacyGroupsWithCustomDefault(): TierGroup[] {
+    return [
+      tierGroup("frontier", []),
+      tierGroup("standard", []),
+      tierGroup("cheap", []),
+    ];
+  }
+
+  function renderEditor(props: {
+    readonly patternsSupported: boolean;
+    readonly groups: readonly TierGroup[];
+    readonly defaultTierGroupId: string | null;
+    readonly onRestoreDefaults: () => void;
+  }): RenderResult {
+    return render(
+      <FallbackTierGroupsEditor
+        policy={{
+          ...createDefaultFallbackPolicy(),
+          tierGroups: [...props.groups],
+          defaultTierGroupId: props.defaultTierGroupId,
+        }}
+        groups={toKeyedGroups(props.groups)}
+        preview={null}
+        labelFor={(profileId) => profileId}
+        catalog={NO_CATALOG}
+        patternsSupported={props.patternsSupported}
+        conflicts={[]}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={() => {}}
+        onCommit={() => {}}
+        onUndo={() => {}}
+        onRestoreDefaults={props.onRestoreDefaults}
+        restorePending={false}
+        status={null}
+        headerAction={null}
+        testPanel={null}
+      />,
+    );
+  }
+
+  it("RED 3: patternsSupported false, a legacy two-tier policy with no custom default - no footer restore control", () => {
+    renderEditor({
+      patternsSupported: false,
+      groups: legacyGroups(),
+      defaultTierGroupId: null,
+      onRestoreDefaults: () => {},
+    });
+    // Falsification: this is RED on the unmodified editor, which renders
+    // `RestoreDefaultTiers` whenever `groups.length > 0` with no
+    // `patternsSupported` check at all.
+    expect(screen.queryByTestId("fallback-tier-groups-restore")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Restore the default tiers" }),
+    ).toBeNull();
+  });
+
+  it("RED 4: patternsSupported false, a custom tier as the default - still no footer restore control, and it is never invoked", () => {
+    const onRestoreDefaults = vi.fn();
+    renderEditor({
+      patternsSupported: false,
+      groups: legacyGroupsWithCustomDefault(),
+      defaultTierGroupId: "cheap",
+      onRestoreDefaults,
+    });
+    // Falsification: same as RED 3. A get@1.0 host's restore also REJECTS
+    // outright here, because the default names a tier the released two-tier
+    // seed does not have - this case is where offering the control is worst.
+    expect(screen.queryByTestId("fallback-tier-groups-restore")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Restore the default tiers" }),
+    ).toBeNull();
+    expect(onRestoreDefaults).toHaveBeenCalledTimes(0);
+  });
+
+  it("GUARD E: patternsSupported false, the EMPTY state's own direct button is unaffected - one click, no confirm dialog", () => {
+    const onRestoreDefaults = vi.fn();
+    renderEditor({
+      patternsSupported: false,
+      groups: [],
+      defaultTierGroupId: null,
+      onRestoreDefaults,
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Restore the default tiers" }),
+    );
+    // The empty state (`EmptyGroups`) is a different component from the
+    // footer `RestoreDefaultTiers` this describe is about, and it calls
+    // `onRestoreDefaults` directly with no confirm - unchanged by the
+    // `patternsSupported` gate the fix adds to the footer alone.
+    expect(onRestoreDefaults).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+  });
+
+  it("GUARD F: patternsSupported true, a custom tier as the default - the footer restore IS present, and opening it shows the Frontier/Flagship/Standard title", () => {
+    renderEditor({
+      patternsSupported: true,
+      groups: legacyGroupsWithCustomDefault(),
+      defaultTierGroupId: "cheap",
+      onRestoreDefaults: () => {},
+    });
+    const restoreButton = screen.getByTestId("fallback-tier-groups-restore");
+    fireEvent.click(restoreButton);
+    // Falsification: gate the footer on something other than
+    // `patternsSupported` (e.g. always render it) - this guard would still
+    // pass, but RED 3/4 above would catch that instead; gate it the OTHER
+    // way (render only when `patternsSupported` is false) and this guard is
+    // what catches a 1.1 host silently losing its own restore control.
+    expect(
+      screen.getByText(
+        "Replace your 3 tiers with the default Frontier, Flagship and Standard tiers?",
+      ),
+    ).not.toBeNull();
   });
 });
 

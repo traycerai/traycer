@@ -5321,3 +5321,50 @@ describe("FallbackSettingsPanel - R2 CONTROL: role=alert on every mount with no 
     }
   });
 });
+
+/**
+ * R5, at the real panel boundary: `patternLines.patterns` is what the panel
+ * passes through to `FallbackTierGroupsEditor` as `patternsSupported`
+ * (`fallback-settings-panel.tsx`), so this is the same gate the editor-level
+ * RED 3/4/GUARD E/F cases exercise, driven from the top instead.
+ */
+describe("FallbackSettingsPanel - R5: the populated-list footer restore is gated on patternsSupported", () => {
+  function policyWithCustomDefault(): FallbackPolicy {
+    return policy({
+      tierGroups: [
+        { id: "frontier", candidates: [] },
+        { id: "standard", candidates: [] },
+        { id: "cheap", candidates: [] },
+      ],
+      defaultTierGroupId: "cheap",
+    });
+  }
+
+  it("RED 5: patterns false, a populated policy with a custom tier as the default - no 'Restore the default tiers' button, and restoreMutateAsync is never called", () => {
+    patternLines.patterns = false;
+    // The file's `beforeEach` does not reset this double, so it still carries
+    // the calls of every restore test above; the assertion below is about THIS
+    // render only.
+    fallbackMocks.restoreMutateAsync.mockClear();
+    fallbackMocks.queryData = respond(policyWithCustomDefault());
+    renderPanel();
+    openFallbackTab("equivalentModels");
+    // Falsification: this is RED on the unmodified panel, which passes
+    // `patternsSupported` through unchanged but the editor itself renders the
+    // footer restore for any non-empty `groups` regardless of that prop.
+    expect(
+      screen.queryByRole("button", { name: "Restore the default tiers" }),
+    ).toBeNull();
+    expect(fallbackMocks.restoreMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("GUARD G: patterns true, the same policy - the button is present", () => {
+    patternLines.patterns = true;
+    fallbackMocks.queryData = respond(policyWithCustomDefault());
+    renderPanel();
+    openFallbackTab("equivalentModels");
+    expect(
+      screen.getByRole("button", { name: "Restore the default tiers" }),
+    ).not.toBeNull();
+  });
+});

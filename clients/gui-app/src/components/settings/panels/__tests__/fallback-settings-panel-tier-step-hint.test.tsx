@@ -5,9 +5,12 @@ import {
   createDefaultFallbackPolicy,
   type FallbackPolicy,
   type ProvidersFallbackPolicyGetResponse,
+  type TierCandidate,
+  type TierGroup,
 } from "@traycer/protocol/host/fallback-policy";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
+import type { HarnessId } from "@traycer/protocol/host/agent/shared";
 
 /**
  * `TierStepHint` must not resolve a legacy (unattributed) last-run tuple
@@ -22,6 +25,25 @@ import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary
  */
 
 const { HOST_ID } = vi.hoisted(() => ({ HOST_ID: "host-a" as const }));
+
+/**
+ * `providers.fallbackPolicy.get`'s negotiated line. Default `true` (a 1.1
+ * host), because Pin 11's rows are `*`-patterns and its catalog arm is a
+ * pattern-era rule: on a 1.0 host the hint asks the released family-word rule
+ * instead, where `*astra*` is a literal word that matches nothing. The
+ * ownership describe renders with no tiers, so the line does not move it. The
+ * R4 describe sets `false` where it is about a 1.0 host.
+ */
+const patternLinesHolder = vi.hoisted(
+  (): { patterns: boolean; blankPreviewRows: boolean } => ({
+    patterns: true,
+    blankPreviewRows: true,
+  }),
+);
+
+vi.mock("@/hooks/providers/use-fallback-policy-pattern-lines", () => ({
+  useFallbackPolicyPatternLines: () => patternLinesHolder,
+}));
 
 const LAST_RUN: ChatRunSettings = {
   harnessId: "claude",
@@ -247,6 +269,8 @@ beforeEach(() => {
     ["claude", [modelOption("claude", "claude-fable-5-1[1m]", "Claude Fable")]],
   ]);
   catalogForFixture.value = new Map();
+  patternLinesHolder.patterns = true;
+  patternLinesHolder.blankPreviewRows = true;
   useComposerRunSettingsStore.getState().resetForTests();
 });
 
@@ -396,5 +420,201 @@ describe("TierStepHint - last-run tuples that this host does not own", () => {
         /— the model you last started a chat with on this host\./,
       ),
     ).toBeDefined();
+  });
+});
+
+describe("TierStepHint - R4: a get@1.0 host reads tier rows as family words", () => {
+  // A get@1.0 host's OWN routing rule (not `modelMatchesPattern`): a row
+  // matches when `needle === slug || haystackHasFamilyWord(slug, needle)`,
+  // SLUG only, never the catalog label; the LONGEST matching family wins
+  // across groups, ties go to the earlier group; no match falls to
+  // `defaultTierGroupId`. `TierStepHint` currently calls
+  // `tierGroupsNameDestinationFor` (the 1.1 pattern rule) unconditionally, so
+  // every test below that sets `patterns: false` exercises a host the
+  // production code does not yet special-case.
+  function legacyCandidate(
+    harnessId: HarnessId,
+    modelFamily: string,
+  ): TierCandidate {
+    return { harnessId, modelFamily, reasoningEffort: null };
+  }
+
+  function legacyTierGroup(
+    id: string,
+    candidates: readonly TierCandidate[],
+  ): TierGroup {
+    return { id, candidates: [...candidates] };
+  }
+
+  /** frontier: [claude `opus`, codex `gpt`]; standard: [claude `sonnet`, codex `spark`]. */
+  function legacySeedGroups(): readonly TierGroup[] {
+    return [
+      legacyTierGroup("frontier", [
+        legacyCandidate("claude", "opus"),
+        legacyCandidate("codex", "gpt"),
+      ]),
+      legacyTierGroup("standard", [
+        legacyCandidate("claude", "sonnet"),
+        legacyCandidate("codex", "spark"),
+      ]),
+    ];
+  }
+
+  function policyWithGroups(groups: readonly TierGroup[]): FallbackPolicy {
+    return {
+      ...createDefaultFallbackPolicy(),
+      enabled: true,
+      defaultTierGroupId: null,
+      tierGroups: [...groups],
+    };
+  }
+
+  function runSettings(harnessId: HarnessId, model: string): ChatRunSettings {
+    return {
+      harnessId,
+      model,
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: null,
+    };
+  }
+
+  function setLastRun(tuple: ChatRunSettings): void {
+    useComposerRunSettingsStore.setState({
+      globalLastRunSettingsByHostId: { [HOST_ID]: tuple },
+      legacyGlobalLastRunSettings: tuple,
+    });
+  }
+
+  it("RED 1: 'gpt' is a whole word in the failed slug, so the tuple routes to frontier, which has a real destination (claude opus) - no hint", () => {
+    patternLinesHolder.patterns = false;
+    setLastRun(runSettings("codex", "gpt-6-sol"));
+    catalogForFixture.value = new Map([
+      [
+        "codex",
+        [
+          { slug: "gpt-6-sol", label: "GPT-6-Sol" },
+          { slug: "gpt-6-astra", label: "GPT-6-Astra" },
+        ],
+      ],
+    ]);
+    queryDataHolder.value = respond(policyWithGroups(legacySeedGroups()));
+    renderPanel();
+    // Falsification: this is RED on the unmodified `TierStepHint`, which
+    // always calls `tierGroupsNameDestinationFor` - the 1.1 pattern rule.
+    // Under that rule codex's exact (non-wildcard) pattern "gpt" must equal
+    // the whole slug "gpt-6-sol" and does not, so neither group matches, no
+    // default is set, and the component wrongly shows the hint. The fix
+    // (consulting a 1.0-style family-word rule when `patterns` is false)
+    // must route "gpt-6-sol" to "frontier" via the whole-word family "gpt"
+    // and withhold the hint, since frontier's claude `opus` row is a real
+    // destination.
+    expect(screen.queryByText(/No other model is set up/)).toBeNull();
+  });
+
+  it("RED 2: the same family-word routing holds with no catalog loaded (`catalog: null`) - no hint", () => {
+    patternLinesHolder.patterns = false;
+    setLastRun(runSettings("codex", "gpt-6-sol"));
+    // Default from `beforeEach`: `catalogForFixture.value` is an empty map,
+    // so `catalog.catalogFor("codex")` answers `null`.
+    queryDataHolder.value = respond(policyWithGroups(legacySeedGroups()));
+    renderPanel();
+    // Falsification: same as RED 1 - the unmodified `tierGroupsNameDestinationFor`
+    // path requires "gpt" to equal the whole slug "gpt-6-sol" and, with no
+    // catalog to supply a label either, finds no matching group at all. The
+    // 1.0 family-word rule does not need a catalog to see the whole word.
+    expect(screen.queryByText(/No other model is set up/)).toBeNull();
+  });
+
+  it("GUARD A: the LONGEST matching family wins - 'spark' (5) over 'gpt' (3), so the tuple routes to standard, whose only row is its own failed family - hint shown", () => {
+    patternLinesHolder.patterns = false;
+    setLastRun(runSettings("codex", "gpt-5.3-codex-spark"));
+    queryDataHolder.value = respond(
+      policyWithGroups([
+        legacyTierGroup("frontier", [
+          legacyCandidate("codex", "gpt"),
+          legacyCandidate("claude", "opus"),
+        ]),
+        legacyTierGroup("standard", [legacyCandidate("codex", "spark")]),
+      ]),
+    );
+    renderPanel();
+    // A first-match rule (frontier listed first, "gpt" also a whole word in
+    // the slug) would route here and hide the hint via frontier's claude
+    // `opus` row - this guard is what tells "longest wins" apart from
+    // "first-listed wins". Passes on both the unmodified pattern-based code
+    // (neither "gpt" nor "spark" equals the whole slug, so no group matches
+    // and the hint shows for that reason) and the fixed family-word code
+    // (routes to standard, whose one row is the failed model's own family, so
+    // the hint shows for the routing reason this guard names).
+    expect(
+      screen.getByText(/No other model is set up for Codex/),
+    ).toBeDefined();
+  });
+
+  it("GUARD B: the family word is matched against the SLUG only, never the catalog label - hint shown", () => {
+    patternLinesHolder.patterns = false;
+    setLastRun(runSettings("claude", "default"));
+    catalogForFixture.value = new Map([
+      ["claude", [{ slug: "default", label: "Default (Opus 5.5)" }]],
+    ]);
+    queryDataHolder.value = respond(
+      policyWithGroups([
+        legacyTierGroup("frontier", [
+          legacyCandidate("claude", "opus"),
+          legacyCandidate("codex", "gpt"),
+        ]),
+      ]),
+    );
+    renderPanel();
+    // "opus" is a whole word in the catalog LABEL "Default (Opus 5.5)" but
+    // not in the SLUG "default" - a 1.0 host never sees the label, so no
+    // group matches. Passes on both the unmodified pattern-based code
+    // (`modelMatchesPattern` also requires a whole match, and "opus" equals
+    // neither the whole slug nor the whole label here) and the fixed
+    // family-word code (slug-only, so the label match a wrong
+    // label-inclusive implementation would find is never reached).
+    expect(
+      screen.getByText(/No other model is set up for Claude Code/),
+    ).toBeDefined();
+  });
+
+  it("GUARD C: patterns supported (1.1) - exact 'gpt' is not 'gpt-6-sol' - hint shown", () => {
+    patternLinesHolder.patterns = true;
+    setLastRun(runSettings("codex", "gpt-6-sol"));
+    queryDataHolder.value = respond(policyWithGroups(legacySeedGroups()));
+    renderPanel();
+    // Falsification: drop the `patterns` gate the fix adds to `TierStepHint`
+    // (always use the family-word rule). "gpt" is a whole word in
+    // "gpt-6-sol", so a family-word reading would route to frontier and hide
+    // the hint - this guard is what would catch a fix that stopped
+    // respecting `patterns: true`.
+    expect(
+      screen.getByText(/No other model is set up for Codex/),
+    ).toBeDefined();
+  });
+
+  it("GUARD D: patterns supported (1.1), frontier's codex row is '*gpt*' - the wildcard matches 'gpt-6-sol' - no hint", () => {
+    patternLinesHolder.patterns = true;
+    setLastRun(runSettings("codex", "gpt-6-sol"));
+    queryDataHolder.value = respond(
+      policyWithGroups([
+        legacyTierGroup("frontier", [
+          legacyCandidate("codex", "*gpt*"),
+          legacyCandidate("claude", "opus"),
+        ]),
+        legacyTierGroup("standard", [
+          legacyCandidate("claude", "sonnet"),
+          legacyCandidate("codex", "spark"),
+        ]),
+      ]),
+    );
+    renderPanel();
+    // The pair to GUARD C: on a 1.1 host the SAME tuple, with a wildcard
+    // pattern instead of an exact one, does match - frontier routes and its
+    // claude `opus` row is a real destination, so the hint is withheld.
+    expect(screen.queryByText(/No other model is set up/)).toBeNull();
   });
 });
