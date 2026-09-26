@@ -221,7 +221,9 @@ export function cloudEpicTasksFirstPageQueryOptions(
       ),
     staleTime: Infinity,
     gcTime: Infinity,
-    refetchOnMount: false,
+    // Cached pages stay fresh until explicitly invalidated. If that happens
+    // while History is closed, refresh when it is opened again.
+    refetchOnMount: true,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
