@@ -1,18 +1,20 @@
 import { memo, type ReactElement } from "react";
 import { hasRenderableMessageTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
-import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type {
+  ChatMessage as ChatMessageModel,
+  MessageSegment,
+} from "@/stores/composer/chat-store";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { AssistantMessageBody } from "./chat-message-assistant-body";
 import { chatFindSegmentUnitId } from "./chat-find";
 import { ChatMessageTimestamp } from "./chat-message-timestamp";
-import { singleSpecialSegment } from "./chat-special-segment";
+import { rowPaintsNothing, singleSpecialSegment } from "./chat-special-segment";
 import { UserMessageBody } from "./chat-message-user-body";
 import { ForkedChatLinkSegment } from "./segments/forked-chat-link-segment";
 import { ImportedChatMarkerSegment } from "./segments/imported-chat-marker-segment";
 import { AutoJudgeUnattendedDenialSegment } from "./segments/auto-judge-unattended-denial-segment";
-import { AutoJudgeNoticeSegment } from "./segments/auto-judge-notice-segment";
 import type { InterviewDeliveryRetryAction } from "./segments/interview-delivery-retry-action";
 import { SetupCardSegment } from "./segments/setup-card-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
@@ -122,14 +124,11 @@ function messageAlignmentClass(message: ChatMessageModel): string {
 }
 
 // A synthesized row can carry a single full-width "special" segment (a
-// setup-card, a forked-chat-link or an imported-chat-marker) with no
-// sender/body. Render it directly,
-// bypassing the role branches below.
-function renderSingleSpecialSegment(
-  message: ChatMessageModel,
-): ReactElement | null {
-  const segment = singleSpecialSegment(message.segments);
-  if (segment === null) return null;
+// setup-card, a forked-chat-link, an imported-chat-marker or an unattended
+// auto-mode refusal) with no sender/body. Render it directly, bypassing the
+// role branches below. A special row that paints nothing never gets here -
+// see `rowPaintsNothing` in `ChatMessageImpl`.
+function renderSpecialSegment(segment: MessageSegment): ReactElement | null {
   if (segment.kind === "setup-card") {
     return (
       <div
@@ -173,16 +172,6 @@ function renderSingleSpecialSegment(
         <AutoJudgeUnattendedDenialSegment
           rule={segment.rule}
           reason={segment.reason}
-        />
-      </div>
-    );
-  }
-  if (segment.kind === "auto-judge-notice") {
-    return (
-      <div data-chat-find-unit={chatFindSegmentUnitId(segment.id)}>
-        <AutoJudgeNoticeSegment
-          marker={segment.marker}
-          message={segment.message}
         />
       </div>
     );
@@ -239,9 +228,14 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
 
 function ChatMessageImpl(props: ChatMessageProps) {
   const { actions, message } = props;
-  const specialSegment = renderSingleSpecialSegment(message);
+  // The list withholds these rows (`withholdUnpaintedRows`); this is the same
+  // predicate for a model that reaches a `ChatMessage` some other way. It
+  // returns before the role branches below, so the row's `system` role and
+  // timestamp cannot fall through to the sender overline either.
+  if (rowPaintsNothing(message)) return null;
+  const specialSegment = singleSpecialSegment(message.segments);
   if (specialSegment !== null) {
-    return specialSegment;
+    return renderSpecialSegment(specialSegment);
   }
   if (message.role === "assistant") {
     return renderAssistantMessage(props);

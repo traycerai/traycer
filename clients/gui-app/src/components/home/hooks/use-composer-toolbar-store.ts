@@ -176,8 +176,10 @@ export function useComposerToolbarStore(
   );
   const [store] = useState(() =>
     createComposerToolbarStore({
-      // Every surface this hook serves configures a turn about to launch.
+      // Every surface this hook serves configures a turn about to launch, at
+      // the model's own default effort when the sticky one does not apply.
       purpose: "run",
+      reasoningFallback: "model-default",
       seedKey,
       values: seededValues,
       // The recording wrapper is installed via the effect below - never the raw

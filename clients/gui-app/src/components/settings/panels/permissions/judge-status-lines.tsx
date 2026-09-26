@@ -16,6 +16,7 @@ import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { Button } from "@/components/ui/button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useGuiHarnessModelsQuery } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { effectiveJudgeReasoningEffort } from "@traycer/protocol/host/agent/gui/reasoning-effort-order";
 import { autoJudgeModelLabel } from "@/hooks/auto-mode/use-auto-judge-billing";
 import { profileDisplayLabel } from "@/components/providers/provider-profile-model";
 import {
@@ -103,6 +104,13 @@ export function AutomaticStatus(props: {
   readonly record: AutoJudgeGetResponse;
   readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
   readonly copilotEnabled: boolean;
+  /**
+   * Whether this host runs the judge at an effort of its own (its
+   * `autoJudge.get` line is `1.3` or later, `autoJudgeGetKnowsReasoningEffort`).
+   * Below it the host runs the model's default and the line must not name an
+   * effort the host does not apply - the composer's rule too.
+   */
+  readonly hostRunsEffort: boolean;
 }): ReactNode {
   const effective = props.record.effective;
   if (effective === undefined) return null;
@@ -145,7 +153,11 @@ export function AutomaticStatus(props: {
           {row === undefined ? (
             effective.model
           ) : (
-            <EffectiveModelLabel row={row} slug={effective.model} />
+            <EffectiveModelLabel
+              row={row}
+              slug={effective.model}
+              hostRunsEffort={props.hostRunsEffort}
+            />
           )}{" "}
           on Traycer
         </span>{" "}
@@ -156,15 +168,31 @@ export function AutomaticStatus(props: {
   );
 }
 
+/**
+ * Automatic's model label, with the effort the host runs it at in parentheses
+ * - "Grok 4.7 Build Fast (Low)". Automatic has no stored selection, so there
+ * is no picked effort: the host runs its default for the model, the lowest it
+ * advertises (`effectiveJudgeReasoningEffort` with `null` requested), and the
+ * label resolves through that same rule so the two cannot disagree. Silent
+ * about effort when there is none to name: the model advertises none, its
+ * catalog has not answered, or the host predates judge efforts.
+ */
 function EffectiveModelLabel(props: {
   readonly row: GuiHarnessOption;
   readonly slug: string;
+  readonly hostRunsEffort: boolean;
 }): ReactNode {
   const models = useGuiHarnessModelsQuery(props.row.id, null, {
     enabled: true,
     subscribed: true,
   }).data?.models;
-  return autoJudgeModelLabel(models, props.slug) ?? props.slug;
+  const modelLabel = autoJudgeModelLabel(models, props.slug) ?? props.slug;
+  const effortLabel =
+    models === undefined || !props.hostRunsEffort
+      ? null
+      : (effectiveJudgeReasoningEffort(models, props.slug, null)?.label ??
+        null);
+  return effortLabel === null ? modelLabel : `${modelLabel} (${effortLabel})`;
 }
 
 /**

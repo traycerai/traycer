@@ -828,15 +828,19 @@ import {
 import {
   autoJudgeGetUpgradeV10ToV11,
   autoJudgeGetUpgradeV11ToV12,
+  autoJudgeGetUpgradeV12ToV13,
   autoJudgeGetV10,
   autoJudgeGetV11,
   autoJudgeGetV12,
+  autoJudgeGetV13,
   autoJudgeListRecentV10,
   autoJudgeSetUpgradeV10ToV11,
   autoJudgeSetUpgradeV11ToV12,
+  autoJudgeSetUpgradeV12ToV13,
   autoJudgeSetV10,
   autoJudgeSetV11,
   autoJudgeSetV12,
+  autoJudgeSetV13,
   autoPolicyGetV10,
   autoPolicySetV10,
   providersSetAutoJudgeV10,
@@ -5015,8 +5019,9 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       // Automatic judge's `{ source: "fallback" }` answer opens @1.1 rather
       // than widening it in place. @1.1 is RELEASED too (every host tag from
       // `host-v1.3.2-staging.52` on), so the machine's last judge pick opens
-      // @1.2 the same way.
-      latestMinor: 2,
+      // @1.2 the same way. @1.2 is spoken by a released desktop (traycer#2162),
+      // so the judge's reasoning effort opens @1.3 rather than widening it.
+      latestMinor: 3,
       versions: {
         0: {
           contract: autoJudgeGetV10,
@@ -5043,6 +5048,14 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           // caller still gets the 1.1 projection, which builds its answer
           // field by field and so never copies the key.
         },
+        3: {
+          contract: autoJudgeGetV13,
+          upgradeFromPreviousVersion: autoJudgeGetUpgradeV12ToV13,
+          // `selection` / `lastSelection` gain the `reasoningEffort` KEY (the
+          // judge's effort). A new key is structural growth, not value
+          // growth: a <=1.2 caller's non-strict decode drops it, and the 1.0
+          // projection strips it on its way down, so no gate is declared.
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -5051,9 +5064,9 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     degrade: { kind: "unsupported" },
     1: {
       // Same line, same reasons, as `autoJudge.get`: the echo reports the
-      // judge the new selection resolves to, and (@1.2) the last pick this
-      // write left.
-      latestMinor: 2,
+      // judge the new selection resolves to, (@1.2) the last pick this write
+      // left, and (@1.3) the effort the selection carries.
+      latestMinor: 3,
       versions: {
         0: {
           contract: autoJudgeSetV10,
@@ -5070,6 +5083,13 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: autoJudgeSetV12,
           upgradeFromPreviousVersion: autoJudgeSetUpgradeV11ToV12,
           // See `autoJudge.get@1.2`: `lastSelection` is a new key.
+        },
+        3: {
+          contract: autoJudgeSetV13,
+          upgradeFromPreviousVersion: autoJudgeSetUpgradeV12ToV13,
+          // See `autoJudge.get@1.3`. The request grows by the same key: a
+          // <=1.2 save is upgraded with `reasoningEffort: null`, the host's
+          // default for the model.
         },
       },
       downgradePathsFromLatest: {},

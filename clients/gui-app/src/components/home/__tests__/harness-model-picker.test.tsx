@@ -1032,6 +1032,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
   const embedding = resolvedInput.embedding ?? null;
   const store = createComposerToolbarStore({
     purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: "picker-test",
     values: {
       permission: "supervised",

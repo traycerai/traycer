@@ -41,6 +41,12 @@ export function model(
   harnessId: string,
   slug: string,
   label: string,
+  overrides: Partial<
+    Pick<
+      GuiAgentModelOption,
+      "defaultReasoningEffort" | "supportedReasoningEfforts"
+    >
+  >,
 ): GuiAgentModelOption {
   return guiAgentModelOptionSchema.parse({
     harnessId,
@@ -52,6 +58,7 @@ export function model(
     defaultReasoningEffort: null,
     supportedReasoningEfforts: [],
     metadata: {},
+    ...overrides,
   });
 }
 

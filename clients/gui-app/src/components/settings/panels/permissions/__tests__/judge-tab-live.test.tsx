@@ -84,7 +84,10 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     method === "autoJudge.get" ? true : null,
   useHostSupportsMethod: (_hostId: string | null, method: string) =>
     method === "autoJudge.set",
-  useHostMethodSchemaVersion: () => ({ major: 9, minor: 1 }),
+  useHostMethodSchemaVersion: (_hostId: string | null, method: string) =>
+    method === "autoJudge.get" || method === "autoJudge.set"
+      ? { major: 1, minor: 3 }
+      : { major: 9, minor: 1 },
 }));
 const toastSpy = vi.hoisted(() =>
   vi.fn<(error: unknown, title: string) => void>(),
@@ -159,6 +162,7 @@ const CLAUDE_STORED: AutoJudgeSelection = {
   harnessId: "claude",
   model: "sonnet",
   profileId: null,
+  reasoningEffort: null,
 };
 
 /** What one `autoJudge.get` answers: the record and the host's verdict. */
@@ -443,11 +447,11 @@ beforeEach(() => {
   ];
   setModels("traycer", {
     kind: "ready",
-    models: [model("traycer", "traycer-fast", "Traycer Fast")],
+    models: [model("traycer", "traycer-fast", "Traycer Fast", {})],
   });
   setModels("claude", {
     kind: "ready",
-    models: [model("claude", "sonnet", "Claude Sonnet")],
+    models: [model("claude", "sonnet", "Claude Sonnet", {})],
   });
   judgeCatalog.providers = [
     provider("claude-code", [profile("ambient", "ambient")]),
@@ -465,7 +469,7 @@ describe("JudgeTab against the real query stack", () => {
     const fixture = createFixture();
     setModels("codex", {
       kind: "ready",
-      models: [model("codex", "gpt-mini", "GPT Mini")],
+      models: [model("codex", "gpt-mini", "GPT Mini", {})],
     });
     renderTab(fixture);
     await storedJudgeShown();
@@ -519,8 +523,8 @@ describe("JudgeTab against the real query stack", () => {
     setModels("codex", {
       kind: "ready",
       models: [
-        model("codex", "gpt-mini", "GPT Mini"),
-        model("codex", "gpt-big", "GPT Big"),
+        model("codex", "gpt-mini", "GPT Mini", {}),
+        model("codex", "gpt-big", "GPT Big", {}),
       ],
     });
     renderTab(fixture);
@@ -692,14 +696,19 @@ describe("JudgeTab against the real query stack", () => {
       act(() => {
         setModels("codex", {
           kind: "ready",
-          models: [model("codex", "gpt-x", "GPT X")],
+          models: [model("codex", "gpt-x", "GPT X", {})],
         });
       });
       await waitFor(() => expect(fixture.held).toHaveLength(1));
       await flush();
 
       expect(heldAt(fixture, 0).request).toEqual({
-        selection: { harnessId: "codex", model: "gpt-x", profileId: null },
+        selection: {
+          harnessId: "codex",
+          model: "gpt-x",
+          profileId: null,
+          reasoningEffort: null,
+        },
       });
       expect(sentModels(fixture)).toEqual(["gpt-x"]);
       expect(sentModels(fixture)).not.toContain("");
@@ -722,7 +731,7 @@ describe("JudgeTab against the real query stack", () => {
       act(() => {
         setModels("codex", {
           kind: "ready",
-          models: [model("codex", "gpt-x", "GPT X")],
+          models: [model("codex", "gpt-x", "GPT X", {})],
         });
       });
       // Writes are serialised, so a stray Codex write would queue behind the
@@ -970,6 +979,7 @@ describe("JudgeTab against the real query stack", () => {
       harnessId: "claude",
       model: "opus",
       profileId: null,
+      reasoningEffort: null,
     };
     const FALLBACK_LINE =
       "Now: each conversation's own model · on your account there";
@@ -984,8 +994,8 @@ describe("JudgeTab against the real query stack", () => {
       setModels("claude", {
         kind: "ready",
         models: [
-          model("claude", "sonnet", "Claude Sonnet"),
-          model("claude", "opus", "Claude Opus"),
+          model("claude", "sonnet", "Claude Sonnet", {}),
+          model("claude", "opus", "Claude Opus", {}),
         ],
       });
     });
@@ -1050,6 +1060,7 @@ describe("JudgeTab against the real query stack", () => {
         harnessId: "codex",
         model: "gpt-mini",
         profileId: null,
+        reasoningEffort: null,
       });
       fixture.holdGets();
       const before = fixture.getCalls();

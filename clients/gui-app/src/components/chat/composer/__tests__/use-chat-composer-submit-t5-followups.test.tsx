@@ -231,6 +231,7 @@ function mutableFakeEditor(initial: JsonContent): {
 function makeToolbarStore(seedKey: string) {
   return createComposerToolbarStore({
     purpose: "run",
+    reasoningFallback: "model-default",
     seedKey,
     values: {
       permission: "supervised",

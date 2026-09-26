@@ -158,6 +158,7 @@ function mountSubmit(args: {
 }) {
   const toolbarStore = createComposerToolbarStore({
     purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: "browser-annotation-submit",
     values: {
       permission: "supervised",

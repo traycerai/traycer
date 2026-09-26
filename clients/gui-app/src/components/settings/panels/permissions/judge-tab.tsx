@@ -23,6 +23,7 @@ import type {
   AutoJudgeGetResponse,
   AutoJudgeSelection,
 } from "@traycer/protocol/host/auto-mode/contracts";
+import { effectiveJudgeReasoningEffort } from "@traycer/protocol/host/agent/gui/reasoning-effort-order";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -46,7 +47,10 @@ import {
 } from "@/hooks/auto-mode/use-auto-judge-query";
 import { useAutoJudgeSetMutation } from "@/hooks/auto-mode/use-auto-judge-set-mutation";
 import { autoJudgeModelLabel } from "@/hooks/auto-mode/use-auto-judge-billing";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import {
+  useHostMethodSchemaVersion,
+  useHostSupportsMethod,
+} from "@/hooks/host/use-host-supports-method";
 import {
   useGuiHarnessModelsQuery,
   useGuiHarnessesQuery,
@@ -94,6 +98,10 @@ import {
   useJudgeToolbarStore,
   type JudgeToolbarStore,
 } from "@/components/settings/panels/permissions/use-judge-toolbar-store";
+import {
+  autoJudgeGetKnowsReasoningEffort,
+  autoJudgeSetStoresReasoningEffort,
+} from "@/lib/auto-mode/auto-judge-billing";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -277,6 +285,16 @@ function AutoJudgeCard(props: { readonly hostId: string | null }): ReactNode {
   const verdict = useAutoJudgeVerdict();
   useRefetchOnWindowFocus(query.refetch);
   const canWrite = useHostSupportsMethod(props.hostId, "autoJudge.set");
+  // Two gates on two lines, as the composer draws them: the picker's effort
+  // FOOTER writes through `set`, so it needs a `set` line that stores the
+  // effort; every LABEL that names one (the face, the "Now:" line) reports
+  // what `get`'s host runs, so it needs a `get` line whose host applies one.
+  const storesEffort = autoJudgeSetStoresReasoningEffort(
+    useHostMethodSchemaVersion(props.hostId, "autoJudge.set"),
+  );
+  const hostRunsEffort = autoJudgeGetKnowsReasoningEffort(
+    useHostMethodSchemaVersion(props.hostId, "autoJudge.get"),
+  );
   const harnessesQuery = useGuiHarnessesQuery({
     enabled: true,
     subscribed: true,
@@ -341,6 +359,8 @@ function AutoJudgeCard(props: { readonly hostId: string | null }): ReactNode {
         harnesses={harnesses}
         providers={providers}
         shownModels={shownModels}
+        storesEffort={storesEffort}
+        hostRunsEffort={hostRunsEffort}
       />
     </div>
   );
@@ -356,6 +376,10 @@ interface JudgeTilesProps {
   readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
   readonly providers: ReadonlyArray<ProviderCliState> | undefined;
   readonly shownModels: ReadonlyArray<GuiAgentModelOption> | undefined;
+  /** The host's `autoJudge.set` stores an effort: the picker draws its footer. */
+  readonly storesEffort: boolean;
+  /** The host's `autoJudge.get` runs one: the face and "Now:" line name it. */
+  readonly hostRunsEffort: boolean;
 }
 
 /**
@@ -577,6 +601,7 @@ function AutomaticFoot(props: JudgeTilesProps): ReactNode {
           (provider) => provider.providerId === "copilot" && provider.enabled,
         ) ?? false
       }
+      hostRunsEffort={props.hostRunsEffort}
     />
   );
 }
@@ -592,6 +617,14 @@ function PickTileContent(
   const radioId = useId();
   const titleId = useId();
   const descriptionId = useId();
+  // The effort footer is the judge's Effort control: drawn only on a host
+  // whose `autoJudge.set` stores one, and only over the pick on show - a
+  // change in it saves the store's selection at once, and in the rows whose
+  // seed is a placeholder or a pick that cannot run ("Choose a model", a
+  // broken last pick, a harness this build does not know) that would save
+  // the seed as the judge. It is seeded with the level the host runs (the
+  // stored effort, else the model's lowest).
+  const drawsEffortFooter = props.storesEffort && judgeSelectionMarked(state);
   return (
     <>
       <RadioGroupItem
@@ -613,9 +646,10 @@ function PickTileContent(
       {state.row === "loading" ? null : (
         <HarnessModelPicker
           store={picker.toolbar.store}
-          // The judge has no effort or Fast setting to carry.
+          // No Fast setting to carry; the effort footer per
+          // `drawsEffortFooter` above.
           withServiceTier={false}
-          withReasoning={false}
+          withReasoning={drawsEffortFooter}
           tuiOnly={false}
           lockedHarnessId={null}
           disabled={judgePickerDisabled(state)}
@@ -739,8 +773,11 @@ function useJudgePicker(props: JudgeTilesProps): JudgePicker {
       effective: props.record?.effective,
       harnesses,
     }),
+    // The shown pick's own effort; an unpicked seed has none.
+    seedReasoning: state.shown?.reasoningEffort ?? "",
     // Marked is exactly "the seed is the pick on show".
     seedIsPick: selectionMarked,
+    storesEffort: props.storesEffort,
     pickerOpen,
     harnesses,
     onPick: props.pick.request,
@@ -761,6 +798,7 @@ function useJudgePicker(props: JudgeTilesProps): JudgePicker {
       state,
       models: props.shownModels,
       providers: props.providers,
+      hostRunsEffort: props.hostRunsEffort,
     }),
   );
   const openRef = useRef<(() => void) | null>(null);
@@ -795,13 +833,17 @@ function useJudgePicker(props: JudgeTilesProps): JudgePicker {
 /**
  * What the second tile's face shows in a tile state: the pick, or the last
  * pick dimmed - with its blocker when it cannot run - or "Choose a model".
- * The provider icon, the model's catalog label (else its slug), and the
- * account when that provider has more than one here.
+ * The provider icon, the model's catalog label (else its slug), the effort
+ * the host runs it at when the model advertises one and the host applies it
+ * (the stored effort while the model still offers it, else its lowest -
+ * `effectiveJudgeReasoningEffort`, the host's own rule), and the account when
+ * that provider has more than one here.
  */
 function judgeFace(input: {
   readonly state: JudgeTileState;
   readonly models: ReadonlyArray<GuiAgentModelOption> | undefined;
   readonly providers: ReadonlyArray<ProviderCliState> | undefined;
+  readonly hostRunsEffort: boolean;
 }): JudgeFace {
   const { state } = input;
   const dimmed = judgeFaceDimmed(state);
@@ -819,8 +861,17 @@ function judgeFace(input: {
   const account = judgePickAccount(input.providers, shown);
   const blocker =
     state.lastCause === null ? null : judgeCauseShortLabel(state.lastCause);
+  const effort =
+    input.hostRunsEffort && input.models !== undefined
+      ? (effectiveJudgeReasoningEffort(
+          input.models,
+          shown.model,
+          shown.reasoningEffort,
+        )?.label ?? null)
+      : null;
   const label = [
     autoJudgeModelLabel(input.models, shown.model) ?? shown.model,
+    effort,
     account === null ? null : profileDisplayLabel(account),
     blocker,
   ]

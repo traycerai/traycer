@@ -27,18 +27,20 @@ const CLAUDE: AutoJudgeSelection = {
   harnessId: "claude",
   model: "sonnet",
   profileId: null,
+  reasoningEffort: null,
 };
 const CODEX: AutoJudgeSelection = {
   harnessId: "codex",
   model: "gpt-mini",
   profileId: null,
+  reasoningEffort: null,
 };
 
 const HARNESSES = [
   harness({ id: "claude", label: "Claude Code" }),
   harness({ id: "codex", label: "Codex" }),
 ];
-const CLAUDE_MODELS = [model("claude", "sonnet", "Claude Sonnet")];
+const CLAUDE_MODELS = [model("claude", "sonnet", "Claude Sonnet", {})];
 
 function state(
   record: AutoJudgeGetResponse | undefined,
@@ -187,7 +189,7 @@ describe("judgeTileState", () => {
           harness({ id: "claude" }),
           harness({ id: "codex", authStatus: "unauthenticated" }),
         ],
-        shownModels: [model("codex", "gpt-mini", "GPT Mini")],
+        shownModels: [model("codex", "gpt-mini", "GPT Mini", {})],
       },
     );
     expect(result.row).toBe("last-broken");
@@ -200,7 +202,7 @@ describe("judgeTileState", () => {
   it("last-broken when the last model is no longer offered", () => {
     const result = state(
       { selection: null, lastSelection: CLAUDE },
-      { shownModels: [model("claude", "opus", "Claude Opus")] },
+      { shownModels: [model("claude", "opus", "Claude Opus", {})] },
     );
     expect(result.row).toBe("last-broken");
     expect(result.lastCause).toEqual({ kind: "model" });
@@ -306,7 +308,14 @@ describe("judgeUnpickedSeed and judgeSeedSelection", () => {
     expect(
       judgeSeedSelection({
         state: state(
-          { selection: { harnessId: "mystery", model: "m", profileId: null } },
+          {
+            selection: {
+              harnessId: "mystery",
+              model: "m",
+              profileId: null,
+              reasoningEffort: null,
+            },
+          },
           {},
         ),
         effective: undefined,
@@ -325,7 +334,14 @@ describe("judgeSelectionMarked", () => {
     expect(
       judgeSelectionMarked(
         state(
-          { selection: { harnessId: "mystery", model: "m", profileId: null } },
+          {
+            selection: {
+              harnessId: "mystery",
+              model: "m",
+              profileId: null,
+              reasoningEffort: null,
+            },
+          },
           {},
         ),
       ),

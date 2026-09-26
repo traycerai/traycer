@@ -11,6 +11,7 @@ import {
   type AgentServiceTierOption,
 } from "@traycer/protocol/host/index";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import { sortReasoningEffortOptions } from "@traycer/protocol/host/agent/gui/reasoning-effort-order";
 import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import {
@@ -745,14 +746,33 @@ export function findReasoningOptionsForModel(
   return model?.supportedReasoningEfforts ?? NO_REASONING_OPTIONS;
 }
 
+/**
+ * What an effort the selected model does not advertise (the `""` no-carry
+ * lever included) clamps to.
+ *
+ * - `"model-default"`: the model's own `defaultReasoningEffort`, else its first
+ *   advertised level - every composer surface, where a turn should run the way
+ *   the vendor tunes the model.
+ * - `"lowest"`: the lowest level the model advertises by the canonical ladder
+ *   (`sortReasoningEffortOptions`, the protocol's rank) - the Settings judge,
+ *   whose host runs an unset effort at exactly that level
+ *   (`effectiveJudgeReasoningEffort`), so the footer must show what the host
+ *   will run and never the vendor default the host does not apply.
+ */
+export type ReasoningFallback = "model-default" | "lowest";
+
 export function normalizeReasoningForModel(
   value: ReasoningLevel,
   model: ModelOption | null,
+  fallback: ReasoningFallback,
 ): ReasoningLevel {
   if (model === null) return value;
   const options = findReasoningOptionsForModel(model);
   if (options.length === 0) return "";
   if (options.some((option) => option.id === value)) return value;
+  if (fallback === "lowest") {
+    return sortReasoningEffortOptions(options)[0]?.id ?? value;
+  }
   const defaultReasoningEffort = model.defaultReasoningEffort;
   if (
     defaultReasoningEffort !== null &&

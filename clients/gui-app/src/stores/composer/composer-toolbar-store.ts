@@ -13,6 +13,7 @@ import {
   autoModeOfferableHere,
   normalizePermissionMode,
   normalizeReasoningForModel,
+  type ReasoningFallback,
   normalizeServiceTierForModel,
   type HarnessModelSelection,
   type HarnessOption,
@@ -172,8 +173,11 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
  * The single `(harness, model)` commit funnel. Patches selection + reasoning +
  * tier in one `update()` (one derive, one emit), so a switch never sequences
  * multiple emits. The caller resolves `reasoning` / `serviceTier` from memory
- * before calling; `""` is the no-carry lever (the derive resolves it to the
- * selected model's own default).
+ * before calling; `""` is the no-carry lever (the derive resolves it through
+ * the surface's `reasoningFallback`: the selected model's own default for a
+ * composer, its lowest for the judge). A `"setting"` store ignores the
+ * incoming `reasoning` altogether and decides by the committed pair (see
+ * `applyComposerSelection`).
  */
 export interface ApplyComposerSelectionInput {
   readonly selection: HarnessModelSelection;
@@ -242,12 +246,24 @@ export interface CreateComposerToolbarStoreInput {
   readonly chatLineCarriesAutoMode: boolean | null;
   /** Seeds `catalog.hostId`; kept in sync at runtime via `setCatalog`. */
   readonly hostId: string | null;
+  /**
+   * What an effort the selected model does not advertise clamps to, for
+   * display and emit alike (`normalizeReasoningForModel`). Composer surfaces
+   * pass `"model-default"`; the Settings judge passes `"lowest"`, the level
+   * its host runs an unset effort at. Fixed at creation like `purpose`: it is
+   * a property of the surface.
+   */
+  readonly reasoningFallback: ReasoningFallback;
 }
 
 export function createComposerToolbarStore(
   input: CreateComposerToolbarStoreInput,
 ): ComposerToolbarStore {
   const { purpose } = input;
+  const policy: ToolbarSurfacePolicy = {
+    purpose,
+    reasoningFallback: input.reasoningFallback,
+  };
   const initialCatalog: ComposerToolbarCatalog = {
     hostId: input.hostId,
     chatLineCarriesAutoMode: input.chatLineCarriesAutoMode,
@@ -261,7 +277,7 @@ export function createComposerToolbarStore(
     const update = (patch: Partial<ComposerToolbarValues>): void => {
       const state = get();
       const values = { ...state.values, ...patch };
-      const derived = deriveToolbarState(values, state.catalog, state, purpose);
+      const derived = deriveToolbarState(values, state.catalog, state, policy);
       const settings = settingsFromDerived(derived);
       // Never persist a surface-rerouted harness. When the derived harness
       // differs from the user's raw choice it was clamped by the surface
@@ -298,7 +314,7 @@ export function createComposerToolbarStore(
       seedKey: input.seedKey,
       values: input.values,
       catalog: initialCatalog,
-      ...deriveToolbarState(input.values, initialCatalog, null, purpose),
+      ...deriveToolbarState(input.values, initialCatalog, null, policy),
       onSettingsChange: input.onSettingsChange,
       pendingSettingsEmit: false,
 
@@ -322,14 +338,39 @@ export function createComposerToolbarStore(
       // calls would produce. Owns the `HarnessChanged` analytics for this path,
       // which a `"setting"` store skips: its switches are not a composer's.
       applyComposerSelection: ({ selection, reasoning, serviceTier }) => {
-        const prev = get().values.selection.harnessId;
-        if (purpose === "run" && prev !== selection.harnessId) {
+        const previous = get().values;
+        if (
+          purpose === "run" &&
+          previous.selection.harnessId !== selection.harnessId
+        ) {
           Analytics.getInstance().track(AnalyticsEvent.HarnessChanged, {
-            from: prev,
+            from: previous.selection.harnessId,
             to: selection.harnessId,
           });
         }
-        update({ selection, reasoning, serviceTier });
+        // A `"setting"` store owns its effort and ignores the one the funnel
+        // passes in. `commitSelection` reads composer memory, which a setting
+        // is not allowed to inherit: its catalog `hostId` is `null`, but the
+        // memory store's pre-host `legacy` tier answers a `null` host too, so
+        // an old composer effort for the same model would arrive here and
+        // move the setting on a click that changed nothing. What the commit
+        // means for the effort is decided by the (harness, model) pair alone:
+        // the same pair (a re-click of the checked row, a same-provider rail
+        // click that keeps the model, an account change) keeps the current
+        // effort, and a fresh pick starts from `""`, which the derive resolves
+        // through the surface's fallback - the new model's lowest for the
+        // judge. Effort ladders are not comparable across models, and a run
+        // store never carries one across models either (its memory is per
+        // pair).
+        const samePair =
+          previous.selection.harnessId === selection.harnessId &&
+          previous.selection.modelSlug === selection.modelSlug;
+        const settingReasoning = samePair ? previous.reasoning : "";
+        update({
+          selection,
+          reasoning: purpose === "setting" ? settingReasoning : reasoning,
+          serviceTier,
+        });
       },
       setReasoning: (next) => {
         update({ reasoning: next });
@@ -345,7 +386,7 @@ export function createComposerToolbarStore(
           values,
           state.catalog,
           state,
-          purpose,
+          policy,
         );
         set({
           seedKey,
@@ -363,7 +404,7 @@ export function createComposerToolbarStore(
           state.values,
           catalog,
           state,
-          purpose,
+          policy,
         );
         // The emit decision lives in one named, testable place. A catalog push
         // never touches `values`: the raw sticky selection is the user's.
@@ -397,12 +438,19 @@ function settingsFromDerived(derived: ComposerToolbarDerived): ChatRunSettings {
   });
 }
 
+/** The surface's fixed choices, threaded into every derive together. */
+interface ToolbarSurfacePolicy {
+  readonly purpose: ComposerToolbarPurpose;
+  readonly reasoningFallback: ReasoningFallback;
+}
+
 function deriveToolbarState(
   values: ComposerToolbarValues,
   catalog: ComposerToolbarCatalog,
   previous: ComposerToolbarDerived | null,
-  purpose: ComposerToolbarPurpose,
+  policy: ToolbarSurfacePolicy,
 ): ComposerToolbarDerived {
+  const { purpose, reasoningFallback } = policy;
   const availabilitySelection = presentedHarnessSelection(
     values.selection,
     catalog,
@@ -488,7 +536,11 @@ function deriveToolbarState(
       supportedPermissionModes,
       hostKnowsAutoMode,
     ),
-    reasoning: normalizeReasoningForModel(values.reasoning, selectedModel),
+    reasoning: normalizeReasoningForModel(
+      values.reasoning,
+      selectedModel,
+      reasoningFallback,
+    ),
     // Clamp the sticky tier to the selected model (single site for display AND
     // emit) so a tier carried over from another model - e.g. Codex "priority"
     // after a switch to Claude, whose upgrade tier is "fast" - is dropped here

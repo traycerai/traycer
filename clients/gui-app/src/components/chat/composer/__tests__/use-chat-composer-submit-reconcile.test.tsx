@@ -126,6 +126,7 @@ function mountSubmit(
 ) {
   const toolbarStore = createComposerToolbarStore({
     purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: "reconcile-submit",
     values: {
       permission: "supervised",

@@ -1988,15 +1988,21 @@ function buildAutoJudgeUnattendedDenialMessages(
 }
 
 /**
- * Project an auto-mode judge notice: the line the host owes the user when the
- * judge could not run, a policy file is not the one deciding, or Automatic
- * moved the judge's billing to the conversation's own provider.
+ * Project a LEGACY auto-mode judge notice row.
  *
- * The host journals each as a `permission.blocked` event and nothing else, so
- * without this row the notice reached the chat store and was drawn nowhere.
- * Filtered and identified THROUGH the projection's own helper, like the
- * refusal row above - the host numbers this row's ordinal from
- * `autoJudgeNoticeRowSource`.
+ * Hosts used to journal a `permission.blocked` event carrying a notice (the
+ * judge could not run, a policy file was not wholly applied, Automatic moved
+ * the judge's billing to the conversation's provider). They no longer write
+ * one, but rows already on disk keep their ordinal: the host still numbers
+ * them from `autoJudgeNoticeRowSource`, so this list enumerates them too -
+ * the row-projection equivalence suite holds it to the host's list, row for
+ * row. Filtered and identified THROUGH the projection's own helper, like the
+ * refusal row above.
+ *
+ * Nothing draws the row. The chat tile withholds it before the list is built
+ * (`withholdUnpaintedRows` in `chat-special-segment.ts`), and
+ * `transcriptListRows` then omits its ordinal the way it omits a row the
+ * pinned-todo pass withholds.
  */
 function buildAutoJudgeNoticeMessages(
   events: ReadonlyArray<ChatEvent>,

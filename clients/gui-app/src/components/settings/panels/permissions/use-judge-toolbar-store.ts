@@ -18,6 +18,7 @@ import type {
   ListGuiAgentModelsResponse,
 } from "@traycer/protocol/host/index";
 import type { AutoJudgeSelection } from "@traycer/protocol/host/auto-mode/contracts";
+import { effectiveJudgeReasoningEffort } from "@traycer/protocol/host/agent/gui/reasoning-effort-order";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   DEFAULT_PERMISSION,
@@ -111,64 +112,67 @@ export interface JudgeToolbarStore {
  * provider or a delisted model included (the status line explains it), and a
  * provider switch is not a composer's `HarnessChanged`.
  *
- * The seed key is `[row, seed]`. The row is part of it so the store re-seeds
- * when the card changes rows over the same selection. A re-seed from what is
- * saved when the seed itself has not changed - dropping a switch, or settling
- * the picker on close - applies a key of its own, since re-applying an
- * unchanged key is a no-op by design.
+ * `reasoningFallback: "lowest"`: the store's effort is what the host RUNS. The
+ * host runs a stored effort the model still advertises, else the lowest the
+ * model advertises (`effectiveJudgeReasoningEffort`), so a seed of `""` (no
+ * stored effort, or a provider switch) lands the footer on that lowest level
+ * and never on the vendor default a composer would restore.
+ *
+ * The seed key is `[row, seed, seedReasoning]`. The row is part of it so the
+ * store re-seeds when the card changes rows over the same selection. A re-seed
+ * from what is saved when the seed itself has not changed - dropping a switch,
+ * or settling the picker on close - applies a key of its own, since
+ * re-applying an unchanged key is a no-op by design.
  */
 export function useJudgeToolbarStore(input: {
   readonly seedRow: JudgeTileRow;
   readonly seed: HarnessModelSelection;
+  /**
+   * The stored pick's effort, `""` when it has none: the seed of the picker's
+   * effort footer, which the store clamps to what the host runs.
+   */
+  readonly seedReasoning: string;
   /**
    * The seed is the pick on show, so a write naming it again would change
    * nothing: the picker's same-provider click and a click on the checked row
    * write nothing, as in the composer.
    */
   readonly seedIsPick: boolean;
+  /**
+   * Whether the host's negotiated `autoJudge.set` stores an effort
+   * (`autoJudgeSetStoresReasoningEffort`). Below that line the footer is
+   * hidden and every write carries `reasoningEffort: null`; the store's own
+   * effort then never reaches the wire and never makes a write out of a click
+   * that changed nothing else.
+   */
+  readonly storesEffort: boolean;
   readonly pickerOpen: boolean;
   readonly harnesses: ReadonlyArray<GuiHarnessOption> | undefined;
   readonly onPick: (selection: AutoJudgeSelection) => void;
 }): JudgeToolbarStore {
-  const { seedRow, seedIsPick, pickerOpen, harnesses, onPick } = input;
+  const {
+    seedRow,
+    seedReasoning,
+    seedIsPick,
+    storesEffort,
+    pickerOpen,
+    harnesses,
+    onPick,
+  } = input;
   const seed = useStableSeed(input.seed);
-  const seedKey = JSON.stringify([seedRow, seed]);
+  const seedKey = JSON.stringify([seedRow, seed, seedReasoning]);
   const [store] = useState(() =>
     createComposerToolbarStore({
       purpose: "setting",
+      reasoningFallback: "lowest",
       seedKey,
-      values: judgeToolbarValues(seed),
+      values: judgeToolbarValues(seed, seedReasoning),
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
       hostId: null,
     }),
   );
-
-  // The writer is installed through the store's setter, not baked in at
-  // creation, so it never writes through a stale closure. The store never
-  // emits an unresolved model; the guard makes "no write carries `model: \"\"`"
-  // a property of this file too.
-  const writeJudge = useCallback(
-    (settings: ChatRunSettings) => {
-      if (settings.model.length === 0) return;
-      const selection: HarnessModelSelection = {
-        harnessId: settings.harnessId,
-        modelSlug: settings.model,
-        profileId: settings.profileId,
-      };
-      if (seedIsPick && sameSelection(selection, seed)) return;
-      onPick({
-        harnessId: settings.harnessId,
-        model: settings.model,
-        profileId: settings.profileId,
-      });
-    },
-    [onPick, seed, seedIsPick],
-  );
-  useEffect(() => {
-    store.getState().setOnSettingsChange(writeJudge);
-  }, [store, writeJudge]);
 
   // Before paint, so the face never shows a frame of the old seed. A provider
   // switch that is waiting for its models is a pick made on this card that
@@ -178,8 +182,8 @@ export function useJudgeToolbarStore(input: {
   useLayoutEffect(() => {
     const state = store.getState();
     if (state.pendingSettingsEmit) return;
-    state.applySeed(seedKey, judgeToolbarValues(seed));
-  }, [store, seedKey, seed]);
+    state.applySeed(seedKey, judgeToolbarValues(seed, seedReasoning));
+  }, [store, seedKey, seed, seedReasoning]);
 
   const reseedCount = useRef(0);
   const reseed = (): void => {
@@ -187,8 +191,8 @@ export function useJudgeToolbarStore(input: {
     store
       .getState()
       .applySeed(
-        JSON.stringify([seedRow, seed, reseedCount.current]),
-        judgeToolbarValues(seed),
+        JSON.stringify([seedRow, seed, seedReasoning, reseedCount.current]),
+        judgeToolbarValues(seed, seedReasoning),
       );
   };
 
@@ -216,6 +220,52 @@ export function useJudgeToolbarStore(input: {
       tuiOnly: false,
     });
   }, [store, harnesses, harnessId, models, modelsLoaded]);
+
+  // The writer is installed through the store's setter, not baked in at
+  // creation, so it never writes through a stale closure. The store never
+  // emits an unresolved model; the guard makes "no write carries `model: \"\"`"
+  // a property of this file too.
+  //
+  // The effort rides the emit as the store clamped it: the level the footer
+  // shows, which is the level the host will run. A write that names the pick
+  // on show AND the effort the host already runs for it (the stored effort if
+  // the model still offers it, else its lowest - the same rule the seed
+  // resolves through) changes nothing and is not sent, so a click on the
+  // checked row stays silent whether or not the footer has been touched. The
+  // comparison is against the level the host RUNS, not the file's raw value:
+  // choosing the lowest in the footer while the file names a level the model
+  // no longer advertises is the same no-op, and the file keeps its stale
+  // value, which the host resolves identically until the level is advertised
+  // again. It reads the store harness's models below, so it sits after them.
+  const writeJudge = useCallback(
+    (settings: ChatRunSettings) => {
+      if (settings.model.length === 0) return;
+      const selection: HarnessModelSelection = {
+        harnessId: settings.harnessId,
+        modelSlug: settings.model,
+        profileId: settings.profileId,
+      };
+      const effort = storesEffort ? settings.reasoningEffort : null;
+      if (
+        seedIsPick &&
+        sameSelection(selection, seed) &&
+        (!storesEffort ||
+          effort === seedRunsEffort(models, seed, seedReasoning))
+      ) {
+        return;
+      }
+      onPick({
+        harnessId: settings.harnessId,
+        model: settings.model,
+        profileId: settings.profileId,
+        reasoningEffort: effort,
+      });
+    },
+    [models, onPick, seed, seedIsPick, seedReasoning, storesEffort],
+  );
+  useEffect(() => {
+    store.getState().setOnSettingsChange(writeJudge);
+  }, [store, writeJudge]);
 
   const pending = useStore(store, (state) => state.pendingSettingsEmit);
   const read = pendingModelsRead(available, modelsQuery);
@@ -329,19 +379,48 @@ function useDroppedSwitch(input: {
 }
 
 /**
- * The values the store is seeded with. `permission`, `reasoning` and
- * `serviceTier` are inert: a judge record is `(harness, model, profile)`, and
- * the picker hides both footers.
+ * The values the store is seeded with. `permission` and `serviceTier` are
+ * inert: a judge record carries neither, and the picker hides the Fast footer.
+ * `reasoning` is the stored effort, or `""` for none, which the store clamps
+ * to the level the host runs (`reasoningFallback: "lowest"`).
  */
 function judgeToolbarValues(
   selection: HarnessModelSelection,
+  reasoning: string,
 ): ComposerToolbarValues {
   return {
     permission: DEFAULT_PERMISSION,
     selection,
-    reasoning: "",
+    reasoning,
     serviceTier: "",
   };
+}
+
+/**
+ * The effort the host runs the seed at, as the emit would spell it: the
+ * stored effort while the model still advertises it, else the model's lowest
+ * (`effectiveJudgeReasoningEffort`), and `null` for a model with none. Before
+ * the catalog has answered there is no model row to clamp against, and the
+ * store emits the stored effort unclamped (`normalizeReasoningForModel` with
+ * no selected model returns its input), so that is the value to compare: a
+ * same-provider rail click while the catalog loads keeps the model and must
+ * write nothing.
+ */
+function seedRunsEffort(
+  models: ReadonlyArray<ModelOption> | undefined,
+  seed: HarnessModelSelection,
+  seedReasoning: string,
+): string | null {
+  if (models === undefined) {
+    return seedReasoning.length === 0 ? null : seedReasoning;
+  }
+  return (
+    effectiveJudgeReasoningEffort(
+      models,
+      seed.modelSlug,
+      seedReasoning.length === 0 ? null : seedReasoning,
+    )?.id ?? null
+  );
 }
 
 /** What the store harness's models read says, for a pending switch. */

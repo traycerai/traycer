@@ -164,6 +164,7 @@ function createLandingToolbarStore(
 ): ComposerToolbarStore {
   return createComposerToolbarStore({
     purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: `landing-durability:${profileId ?? "ambient"}`,
     values: {
       permission: "supervised",
