@@ -141,6 +141,8 @@ Provider credentials are not CLI env vars. Configure provider credentials in **S
 | ----------------------------------- | ----------------------------------------------- |
 | `traycer agent list`                | List reachable agents.                          |
 | `traycer agent create`              | Create a child agent.                           |
+| `traycer agent fork`                | Fork an agent from its latest checkpoint.       |
+| `traycer agent configure`           | Change a GUI agent's settings for future turns. |
 | `traycer agent send`                | Send a message to another agent.                |
 | `traycer agent transcript`          | Read an agent transcript.                       |
 | `traycer agent inbox`               | Inspect pending agent messages.                 |
@@ -165,9 +167,12 @@ Common agent options:
 | `--cwd <path>`                          | `agent create`                                                                                   | Primary working directory for the child agent.                                     |
 | `--workspace-path <path>`               | `agent create`                                                                                   | Additional existing workspace path. Repeatable.                                    |
 | `--workspace-entry <workspace=path>`    | `agent create`                                                                                   | Exact workspace binding. Repeatable.                                               |
+| `--permission-mode <mode>`              | `agent create`, `agent fork`, `agent configure`                                                  | GUI permission mode: `supervised`, `auto_accept_edits`, `auto`, or `full_access`. Defaults to `full_access`. |
 | `--to <agentId>` / `--message <text>`   | `agent send`                                                                                     | Required receiver and message.                                                     |
 | `--expect-reply` / `--response-id <id>` | `agent send`                                                                                     | Open a reply thread, or close one with the final reply.                            |
 | `--agent-id <id>`                       | `agent transcript`, `agent inbox`, `monitor`                                                     | Target agent. `inbox` and `monitor` default to `TRAYCER_AGENT_ID`.                 |
+
+`auto` is [Auto mode](/panels/agents#auto-mode): a judge approves routine commands and sends risky ones to you. On `agent configure`, the mode applies from the agent's next turn. Omitting `--permission-mode` there does not keep the agent's current mode: it resets the agent to `full_access`. Not every coding agent supports every mode; see [Agents & Models](/agents-and-models/coding-agents).
 
 Provider hook commands such as `agent title-from-hook`, `agent activity-from-hook`, and `agent turn-ended-from-hook` are used by Traycer-launched agents on the Terminal interface. They are not normal user workflows.
 

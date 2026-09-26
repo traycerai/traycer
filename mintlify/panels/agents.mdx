@@ -86,13 +86,25 @@ Not every coding agent can back the Terminal interface. The supported set is lis
 
 Permissions control how much the agent can do without another approval.
 
-| Permission            | Meaning                                       |
-| --------------------- | --------------------------------------------- |
-| **Supervised**        | Ask before commands and file changes.         |
-| **Auto-accept edits** | Auto-approve edits, ask before other actions. |
-| **Full access**       | Allow commands and edits without prompts.     |
+| Permission            | Meaning                                                          |
+| --------------------- | ---------------------------------------------------------------- |
+| **Supervised**        | Ask before every command and file change.                        |
+| **Auto-accept edits** | Edits go through. Commands still ask.                            |
+| **Auto**              | A judge approves routine commands and asks you about risky ones. |
+| **Full access**       | Run everything. Nothing asks.                                    |
 
-Supervised is the safest starting point. Some coding agents expose fewer permission options; those compatibility details live in [Agents & Models](/agents-and-models/coding-agents).
+Supervised is the safest starting point. New conversations start in the mode set in [Permissions settings](/settings/permissions); choose **Permission settings…** at the bottom of the picker to open them. Some coding agents expose fewer permission options; those compatibility details live in [Agents & Models](/agents-and-models/coding-agents).
+
+### Auto Mode
+
+In **Auto**, reads, searches, and edits run as they would in Auto-accept edits. Each command goes to a judge model first:
+
+- If the judge approves it, the command runs without a prompt.
+- If the judge flags it as risky, is unsure, runs out of time, or can't run, you get the normal approval card. The card says why it was sent to you.
+
+The judge never refuses an action on its own; anything it does not approve comes to you. The one exception is a conversation another agent started with nobody watching it: there is no one to ask, so the action is refused and the chat says so.
+
+Switching to Auto mid-turn applies right away, but approvals that are already waiting still ask you. The judge, your rules, and a log of recent decisions live in [Permissions settings](/settings/permissions).
 
 ## Thinking Effort And Fast Mode
 
