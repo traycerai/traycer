@@ -1,3 +1,4 @@
+import type { BrowserDesktopControl } from "../browser-sessions/browser-desktop-control";
 import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
 import { describeLogError, log } from "../app/logger";
@@ -576,6 +577,7 @@ export class RunnerIpcBridge {
   readonly freshSnapshotWaiters = new Map<string, FreshSnapshotWaiter>();
   private browserViewManager: BrowserViewManager | null = null;
   private browserSessions: BrowserSessionsRegistry | null = null;
+  private browserPreparation: BrowserDesktopControl | null = null;
 
   constructor(options: RunnerIpcBridgeOptions) {
     this.options = options;
@@ -629,6 +631,7 @@ export class RunnerIpcBridge {
     const browserView = registerBrowserViewIpc(this);
     this.browserViewManager = browserView.manager;
     this.browserSessions = browserView.sessions;
+    this.browserPreparation = browserView.preparation;
     registerPipCaptureIpc(this, browserView.manager);
     registerMenuIpc(this);
     // Power IPC (renderer-driven sleep prevention) registers a `disposeFn`
@@ -889,6 +892,7 @@ export class RunnerIpcBridge {
 
   notifySystemResumed(): void {
     this.browserSessions?.notifySystemResumed();
+    this.browserPreparation?.notifySystemResumed();
   }
 
   /** The native-teardown gate: this window owns guests that are about to die. */

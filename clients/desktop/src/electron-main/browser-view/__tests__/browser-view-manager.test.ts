@@ -2635,6 +2635,65 @@ describe("BrowserViewManager native tab lifecycle", () => {
   });
 });
 
+describe("BrowserViewManager navigation that bypasses navigate()", () => {
+  // An agent or CDP client can commit a navigation on its own, so the entry
+  // is already `ready` and no `loading` episode precedes the commit. The
+  // status dedupe then swallows the settle, and an untitled destination
+  // never fires `page-title-updated` either - so the commit itself has to
+  // publish the new url and drop the title of the page that was left.
+  it("publishes the new url and no title when a ready tab commits to an untitled page", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/titled",
+    );
+    view.title = "Titled Page";
+    view.emit("page-title-updated", {}, "Titled Page");
+    harness.nativeTabStatuses.length = 0;
+
+    view.title = "";
+    view.emit("did-navigate", {}, "https://other.example/untitled", 200, "OK");
+
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      url: "https://other.example/untitled",
+      title: null,
+      status: "ready",
+      reason: null,
+    });
+  });
+
+  it("publishes a cleared title on a same-document navigation while already ready", async () => {
+    const harness = createHarness();
+    const { view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/titled",
+    );
+    view.title = "Titled Page";
+    view.emit("page-title-updated", {}, "Titled Page");
+    harness.nativeTabStatuses.length = 0;
+
+    view.title = "";
+    view.emit(
+      "did-navigate-in-page",
+      {},
+      "https://example.com/titled#untitled",
+      true,
+      1,
+      2,
+    );
+
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      url: "https://example.com/titled#untitled",
+      title: null,
+      status: "ready",
+    });
+  });
+});
+
 describe("BrowserViewManager in-page navigation settle", () => {
   it("settles a history move back to ready on the trailing did-navigate-in-page", async () => {
     const harness = createHarness();

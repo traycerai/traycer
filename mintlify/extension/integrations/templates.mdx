@@ -1,0 +1,123 @@
+---
+title: "Templates"
+description: "Customize plan prompts with Handlebars templates for your coding agents"
+keywords:
+  [
+    "templates",
+    "handlebars",
+    "plan templates",
+    "verification templates",
+    "generic templates",
+    "user query template",
+    "custom instructions",
+    "coding agents",
+    "planMarkdown",
+    "comments",
+    "basePrompt",
+    "applicableFor",
+    "displayName",
+    "formatting",
+    "prompts",
+    "customization",
+    "userQuery",
+  ]
+---
+
+<Frame>
+  <iframe
+    className="w-full aspect-video rounded-xl"
+    src="https://www.youtube.com/embed/UNZ_oEVV18A?rel=0"
+    title="Templates"
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+    allowFullScreen
+  ></iframe>
+</Frame>
+
+## What are templates?
+
+Templates are a formatting mechanism that allows you to wrap Traycer's generated content (like plans or verification comments) with your own custom instructions. When you hand off to a coding agent, templates let you include additional context before and after the core content.
+
+For example, when Traycer generates a plan, you can use templates to:
+
+- Add project-specific setup instructions before the plan.
+- Include testing requirements after the plan.
+- Specify coding standards and conventions.
+- Integrate with MCPs or other tools.
+
+### Example template structure
+
+In the following example, `{{planMarkdown}}` is where Traycer inserts the generated plan content, surrounded by your custom instructions. The frontmatter defines the template's display name (`displayName`) and type (`applicableFor`).
+
+```handlebars MyTemplate.md wrap highlight={1-4,8} icon="markdown"
+---
+displayName: Auto-Test Plan Template
+applicableFor: plan
+---
+
+Follow the below plan verbatim. Trust the files and references. Do not re-verify
+what's written in the plan.
+
+{{planMarkdown}}
+
+## After Implementation - Always Run Tests
+
+After implementing all the changes above:
+
+1. Run `bun test` to execute the full test suite
+2. If any tests fail, fix the issues before considering the implementation complete
+3. Ensure all existing tests still pass and new functionality is properly tested
+```
+
+## Template types
+
+### Plan Templates (`applicableFor: plan`)
+
+Customize prompts when sending implementation plans to your coding agent.
+
+**Available Handlebars:**
+
+<ParamField query="{{planMarkdown}}" type="placeholder" required>
+  Contains the generated implementation plan content.
+</ParamField>
+
+### Verification Templates (`applicableFor: verification`)
+
+Customize prompts when sending verification review comments to your agent for fixes.
+
+**Available Handlebars:**
+
+<ParamField query="{{comments}}" type="placeholder" required>
+  Contains the verification review comments and feedback.
+</ParamField>
+
+### Review Templates (`applicableFor: review`)
+
+Customize prompts when sending review comments to your agent for fixes.
+
+**Available Handlebars:**
+
+<ParamField query="{{reviewComments}}" type="placeholder" required>
+  Contains the review comments and feedback.
+</ParamField>
+
+### User Query Templates (`applicableFor: user query`)
+
+Customize prompts when bypassing the plan and directly sending the generated user query to your agent for fixes.
+
+**Available Handlebars:**
+
+<ParamField query="{{userQuery}}" type="placeholder" required>
+  Contains the generated user query.
+</ParamField>
+
+### Generic Templates (`applicableFor: generic`)
+
+Create reusable templates for both plan and verification contexts, or any custom agent interactions.
+
+**Available Handlebars:**
+
+<ParamField query="{{basePrompt}}" type="placeholder" required>
+  Contains the base prompt content that can be used in any context.
+</ParamField>
+
+<Note>More handlebars will be added in the future.</Note>

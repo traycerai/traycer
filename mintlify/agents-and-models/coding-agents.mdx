@@ -1,0 +1,73 @@
+---
+title: "Agents & Models"
+description: "Compare Traycer's supported coding-agent paths and where to configure them."
+---
+
+This page is the compatibility reference for Traycer's coding-agent paths and model selection.
+
+For the agent surface itself, including composer controls, permissions, attachments, voice input, and per-turn behavior, see [Agents](/panels/agents).
+
+## Supported Coding Agents
+
+| Coding agent    | Chat interface | Terminal interface | Fast mode       | Setup                                |
+| --------------- | ---- | -------------- | --------------- | ------------------------------------ |
+| **Claude Code** | Yes  | Yes            | Model-dependent | Claude Code CLI/account              |
+| **Codex**       | Yes  | Yes            | Model-dependent | Codex CLI/account                    |
+| **OpenCode**    | Yes  | Yes            | Not supported   | OpenCode CLI/provider                |
+| **Traycer**     | Yes  | Not supported  | Not supported   | Traycer sign-in and credits          |
+| **Cursor**      | Yes  | Not supported  | Not supported   | Cursor API key                       |
+| **Grok**        | Yes  | Not supported  | Not supported   | Grok CLI/account or xAI API key      |
+| **Qwen Code**   | Yes  | Not supported  | Not supported   | Qwen Code CLI/provider               |
+| **Kiro**        | Yes  | Not supported  | Not supported   | Kiro CLI/account or API key          |
+| **Droid**       | Yes  | Not supported  | Not supported   | Factory Droid CLI/account or API key |
+| **Kimi**        | Yes  | Not supported  | Not supported   | Kimi CLI/account                     |
+| **Copilot**     | Yes  | Not supported  | Not supported   | GitHub Copilot CLI/account           |
+| **Kilo Code**   | Yes  | Not supported  | Not supported   | Kilo Code CLI/account or API key     |
+| **OpenRouter**  | Yes  | Not supported  | Not supported   | OpenRouter API key                   |
+| **Amp**         | Yes  | Not supported  | Not supported   | Amp CLI/account or API key           |
+| **Devin**       | Yes  | Not supported  | Not supported   | Devin CLI/account                    |
+| **Pi**          | Yes  | Not supported  | Not supported   | Pi CLI/provider credentials          |
+
+<Info>
+  **Chat interface** means the coding agent can back an agent on the Chat
+  interface. **Terminal interface** means it can also back one on the Terminal
+  interface.
+  A provider using a CLI behind its Chat integration does not automatically
+  make it available on the Terminal interface.
+</Info>
+
+## Models
+
+Traycer loads models from the selected coding agent and provider profile at runtime. The available list can vary with your installed CLI version, account, provider configuration, and model access, so Traycer does not maintain a fixed model list in these docs.
+
+In the composer:
+
+- Select a coding agent and provider profile first.
+- The model picker shows the models currently available for that selection.
+- Thinking effort appears only when the selected model exposes supported reasoning levels.
+- Fast mode appears only when the selected Claude Code or Codex model exposes a fast tier.
+
+Using the **Traycer** provider consumes Traycer credits. Other coding agents use their own account, API, or provider billing; see [Pricing](/account/pricing).
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Choose a coding agent and model">
+  <source src="https://assets.traycer.ai/docs/videos/composer-model-picker.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+## Provider Setup
+
+Configure provider credentials, environment variables, CLI paths, profiles, and default Terminal interface CLI arguments in [Settings > Providers](/settings/providers). Disabled or unavailable providers do not appear as runnable options until their setup is complete.
+
+Claude Code, Codex, and Grok support multiple managed profiles. Grok profiles
+use separate `GROK_HOME` directories, so each profile keeps its OAuth account,
+configuration, and sessions isolated. New profiles start with an empty private
+store: ambient configuration, MCP credentials, plugins, skills, memory, and
+sessions are not copied automatically. Ambient xAI API keys and external-auth
+commands are not inherited by managed Grok profiles.
+
+Open the coding-agent picker in the composer, then choose the profile row to switch accounts for the next turn.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Switch provider profiles">
+  <source src="https://assets.traycer.ai/docs/videos/profile-switch.mp4" type="video/mp4" />
+  Unable to load video.
+</video>

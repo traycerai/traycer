@@ -1,0 +1,60 @@
+---
+title: "Plan Mode"
+description: "Direct, step-by-step implementation for single-PR tasks. Perfect for straightforward development tasks where you want a direct, step‑by‑step guide from idea to implementation."
+keywords: ['plan mode', 'step-by-step implementation', 'single-PR tasks', 'straightforward development', 'file-level plan', 'symbol references', 'implementation steps', 'user query', 'file analysis', 'file structure', 'execute in agent', 'verification', 'quality checks', 'requirement validation', 'code review']
+---
+
+<Frame>
+<iframe
+  className="w-full aspect-video rounded-xl"
+  src="https://www.youtube.com/embed/6rm4XfC7YsY?rel=0&cc_load_policy=1&cc_lang_pref=en"
+  title="Plan mode"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allowFullScreen
+></iframe>
+</Frame>
+
+<Steps>
+  <Step title="1. User Query">
+    State your goal, expected outcome, and constraints.
+
+    <Accordion title="What context can I provide?">
+      Optional context:
+
+      - **Files**: Source files, config files, documentation, test files.
+      - **Folders**: Component directories, feature folders, asset directories.
+      - **Images**: UI mockups, error screenshots.
+      - **Git**:
+        - **Diff against uncommitted changes**: Changes that haven't been committed yet.
+        - **Diff against 'main'**: Changes compared to the main/default branch.
+        - **Diff against branch**: Changes compared to a specific branch of your choice.
+        - **Diff against commit**: Changes compared to a specific commit.
+    </Accordion>
+
+  </Step>
+  <Step title="2. Detailed File-Level Plan with Symbol References">
+    Traycer generates a detailed plan including:
+
+    - **File analysis & structure**.
+    - **Symbol references**.
+    - **Implementation steps**.
+
+   If the plan isn't fully aligned with your goal, *iterate* to refine it until it fits your goal.
+  </Step>
+  <Step title="3. Execute in Agent">
+    Run the plan with your preferred coding assistant. (See [supported agents](/extension/integrations/agents).)
+
+  </Step>
+  <Step title="4. Verification">
+    Validate in Traycer:
+
+    - Compares agent's implementation against your original plan to ensure requirements.
+    - Categorizes verification review comments by severity - Critical, Major, Minor, Outdated.
+
+    [Learn more about verification](/extension/tasks/verification).
+
+  </Step>
+  <Step title="5. Complete">
+    Finalize, commit, and ship.
+  </Step>
+</Steps>

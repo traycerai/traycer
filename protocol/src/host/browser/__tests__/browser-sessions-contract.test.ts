@@ -19,12 +19,19 @@ import {
   browserSessionsServerFrameSchema,
   browserSessionsV20,
   browserSessionsV21,
+  browserSessionsV22,
   browserScreencastClientFrameSchema,
   browserScreencastOpenRequestSchema,
   browserScreencastServerFrameSchema,
   browserScreencastV20,
   browserScreencastV21,
 } from "@traycer/protocol/host/browser/contracts";
+import {
+  browserDesktopControlClientFrameSchema,
+  browserDesktopControlOpenSchema,
+  browserDesktopControlServerFrameSchema,
+  browserDesktopControlV10,
+} from "@traycer/protocol/host/browser/desktop-control";
 import {
   BROWSER_VIEWPORT_MAX_EDGE,
   BROWSER_VIEWPORT_MAX_PIXELS,
@@ -1263,6 +1270,220 @@ describe("browser.sessions@2.0 frame-kind sets", () => {
     );
     expect(uxKinds.has("forgetLogins")).toBe(false);
     expect(uxKinds.has("clearSite")).toBe(false);
+  });
+});
+
+describe("browser.sessions@2.2 on-demand frames", () => {
+  const onDemandReady = {
+    kind: "electronTabLifecycleReadyOnDemand",
+    hasBinaryPayload: false,
+    coLocatedHostId: "host-1",
+    desktopWindowId: "window-1",
+  };
+
+  it("accepts the on-demand readiness frame on 2.2 only", () => {
+    expect(
+      browserSessionsV22.clientFrameSchema.safeParse(onDemandReady).success,
+    ).toBe(true);
+    expect(
+      browserSessionsV21.clientFrameSchema.safeParse(onDemandReady).success,
+    ).toBe(false);
+    expect(
+      browserSessionsV20.clientFrameSchema.safeParse(onDemandReady).success,
+    ).toBe(false);
+    // The exported live schema is the newest line's.
+    expect(
+      browserSessionsClientFrameSchema.safeParse(onDemandReady).success,
+    ).toBe(true);
+  });
+
+  it("accepts requestSnapshot on 2.2 only, as a bare text frame", () => {
+    const requestSnapshot = {
+      kind: "requestSnapshot",
+      hasBinaryPayload: false,
+    };
+    expect(
+      browserSessionsV22.clientFrameSchema.safeParse(requestSnapshot).success,
+    ).toBe(true);
+    expect(
+      browserSessionsClientFrameSchema.safeParse(requestSnapshot).success,
+    ).toBe(true);
+    expect(
+      browserSessionsV21.clientFrameSchema.safeParse(requestSnapshot).success,
+    ).toBe(false);
+    expect(
+      browserSessionsV20.clientFrameSchema.safeParse(requestSnapshot).success,
+    ).toBe(false);
+    // It asks the host to republish its inventory; it names nothing itself.
+    expect(
+      browserSessionsV22.clientFrameSchema.safeParse({
+        ...requestSnapshot,
+        requestId: "request-1",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires a real host id and window id, and refuses extra fields", () => {
+    for (const malformed of [
+      { ...onDemandReady, coLocatedHostId: null },
+      { ...onDemandReady, desktopWindowId: null },
+      {
+        kind: onDemandReady.kind,
+        hasBinaryPayload: false,
+        coLocatedHostId: "host-1",
+      },
+      { ...onDemandReady, extra: true },
+    ]) {
+      expect(
+        browserSessionsV22.clientFrameSchema.safeParse(malformed).success,
+      ).toBe(false);
+    }
+  });
+
+  it("keeps the existing readiness frame accepted on every line", () => {
+    const ready = {
+      kind: "electronTabLifecycleReady",
+      hasBinaryPayload: false,
+      coLocatedHostId: "host-1",
+    };
+    for (const contract of [
+      browserSessionsV20,
+      browserSessionsV21,
+      browserSessionsV22,
+    ]) {
+      expect(contract.clientFrameSchema.safeParse(ready).success).toBe(true);
+    }
+  });
+
+  it("adds exactly the two demand kinds to 2.2 and leaves the 2.0 and 2.1 client frame sets unchanged", () => {
+    const kindsOf = (
+      options: ReadonlyArray<{
+        readonly shape: { readonly kind: { readonly value: string } };
+      }>,
+    ) => options.map((option) => option.shape.kind.value).sort();
+    const v20 = kindsOf(browserSessionsV20.clientFrameSchema.options);
+    const v21 = kindsOf(browserSessionsV21.clientFrameSchema.options);
+    const v22 = kindsOf(browserSessionsV22.clientFrameSchema.options);
+
+    for (const kind of [
+      "electronTabLifecycleReadyOnDemand",
+      "requestSnapshot",
+    ]) {
+      expect(v21).not.toContain(kind);
+      expect(v20).not.toContain(kind);
+    }
+    expect(v22).toEqual(
+      [...v21, "electronTabLifecycleReadyOnDemand", "requestSnapshot"].sort(),
+    );
+  });
+
+  it("shares the open request and server frames with 2.1", () => {
+    expect(browserSessionsV22.openRequestSchema).toBe(
+      browserSessionsV21.openRequestSchema,
+    );
+    expect(browserSessionsV22.serverFrameSchema).toBe(
+      browserSessionsV21.serverFrameSchema,
+    );
+  });
+});
+
+describe("host.browserPreparation.subscribe@1.0", () => {
+  const serverFrames = [
+    {
+      kind: "prepare",
+      hasBinaryPayload: false,
+      requestId: "request-1",
+      epicId: "epic-1",
+    },
+    { kind: "release", hasBinaryPayload: false, requestId: "request-1" },
+    { kind: "pong", hasBinaryPayload: false },
+  ];
+  const clientFrames = [
+    {
+      kind: "prepared",
+      hasBinaryPayload: false,
+      requestId: "request-1",
+      windowId: "window-1",
+    },
+    { kind: "refused", hasBinaryPayload: false, requestId: "request-1" },
+    { kind: "ping", hasBinaryPayload: false },
+  ];
+
+  it("is the 1.0 line of the host.browserPreparation.subscribe method, outside the frozen browser.* namespace", () => {
+    expect(browserDesktopControlV10.method).toBe(
+      "host.browserPreparation.subscribe",
+    );
+    expect(browserDesktopControlV10.method.startsWith("browser.")).toBe(false);
+    expect(browserDesktopControlV10.schemaVersion).toEqual({
+      major: 1,
+      minor: 0,
+    });
+  });
+
+  it("accepts exactly the prepare/release/pong server frames and the prepared/refused/ping client frames", () => {
+    for (const frame of serverFrames) {
+      expect(
+        browserDesktopControlServerFrameSchema.safeParse(frame).success,
+      ).toBe(true);
+      expect(
+        browserDesktopControlClientFrameSchema.safeParse(frame).success,
+      ).toBe(false);
+    }
+    for (const frame of clientFrames) {
+      expect(
+        browserDesktopControlClientFrameSchema.safeParse(frame).success,
+      ).toBe(true);
+      expect(
+        browserDesktopControlServerFrameSchema.safeParse(frame).success,
+      ).toBe(false);
+    }
+  });
+
+  it("carries no cookie or secret material: every variant and the open request are strict", () => {
+    for (const frame of serverFrames) {
+      expect(
+        browserDesktopControlServerFrameSchema.safeParse({
+          ...frame,
+          cookies: [],
+        }).success,
+      ).toBe(false);
+    }
+    for (const frame of clientFrames) {
+      expect(
+        browserDesktopControlClientFrameSchema.safeParse({
+          ...frame,
+          storageState: {},
+        }).success,
+      ).toBe(false);
+    }
+    expect(browserDesktopControlOpenSchema.safeParse({}).success).toBe(true);
+    expect(
+      browserDesktopControlOpenSchema.safeParse({ token: "secret" }).success,
+    ).toBe(false);
+  });
+
+  it("requires the correlating fields", () => {
+    expect(
+      browserDesktopControlServerFrameSchema.safeParse({
+        kind: "prepare",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserDesktopControlServerFrameSchema.safeParse({
+        kind: "release",
+        hasBinaryPayload: false,
+        requestId: "",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserDesktopControlClientFrameSchema.safeParse({
+        kind: "prepared",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+      }).success,
+    ).toBe(false);
   });
 });
 

@@ -1,0 +1,114 @@
+---
+title: "Model Context Protocol (MCP)"
+description: "Connect external tools and data sources to Traycer using MCP"
+keywords: ['MCP', 'model context protocol', 'external tools', 'data sources', 'remote MCP server', 'custom MCP', 'endpoint URL', 'authentication', 'API key', 'OAuth', 'tools configuration', 'organization account', 'personal account', 'traycer platform', 'composio', 'server management']
+---
+
+## What is MCP?
+
+**Model Context Protocol (MCP)** enables Traycer to securely connect to external tools and data sources, allowing your agents to access them at runtime. You can configure custom MCP endpoints to extend your agent's capabilities.
+
+## Connect a Custom Remote MCP Server
+
+<Frame>
+<iframe
+  className="w-full aspect-video rounded-xl"
+  src="https://www.youtube.com/embed/_AAyisc0lSc?rel=0"
+  title="Connect Remote MCP Server"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allowFullScreen
+></iframe>
+</Frame>
+
+<Steps>
+  <Step title="1. Open Traycer Platform">
+    Go to [Traycer Platform](https://platform.traycer.ai/). By default, you're on your personal account. To manage MCP servers for your organization, use the account dropdown to switch to your organization account.
+  </Step>
+
+  <Step title="2. Add custom MCP server">
+    Open the "Remote MCP Servers" section from the sidebar and click **"Add Custom MCP"**.
+  </Step>
+
+  <Step title="3. Configure details">
+    Fill in the required information for your custom MCP server, complete authentication, and save:
+
+  - **Name** - Enter a descriptive name for your MCP server.
+  - **Endpoint URL** - Provide the HTTPS endpoint URL of the server.
+  - **Authentication** - Select one of the following options:
+    - **None** - For public endpoints that don't require credentials.
+    - **API Key** - Paste your API key.
+    - **OAuth** - You'll be redirected to sign in and grant access.
+  </Step>
+
+  <Step title="4. Configure tools">
+    Review and configure the available tools from your MCP server:
+
+    - All tools are enabled by default.
+    - Disable any tools you don't need or want to use.
+    - Click **"Confirm Configuration"** to save your settings.
+  </Step>
+</Steps>
+
+## Manage MCP Servers
+
+Manage your MCP servers and their available tools from the platform.
+
+### Change server configuration
+- Edit Endpoint URL and credentials (for example, API Key).
+- Use the master toggle to enable/disable the mcp server **organization‑wide**.
+
+
+### Enable or disable tools
+- Toggle individual tools in the Available Tools list.
+- Use Enable All / Disable All for bulk changes.
+
+
+## Switching to organization account for MCP Servers in Traycer Extension
+
+<Frame>
+<img src="/images/mcp-switch.gif" alt="MCP switch" />
+</Frame>
+
+
+To switch to organization account for MCP Servers in the Traycer extension:
+
+<Steps>
+  <Step title="1. Open MCP tab">
+    Click the MCP icon in the top toolbar of the Traycer extension.
+  </Step>
+
+  <Step title="2. Select account">
+    Use the account dropdown to switch between your personal and organization accounts to view the MCP servers configured for each account.
+  </Step>
+
+  <Step title="3. Review available servers and tools">
+    Click **"Mark as Active"** to switch to the selected account. You'll see a list of your configured MCP servers and their available tools for that account.
+  </Step>
+</Steps>
+
+<Note>
+To add, remove, or configure MCP servers, use the [Traycer Platform](https://platform.traycer.ai/).
+</Note>
+
+## Frequently Asked Questions
+
+<AccordionGroup>
+  <Accordion title="Does Traycer support local MCP servers?">
+    No, Traycer only supports remote MCP servers. Local MCP servers are not supported at this time. If you need access to tools that don't provide direct remote MCP endpoints, consider using [Composio](https://mcp.composio.dev), which offers many local MCP integrations as managed remote services. This includes 250+ tools like Gmail, Slack, Notion, and Linear with built-in authentication.
+
+    <Frame>
+    <iframe
+      className="w-full aspect-video rounded-xl"
+      src="https://www.youtube.com/embed/ywkGdUOR5OE?rel=0"
+      title="Local MCP servers with Composio"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+      allowFullScreen
+    ></iframe>
+    </Frame>
+
+  </Accordion>
+
+  <Accordion title="Are MCP servers shared across my organization?">
+    Only if you add them to your organization account. MCP servers added to your personal account are private to you. When you add an MCP server to your organization account, it becomes available to all organization members. Similarly, disabling any organization-level MCP server or tool will disable it for everyone on your team.
+  </Accordion>
+</AccordionGroup>

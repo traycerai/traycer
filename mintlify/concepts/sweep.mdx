@@ -1,0 +1,73 @@
+---
+title: "Sweep"
+description: "Clean up Task worktrees, understand what gets deleted, and review work that may still be needed."
+---
+
+**Sweep** removes selected [worktrees](/concepts/worktrees) belonging to one or more Tasks. Use it to reclaim disk space after work has landed or when you no longer need an isolated checkout.
+
+Opening Sweep lets you inspect the worktrees before removing anything. Sweep keeps the Task, its agent conversations, and its artifacts. It removes the selected checkout directories. Saved bindings can then point to missing worktrees, so agents need an available run location for future work. The removal operation itself does not delete local or remote branch refs; a configured teardown script may perform additional cleanup.
+
+<Warning>
+  Removal has no undo in Traycer. Uncommitted files and work that exists only in a removed worktree may be permanently lost. Save anything you need elsewhere before removing it, including ignored files you want to keep.
+</Warning>
+
+## Open Sweep
+
+| Starting point | How to open it |
+|---|---|
+| **Inside a Task** | Click the paintbrush icon in the top-right status row, next to the sync indicator. Its tooltip says **Sweep worktrees**. |
+| **History: one Task** | Use the Task row's paintbrush action or **Sweep Worktrees…** in its context menu. |
+| **History: several Tasks** | Enter selection mode, select the Tasks, then use the Sweep action. |
+
+The action is unavailable when there are no worktrees to sweep. For an inventory of all Traycer-managed worktrees on a host, use [Settings > Worktrees](/settings/worktrees).
+
+## Choose What To Remove
+
+Sweep lists each worktree with its branch, repository, path, status, and available pull request information. Only **Landed** or **At base commit** worktrees that are idle and belong exclusively to the selected Tasks start checked.
+
+| Status or message | What it means for your decision |
+|---|---|
+| **Landed** | Traycer has evidence that the current work landed, such as a merged PR matching the current commit or commits contained in the default branch. A merged PR alone does not prove later changes are safe to remove. |
+| **At base commit** | No committed work has been added beyond the starting point, and no uncommitted changes were found. |
+| **Review** / **Not proven landed** | There may be uncommitted changes, unmerged or unpushed commits, unmerged submodule work, a detached HEAD, or information Traycer could not verify. Read the row's explanation before selecting it. |
+| **Also used by a Task outside this sweep** | Removing this worktree also leaves that other Task's saved run location pointing to a missing checkout. It starts unchecked even if its work has landed. |
+| **In use** | Something is using the worktree. It starts unchecked; selecting it requires reviewing what will be stopped. |
+| **Orphaned** | The directory or Git metadata is missing or broken. Cleanup requires forced removal and is not preselected. |
+| **Still checking** | Facts are not verified yet. Wait for the check or use **Refresh**. |
+
+When several selected Tasks share a worktree, it appears once. It counts as shared outside the sweep only if a Task outside your selection also references it.
+
+<Note>
+  **Select all** includes selectable worktrees that did not start checked, including work needing review. Keep the default selection if you only want the worktrees Traycer has preselected as safe.
+</Note>
+
+## Remove The Selected Worktrees
+
+1. Check the paths, branches, and selected count. Deselect anything you want to keep.
+2. Click **Remove N worktrees**. Traycer refreshes its checks before proceeding.
+3. If the selection is still safe, removal starts immediately. If it includes unproven work, active work, or worktrees shared with other Tasks, **Review this sweep** shows the consequences first.
+4. In that review, read the possible work loss, activity that will be stopped, affected Tasks, and worktree paths. Choose **Back** to change the selection, **Cancel** to leave, or **Confirm and remove N worktrees** to proceed.
+
+For a selected worktree in use, confirmation authorizes stopping anything working there when deletion runs. If Traycer cannot identify everything using it, the review says so. If the activity changes during review, Traycer asks you to review the updated consequences.
+
+Cleanup runs in the background and can run the workspace's configured teardown script. Closing the dialog does not cancel cleanup that has started. Reopen Sweep to see progress; the result notification reports removals, failures, or unconfirmed outcomes.
+
+### Example: Clean Up After A Merged PR
+
+Suppose a Task has two worktrees: `fix-login`, whose current work has landed, and `try-new-layout`, which still has uncommitted changes. Once checks finish, Sweep preselects the idle `fix-login` worktree if no other Task uses it. It leaves `try-new-layout` unchecked with a review explanation.
+
+Leave that selection as-is and choose **Remove 1 worktree** to remove the `fix-login` checkout while retaining the unfinished checkout. The Task and its conversation history remain available.
+
+## Sweep On Different Hosts
+
+Worktrees live on the host where they were created. If you have multiple hosts, use the host selector in Sweep to choose whose worktrees to inspect and remove. A sweep acts on one host at a time; repeat it on another host if needed.
+
+An empty list means no worktrees were found for the selected Tasks on that host. An unreachable host cannot be inspected or cleaned up until it is reachable again. In the review step, use **Back** before changing hosts.
+
+## If Cleanup Does Not Finish
+
+- **Couldn't be removed:** Inspect the reported reason, address it, then select the worktree again to retry.
+- **Unconfirmed:** Traycer could not confirm the outcome. Check the worktree and refresh its status before taking further action; Sweep does not automatically retry that deletion.
+- **Couldn't check these worktrees:** Retry or inspect the host's inventory in [Settings > Worktrees](/settings/worktrees).
+
+Sweep is manual cleanup. Opening it does not enable [automatic cleanup](/settings/worktrees#automatic-cleanup), a separate, opt-in setting that removes inactive, proven-safe worktrees on a schedule. See Settings > Worktrees for its eligibility rules, timing, and cleanup history.

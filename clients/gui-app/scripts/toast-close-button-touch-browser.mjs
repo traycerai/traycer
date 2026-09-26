@@ -24,6 +24,7 @@ import {
   launchChromeWithDevTools,
   terminateProcessTree,
 } from "./chrome-launcher.mjs";
+import { connectCdp } from "./cdp-client.mjs";
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -479,74 +480,6 @@ async function waitForHttp(url, child, readError, label) {
     await delay(150);
   }
   throw new Error(`${label} did not become reachable: ${readError()}`);
-}
-
-function connectCdp(url) {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    const pending = new Map();
-    let nextId = 0;
-    let closedReason = null;
-    const connectTimer = setTimeout(
-      () => reject(new Error("CDP connect timed out")),
-      15_000,
-    );
-    // A socket that errors or closes mid-run must fail every outstanding
-    // request: `run-tests.ts` spawns this script without a timeout, so a
-    // request left unsettled would hold the CI job until its own timeout
-    // and hide the real error.
-    const fail = (reason) => {
-      closedReason = reason;
-      clearTimeout(connectTimer);
-      for (const request of pending.values()) request.reject(reason);
-      pending.clear();
-      reject(reason);
-    };
-    socket.addEventListener("error", (event) =>
-      fail(new Error(`CDP socket error: ${String(event)}`)),
-    );
-    socket.addEventListener("close", () =>
-      fail(new Error("CDP socket closed before the run finished")),
-    );
-    socket.addEventListener("message", (event) => {
-      const message = JSON.parse(String(event.data));
-      if (typeof message.id !== "number") return;
-      const request = pending.get(message.id);
-      if (request === undefined) return;
-      pending.delete(message.id);
-      if (message.error === undefined) request.resolve(message.result);
-      else request.reject(new Error(message.error.message));
-    });
-    socket.addEventListener("open", () => {
-      clearTimeout(connectTimer);
-      resolve({
-        send(method, params = {}) {
-          if (closedReason !== null) return Promise.reject(closedReason);
-          return new Promise((requestResolve, requestReject) => {
-            const id = ++nextId;
-            const timer = setTimeout(() => {
-              pending.delete(id);
-              requestReject(new Error(`CDP ${method} timed out`));
-            }, 30_000);
-            pending.set(id, {
-              resolve: (result) => {
-                clearTimeout(timer);
-                requestResolve(result);
-              },
-              reject: (reason) => {
-                clearTimeout(timer);
-                requestReject(reason);
-              },
-            });
-            socket.send(JSON.stringify({ id, method, params }));
-          });
-        },
-        close() {
-          socket.close();
-        },
-      });
-    });
-  });
 }
 
 async function evaluate(client, expression) {

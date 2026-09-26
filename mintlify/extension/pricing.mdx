@@ -1,0 +1,113 @@
+---
+title: Pricing & Usage Limits
+description: Understand credit-based pricing, plan credits, bundles, and billing details.
+keywords: ['pricing', 'billing', 'plans', 'free', 'sync', 'credits', 'credit usage', 'credit bundles', 'subscription', 'free trial', 'enterprise', 'team billing']
+---
+
+This page covers **IDE extension** pricing (credit-based, model rate card). Using Traycer Desktop? See [Desktop Pricing](/account/pricing).
+
+## Plans & Billing
+
+Traycer has two plans. Individuals use Traycer for free; teams subscribe to Sync.
+
+| Plan | Price | Includes |
+|-------|------|----------|
+| **Free** | $0 | Traycer with your own coding agents, AI planning and task tracking, unlimited agent sessions, remote hosts, the mobile app. No token metering. |
+| **Sync** | $20 per user / month, or $16 per user / month billed yearly | Everything in Free for your whole team, plus Cloud Sync, device switching and team collaboration. |
+
+**Yearly billing is 20% off.**
+
+Neither plan includes monthly credits. Inference through the Traycer provider is pay as you go: buy a credit bundle when you need one (see [Bundles](#bundles)).
+
+If you subscribed to an earlier plan (Lite, Pro, Ultra or Ultra+), you keep it for as long as you stay subscribed, on its original terms: the credits it includes renew every monthly billing cycle and do not roll over. Those plans can no longer be bought or switched to; you can cancel at any time.
+
+### Trials
+- Teams start Sync with a 7-day free trial.
+- No credit card required to start the trial.
+
+<Accordion title="Can I attach my card during the trial to avoid any interruption?" defaultOpen>
+  Yes. You can add a payment method at any time during your trial on the [platform](https://platform.traycer.ai/). Your subscription will continue automatically when the trial ends.
+</Accordion>
+
+---
+
+## Usage & Limits
+
+Traycer uses **credits** to meter usage across artifacts and chat.
+
+### Key Terms
+- **Credit:** The billing unit used for usage.
+- **Bundle credits:** Additional credits you can buy separately, starting at $10 bundles.
+- **Rate card:** Each action has a credit cost based on the operation type.
+
+### Rate Card
+
+<Info>
+  Action costs vary based on your selected model profile and reasoning level. Use our interactive pricing calculator to estimate costs for your workflow.
+
+  **[View Pricing Calculator →](/extension/tasks/models#pricing-calculator)**
+</Info>
+
+### Model Profile Multipliers
+
+The pricing calculator shows the base action cost. Final cost per action can change based on selected model profile and reasoning level.
+
+- Use **Balanced** for default cost/performance.
+- Use **Frontier** for higher quality and deeper reasoning.
+- Use a **Custom profile** to override specific steps.
+
+See [Model Profiles & Cost Multipliers](/extension/tasks/models) for:
+
+- Step-level profile defaults
+- Reasoning effort multipliers
+- Cost multiplier formula used for estimation
+
+<Note>
+If any model call in a request exceeds 200K input tokens, the request cost is multiplied by 2x. This applies to every model.
+</Note>
+
+### Bundles
+
+Inference through the Traycer provider is paid for with credit bundles.
+
+- Bundles are free-form amounts starting at **$10**.
+- The amount you buy is added to your credit balance at checkout.
+
+### FAQ
+
+<Accordion title="Do team members share credits?">
+  No. Credits are allocated per seat by default. Enterprise plans provide centralized billing and enforce privacy mode.
+</Accordion>
+
+<Accordion title="Do unused credits expire?">
+  Bundle credits never expire. Credits included in an earlier plan (Lite, Pro, Ultra, Ultra+) reset at the end of each monthly billing cycle and do not carry over.
+</Accordion>
+
+<Accordion title="What happens to my artifacts if I downgrade?">
+  All previously generated artifacts remain accessible permanently, regardless of your plan tier.
+</Accordion>
+
+<Accordion title="What are Enterprise plans?">
+  Enterprise teams are on the Sync plan, priced per seat like any team. It includes:
+  - **Centralized Billing** - All team members are billed under a single invoice for easier expense tracking.
+  - **Seat Management** - Invite, remove, and manage members from a central dashboard.
+  - **Centralized Remote MCP Connections** - Connect and manage servers at the organization level for all team members.
+  - **Org-Wide Privacy Mode** - Enforced by default to protect sensitive data.
+  - **Dedicated Support Channel** - A private Slack or Discord channel for faster communication and priority support.
+</Accordion>
+
+<Accordion title="Does deleting tasks or artifacts refund my credits?">
+  No. Deleting previous tasks, plans, or any generated artifacts does not refund consumed credits.
+</Accordion>
+
+<Accordion title="What happens if artifact generation fails?">
+  If an artifact generation fails, we will automatically refund the consumed credits. In case your credits were not refunded, please reach out to us for assistance.
+</Accordion>
+
+<Accordion title="How do plan changes work?">
+  - **Teams** move between Free and Sync from the team settings page. Cancelling Sync takes effect at the end of the current billing cycle, with no loss of access until then.
+  - **New individual accounts** are on Free; there is nothing to upgrade to. Credits are bought as bundles when needed.
+  - **Earlier plans** (Lite, Pro, Ultra, Ultra+) are kept by their existing subscribers and can be cancelled but not changed. All generated artifacts remain available permanently.
+</Accordion>
+
+---

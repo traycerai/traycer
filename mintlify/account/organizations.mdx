@@ -1,0 +1,98 @@
+---
+title: Organizations and Teams
+keywords: ['teams', 'team management', 'seat management', 'members', 'organization', 'billing', 'automatic assignment', 'manual assignment', 'privacy mode', 'centralized billing', 'admin', 'enterprise', 'collaboration', 'team billing', 'seat allocation', 'epic boards', 'shared boards']
+
+description: 'Provides centralized billing, seat management, privacy controls, and team collaboration.'
+---
+
+Organizations and teams are account-level features for seats, shared billing, and team access.
+
+## Adding organizations
+
+<Frame>
+<iframe
+  className="w-full aspect-video rounded-xl"
+  src="https://www.youtube.com/embed/pTxtE-ygqF8?rel=0"
+  title="Adding Organizations to Traycer"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allowFullScreen
+></iframe>
+</Frame>
+
+To add your GitHub organization to Traycer:
+
+<Steps>
+  <Step title="Access organization settings">
+    Click on the account dropdown in the top navigation bar and select "Fetch Organizations".
+  </Step>
+  <Step title="Grant GitHub permissions">
+    A GitHub OAuth window will open. Review and grant the necessary permissions for your organization.
+  </Step>
+  <Step title="Switch to your organization">
+    Once permissions are granted, you can switch between your personal account and organization accounts using the account dropdown.
+  </Step>
+</Steps>
+
+## Seat management
+
+Navigate to your organization's **Seat Management** page to configure how seats are assigned to members.
+
+### Automatic assignment mode
+
+When **Automatic Assignment Mode** is enabled, any new member added to your organization is instantly granted a paid seat and full access to Traycer features. This ensures seamless onboarding and eliminates manual intervention for seat allocation.
+
+### Manual assignment mode
+
+In **Manual Assignment Mode**, admins can change the status for any user to enable or disable their seat, giving you full control over who has access to Traycer features.
+
+<Frame>
+<img src="/images/seat-management.png" alt="Seat management interface showing user seats and roles" />
+</Frame>
+
+<Note>
+**Important**: Disabling a seat does not decrease your subscription seat count. The disabled seat can be enabled for another user, allowing you to reassign seats within your subscription limit without changing your billing.
+</Note>
+
+---
+
+## Managing subscription seats
+
+To add or remove seats from your subscription:
+
+<Steps>
+  <Step title="Access organization settings">
+    Navigate to the **Settings** page for your organization.
+  </Step>
+  <Step title="Open subscription management">
+    Click **"Manage Subscription"** to access your billing settings.
+  </Step>
+  <Step title="Modify seat count">
+    Click **"Current Plan"** under your subscription. You'll see a counter where you can increase or decrease your seat count.
+  </Step>
+</Steps>
+
+<Info>
+**Billing timing**: Additional seats are added instantly and billed immediately. Seat decrements take effect at the end of your current billing cycle.
+</Info>
+
+---
+
+## Frequently Asked Questions
+
+<AccordionGroup>
+  <Accordion title="Does Traycer have SSO (Single Sign On)?">
+    Yes, Traycer supports Single Sign-On through GitHub.
+  </Accordion>
+
+  <Accordion title="How does organization pricing work?">
+    Organization pricing follows the same per-seat model as individual plans. Each subscription seat in your organization is billed at the same rate as individual subscribers, with no additional fees for organizations.
+  </Accordion>
+
+  <Accordion title="What is privacy mode?">
+    Privacy controls are managed at the organization level. Your organization settings determine which cloud and inference features are available for sensitive work.
+  </Accordion>
+
+  <Accordion title="Can I share work with my organization?">
+    Yes. Shared work can be made available to your organization so teammates can collaborate on the same specs and tickets. From the share dialog, select your organization and choose an access level (`Editor` or `Viewer`), then click `Share`.
+  </Accordion>
+</AccordionGroup>

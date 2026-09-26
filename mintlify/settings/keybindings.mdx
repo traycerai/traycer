@@ -1,0 +1,107 @@
+---
+title: "Keybindings"
+description: "Default Traycer Desktop keyboard shortcuts and how to customize them."
+---
+
+Keybindings are local keyboard shortcuts. They are a local UI preference, not shared Task content.
+
+## Customize Shortcuts
+
+Every shortcut below can be changed. Open **Settings → Keybindings**, then:
+
+<Steps>
+  <Step title="Find the command">
+    Locate the action you want to change in the list.
+  </Step>
+  <Step title="Capture a new shortcut">
+    Click the shortcut chord chip. When it reads **Press chord…**, press the key combination you want to assign. Press **Esc** to cancel.
+  </Step>
+  <Step title="Clear or reset (optional)">
+    Press **Backspace** while capturing to unbind an action, or click **Reset all to defaults** at the bottom of the page to restore every shortcut at once.
+  </Step>
+</Steps>
+
+<Note>
+**Sub-leader configuration** sets the secondary modifier (default <kbd>Opt</kbd> / <kbd>Alt</kbd>) used by the number shortcuts in the tables below.
+</Note>
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Rebind a shortcut with its chord chip">
+  <source src="https://assets.traycer.ai/docs/videos/keybindings-capture.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+## Default Shortcuts
+
+Number shortcuts are leader chords: hold the modifier and press a digit.
+
+### Tasks
+
+Each tab in the header strip is a Task.
+
+| Command | macOS | Windows | What it does |
+|---|---|---|---|
+| New Task | <kbd>Cmd</kbd> + <kbd>N</kbd> | <kbd>Ctrl</kbd> + <kbd>N</kbd> | Open the landing page to start a new Task. |
+| Duplicate Task tab | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>K</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>K</kbd> | Duplicate the active Task tab and its tiling layout. |
+| Next Task tab | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>]</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>]</kbd> | Activate the next Task tab in the header strip. |
+| Previous Task tab | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>[</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>[</kbd> | Activate the previous Task tab in the header strip. |
+| Close active tab | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>W</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>W</kbd> | Close the active strip tab — Task, draft, history, or settings. |
+| Switch Task by number | <kbd>Opt</kbd> + number | <kbd>Alt</kbd> + number | Hold and type a tab number to jump to that Task tab. |
+
+### Tabs
+
+Within a Task, panels open as tabs (agents, terminals, artifacts).
+
+| Command | macOS | Windows | What it does |
+|---|---|---|---|
+| New tab | <kbd>Cmd</kbd> + <kbd>T</kbd> | <kbd>Ctrl</kbd> + <kbd>T</kbd> | Open a new blank tab in the active group; the inline opener is focused. |
+| Close tab | <kbd>Cmd</kbd> + <kbd>W</kbd> | <kbd>Ctrl</kbd> + <kbd>W</kbd> | Close the active tab. The last tab in a non-root group collapses it. |
+| Close other tabs | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>W</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>W</kbd> | Close every tab in the focused group except the active one. |
+| Close tabs to the right | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Opt</kbd> + <kbd>]</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>]</kbd> | Close every tab to the right of the active tab. |
+| Close all tabs in group | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Opt</kbd> + <kbd>W</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>W</kbd> | Close every tab in the focused group. |
+| Next tab | <kbd>Cmd</kbd> + <kbd>]</kbd> | <kbd>Ctrl</kbd> + <kbd>]</kbd> | Activate the next tab in the focused group. |
+| Previous tab | <kbd>Cmd</kbd> + <kbd>[</kbd> | <kbd>Ctrl</kbd> + <kbd>[</kbd> | Activate the previous tab in the focused group. |
+| Switch tab by number | <kbd>Cmd</kbd> + number | <kbd>Ctrl</kbd> + number | Hold and press 1–9 to jump to that tab in the active group. |
+
+### Groups
+
+| Command | macOS | Windows | What it does |
+|---|---|---|---|
+| Split group horizontally | <kbd>Cmd</kbd> + <kbd>D</kbd> | <kbd>Ctrl</kbd> + <kbd>D</kbd> | Split the focused group, placing an empty group on the right. |
+| Split group vertically | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>D</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>D</kbd> | Split the focused group, placing an empty group on the bottom. |
+| Split group to the right | <kbd>Cmd</kbd> + <kbd>&#92;</kbd> | <kbd>Ctrl</kbd> + <kbd>&#92;</kbd> | Create an empty new group to the right; it becomes active. |
+| Focus group above | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>↑</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>↑</kbd> | Move group focus to the nearest group above. |
+| Focus group below | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>↓</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>↓</kbd> | Move group focus to the nearest group below. |
+| Focus group left | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>←</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>←</kbd> | Move group focus to the nearest group on the left. |
+| Focus group right | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>→</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>→</kbd> | Move group focus to the nearest group on the right. |
+| Focus active tab editor | <kbd>Cmd</kbd> + <kbd>L</kbd> | <kbd>Ctrl</kbd> + <kbd>L</kbd> | Place the cursor in the editor of the active tab. |
+
+#### Split Groups
+
+Use the tab strip’s split button to open a new group on the right, or Shift-click to split down. Choose a surface in the new pane.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Split a group and open a terminal beside a chat">
+  <source src="https://assets.traycer.ai/docs/videos/tiling-split.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+### App
+
+| Command | macOS | Windows | What it does |
+|---|---|---|---|
+| Toggle left panel | <kbd>Cmd</kbd> + <kbd>B</kbd> | <kbd>Ctrl</kbd> + <kbd>B</kbd> | Show or hide the Task left panel; the rail stays visible. |
+| Open history | <kbd>Cmd</kbd> + <kbd>Y</kbd> | <kbd>Ctrl</kbd> + <kbd>Y</kbd> | Open Task history, or focus the History tab if present. |
+| Open settings | <kbd>Cmd</kbd> + <kbd>,</kbd> | <kbd>Ctrl</kbd> + <kbd>,</kbd> | Navigate to the settings screen. |
+| Open command palette | <kbd>Cmd</kbd> + <kbd>K</kbd> | <kbd>Ctrl</kbd> + <kbd>K</kbd> | Search commands, navigation targets, and recent actions. |
+| Voice input | <kbd>Control</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> | Dictate into the composer. Tap to toggle, or hold to talk. Transcribed on-device. |
+| Switch settings section by number | <kbd>Opt</kbd> + number | <kbd>Alt</kbd> + number | On the settings screen, hold and press a digit to jump to a section. |
+| Switch model provider by number | <kbd>Cmd</kbd> + number | <kbd>Ctrl</kbd> + number | While the model picker is open, hold and press a digit to switch provider rail. |
+| Switch thinking level by number | <kbd>Opt</kbd> + number | <kbd>Alt</kbd> + number | While the model picker is open, hold and press a digit to set thinking level. |
+
+#### Command Palette
+
+Open the command palette, type part of a command name, and select the matching action.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Find and run a command from the command palette">
+  <source src="https://assets.traycer.ai/docs/videos/command-palette.mp4" type="video/mp4" />
+  Unable to load video.
+</video>

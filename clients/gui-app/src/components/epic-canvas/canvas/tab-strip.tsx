@@ -869,13 +869,18 @@ function TabItemBody(
             onDoubleClick={handleDoubleClick}
             onKeyDown={handleKeyDown}
             onAuxClick={handleAuxClick}
+            // No fixed height: the tab stretches to the scroller's row, which
+            // is 35px (the strip's h-9 less its border-b). A fixed h-9 here
+            // overflowed that row by 1px, and because an overflow-x scroller
+            // computes overflow-y to auto, the wheel scrolled the whole strip
+            // up and down by that pixel. `pt-px` keeps the icon and title on
+            // the strip's full 36px centre line, where the clipped h-9 tab
+            // drew them.
             className={cn(
-              "group relative flex h-9 shrink-0 cursor-pointer items-center gap-1.5 border-r border-canvas-border/70 px-3 text-ui-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "group relative flex shrink-0 cursor-pointer items-center gap-1.5 border-r border-canvas-border/70 px-3 pt-px text-ui-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               "transition-[background-color,color] duration-300 ease-spring",
               "hover:bg-card/60 active:scale-97",
-              // Paint over the strip border so the active tab merges with the panel below.
-              isActive &&
-                "bg-(--app-background) text-canvas-foreground shadow-[inset_0_-1px_0_0_var(--app-background)]",
+              isActive && "bg-(--app-background) text-canvas-foreground",
               !isActive && "text-muted-foreground hover:text-foreground/90",
             )}
           >
@@ -1219,13 +1224,16 @@ function TabStripDropIndicator(props: { readonly visible: boolean }) {
   // for the length of the exit (~110ms measured). A drop indicator states one
   // destination, so it unmounts immediately and only its entry animates.
   if (!props.visible) return null;
+  // `bottom-0.75`, not `bottom-1`: the tab is 35px (it fills the strip's row),
+  // and the 3px inset keeps the line at 4px-32px, where it sat when the tab
+  // was a fixed 36px.
   return (
     <m.span
       aria-hidden
       initial={{ opacity: 0, scaleY: 0.45 }}
       animate={{ opacity: 1, scaleY: 1 }}
       transition={EPIC_TAB_DROP_INDICATOR_TRANSITION}
-      className="absolute inset-y-1 left-0 z-20 -translate-x-0.5 origin-center"
+      className="absolute top-1 bottom-0.75 left-0 z-20 -translate-x-0.5 origin-center"
     >
       <DropLine
         orientation="vertical"

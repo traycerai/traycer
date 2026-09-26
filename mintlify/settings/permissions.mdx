@@ -1,0 +1,76 @@
+---
+title: "Permissions"
+description: "Choose the default permission mode, pick the judge that reviews commands in Auto mode, write Auto mode rules, and review recent decisions."
+---
+
+**Permissions** settings control how much an agent may do on its own, and who reviews the rest. The page has four tabs: **Modes**, **Judge**, **Rules**, and **Activity**.
+
+For what each mode does in a conversation, see [Permissions](/panels/agents#permissions) on the Agents page.
+
+## Modes
+
+**New conversations start in** sets the default mode for new conversations on all machines. A card for each mode lists what that mode runs without asking.
+
+| Mode                  | Runs without asking                                                                 |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| **Supervised**        | Nothing. Every command and file change asks.                                        |
+| **Auto-accept edits** | Reads, searches, and edits. Commands still ask.                                     |
+| **Auto**              | Reads, searches, edits, and the commands the judge approves. Risky ones still ask.  |
+| **Full access**       | Everything.                                                                         |
+
+You can still change the mode for any conversation from the composer.
+
+This default applies only to conversations you start in the app. Agents created from the [CLI](/cli/commands) or by another agent start in **Full access** unless their creator passes `--permission-mode`.
+
+## Judge
+
+The judge is the model that reviews commands when a conversation runs in Auto mode. This choice is stored on the machine you are editing.
+
+| Option               | What reviews commands                                                                                                                                            |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Automatic**        | Traycer's hosted model when Traycer inference is available and uses Traycer credits. If it isn't available, the conversation's own provider reviews, billed to your account there. |
+| **A specific model** | The **Provider**, **Account**, and **Model** you choose. It is billed to that provider's account, on top of the conversation itself.                             |
+
+The Auto option in the composer picker shows which judge is active and how it is billed, for example **Reviewed by … on Traycer · uses credits**. If no judge can run on the machine, it shows **No judge available on this machine · asks you instead**, and commands go to you for approval.
+
+### Providers With A Built-In Reviewer
+
+Some providers can review their own commands. Claude Code can use its own classifier instead of Traycer's judge. It is faster and costs nothing extra, but your [rules](#rules) do not apply to it. For that provider's conversations, the built-in reviewer takes the place of the judge above.
+
+Choose **Traycer's judge** or the provider's classifier for each provider here, or on that provider's **Permissions** tab in [Providers](/settings/providers). If the provider's own auto mode is unavailable, for example because an administrator turned it off, Traycer's judge reviews that turn and the chat says so.
+
+## Rules
+
+Rules tell the judge what to trust and what to bring to you. Your rules add to Traycer's built-in ones, which you can expand under **Built-in** to read. They are saved to your account and apply on every machine.
+
+| Section          | Use it for                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------- |
+| **Environment**  | What the judge should trust: your repos, hosts, buckets, and internal services, in plain words.               |
+| **Always allow** | Actions to approve without asking.                                                                             |
+| **Ask first**    | Actions to send to you, unless you asked for exactly that action.                                             |
+| **Never allow**  | Security boundaries. These always come to you, whatever the conversation says. You can still approve them on the card; the judge never will. |
+| **Notes**        | Anything else the judge should read.                                                                           |
+
+Click **Save rules** to apply your changes, or **Discard** to drop them.
+
+### Repository Rules
+
+A repository can add its own rules in a committed file:
+
+```text
+<repo>/.traycer/auto-policy.md
+```
+
+Repository rules can only add restrictions. Only their **Ask first** and **Never allow** sections apply; a repository cannot allow something your rules would send to you.
+
+## Activity
+
+**Recent decisions** lists what the judge decided recently on this machine: when, which action, and the outcome. Filter by **Allowed**, **Asked you**, **Refused**, or **Couldn't decide**.
+
+Commands the judge approves run without a card in the conversation, so this is where to check them. Decisions stay on the machine and are not synced.
+
+<Note>
+  If a machine's Host predates Auto mode, the Auto option says **Needs a newer
+  Traycer on this machine**, and these tabs ask you to update the Host. See
+  [Host](/settings/host).
+</Note>

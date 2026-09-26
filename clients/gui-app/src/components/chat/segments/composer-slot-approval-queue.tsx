@@ -1,6 +1,12 @@
 import { useRef } from "react";
-import { Check, ShieldAlert, ShieldCheck, X } from "lucide-react";
+import { Check, ChevronRight, ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { ToolInputPanel } from "@/components/chat/segments/tool-input-panel";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
@@ -32,7 +38,10 @@ import type {
   ChatApprovalReason,
   ChatApprovalState,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
+import {
+  deriveToolInputDetail,
+  type ToolInputDetail,
+} from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import type { TabHostSettingsOpts } from "@/stores/tabs/system-overlay-types";
 
 interface ComposerSlotApprovalQueueProps {
@@ -227,7 +236,7 @@ function ApprovalRow(props: ApprovalRowProps) {
     approval.toolName,
     approval.input,
   );
-  const { inputSummary, headline } = approvalCardText(
+  const { inputSummary, headline, inputDetail } = approvalCardText(
     approval.toolName,
     derivedSummary,
     approval.description,
@@ -259,7 +268,9 @@ function ApprovalRow(props: ApprovalRowProps) {
         <ApprovalWaitLine requestedAt={approval.requestedAt} />
       ) : null}
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-code-sm text-foreground/80">
-        <span className="shrink-0">{approval.toolName}</span>
+        {/* An ACP harness names the call by its title, which can carry the
+            whole command, so the name wraps like the summary beside it. */}
+        <span className="min-w-0 break-words">{approval.toolName}</span>
         {inputSummary !== null ? (
           <>
             <span aria-hidden className="shrink-0 text-muted-foreground/40">
@@ -278,6 +289,7 @@ function ApprovalRow(props: ApprovalRowProps) {
           {headline}
         </p>
       )}
+      {inputDetail === null ? null : <ApprovalInput detail={inputDetail} />}
       {approval.reason !== null ? (
         <JudgeReason
           reason={approval.reason}
@@ -330,6 +342,32 @@ function ApprovalRow(props: ApprovalRowProps) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The whole input behind a disclosure, in the same panel a tool row and a
+ * resolved approval open: collapsed, since the card sits above the composer
+ * and a long script would push it down.
+ */
+function ApprovalInput(props: { readonly detail: ToolInputDetail }) {
+  return (
+    <Collapsible className="min-w-0">
+      <CollapsibleTrigger
+        variant="quiet"
+        className="group/approval-input flex w-fit items-center text-ui-xs"
+        data-testid="approval-input-toggle"
+      >
+        <ChevronRight
+          className="size-3 shrink-0 transition-transform group-data-[state=open]/approval-input:rotate-90"
+          aria-hidden
+        />
+        {props.detail.kind === "command" ? "Full command" : "Full input"}
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-1">
+        <ToolInputPanel detail={props.detail} />
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 

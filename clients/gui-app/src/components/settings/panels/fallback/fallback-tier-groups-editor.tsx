@@ -1,9 +1,10 @@
-import { useId, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type {
   FallbackPolicy,
   TierCandidate,
   TierCandidatePreview,
+  TierConflict,
 } from "@traycer/protocol/host/fallback-policy";
 import {
   defaultTierGroupIndex,
@@ -19,6 +20,7 @@ import type { FallbackSettingsProfileLabel } from "@/components/settings/panels/
 import type { FallbackCatalogOptions } from "@/components/settings/panels/fallback/fallback-catalog-options";
 import {
   FALLBACK_ADD_GROUP_ATTRIBUTE,
+  FALLBACK_CANDIDATE_MODEL_ATTRIBUTE,
   FALLBACK_GROUP_DELETE_ATTRIBUTE,
   focusSelector,
   useRemovalFocus,
@@ -26,6 +28,7 @@ import {
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   Select,
   SelectContent,
@@ -51,10 +54,10 @@ import { FALLBACK } from "@/components/settings/panels/fallback-settings.definit
 const SEED_HARNESS_ID: TierCandidate["harnessId"] = "claude";
 
 /**
- * The default-group Select's stand-in for `null`. A sentinel rather than the
+ * The default-tier Select's stand-in for `null`. A sentinel rather than the
  * empty string because Radix's `Select` reads `""` as "nothing selected" and
  * would render a placeholder for a choice the user made. It never reaches the
- * wire - `onValueChange` maps it back to `null` - and a group cannot be named
+ * wire - `onValueChange` maps it back to `null` - and a tier cannot be named
  * this, because the name field is what a user types and this is not a name.
  */
 const NO_DEFAULT_GROUP_VALUE = "__no-default-group__";
@@ -86,6 +89,20 @@ export interface FallbackTierGroupsEditorProps {
   readonly labelFor: FallbackSettingsProfileLabel;
   /** The catalogs each row's Model and Effort cells draw from; see `fallback-catalog-options.ts`. */
   readonly catalog: FallbackCatalogOptions;
+  /**
+   * Whether the host reads tier rows as PATTERNS - `providers.fallbackPolicy.get`
+   * negotiated at 1.1 or later (`useFallbackPolicyPatternLines`). Below it the
+   * Model cell stays the select-only cell, the copy does not offer the
+   * pattern syntax the host would not read, and the populated list offers no
+   * Restore (see `RestoreDefaultTiers`).
+   */
+  readonly patternsSupported: boolean;
+  /**
+   * Every model more than one tier of the draft claims
+   * (`fallbackTierConflicts`) - drawn on the rows involved and never a gate.
+   * Empty on a host that does not read patterns.
+   */
+  readonly conflicts: readonly TierConflict[];
   readonly previewPending: boolean;
   /**
    * The preview request FAILED, as opposed to having no answer yet.
@@ -142,10 +159,29 @@ export interface FallbackTierGroupsEditorProps {
    * the current draft, so only the panel can apply an inverse to it.
    */
   readonly onUndo: (inverse: FallbackGroupsInverse) => void;
-  /** "Restore the default groups" - the RESTORE op, not a client-built list. */
+  /** "Restore the default tiers" - the RESTORE op, not a client-built list. */
   readonly onRestoreDefaults: () => void;
   readonly restorePending: boolean;
   readonly status: ReactNode;
+  /**
+   * The section header's own action, beside the intro - wireframe 1's "Test a
+   * model" button - or `null` for none.
+   */
+  readonly headerAction: ReactNode;
+  /**
+   * The Test a model panel, drawn under the header while it is open, or `null`
+   * while it is closed. Inline, not a dialog: the tiers it tests stay on
+   * screen below it.
+   *
+   * A render function because the panel's conflict "fix" puts the keyboard on
+   * a row, and the go-to-row that can do that is this editor's own (the
+   * conflict block's "Go to the <tier> row" uses the same one).
+   */
+  readonly testPanel:
+    | ((
+        goToRow: (tierIndex: number, candidateIndex: number) => void,
+      ) => ReactNode)
+    | null;
 }
 
 /**
@@ -156,8 +192,9 @@ export interface FallbackTierGroupsEditorProps {
  * host will not move a chat from a standard model to a frontier one, or the
  * reverse, on its own guess.
  *
- * The vocabulary here is "model groups" throughout - never "tier", "ladder" or
- * "rung", which are engine words that appear nowhere on this surface.
+ * The vocabulary here is "tier" (spec decision 7: Frontier, Flagship,
+ * Standard) - never "ladder" or "rung", which are engine words that appear
+ * nowhere on this surface. A row is a "model or pattern".
  */
 export function FallbackTierGroupsEditor(
   props: FallbackTierGroupsEditorProps,
@@ -168,6 +205,8 @@ export function FallbackTierGroupsEditor(
     preview,
     labelFor,
     catalog,
+    patternsSupported,
+    conflicts,
     previewPending,
     previewUnavailable,
     onRetryPreview,
@@ -177,6 +216,8 @@ export function FallbackTierGroupsEditor(
     onRestoreDefaults,
     restorePending,
     status,
+    headerAction,
+    testPanel,
   } = props;
 
   // Every edit below builds a new keyed list and projects it through
@@ -239,6 +280,40 @@ export function FallbackTierGroupsEditor(
   // Computed once for the whole list rather than per card: the question is
   // about the list, and asking it per card would be quadratic for no gain.
   const ambiguousNames = ambiguousGroupNames(groups);
+  /**
+   * What the live region says about a picker refusal - Enter on an option the
+   * one-model-one-tier rule refuses (spec §Accessibility). The same region as
+   * the preview's status, so the page keeps one place that speaks; a counter
+   * rides along so pressing Enter twice on the same refusal is said twice.
+   */
+  const [announcement, setAnnouncement] = useState<{
+    readonly text: string;
+    readonly count: number;
+  } | null>(null);
+  const announce = (text: string): void => {
+    setAnnouncement((previous) => ({
+      text,
+      count: previous === null ? 1 : previous.count + 1,
+    }));
+  };
+  /**
+   * "Go to the <tier> row": the keyboard onto the OTHER tier's Model cell for
+   * a model in two tiers. Addressed by that row's draft key, the removal
+   * handoff's precedent (`fallback-removal-focus.ts`), never by the tier's
+   * editable name - and focused now, since the row already exists.
+   */
+  const goToRow = (tierIndex: number, candidateIndex: number): void => {
+    if (tierIndex < 0 || tierIndex >= groups.length) return;
+    const candidates = groups[tierIndex].candidates;
+    if (candidateIndex < 0 || candidateIndex >= candidates.length) return;
+    const target = containerRef.current?.querySelector(
+      focusSelector(
+        FALLBACK_CANDIDATE_MODEL_ATTRIBUTE,
+        candidates[candidateIndex].key,
+      ),
+    );
+    if (target instanceof HTMLElement) target.focus();
+  };
 
   return (
     <SettingsGroup
@@ -249,17 +324,40 @@ export function FallbackTierGroupsEditor(
       dataTestId="settings-fallback-tier-groups"
       fill={false}
     >
-      <div className="px-5 py-4" ref={containerRef}>
-        <p className="max-w-[68ch] text-ui-sm text-muted-foreground">
-          {/* Defines a GROUP, which the rest of the tab then uses freely.
-              "Models you consider interchangeable" defined the feature and left
-              the object unnamed, so "group" arrived later as though the reader
-              already had it. It also never said the try order was within the
-              group rather than across the whole tab. */}
-          Put models you&apos;re happy to use in place of one another into the
-          same group. When one is blocked, Traycer tries the others in that
-          group, from the top down.
-        </p>
+      {/* The container the rows' stacked layout keys off (`@2xl`, as the
+          Overrides tab beside this one does): the Settings pane, not the
+          window, decides when a row stops fitting as a table. */}
+      <div className="@container px-5 py-4" ref={containerRef}>
+        {/* The section header: the intro, and room on its right for the
+            section's own actions - wireframe 1 puts "Test a model" there. */}
+        <div
+          className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2"
+          data-testid="fallback-tier-groups-header"
+        >
+          <p className="max-w-[66ch] text-ui-sm text-muted-foreground">
+            {/* Defines a TIER, which the rest of the tab then uses freely, and
+                says the try order is within the tier rather than across the
+                whole tab. The pattern sentences only where the host reads a
+                pattern - on an older host they would teach a syntax it
+                ignores. */}
+            Put models you&apos;re happy to use in place of one another into the
+            same tier. When one is blocked, Traycer tries the others in its
+            tier, top to bottom.
+            {patternsSupported ? (
+              <>
+                {" "}
+                Use <PatternCode>*</PatternCode> to cover several models at
+                once, like <PatternCode>*opus*</PatternCode> or{" "}
+                <PatternCode>*luna*</PatternCode>. A model can be in only one
+                tier.
+              </>
+            ) : null}
+          </p>
+          {headerAction}
+        </div>
+        {testPanel === null ? null : (
+          <TestPanelSlot render={testPanel} goToRow={goToRow} />
+        )}
         {groups.length === 0 ? (
           <EmptyGroups
             onRestoreDefaults={onRestoreDefaults}
@@ -277,7 +375,7 @@ export function FallbackTierGroupsEditor(
             <div className="mt-3 flex flex-col gap-3">
               {groups.map((group, index) => (
                 <FallbackTierGroupCard
-                  // The group's own client-side identity, not its `id`. The id
+                  // The tier's own client-side identity, not its `id`. The id
                   // is the EDITABLE NAME: keying on it remounted the card - and
                   // so destroyed the focused input - on every keystroke of a
                   // rename, and could not represent the intermediate duplicate
@@ -286,6 +384,8 @@ export function FallbackTierGroupsEditor(
                   // `fallback-tier-group-keys.ts`.
                   key={group.draftKey}
                   group={group}
+                  groupIndex={index}
+                  tierGroups={policy.tierGroups}
                   // By NAME, which is the marker's own currency. While a
                   // rename passes through a sibling's name both cards show the
                   // pill; the draft is unsavable in that state anyway (ids
@@ -295,6 +395,10 @@ export function FallbackTierGroupsEditor(
                   preview={previewForGroup(preview, group.id, ambiguousNames)}
                   labelFor={labelFor}
                   catalog={catalog}
+                  patternsSupported={patternsSupported}
+                  conflicts={conflicts}
+                  onAnnounce={announce}
+                  onGoToRow={goToRow}
                   onUndo={onUndo}
                   defaultHarnessId={firstHarnessId(groups)}
                   onChange={(next) => {
@@ -307,9 +411,9 @@ export function FallbackTierGroupsEditor(
                   }}
                   onDelete={() => {
                     // The keyboard has to land somewhere: the button that had it
-                    // is inside the subtree about to be filtered out. The group
+                    // is inside the subtree about to be filtered out. The tier
                     // that takes this one's place, its neighbour if this was the
-                    // last, and "Add a group" once the list is empty.
+                    // last, and "Add tier" once the list is empty.
                     focusAfterRemoval([
                       ...groupDeleteSelectors(groups, index),
                       `[${FALLBACK_ADD_GROUP_ATTRIBUTE}]`,
@@ -388,12 +492,24 @@ export function FallbackTierGroupsEditor(
               ]);
             }}
           >
-            Add a group
+            Add tier
           </Button>
+          {groups.length === 0 || !patternsSupported ? null : (
+            // The empty state carries its own direct Restore; this one sits
+            // over tiers the user has, so it confirms first. A pattern-era
+            // host only: see `RestoreDefaultTiers` for what a 1.0 host's
+            // restore does instead.
+            <RestoreDefaultTiers
+              tierCount={groups.length}
+              onRestoreDefaults={onRestoreDefaults}
+              restorePending={restorePending}
+            />
+          )}
           <PreviewFooterStatus
             previewPending={previewPending}
             previewUnavailable={previewUnavailable}
             onRetryPreview={onRetryPreview}
+            announcement={announcement}
           />
         </div>
         {status}
@@ -403,10 +519,10 @@ export function FallbackTierGroupsEditor(
 }
 
 /**
- * Which group the "equivalent model" step uses for a model that is in NO
- * group - the user's own answer to "and what about everything I haven't
+ * Which tier the "equivalent model" step uses for a model that is in NO
+ * tier - the user's own answer to "and what about everything I haven't
  * listed", which used to be a dead end (the step was skipped and the ladder
- * moved on).
+ * moved on). The seed sets it to `flagship` (spec decision 6).
  *
  * ONE control above the list rather than a toggle on each card: it is one
  * policy field that at most one group can hold, and N toggles for it would
@@ -455,7 +571,7 @@ function DefaultGroupSelect(props: {
       data-testid="fallback-tier-default-group"
     >
       <span id={labelId} className="text-ui-sm">
-        For a model not in any group
+        For a model not in any tier
       </span>
       <Select
         value={defaultTierGroupId ?? NO_DEFAULT_GROUP_VALUE}
@@ -488,7 +604,7 @@ function DefaultGroupSelect(props: {
               value={defaultTierGroupId}
               data-testid="fallback-tier-default-group-unlisted"
             >
-              {defaultTierGroupId} - no such group
+              {defaultTierGroupId} - no such tier
             </SelectItem>
           ) : null}
         </SelectContent>
@@ -503,9 +619,9 @@ function DefaultGroupSelect(props: {
             when that section moved behind a tab.
             What this owes the reader is the CONSEQUENCE of the choice, which no
             version of it has ever given: which models actually get tried. */}
-        Traycer tries the models in the group you pick here. Choose &ldquo;None
-        - skip this step&rdquo; to skip model switching only for models not in a
-        group.
+        Traycer tries the models in the tier you pick here. Choose &ldquo;None -
+        skip this step&rdquo; to skip model switching only for models not in a
+        tier.
       </span>
     </div>
   );
@@ -513,7 +629,8 @@ function DefaultGroupSelect(props: {
 
 /**
  * What the editor says about the per-row preview AS A WHOLE - one line beside
- * "Add a group", never one per row.
+ * "Add tier", never one per row - and, in the same live region, a picker
+ * refusal the user pressed Enter on.
  *
  * Two states in one component, made mutually exclusive by the `!previewPending`
  * term in `failed` below: a retry that is RUNNING is an answer on its way, and
@@ -538,8 +655,13 @@ function PreviewFooterStatus(props: {
   readonly previewPending: boolean;
   readonly previewUnavailable: boolean;
   readonly onRetryPreview: () => void;
+  readonly announcement: {
+    readonly text: string;
+    readonly count: number;
+  } | null;
 }): ReactNode {
-  const { previewPending, previewUnavailable, onRetryPreview } = props;
+  const { previewPending, previewUnavailable, onRetryPreview, announcement } =
+    props;
   // Mutually exclusive, and pending WINS: a retry already in flight is the
   // newer fact, and showing the old failure beside its own retry spinner
   // invites a second click. Derived once here rather than as two early returns,
@@ -581,6 +703,19 @@ function PreviewFooterStatus(props: {
             Couldn&apos;t check what these models resolve to.
           </span>
         ) : null}
+        {/* Screen-reader only: the refused option already shows the same
+            reason on screen, in the list the user is looking at. Keyed by the
+            count so a second Enter on the same refusal replaces the text node
+            and is announced again rather than read as "no change". */}
+        {announcement === null ? null : (
+          <span
+            key={announcement.count}
+            className="sr-only"
+            data-testid="fallback-tier-picker-announcement"
+          >
+            {announcement.text}
+          </span>
+        )}
       </span>
       {failed ? (
         <Button
@@ -595,6 +730,21 @@ function PreviewFooterStatus(props: {
       ) : null}
     </span>
   );
+}
+
+/**
+ * Draws the Test a model panel's render function as a component of its own,
+ * so the go-to-row reaches it as a PROP. The go-to-row reads the rows'
+ * container ref, which is sound only outside render - and the panel calls it
+ * from one place, the conflict footer's "fix" click - whereas calling the
+ * render function in the editor's own body would hand it that ref-reading
+ * function mid-render.
+ */
+function TestPanelSlot(props: {
+  readonly render: NonNullable<FallbackTierGroupsEditorProps["testPanel"]>;
+  readonly goToRow: (tierIndex: number, candidateIndex: number) => void;
+}): ReactNode {
+  return props.render(props.goToRow);
 }
 
 /**
@@ -622,7 +772,7 @@ function EmptyGroups(props: {
       data-testid="fallback-tier-groups-empty"
     >
       <p className="max-w-[68ch] text-ui-sm text-muted-foreground">
-        No groups yet, so the &ldquo;equivalent model&rdquo; step has nothing to
+        No tiers yet, so the &ldquo;equivalent model&rdquo; step has nothing to
         switch to. Add one, or put the defaults back.
       </p>
       <Button
@@ -632,7 +782,7 @@ function EmptyGroups(props: {
         disabled={restorePending}
         onClick={onRestoreDefaults}
       >
-        Restore the default groups
+        Restore the default tiers
         {restorePending ? (
           <AgentSpinningDots
             className="ml-2"
@@ -711,7 +861,7 @@ function previewForGroup(
 /**
  * Group names carried by MORE THAN ONE card in the current draft.
  *
- * Reachable by ordinary editing, not only by a bad save: "Add a group" mints a
+ * Reachable by ordinary editing, not only by a bad save: "Add tier" mints a
  * distinct name, but a rename passes through every prefix of the name being
  * typed, and one of those can equal a sibling's. The draft is never rejected for
  * it either - the panel's validator refuses the SAVE, and the cards keep
@@ -752,16 +902,112 @@ function firstHarnessId(
 }
 
 /**
- * A distinct name for a new group.
+ * A distinct name for a new tier.
  *
- * Group ids must be unique or the whole policy fails validation, so a fixed
- * "New group" would make the second one invalid the moment it is added - the
+ * Tier ids must be unique or the whole policy fails validation, so a fixed
+ * "New tier" would make the second one invalid the moment it is added - the
  * user would meet an error they did not cause and could not have avoided.
  */
 function nextGroupName(groups: readonly KeyedGroup[]): string {
   const taken = new Set(groups.map((group) => group.id));
-  if (!taken.has("New group")) return "New group";
+  if (!taken.has("New tier")) return "New tier";
   let suffix = 2;
-  while (taken.has(`New group ${suffix}`)) suffix += 1;
-  return `New group ${suffix}`;
+  while (taken.has(`New tier ${suffix}`)) suffix += 1;
+  return `New tier ${suffix}`;
+}
+
+/** An inline `*pattern*` in the intro copy, in the pattern cell's own face and accent. */
+function PatternCode(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <code className="rounded-sm bg-primary/15 px-1 font-mono text-ui-xs text-primary">
+      {props.children}
+    </code>
+  );
+}
+
+/**
+ * "Restore the default tiers" over a list that is NOT empty (wireframe 1's
+ * footer), behind a confirm.
+ *
+ * The empty state's own button restores directly, because there is nothing to
+ * lose there. Here there is: the restore is a host op that replaces every tier
+ * wholesale and also sets the default tier to `flagship`, and unlike a row or
+ * tier removal it has no Undo - there is no draft inverse for a list the host
+ * built. So the confirm says exactly that, with the count the user is about to
+ * lose.
+ *
+ * Offered only where `patternsSupported` - a host whose `get` line is 1.1 -
+ * because the confirm is a claim about what the HOST writes, and the restore
+ * request is the same empty `{}` everywhere. A 1.0 host restores its own older
+ * seed and keeps the current default, so the confirm would promise tiers and a
+ * default it never writes; and when that default names a tier of the user's
+ * own, the host refuses the restore outright, since the tier is gone from the
+ * list it writes. The released editor had no footer restore there, and a 1.0
+ * host keeps that shape: its empty state still restores directly, and there
+ * the default is always None, since there is no tier left for it to name.
+ *
+ * Focus comes back to this button afterwards. A cancel is the shared dialog's
+ * own return. A confirm is the case it cannot cover: confirming closes the
+ * dialog and starts the restore in one gesture, so the button it returns to is
+ * `disabled` for the round trip and `.focus()` on it silently does nothing,
+ * leaving the keyboard on `document.body`. The effect below puts it back once
+ * the restore settles - only from an unclaimed focus, for the reason
+ * `fallback-danger-zone.tsx` records: the rest of the editor stays live
+ * meanwhile, and a user who has moved on outranks a deferred restoration.
+ */
+function RestoreDefaultTiers(props: {
+  readonly tierCount: number;
+  readonly onRestoreDefaults: () => void;
+  readonly restorePending: boolean;
+}): ReactNode {
+  const { tierCount, onRestoreDefaults, restorePending } = props;
+  const [confirming, setConfirming] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const awaitingRestoreRef = useRef(false);
+  useEffect(() => {
+    if (!awaitingRestoreRef.current || restorePending) return;
+    awaitingRestoreRef.current = false;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    buttonRef.current?.focus();
+  }, [restorePending]);
+  return (
+    <>
+      <Button
+        ref={buttonRef}
+        type="button"
+        variant="muted"
+        className="h-8"
+        disabled={restorePending}
+        data-testid="fallback-tier-groups-restore"
+        onClick={() => {
+          setConfirming(true);
+        }}
+      >
+        Restore the default tiers
+        {restorePending ? (
+          <AgentSpinningDots
+            className="ml-2"
+            testId={undefined}
+            variant="orbit"
+          />
+        ) : null}
+      </Button>
+      <ConfirmDestructiveDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title={`Replace your ${tierCount === 1 ? "tier" : `${tierCount} tiers`} with the default Frontier, Flagship and Standard tiers?`}
+        description="This also sets the default tier to flagship."
+        cascadeSummary={null}
+        actionLabel="Restore"
+        isPending={restorePending}
+        blockedReason={null}
+        onConfirm={() => {
+          setConfirming(false);
+          awaitingRestoreRef.current = true;
+          onRestoreDefaults();
+        }}
+      />
+    </>
+  );
 }

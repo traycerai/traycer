@@ -80,6 +80,14 @@ export const FALLBACK_CANDIDATE_REMOVE_ATTRIBUTE =
   "data-fallback-candidate-remove";
 export const FALLBACK_ADD_GROUP_ATTRIBUTE = "data-fallback-add-group";
 export const FALLBACK_ADD_MODEL_ATTRIBUTE = "data-fallback-add-model";
+/**
+ * A row's Model cell, so a conflict block's "Go to the <tier> row" can put
+ * the keyboard on the OTHER tier's row that claims the same model. The same
+ * draft-key addressing as the removal handoff, for the same reason: the row is
+ * named by an identity this feature minted, never by the tier's editable name.
+ */
+export const FALLBACK_CANDIDATE_MODEL_ATTRIBUTE =
+  "data-fallback-candidate-model";
 
 /**
  * `[attr="value"]`.

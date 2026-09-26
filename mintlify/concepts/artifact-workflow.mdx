@@ -1,0 +1,75 @@
+---
+title: "Artifact workflow"
+description: "How Tasks hold artifacts after per-agent Epic Mode was removed, and how planning skills fit a large feature."
+keywords:
+  [
+    "artifacts",
+    "skills",
+    "epic brief",
+    "tech plan",
+    "tickets",
+    "walkthrough",
+    "desktop",
+  ]
+---
+
+<Note>
+  This is the Desktop path. The IDE extension's Epic Mode is a separate product;
+  see the [IDE Extension docs](/extension).
+</Note>
+
+A **Task** is still the container for a piece of work. It holds agents, files, git
+diff, and [artifacts](/panels/artifacts) — specs, tickets, stories, and reviews.
+
+Desktop 1.1.10 removed the **per-agent** Epic / Regular mode control (composer,
+settings, and `traycer agent create`). That control was never a property of the
+Task. Removing it did not remove Tasks or the artifact tree.
+
+## How artifacts appear
+
+Artifacts are created when something should outlive the conversation or be put in
+front of you. You can create them from the Artifacts panel, and an agent can write
+one during a turn.
+
+That write is not guaranteed. If nobody creates the artifact, the coding work can
+still finish and the context stays in the transcript.
+
+## Planning skills
+
+Traycer still ships skills for framing, planning, tickets, implementation, and
+review. They are the same skills that used to sit behind Epic Mode. Typical order
+for a large feature — skip any step the work does not need:
+
+| Order | Skill | Role |
+| ----- | ----- | ---- |
+| 1 | `traycer-epic-brief` | Orientation: what the initiative is, who it affects, why now. Not UX or architecture. |
+| 2 | `traycer-core-flows` | Product-level journeys, states, and UX decisions. |
+| 3 | `traycer-tech-plan` | Architecture and load-bearing technical decisions, after product direction is aligned. |
+| 4 | `traycer-ticket-breakdown` | Implementation tickets from the aligned plan. |
+| 5 | `traycer-execute` | Implement from those tickets. |
+| 6 | `traycer-review` | Review the changeset. |
+| 7 | `traycer-changeset-walkthrough` | A guide for reviewing substantive completed work. |
+
+Use `traycer-revise-requirements` when the requirements change enough to rewrite
+existing planning artifacts. Use `traycer-artifact-critique` to pressure-test a
+plan before implementation.
+
+## Invoking a skill
+
+On the Chat interface, pick skills with `$` in the composer, or type `/` and the
+skill name. Several skills can be attached to one prompt.
+
+Some coding agents may also start a skill from its description without that pick.
+That is harness behavior. Traycer does not run brief → plan → tickets →
+walkthrough as an automatic pipeline, and it does not fail the turn when a skill
+is skipped.
+
+Picking the skill yourself is a **reliable available workflow**. It is not a new
+policy that every artifact must be requested by hand.
+
+## Related
+
+- [Tasks and workspace folders](/concepts/tasks-and-workspace-folders)
+- [Artifacts](/panels/artifacts)
+- [Agents](/panels/agents)
+- [Desktop changelog](/changelog)
