@@ -355,6 +355,12 @@ describe("RoutingDestinationPicker rows and listing", () => {
       const row = suggestionOptions()[0];
       expect(row.textContent).toContain("gpt");
       expect(row.textContent).not.toContain("GPT-5");
+      // `gpt` has no `*`: an unresolved EXACT value, not a pattern, so it is
+      // never announced as one (the tier editor draws it as an exact pick).
+      // Falsification: drop the `isModelPattern` half of
+      // `modelSuggestionTitle`'s guard and this row wears the glyph.
+      expect(within(row).queryByTestId("fallback-pattern-glyph")).toBeNull();
+      expect(row.textContent).not.toContain("pattern");
       expect(row.textContent).toContain("No matching model on this provider");
       expect(row.getAttribute("aria-disabled")).toBe("true");
     });
@@ -713,6 +719,10 @@ describe("RoutingDestinationPicker rows and listing", () => {
       await open();
 
       const row = suggestionOptions()[0];
+      // `sonnet` has no `*` either: plain, and not announced as a pattern.
+      // Falsification: as above - drop the `isModelPattern` guard.
+      expect(within(row).queryByTestId("fallback-pattern-glyph")).toBeNull();
+      expect(row.textContent).not.toContain("pattern");
       expect(row.getAttribute("aria-disabled")).toBe("true");
       fireEvent.click(row);
       expect(footerConfirm().disabled).toBe(true);
@@ -1424,5 +1434,117 @@ describe("RoutingDestinationPicker rows and listing", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog", { name: "Select model" })).toBeNull();
     });
+  });
+});
+
+describe("RoutingDestinationPicker - a pattern row's own presentation (ported from #2161)", () => {
+  beforeEach(() => {
+    resetKit();
+    seedProviders();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function unresolvedRow(input: {
+    readonly family: string;
+    readonly effort: string | null;
+  }) {
+    return modelRow({
+      harnessId: "codex",
+      modelFamily: input.family,
+      model: null,
+      reasoningEffort: input.effort,
+      target: null,
+      selectable: false,
+      skip: fallbackSkip({
+        reason: "unresolved",
+        label: "No matching model on this provider",
+      }),
+      warnings: [],
+    });
+  }
+
+  async function openWith(rows: FallbackModelTarget[]): Promise<void> {
+    kit.listData = listed({ profileTargets: [], modelTargets: rows });
+    mount(failedTurn(["switch"]));
+    await open();
+  }
+
+  it("an unresolved pattern row (model: null) renders the pattern glyph and the mono pattern text, stays dimmed, and is announced as a pattern", async () => {
+    await openWith([unresolvedRow({ family: "*luna*", effort: null })]);
+
+    const row = suggestionOptions()[0];
+    const glyph = within(row).getByTestId("fallback-pattern-glyph");
+    expect(glyph.textContent).toContain("pattern");
+    const pattern = within(row).getByText("*luna*");
+    expect(pattern.closest(".font-mono")).not.toBeNull();
+    expect(row.textContent).toContain("pattern");
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    // Falsification: in `modelSuggestionTitle`, return the plain
+    // `destination.modelLabel` string whatever `isModelPattern` says - no
+    // glyph, no mono span, and every assertion above goes red.
+  });
+
+  it("an unresolved pattern row with an effort reads '*luna* · high' after the glyph", async () => {
+    await openWith([unresolvedRow({ family: "*luna*", effort: "high" })]);
+
+    const row = suggestionOptions()[0];
+    expect(within(row).getByTestId("fallback-pattern-glyph")).toBeDefined();
+    expect(row.textContent).toContain("*luna* · high");
+    expect(
+      within(row).getByText("*luna*").closest(".font-mono"),
+    ).not.toBeNull();
+    // Falsification: drop the `effort === null ? null : ` suffix branch in
+    // `modelSuggestionTitle` and the " · high" tail disappears.
+  });
+
+  it("an unresolved value with NO `*` is an exact pick: plain raw-value title, no glyph, not announced as a pattern", async () => {
+    await openWith([unresolvedRow({ family: "gpt-5.6-terra", effort: null })]);
+
+    expect(screen.queryByTestId("fallback-pattern-glyph")).toBeNull();
+    const row = suggestionOptions()[0];
+    expect(row.textContent).not.toContain("pattern");
+    expect(row.textContent).toContain("gpt-5.6-terra");
+    expect(screen.getByText("gpt-5.6-terra")).toBeDefined();
+    // Falsification: drop the `!isModelPattern(destination.modelLabel)` half
+    // of `modelSuggestionTitle`'s guard - the row then wears the glyph and
+    // reads "pattern gpt-5.6-terra".
+  });
+
+  it("two rows built from one pattern, each with its own resolved model, render as two SEPARATE rows with no glyph - a resolved row is unchanged", async () => {
+    await openWith([
+      modelRow({
+        harnessId: "codex",
+        modelFamily: "*luna*",
+        model: "gpt-6-luna",
+        reasoningEffort: null,
+        target: { ...TARGET_CODEX_TUPLE, model: "gpt-6-luna" },
+        selectable: true,
+        skip: null,
+        warnings: [],
+      }),
+      modelRow({
+        harnessId: "codex",
+        modelFamily: "*luna*",
+        model: "gpt-6-luna-mini",
+        reasoningEffort: null,
+        target: { ...TARGET_CODEX_TUPLE, model: "gpt-6-luna-mini" },
+        selectable: true,
+        skip: null,
+        warnings: [],
+      }),
+    ]);
+
+    const rows = suggestionOptions();
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain("gpt-6-luna");
+    expect(rows[0].textContent).not.toContain("gpt-6-luna-mini");
+    expect(rows[1].textContent).toContain("gpt-6-luna-mini");
+    expect(screen.queryByTestId("fallback-pattern-glyph")).toBeNull();
+    // Falsification: key the pattern branch on `modelFamily` alone (ignoring
+    // `modelIsFamily`) and both resolved rows would wear the glyph and read
+    // "*luna*"; any merge keyed on `modelFamily` would collapse them to one.
   });
 });

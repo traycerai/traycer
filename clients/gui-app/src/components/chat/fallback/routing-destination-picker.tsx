@@ -91,9 +91,12 @@ import {
   fallbackProviderModelLabel,
   useFallbackModelLabels,
   useFallbackProfileLabels,
+  type FallbackDestinationDescription,
   type FallbackModelLabelResolver,
   type FallbackProfileLabelResolver,
 } from "./fallback-identity";
+import { FallbackPatternGlyph } from "@/components/settings/panels/fallback/fallback-pattern-glyph";
+import { isModelPattern } from "@/components/settings/panels/fallback/fallback-model-patterns";
 import { useOpenFallbackSettings } from "./open-fallback-settings";
 import {
   useFallbackChooseTarget,
@@ -1704,9 +1707,7 @@ function modelSuggestion(input: {
     harnessId,
     modelId: target.target?.model ?? target.model ?? target.modelFamily,
     profileId: target.profileId,
-    title: [destination.modelLabel, destination.effortLabel]
-      .filter((part): part is string => part !== null)
-      .join(" · "),
+    title: modelSuggestionTitle(destination),
     subtitle: crossesProviders
       ? `${fallbackHarnessLabelFor(target.harnessId)} · ${destination.profileLabel}`
       : destination.profileLabel,
@@ -1719,6 +1720,40 @@ function modelSuggestion(input: {
     recommended: false,
     action: { kind: "switch", target: target.target },
   };
+}
+
+/**
+ * An equivalent-model row's title: "GPT-6-Astra · high", or - for a row the
+ * host could not resolve to a PATTERN - "[*] *luna* · high", the pattern in
+ * the tier editor's own badge and a mono face, so it cannot read as a model's
+ * name. The badge's text alternative is "pattern", so the row is announced as
+ * one. The provider stays where every equivalent-model row puts it: the
+ * subtitle, beside the account.
+ *
+ * An unresolved value with no `*` is NOT a pattern: it is an exact pick the
+ * host could not find (or a 1.0 host's family word), which the tier editor
+ * draws as an exact pick (`isModelPattern`). It keeps the plain raw-value
+ * title here too, so Settings and the chat never disagree about what one
+ * stored value is. One `listTargets` row is one destination - a pattern that
+ * matches several models arrives as one resolved row per match - so there is
+ * nothing to merge.
+ */
+function modelSuggestionTitle(
+  destination: FallbackDestinationDescription,
+): ReactNode {
+  const effort = destination.effortLabel;
+  if (!destination.modelIsFamily || !isModelPattern(destination.modelLabel)) {
+    return effort === null
+      ? destination.modelLabel
+      : `${destination.modelLabel} · ${effort}`;
+  }
+  return (
+    <>
+      <FallbackPatternGlyph tone="accent" />{" "}
+      <span className="font-mono">{destination.modelLabel}</span>
+      {effort === null ? null : ` · ${effort}`}
+    </>
+  );
 }
 
 function actionSuggestion(input: {

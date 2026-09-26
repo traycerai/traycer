@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
@@ -114,7 +115,12 @@ export interface SuggestionRow {
   /** The slug a `switch` commits; `""` for a row with nothing to commit. */
   readonly modelId: string;
   readonly profileId: string | null;
-  readonly title: string;
+  /**
+   * What the row is titled. Usually text; a node where the surface draws part
+   * of it specially (the routing chooser's tier PATTERN, badged and in a mono
+   * face) - the picker renders it as given and reads nothing from it.
+   */
+  readonly title: ReactNode;
   readonly subtitle: string | null;
   /** One short reason, shown under the title - why a row is dimmed, most often. */
   readonly note: string | null;
