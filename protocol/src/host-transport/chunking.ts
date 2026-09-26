@@ -332,14 +332,14 @@ function compressFramePayload(plain: Uint8Array): Uint8Array | null {
  * a compressed payload must be SMALLER than its declared plaintext, which a
  * genuine sender guarantees and the check below enforces - so the input is
  * under a chunk's worth of compressed bytes, and DEFLATE expands at most
- * ~1032:1: the worst case is ~66 MB of dropped writes, tens of milliseconds,
- * after which the stream is failed closed. A peer that keeps sending such
- * frames on fresh streams is an authenticated peer spending its own credit
- * window on them (bulk frames are credit-gated per frame at receipt), and it
- * costs this side per frame roughly what a 66 MB JSON body would; that
- * ceiling is accepted rather than escalated to a session drop, for the
- * reconnect-loop reason above. A legitimate frame that cost 0.65 s is the
- * wrong side of that trade by four orders of magnitude.
+ * ~1032:1: the worst case is ~66 MB of dropped writes, tens of milliseconds.
+ * That one verdict - over-expansion, which no genuine sender can produce -
+ * is then routed to the SESSION rather than the stream
+ * ({@link MuxFrameOverExpansionError}), so a peer that means to repeat it
+ * pays a reconnect per attempt instead of a stream id. The per-stream
+ * routing above is kept for every other decode fault, which is caught for
+ * its own cost. A legitimate frame that cost 0.65 s is the wrong side of
+ * that trade by four orders of magnitude.
  */
 function inflateFramePayload(payload: Uint8Array): Uint8Array {
   if (payload.length < COMPRESSED_PAYLOAD_HEADER_LEN) {
@@ -382,17 +382,47 @@ function inflateFramePayload(payload: Uint8Array): Uint8Array {
       `compressed frame payload failed to inflate: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  if (written !== plainLength) {
+  if (written > plainLength) {
     // "more than" rather than a count: the spare byte proves the payload
     // over-expanded without measuring by how much, and inventing a figure the
-    // buffer never held would be worse than naming the direction.
-    const actual =
-      written > plainLength ? `more than ${plainLength}` : `${written}`;
+    // buffer never held would be worse than naming the direction. Its own
+    // class, because this is the one verdict that is session-level - see
+    // {@link MuxFrameOverExpansionError}.
+    throw new MuxFrameOverExpansionError(
+      `compressed frame inflated to more than ${plainLength} bytes, declared ${plainLength}`,
+    );
+  }
+  if (written !== plainLength) {
     throw new MuxFrameDecodeError(
-      `compressed frame inflated to ${actual} bytes, declared ${plainLength}`,
+      `compressed frame inflated to ${written} bytes, declared ${plainLength}`,
     );
   }
   return out.subarray(0, written);
+}
+
+/**
+ * A compressed frame that inflated to MORE bytes than it declared.
+ *
+ * Distinct from every other `MuxFrameDecodeError` because it is the one
+ * inbound fault a genuine peer cannot produce and the one whose cost the
+ * receiver cannot bound: the sender writes the exact length it deflated, so
+ * a payload that expands past its declaration carries a forged prefix - and
+ * by the time that is known, the inflate has already walked the whole
+ * expansion, up to ~1032x the declaration (~66 MB for a full chunk). A
+ * corrupt or short payload is caught for its own cost and stays a
+ * per-stream verdict; this one is routed to the SESSION by
+ * `RemoteSession.failStreamOnInboundError` (and its host-side mirror), so
+ * that repeating it costs the peer a reconnect - a relay grant and a Noise
+ * handshake - per attempt, rather than one fresh stream id. Receive credits
+ * are not a bound here: they are spent on the peer's own word (the BULK flag
+ * is peer-controlled and no receive-side balance is enforced), so a peer
+ * that means to repeat this can simply not spend them.
+ */
+export class MuxFrameOverExpansionError extends MuxFrameDecodeError {
+  constructor(message: string) {
+    super(message);
+    this.name = "MuxFrameOverExpansionError";
+  }
 }
 
 /**

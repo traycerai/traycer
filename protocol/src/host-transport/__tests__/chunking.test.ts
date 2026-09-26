@@ -27,6 +27,7 @@ import {
   CHUNK_PACE_FRAMES_PER_SEC,
   ChunkPacer,
   ChunkReassembler,
+  MuxFrameOverExpansionError,
   ChunkReassemblyError,
   COMPRESSION_MIN_PAYLOAD_BYTES,
   decodeMuxMessageBody,
@@ -645,6 +646,9 @@ describe("body compression round-trip (T5)", () => {
           throw new Error("expected reassembler.accept to throw an Error");
         }
         expect(thrown).toBeInstanceOf(MuxFrameDecodeError);
+        // The over-expansion verdict is its own class: the session routes it
+        // to the connection, every other decode fault to the stream.
+        expect(thrown).toBeInstanceOf(MuxFrameOverExpansionError);
         expect(thrown.message).toBe(
           `compressed frame inflated to more than ${declaredPlainLength} bytes, declared ${declaredPlainLength}`,
         );

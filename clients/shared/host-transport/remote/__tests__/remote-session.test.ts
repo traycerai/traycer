@@ -16,6 +16,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { z } from "zod";
+import { deflateSync } from "fflate";
 import {
   defineFallbackMethodDegrade,
   defineFloorAwareVersionedRpcRegistry,
@@ -6502,6 +6503,109 @@ describe("RemoteSession per-stream inbound error routing", () => {
         expect(relay.openBearers).toHaveLength(1);
         expect(relay.errors).toEqual([]);
       } finally {
+        streamB.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "fails the SESSION, not the stream, on a compressed frame that inflates past its declaration",
+    async () => {
+      // The other half of the asymmetry the neighbour above closes. Both
+      // frames are flagged compressed and both fail to decode, but they are
+      // NOT the same fault: the neighbour's payload is bytes `inflateSync`
+      // cannot decode at all ("failed to inflate"), which stays per-stream.
+      // This one decodes CLEANLY but produces far more plaintext than its
+      // own declared length promised - the one inbound fault
+      // `failStreamOnInboundError` does NOT route per-stream
+      // (`MuxFrameOverExpansionError`, chunking.ts), because by the time it
+      // is caught the receiver has already paid for the whole real
+      // expansion once. The caller re-throws, and the inbound IIFE's
+      // `.catch` sends it through `handleConnectionLost(..., "inbound-decode
+      // -failed", "host-transport-plane")` - a full connection drop and
+      // redial, not a per-stream fatal.
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const streamA = session.subscribe("cursor.subscribe", { cursor: null });
+      const streamB = session.subscribe("cursor.subscribe", { cursor: null });
+      let streamAClosedReason: StreamCloseReason | null = null;
+      streamA.onStatusChange((status, reason) => {
+        if (status === "closed") {
+          streamAClosedReason = reason;
+        }
+      });
+      let streamBClosedReason: StreamCloseReason | null = null;
+      streamB.onStatusChange((status, reason) => {
+        if (status === "closed") {
+          streamBClosedReason = reason;
+        }
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const [streamIdA] = relay.subscribeStreamIds;
+
+        // A frame FLAGGED compressed whose declared plaintext length clears
+        // BOTH bound checks in `inflateFramePayload` - well under
+        // `BULK_CHUNK_SIZE_BYTES`, and strictly larger than the compressed
+        // payload's own byte length, so a genuine-looking header - but whose
+        // REAL inflated size is the whole megabyte of zeros this deflates:
+        // ~1000x the declaration. Highly compressible input keeps the
+        // compressed bytes tiny so the forged declared length can stay small
+        // too; only the genuine inflate exposes the mismatch.
+        const deflated = deflateSync(new Uint8Array(1024 * 1024), {
+          level: 6,
+        });
+        const declaredPlainLength = 4 + deflated.length + 1;
+        const overExpandingPayload = new Uint8Array(4 + deflated.length);
+        new DataView(overExpandingPayload.buffer).setUint32(
+          0,
+          declaredPlainLength,
+        );
+        overExpandingPayload.set(deflated, 4);
+        const overExpandingFrame: EncodeMuxFrameInput = {
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: streamIdA,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: overExpandingPayload,
+        };
+        relay.deliverToClient(await relay.encryptFrame(overExpandingFrame));
+
+        // The connection-lost path, observed the way this suite observes it
+        // elsewhere (the availability-recovered reconnect case above): a
+        // redial puts a SECOND bearer on `openBearers`. Nothing routes this
+        // per-stream - if this stayed at 1 the production change had
+        // regressed to the neighbour's per-stream route instead.
+        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), WAIT);
+        expect(relay.openBearers).toEqual(["valid-token", "valid-token"]);
+
+        // Neither logical stream was condemned - it is the SHARED CONNECTION
+        // that dropped and redialled, not stream A specifically (which is
+        // what the neighbour's per-stream routing would have done instead).
+        expect(streamAClosedReason).toBeNull();
+        expect(streamBClosedReason).toBeNull();
+        expect(session.isClosed()).toBe(false);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        streamA.close();
         streamB.close();
         session.close();
       }
