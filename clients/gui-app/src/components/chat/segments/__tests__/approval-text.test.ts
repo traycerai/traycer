@@ -166,7 +166,7 @@ describe("approvalCardText", () => {
     });
   });
 
-  it("drops the cut summary when the description equals the whole command", () => {
+  it("drops the cut summary for a description that is the whole command collapsed, and still offers the command as written", () => {
     const command = `echo ${"b".repeat(100)}\n  && ls`;
     const summary = truncatedSummary(command);
     expect(
@@ -179,7 +179,25 @@ describe("approvalCardText", () => {
     ).toEqual({
       inputSummary: null,
       headline: command.replace(/\s+/g, " "),
-      inputDetail: null,
+      inputDetail: commandDetail(command),
+    });
+  });
+
+  it("offers a short multi-line command whose summary put it on one line", () => {
+    const command = "rm -rf build\ntouch done";
+    const summary = truncatedSummary(command);
+    expect(summary).toBe("rm -rf build touch done");
+    expect(
+      approvalCardText(
+        "run_command",
+        summary,
+        "Clean the build",
+        commandDetail(command),
+      ),
+    ).toEqual({
+      inputSummary: summary,
+      headline: "Clean the build",
+      inputDetail: commandDetail(command),
     });
   });
 
