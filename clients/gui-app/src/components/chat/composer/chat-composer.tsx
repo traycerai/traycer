@@ -507,6 +507,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
       rateLimitPrompt.destinations.some(
         (destination) => destination.selectable,
       ),
+    episodeKey:
+      rateLimitPrompt.kind === "visible" ? rateLimitPrompt.warningKey : null,
     harnessId,
     profileId,
     selectedModel,
@@ -740,7 +742,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   probeTarget={rateLimitPrompt.probeTarget}
                   runTargetHostId={tabHostId}
                   onSwitchProfile={onSwitchProfile}
-                  affectedChatCount={taskProfileSwitch.affectedChatCount}
+                  taskScope={taskProfileSwitch.scope}
+                  onResolveTaskScope={taskProfileSwitch.resolveScope}
                   onSwitchProfileForTask={
                     taskProfileSwitch.switchOtherTaskChats
                   }

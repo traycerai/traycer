@@ -149,7 +149,8 @@ function ComposerProfileSwitchHarness() {
             probeTarget={null}
             runTargetHostId={null}
             onSwitchProfile={setProfileId}
-            affectedChatCount={1}
+            taskScope={{ kind: "none" }}
+            onResolveTaskScope={() => undefined}
             onSwitchProfileForTask={() => undefined}
             onDismiss={prompt.dismiss}
           />
@@ -201,7 +202,8 @@ function ComposerBannerPrecedenceHarness() {
             probeTarget={null}
             runTargetHostId={null}
             onSwitchProfile={setProfileId}
-            affectedChatCount={1}
+            taskScope={{ kind: "none" }}
+            onResolveTaskScope={() => undefined}
             onSwitchProfileForTask={() => undefined}
             onDismiss={prompt.dismiss}
           />

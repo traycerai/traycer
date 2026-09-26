@@ -37,7 +37,12 @@ const epicRecords = vi.hoisted(() => {
 
 const batch = vi.hoisted(() => ({
   chatIds: [] as ReadonlyArray<string>,
+  enabled: false,
+  checkId: 0,
+  resolving: false,
   settingsByChatId: new Map<string, ChatRunSettings>(),
+  /** Chats whose read failed. */
+  failed: new Set<string>(),
 }));
 const updateProfile = vi.hoisted(() => vi.fn());
 const tabHostClient = vi.hoisted(() => ({ request: vi.fn() }));
@@ -54,14 +59,29 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
   useMaybeOpenEpicHandle: () => ({ store: epicRecords }),
 }));
 
+// Answers like the real batch: nothing while disabled, and settings only
+// once no read is in flight.
 vi.mock("@/hooks/chats/use-chat-run-settings-query", () => ({
   useChatRunSettingsBatch: (args: {
     readonly chatIds: ReadonlyArray<string>;
+    readonly enabled: boolean;
+    readonly checkId: number;
   }) => {
     batch.chatIds = args.chatIds;
-    return args.chatIds.map((chatId) => ({
-      data: { settings: batch.settingsByChatId.get(chatId) ?? null },
-    }));
+    batch.enabled = args.enabled;
+    batch.checkId = args.checkId;
+    return {
+      resolving: args.enabled && batch.resolving,
+      reads: args.chatIds.map((chatId) => {
+        if (!args.enabled) return { kind: "unavailable" };
+        if (batch.resolving) return { kind: "pending" };
+        if (batch.failed.has(chatId)) return { kind: "failed" };
+        return {
+          kind: "answered",
+          settings: batch.settingsByChatId.get(chatId) ?? null,
+        };
+      }),
+    };
   },
 }));
 
@@ -128,11 +148,29 @@ describe("useTaskProfileRateLimitSwitch", () => {
       chats: { byId: {}, allIds: [] },
     });
     batch.chatIds = [];
+    batch.enabled = false;
+    batch.checkId = 0;
+    batch.resolving = false;
     batch.settingsByChatId.clear();
+    batch.failed.clear();
     updateProfile.mockReset();
   });
 
   afterEach(cleanup);
+
+  function renderSwitch(episodeKey: { current: string | null }) {
+    return renderHook(() =>
+      useTaskProfileRateLimitSwitch({
+        enabled: true,
+        episodeKey: episodeKey.current,
+        harnessId: "claude",
+        profileId: "limited",
+        selectedModel: SELECTED_MODEL,
+        epicId: EPIC_ID,
+        chatId: CURRENT_CHAT_ID,
+      }),
+    );
+  }
 
   it("switches matching registry chats on the tab host without reading legacy or cross-host chats", () => {
     const sameHostMatch = chat("chat-same-match", TAB_HOST_ID);
@@ -166,22 +204,18 @@ describe("useTaskProfileRateLimitSwitch", () => {
     batch.settingsByChatId.set(crossHostMatch.id, settings(undefined));
     batch.settingsByChatId.set(legacy.id, settings(undefined));
 
-    const { result } = renderHook(() =>
-      useTaskProfileRateLimitSwitch({
-        enabled: true,
-        harnessId: "claude",
-        profileId: "limited",
-        selectedModel: SELECTED_MODEL,
-        epicId: EPIC_ID,
-        chatId: CURRENT_CHAT_ID,
-      }),
-    );
+    const { result } = renderSwitch({ current: "warning-1" });
+    act(() => result.current.resolveScope());
 
     expect(batch.chatIds).toEqual([
       sameHostMatch.id,
       sameHostDifferentModel.id,
     ]);
-    expect(result.current.affectedChatCount).toBe(2);
+    expect(result.current.scope).toEqual({
+      kind: "resolved",
+      otherChatCount: 1,
+      uncheckedChatCount: 0,
+    });
 
     act(() => result.current.switchOtherTaskChats("fresh"));
 
@@ -190,6 +224,195 @@ describe("useTaskProfileRateLimitSwitch", () => {
       epicId: EPIC_ID,
       chatId: sameHostMatch.id,
       profileId: "fresh",
+    });
+  });
+
+  it("reads no sibling settings while the banner merely shows, only once task scope is asked for", () => {
+    const sibling = chat("chat-sibling", TAB_HOST_ID);
+    epicRecords.setState({
+      chatRecords: slice([chat(CURRENT_CHAT_ID, TAB_HOST_ID), sibling]),
+      chats: slice([]),
+    });
+    batch.settingsByChatId.set(sibling.id, settings(undefined));
+
+    const { result } = renderSwitch({ current: "warning-1" });
+
+    expect(batch.enabled).toBe(false);
+    expect(result.current.scope).toEqual({ kind: "unresolved" });
+    act(() => result.current.switchOtherTaskChats("fresh"));
+    expect(updateProfile).not.toHaveBeenCalled();
+
+    act(() => result.current.resolveScope());
+
+    expect(batch.enabled).toBe(true);
+    expect(result.current.scope).toEqual({
+      kind: "resolved",
+      otherChatCount: 1,
+      uncheckedChatCount: 0,
+    });
+  });
+
+  it("leaves archived chats out of the candidates", () => {
+    const live = chat("chat-live", TAB_HOST_ID);
+    const archived = { ...chat("chat-archived", TAB_HOST_ID), archivedAt: 5 };
+    epicRecords.setState({
+      chatRecords: slice([chat(CURRENT_CHAT_ID, TAB_HOST_ID), live, archived]),
+      chats: slice([]),
+    });
+    batch.settingsByChatId.set(live.id, settings(undefined));
+    batch.settingsByChatId.set(archived.id, settings(undefined));
+
+    const { result } = renderSwitch({ current: "warning-1" });
+    act(() => result.current.resolveScope());
+
+    expect(batch.chatIds).toEqual([live.id]);
+    act(() => result.current.switchOtherTaskChats("fresh"));
+    expect(updateProfile).toHaveBeenCalledTimes(1);
+    expect(updateProfile).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      chatId: live.id,
+      profileId: "fresh",
+    });
+  });
+
+  it("offers nothing when this is the task's only live chat on the tab host", () => {
+    epicRecords.setState({
+      chatRecords: slice([
+        chat(CURRENT_CHAT_ID, TAB_HOST_ID),
+        { ...chat("chat-archived", TAB_HOST_ID), archivedAt: 5 },
+        chat("chat-cross-host", OTHER_HOST_ID),
+      ]),
+      chats: slice([]),
+    });
+
+    const { result } = renderSwitch({ current: "warning-1" });
+
+    expect(result.current.scope).toEqual({ kind: "none" });
+  });
+
+  it("reports resolving while the reads are in flight, and moves nobody until they answer", () => {
+    const sibling = chat("chat-sibling", TAB_HOST_ID);
+    epicRecords.setState({
+      chatRecords: slice([chat(CURRENT_CHAT_ID, TAB_HOST_ID), sibling]),
+      chats: slice([]),
+    });
+    batch.settingsByChatId.set(sibling.id, settings(undefined));
+    batch.resolving = true;
+
+    const { result, rerender } = renderSwitch({ current: "warning-1" });
+    act(() => result.current.resolveScope());
+
+    expect(result.current.scope).toEqual({ kind: "resolving" });
+    act(() => result.current.switchOtherTaskChats("fresh"));
+    expect(updateProfile).not.toHaveBeenCalled();
+
+    batch.resolving = false;
+    rerender();
+    expect(result.current.scope).toEqual({
+      kind: "resolved",
+      otherChatCount: 1,
+      uncheckedChatCount: 0,
+    });
+  });
+
+  it("asks again for a new warning episode instead of inheriting the old request", () => {
+    const sibling = chat("chat-sibling", TAB_HOST_ID);
+    epicRecords.setState({
+      chatRecords: slice([chat(CURRENT_CHAT_ID, TAB_HOST_ID), sibling]),
+      chats: slice([]),
+    });
+    const episodeKey = { current: "warning-1" as string | null };
+    const { result, rerender } = renderSwitch(episodeKey);
+    act(() => result.current.resolveScope());
+    expect(batch.enabled).toBe(true);
+
+    episodeKey.current = "warning-2";
+    rerender();
+
+    expect(batch.enabled).toBe(false);
+    expect(result.current.scope).toEqual({ kind: "unresolved" });
+  });
+  it("counts a sibling whose read failed as unchecked, and moves only the ones it could read", () => {
+    const readable = chat("chat-readable", TAB_HOST_ID);
+    const broken = chat("chat-broken", TAB_HOST_ID);
+    epicRecords.setState({
+      chatRecords: slice([
+        chat(CURRENT_CHAT_ID, TAB_HOST_ID),
+        readable,
+        broken,
+      ]),
+      chats: slice([]),
+    });
+    batch.settingsByChatId.set(readable.id, settings(undefined));
+    batch.settingsByChatId.set(broken.id, settings(undefined));
+    batch.failed.add(broken.id);
+
+    const { result } = renderSwitch({ current: "warning-1" });
+    act(() => result.current.resolveScope());
+
+    expect(result.current.scope).toEqual({
+      kind: "resolved",
+      otherChatCount: 1,
+      uncheckedChatCount: 1,
+    });
+    act(() => result.current.switchOtherTaskChats("fresh"));
+    expect(updateProfile).toHaveBeenCalledTimes(1);
+    expect(updateProfile).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      chatId: readable.id,
+      profileId: "fresh",
+    });
+  });
+
+  it("makes every resolveScope a new check, so a later tick reads the siblings again", () => {
+    epicRecords.setState({
+      chatRecords: slice([
+        chat(CURRENT_CHAT_ID, TAB_HOST_ID),
+        chat("chat-sibling", TAB_HOST_ID),
+      ]),
+      chats: slice([]),
+    });
+    const { result } = renderSwitch({ current: "warning-1" });
+
+    act(() => result.current.resolveScope());
+    const first = batch.checkId;
+    act(() => result.current.resolveScope());
+
+    expect(batch.checkId).toBeGreaterThan(first);
+    expect(batch.enabled).toBe(true);
+  });
+  it("stays resolving while the composer's model has not loaded, rather than resolving with every sibling unchecked", () => {
+    const sibling = chat("chat-sibling", TAB_HOST_ID);
+    epicRecords.setState({
+      chatRecords: slice([chat(CURRENT_CHAT_ID, TAB_HOST_ID), sibling]),
+      chats: slice([]),
+    });
+    batch.settingsByChatId.set(sibling.id, settings(undefined));
+    const model: { current: ModelOption | null } = { current: null };
+
+    const { result, rerender } = renderHook(() =>
+      useTaskProfileRateLimitSwitch({
+        enabled: true,
+        episodeKey: "warning-1",
+        harnessId: "claude",
+        profileId: "limited",
+        selectedModel: model.current,
+        epicId: EPIC_ID,
+        chatId: CURRENT_CHAT_ID,
+      }),
+    );
+    act(() => result.current.resolveScope());
+
+    expect(batch.enabled).toBe(false);
+    expect(result.current.scope).toEqual({ kind: "resolving" });
+
+    model.current = SELECTED_MODEL;
+    rerender();
+    expect(batch.enabled).toBe(true);
+    expect(result.current.scope).toEqual({
+      kind: "resolved",
+      otherChatCount: 1,
+      uncheckedChatCount: 0,
     });
   });
 });

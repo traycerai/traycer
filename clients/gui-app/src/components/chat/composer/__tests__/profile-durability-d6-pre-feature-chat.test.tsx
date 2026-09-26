@@ -159,7 +159,8 @@ function PreFeatureComposerHarness() {
             probeTarget={null}
             runTargetHostId={null}
             onSwitchProfile={setProfileId}
-            affectedChatCount={1}
+            taskScope={{ kind: "none" }}
+            onResolveTaskScope={() => undefined}
             onSwitchProfileForTask={() => undefined}
             onDismiss={prompt.dismiss}
           />

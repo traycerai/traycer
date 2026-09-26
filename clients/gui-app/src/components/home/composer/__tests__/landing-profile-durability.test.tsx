@@ -36,7 +36,7 @@ import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/pro
  * - real `ProfileRateLimitSwitchBanner`
  * - real landing `ComposerToolbarStore` + `commitProfileSelection`
  * - real shared dismissal store
- * - `affectedChatCount: 0`, `runTargetHostId: null`
+ * - `taskScope: none`, `runTargetHostId: null`
  * - submit-time settings via `buildChatRunSettings` (same builder the landing
  *   actions path uses for `epic.create`)
  *
@@ -247,7 +247,8 @@ function LandingRateLimitBannerHarness(props: {
             onSwitchProfile={(nextProfileId) => {
               commitProfileSelection(props.toolbarStore, nextProfileId);
             }}
-            affectedChatCount={0}
+            taskScope={{ kind: "none" }}
+            onResolveTaskScope={() => undefined}
             onSwitchProfileForTask={() => undefined}
             onDismiss={prompt.dismiss}
           />
@@ -289,7 +290,8 @@ function ChatSurfaceDismissHarness(props: {
             probeTarget={prompt.probeTarget}
             runTargetHostId={null}
             onSwitchProfile={() => undefined}
-            affectedChatCount={1}
+            taskScope={{ kind: "none" }}
+            onResolveTaskScope={() => undefined}
             onSwitchProfileForTask={() => undefined}
             onDismiss={prompt.dismiss}
           />
@@ -355,7 +357,8 @@ function LoadingSeedHarness(props: {
             probeTarget={prompt.probeTarget}
             runTargetHostId={null}
             onSwitchProfile={() => undefined}
-            affectedChatCount={0}
+            taskScope={{ kind: "none" }}
+            onResolveTaskScope={() => undefined}
             onSwitchProfileForTask={() => undefined}
             onDismiss={prompt.dismiss}
           />
@@ -677,7 +680,7 @@ describe("Landing rate-limit banner durability", () => {
           serviceTier: toolbarStore.getState().serviceTier,
         }).profileId,
       ).toBe("work");
-      // Task checkbox never appears on landing (affectedChatCount 0).
+      // Task checkbox never appears on landing (task scope none).
       expect(screen.queryByRole("checkbox")).toBeNull();
     });
 

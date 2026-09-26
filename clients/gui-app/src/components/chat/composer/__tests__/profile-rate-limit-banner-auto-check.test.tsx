@@ -102,7 +102,8 @@ function renderBanner(input: {
         probeTarget={input.probeTarget}
         runTargetHostId={null}
         onSwitchProfile={() => undefined}
-        affectedChatCount={1}
+        taskScope={{ kind: "none" }}
+        onResolveTaskScope={() => undefined}
         onSwitchProfileForTask={() => undefined}
         onDismiss={() => undefined}
       />
@@ -146,7 +147,8 @@ describe("ProfileRateLimitSwitchBanner automatic unknown-destination check", () 
           probeTarget={unknownDestination}
           runTargetHostId={null}
           onSwitchProfile={() => undefined}
-          affectedChatCount={1}
+          taskScope={{ kind: "none" }}
+          onResolveTaskScope={() => undefined}
           onSwitchProfileForTask={() => undefined}
           onDismiss={() => undefined}
         />
@@ -206,7 +208,8 @@ describe("ProfileRateLimitSwitchBanner automatic unknown-destination check", () 
           probeTarget={unknownDestination}
           runTargetHostId={null}
           onSwitchProfile={() => undefined}
-          affectedChatCount={1}
+          taskScope={{ kind: "none" }}
+          onResolveTaskScope={() => undefined}
           onSwitchProfileForTask={() => undefined}
           onDismiss={() => undefined}
         />
@@ -265,7 +268,8 @@ describe("ProfileRateLimitSwitchBanner automatic unknown-destination check", () 
           probeTarget={unknownDestination}
           runTargetHostId={null}
           onSwitchProfile={() => undefined}
-          affectedChatCount={1}
+          taskScope={{ kind: "none" }}
+          onResolveTaskScope={() => undefined}
           onSwitchProfileForTask={() => undefined}
           onDismiss={() => undefined}
         />

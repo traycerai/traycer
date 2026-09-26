@@ -30,6 +30,7 @@ import { useComposerPickerItems } from "@/components/chat/composer/picker/use-co
 import { NO_LOCAL_SLASH_COMMANDS } from "@/hooks/composer/use-slash-commands";
 import { useProfileRateLimitSwitchPrompt } from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
 import { ProfileRateLimitSwitchBanner } from "@/components/chat/composer/profile-rate-limit-switch-banner";
+import type { TaskChatScope } from "@/components/chat/composer/use-task-profile-rate-limit-switch";
 import { ProfileDisabledBanner } from "@/components/chat/composer/profile-disabled-banner";
 import { useProfileEligibilityGate } from "@/components/chat/composer/use-profile-eligibility-gate";
 import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
@@ -768,7 +769,8 @@ export function LandingComposer(props: LandingComposerProps) {
               // actually run on.
               runTargetHostId={resolvedHostId}
               onSwitchProfile={onSwitchRateLimitedProfile}
-              affectedChatCount={0}
+              taskScope={NO_TASK_SCOPE}
+              onResolveTaskScope={noopResolveTaskScope}
               onSwitchProfileForTask={noopSwitchProfileForTask}
               onDismiss={rateLimitPrompt.dismiss}
             />
@@ -847,6 +849,11 @@ function resolveLandingSubmitBlock(args: {
 }
 
 function noopSwitchProfileForTask(): void {}
+
+function noopResolveTaskScope(): void {}
+
+/** A new task has no sibling chats to switch with it. */
+const NO_TASK_SCOPE: TaskChatScope = { kind: "none" };
 
 /**
  * Exported for its test only. The byte source below is the whole subject of

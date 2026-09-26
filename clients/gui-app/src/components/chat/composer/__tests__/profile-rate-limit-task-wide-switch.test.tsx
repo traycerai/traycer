@@ -15,6 +15,7 @@ import {
   initialPreviewProfileId,
   type ProfileRateLimitDestination,
 } from "../use-profile-rate-limit-switch-prompt";
+import type { TaskChatScope } from "../use-task-profile-rate-limit-switch";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -124,21 +125,33 @@ function usageEntry(
   };
 }
 
-function renderBanner(input: {
-  readonly affectedChatCount: number;
+const SCOPE_NONE: TaskChatScope = { kind: "none" };
+
+function resolvedScope(
+  otherChatCount: number,
+  uncheckedChatCount: number,
+): TaskChatScope {
+  return { kind: "resolved", otherChatCount, uncheckedChatCount };
+}
+
+interface BannerInput {
+  readonly taskScope: TaskChatScope;
+  readonly onResolveTaskScope: () => void;
   readonly destinations: ReadonlyArray<ProfileRateLimitDestination> | undefined;
   readonly primaryTarget: ProfileRateLimitDestination | null | undefined;
   readonly profiles: ReadonlyArray<ProviderProfile> | undefined;
   readonly onSwitchProfile: (profileId: string | null) => void;
   readonly onSwitchProfileForTask: (profileId: string | null) => void;
-}) {
+}
+
+function bannerElement(input: BannerInput) {
   const destinations = input.destinations ?? [destination(ALTERNATIVE, true)];
   const profiles = input.profiles ?? [CURRENT, ALTERNATIVE];
   const primaryTarget =
     input.primaryTarget === undefined
       ? (destinations.find((entry) => entry.selectable) ?? null)
       : input.primaryTarget;
-  return render(
+  return (
     <TooltipProvider delayDuration={0}>
       <ProfileRateLimitSwitchBanner
         harnessId="claude"
@@ -152,12 +165,17 @@ function renderBanner(input: {
         probeTarget={null}
         runTargetHostId={null}
         onSwitchProfile={input.onSwitchProfile}
-        affectedChatCount={input.affectedChatCount}
+        taskScope={input.taskScope}
+        onResolveTaskScope={input.onResolveTaskScope}
         onSwitchProfileForTask={input.onSwitchProfileForTask}
         onDismiss={() => undefined}
       />
-    </TooltipProvider>,
+    </TooltipProvider>
   );
+}
+
+function renderBanner(input: BannerInput) {
+  return render(bannerElement(input));
 }
 
 describe("rate-limit banner task-wide switch", () => {
@@ -166,7 +184,8 @@ describe("rate-limit banner task-wide switch", () => {
 
   it("hides the task-wide checkbox when only this chat is affected", () => {
     renderBanner({
-      affectedChatCount: 1,
+      taskScope: SCOPE_NONE,
+      onResolveTaskScope: () => undefined,
       destinations: undefined,
       primaryTarget: undefined,
       profiles: undefined,
@@ -181,7 +200,8 @@ describe("rate-limit banner task-wide switch", () => {
 
   it("uses the shadcn button group with theme-neutral outline actions and opens the menu above", () => {
     renderBanner({
-      affectedChatCount: 1,
+      taskScope: SCOPE_NONE,
+      onResolveTaskScope: () => undefined,
       destinations: undefined,
       primaryTarget: undefined,
       profiles: undefined,
@@ -220,7 +240,8 @@ describe("rate-limit banner task-wide switch", () => {
 
   it("provides native tooltips for the icon-only profile and dismiss actions", async () => {
     renderBanner({
-      affectedChatCount: 1,
+      taskScope: SCOPE_NONE,
+      onResolveTaskScope: () => undefined,
       destinations: undefined,
       primaryTarget: undefined,
       profiles: undefined,
@@ -249,7 +270,8 @@ describe("rate-limit banner task-wide switch", () => {
     const onSwitchProfile = vi.fn();
     const onSwitchProfileForTask = vi.fn();
     renderBanner({
-      affectedChatCount: 3,
+      taskScope: resolvedScope(2, 0),
+      onResolveTaskScope: () => undefined,
       destinations: undefined,
       primaryTarget: undefined,
       profiles: undefined,
@@ -298,7 +320,8 @@ describe("rate-limit banner task-wide switch", () => {
     const onSwitchProfile = vi.fn();
     const onSwitchProfileForTask = vi.fn();
     renderBanner({
-      affectedChatCount: 2,
+      taskScope: resolvedScope(1, 0),
+      onResolveTaskScope: () => undefined,
       destinations: [destination(ALTERNATIVE, true), destination(SECOND, true)],
       profiles: [CURRENT, ALTERNATIVE, SECOND],
       primaryTarget: undefined,
@@ -317,7 +340,8 @@ describe("rate-limit banner task-wide switch", () => {
     const onSwitchProfile = vi.fn();
     const onSwitchProfileForTask = vi.fn();
     renderBanner({
-      affectedChatCount: 3,
+      taskScope: resolvedScope(2, 0),
+      onResolveTaskScope: () => undefined,
       destinations: [destination(UNKNOWN, true)],
       profiles: [CURRENT, UNKNOWN],
       primaryTarget: null,
@@ -345,7 +369,8 @@ describe("rate-limit banner task-wide switch", () => {
     const onSwitchProfile = vi.fn();
     const unavailable = destination(SECOND, false);
     renderBanner({
-      affectedChatCount: 1,
+      taskScope: SCOPE_NONE,
+      onResolveTaskScope: () => undefined,
       destinations: [destination(ALTERNATIVE, true), unavailable],
       profiles: [CURRENT, ALTERNATIVE, SECOND],
       primaryTarget: undefined,
@@ -370,7 +395,8 @@ describe("rate-limit banner task-wide switch", () => {
       "hard_limit",
     );
     renderBanner({
-      affectedChatCount: 1,
+      taskScope: SCOPE_NONE,
+      onResolveTaskScope: () => undefined,
       destinations: [],
       primaryTarget: null,
       profiles: [CURRENT, blocked],
@@ -414,7 +440,8 @@ describe("rate-limit banner task-wide switch", () => {
       hostId: null,
     });
     renderBanner({
-      affectedChatCount: 1,
+      taskScope: SCOPE_NONE,
+      onResolveTaskScope: () => undefined,
       destinations: undefined,
       primaryTarget: undefined,
       profiles: undefined,
@@ -451,7 +478,8 @@ describe("rate-limit banner task-wide switch", () => {
     expect(ambientTarget.profileId).toBeNull();
 
     renderBanner({
-      affectedChatCount: 1,
+      taskScope: SCOPE_NONE,
+      onResolveTaskScope: () => undefined,
       destinations: [ambientTarget, blockedTarget],
       primaryTarget: ambientTarget,
       profiles: [CURRENT, AMBIENT, BLOCKED],
@@ -512,7 +540,8 @@ describe("rate-limit banner task-wide switch", () => {
       usageEntry(ALTERNATIVE.profileId, () => Promise.resolve()),
     );
     renderBanner({
-      affectedChatCount: 1,
+      taskScope: SCOPE_NONE,
+      onResolveTaskScope: () => undefined,
       destinations: undefined,
       primaryTarget: undefined,
       profiles: undefined,
@@ -537,6 +566,187 @@ describe("rate-limit banner task-wide switch", () => {
         name: "Usage details for Fresh profile",
       }),
     ).toBeDefined();
+  });
+});
+
+describe("rate-limit banner task scope, read on demand", () => {
+  afterEach(cleanup);
+
+  function baseInput(
+    taskScope: TaskChatScope,
+    handlers: {
+      readonly onResolveTaskScope: () => void;
+      readonly onSwitchProfile: (profileId: string | null) => void;
+      readonly onSwitchProfileForTask: (profileId: string | null) => void;
+    },
+  ): BannerInput {
+    return {
+      taskScope,
+      destinations: undefined,
+      primaryTarget: undefined,
+      profiles: undefined,
+      ...handlers,
+    };
+  }
+
+  it("offers task scope without a count and asks for the read only when it is ticked", () => {
+    const onResolveTaskScope = vi.fn();
+    renderBanner(
+      baseInput(
+        { kind: "unresolved" },
+        {
+          onResolveTaskScope,
+          onSwitchProfile: () => undefined,
+          onSwitchProfileForTask: () => undefined,
+        },
+      ),
+    );
+
+    expect(
+      screen.getByText("Also switch matching chats in this task"),
+    ).toBeDefined();
+    expect(onResolveTaskScope).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("checkbox"));
+
+    expect(onResolveTaskScope).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds the switch while the ticked scope is being read, then carries it once resolved", () => {
+    const handlers = {
+      onResolveTaskScope: vi.fn(),
+      onSwitchProfile: vi.fn(),
+      onSwitchProfileForTask: vi.fn(),
+    };
+    const view = renderBanner(baseInput({ kind: "unresolved" }, handlers));
+    fireEvent.click(screen.getByRole("checkbox"));
+    view.rerender(bannerElement(baseInput({ kind: "resolving" }, handlers)));
+
+    const switchButton = screen.getByRole("button", {
+      name: "Switch to Fresh profile",
+    });
+    expect(switchButton.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen
+        .getByRole("button", { name: "Choose another profile" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(screen.getByTestId("task-scope-resolving")).toBeDefined();
+    fireEvent.click(switchButton);
+    expect(handlers.onSwitchProfile).not.toHaveBeenCalled();
+    expect(handlers.onSwitchProfileForTask).not.toHaveBeenCalled();
+
+    view.rerender(bannerElement(baseInput(resolvedScope(2, 0), handlers)));
+
+    expect(
+      screen.getByText("Also switch 2 other chats in this task"),
+    ).toBeDefined();
+    expect(screen.queryByTestId("task-scope-resolving")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Switch to Fresh profile" }),
+    );
+    expect(handlers.onSwitchProfile).toHaveBeenCalledWith(
+      ALTERNATIVE.profileId,
+    );
+    expect(handlers.onSwitchProfileForTask).toHaveBeenCalledWith(
+      ALTERNATIVE.profileId,
+    );
+  });
+
+  it("does not hold the switch while task scope is left unticked", () => {
+    const handlers = {
+      onResolveTaskScope: vi.fn(),
+      onSwitchProfile: vi.fn(),
+      onSwitchProfileForTask: vi.fn(),
+    };
+    renderBanner(baseInput({ kind: "unresolved" }, handlers));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Switch to Fresh profile" }),
+    );
+
+    expect(handlers.onSwitchProfile).toHaveBeenCalledWith(
+      ALTERNATIVE.profileId,
+    );
+    expect(handlers.onSwitchProfileForTask).not.toHaveBeenCalled();
+    expect(handlers.onResolveTaskScope).not.toHaveBeenCalled();
+  });
+
+  it("says so when the read finds no other chat on this profile, and switches only this chat", () => {
+    const handlers = {
+      onResolveTaskScope: vi.fn(),
+      onSwitchProfile: vi.fn(),
+      onSwitchProfileForTask: vi.fn(),
+    };
+    const view = renderBanner(baseInput({ kind: "unresolved" }, handlers));
+    fireEvent.click(screen.getByRole("checkbox"));
+    view.rerender(bannerElement(baseInput(resolvedScope(0, 0), handlers)));
+
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(
+      screen.getByText("No other chats in this task use this profile."),
+    ).toBeDefined();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Switch to Fresh profile" }),
+    );
+    expect(handlers.onSwitchProfile).toHaveBeenCalledWith(
+      ALTERNATIVE.profileId,
+    );
+  });
+});
+
+describe("rate-limit banner task scope with siblings it could not check", () => {
+  afterEach(cleanup);
+
+  function input(
+    taskScope: TaskChatScope,
+    onResolveTaskScope: () => void,
+  ): BannerInput {
+    return {
+      taskScope,
+      onResolveTaskScope,
+      destinations: undefined,
+      primaryTarget: undefined,
+      profiles: undefined,
+      onSwitchProfile: () => undefined,
+      onSwitchProfileForTask: () => undefined,
+    };
+  }
+
+  it("says how many it could not check beside the ones it will switch, and Retry reads them again", () => {
+    const onResolveTaskScope = vi.fn();
+    const view = renderBanner(
+      input({ kind: "unresolved" }, onResolveTaskScope),
+    );
+    fireEvent.click(screen.getByRole("checkbox"));
+    view.rerender(
+      bannerElement(input(resolvedScope(2, 1), onResolveTaskScope)),
+    );
+
+    expect(
+      screen.getByText("Also switch 2 other chats in this task"),
+    ).toBeDefined();
+    expect(screen.getByText(/Couldn.t check 1 other chat\./)).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onResolveTaskScope).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not claim no other chat uses the profile when some could not be checked", () => {
+    const onResolveTaskScope = vi.fn();
+    const view = renderBanner(
+      input({ kind: "unresolved" }, onResolveTaskScope),
+    );
+    fireEvent.click(screen.getByRole("checkbox"));
+    view.rerender(
+      bannerElement(input(resolvedScope(0, 3), onResolveTaskScope)),
+    );
+
+    expect(
+      screen.queryByText("No other chats in this task use this profile."),
+    ).toBeNull();
+    expect(screen.getByText(/Couldn.t check 3 other chats\./)).toBeDefined();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
   });
 });
 
