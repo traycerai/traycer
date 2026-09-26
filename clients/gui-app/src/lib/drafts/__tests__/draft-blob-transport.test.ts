@@ -18,6 +18,7 @@ import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-tran
 import { readDraftBlobsForRecovery } from "@/lib/drafts/draft-blob-transport";
 import {
   DRAFT_BLOB_UPLOAD_CONCURRENCY,
+  draftBlobUploadsInFlight,
   forgetBlobUnsupportedHost,
   forgetConfirmedDraftBlobs,
   isDraftBlobConfirmed,
@@ -766,6 +767,140 @@ describe("draft blob transport", () => {
     for (const hash of hashes) {
       expect(isDraftBlobConfirmed(HOST, hash, OWNER)).toBe(true);
     }
+  });
+
+  it("two overlapping calls on one host share ONE limit", async () => {
+    // Two `putDraftBlobs` calls with DISJOINT digest sets, started
+    // concurrently against the SAME host and the SAME tracked client.
+    // Pre-gate, each call ran its own pool of DRAFT_BLOB_UPLOAD_CONCURRENCY
+    // workers, so two overlapping calls could open six requests at once; the
+    // shared per-host gate caps the total at three regardless of how many
+    // callers are pulling from it.
+    const firstBatch: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      firstBatch.push(await putImage(pngBytesTagged(150 + index)));
+    }
+    const secondBatch: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      secondBatch.push(await putImage(pngBytesTagged(160 + index)));
+    }
+    const { client, releaseOpen, peakConcurrent, totalCalls } =
+      deferredTrackingClient();
+
+    const firstCall = putDraftBlobs(HOST, client, firstBatch, OWNER);
+    const secondCall = putDraftBlobs(HOST, client, secondBatch, OWNER);
+
+    for (let index = 0; index < 20 && peakConcurrent() < 3; index += 1) {
+      await tick();
+    }
+    // Never six: one host, one gate, regardless of how many callers are
+    // pulling from it.
+    expect(peakConcurrent()).toBe(DRAFT_BLOB_UPLOAD_CONCURRENCY);
+    expect(draftBlobUploadsInFlight(HOST)).toBe(3);
+
+    for (let wave = 0; wave < 10; wave += 1) {
+      releaseOpen();
+      await tick();
+    }
+
+    const [firstConfirmed, secondConfirmed] = await Promise.all([
+      firstCall,
+      secondCall,
+    ]);
+    const allHashes = [...firstBatch, ...secondBatch];
+    const allConfirmed = [...firstConfirmed, ...secondConfirmed];
+    expect(totalCalls()).toBe(8);
+    expect([...allConfirmed].sort()).toEqual([...allHashes].sort());
+    for (const hash of allHashes) {
+      expect(isDraftBlobConfirmed(HOST, hash, OWNER)).toBe(true);
+    }
+    expect(draftBlobUploadsInFlight(HOST)).toBe(0);
+  });
+
+  it("two hosts have independent gates", async () => {
+    // Same shape as the overlapping-calls case above, but across two DISTINCT
+    // hosts - the gate is keyed by host, so neither call's concurrency should
+    // bleed into the other's budget.
+    const HOST_2 = "host-blobs-2";
+    const batchA: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      batchA.push(await putImage(pngBytesTagged(170 + index)));
+    }
+    const batchB: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      batchB.push(await putImage(pngBytesTagged(180 + index)));
+    }
+    const trackerA = deferredTrackingClient();
+    const trackerB = deferredTrackingClient();
+
+    const callA = putDraftBlobs(HOST, trackerA.client, batchA, OWNER);
+    const callB = putDraftBlobs(HOST_2, trackerB.client, batchB, OWNER);
+
+    for (
+      let index = 0;
+      index < 20 &&
+      (trackerA.peakConcurrent() < 3 || trackerB.peakConcurrent() < 3);
+      index += 1
+    ) {
+      await tick();
+    }
+    expect(trackerA.peakConcurrent()).toBe(DRAFT_BLOB_UPLOAD_CONCURRENCY);
+    expect(trackerB.peakConcurrent()).toBe(DRAFT_BLOB_UPLOAD_CONCURRENCY);
+    // Six in flight TOTAL across both hosts - three apiece, never sharing one
+    // budget.
+    expect(
+      draftBlobUploadsInFlight(HOST) + draftBlobUploadsInFlight(HOST_2),
+    ).toBe(6);
+
+    for (let wave = 0; wave < 10; wave += 1) {
+      trackerA.releaseOpen();
+      trackerB.releaseOpen();
+      await tick();
+    }
+
+    const [confirmedA, confirmedB] = await Promise.all([callA, callB]);
+    expect(trackerA.totalCalls()).toBe(4);
+    expect(trackerB.totalCalls()).toBe(4);
+    expect([...confirmedA].sort()).toEqual([...batchA].sort());
+    expect([...confirmedB].sort()).toEqual([...batchB].sort());
+    expect(draftBlobUploadsInFlight(HOST)).toBe(0);
+    expect(draftBlobUploadsInFlight(HOST_2)).toBe(0);
+  });
+
+  it("a slot released by a failing upload is handed to the next waiter", async () => {
+    // Four digests, three workers: the FIRST request answered rejects with a
+    // generic error (not E_HOST_UNSUPPORTED, so this is not the
+    // withheld-method fence - the remaining digests are still sent). If the
+    // gate's `finally` failed to release on this failure path, the fourth
+    // digest would wait forever for a slot that never frees and this test
+    // would hang rather than fail cleanly.
+    const hashes: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      hashes.push(await putImage(pngBytesTagged(190 + index)));
+    }
+    let calls = 0;
+    const requestWithOptions = ((_method, _params) => {
+      calls += 1;
+      if (calls === 1) {
+        return Promise.reject(new Error("boom - transient failure"));
+      }
+      return Promise.resolve({ ok: true as const });
+    }) as HostRequester<HostRpcRegistry>["requestWithOptions"];
+    const request = (() =>
+      Promise.reject(
+        new Error(
+          "a slot released by a failing upload: unexpected request() call",
+        ),
+      )) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions };
+
+    const confirmed = await putDraftBlobs(HOST, client, hashes, OWNER);
+
+    // Every digest was sent - the failing one, and the three the freed slot
+    // let through afterward.
+    expect(calls).toBe(4);
+    expect(confirmed).toHaveLength(3);
+    expect(draftBlobUploadsInFlight(HOST)).toBe(0);
   });
 
   it("reports progress once up front and once per settled digest, counting only what it sends", async () => {

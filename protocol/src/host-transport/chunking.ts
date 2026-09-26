@@ -328,12 +328,18 @@ function compressFramePayload(plain: Uint8Array): Uint8Array | null {
  *
  * What the single call gives up is bounded and worth stating: a MALICIOUS
  * frame whose stream inflates far past its declared length is walked to its
- * end before it is rejected. The input is one frame, at most a chunk's worth
- * of compressed bytes, and DEFLATE expands at most ~1032:1, so the worst case
- * is ~66 MB of dropped writes - tens of milliseconds, once, after which the
- * stream is failed closed and the peer has to reconnect to try again. A
- * legitimate frame that cost 0.65 s is the wrong side of that trade by four
- * orders of magnitude.
+ * end before it is rejected. The input is bounded by the declaration itself -
+ * a compressed payload must be SMALLER than its declared plaintext, which a
+ * genuine sender guarantees and the check below enforces - so the input is
+ * under a chunk's worth of compressed bytes, and DEFLATE expands at most
+ * ~1032:1: the worst case is ~66 MB of dropped writes, tens of milliseconds,
+ * after which the stream is failed closed. A peer that keeps sending such
+ * frames on fresh streams is an authenticated peer spending its own credit
+ * window on them (bulk frames are credit-gated per frame at receipt), and it
+ * costs this side per frame roughly what a 66 MB JSON body would; that
+ * ceiling is accepted rather than escalated to a session drop, for the
+ * reconnect-loop reason above. A legitimate frame that cost 0.65 s is the
+ * wrong side of that trade by four orders of magnitude.
  */
 function inflateFramePayload(payload: Uint8Array): Uint8Array {
   if (payload.length < COMPRESSED_PAYLOAD_HEADER_LEN) {
@@ -349,6 +355,21 @@ function inflateFramePayload(payload: Uint8Array): Uint8Array {
   if (plainLength > BULK_CHUNK_SIZE_BYTES) {
     throw new MuxFrameDecodeError(
       `compressed frame declares ${plainLength} plaintext bytes, over the ${BULK_CHUNK_SIZE_BYTES}-byte chunk bound`,
+    );
+  }
+  // The INPUT bound, checked before a byte is inflated. A sender compresses
+  // a frame only when the header plus the deflated bytes came out SMALLER
+  // than the plaintext (`compressFramePayload` returns null otherwise, and
+  // has since compression shipped), so a compressed payload at or over its
+  // own declared plaintext length is one no sender produces. Without this
+  // the declared length bounded only the OUTPUT buffer: a frame at the mux
+  // ceiling declaring one plaintext byte would still be walked through the
+  // whole inflate before the length check rejected it. With it, the inflate
+  // below reads fewer than `plainLength` compressed bytes, so the work it can
+  // be made to do is bounded by the declaration the peer chose.
+  if (payload.length >= plainLength) {
+    throw new MuxFrameDecodeError(
+      `compressed frame payload of ${payload.length} bytes is not smaller than its declared ${plainLength} plaintext bytes`,
     );
   }
   const out = new Uint8Array(plainLength + 1);

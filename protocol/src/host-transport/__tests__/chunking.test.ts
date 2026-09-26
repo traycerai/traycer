@@ -549,17 +549,68 @@ describe("body compression round-trip (T5)", () => {
   });
 
   describe("decompression bomb guard", () => {
+    it("rejects a compressed payload that is not smaller than its declared plaintext BEFORE inflating a byte", () => {
+      // The input bound: a genuine sender compresses only when the payload
+      // came out smaller than the plaintext, so a declaration at or under
+      // the payload's own length is forged - and it is the declaration that
+      // sizes the work the inflate can be made to do, so it is checked first.
+      const deflated = deflateSync(new Uint8Array(4 * 1024 * 1024), {
+        level: 6,
+      });
+      const header = new Uint8Array(4);
+      new DataView(header.buffer).setUint32(0, 1);
+      const frame = decodeMuxFrame(
+        encodeMuxFrame({
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: 6,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: concatBytes(header, deflated),
+        }),
+      );
+      const reassembler = new ChunkReassembler(undefined);
+      vi.mocked(inflateSync).mockClear();
+      const push = vi.spyOn(Inflate.prototype, "push");
+      try {
+        let thrown: unknown = null;
+        try {
+          reassembler.accept(frame);
+        } catch (error) {
+          thrown = error;
+        }
+        if (!(thrown instanceof Error)) {
+          throw new Error("expected reassembler.accept to throw an Error");
+        }
+        expect(thrown).toBeInstanceOf(MuxFrameDecodeError);
+        expect(thrown.message).toBe(
+          `compressed frame payload of ${4 + deflated.length} bytes is not smaller than its declared 1 plaintext bytes`,
+        );
+        expect(inflateSync).not.toHaveBeenCalled();
+        expect(push).not.toHaveBeenCalled();
+      } finally {
+        push.mockRestore();
+      }
+    });
+
     it("rejects an under-declared compressed bomb from ONE bounded inflateSync call", () => {
       // The header is peer-controlled, so it must not be the only output
       // bound. `inflateSync(compressed, { out })` never grows the
-      // caller-supplied buffer, so a forged one-byte declaration is caught by
-      // the length check on the single call's clamped result - a small
-      // fixture proves that without putting a gigabyte-scale bomb in CI.
+      // caller-supplied buffer, so a forged declaration that clears the input
+      // bound (larger than the payload, far smaller than the real plaintext)
+      // is caught by the length check on the single call's clamped result -
+      // a small fixture proves that without putting a gigabyte-scale bomb in
+      // CI.
       const actualPlainLength = 4 * 1024 * 1024;
-      const declaredPlainLength = 1;
       const deflated = deflateSync(new Uint8Array(actualPlainLength), {
         level: 6,
       });
+      const declaredPlainLength = 4 + deflated.length + 1;
+      expect(declaredPlainLength).toBeLessThan(actualPlainLength);
       const header = new Uint8Array(4);
       new DataView(header.buffer).setUint32(0, declaredPlainLength);
       const frame = decodeMuxFrame(
@@ -595,7 +646,7 @@ describe("body compression round-trip (T5)", () => {
         }
         expect(thrown).toBeInstanceOf(MuxFrameDecodeError);
         expect(thrown.message).toBe(
-          "compressed frame inflated to more than 1 bytes, declared 1",
+          `compressed frame inflated to more than ${declaredPlainLength} bytes, declared ${declaredPlainLength}`,
         );
         expect(inflateSync).toHaveBeenCalledTimes(1);
         const calls = vi.mocked(inflateSync).mock.calls;

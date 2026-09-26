@@ -97,8 +97,10 @@ import {
 } from "@/lib/composer/attachments-by-hash";
 import {
   currentDraftBlobOwnerId,
+  DRAFT_BLOB_UPLOAD_CONCURRENCY,
   type DraftBlobUploadProgress,
 } from "@/lib/drafts/draft-blob-transport";
+import { mapWithConcurrency } from "@/lib/map-with-concurrency";
 import {
   createOutcomeIsDecidable,
   pollEpicExistence,
@@ -1927,16 +1929,25 @@ async function resolveBase64ByHash(
   target: DraftImageByteTarget,
 ): Promise<Map<string, string>> {
   const base64ByHash = new Map<string, string>();
-  await Promise.all(
-    hashes.map(async (hash) => {
+  // Already off the synchronous fast path (see `sessionBase64ByHash`), so the
+  // encode goes to the browser's own encoder rather than costing the main
+  // thread ~70 ms per image - and at most a few at a time: each FileReader
+  // holds its multi-megabyte source and produces a larger string until it
+  // resolves, so a thirty-image fallback started on one tick would hold
+  // hundreds of megabytes live where the upload path holds three images'
+  // worth. The synchronous encode this replaced was serialized by the main
+  // thread itself; the bound keeps that property without the jank.
+  const encoded = await mapWithConcurrency(
+    hashes,
+    DRAFT_BLOB_UPLOAD_CONCURRENCY,
+    async (hash): Promise<readonly [string, string] | null> => {
       const bytes = await resolveDraftImageBytes(hash, target);
-      // Already off the synchronous fast path (see `sessionBase64ByHash`), so
-      // the encode goes to the browser's own encoder rather than costing the
-      // main thread ~70 ms per image.
-      if (bytes !== null)
-        base64ByHash.set(hash, await bytesToBase64Async(bytes));
-    }),
+      return bytes === null ? null : [hash, await bytesToBase64Async(bytes)];
+    },
   );
+  for (const entry of encoded) {
+    if (entry !== null) base64ByHash.set(entry[0], entry[1]);
+  }
   return base64ByHash;
 }
 

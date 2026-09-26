@@ -101,12 +101,83 @@ const inFlightBlobUploads = new Map<string, Map<string, Promise<boolean>>>();
 const unbridgeableBlobs = new Map<string, Set<string>>();
 const blobEpochs = new Map<string, number>();
 
+/**
+ * ## The per-host upload gate
+ *
+ * At most {@link DRAFT_BLOB_UPLOAD_CONCURRENCY} `drafts.putBlob` requests in
+ * flight per host, counted across EVERY caller in this renderer rather than
+ * per call. A per-call pool bounded one submit's burst and nothing else:
+ * `adoptUnadoptedLandingDraftsForHost` starts one `putDraftBlobs` per restored
+ * draft and awaits them together, a draft write and a submit can overlap, and
+ * each of those would have brought its own three workers - so restoring twenty
+ * image-bearing drafts could open sixty FileReader encodes and sixty
+ * multi-megabyte requests at once. One counter per host is what actually
+ * limits the renderer's live encodes and the host's inbound frames.
+ *
+ * Slots hand over FIFO: a released slot goes to the longest waiter, so a call
+ * that arrived first finishes first and a progress listener sees its own
+ * digests settle in order. A holder never waits on the gate (it waits only on
+ * its request, or on another holder's flight when it joins one), so the gate
+ * cannot deadlock.
+ */
+interface UploadGate {
+  inFlight: number;
+  readonly waiters: Array<() => void>;
+}
+
+const uploadGates = new Map<string, UploadGate>();
+
+/**
+ * Takes a slot SYNCHRONOUSLY when one is free (`null`), else returns the
+ * promise that resolves once a released slot has been handed to this caller.
+ *
+ * Synchronous on purpose, not `await`ed through a resolved promise: the
+ * flight that follows captures the host's blob epoch at its START and
+ * registers itself for de-duplication before its first await, and the
+ * callers that bump the epoch or re-bootstrap right after starting a put rely
+ * on the flight having begun in the same tick as the call (see the module
+ * doc's ordering argument). One extra microtask between the call and the
+ * flight would move that capture to after the caller's next synchronous
+ * step.
+ */
+function acquireUploadSlot(hostId: string): Promise<void> | null {
+  const existing = uploadGates.get(hostId);
+  const gate: UploadGate = existing ?? { inFlight: 0, waiters: [] };
+  if (existing === undefined) uploadGates.set(hostId, gate);
+  if (gate.inFlight < DRAFT_BLOB_UPLOAD_CONCURRENCY) {
+    gate.inFlight += 1;
+    return null;
+  }
+  return new Promise((resolve) => {
+    gate.waiters.push(resolve);
+  });
+}
+
+function releaseUploadSlot(hostId: string): void {
+  const gate = uploadGates.get(hostId);
+  if (gate === undefined) return;
+  const next = gate.waiters.shift();
+  if (next !== undefined) {
+    // The slot passes straight to the waiter; `inFlight` is unchanged.
+    next();
+    return;
+  }
+  gate.inFlight -= 1;
+  if (gate.inFlight === 0) uploadGates.delete(hostId);
+}
+
+/** How many uploads one host has in flight right now; for tests. */
+export function draftBlobUploadsInFlight(hostId: string): number {
+  return uploadGates.get(hostId)?.inFlight ?? 0;
+}
+
 export function resetDraftBlobTransportForTests(): void {
   blobUnsupportedHosts.clear();
   confirmedBlobOwners.clear();
   inFlightBlobUploads.clear();
   unbridgeableBlobs.clear();
   blobEpochs.clear();
+  uploadGates.clear();
 }
 
 /**
@@ -369,30 +440,32 @@ export async function putDraftBlobsWithProgress(input: {
   if (pending.length === 0) return confirmed;
   const total = pending.length;
   let completed = 0;
-  let next = 0;
   onProgress?.({ completed, total });
-  const worker = async (): Promise<void> => {
-    for (;;) {
-      // Checked before each digest rather than only on the throw: a joined
-      // upload can be the one that discovers the host withholds the methods,
-      // and its joiner sees that only through this flag. Every worker stops
-      // at the same signal, so the remaining digests are never sent.
-      if (blobUnsupportedHosts.has(hostId)) return;
-      if (next >= pending.length) return;
-      const sha256 = pending[next];
-      next += 1;
-      if (await joinOrStartBlobUpload(hostId, client, sha256, ownerUserId)) {
-        confirmed.push(sha256);
+  // Every digest queues on the HOST's gate (see "The per-host upload gate"),
+  // not on a pool of this call's own, so the limit holds across overlapping
+  // callers. Each digest still settles into this call's own progress count.
+  await Promise.all(
+    pending.map(async (sha256) => {
+      const slot = acquireUploadSlot(hostId);
+      if (slot !== null) await slot;
+      try {
+        // Checked once the slot is held rather than only on the throw: a
+        // joined upload can be the one that discovers the host withholds the
+        // methods, and its joiner sees that only through this flag. Every
+        // digest still waiting stops at the same signal, so the remaining
+        // ones are never sent.
+        if (
+          !blobUnsupportedHosts.has(hostId) &&
+          (await joinOrStartBlobUpload(hostId, client, sha256, ownerUserId))
+        ) {
+          confirmed.push(sha256);
+        }
+      } finally {
+        releaseUploadSlot(hostId);
       }
       completed += 1;
       onProgress?.({ completed, total });
-    }
-  };
-  await Promise.all(
-    Array.from(
-      { length: Math.min(DRAFT_BLOB_UPLOAD_CONCURRENCY, total) },
-      worker,
-    ),
+    }),
   );
   return confirmed;
 }
