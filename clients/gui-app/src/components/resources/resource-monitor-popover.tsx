@@ -560,13 +560,21 @@ function ScopedResourceMonitorPopover(props: {
       ? tooltipLabel
       : `${tooltipLabel} (${formatChordForDisplay(chord)})`;
 
+  // The installed app's header button is a bare glyph: closed, it shows
+  // nothing the stream feeds, so the stream opens with the panel and closes
+  // with it rather than ticking in the background for a chip nobody sees. A
+  // readout trigger (the status bar's) displays live numbers while closed and
+  // keeps its lease; the registry is lease-counted, so it is unaffected.
+  const streamWhileClosed =
+    props.trigger.trigger !== "header-button" || !isMobileApp();
+
   return (
     <>
       {/* Held out of the tree entirely under an unresolved pick, rather than
           mounted and ignored: this mount OPENS a stream, and one opened on the
           ambient host would be sampling processes on a machine nobody asked
           about — and would then have to be disowned by every reader below. */}
-      {props.streamBoundToScope ? (
+      {props.streamBoundToScope && (open || streamWhileClosed) ? (
         <GlobalResourcesStreamMount interactive={open} />
       ) : null}
       <Popover open={open} onOpenChange={setOpen}>

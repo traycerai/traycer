@@ -2,6 +2,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
+import { setMobileApp } from "@/lib/mobile-app";
 
 // The sheet pulls the resolved-theme context and every embedded panel body with
 // it; this file is about the mount's REGISTRATION, so stub it to a marker
@@ -9,6 +10,14 @@ import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
 vi.mock("@/components/epic-canvas/mobile/tab-switcher-sheet", () => ({
   TabSwitcherSheet: (props: { readonly open: boolean }) => (
     <div data-testid="sheet" data-open={props.open ? "true" : "false"} />
+  ),
+}));
+
+// The stream mount opens a real `resources.subscribe`; this file only asks
+// WHEN the switcher holds one, so a marker carrying its epic stands in.
+vi.mock("@/providers/resources-stream-mount", () => ({
+  EpicResourceChipsStreamMount: (props: { readonly epicId: string }) => (
+    <div data-testid="resources-stream" data-epic-id={props.epicId} />
   ),
 }));
 
@@ -20,7 +29,10 @@ describe("<MobileTabSwitcherMount />", () => {
   beforeEach(() => {
     useMobileSwitcherStore.setState({ openTabId: null, mountCountByTabId: {} });
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    setMobileApp(false);
+  });
 
   it("registers its tab while mounted and unregisters on unmount", () => {
     expect(mountedFor("tab-1")).toBe(false);
@@ -69,5 +81,25 @@ describe("<MobileTabSwitcherMount />", () => {
     act(() => useMobileSwitcherStore.getState().setOpen("tab-1", true));
     unmount();
     expect(useMobileSwitcherStore.getState().openTabId).toBe("tab-1");
+  });
+
+  it("holds the epic's resources stream only while the sheet is open on the phone", () => {
+    setMobileApp(true);
+    render(<MobileTabSwitcherMount epicId="epic-1" tabId="tab-1" />);
+    expect(screen.queryByTestId("resources-stream")).toBeNull();
+
+    act(() => useMobileSwitcherStore.getState().setOpen("tab-1", true));
+    expect(
+      screen.getByTestId("resources-stream").getAttribute("data-epic-id"),
+    ).toBe("epic-1");
+
+    act(() => useMobileSwitcherStore.getState().setOpen("tab-1", false));
+    expect(screen.queryByTestId("resources-stream")).toBeNull();
+  });
+
+  it("adds no stream off the installed app, where the pane holds it", () => {
+    render(<MobileTabSwitcherMount epicId="epic-1" tabId="tab-1" />);
+    act(() => useMobileSwitcherStore.getState().setOpen("tab-1", true));
+    expect(screen.queryByTestId("resources-stream")).toBeNull();
   });
 });

@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
-import { ResourcesStreamMount } from "@/providers/resources-stream-mount";
+import {
+  EpicResourceChipsStreamMount,
+  ResourcesStreamMount,
+} from "@/providers/resources-stream-mount";
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
 import {
@@ -123,5 +126,27 @@ describe("<ResourcesStreamMount />", () => {
     unmount();
 
     expect(resourcesRegistry.get("epic-1")).toBeNull();
+  });
+});
+
+// The phone's tab switcher sheet: the chips are its only reader, so the header
+// monitor setting - whose numbers come from the global entry - opens nothing.
+describe("<EpicResourceChipsStreamMount />", () => {
+  it("acquires nothing for the header monitor alone", () => {
+    installStubFactory();
+    setResourceUiSettings(true, []);
+
+    render(<EpicResourceChipsStreamMount epicId="epic-1" />);
+
+    expect(resourcesRegistry.get("epic-1")).toBeNull();
+  });
+
+  it("acquires the entry when the chips pick any metric", () => {
+    installStubFactory();
+    setResourceUiSettings(false, ["cpu"]);
+
+    render(<EpicResourceChipsStreamMount epicId="epic-1" />);
+
+    expect(resourcesRegistry.get("epic-1")).not.toBeNull();
   });
 });

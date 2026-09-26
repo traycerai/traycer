@@ -1,5 +1,7 @@
 import { useCallback, useEffect } from "react";
 import { TabSwitcherSheet } from "@/components/epic-canvas/mobile/tab-switcher-sheet";
+import { isMobileApp } from "@/lib/mobile-app";
+import { EpicResourceChipsStreamMount } from "@/providers/resources-stream-mount";
 import {
   useIsMobileSwitcherOpen,
   useMobileSwitcherStore,
@@ -16,6 +18,13 @@ import {
  * screen in states no sheet is listening in. Registering the tab id while
  * mounted is what lets the trigger see that and disable itself, rather than
  * writing an open flag nothing renders.
+ *
+ * On the installed app it is also where this epic's `resources.subscribe`
+ * stream lives: the sheet's agent and terminal rows are the only place the
+ * phone shows the epic's resource chips, so the stream is held while the sheet
+ * is open and released when it closes (`EpicShell` opens one there only for an
+ * old host's global fallback). Off the app the pane's own mount already holds
+ * it, and this adds nothing.
  */
 export function MobileTabSwitcherMount(props: {
   readonly epicId: string;
@@ -35,11 +44,16 @@ export function MobileTabSwitcherMount(props: {
     return () => unregisterMount(tabId);
   }, [registerMount, tabId, unregisterMount]);
   return (
-    <TabSwitcherSheet
-      epicId={epicId}
-      tabId={tabId}
-      open={open}
-      onOpenChange={handleOpenChange}
-    />
+    <>
+      {open && isMobileApp() ? (
+        <EpicResourceChipsStreamMount epicId={epicId} />
+      ) : null}
+      <TabSwitcherSheet
+        epicId={epicId}
+        tabId={tabId}
+        open={open}
+        onOpenChange={handleOpenChange}
+      />
+    </>
   );
 }
