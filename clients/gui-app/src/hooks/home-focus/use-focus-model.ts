@@ -26,9 +26,14 @@ import {
   buildFocusModel,
   EMPTY_FOCUS_MODEL,
   focusActivityCoverage,
+  focusActivityDegradedReason,
 } from "@/lib/home-focus/build-focus-model";
 import { compareAscending } from "@/lib/home-focus/focus-identity";
-import type { FocusModel } from "@/lib/home-focus/focus-model";
+import {
+  FOCUS_DEGRADED_REASONS,
+  type FocusDegradedHost,
+  type FocusModel,
+} from "@/lib/home-focus/focus-model";
 import { pendingPromptEpicIds } from "@/lib/home-focus/focus-prompts";
 import { focusAgentKey } from "@/lib/home-focus/focus-tasks";
 import type { FocusBackgroundChat } from "@/lib/home-focus/focus-background";
@@ -204,7 +209,7 @@ function selectActivityHealth(
   connectableHostCount: number,
   connectableHostsResolved: boolean,
 ): {
-  readonly degradedHostIds: ReadonlyArray<string>;
+  readonly degradedHosts: ReadonlyArray<FocusDegradedHost>;
   readonly connectionStatus: StreamConnectionStatus;
   readonly cloudSyncStatus: AgentActivityCloudSyncStatus | null;
   readonly stateFrameSeenThisEpoch: boolean;
@@ -215,7 +220,7 @@ function selectActivityHealth(
   // host puts the notice on the heading it belongs to, and only this loop
   // knows which slice earned it - the fold above keeps one verdict and loses
   // the attribution.
-  const degradedHostIds: string[] = [];
+  const degradedHosts: FocusDegradedHost[] = [];
   for (const [hostId, host] of byHost) {
     const coverage = focusActivityCoverage({
       connectionStatus: host.connectionStatus,
@@ -224,17 +229,16 @@ function selectActivityHealth(
       connectableHostCount,
       connectableHostsResolved,
     });
-    if (coverage === "reconnecting" || coverage === "disconnected") {
-      degradedHostIds.push(hostId);
-    }
+    const reason = focusActivityDegradedReason(host);
+    if (reason !== null) degradedHosts.push({ hostId, reason });
     const severity = COVERAGE_SEVERITY[coverage];
     if (severity > worstSeverity) {
       worstSeverity = severity;
       worst = host;
     }
   }
-  degradedHostIds.sort(compareAscending);
-  return { ...(worst ?? PRE_OPEN_ACTIVITY_HEALTH), degradedHostIds };
+  degradedHosts.sort((a, b) => compareAscending(a.hostId, b.hostId));
+  return { ...(worst ?? PRE_OPEN_ACTIVITY_HEALTH), degradedHosts };
 }
 
 /**
@@ -325,18 +329,18 @@ export function useFocusModel(): FocusModel {
   // the fold allocates a fresh array per call, so selecting it directly would
   // re-render this hook on every activity frame. The key is split back into a
   // list in one memo below.
-  const degradedHostIdsKey = useAgentActivityStore((state) =>
+  const degradedHostsKey = useAgentActivityStore((state) =>
     joinList(
       selectActivityHealth(
         state.byHost,
         connectableHostCount,
         connectableHostsResolved,
-      ).degradedHostIds,
+      ).degradedHosts.flatMap((host) => [host.hostId, host.reason]),
     ),
   );
-  const degradedHostIds = useMemo(
-    () => splitIds(degradedHostIdsKey),
-    [degradedHostIdsKey],
+  const degradedHosts = useMemo(
+    () => splitDegradedHosts(degradedHostsKey),
+    [degradedHostsKey],
   );
   const activityHostIds = useAgentActivityStore((state) =>
     selectActivityHostIds(state.byHost),
@@ -556,7 +560,7 @@ export function useFocusModel(): FocusModel {
           connectableHostCount: connectableHosts.hostIds.length,
           connectableHostsResolved: connectableHosts.resolved,
         },
-        degradedHostIds,
+        degradedHosts,
         feedMode,
       },
       previous,
@@ -580,7 +584,7 @@ export function useFocusModel(): FocusModel {
     connectionStatus,
     cloudSyncStatus,
     stateFrameSeenThisEpoch,
-    degradedHostIds,
+    degradedHosts,
     connectableHosts.hostIds.length,
     connectableHosts.resolved,
     feedMode,
@@ -626,6 +630,19 @@ function joinList(ids: ReadonlyArray<string>): string {
 
 function joinIds(ids: ReadonlySet<string>): string {
   return Array.from(ids).sort(compareAscending).join(ID_LIST_SEPARATOR);
+}
+
+/** The inverse of the `degradedHostsKey` join: host id and reason pairs. */
+function splitDegradedHosts(key: string): ReadonlyArray<FocusDegradedHost> {
+  const parts = splitIds(key);
+  const hosts: FocusDegradedHost[] = [];
+  for (let index = 0; index + 1 < parts.length; index += 2) {
+    const reason = FOCUS_DEGRADED_REASONS.find(
+      (known) => known === parts[index + 1],
+    );
+    if (reason !== undefined) hosts.push({ hostId: parts[index], reason });
+  }
+  return hosts;
 }
 
 function splitIds(key: string): ReadonlyArray<string> {

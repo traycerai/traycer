@@ -157,7 +157,7 @@ function model(overrides: Partial<FocusModel>): FocusModel {
     browsers: [],
     coverage: {
       activity: "live",
-      degradedHostIds: [],
+      degradedHosts: [],
       notifications: "cloud",
       backgroundIsMountedOnly: true,
       browsersAreMountedOnly: true,
