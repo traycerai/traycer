@@ -255,6 +255,10 @@ export const kit = {
   }>,
   // An `ensureFresh` that never answers: the check is still in flight.
   ensureFreshHangs: false,
+  // An `ensureFresh` that fails: the host dropped mid-check.
+  ensureFreshRejects: false,
+  // A `refresh` that fails: the host dropped mid-retry.
+  refreshRejects: false,
   // Model labels: `harnessId:model` -> label; `null` passes the slug through.
   modelLabels: null as ReadonlyMap<string, string> | null,
   openSettings: vi.fn<() => void>(),
@@ -285,6 +289,8 @@ export function resetKit(): void {
   kit.ensureFreshCalls = [];
   kit.refreshCalls = [];
   kit.ensureFreshHangs = false;
+  kit.ensureFreshRejects = false;
+  kit.refreshRejects = false;
   kit.modelLabels = null;
   kit.openSettings.mockReset();
   session.reset();
@@ -596,7 +602,9 @@ export function hostDirectoryListModule() {
 /**
  * `@/hooks/rate-limits/use-profile-usage-comparison`: one entry per profile
  * the caller passes, from `kit.usage` (default: never checked, eligible, idle).
- * `ensureFresh` and `refresh` are recorded and resolve at once.
+ * `ensureFresh` and `refresh` are recorded and resolve at once - unless
+ * `kit.ensureFreshHangs` keeps the first check in flight, or
+ * `kit.ensureFreshRejects` / `kit.refreshRejects` make the call fail.
  */
 export function usageComparisonModule() {
   return {
@@ -622,13 +630,18 @@ export function usageComparisonModule() {
           refreshStatus: config === undefined ? "idle" : config.refreshStatus,
           refresh: () => {
             kit.refreshCalls.push({ providerId: args.providerId, profileId });
-            return Promise.resolve();
+            return kit.refreshRejects
+              ? Promise.reject(new Error("host dropped"))
+              : Promise.resolve();
           },
           ensureFresh: () => {
             kit.ensureFreshCalls.push({
               providerId: args.providerId,
               profileId,
             });
+            if (kit.ensureFreshRejects) {
+              return Promise.reject(new Error("host dropped"));
+            }
             return kit.ensureFreshHangs
               ? new Promise<void>(() => undefined)
               : Promise.resolve();

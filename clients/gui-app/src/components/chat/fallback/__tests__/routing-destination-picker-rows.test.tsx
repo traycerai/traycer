@@ -819,6 +819,59 @@ describe("RoutingDestinationPicker rows and listing", () => {
       ]);
     });
 
+    /** Node reports an unhandled rejection on a macrotask, not a microtask. */
+    async function letRejectionsSurface(): Promise<void> {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    it("a failed first check is not an unhandled rejection, and the cell reads Not checked", async () => {
+      kit.ensureFreshRejects = true;
+      const rejections: unknown[] = [];
+      const probe = (reason: unknown): void => {
+        rejections.push(reason);
+      };
+      process.on("unhandledRejection", probe);
+      try {
+        await openOneAccount();
+        await waitFor(() => {
+          expect(option(/work-account/).textContent).toContain("Not checked");
+        });
+        await letRejectionsSurface();
+
+        expect(rejections).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", probe);
+      }
+    });
+
+    it("a failed retry is not an unhandled rejection, and the cell stays on Not checked", async () => {
+      kit.refreshRejects = true;
+      await openOneAccount();
+      await waitFor(() => {
+        expect(option(/work-account/).textContent).toContain("Not checked");
+      });
+      const rejections: unknown[] = [];
+      const probe = (reason: unknown): void => {
+        rejections.push(reason);
+      };
+      process.on("unhandledRejection", probe);
+      try {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Check usage again" }),
+        );
+        expect(kit.refreshCalls).toEqual([
+          { providerId: "claude-code", profileId: WORK_PROFILE },
+        ]);
+        await letRejectionsSurface();
+
+        expect(rejections).toEqual([]);
+        expect(option(/work-account/).textContent).toContain("Not checked");
+      } finally {
+        process.off("unhandledRejection", probe);
+      }
+    });
+
     it("prints the reading when there is one, and no Not checked beside it", async () => {
       kit.usage.set(`claude-code|${WORK_PROFILE}`, {
         detail: { kind: "semantic-only", status: "near_limit" },

@@ -61,6 +61,7 @@ import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usage-presentation";
+import { ignoreError } from "@/lib/browser-view/ignore-error";
 import type { HostRpcRegistry } from "@/lib/host";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { formatWaitTime, useSampledNow } from "@/lib/relative-time";
@@ -2028,9 +2029,16 @@ function ProviderUsageProbe({
     presentation.entries.forEach((entry, profileId) => {
       if (askedRef.current.has(profileId)) return;
       askedRef.current.add(profileId);
-      void entry.ensureFresh().finally(() => {
-        setSettled((current) => new Set(current).add(profileId));
-      });
+      // A failed check (the host dropped while the chooser was open) is
+      // already drawn: the settled flag plus the entry's own state render
+      // "Not checked" with a retry, so the rejection carries nothing left to
+      // act on. Caught, or it surfaces as an unhandled rejection.
+      void entry
+        .ensureFresh()
+        .finally(() => {
+          setSettled((current) => new Set(current).add(profileId));
+        })
+        .catch(ignoreError);
     });
   }, [presentation]);
 
@@ -2044,7 +2052,9 @@ function ProviderUsageProbe({
     const signature: string[] = [];
     presentation.entries.forEach((entry, profileId) => {
       const cell = usageCell(entry, settled.has(profileId), () => {
-        void latestRef.current.get(profileId)?.refresh();
+        // Same as the first check: a failed retry leaves the cell on "Not
+        // checked", which is the whole answer to it.
+        void latestRef.current.get(profileId)?.refresh().catch(ignoreError);
       });
       cells.set(usageKey(harnessId, profileId), cell);
       signature.push(usageSignature(profileId, cell));
