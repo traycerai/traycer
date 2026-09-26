@@ -10,6 +10,13 @@ on:
 permissions:
   contents: read
 
+# One publish at a time. A newer dispatch waits for the running one instead of
+# racing it to the force-push, and replaces any older run still pending, so
+# the last dispatch is the last to publish.
+concurrency:
+  group: publish-docs
+  cancel-in-progress: false
+
 jobs:
   publish-docs:
     runs-on: ubuntu-latest
@@ -28,7 +35,7 @@ jobs:
       - name: Run mintlify lint checks
         working-directory: ./mintlify
         run: |
-          bunx mint broken-links
+          bunx mint@4.2.939 broken-links
 
       - name: Setup Git
         run: |
