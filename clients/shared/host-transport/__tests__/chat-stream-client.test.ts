@@ -2000,6 +2000,25 @@ describe("ChatStreamClient skeleton resume (chat.subscribe@1.19)", () => {
     }
   });
 
+  it("sends a 1.17 host exactly the 1.17 open request, without asking the chat", () => {
+    const { factory, sockets } = makeFactory();
+    const { callbacks, reads } = resumeCallbacks(() => CLAIM);
+    const client = new ChatStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks,
+    });
+    completeHandshakeAtVersion(sockets[0], { major: 1, minor: 17 });
+    const frame = parseText(sockets[0].textSent[1]);
+    expect(frame.schemaVersion).toEqual({ major: 1, minor: 17 });
+    // `toEqual`, not `toMatchObject`: an older host must not see a `resume`
+    // key at all, not even a null one.
+    expect(frame.params).toEqual({ epicId: "epic-1", chatId: "chat-1" });
+    expect(reads()).toBe(0);
+    client.close();
+  });
+
   it("hands retainedRows through to the chunk callback", () => {
     const { wsStreamClient, session } = stubClientAtVersion({
       major: 1,
