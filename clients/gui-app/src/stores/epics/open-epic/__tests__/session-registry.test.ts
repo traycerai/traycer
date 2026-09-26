@@ -261,6 +261,53 @@ describe("OpenEpicSessionRegistry", () => {
     expect(registry.get("active")).not.toBeNull();
   });
 
+  it("evicts a clean session whose agent has only background-only work", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 2 });
+    const background = buildTestHandle("background", false);
+    const inactiveA = buildTestHandle("inactive-a", false);
+    const inactiveB = buildTestHandle("inactive-b", false);
+
+    markAgentBackgroundOnly(background, "chat-shell");
+    registry.acquire("background", () => h(background));
+    registry.acquire("inactive-a", () => h(inactiveA));
+    registry.acquire("inactive-b", () => h(inactiveB));
+
+    expect(registry.size()).toBe(2);
+    expect(background.disposed).toBe(true);
+    expect(inactiveA.disposed).toBe(false);
+    expect(inactiveB.disposed).toBe(false);
+  });
+
+  it("lets a clean session park while its agent has only background-only work, and refuses while a turn runs", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const th = buildTestHandle("e-bg", false);
+    registry.acquire("e-bg", () => h(th));
+
+    markAgentBackgroundOnly(th, "chat-shell");
+    expect(registry.canPark("e-bg")).toBe(true);
+
+    markAgentWorking(th, "chat-shell");
+    expect(registry.canPark("e-bg")).toBe(false);
+  });
+
+  it("auto-prunes overflow when a turn ends and only background-only work remains", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const activeA = buildTestHandle("active-a", false);
+    const activeB = buildTestHandle("active-b", false);
+
+    markAgentWorking(activeA, "chat-a");
+    markAgentWorking(activeB, "chat-b");
+    registry.acquire("active-a", () => h(activeA));
+    registry.acquire("active-b", () => h(activeB));
+    expect(registry.size()).toBe(2);
+
+    markAgentBackgroundOnly(activeA, "chat-a");
+
+    expect(registry.size()).toBe(1);
+    expect(activeA.disposed).toBe(true);
+    expect(activeB.disposed).toBe(false);
+  });
+
   it("auto-prunes overflow when active agent work clears", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
     const activeA = buildTestHandle("active-a", false);
@@ -598,26 +645,37 @@ describe("OpenEpicSessionRegistry", () => {
  * each time mirrors the host, which republishes its full entry on every
  * activity boundary.
  */
-const workingByEpic = new Map<string, readonly string[]>();
+const workingByEpic = new Map<
+  string,
+  { working: readonly string[]; turn: readonly string[] }
+>();
 
 function publishWorkingSet(): void {
-  const byEpic: Record<
-    string,
-    { working: readonly string[]; turn: readonly string[] }
-  > = {};
-  for (const [epicId, agentIds] of workingByEpic) {
-    byEpic[epicId] = { working: agentIds, turn: agentIds };
-  }
-  publishAgentActivity([{ hostId: "host-registry", byEpic }]);
+  publishAgentActivity([
+    { hostId: "host-registry", byEpic: Object.fromEntries(workingByEpic) },
+  ]);
 }
 
 function markAgentWorking(handle: TestHandle, agentId: string): void {
-  workingByEpic.set(handle.handle.epicId, [agentId]);
+  workingByEpic.set(handle.handle.epicId, {
+    working: [agentId],
+    turn: [agentId],
+  });
+  publishWorkingSet();
+}
+
+/**
+ * The host's shape for an agent whose only live work is background-only - a
+ * running shell, a monitor, a scheduled wake: listed in `working`, absent from
+ * `turn`.
+ */
+function markAgentBackgroundOnly(handle: TestHandle, agentId: string): void {
+  workingByEpic.set(handle.handle.epicId, { working: [agentId], turn: [] });
   publishWorkingSet();
 }
 
 function clearAgentWorking(handle: TestHandle): void {
-  workingByEpic.set(handle.handle.epicId, []);
+  workingByEpic.set(handle.handle.epicId, { working: [], turn: [] });
   publishWorkingSet();
 }
 
