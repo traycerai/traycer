@@ -614,7 +614,9 @@ const REASON_SEVERITY: Readonly<Record<FocusDegradedReason, number>> = {
 function orderByReasonSeverity(
   hosts: ReadonlyArray<FocusDegradedHost>,
 ): ReadonlyArray<FocusDegradedHost> {
-  return hosts.toSorted(
+  // A copy and `sort`, not `toSorted`: the installed mobile app still runs on
+  // iOS 15.5 WebViews, which predate it, and its bundle carries no polyfill.
+  return [...hosts].sort(
     (a, b) => REASON_SEVERITY[a.reason] - REASON_SEVERITY[b.reason],
   );
 }
