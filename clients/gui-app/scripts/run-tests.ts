@@ -201,6 +201,19 @@ if (runsFirstShard) {
       exitCode,
       runBrowserRegression("scripts/status-bar-usage-scroll-browser.mjs"),
     );
+    // Same gate: whether a non-overflowing tab strip's scroller has ANY
+    // vertical scroll range, and whether a real mouse wheel over it wobbles
+    // the active tab's row by a pixel, are both layout questions - jsdom
+    // reports scrollHeight/clientHeight as 0 and has no native scroll-on-
+    // wheel action behind its synthetic wheel event, which is exactly the
+    // mechanism the bug lived in. Ablated before wiring: reverting the tab
+    // item's height back to a fixed h-9 turns both the vertical-range and
+    // the wheel-wobble checks red while the horizontal-overflow-scrolls
+    // checks stay green.
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/canvas-tab-strip-overflow-browser.mjs"),
+    );
     // NOT here, deliberately, and each for its own reason:
     // - `scripts/window-host-modal-alignment-browser.mjs` measures the
     //   local-bootstrap body against ONE LEFT EDGE (A1/A2/A5/PC4) - the design
