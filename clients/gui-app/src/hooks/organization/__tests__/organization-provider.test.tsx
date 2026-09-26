@@ -18,6 +18,10 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
 import { OrganizationProvider } from "@/hooks/organization/organization-provider";
 import { useOrganization } from "@/hooks/organization/organization-context";
+import {
+  cloudEpicTasksQueryKey,
+  LIST_CLOUD_TASKS_REQUEST,
+} from "@/lib/cloud-epic-tasks-query";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { tabItemId } from "@/stores/tabs/layout";
@@ -460,6 +464,109 @@ describe("OrganizationProvider lifecycle projection", () => {
     });
 
     expect(invalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it("invalidates same-account cloud task caches on every host, excluding other accounts", async () => {
+    const queryClient = new QueryClient();
+    const sameHostKey = cloudEpicTasksQueryKey(
+      "host-1",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const otherHostKey = cloudEpicTasksQueryKey(
+      "host-2",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const otherAccountKey = cloudEpicTasksQueryKey(
+      "host-1",
+      "user-2",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData(sameHostKey, { tasks: [], hasMore: false });
+    queryClient.setQueryData(otherHostKey, { tasks: [], hasMore: false });
+    queryClient.setQueryData(otherAccountKey, { tasks: [], hasMore: false });
+    const rendered = renderProvider(queryClient, null);
+    act(() => {});
+
+    state.view = {
+      ...state.view,
+      catalog: [
+        {
+          ownerId: "user-1",
+          labelId: "changed",
+          name: "Changed",
+          color: "#8ab4f8",
+          version: "1",
+          kind: "custom",
+          systemKey: null,
+        },
+      ],
+    };
+    act(() => {
+      rendered.rerender(
+        <QueryClientProvider client={queryClient}>
+          <OrganizationProvider>{null}</OrganizationProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(sameHostKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(otherHostKey)?.isInvalidated).toBe(true);
+    });
+    expect(queryClient.getQueryState(otherAccountKey)?.isInvalidated).toBe(
+      false,
+    );
+  });
+
+  it("invalidates history when a confirmed view removes an appearance without a history marker", () => {
+    state.view = {
+      ...emptyView(),
+      appearances: [
+        { taskId: "task-1", version: "1", color: "#8ab4f8", icon: null },
+      ],
+    };
+    const queryClient = new QueryClient();
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    const rendered = renderProvider(queryClient, null);
+    act(() => {});
+    invalidateQueries.mockClear();
+
+    state.view = emptyView();
+    act(() => {
+      rendered.rerender(
+        <QueryClientProvider client={queryClient}>
+          <OrganizationProvider>{null}</OrganizationProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope("host-1", "organization.history"),
+    });
+  });
+
+  it("invalidates History when its invalidation marker changes without a loaded task", () => {
+    state.view = { ...emptyView(), historyInvalidation: "marker-1" };
+    const queryClient = new QueryClient();
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    const rendered = renderProvider(queryClient, null);
+    act(() => {});
+    invalidateQueries.mockClear();
+
+    state.view = { ...state.view, historyInvalidation: "marker-2" };
+    act(() => {
+      rendered.rerender(
+        <QueryClientProvider client={queryClient}>
+          <OrganizationProvider>{null}</OrganizationProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope("host-1", "organization.history"),
+    });
   });
 
   it("does not retain another account's group projection", async () => {

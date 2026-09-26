@@ -94,6 +94,7 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
+import { withholdUnpaintedRows } from "@/components/chat/chat-special-segment";
 import type { ChatMessageActions } from "@/components/chat/chat-message";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import type {
@@ -153,6 +154,7 @@ import {
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import {
+  transcriptShowsSetupCard,
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
 } from "@/stores/chats/rendered-messages";
@@ -2491,6 +2493,15 @@ function useChatTileSessionViewModel(
     }
     return [...renderedMessages, activeInlineEdit.originalMessage];
   }, [activeInlineEdit, renderedMessages]);
+  // Renderer policy, like the pinned-todo pass below: a row that paints
+  // nothing (`rowPaintsNothing`, today the legacy auto-mode judge notice)
+  // leaves the list here, so `transcriptListRows` omits its ordinal instead of
+  // the timeline framing an empty row. `useRenderedMessages` still enumerates
+  // it, because that list is held to the host's projection row for row.
+  const paintedMessages = useMemo(
+    () => withholdUnpaintedRows(displayedMessages),
+    [displayedMessages],
+  );
   // On the legacy line the rendered rows are the full history, so the pinned
   // snapshot derives from the same walk that strips the inline segments. On
   // the windowed line the rows are the HYDRATED SUBSET and the fold's answer
@@ -2501,7 +2512,7 @@ function useChatTileSessionViewModel(
   const pinnedTodoRenderState = useMemo(
     () =>
       buildPinnedTodoRenderState(
-        displayedMessages,
+        paintedMessages,
         state.transcriptDerived === null
           ? { kind: "derive" }
           : {
@@ -2511,7 +2522,7 @@ function useChatTileSessionViewModel(
               activeTurnId,
             },
       ),
-    [displayedMessages, state.transcriptDerived, activeTurnId],
+    [paintedMessages, state.transcriptDerived, activeTurnId],
   );
   const hostPendingInterviewIds = useMemo(
     () =>
@@ -2599,6 +2610,10 @@ function useChatTileSessionViewModel(
     },
     [chatActions],
   );
+  const setupCardShown = useMemo(
+    () => transcriptShowsSetupCard(renderedMessages),
+    [renderedMessages],
+  );
   const { messageActionsFor, forkAtAssistantMessage, revertOnEdit } =
     useChatMessageActions({
       dispatchUi,
@@ -2618,6 +2633,7 @@ function useChatTileSessionViewModel(
       chatParentId: state.chat?.parentId ?? null,
       messages: state.messages,
       messageDelivery: state.messageDelivery,
+      setupCardShown,
       events: state.events,
       // `transcriptDerived !== null` is the line discriminator: on the legacy
       // line the window is an inert empty value and `messages`/`events` are

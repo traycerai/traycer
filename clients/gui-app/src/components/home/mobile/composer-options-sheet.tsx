@@ -11,6 +11,7 @@ import {
 } from "@/components/home/data/landing-options";
 import {
   autoJudgeMetaLine,
+  autoModeMidTurnLock,
   type AutoJudgeBilling,
 } from "@/lib/auto-mode/auto-judge-billing";
 import {
@@ -68,6 +69,13 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
     props.hostKnowsAutoMode,
   );
   const supported = props.supportedPermissionModes;
+  // The desktop picker's mid-turn lock on the Auto row, through the same
+  // helper, so the two surfaces refuse the same flip with the same words.
+  const autoMidTurnLock = autoModeMidTurnLock({
+    turnActive: props.turnActive,
+    currentModeIsAuto: effectivePermission === "auto",
+    judgeBilling: props.judgeBilling,
+  });
 
   return (
     <Drawer
@@ -98,6 +106,22 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
                 option.id,
                 props.hostKnowsAutoMode,
               );
+              // Supported, but not for THIS turn - see the desktop picker.
+              const lockedMidTurn =
+                isSupported && option.id === "auto" && autoMidTurnLock !== null;
+              let description: string;
+              if (!isSupported) {
+                description = unsupportedPermissionModeCopy({
+                  mode: option.id,
+                  harnessLabel: props.harnessLabel,
+                  catalogSupportedModes: props.catalogSupportedModes,
+                  hostKnowsAutoMode: props.hostKnowsAutoMode,
+                });
+              } else if (lockedMidTurn) {
+                description = autoMidTurnLock;
+              } else {
+                description = option.description;
+              }
               return (
                 <OptionRow
                   key={option.id}
@@ -105,22 +129,14 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
                     <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                   }
                   label={option.label}
-                  description={
-                    isSupported
-                      ? option.description
-                      : unsupportedPermissionModeCopy({
-                          mode: option.id,
-                          harnessLabel: props.harnessLabel,
-                          catalogSupportedModes: props.catalogSupportedModes,
-                          hostKnowsAutoMode: props.hostKnowsAutoMode,
-                        })
-                  }
+                  description={description}
                   // The same two `auto`-only lines the desktop dropdown adds,
                   // through the same helpers: this sheet reads the desktop
                   // picker's registries rather than restating them, so the copy
                   // and the gating stay in one place.
                   metaLine={
                     isSupported &&
+                    !lockedMidTurn &&
                     option.id === "auto" &&
                     props.judgeBilling !== null
                       ? autoJudgeMetaLine(props.judgeBilling)
@@ -128,6 +144,7 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
                   }
                   notice={
                     isSupported &&
+                    !lockedMidTurn &&
                     option.id === "auto" &&
                     props.turnActive &&
                     effectivePermission !== "auto"
@@ -135,7 +152,9 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
                       : null
                   }
                   selected={option.id === effectivePermission}
-                  disabled={props.settingsLocked || !isSupported}
+                  disabled={
+                    props.settingsLocked || !isSupported || lockedMidTurn
+                  }
                   testId={`composer-options-permission-${option.id}`}
                   onSelect={() => {
                     // Defense-in-depth, mirroring `PermissionsPicker`: the
@@ -143,6 +162,7 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
                     // programmatic dispatch must not escalate permissions.
                     if (props.settingsLocked) return;
                     if (!isSupported) return;
+                    if (lockedMidTurn) return;
                     props.onPermissionChange(option.id);
                   }}
                 />

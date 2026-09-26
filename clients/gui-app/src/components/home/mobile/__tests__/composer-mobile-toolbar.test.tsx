@@ -46,6 +46,8 @@ beforeEach(() => {
 
 function makeStore(modelSlug: string) {
   return createComposerToolbarStore({
+    purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: "mobile-toolbar-test",
     values: {
       permission: "supervised",

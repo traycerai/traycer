@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type {
+  AntigravityRateLimitWindow,
   ProviderRateLimits,
   ProviderRateLimitWindow,
   RateLimitUnavailableReason,
@@ -11,6 +12,7 @@ import {
   isTransientProviderRateLimitFailure,
   isTransientRateLimitUnavailableReason,
   liveProviderRateLimitWindows,
+  providerRateLimitWindows,
 } from "../semantics";
 
 const NOW = 1_000_000;
@@ -57,6 +59,31 @@ function codex(
     individualLimit: null,
     resetCredits: null,
     rateLimitReachedType,
+  };
+}
+
+type AntigravityRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "antigravity" }
+>;
+
+function antigravityBucket(
+  usedPercent: number,
+  durationMinutes: number | null,
+  resetsAt: number | null,
+  bucketId: string,
+): AntigravityRateLimitWindow {
+  return { usedPercent, durationMinutes, resetsAt, bucketId, windowKind: null };
+}
+
+function antigravity(
+  groups: AntigravityRateLimits["groups"],
+): ProviderRateLimits {
+  return {
+    provider: "antigravity",
+    available: true,
+    planName: null,
+    groups,
   };
 }
 
@@ -207,6 +234,76 @@ describe("classifyProviderRateLimits", () => {
         NOW,
       ),
     ).toBe("unknown");
+  });
+});
+
+describe("providerRateLimitWindows / classifyProviderRateLimits for antigravity", () => {
+  it("flattens every group's windows in wire order", () => {
+    const rateLimits = antigravity([
+      {
+        displayName: "Gemini Models",
+        description: null,
+        windows: [
+          antigravityBucket(10, 300, NOW + 1, "gemini-5h"),
+          antigravityBucket(20, 10_080, NOW + 1, "gemini-weekly"),
+        ],
+      },
+      {
+        displayName: "Claude and GPT models",
+        description: null,
+        windows: [antigravityBucket(30, 300, NOW + 1, "3p-5h")],
+      },
+    ]);
+    expect(providerRateLimitWindows(rateLimits)).toEqual([
+      antigravityBucket(10, 300, NOW + 1, "gemini-5h"),
+      antigravityBucket(20, 10_080, NOW + 1, "gemini-weekly"),
+      antigravityBucket(30, 300, NOW + 1, "3p-5h"),
+    ]);
+  });
+
+  // Every window feeds the shared severity rollup, not only the first
+  // (Gemini) group's - the severity is account-wide, and a window in a later
+  // group is exactly as authoritative as one in the first.
+  it("reflects a limited window in a non-first group, not just the first group's", () => {
+    const rateLimits = antigravity([
+      {
+        displayName: "Gemini Models",
+        description: null,
+        windows: [antigravityBucket(10, 300, NOW + 1, "gemini-5h")],
+      },
+      {
+        displayName: "Claude and GPT models",
+        description: null,
+        windows: [antigravityBucket(100, 300, NOW + 1, "3p-5h")],
+      },
+    ]);
+    expect(classifyProviderRateLimits(rateLimits, NOW)).toBe("limited");
+  });
+
+  it("stays healthy when every group's windows are well under their thresholds", () => {
+    const rateLimits = antigravity([
+      {
+        displayName: "Gemini Models",
+        description: null,
+        windows: [antigravityBucket(10, 300, NOW + 1, "gemini-5h")],
+      },
+      {
+        displayName: "Claude and GPT models",
+        description: null,
+        windows: [antigravityBucket(15, 300, NOW + 1, "3p-5h")],
+      },
+    ]);
+    expect(classifyProviderRateLimits(rateLimits, NOW)).toBe("healthy");
+  });
+
+  it("returns no windows for a snapshot whose groups all report none", () => {
+    expect(
+      providerRateLimitWindows(
+        antigravity([
+          { displayName: "Gemini Models", description: null, windows: [] },
+        ]),
+      ),
+    ).toEqual([]);
   });
 });
 

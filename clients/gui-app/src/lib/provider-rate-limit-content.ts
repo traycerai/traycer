@@ -271,7 +271,8 @@ export function titleCaseFromToken(value: string): string {
  * A provider's plan/tier label, where one is fetched - the header popover
  * shows this as a chip next to the provider name (Core Flows: "where the
  * provider reports one"). Codex (`planType`), Claude Code (`subscriptionType`),
- * and Grok (`subscriptionTier`) report a plan/tier; OpenRouter, Kilo Code,
+ * Grok (`subscriptionTier`) and Antigravity (`planName`) report a plan/tier;
+ * OpenRouter, Kilo Code,
  * Hugging Face and Cursor have no analogous field, so they always resolve to
  * `null` and render no chip.
  */
@@ -293,6 +294,10 @@ export function resolveProviderPlanLabel(
       return data.subscriptionTier;
     case "opencode":
       return "Go";
+    // Antigravity's plan is the Cloud Code tier's display name ("Google AI
+    // Pro"), already display-ready, so it is shown verbatim.
+    case "antigravity":
+      return data.planName;
     // None of the credit providers report a tier - Hugging Face's billing-usage
     // endpoint carries no plan field either, and Cursor's current-period usage
     // reports the plan's SIZE (an included-credit allowance) but never its

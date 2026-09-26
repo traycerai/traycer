@@ -83,17 +83,19 @@ function fiveHourWindow(
       return rateLimits.primary;
     case "claude-code":
       return rateLimits.fiveHour;
-    // OpenRouter/Kilo Code/Grok/Hugging Face/OpenCode/Cursor are never queried
-    // for a glyph slot (grok and cursor stay out of `GLYPH_PROVIDER_IDS` - a
-    // monthly billing cycle isn't a short rolling window, and the credit
-    // providers report money rather than a window at all); kept for
-    // exhaustiveness over the union.
+    // OpenRouter/Kilo Code/Grok/Hugging Face/OpenCode/Cursor/Antigravity are
+    // never queried for a glyph slot (grok and cursor stay out of
+    // `GLYPH_PROVIDER_IDS` - a monthly billing cycle isn't a short rolling
+    // window - antigravity's windows belong to named model groups rather than
+    // one account pair, and the credit providers report money rather than a
+    // window at all); kept for exhaustiveness over the union.
     case "openrouter":
     case "kilocode":
     case "grok":
     case "huggingface":
     case "opencode":
     case "cursor":
+    case "antigravity":
       return null;
   }
 }
@@ -114,6 +116,7 @@ function weeklyWindow(
     case "huggingface":
     case "opencode":
     case "cursor":
+    case "antigravity":
       return null;
   }
 }

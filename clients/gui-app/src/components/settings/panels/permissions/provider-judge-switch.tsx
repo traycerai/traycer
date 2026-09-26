@@ -1,5 +1,5 @@
 /**
- * Docs: see ../../SETTINGS.md (Permissions ▸ Judge, Providers ▸ Permissions).
+ * Docs: see ../../SETTINGS.md (Providers ▸ Permissions).
  * Update that file whenever this settings surface changes.
  */
 import { useState, type ReactNode } from "react";
@@ -34,14 +34,15 @@ const LINE_CLASSNAME = "text-ui-sm text-muted-foreground";
 
 /**
  * Who reviews one provider's commands in Auto mode: Traycer's judge, or the
- * provider's own built-in classifier - the one control behind both Settings ▸
- * Permissions ▸ Judge ("Providers with a built-in reviewer") and Providers ▸
- * {provider} ▸ Permissions. One component, so the two cannot disagree.
+ * provider's own built-in classifier. Providers ▸ {provider} ▸ Permissions is
+ * its only home; Settings ▸ Permissions ▸ Judge carries a pointer line to it
+ * (`BuiltInReviewerPointer`) and no switch of its own.
  *
  * A SWITCH only for a provider whose catalog row reports `nativeAutoJudge`; a
  * switch with one option is not a switch, so every other provider gets one
- * line naming Traycer's judge. The Judge tab only lists native providers, so
- * that line is the Providers tab's.
+ * line naming Traycer's judge. Under the switch, one line says what choosing
+ * the classifier costs: your rules don't apply to it, and it replaces
+ * Traycer's judge for the provider's conversations.
  *
  * **Two gates, and the second is the write's own.** `nativeAutoJudge` rides
  * the catalog's minor, and `providers.setAutoJudge` is registered `degrade:
@@ -151,43 +152,51 @@ export function ProviderJudgeSwitch(props: {
   }
 
   return (
-    <div className="flex min-w-0 items-center gap-2">
-      <Select
-        value={value}
-        disabled={settling}
-        onValueChange={(next) => {
-          // Radix hands back a plain string; only the two members this control
-          // renders may reach the wire.
-          if (next !== "traycer" && next !== "provider") return;
-          if (next === value) return;
-          setEcho({
-            chosen: next,
-            against: stored,
-            seenAt: providersUpdatedAt,
-          });
-          setAutoJudge.mutate(
-            { harnessId, autoJudge: next },
-            // A refused write leaves the stored value where it was; the toast
-            // says what happened and this puts the control back.
-            { onError: () => setEcho(null) },
-          );
-        }}
-      >
-        <SelectTrigger
-          aria-label={`Who reviews ${providerName}'s commands`}
-          className="w-full min-w-0"
-          data-testid="provider-auto-judge-select"
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <div className="flex min-w-0 items-center gap-2">
+        <Select
+          value={value}
+          disabled={settling}
+          onValueChange={(next) => {
+            // Radix hands back a plain string; only the two members this
+            // control renders may reach the wire.
+            if (next !== "traycer" && next !== "provider") return;
+            if (next === value) return;
+            setEcho({
+              chosen: next,
+              against: stored,
+              seenAt: providersUpdatedAt,
+            });
+            setAutoJudge.mutate(
+              { harnessId, autoJudge: next },
+              // A refused write leaves the stored value where it was; the
+              // toast says what happened and this puts the control back.
+              { onError: () => setEcho(null) },
+            );
+          }}
         >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="traycer">Traycer&apos;s judge</SelectItem>
-          <SelectItem value="provider">
-            {providerName}&apos;s classifier
-          </SelectItem>
-        </SelectContent>
-      </Select>
-      {settling ? <MutedAgentSpinner /> : null}
+          <SelectTrigger
+            aria-label={`Who reviews ${providerName}'s commands`}
+            className="w-full min-w-0"
+            data-testid="provider-auto-judge-select"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="traycer">Traycer&apos;s judge</SelectItem>
+            <SelectItem value="provider">
+              {providerName}&apos;s classifier
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        {settling ? <MutedAgentSpinner /> : null}
+      </div>
+      {/* What choosing the classifier costs. Said here because this is the
+          switch's only home; the Judge tab only points to it. */}
+      <p className={LINE_CLASSNAME} data-testid="provider-auto-judge-warning">
+        Faster and free, but your rules don&apos;t apply to it, and it replaces
+        Traycer&apos;s judge for this provider&apos;s conversations.
+      </p>
     </div>
   );
 }

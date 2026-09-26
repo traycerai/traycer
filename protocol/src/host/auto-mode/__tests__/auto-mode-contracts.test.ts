@@ -10,6 +10,7 @@ import {
   autoJudgeGetV10,
   autoJudgeListRecentV10,
   autoJudgeSelectionSchema,
+  autoJudgeSelectionSchemaPreEffort,
   autoJudgeSetV10,
   autoPolicyGetV10,
   autoPolicySetV10,
@@ -103,12 +104,13 @@ describe("auto-mode protocol change", () => {
     // `worktree.readScriptsAtRef` broke 1.0.1-rc.1. New methods must therefore
     // stay out of it and state their missing-peer behaviour instead.
     //
-    // `autoJudge.get` / `autoJudge.set` head at `1.1` now (the `fallback`
-    // response arm); the other four are still `1.0`.
+    // `autoJudge.get` / `autoJudge.set` head at `1.3` now (`1.2`'s
+    // `lastSelection` response key, then `1.3`'s `reasoningEffort` on the
+    // selection); the other four are still `1.0`.
     const methods = [
       { method: "providers.setAutoJudge", latestMinor: 0 },
-      { method: "autoJudge.get", latestMinor: 1 },
-      { method: "autoJudge.set", latestMinor: 1 },
+      { method: "autoJudge.get", latestMinor: 3 },
+      { method: "autoJudge.set", latestMinor: 3 },
       { method: "autoPolicy.get", latestMinor: 0 },
       { method: "autoPolicy.set", latestMinor: 0 },
       { method: "autoJudge.listRecent", latestMinor: 0 },
@@ -152,6 +154,7 @@ describe("auto-mode protocol change", () => {
         harnessId: "a-harness-this-build-has-never-heard-of",
         model: "some-model",
         profileId: null,
+        reasoningEffort: null,
       }).success,
     ).toBe(true);
     // Open, not absent: an empty id is still a bug.
@@ -160,8 +163,17 @@ describe("auto-mode protocol change", () => {
         harnessId: "",
         model: "m",
         profileId: null,
+        reasoningEffort: null,
       }).success,
     ).toBe(false);
+    // The frozen `<=1.2` selection has the same openness, minus the effort.
+    expect(
+      autoJudgeSelectionSchemaPreEffort.safeParse({
+        harnessId: "a-harness-this-build-has-never-heard-of",
+        model: "some-model",
+        profileId: null,
+      }).success,
+    ).toBe(true);
   });
 
   it("widens autoJudge get/set responses in place while preserving legacy output", () => {
@@ -215,12 +227,14 @@ describe("auto-mode protocol change", () => {
     ).toBe(false);
   });
 
-  it("keeps the released 1.0 autoJudge lines installed and frozen, with 1.1 as the head", () => {
-    // `1.0` shipped (`host-v1.3.2-staging.39`), so it stays installed and
-    // immutable; `1.1` is the unreleased head that carries the `fallback` arm.
+  it("keeps the 1.0, 1.1 and 1.2 autoJudge lines installed and frozen, with 1.3 as the head", () => {
+    // `1.0` shipped (`host-v1.3.2-staging.39`) and `1.1` shipped (every host
+    // tag from `host-v1.3.2-staging.52` on), so both stay installed and
+    // immutable; `1.2` (`lastSelection`) is spoken by a released desktop, so
+    // it is fixed too; `1.3` is the head that carries `reasoningEffort`.
     for (const method of ["autoJudge.get", "autoJudge.set"] as const) {
       const entry = hostRpcRegistry[method];
-      expect(entry[1].latestMinor).toBe(1);
+      expect(entry[1].latestMinor).toBe(3);
       expect(entry[1].versions[0].contract.schemaVersion).toEqual({
         major: 1,
         minor: 0,
@@ -228,6 +242,14 @@ describe("auto-mode protocol change", () => {
       expect(entry[1].versions[1].contract.schemaVersion).toEqual({
         major: 1,
         minor: 1,
+      });
+      expect(entry[1].versions[2].contract.schemaVersion).toEqual({
+        major: 1,
+        minor: 2,
+      });
+      expect(entry[1].versions[3].contract.schemaVersion).toEqual({
+        major: 1,
+        minor: 3,
       });
       expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(method);
     }

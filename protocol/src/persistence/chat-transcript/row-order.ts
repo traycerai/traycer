@@ -317,12 +317,15 @@ export interface AutoJudgeNoticeRowSource {
  * The auto-mode judge notice row's content, or `null` when this event draws no
  * row.
  *
- * The host writes each notice as a `permission.blocked` event carrying the
- * text as its `message` and one of {@link AUTO_JUDGE_NOTICE_MARKERS} under
- * `metadata.autoJudge` - once per session per kind. Until this existed the
- * event was journaled and drawn nowhere, so the line promising the user that
- * Automatic had moved their judge's billing to the conversation's provider
- * never reached them.
+ * Hosts USED to write each notice as a `permission.blocked` event carrying
+ * the text as its `message` and one of {@link AUTO_JUDGE_NOTICE_MARKERS}
+ * under `metadata.autoJudge` - once per session per kind. No host writes them
+ * any more: the judge's reason rides the approval card it escalated to, and a
+ * durable line read as a present fault long after the mode was switched. The
+ * reader stays because rows already on disk keep their ORDINAL - this
+ * function is part of `eventMaterializesTranscriptRow`, and dropping the row
+ * would renumber every transcript holding one. Clients paint the row as
+ * nothing.
  *
  * Gated on the MARKER, never on the event type alone: the host has older
  * `permission.blocked` emitters that carry no marker and draw no row, and they

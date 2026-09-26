@@ -114,7 +114,13 @@ import {
   type ProviderCliState,
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import { useState, type Key, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useState,
+  type Key,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 
 interface CatalogHarness extends HarnessOption {
   readonly models: ReadonlyArray<ModelOption>;
@@ -657,7 +663,10 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   },
 }));
 
-import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
+import {
+  HarnessModelPicker,
+  type HarnessModelPickerEmbedding,
+} from "@/components/home/pickers/harness-model-picker";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import {
   PaneActivationFocusIntentContext,
@@ -682,6 +691,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundation";
 
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
+import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
+import { resetPrimaryFocusCoordinatorForTests } from "@/lib/focus/primary-focus-coordinator";
 const CODEX_HARNESS: HarnessOption = {
   id: "codex",
   label: "Codex",
@@ -998,6 +1009,8 @@ interface RenderPickerInput {
     string | null,
     ProfileRowAdmission
   > | null;
+  readonly embedding?: HarnessModelPickerEmbedding | null;
+  readonly hostId?: string | null;
 }
 
 interface PickerHarness {
@@ -1014,7 +1027,12 @@ interface PickerHarness {
 function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
   const resolvedInput = input ?? {};
   const selection = resolvedInput.selection ?? defaultSelection();
+  const hostId =
+    resolvedInput.hostId === undefined ? TEST_HOST_ID : resolvedInput.hostId;
+  const embedding = resolvedInput.embedding ?? null;
   const store = createComposerToolbarStore({
+    purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: "picker-test",
     values: {
       permission: "supervised",
@@ -1025,11 +1043,11 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     onSettingsChange: null,
     tuiOnly: resolvedInput.tuiOnly ?? false,
     chatLineCarriesAutoMode: null,
-    hostId: TEST_HOST_ID,
+    hostId,
   });
   if (resolvedInput.storeModels !== undefined) {
     store.getState().setCatalog({
-      hostId: TEST_HOST_ID,
+      hostId,
       harnesses: undefined,
       modelsHarnessId: selection.harnessId,
       models: resolvedInput.storeModels,
@@ -1073,6 +1091,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           runTargetHostId={resolvedInput.createProfileHostId ?? null}
           profileAdmission={resolvedInput.profileAdmission ?? null}
           terminalLoginSurface={null}
+          embedding={embedding}
         />
       </TooltipProvider>
     </SurfaceActivityProvider>
@@ -4850,6 +4869,289 @@ describe("<HarnessModelPicker />", () => {
       expect(document.activeElement).toBe(
         screen.getByRole("button", { name: /^GPT-5\.5/ }),
       );
+    });
+  });
+
+  describe("HarnessModelPicker with an embedding", () => {
+    const CLAUDE_MEMORY_SLUG = "claude-opus-4-7";
+    const CLAUDE_EMBEDDING_SLUG = "claude-sonnet-4-6";
+    const CODEX_MEMORY_SLUG = "gpt-4.1";
+    const CODEX_EMBEDDING_SLUG = "gpt-5.5";
+
+    function embeddingSwitchModel(harnessId: ProviderId): string {
+      if (harnessId === "claude") return CLAUDE_EMBEDDING_SLUG;
+      if (harnessId === "codex") return CODEX_EMBEDDING_SLUG;
+      return "";
+    }
+
+    // Built once per test, so the object stays stable across the memoized
+    // picker's re-renders, as `HarnessModelPickerEmbedding` asks.
+    function judgeEmbedding(input: {
+      readonly selectionMarked: boolean;
+      readonly openRef: RefObject<(() => void) | null>;
+    }): HarnessModelPickerEmbedding {
+      return {
+        trigger: <button type="button">Judge face</button>,
+        providerSwitchModel: embeddingSwitchModel,
+        selectionMarked: input.selectionMarked,
+        openRef: input.openRef,
+      };
+    }
+
+    function markedEmbedding(): HarnessModelPickerEmbedding {
+      return judgeEmbedding({
+        selectionMarked: true,
+        openRef: { current: null },
+      });
+    }
+
+    function seedProviderMemory(): void {
+      useComposerHarnessMemoryStore.getState().record(TEST_HOST_ID, {
+        harnessId: "claude",
+        model: CLAUDE_MEMORY_SLUG,
+        permissionMode: "supervised",
+        reasoningEffort: "high",
+        serviceTier: null,
+        agentMode: "regular",
+        profileId: null,
+      });
+      useComposerHarnessMemoryStore.getState().record(TEST_HOST_ID, {
+        harnessId: "codex",
+        model: CODEX_MEMORY_SLUG,
+        permissionMode: "supervised",
+        reasoningEffort: "low",
+        serviceTier: null,
+        agentMode: "regular",
+        profileId: null,
+      });
+    }
+
+    async function openJudgePicker(): Promise<HTMLInputElement> {
+      return openPickerByTriggerName("Judge face");
+    }
+
+    it("commits a rail click onto the embedding's provider-switch slug, not composer memory", async () => {
+      seedProviderMemory();
+      const embedding = markedEmbedding();
+      const { store } = renderPicker({ embedding });
+
+      await openJudgePicker();
+      fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+      expect(store.getState().selection).toEqual({
+        harnessId: "claude",
+        modelSlug: CLAUDE_EMBEDDING_SLUG,
+        profileId: null,
+      });
+    });
+
+    it("commits a ⌘-digit rail switch onto the embedding's provider-switch slug", async () => {
+      seedProviderMemory();
+      const embedding = markedEmbedding();
+      const { store } = renderPicker({ embedding });
+
+      await openJudgePicker();
+      act(() => {
+        fireLeaderDigit(2, "mod", false);
+      });
+
+      expect(store.getState().selection).toEqual({
+        harnessId: "claude",
+        modelSlug: CLAUDE_EMBEDDING_SLUG,
+        profileId: null,
+      });
+    });
+
+    it("writes no composer memory when the store's host is unresolved", async () => {
+      queryMock.providerStates = [
+        providerCliStateWithProfiles({
+          providerId: "claude-code",
+          profiles: claudeProfilesForDropdown(),
+        }),
+      ];
+      const embedding = markedEmbedding();
+      const { store } = renderPicker({ embedding, hostId: null });
+      const listener = vi.fn();
+      const unsubscribe = useComposerHarnessMemoryStore.subscribe(listener);
+
+      await openJudgePicker();
+      fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+      act(() => {
+        fireLeaderDigit(1, "mod", false);
+      });
+      fireEvent.click(screen.getByRole("option", { name: /GPT-4\.1/ }));
+      fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+
+      expect(store.getState().selection.harnessId).toBe("claude");
+      expect(store.getState().selection.profileId).toBe("work-profile");
+      expect(listener).not.toHaveBeenCalled();
+      expect(useComposerHarnessMemoryStore.getState().byHost).toEqual({});
+      unsubscribe();
+    });
+
+    it("commits a cross-provider profile pick onto the embedding's provider-switch slug", async () => {
+      const codex = codexModels();
+      const signedOutClaude: HarnessOption = {
+        ...CLAUDE_HARNESS,
+        available: false,
+        error: "Claude is signed out",
+      };
+      queryMock.harnesses = [CODEX_HARNESS, signedOutClaude];
+      queryMock.catalogHarnesses = [
+        catalogHarness(CODEX_HARNESS, codex),
+        catalogHarness(signedOutClaude, []),
+      ];
+      queryMock.selectedModelsByHarness = new Map([
+        ["codex", codex],
+        ["claude", []],
+      ]);
+      const degradedClaude = providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: claudeProfilesForDropdown(),
+      });
+      queryMock.providerStates = [
+        {
+          ...degradedClaude,
+          auth: { ...degradedClaude.auth, status: "unauthenticated" },
+        },
+      ];
+      seedProviderMemory();
+      const embedding = markedEmbedding();
+      const { store } = renderPicker({ embedding });
+
+      await openJudgePicker();
+      fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+      expect(store.getState().selection.harnessId).toBe("codex");
+
+      fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+
+      expect(store.getState().selection).toEqual({
+        harnessId: "claude",
+        modelSlug: CLAUDE_EMBEDDING_SLUG,
+        profileId: "work-profile",
+      });
+    });
+
+    it("fills openRef with an opener and clears it on unmount", async () => {
+      const openRef: RefObject<(() => void) | null> = { current: null };
+      const embedding = judgeEmbedding({ selectionMarked: true, openRef });
+      const harness = pickerHarness({ embedding });
+      const { unmount } = render(harness.element(false, undefined));
+
+      expect(openRef.current).not.toBeNull();
+      act(() => {
+        openRef.current?.();
+      });
+      expect(
+        await screen.findByRole("dialog", { name: "Select model" }),
+      ).not.toBeNull();
+
+      unmount();
+      expect(openRef.current).toBeNull();
+    });
+
+    it("uses the caller's face as the trigger, returns focus to it on Esc, and skips the composer close hand-off", async () => {
+      const composerFocus = vi.fn();
+      const composer = document.createElement("textarea");
+      composer.setAttribute("data-testid", "registered-composer");
+      document.body.append(composer);
+      const unregister = registerComposerFocus(
+        "embedding-picker-composer",
+        {
+          focus: (isCurrent) => {
+            composerFocus();
+            if (isCurrent()) composer.focus();
+          },
+          containsActiveElement: (activeElement) => activeElement === composer,
+          isEligible: () => true,
+        },
+        true,
+        () => true,
+      );
+
+      try {
+        const embedding = markedEmbedding();
+        renderPicker({ embedding });
+
+        const face = screen.getByRole("button", { name: "Judge face" });
+        expect(screen.queryByRole("button", { name: /^GPT-5\.5/ })).toBeNull();
+        fireEvent.focus(face);
+        expect(screen.queryByRole("tooltip")).toBeNull();
+
+        const input = await openJudgePicker();
+        expect(
+          screen.getByRole("dialog", { name: "Select model" }),
+        ).not.toBeNull();
+
+        fireEvent.keyDown(input, { key: "Escape" });
+        await waitFor(() => {
+          expect(
+            screen.queryByRole("dialog", { name: "Select model" }),
+          ).toBeNull();
+        });
+        expect(document.activeElement).toBe(face);
+        expect(composerFocus).not.toHaveBeenCalled();
+
+        cleanup();
+        composerFocus.mockClear();
+        renderPicker(undefined);
+        const composerInput = await openPicker();
+        fireEvent.keyDown(composerInput, { key: "Escape" });
+        await waitFor(() => {
+          expect(
+            screen.queryByRole("dialog", { name: "Select model" }),
+          ).toBeNull();
+        });
+        expect(composerFocus).toHaveBeenCalled();
+        expect(document.activeElement).toBe(composer);
+      } finally {
+        unregister();
+        composer.remove();
+        resetPrimaryFocusCoordinatorForTests();
+      }
+    });
+
+    it("marks no model row when selectionMarked is false, and marks the selection when true", async () => {
+      const unmarked = judgeEmbedding({
+        selectionMarked: false,
+        openRef: { current: null },
+      });
+      renderPicker({
+        embedding: unmarked,
+        selection: {
+          harnessId: "codex",
+          modelSlug: "gpt-5.5",
+          profileId: null,
+        },
+      });
+
+      await openJudgePicker();
+      expect(
+        screen
+          .getAllByRole("option")
+          .filter((option) => option.getAttribute("aria-selected") === "true"),
+      ).toEqual([]);
+
+      cleanup();
+      const marked = judgeEmbedding({
+        selectionMarked: true,
+        openRef: { current: null },
+      });
+      renderPicker({
+        embedding: marked,
+        selection: {
+          harnessId: "codex",
+          modelSlug: "gpt-5.5",
+          profileId: null,
+        },
+      });
+      await openJudgePicker();
+      expect(
+        screen
+          .getByRole("option", { name: /GPT-5\.5/ })
+          .getAttribute("aria-selected"),
+      ).toBe("true");
     });
   });
 });
