@@ -28,8 +28,10 @@
 import {
   memo,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
+  useState,
   type KeyboardEvent,
   type PointerEvent,
 } from "react";
@@ -43,6 +45,7 @@ import { markdownToPlainText } from "@/lib/markdown/markdown-to-plain-text";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 import {
   commGraphEventAtFraction,
+  commGraphMarkerIndexNearFraction,
   commGraphPlayheadFraction,
   commGraphTransportMarkers,
   commGraphTransportTrack,
@@ -56,15 +59,34 @@ import {
 const MARKER_PREVIEW_MAX_CHARS = 120;
 
 /**
- * Marker tooltips, by the row they describe.
+ * How far from a tick the pointer may be and still be on it, in pixels. A tick
+ * is one pixel wide, which nobody can hold a pointer on; this is the reach the
+ * per-tick tooltips never had, and it is small enough that the gap between two
+ * separate ticks still reads as a gap.
+ */
+const MARKER_HOVER_REACH_PX = 4;
+
+/**
+ * How long the pointer rests on the track before the first label appears. The
+ * app's own tooltip delay (`TooltipProvider`'s default), spelled again here
+ * because the label below is opened by the track and not by Radix's hover, so
+ * nothing else would apply it. Paid once per visit to the track: after it, the
+ * label follows the pointer from tick to tick with no further wait, which is
+ * what Radix's skip-delay gave the per-tick tooltips.
+ */
+const MARKER_HOVER_DELAY_MS = 500;
+
+/**
+ * Marker titles, by the row they describe.
  *
- * A title is a markdown parse and a single-line format, and the track renders
- * ONE MARKER PER ROW - so an epic with a couple of thousand rows in it was
- * parsing a couple of thousand messages every time the bar re-rendered, which
- * during playback is every tick. The text is a pure function of a row and a row
- * never changes, so it is computed once and kept for as long as the row is
- * reachable. A `WeakMap` rather than a bounded cache because the key IS the
- * lifetime: rows the log has dropped take their titles with them.
+ * A title is a markdown parse and a single-line format. It is built when a
+ * tick is first HOVERED and never before: the track draws one tick per row, so
+ * building titles at render parsed every message in the epic to label ticks
+ * nobody had pointed at. The text is a pure function of a row and a row never
+ * changes, so it is kept for as long as the row is reachable, and a tick
+ * hovered twice is parsed once. A `WeakMap` rather than a bounded cache because
+ * the key IS the lifetime: rows the log has dropped take their titles with
+ * them.
  */
 const markerTitles = new WeakMap<CommGraphEvent, string>();
 
@@ -190,38 +212,95 @@ function CommGraphTransportTrack(props: {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const hasEvents = events.length > 0;
 
-  const fractionFromPointer = useCallback((clientX: number): number | null => {
-    const track = trackRef.current;
-    if (track === null) return null;
-    const rect = track.getBoundingClientRect();
-    // jsdom (and a track that has not been laid out yet) reports zero width;
-    // dividing by it would seek to NaN, so a pointer seek simply does not
-    // happen until there is a real track to seek along.
-    if (rect.width <= 0) return null;
-    return (clientX - rect.left) / rect.width;
+  // THE HOVER IS A KEY, not an index. A commit can insert rows ahead of the
+  // hovered one or prune it, and between that commit and the next pointer move
+  // an index would name a different row or none. The key is resolved against
+  // the current markers on every render, so a row that has gone shows nothing.
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const [hoverArmed, setHoverArmed] = useState(false);
+  const hoverDelayRef = useRef<number | null>(null);
+
+  const cancelHoverDelay = useCallback(() => {
+    if (hoverDelayRef.current === null) return;
+    window.clearTimeout(hoverDelayRef.current);
+    hoverDelayRef.current = null;
   }, []);
+
+  useEffect(() => cancelHoverDelay, [cancelHoverDelay]);
+
+  const pointerOnTrack = useCallback(
+    (clientX: number): PointerOnTrack | null => {
+      const track = trackRef.current;
+      if (track === null) return null;
+      const rect = track.getBoundingClientRect();
+      // jsdom (and a track that has not been laid out yet) reports zero width;
+      // dividing by it would seek to NaN, so a pointer seek simply does not
+      // happen until there is a real track to seek along.
+      if (rect.width <= 0) return null;
+      return {
+        fraction: (clientX - rect.left) / rect.width,
+        width: rect.width,
+      };
+    },
+    [],
+  );
 
   const handlePointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
-      const fraction = fractionFromPointer(event.clientX);
-      if (fraction === null) return;
+      const pointer = pointerOnTrack(event.clientX);
+      if (pointer === null) return;
       // Capture so a drag that leaves the track keeps scrubbing instead of
       // stopping wherever the pointer crossed the edge.
       event.currentTarget.setPointerCapture(event.pointerId);
-      onSeekToFraction(fraction);
+      // A drag carries no label. It never did: with the pointer captured the
+      // ticks stopped receiving it, so none of their tooltips could open.
+      setHoveredKey(null);
+      onSeekToFraction(pointer.fraction);
     },
-    [fractionFromPointer, onSeekToFraction],
+    [onSeekToFraction, pointerOnTrack],
   );
 
   const handlePointerMove = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
-      if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-      const fraction = fractionFromPointer(event.clientX);
-      if (fraction === null) return;
-      onSeekToFraction(fraction);
+      const pointer = pointerOnTrack(event.clientX);
+      if (pointer === null) return;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        onSeekToFraction(pointer.fraction);
+        return;
+      }
+      // Armed from a move as well as from entering, because a track that
+      // mounts under a resting pointer is never entered.
+      if (!hoverArmed && hoverDelayRef.current === null) {
+        hoverDelayRef.current = window.setTimeout(() => {
+          hoverDelayRef.current = null;
+          setHoverArmed(true);
+        }, MARKER_HOVER_DELAY_MS);
+      }
+      const index = commGraphMarkerIndexNearFraction(
+        markers,
+        pointer.fraction,
+        MARKER_HOVER_REACH_PX / pointer.width,
+      );
+      // Setting the key it already holds is not a render, so a pointer sliding
+      // along one tick costs the track nothing.
+      setHoveredKey(index === null ? null : markers[index].key);
     },
-    [fractionFromPointer, onSeekToFraction],
+    [hoverArmed, markers, onSeekToFraction, pointerOnTrack],
   );
+
+  // `pointerleave` alone is not enough: it is not delivered while the track
+  // holds the pointer, so a drag that ends outside the track would leave the
+  // hover set. Releasing clears the tick and keeps the delay paid - the
+  // pointer has not left.
+  const clearHoveredMarker = useCallback(() => {
+    setHoveredKey(null);
+  }, []);
+
+  const handlePointerLeave = useCallback(() => {
+    cancelHoverDelay();
+    setHoverArmed(false);
+    setHoveredKey(null);
+  }, [cancelHoverDelay]);
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
@@ -253,6 +332,11 @@ function CommGraphTransportTrack(props: {
   if (!hasEvents)
     return <CommGraphEmptyTrack following={transport.following} />;
 
+  const hoveredMarker =
+    hoverArmed && hoveredKey !== null
+      ? (markers.find((marker) => marker.key === hoveredKey) ?? null)
+      : null;
+
   return (
     <div
       ref={trackRef}
@@ -269,6 +353,9 @@ function CommGraphTransportTrack(props: {
       className="relative h-6 min-w-0 flex-1 cursor-pointer rounded-sm bg-muted/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
+      onPointerUp={clearHoveredMarker}
+      onLostPointerCapture={clearHoveredMarker}
+      onPointerLeave={handlePointerLeave}
       onKeyDown={handleKeyDown}
     >
       {/* Elapsed fill: everything the graph is currently showing. */}
@@ -285,24 +372,92 @@ function CommGraphTransportTrack(props: {
         className="absolute inset-y-0 w-0.5 -translate-x-1/2 rounded-full bg-primary"
         style={{ left: `${playhead * 100}%` }}
       />
+      {/*
+        KEYED BY THE ROW AND WHERE IT IS DRAWN, so that anything which moves
+        the label's anchor is a remount and not a move. Radix places a label
+        against its anchor when it mounts and then watches the anchor for
+        movement - and that watcher gives up on an anchor with no size, which
+        this one is. One persistent anchor sliding along the track would leave
+        its label over the first tick hovered; one keyed by the row alone
+        would leave it behind when rows land and the hovered tick rescales.
+      */}
+      {hoveredMarker === null ? null : (
+        <CommGraphMarkerHover
+          key={`${hoveredMarker.key}@${hoveredMarker.fraction}`}
+          marker={hoveredMarker}
+        />
+      )}
     </div>
   );
 }
 
+interface PointerOnTrack {
+  /** Where along the track the pointer is; outside 0..1 when it is past an end. */
+  readonly fraction: number;
+  /** The track's laid-out width in pixels, to turn a reach in pixels into a fraction. */
+  readonly width: number;
+}
+
 /**
- * THE TICKS, AND NOTHING THAT MOVES.
+ * THE ONE LABEL THE TRACK HAS.
+ *
+ * Every tick used to carry its own Radix tooltip. This is the only one now,
+ * and it exists only while a tick is hovered: an invisible anchor on the
+ * hovered tick's spot, with a label that is simply open. The track decides
+ * when (see `MARKER_HOVER_DELAY_MS`) and which tick; Radix only places it.
+ *
+ * NO ENTRY ANIMATION, on purpose. A label opened this way mounts as
+ * `instant-open`, which the tooltip's entry classes do not match. For a label
+ * that follows the pointer from tick to tick that is the right reading: it
+ * moves, it does not keep arriving.
+ *
+ * This is also the only place a title is built - see `markerTitles`.
+ */
+function CommGraphMarkerHover(props: {
+  readonly marker: CommGraphTransportMarker;
+}) {
+  const { marker } = props;
+  return (
+    <TooltipWrapper
+      open
+      label={markerTitle(marker.event)}
+      side="top"
+      sideOffset={4}
+      align="center"
+    >
+      <span
+        aria-hidden
+        data-testid="comm-graph-transport-marker-hover"
+        data-marker-key={marker.key}
+        className="pointer-events-none absolute inset-y-0 w-0"
+        style={{ left: `${marker.fraction * 100}%` }}
+      />
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * THE TICKS, AND NOTHING ELSE.
+ *
+ * ONE BARE ELEMENT PER ROW. Each tick used to be wrapped in its own Radix
+ * tooltip, which is about ten components and a click handler per tick - and a
+ * row landing moves every tick, because the track it is a fraction of just
+ * grew. So while an epic's history was still arriving, every row that landed
+ * reconciled a tooltip for every row already there: a few thousand rows became
+ * a few hundred thousand component instances, the main thread stopped
+ * answering, and the heap grew by gigabytes faster than it could be collected.
+ * A tick is now the one element that is actually drawn, and the label is the
+ * track's business - see `CommGraphMarkerHover`.
+ *
+ * `pointer-events-none` so that a tick is never what the pointer is over: the
+ * track resolves the hovered tick from the pointer's position, and nothing
+ * drawn inside it should take part in hit-testing.
  *
  * Split out and memoized because the track around it re-renders on every step
  * of playback - the playhead and the elapsed fill are what a step MOVES - and
- * the markers are not among the things that moved. Left inline, a tick of
- * playback reconciled one Radix tooltip per captured row, thirty times a
- * second, for rows whose positions had not changed since the last frame; that
- * is the same "even at 4x, the graph is filling super slow" the speed ladder
- * answers from the other end, and raising the ladder without this would only
- * have asked the bar to do it more often.
- *
+ * on every change of hover, and the ticks are not among the things that moved.
  * `markers` comes from one memo over `events`, so this re-renders exactly when
- * a row lands - which is also the only time a fraction can change.
+ * rows land - which is also the only time a fraction can change.
  */
 const CommGraphTransportMarkerLayer = memo(
   function CommGraphTransportMarkerLayer(props: {
@@ -311,26 +466,19 @@ const CommGraphTransportMarkerLayer = memo(
     return (
       <>
         {props.markers.map((marker) => (
-          <TooltipWrapper
+          <span
             key={marker.key}
-            label={markerTitle(marker.event)}
-            side="top"
-            sideOffset={4}
-            align="center"
-          >
-            <span
-              aria-hidden
-              data-testid={`comm-graph-transport-marker-${marker.key}`}
-              data-kind={marker.event.kind}
-              className={cn(
-                "absolute top-1 bottom-1 w-px -translate-x-1/2",
-                marker.event.kind === "a2a_notice"
-                  ? "bg-warning/70"
-                  : "bg-foreground/25",
-              )}
-              style={{ left: `${marker.fraction * 100}%` }}
-            />
-          </TooltipWrapper>
+            aria-hidden
+            data-testid={`comm-graph-transport-marker-${marker.key}`}
+            data-kind={marker.event.kind}
+            className={cn(
+              "pointer-events-none absolute top-1 bottom-1 w-px -translate-x-1/2",
+              marker.event.kind === "a2a_notice"
+                ? "bg-warning/70"
+                : "bg-foreground/25",
+            )}
+            style={{ left: `${marker.fraction * 100}%` }}
+          />
         ))}
       </>
     );
@@ -462,10 +610,10 @@ function CommGraphCursorTime(props: {
  * which is the price of the guarantee and a fair one under a scrubber, where
  * the neighbouring speed is `tabular-nums` for the same reason.
  *
- * ONE formatter for the readout and the marker tooltips alike - two clocks in
+ * ONE formatter for the readout and the marker labels alike - two clocks in
  * one bar disagreeing about how to write an instant is its own defect, and
  * constructing an `Intl.DateTimeFormat` is expensive enough to hoist out of a
- * function the tooltip cache calls per row.
+ * function the readout calls on every step.
  */
 const TRANSPORT_TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
   hour: "2-digit",

@@ -30,6 +30,7 @@ import {
 } from "@/stores/epics/comm-graph-timeline-store";
 import { commGraphCursorForEvent } from "@/lib/comm-graph/comm-graph-timeline";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { __setCommGraphDataCommitWindowMsForTests } from "@/lib/comm-graph/comm-graph-data-commit-window";
 
 const PROFILE = { userId: "user-1", userName: "U", email: "u@example.com" };
 const CONTEXT = { userId: "user-1", username: "U" };
@@ -85,6 +86,9 @@ function cloudEvent(
 
 describe("useCommGraphSnapshot cloud authority", () => {
   beforeEach(() => {
+    // Frames publish as they are applied: these cases read the snapshot in
+    // the tick they push in.
+    __setCommGraphDataCommitWindowMsForTests(0);
     directoryEntries.current = [];
     // The cloud claim is held only under a cloud verdict; every case here
     // models a verified session unless it says otherwise.
@@ -104,6 +108,7 @@ describe("useCommGraphSnapshot cloud authority", () => {
     __setCommGraphCloudSubscriptionOpenerForTests(null);
     __resetCommGraphCloudRegistryForTests();
     __resetCommGraphRegistryForTests();
+    __setCommGraphDataCommitWindowMsForTests(null);
   });
 
   it("never opens a local subscription while the cloud relay is pending or available", async () => {

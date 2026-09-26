@@ -1,39 +1,53 @@
 /**
- * WHAT A STEP OF PLAYBACK COSTS THE BAR.
+ * WHAT MOUNTING THE BAR COSTS, AND WHAT HOVERING ONE TICK COSTS IT.
  *
- * The track draws one marker per captured row, each a Radix tooltip whose label
- * is a markdown parse - and the bar re-renders on every step, because moving the
- * playhead is what a step DOES. So an epic with a couple of thousand rows in it
- * re-parsed a couple of thousand messages per tick, for markers that had not
- * moved since the frame before.
- *
- * That is the other half of "even at 4x, the graph is filling super slow": the
- * speed ladder answers how often a step happens, and this answers what one
- * costs. Raising the ladder without this would only have asked the bar to do
- * the same work more often.
+ * Every tick used to carry its own Radix tooltip, each with a markdown parse
+ * for its label built at RENDER time - so mounting (or growing) the track
+ * parsed every captured row's message just to label ticks nobody had pointed
+ * at, and a step of playback that moved nothing about the ticks themselves
+ * still reconciled a tooltip per row. The bar now draws bare ticks and builds
+ * a label only for the one tick actually HOVERED, and only once the hover
+ * delay has elapsed - see `comm-graph-transport-bar.tsx`'s `markerTitle` and
+ * `MARKER_HOVER_DELAY_MS`.
  *
  * COUNTED THROUGH `markdownToPlainText`, which is the expensive half of a
- * marker's label and is reached only from there in this component, so its call
- * count is a direct reading of work the bar did rather than a proxy for it.
+ * marker's label and is reached only from `markerTitle` in this component, so
+ * its call count is a direct reading of how many rows the bar actually
+ * described rather than a proxy for it.
  *
- * THE OUTCOME, NOT EACH MECHANISM. Two things stop the re-parsing - a `memo`
- * boundary on the marker layer and a `WeakMap` keyed by the row - and either
- * alone would satisfy the count below. That is on purpose: what a reader is
- * owed is that a step costs nothing, and pinning the two separately would pin
- * an implementation rather than a bill. They are not redundant in the long
- * run, though, and the split is worth knowing - the memo is what keeps the
- * cache from being consulted N times a tick, and the `WeakMap` is what
- * survives the layer remounting.
+ * THE CACHE IS BY OBJECT IDENTITY (`markerTitles`, a module-scoped
+ * `WeakMap`), which is why every case below builds its OWN rows through
+ * `rows()` instead of sharing one array: a row hovered in an earlier test
+ * would already carry a cached title, and the next test's "exactly one
+ * parse" assertion would then pass over a cache hit rather than the code path
+ * it means to prove. The second describe below shares its own `EVENTS`
+ * constant freely, because it never counts parses.
  *
- * `markerTitles` is module-scoped and outlives `mockClear`, so the first case
- * here depends on running before its sibling. That is the safe direction - a
- * reorder makes `afterFirstPaint >= ROWS` fail loudly rather than quietly
- * measure nothing - but it is worth knowing before moving either.
+ * GEOMETRY IS STUBBED, not simulated - jsdom lays out nothing, so
+ * `getBoundingClientRect` is pinned to a 400px-wide box at `left: 0`
+ * (`stubTrackGeometry`, the same shape `slider-pointer-geometry.ts` uses,
+ * without its `hasPointerCapture` override, which would disable hover
+ * entirely). The fixture rows sit 1000ms apart, more than one playback step
+ * (`BASE_STEP_MS` = 700ms), so all 39 gaps between the 40 rows are capped
+ * identically and every tick lands evenly at `index / 39` of the track -
+ * `tickX` spends that arithmetic once. `hasPointerCapture` already defaults
+ * to `false` globally (`__tests__/test-browser-apis.ts`), which is what lets
+ * a plain `pointermove` reach the hover path at all; the one case that needs
+ * capture stubs it back to `true` itself, nowhere else.
  */
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
-import { commGraphCursorForEvent } from "@/lib/comm-graph/comm-graph-timeline";
+import {
+  commGraphCursorForEvent,
+  commGraphEventKey,
+} from "@/lib/comm-graph/comm-graph-timeline";
 import { CommGraphTransportBar } from "@/components/epic-canvas/comm-graph/comm-graph-transport-bar";
 import { useCommGraphTimelineStore } from "@/stores/epics/comm-graph-timeline-store";
 
@@ -81,53 +95,230 @@ const EVENTS: ReadonlyArray<CommGraphEvent> = Array.from(
   (_unused, index) => event(index + 1),
 );
 
+/** A fresh 40-row fixture, built per test - see the WeakMap note above. */
+function rows(): CommGraphEvent[] {
+  return Array.from({ length: ROWS }, (_unused, index) => event(index + 1));
+}
+
+/**
+ * Pins the track to a 400px-wide box at `left: 0`, the same shape
+ * `slider-pointer-geometry.ts` uses and for the same reason - jsdom lays out
+ * nothing, so a pointer test needs a real width to turn a `clientX` into a
+ * fraction. `stubSliderGeometry` itself is not reused here: it also forces
+ * `hasPointerCapture` to `true`, which would disable hover entirely.
+ */
+function stubTrackGeometry(): () => void {
+  const rect = vi
+    .spyOn(Element.prototype, "getBoundingClientRect")
+    .mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 400,
+      bottom: 24,
+      width: 400,
+      height: 24,
+      toJSON: () => ({}),
+    });
+  return () => rect.mockRestore();
+}
+
+/** The x, in pixels, for tick `index` of the 40 evenly spaced fixture rows. */
+function tickX(index: number): number {
+  return (index / (ROWS - 1)) * 400;
+}
+
+/** Halfway between two neighbouring ticks - about 5.1px from each, further
+ * than the 4px reach, so it resolves to no tick at all. */
+function betweenTicksX(index: number): number {
+  return (tickX(index) + tickX(index + 1)) / 2;
+}
+
 describe("what a playback step costs the transport bar", () => {
+  let restoreGeometry: () => void;
+
   beforeEach(() => {
     plainTextCalls.mockClear();
     useCommGraphTimelineStore.setState({ stateByEpicId: {} });
+    vi.useFakeTimers();
+    restoreGeometry = stubTrackGeometry();
   });
 
   afterEach(() => {
     cleanup();
     useCommGraphTimelineStore.setState({ stateByEpicId: {} });
+    vi.useRealTimers();
+    restoreGeometry();
+  });
+
+  function track(): HTMLElement {
+    return screen.getByTestId("comm-graph-transport-track");
+  }
+
+  /** Moves onto tick `index` and pays the hover delay in full. */
+  function armHover(index: number): void {
+    fireEvent.pointerMove(track(), { pointerId: 1, clientX: tickX(index) });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+  }
+
+  it("mounts every row without parsing a single label", () => {
+    const events = rows();
+    render(<CommGraphTransportBar epicId={EPIC} events={events} />);
+
+    expect(plainTextCalls).not.toHaveBeenCalled();
+    // Anti-vacuity: the bar actually drew all 40 rows, not zero of them.
+    for (const row of events) {
+      expect(
+        screen.getByTestId(
+          `comm-graph-transport-marker-${commGraphEventKey(row)}`,
+        ),
+      ).toBeTruthy();
+    }
+  });
+
+  it("parses the hovered row's label once the hover delay has elapsed", () => {
+    const events = rows();
+    render(<CommGraphTransportBar epicId={EPIC} events={events} />);
+
+    armHover(10);
+
+    expect(plainTextCalls).toHaveBeenCalledTimes(1);
+    const hover = screen.getByTestId("comm-graph-transport-marker-hover");
+    expect(hover.getAttribute("data-marker-key")).toBe(
+      commGraphEventKey(events[10]),
+    );
+    // `formatSingleLine` doesn't touch this fixture's text (well under its
+    // 120-char cap), so `markdownToPlainText` reduces
+    // "**row 11** with some _markdown_ in it" to exactly this prose.
+    expect(screen.getByRole("tooltip").textContent).toContain(
+      "row 11 with some markdown in it",
+    );
   });
 
   it("parses each row's label once, however many times the playhead moves", () => {
-    render(<CommGraphTransportBar epicId={EPIC} events={EVENTS} />);
-    // The first paint reads every row: that is the work this is about NOT
-    // repeating, so it has to actually happen first.
-    const afterFirstPaint = plainTextCalls.mock.calls.length;
-    expect(afterFirstPaint).toBeGreaterThanOrEqual(ROWS);
+    const events = rows();
+    render(<CommGraphTransportBar epicId={EPIC} events={events} />);
+    armHover(10);
+    expect(plainTextCalls).toHaveBeenCalledTimes(1);
 
-    // Ten steps of playback, driven the way the tick drives them.
+    // Ten steps of playback, driven the way the tick drives them - none of
+    // them touch the hovered tick's own label.
     for (let step = 0; step < 10; step += 1) {
       act(() => {
         useCommGraphTimelineStore
           .getState()
-          .setCursor(EPIC, commGraphCursorForEvent(EVENTS[step]));
+          .setCursor(EPIC, commGraphCursorForEvent(events[step]));
       });
     }
 
-    // Not one more parse. Unmemoized this was ten more passes over every row.
-    expect(plainTextCalls.mock.calls.length).toBe(afterFirstPaint);
+    expect(plainTextCalls).toHaveBeenCalledTimes(1);
   });
 
-  it("still reads a row that has only just landed", () => {
-    // The control. "Never parse again" would also satisfy the case above, and
-    // would mean a row arriving live got no tooltip at all.
-    const { rerender } = render(
-      <CommGraphTransportBar epicId={EPIC} events={EVENTS} />,
-    );
-    const afterFirstPaint = plainTextCalls.mock.calls.length;
+  it("never re-parses a row hovered twice, but does parse a different one - the WeakMap cache", () => {
+    const events = rows();
+    render(<CommGraphTransportBar epicId={EPIC} events={events} />);
+    armHover(10);
+    expect(plainTextCalls).toHaveBeenCalledTimes(1);
 
-    rerender(
-      <CommGraphTransportBar
-        epicId={EPIC}
-        events={[...EVENTS, event(ROWS + 1)]}
-      />,
-    );
+    // Off the tick onto empty track: the hover element is gone.
+    fireEvent.pointerMove(track(), {
+      pointerId: 1,
+      clientX: betweenTicksX(10),
+    });
+    expect(
+      screen.queryByTestId("comm-graph-transport-marker-hover"),
+    ).toBeNull();
 
-    expect(plainTextCalls.mock.calls.length).toBeGreaterThan(afterFirstPaint);
+    // Back onto the same row: no new parse - the cache hit this pins.
+    fireEvent.pointerMove(track(), { pointerId: 1, clientX: tickX(10) });
+    expect(plainTextCalls).toHaveBeenCalledTimes(1);
+    expect(
+      screen
+        .getByTestId("comm-graph-transport-marker-hover")
+        .getAttribute("data-marker-key"),
+    ).toBe(commGraphEventKey(events[10]));
+
+    // Control: a DIFFERENT row still parses. If the zero above were really a
+    // dead hover path rather than a cache hit, this would also read zero.
+    fireEvent.pointerMove(track(), { pointerId: 1, clientX: tickX(20) });
+    expect(plainTextCalls).toHaveBeenCalledTimes(2);
+    expect(
+      screen
+        .getByTestId("comm-graph-transport-marker-hover")
+        .getAttribute("data-marker-key"),
+    ).toBe(commGraphEventKey(events[20]));
+  });
+
+  it("shows nothing before the hover delay elapses, and the label once it does", () => {
+    const events = rows();
+    render(<CommGraphTransportBar epicId={EPIC} events={events} />);
+
+    fireEvent.pointerMove(track(), { pointerId: 1, clientX: tickX(5) });
+    expect(
+      screen.queryByTestId("comm-graph-transport-marker-hover"),
+    ).toBeNull();
+    expect(plainTextCalls).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(
+      screen.getByTestId("comm-graph-transport-marker-hover"),
+    ).toBeTruthy();
+    expect(plainTextCalls).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows no hover while the track holds pointer capture", () => {
+    const capture = vi
+      .spyOn(Element.prototype, "hasPointerCapture")
+      .mockReturnValue(true);
+    try {
+      const events = rows();
+      render(<CommGraphTransportBar epicId={EPIC} events={events} />);
+
+      fireEvent.pointerMove(track(), { pointerId: 1, clientX: tickX(10) });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+
+      expect(
+        screen.queryByTestId("comm-graph-transport-marker-hover"),
+      ).toBeNull();
+      expect(plainTextCalls).not.toHaveBeenCalled();
+    } finally {
+      capture.mockRestore();
+    }
+  });
+
+  it("pointerleave clears the hover, and re-entering pays the delay again", () => {
+    const events = rows();
+    render(<CommGraphTransportBar epicId={EPIC} events={events} />);
+    armHover(10);
+    expect(
+      screen.getByTestId("comm-graph-transport-marker-hover"),
+    ).toBeTruthy();
+
+    fireEvent.pointerLeave(track());
+    expect(
+      screen.queryByTestId("comm-graph-transport-marker-hover"),
+    ).toBeNull();
+
+    fireEvent.pointerMove(track(), { pointerId: 1, clientX: tickX(10) });
+    // The delay was cancelled by the leave, so the label is not back yet.
+    expect(
+      screen.queryByTestId("comm-graph-transport-marker-hover"),
+    ).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(
+      screen.getByTestId("comm-graph-transport-marker-hover"),
+    ).toBeTruthy();
   });
 });
 
