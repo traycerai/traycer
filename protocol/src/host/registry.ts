@@ -726,7 +726,9 @@ import {
   browserScreencastV21,
   browserSessionsV20,
   browserSessionsV21,
+  browserSessionsV22,
 } from "@traycer/protocol/host/browser/contracts";
+import { browserDesktopControlV10 } from "@traycer/protocol/host/browser/desktop-control";
 import {
   browserScreencastV10,
   browserSessionsV10,
@@ -11701,6 +11703,12 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // client that drops the frame. The GUI feature-detects browser support by
   // these two NAMES in the host's openAck manifest, so a served major is the
   // only way to evolve them (`released-stream-surface-compat.test.ts`).
+  "host.browserPreparation.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: { 0: { contract: browserDesktopControlV10 } },
+    },
+  },
   "browser.sessions": {
     1: {
       latestMinor: 0,
@@ -11711,13 +11719,16 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: browserSessionsV20,
         },
         1: {
           contract: browserSessionsV21,
+        },
+        2: {
+          contract: browserSessionsV22,
         },
       },
     },

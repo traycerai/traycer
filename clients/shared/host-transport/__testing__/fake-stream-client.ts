@@ -24,6 +24,12 @@ type StreamStatus = "connecting" | "open" | "reconnecting" | "closed";
 export class FakeStreamSession implements IStreamSession {
   readonly sentFrames: StreamFrameEnvelope[] = [];
   closed = false;
+  /**
+   * What the host would have negotiated. `null` (the default) is the "answer
+   * with your newest line" case; a suite that exercises a version-gated
+   * capability sets the line it wants before it opens the session.
+   */
+  negotiatedSchemaVersion: SchemaVersion | null = null;
   private serverHandler: ServerFrameHandler | null = null;
   private statusHandler: StatusChangeHandler | null = null;
   private status: StreamStatus = "connecting";
@@ -54,7 +60,7 @@ export class FakeStreamSession implements IStreamSession {
   requestReconnect(): void {}
 
   getNegotiatedSchemaVersion(): SchemaVersion | null {
-    return null;
+    return this.negotiatedSchemaVersion;
   }
 
   close(): void {

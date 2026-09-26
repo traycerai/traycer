@@ -1,4 +1,5 @@
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { localStreamOwnerIdentity } from "@traycer-clients/shared/host-transport/local-stream-owner-identity";
 import {
   isConfirmedTransportRefusal,
   isRemoteHostDirectoryEntry,
@@ -206,7 +207,7 @@ export function remoteAwareOwnerIdentity(
       target.websocketUrl ?? "",
     ].join(SEPARATOR);
   }
-  return ["local", target.hostId, userId].join(SEPARATOR);
+  return localStreamOwnerIdentity(target.hostId, userId);
 }
 
 /**
