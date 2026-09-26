@@ -220,7 +220,13 @@ async function confirmCreateAttachmentHashes(input: {
    */
   readonly ownerUserId: string | null;
 }): Promise<ReadonlySet<string>> {
-  const confirmed = await confirmAttachmentsByHash(input);
+  // No progress surface here: the modal disables its own Send and shows the
+  // attachment strip, and a create from it carries far fewer images than a
+  // landing submit does.
+  const confirmed = await confirmAttachmentsByHash({
+    ...input,
+    onProgress: null,
+  });
   return confirmed.byHash;
 }
 

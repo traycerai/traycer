@@ -84,7 +84,7 @@ import {
   resolveDraftImageBytes,
   type DraftImageByteTarget,
 } from "@/lib/drafts/resolve-draft-image-bytes";
-import { bytesToBase64 } from "@/lib/composer/image-base64";
+import { bytesToBase64, bytesToBase64Async } from "@/lib/composer/image-base64";
 // The by-hash half of the same question: which of those nodes need NOT be
 // inlined, because the host will resolve them from this account's blob tier.
 import {
@@ -95,7 +95,10 @@ import {
   reportCreateAttachmentHashCapExceeded,
   type AttachmentsByHashPlan,
 } from "@/lib/composer/attachments-by-hash";
-import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
+import {
+  currentDraftBlobOwnerId,
+  type DraftBlobUploadProgress,
+} from "@/lib/drafts/draft-blob-transport";
 import {
   createOutcomeIsDecidable,
   pollEpicExistence,
@@ -201,6 +204,12 @@ export interface LandingComposerActions {
    * The observers that actually run live here, so the honest answer does too.
    */
   readonly isPending: boolean;
+  /**
+   * Where the by-hash submit's image upload is, while one runs; `null` the
+   * rest of the time. `isPending` is already true throughout that window; this
+   * is what lets the composer say "k of N" instead of only disabling Send.
+   */
+  readonly attachmentUpload: DraftBlobUploadProgress | null;
 }
 
 export interface LandingPlacementRefusal {
@@ -287,8 +296,11 @@ export function useLandingComposerActions(
   // path spends its time in `drafts.putBlob`, before `createEpic.isPending`
   // flips, and a Send button that stays live through a multi-megabyte upload is
   // a second epic waiting to happen. The ref above guards re-entry; this is the
-  // same window reported to the UI.
-  const [attachmentUploadPending, setAttachmentUploadPending] = useState(false);
+  // same window reported to the UI - `null` outside it, and inside it how far
+  // the upload burst has got, so the composer can say "k of N" instead of
+  // sitting disabled with nothing changing for the whole pass.
+  const [attachmentUpload, setAttachmentUpload] =
+    useState<DraftBlobUploadProgress | null>(null);
 
   // Single create path shared by the GUI-chat and terminal-agent flows so the
   // epic.create request (epic light + repos + workspaces + folded chat) - and
@@ -981,7 +993,10 @@ export function useLandingComposerActions(
         return;
       }
       submissionInFlightRef.current = true;
-      setAttachmentUploadPending(true);
+      // `total: 0` until the leaf has diffed the plan against the memo and
+      // knows how many digests it will actually send; the listener replaces it
+      // before the first request goes out.
+      setAttachmentUpload({ completed: 0, total: 0 });
       void confirmAttachmentsByHash({
         hostId,
         client: input.client,
@@ -990,6 +1005,7 @@ export function useLandingComposerActions(
         // the account that uploaded, and a `null` owner (no signed-in account
         // in this window) confirms nothing, which inlines everything.
         ownerUserId: currentDraftBlobOwnerId(),
+        onProgress: setAttachmentUpload,
       })
         .then(async (confirmed) => {
           if (attemptAborted(attempt)) return;
@@ -1068,7 +1084,7 @@ export function useLandingComposerActions(
         })
         .finally(() => {
           submissionInFlightRef.current = false;
-          setAttachmentUploadPending(false);
+          setAttachmentUpload(null);
         });
     },
     [finalizeSubmission, refusedOverWireHashCap],
@@ -1504,10 +1520,13 @@ export function useLandingComposerActions(
       isPending:
         createEpic.isPending ||
         terminalAgentCreate.isPending ||
-        attachmentUploadPending,
+        attachmentUpload !== null,
+      // The upload burst's position, for the composer to render beside its
+      // disabled Send; `null` whenever no by-hash submit is uploading.
+      attachmentUpload,
     }),
     [
-      attachmentUploadPending,
+      attachmentUpload,
       createEpic.isPending,
       selectTerminalAgent,
       submit,
@@ -1911,7 +1930,11 @@ async function resolveBase64ByHash(
   await Promise.all(
     hashes.map(async (hash) => {
       const bytes = await resolveDraftImageBytes(hash, target);
-      if (bytes !== null) base64ByHash.set(hash, bytesToBase64(bytes));
+      // Already off the synchronous fast path (see `sessionBase64ByHash`), so
+      // the encode goes to the browser's own encoder rather than costing the
+      // main thread ~70 ms per image.
+      if (bytes !== null)
+        base64ByHash.set(hash, await bytesToBase64Async(bytes));
     }),
   );
   return base64ByHash;

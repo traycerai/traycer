@@ -9,7 +9,7 @@ import {
   releaseSession,
 } from "@/lib/composer/landing-image-store";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
-import { bytesToBase64, base64ToBytes } from "@/lib/composer/image-base64";
+import { bytesToBase64Async, base64ToBytes } from "@/lib/composer/image-base64";
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "./draft-blob-transport-budget";
 import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
 import { appLogger, describeLogError } from "@/lib/logger";
@@ -301,24 +301,99 @@ export async function putDraftBlobs(
   hashes: readonly string[],
   ownerUserId: string | null,
 ): Promise<ReadonlyArray<string>> {
+  return putDraftBlobsWithProgress({
+    hostId,
+    client,
+    hashes,
+    ownerUserId,
+    onProgress: null,
+  });
+}
+
+/**
+ * How many `drafts.putBlob` requests one call keeps in flight at once.
+ *
+ * Uploads used to be strictly serial, and a fifteen-image submit was fifteen
+ * round trips end to end - on a local host that is ~40 ms each, on a remote
+ * host it is a relay session's worth of pacing each. Three at a time keeps a
+ * burst's wall clock near the slowest single upload without asking a remote
+ * session to interleave more bodies than its per-session pacer can drain, and
+ * without the renderer holding more than three base64 copies of an image at
+ * once (each is ~5 MiB for a prepared image).
+ */
+export const DRAFT_BLOB_UPLOAD_CONCURRENCY = 3;
+
+/** Where an upload burst is, for a surface that wants to show it. */
+export interface DraftBlobUploadProgress {
+  /** Digests answered so far, confirmed or not. */
+  readonly completed: number;
+  /** Digests this call had to send - the memo hits are not counted. */
+  readonly total: number;
+}
+
+export type DraftBlobUploadProgressListener = (
+  progress: DraftBlobUploadProgress,
+) => void;
+
+/**
+ * {@link putDraftBlobs} with a progress listener. The listener is called once
+ * before the first request with `completed: 0` and once after every digest
+ * settles, on the same tick, so a caller rendering "k of N" sees every step.
+ * `null` reports nothing and is what the plain entry point passes.
+ *
+ * Digests are de-duplicated first: two nodes carrying one image are one upload,
+ * and with several in flight at once the in-flight join below would otherwise
+ * report the same digest twice.
+ */
+export async function putDraftBlobsWithProgress(input: {
+  readonly hostId: string;
+  readonly client: DraftBlobClient;
+  readonly hashes: readonly string[];
+  readonly ownerUserId: string | null;
+  readonly onProgress: DraftBlobUploadProgressListener | null;
+}): Promise<ReadonlyArray<string>> {
+  const { hostId, client, hashes, ownerUserId, onProgress } = input;
   if (hashes.length === 0) return [];
   if (blobUnsupportedHosts.has(hostId)) return [];
   const confirmed: string[] = [];
-  for (const sha256 of hashes) {
+  const pending: string[] = [];
+  for (const sha256 of new Set(hashes)) {
     // The memo hit, and the whole point of the ticket: no local read, no
     // base64, no request.
     if (isDraftBlobConfirmed(hostId, sha256, ownerUserId)) {
       confirmed.push(sha256);
       continue;
     }
-    if (await joinOrStartBlobUpload(hostId, client, sha256, ownerUserId)) {
-      confirmed.push(sha256);
-    }
-    // Checked after each digest rather than only on the throw: a joined upload
-    // can be the one that discovers the host withholds the methods, and its
-    // joiner sees that only through this flag.
-    if (blobUnsupportedHosts.has(hostId)) return confirmed;
+    pending.push(sha256);
   }
+  if (pending.length === 0) return confirmed;
+  const total = pending.length;
+  let completed = 0;
+  let next = 0;
+  onProgress?.({ completed, total });
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      // Checked before each digest rather than only on the throw: a joined
+      // upload can be the one that discovers the host withholds the methods,
+      // and its joiner sees that only through this flag. Every worker stops
+      // at the same signal, so the remaining digests are never sent.
+      if (blobUnsupportedHosts.has(hostId)) return;
+      if (next >= pending.length) return;
+      const sha256 = pending[next];
+      next += 1;
+      if (await joinOrStartBlobUpload(hostId, client, sha256, ownerUserId)) {
+        confirmed.push(sha256);
+      }
+      completed += 1;
+      onProgress?.({ completed, total });
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(DRAFT_BLOB_UPLOAD_CONCURRENCY, total) },
+      worker,
+    ),
+  );
   return confirmed;
 }
 
@@ -432,9 +507,13 @@ async function uploadOneDraftBlob(
     // the whole operation for that discarded promise to be safe.
     const bytes = await getImageBytes(sha256);
     if (bytes === undefined) return false;
+    // Encoded off the main thread: this is a prepared image of up to 3.75 MiB,
+    // and the synchronous helper spends ~70 ms of renderer time per image on
+    // it - jank the composer shows as a stutter for every image in a burst.
+    const bytesBase64 = await bytesToBase64Async(bytes);
     const response = await client.requestWithOptions(
       "drafts.putBlob",
-      { sha256, bytesBase64: bytesToBase64(bytes) },
+      { sha256, bytesBase64 },
       {
         // The blob's OWN digest. A `putBlob` the transport replays - because a
         // relay leg died mid-body and the retrying messenger re-sent it - is by

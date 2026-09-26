@@ -175,6 +175,7 @@ describe("confirmAttachmentsByHash", () => {
       client,
       plan,
       ownerUserId: OWNER,
+      onProgress: null,
     });
 
     expect(confirmed.byHash).toEqual(new Set([hashA]));
@@ -201,6 +202,7 @@ describe("confirmAttachmentsByHash", () => {
       client,
       plan,
       ownerUserId: null,
+      onProgress: null,
     });
 
     expect(confirmed.byHash).toEqual(new Set<string>());
@@ -211,6 +213,7 @@ describe("confirmAttachmentsByHash", () => {
       client,
       plan,
       ownerUserId: OWNER,
+      onProgress: null,
     });
 
     expect(withOwner.byHash).toEqual(new Set([hashA]));
@@ -251,10 +254,42 @@ describe("confirmAttachmentsByHash", () => {
       client: countingClient,
       plan,
       ownerUserId: OWNER,
+      onProgress: null,
     });
 
     expect(confirmed.byHash).toEqual(new Set([hash]));
     expect(putBlobCalls).toBe(1);
+  });
+
+  it("forwards upload progress for the digests it sends", async () => {
+    // Two eligible hashes; one already confirmed before this call (so it is
+    // excluded from `total`, per `putDraftBlobsWithProgress`'s contract), the
+    // other pending. The listener should see completed:0 first and
+    // completed:1 (== total) last.
+    const hostId = "host-confirm-progress";
+    const confirmedHash = await putImage(pngBytesA());
+    const pendingHash = await putImage(pngBytesB());
+    const client = putBlobAckingOnly(new Set([confirmedHash, pendingHash]));
+    // Confirm one hash up front, outside the call under test.
+    await putDraftBlobs(hostId, client, [confirmedHash], OWNER);
+
+    const plan: AttachmentsByHashPlan = {
+      eligible: [confirmedHash, pendingHash],
+      ineligible: [],
+      hasInlineHashedNode: false,
+    };
+    const progress: Array<{ completed: number; total: number }> = [];
+    const confirmed = await confirmAttachmentsByHash({
+      hostId,
+      client,
+      plan,
+      ownerUserId: OWNER,
+      onProgress: (update) => progress.push(update),
+    });
+
+    expect(confirmed.byHash).toEqual(new Set([confirmedHash, pendingHash]));
+    expect(progress[0]).toEqual({ completed: 0, total: 1 });
+    expect(progress[progress.length - 1]).toEqual({ completed: 1, total: 1 });
   });
 });
 
