@@ -1,0 +1,64 @@
+---
+title: "Overview"
+description: "Transform complex requirements into actionable, AI‑executable plans. Traycer Tasks turn ideas into precise, step‑by‑step implementation plans that AI coding tools can follow with zero guesswork."
+keywords: ['tasks overview', 'AI-executable plans', 'implementation plans', 'intelligent analysis', 'structured planning', 'context preservation', 'agent integration', 'phases workflow', 'plan workflow', 'complex features', 'single PR changes', 'file-level guidance', 'codebase analysis', 'requirements', 'development workflow']
+---
+
+Traycer analyzes your codebase, identifies exactly which files and functions need changes, and produces clear instructions your preferred AI assistant can execute end‑to‑end.
+
+## What is a Task?
+
+A Task is an intelligent development workflow that converts high-level requirements into executable plans. Each Task combines:
+
+- **Intelligent analysis**: Understands your codebase and requirements in context.
+- **Structured planning**: Breaks work into manageable steps or phases.
+- **Context preservation**: Maintains full project understanding across steps.
+- **Agent integration**: Hands off cleanly to your AI coding assistant.
+
+## Task Modes
+
+Traycer offers four modes for converting your ideas into Tasks:
+
+<Columns cols={2}>
+  <Card title="Phases Mode" icon="shuffle" href="/extension/tasks/phases">
+    Best for complex features spanning multiple services or larger work - sequenced steps that preserve context across phases.
+  </Card>
+  <Card title="Plan Mode" icon="clipboard" href="/extension/tasks/plan">
+    Best for well-scoped tasks or features that can be implemented in one go, with clear, ready-to-implement guidance.
+  </Card>
+  <Card title="Review Mode" icon="magnifying-glass" href="/extension/tasks/review">
+    Best for comprehensive code reviews with deep analysis - categorized findings for bugs, performance, security, and clarity improvements.
+  </Card>
+  <Card title="Epic Mode" icon="layer-group" href="/extension/tasks/epic">
+    Best for managing specs and tickets through structured workflows - collaborative development with AI-guided processes.
+  </Card>
+</Columns>
+
+<Card title="Workflows" icon="wrench" href="/extension/tasks/workflows">
+  Learn how to create and manage custom workflows tailored to your team's methodology.
+</Card>
+
+
+<AccordionGroup>
+  <Accordion title="When should I use Plan vs Phases?">
+    Use **Plan** for focused, well-scoped changes that can be implemented in a single development session. Use **Phases** when
+    a feature spans multiple areas, requires coordination, or benefits from
+    incremental validation.
+  </Accordion>
+  <Accordion title="When should I use Epic mode?">
+    Use **Epic** when you want to capture requirements as living specs, break work into tickets, share the board with your team, assign ownership, and collaborate in real time from requirements to implementation.
+  </Accordion>
+  <Accordion title="Can I collaborate with my team in Epic mode?">
+    Yes. Epic Mode supports shared Epic boards, invitations, ticket assignment, and real-time collaboration. Learn more in the [Collaboration documentation](/extension/tasks/collaboration).
+  </Accordion>
+  <Accordion title="How does Traycer preserve context across steps?">
+    Traycer carries forward file mappings, decisions, and rationale so later
+    steps reference earlier work accurately, avoiding re-analysis.
+  </Accordion>
+  <Accordion title="Can I switch from Plan to Phases mode?">
+    Yes. You can expand a Plan into Phases if scope grows by adding another phase after the current plan is complete.
+  </Accordion>
+  <Accordion title="Can I create custom workflows?">
+    Yes. you can create custom workflows tailored to your team's methodology. Learn more in the [Workflows documentation](/extension/tasks/workflows).
+  </Accordion>
+</AccordionGroup>

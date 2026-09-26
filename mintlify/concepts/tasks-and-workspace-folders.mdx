@@ -1,0 +1,32 @@
+---
+title: "Tasks and Workspace Folders"
+description: "Understand Tasks, Task tabs, and workspace folders in Traycer Desktop."
+---
+
+## Task
+
+A **Task** is the top-level container for a piece of work in Traycer. It maps to an outer Task tab and keeps related agents, panels, artifacts, terminal sessions, files, and git diff together.
+
+## Workspace Folder
+
+A **workspace folder** is a local code folder or repo that Traycer can work against. A Task can be associated with one or more workspace folders.
+
+The composer shows one summary chip with the primary folder, its branch, and a `+N` badge for additional folders. Open that chip to see each folder and its run location, or choose **Add folder** to attach another folder.
+
+When a workspace folder is a git repository, Traycer can run agent work in the folder itself or in a git worktree. See [Worktrees](/concepts/worktrees).
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Add another workspace folder">
+  <source src="https://assets.traycer.ai/docs/videos/workspace-multi-folder.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+## How a Task Is Organized
+
+| Part | Purpose |
+|---|---|
+| **Workspace folders** | The local code folders Traycer can inspect or modify. |
+| **Panels** | Sidebar navigators for agents, artifacts, terminals, files, git diff, sharing, and comments. |
+| **Canvas tabs** | The work surfaces opened from panels, such as agents, artifacts, file previews, and diffs. |
+| **Artifacts** | Durable specs, tickets, stories, and reviews that preserve intent and progress. |
+
+Learn the sidebar panel list in [Panels](/panels). For how artifacts and planning skills work inside a Task after per-agent Epic Mode was removed, see [Artifact workflow](/concepts/artifact-workflow).

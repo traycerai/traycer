@@ -1,0 +1,44 @@
+---
+title: "Host"
+description: "Manage the Traycer host used by this Desktop app."
+---
+
+Host settings show the state of the selected Traycer host and the controls used to manage it.
+
+## Status And Versions
+
+| Area | What it shows |
+|---|---|
+| **Status** | Whether the host is running, stopped, or not installed. |
+| **Installed version** | The host version currently installed. |
+| **Available versions** | Versions available for install or upgrade. |
+| **Install path** | Where the host is installed. |
+
+## Actions
+
+| Action | What it does |
+|---|---|
+| **Install** | Installs the host when it is missing. |
+| **Restart** | Restarts the host. |
+| **Update** | Upgrades the host when an update is available. |
+| **Check now** | Checks for available host updates. |
+| **Run doctor** | Runs host diagnostics and shows repair actions when available. |
+
+**Run doctor** is in the **⋯** menu on the host's Overview card. It opens a side sheet that lists any issues with a button to fix each one. Click **Re-run Doctor** to check again.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Run host diagnostics and fix an issue">
+  <source src="https://assets.traycer.ai/docs/videos/settings-host-doctor.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+For log access and issue-reporting steps, see [Troubleshooting](/reference/troubleshooting).
+
+Host environment variables live in [Shell](/settings/shell), not in Host settings.
+
+## Select A Host
+
+Open the host switcher and select the Host whose settings you want to inspect. Choose **Add host…** to connect another machine. The switcher rows have no health dots; check connection status on the Host identity card.
+
+After setup reports **Host connected**, choose **Set up host**. Click **Activate** on the identity card to use that Host for this window; the button becomes an **Active** tag. Existing tabs keep their original Host.
+
+See [Remote hosts](/concepts/hosts/remote-hosts) for the connection and activation walkthrough.

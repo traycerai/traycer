@@ -1,0 +1,106 @@
+---
+title: "Install"
+description: "Get Traycer Desktop running on your machine."
+keywords: ["install traycer", "download traycer", "macos", "windows", "linux"]
+---
+
+Download the Traycer Desktop app for your operating system. Links always point to the latest release.
+
+| Platform                  | Download                                                                                                                  | Notes                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| **macOS** (Apple Silicon) | [Download .dmg](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-macos-arm64.dmg)            | For M-series Macs (M1/M2/M3/M4).                 |
+| **macOS** (Intel)         | [Download .dmg](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-macos-x64.dmg)              | For Intel-based Macs.                            |
+| **Linux** (AppImage)      | [Download .AppImage](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.AppImage) | Portable; `chmod +x` then run.                   |
+| **Linux** (Debian/Ubuntu) | [Download .deb](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-amd64.deb)            | `sudo dpkg -i` the package.                      |
+| **Linux** (Fedora/RHEL)   | [Download .rpm](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.rpm)           | `sudo rpm -i` the package.                       |
+| **Windows** (x64)         | [Download .exe](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-windows-x64.exe)            | Native installer for 64-bit Windows.             |
+| **Windows** (via WSL)     | [Install via WSL](#windows-via-wsl)                                                                                       | Run the Linux desktop app through WSL with WSLg. |
+
+All releases are published on [GitHub](https://github.com/traycerai/traycer/releases).
+
+## Windows via WSL
+
+If your Windows setup supports Linux GUI apps with WSLg, you can alternatively run the Linux desktop app through WSL.
+
+Before installing Traycer in WSL:
+
+- Update WSL with `wsl --update`, then restart your Ubuntu distribution.
+- Use WSL 2 on a recent Windows build with WSLg enabled.
+- Set a non-Snap browser as the default browser inside WSL. Snap-installed browsers can block the sign-in redirect back to Traycer. Google Chrome installed from a `.deb` package works.
+
+Then install the package that matches your WSL distribution:
+
+**Debian / Ubuntu (`.deb`)**
+
+```bash
+wget https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-amd64.deb
+sudo apt install ./traycer-desktop-linux-amd64.deb
+```
+
+**Fedora / RHEL (`.rpm`)**
+
+```bash
+wget https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.rpm
+sudo dnf install ./traycer-desktop-linux-x86_64.rpm
+```
+
+**Other distros (portable `.AppImage`)**
+
+```bash
+wget https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.AppImage
+chmod +x traycer-desktop-linux-x86_64.AppImage
+./traycer-desktop-linux-x86_64.AppImage
+```
+
+Launch Traycer from WSL (`.deb` / `.rpm` installs):
+
+```bash
+/opt/Traycer/traycer-desktop
+```
+
+You may also see Traycer in the Windows Start menu if WSLg has registered the desktop app.
+
+## macOS via Homebrew
+
+On macOS you can also install the desktop app with [Homebrew](https://brew.sh):
+
+```bash
+brew install --cask traycerai/traycer/traycer-desktop
+```
+
+After installing the desktop app, open Traycer and choose the workspace folder you want to work in.
+
+## CLI
+
+The desktop app bundles the command-line pieces it needs, so most users do not have to install the CLI separately.
+
+To use the CLI on its own — for host control, automation, or CI — install it with npm (requires Node.js 20.18+):
+
+```bash
+npm install -g @traycerai/cli
+```
+
+Or with [Homebrew](https://brew.sh) on macOS and Linux:
+
+```bash
+brew install traycerai/traycer/traycer
+```
+
+Both install the `traycer` command. Verify with `traycer --version`. See the full [command reference](/cli/commands).
+
+## After Install
+
+<Steps>
+  <Step title="Open Traycer">Launch the desktop app.</Step>
+  <Step title="Choose a workspace folder">
+    Pick the repository or folder Traycer should work with.
+  </Step>
+  <Step title="Set up a coding agent">
+    Configure Codex, Claude Code, OpenCode, Cursor, or Traycer in [Agents &
+    Models](/agents-and-models/coding-agents).
+  </Step>
+  <Step title="Run the Quickstart">
+    Continue with the [Quickstart](/quickstart) to create your first Task and
+    start an agent.
+  </Step>
+</Steps>

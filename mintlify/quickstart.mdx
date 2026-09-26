@@ -1,0 +1,82 @@
+---
+title: "Quickstart"
+description: "Select a workspace folder, create your first Task, and run your first agent."
+keywords:
+  [
+    "quickstart",
+    "traycer desktop",
+    "getting started",
+    "first task",
+    "coding agent",
+  ]
+---
+
+This guide gets you from a fresh Traycer install to one useful coding-agent interaction. If you have not installed Traycer yet, start with [Install](/install).
+
+<Note>
+  This is the Desktop path. If you are using the IDE extension, use the [IDE
+  Extension docs](/extension).
+</Note>
+
+## Before You Start
+
+You need:
+
+- Traycer installed.
+- A local code folder you want Traycer to work with.
+- At least one coding agent path available.
+
+## First Run
+
+<Steps>
+  <Step title="Open Traycer Desktop">
+    Launch Traycer and choose the workspace folder for the repository or project
+    you want to work on.
+  </Step>
+  <Step title="Create a Task">
+    A Task is the container for this piece of work. It can hold agents,
+    terminals, files, git diff, and artifacts.
+  </Step>
+  <Step title="Start your first agent">
+    Pick a coding agent and model, then describe what you want. Traycer keeps
+    the work connected to the Task, workspace, files, and artifacts.
+  </Step>
+  <Step title="Describe the change">
+    Ask for a small, concrete change or investigation. Keep the first run narrow
+    so you can inspect the result easily.
+  </Step>
+  <Step title="Review the result">
+    Use the File Tree and Git Diff panels inside the Task to inspect what
+    changed.
+  </Step>
+</Steps>
+
+## What You Just Used
+
+| Thing                | What it means                                           |
+| -------------------- | ------------------------------------------------------- |
+| **Workspace folder** | The local code folder Traycer is working against.       |
+| **Task**             | The top-level container for this work.                  |
+| **Artifact**         | A durable spec, ticket, story, or review inside a Task. |
+
+## Next Steps
+
+<Columns cols={2}>
+  <Card title="Learn the Concepts" href="/concepts/tasks-and-workspace-folders">
+    Understand Tasks, panels, and artifacts.
+  </Card>
+  <Card title="Work with agents" href="/panels/agents">
+    Understand the Chat and Terminal interfaces, permissions, model selection,
+    attachments, voice input, and per-turn settings.
+  </Card>
+  <Card title="Set up Agents & Models" href="/agents-and-models/coding-agents">
+    Configure Codex, Claude Code, OpenCode, Cursor, or Traycer.
+  </Card>
+  <Card title="Review changes" href="/panels/artifacts">
+    Use git diff and review artifacts to inspect work before shipping.
+  </Card>
+  <Card title="Artifact workflow" href="/concepts/artifact-workflow">
+    How a Task holds artifacts, and which planning skills to run for a large
+    feature.
+  </Card>
+</Columns>

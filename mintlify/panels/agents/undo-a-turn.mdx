@@ -1,0 +1,20 @@
+---
+title: "Undo a turn"
+description: "Restore files changed by an assistant turn from its Changes card."
+---
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Restore the files changed by an assistant turn">
+  <source src="https://assets.traycer.ai/docs/videos/restore-checkpoint.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+A turn that changes files can show a **Changes · N files** card beneath the assistant response. Its **Undo** button opens **Undo this turn?**.
+
+Restore returns those files to the start of the selected turn, including reverting later changes to the same files.
+
+1. Click **Undo** on the Changes card.
+2. Review the files listed in the dialog.
+3. Click **Restore** and wait for progress to finish.
+4. Check the result toast for restored, skipped, and failed file counts.
+
+Undo restores the files a turn changed. Check the reported results and [Git Diff](/panels/git-diff) afterward; skipped or failed files may still need attention. The user-message hover actions are **Edit**, **Delete**, and **Copy**. File restore is on the assistant turn's Changes card.
