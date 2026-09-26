@@ -872,6 +872,50 @@ describe("the settled routing card, mounted", () => {
     expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1);
   });
 
+  it("draws each wait step's line without claiming a resume, and its ending in the destructive column", () => {
+    const resumedAt = new Date(2026, 5, 15, 1, 2, 0).getTime();
+    const REFUSED =
+      "Couldn't resume: the account or model is no longer available";
+    mountTurn("turn-wait-steps", {
+      causeLabel: "Rate limit reached",
+      steps: [
+        {
+          kind: "wait",
+          providerLabel: "Claude Code",
+          modelLabel: "claude-sonnet-4",
+          profileLabel: "Personal 3",
+          resumedAt,
+          endedLabel: "rate limited",
+        },
+        {
+          kind: "wait",
+          providerLabel: "Claude Code",
+          modelLabel: "claude-sonnet-4",
+          profileLabel: "Personal 3",
+          resumedAt,
+          endedLabel: REFUSED,
+        },
+      ],
+    });
+
+    const steps = within(
+      within(screen.getByTestId("routing-settled-card")).getByTestId(
+        "routing-receipt",
+      ),
+    ).getAllByRole("listitem");
+    expect(steps).toHaveLength(2);
+    const expected = ["rate limited", REFUSED];
+    steps.forEach((step, index) => {
+      // li children: the number, the step text, the ending.
+      const line = step.children[1].textContent;
+      const ending = step.children[2];
+      expect(line).toMatch(/Waited until 1:02\sAM for Personal 3$/);
+      expect(line).not.toMatch(/resumed/i);
+      expect(ending.textContent).toBe(expected[index]);
+      expect(ending.className).toContain("text-destructive");
+    });
+  });
+
   it("is a warning card, never the red error treatment, and has no plain error card beside it", () => {
     const { container } = mountTurn("turn-tone", RECEIPT);
 

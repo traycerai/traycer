@@ -19,7 +19,14 @@ export function receiptCrossesProviders(
 
 /**
  * What one receipt step did, in the user's words: "Switched to Fable · Surya",
- * "Retried Fable · Surya", "Waited until 1:02 am, resumed on Personal 3".
+ * "Retried Fable · Surya", "Waited until 1:02 am for Personal 3".
+ *
+ * A wait line says what the wait was FOR and never that it resumed: the host
+ * records a wait whose resume it refused (the account or model became unusable
+ * before the deadline) as a `wait` step too, with `resumedAt` the time the
+ * wait fired. What happened next is the row's `endedLabel` - the resumed
+ * attempt's failure, or the refusal sentence - so the line claiming a resume
+ * would contradict its own ending column.
  *
  * The step's `modelLabel` is the raw slug - the host does not read the
  * catalogue on the settle path - so it is named through the same resolver
@@ -45,8 +52,8 @@ export function receiptStepText(
 ): string {
   if (step.kind === "wait") {
     return step.resumedAt === null
-      ? `Waited for the limit to reset, resumed on ${step.profileLabel}`
-      : `Waited until ${formatWaitTime(step.resumedAt, context.now)}, resumed on ${step.profileLabel}`;
+      ? `Waited for the limit to reset on ${step.profileLabel}`
+      : `Waited until ${formatWaitTime(step.resumedAt, context.now)} for ${step.profileLabel}`;
   }
   const harnessId = fallbackHarnessForProviderLabel(step.providerLabel);
   const model =

@@ -119,14 +119,20 @@ describe("receiptStepText", () => {
     ).toBe("Switched to claude-fable-5 · Surya");
   });
 
-  it("says when a wait resumed, on the account it resumed on", () => {
+  it("says when a wait fired, for the account it waited on, and claims no resume", () => {
     const resumedAt = new Date(2026, 5, 15, 1, 2, 0).getTime();
     expect(
       text(
         step({ kind: "wait", resumedAt, profileLabel: "Personal 3" }),
         false,
       ),
-    ).toMatch(/^Waited until 1:02\sAM, resumed on Personal 3$/);
+    ).toMatch(/^Waited until 1:02\sAM for Personal 3$/);
+    expect(
+      text(
+        step({ kind: "wait", resumedAt, profileLabel: "Personal 3" }),
+        false,
+      ),
+    ).not.toMatch(/resumed/i);
   });
 
   it("does not invent a time for a wait that never recorded one", () => {
@@ -135,7 +141,13 @@ describe("receiptStepText", () => {
         step({ kind: "wait", resumedAt: null, profileLabel: "Personal 3" }),
         false,
       ),
-    ).toBe("Waited for the limit to reset, resumed on Personal 3");
+    ).toBe("Waited for the limit to reset on Personal 3");
+    expect(
+      text(
+        step({ kind: "wait", resumedAt: null, profileLabel: "Personal 3" }),
+        false,
+      ),
+    ).not.toMatch(/resumed/i);
   });
 
   it("never prints the model or provider on a wait line, crossing providers or not", () => {
