@@ -506,29 +506,43 @@ export async function putDraftBlobsWithProgress(input: {
       } else {
         const slot = acquireUploadSlot(hostId);
         if (slot !== null) await slot;
+        // A flight for this digest that another caller started while this
+        // one waited: joined AFTER the slot is given back, so the slot is
+        // only ever held by a caller whose own request is on the wire. Held
+        // through the join, an initiator and two late joiners of one slow
+        // body would fill the gate while issuing a single request.
+        let joinedAfterWait: Promise<boolean> | null = null;
         try {
           // Re-checked once the slot is held, all three: while this digest
           // waited for a slot, another caller's flight for it may have
           // finished (the memo now holds it - a second multi-megabyte upload
           // of a confirmed digest is the waste the memo exists to prevent)
-          // or may still be up (joined inside `joinOrStartBlobUpload`), and
-          // a sibling may have learned the host withholds the method - a
-          // joined upload can be the one that discovers that, and its joiner
-          // sees it only through this flag. Every digest still waiting stops
-          // at the same signal, so the remaining ones are never sent.
+          // or may still be up (joined below, slot-free), and a sibling may
+          // have learned the host withholds the method - a joined upload can
+          // be the one that discovers that, and its joiner sees it only
+          // through this flag. Every digest still waiting stops at the same
+          // signal, so the remaining ones are never sent.
           if (isDraftBlobConfirmed(hostId, sha256, ownerUserId)) {
             acknowledged = true;
           } else if (!blobUnsupportedHosts.has(hostId)) {
-            acknowledged = await joinOrStartBlobUpload(
+            joinedAfterWait = joinBlobUploadInFlight(
               hostId,
-              client,
               sha256,
               ownerUserId,
             );
+            if (joinedAfterWait === null) {
+              acknowledged = await joinOrStartBlobUpload(
+                hostId,
+                client,
+                sha256,
+                ownerUserId,
+              );
+            }
           }
         } finally {
           releaseUploadSlot(hostId);
         }
+        if (joinedAfterWait !== null) acknowledged = await joinedAfterWait;
       }
       if (acknowledged && !settled) confirmed.push(sha256);
       if (settled) return;

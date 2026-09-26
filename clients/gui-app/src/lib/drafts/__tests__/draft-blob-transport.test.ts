@@ -226,6 +226,8 @@ function digestGatingClient(): {
   readonly calls: () => number;
   /** Reject the pending request for this digest with `error`. Throws if none is pending. */
   readonly rejectDigest: (sha256: string, error: Error) => void;
+  /** Resolve the pending request for this digest as `{ ok: true }`. Throws if none is pending. */
+  readonly resolveDigest: (sha256: string) => void;
   /** Resolve every still-pending request as `{ ok: true }`. */
   readonly releaseAll: () => void;
 } {
@@ -259,6 +261,15 @@ function digestGatingClient(): {
       settlers.delete(sha256);
       resolvers.delete(sha256);
       reject(error);
+    },
+    resolveDigest: (sha256) => {
+      const release = resolvers.get(sha256);
+      if (release === undefined) {
+        throw new Error(`digestGatingClient: no pending request for ${sha256}`);
+      }
+      resolvers.delete(sha256);
+      settlers.delete(sha256);
+      release();
     },
     releaseAll: () => {
       const toRelease = [...resolvers.values()];
@@ -1022,6 +1033,54 @@ describe("draft blob transport", () => {
     expect(totalCalls()).toBeLessThanOrEqual(DRAFT_BLOB_UPLOAD_CONCURRENCY);
     expect(hostWithholdsDraftBlobs(HOST)).toBe(true);
     expect(confirmed.length).toBeLessThan(hashes.length);
+  });
+
+  it("a caller that waited for a slot and then finds the digest already up gives its slot back before joining", async () => {
+    // A holds the whole gate with x, y and z. B and C both ask for w while
+    // it is full, so both queue for a slot. x finishing hands its slot to B,
+    // which starts w's flight; y finishing hands the next slot to C, which
+    // now finds w already up. C must give that slot back before joining B's
+    // flight: held through the join, one slow body would occupy two slots
+    // while issuing one request.
+    const x = await putImage(pngBytesTagged(240));
+    const y = await putImage(pngBytesTagged(241));
+    const z = await putImage(pngBytesTagged(242));
+    const w = await putImage(pngBytesTagged(243));
+    const { client, calls, resolveDigest, releaseAll } = digestGatingClient();
+
+    const first = putDraftBlobs(HOST, client, [x, y, z], OWNER);
+    for (let index = 0; index < 20 && calls() < 3; index += 1) {
+      await tick();
+    }
+    expect(calls()).toBe(3);
+    const second = putDraftBlobs(HOST, client, [w], OWNER);
+    const third = putDraftBlobs(HOST, client, [w], OWNER);
+    await tick();
+    expect(calls()).toBe(3);
+
+    resolveDigest(x);
+    for (let index = 0; index < 20 && calls() < 4; index += 1) {
+      await tick();
+    }
+    // B took x's slot and started w.
+    expect(calls()).toBe(4);
+    expect(draftBlobUploadsInFlight(HOST)).toBe(3);
+
+    resolveDigest(y);
+    for (let index = 0; index < 10; index += 1) {
+      await tick();
+    }
+    // C took y's slot, found w up, and gave the slot back: only z and w
+    // hold slots now, and C issued no request of its own.
+    expect(draftBlobUploadsInFlight(HOST)).toBe(2);
+    expect(calls()).toBe(4);
+
+    releaseAll();
+    expect([...(await first)].sort()).toEqual([x, y, z].sort());
+    expect(await second).toEqual([w]);
+    expect(await third).toEqual([w]);
+    expect(calls()).toBe(4);
+    expect(draftBlobUploadsInFlight(HOST)).toBe(0);
   });
 
   it("a caller joining a flight that holds the gate's last slots neither takes a slot nor re-uploads the digest once the flight lands", async () => {
