@@ -5,6 +5,40 @@ description: "Track the latest updates and improvements to the Traycer CLI."
 rss: true
 ---
 
+<Update label="v1.3.0">
+Reliable Host updates, a way to sign in the mobile app, and clearer commands.
+
+* **Host updates** — `traycer host update` shows progress, waits instead of interrupting busy work, and can move to an older release with `--release` and `--allow-downgrade`. A Host you deliberately downgraded is no longer upgraded again behind your back.
+* **Mobile app** — `traycer link-phone` signs the Traycer mobile app in by scanning a code, and shows a match code to compare on both sides.
+* **Self-upgrade** — upgrading the CLI installs exactly the version it reports.
+* **Clearer commands** — host lifecycle and sign-in commands say what they actually do, `host status` and `doctor` only observe unless asked to repair, and help and human-readable output are cleaned up.
+* **npm and nvm installs** — the Host finds a CLI installed through npm or nvm.
+* **Crash reports** — Host crashes are reported from the supervisor so they can be diagnosed.
+* **Fixes** — commands that stop the Host survive the stop on Linux and Windows, Windows Host processes are stopped by identity rather than by process id, and read-only agents are held to the read-only command set.
+</Update>
+
+<Update label="v1.2.0">
+Remote hosts, new agent commands, and a Host that recovers on its own.
+
+* **Remote hosts** — install and sign in a Host on another machine, and connect to it from the app.
+* **Agent commands** — `traycer agent fork`, `traycer agent stop`, and `traycer agent archive`. `traycer agent list` shows the settings each agent actually runs with.
+* **Host lifecycle** — `host install` signs in the Host it starts, keeps your provider CLIs across updates, and accepts `--force`. `host stop` and `host restart` take `--force` for stuck work.
+* **Crash recovery** — a crashed Host is relaunched instead of leaving the machine without one, and the Host keeps running when a child process runs out of memory.
+* **Linux and Windows** — the Host service is more reliable on Linux, with new `doctor` checks, and cleaner to install and remove on Windows.
+* **macOS** — the Host appears in Login Items as Traycer rather than `sh`.
+* **Fixes** — large command output is no longer cut off, and `doctor` reports when the Host needs you to sign in again.
+</Update>
+
+<Update label="v1.1.10">
+Proxy support and easier-to-diagnose Host crashes.
+
+* **Proxies** — the CLI honours `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`.
+* **Epic Mode removed** — `traycer agent create` no longer offers Epic Mode.
+* **Agent-to-agent** — agents created by other agents run with full access.
+* **Crash diagnosis** — the supervisor records why the Host crashed.
+* **Fixes** — installing the Host on Windows survives a locked file, and connections recover after a Host timeout.
+</Update>
+
 <Update label="v1.1.9">
 Agent roles, the Oh My Pi coding agent, and Host installs that recover instead of leaving you stuck.
 

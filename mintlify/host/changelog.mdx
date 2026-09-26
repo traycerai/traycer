@@ -5,6 +5,56 @@ description: "Track the latest updates and improvements to the Traycer Host."
 rss: true
 ---
 
+<Update label="v1.3.1">
+* **Cursor** — Composer no longer always runs in fast mode; the fast setting is applied per run.
+</Update>
+
+<Update label="v1.3.0">
+Agent-controlled browsers, session import, and much faster Tasks.
+
+* **Browser sessions** — agents can open and drive browser sessions, with sign-ins stored encrypted and carried across Hosts.
+* **Session import** — bring Claude Code, Codex, and OpenCode sessions into Traycer.
+* **Mobile app** — the Host serves the Traycer mobile app.
+* **Faster Tasks** — Tasks open from local data in a fraction of the time, long chats load in windows, and memory use is reported accurately.
+* **Comments as files** — agents read comment threads as files beside each artifact and resolve them by editing their status.
+* **Worktrees** — deleting a worktree first stops whatever is using it, sweeps ask for consent before tearing anything down, and deletion rows say why they failed.
+* **Providers** — the Reasonix coding agent is now available; OpenCode reaches parity with Claude; Copilot, Qwen, Grok, and the OpenCode family can be steered mid-turn; Grok gets background work and managed profiles; and sign-in terminals launch the CLI for Qwen, Droid, OMP, and OpenCode.
+* **Harness enablement** — harnesses are enabled once you are signed in, then stay on or off as you set them.
+* **Shells** — choose per command whether it relaunches when the Host restarts.
+* **Updates** — updates are tracked through to completion, and explicit downgrades are supported.
+* **Reliability** — fixes for artifacts lost after a storage replacement, a slow git process taking down a Task, and a Windows Host crash.
+</Update>
+
+<Update label="v1.2.0">
+Remote hosts, chats backed up to the cloud, and usage analytics.
+
+* **Remote hosts** — a Host can run on another machine and be reached through Traycer's relay.
+* **Chat sync** — chats live on the Host, are backed up to the cloud, sync across Hosts, and can be shared or kept private.
+* **Communication Graph** — messages between agents are recorded and streamed for each Task.
+* **Usage analytics** — cost, tokens, and tool calls are captured and priced per turn.
+* **Shells** — agents can run long-running commands that notify them, including in the middle of a turn.
+* **Providers** — Hugging Face and OpenCode model providers are available, provider CLI versions can be chosen, provider CLIs are downloaded on demand, and Cursor and OpenCode Go usage limits are reported.
+* **Terminals** — terminals are owned by the Host and persist across windows and Hosts. Agents can read a terminal's output.
+* **Agents** — fork an agent, stop its whole runtime rather than just the turn, and create agents without a folder.
+* **Skills** — imported skills are stored once and shared across providers.
+* **Git** — edit files in place from the diff, and read GitHub pull requests and issues for mentions.
+* **Worktrees** — branch prefixes can be set per repository, and recent workspace folders are remembered.
+* **Fixes** — Claude profiles no longer sign themselves out, idle Hosts stay quiet, and restart checks ignore idle terminals.
+</Update>
+
+<Update label="v1.1.10">
+Epic Mode removed, and a steadier Host under load.
+
+* **Epic Mode removed** — agents no longer carry an Epic or Regular mode, and the Traycer system prompt is shorter.
+* **Agents** — archive an agent from another agent, stop an agent with `traycer_stop_agent`, and working agents can no longer be archived.
+* **Agent-to-agent** — agents created by other agents run with full access.
+* **Pull requests** — the PR view is back, fetches each PR once per Host, and finds PRs from the branch actually checked out.
+* **Terminals** — terminal titles show the live working directory.
+* **Git status** — a bounded file watcher on Linux, with its health reported to the app.
+* **Grok** — change reasoning effort mid-session.
+* **Fixes** — Claude sessions survive pressing Stop during background work, Copilot starts on the default model, Pi reports its real failure reason, model catalogs no longer flood the Host with requests, and Windows provider CLIs launch directly.
+</Update>
+
 <Update label="v1.1.9">
 The Oh My Pi coding agent, agent roles, and installs that recover instead of leaving you stuck.
 

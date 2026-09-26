@@ -5,6 +5,51 @@ description: "Track the latest updates and improvements to Traycer Desktop."
 rss: true
 ---
 
+<Update label="v1.3.0">
+A browser inside Traycer, the mobile app, and importing your Claude Code and Codex sessions.
+
+- **In-app browser** — browse the web without leaving Traycer, and let agents drive a browser session of their own. Sign-ins are kept between sessions, can be imported from another browser on this machine, and carry over when an agent opens the same site.
+- **Mobile app** — follow your Tasks, agents, artifacts, terminals, and comments from your phone. Link it from **Settings › Link mobile app** by scanning a code.
+- **Session import** — bring existing Claude Code and Codex sessions into Traycer, from Settings or as the last step of the tour.
+- **Side chats** — type `/btw` or `/side` with a question to ask it in a fork, leaving the running agent undisturbed.
+- **Communication Graph** — an office view of the agents in a Task, search, and message cards that jump between the sent and received sides of an exchange.
+- **Sweep** — review worktrees in two steps before anything is deleted, let a confirmed sweep run in the background, and see worktree counts per Host. Busy worktrees can be force-deleted after Traycer shows what will be stopped.
+- **Long chats** — very long transcripts open quickly and load older messages as you scroll.
+- **Previews** — open PDFs from the workspace and git diff.
+- **Artifacts** — send selected artifact text to a chat, and search artifacts by path.
+- **Notifications** — choose a notification chime and preview it. The notification center shortcut is now ⌘⇧B / Ctrl+Shift+B, since ⌘⇧N already opens a new window.
+- **Providers** — the Reasonix coding agent is now available, harnesses are enabled with a plain toggle, provider packs can be checked for updates, and you control which accounts an agent may pick. Each turn shows which environment credential signed it in.
+- **Interviews** — review the questions an agent asked and how you answered them.
+- **Host updates** — updates show their progress, wait rather than interrupting busy work, and an explicitly chosen older Host is kept instead of being upgraded again. Auto-update failures on Windows and Linux are fixed.
+- **Remote hosts** — available on every plan.
+- **Tabs** — drag tabs the way Chrome does, and tear a draft off into its own tab.
+- **Keyboard** — Ctrl shortcuts reach a focused terminal on Windows and Linux.
+- **Open in** — Finder and VSCodium are available as open targets, and sidebar menus can copy an item's ID.
+- **Fixes** — the clock drifting on your machine no longer disconnects streams; steered messages stay where you sent them; generated titles stick in history; and the renderer uses less memory with many Tasks open.
+</Update>
+
+<Update label="v1.2.0">
+Remote hosts, chats backed up to the cloud, and usage dashboards.
+
+- **Remote hosts** — connect a Host running on another machine and run agents there. Choose the Host from the composer, browse its folders, fork a chat onto it, and filter History by Host. See [Remote hosts](/concepts/hosts/remote-hosts).
+- **Chat backup and sharing** — chats live on your Host with a backup in the cloud, shown in the chat header. Choose who can see each chat.
+- **Communication Graph** — watch the agents in a Task message each other.
+- **Usage dashboards** — cost, tokens, and tool calls by harness, model, or chat, exported as an image to share.
+- **Shells** — agents can start long-running commands and get notified when they print or exit. Each one appears as a card you can open.
+- **Providers** — a rebuilt Providers pane with search and filters; pick, keep, or pause each provider's CLI version; connect model providers through OpenCode; sign in to Copilot from a terminal. Hugging Face is now available, with usage limits shown for Cursor and OpenCode Go.
+- **Skills, MCP servers, and plugins** — manage them from Settings, including importing skills and sharing one copy across providers.
+- **Git diff** — edit files directly in the diff, preview images, and open large PR diffs faster.
+- **Composer** — mention GitHub pull requests and issues, and reuse recent folders.
+- **Fork an agent** — fork an agent from the app or with `traycer agent fork`.
+- **Terminals** — terminals persist on the Host, and agents can read a terminal's output.
+- **Navigation** — minimaps for artifact headings and chats, new shortcuts for moving around and opening resources, and ⌘Enter / Ctrl+Enter to confirm the primary action.
+- **Notifications** — read state syncs across your devices, with a shortcut to open the notification center.
+- **Devices & Sessions** — see and manage where you are signed in.
+- **Host** — restart the Host from the menu or tray, force a stop or restart when work is stuck, and scope the resource monitor to one Host.
+- **Worktrees** — set a branch prefix per repository.
+- **Fixes** — the app no longer grows to several gigabytes of memory in long sessions; streaming replies render smoothly; and archived chats are marked and can be filtered.
+</Update>
+
 <Update label="v1.1.10">
 The per-agent Epic / Regular mode control is gone. Tasks and artifacts remain.
 
