@@ -20,6 +20,14 @@
 // real layout engine plus a real CDP-dispatched wheel event can tell a 35px
 // row with zero vertical slack apart from one with 1px of it.
 //
+// It also covers a second, narrower regression in the same fixed-height fix:
+// `TabStripDropIndicator` (the vertical drop line a strip drag renders inside
+// the hovered tab) was `inset-y-1` on the old fixed 36px tab, spanning
+// 4px-32px from the tab's top; on the now-35px tab that same `inset-y-1`
+// spans only 4px-31px, a 1px visible shrink. The fix reclaims it with
+// `top-1 bottom-0.75`, and this driver seeds a drop preview via the fixture's
+// `?dropIndex=` param and measures the indicator back to 4px-32px.
+//
 // Structure follows `status-bar-usage-scroll-browser.mjs` (vite + headless
 // Chrome over CDP via `scripts/chrome-launcher.mjs`); wired into
 // `scripts/run-tests.ts` behind `RUN_DIFF_EDIT_BROWSER_REGRESSION`, next to
@@ -37,6 +45,7 @@ import {
   launchChromeWithDevTools,
   terminateProcessTree,
 } from "./chrome-launcher.mjs";
+import { connectCdp } from "./cdp-client.mjs";
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -47,6 +56,7 @@ const chromePath = await findChrome("the canvas tab strip overflow regression");
 const vitePort = await freePort();
 const STRIP = '[data-testid="tab-strip"]';
 const SCROLLER = '[data-testid="tab-strip-end"]';
+const DROP_INDICATOR = '[data-testid="tab-strip-drop-indicator"]';
 // Wide enough that a single ~100px blank tab never overflows it, narrow
 // enough that twenty of them comfortably do.
 const VIEWPORT_WIDTH_PX = 640;
@@ -63,6 +73,11 @@ const WHEEL_DELTA_PX = 120;
 // same, so the fix moved nothing; a change here is a visible change.
 const EXPECTED_ICON_CENTER_Y_FROM_STRIP_TOP_PX = 18;
 const EXPECTED_TITLE_CENTER_Y_FROM_STRIP_TOP_PX = 18;
+// Drop-indicator baseline: where `inset-y-1` placed the line on the old fixed
+// 36px tab (4px from the top, 32px from the top - a 28px-tall line). The
+// 35px tab's `top-1 bottom-0.75` fix reclaims exactly this span.
+const EXPECTED_DROP_INDICATOR_TOP_FROM_TAB_TOP_PX = 4;
+const EXPECTED_DROP_INDICATOR_BOTTOM_FROM_TAB_TOP_PX = 32;
 let chrome;
 let chromeProfilePath;
 let client;
@@ -249,6 +264,42 @@ try {
       `strip's top (measured ${singleStart.titleCenterYFromStripTop}px)`,
   );
 
+  // ── (e): the strip drop indicator reclaims its pre-35px-tab span ─────────
+  // Reload with a seeded `artifact-tab-strip` drop preview at index 0 (the
+  // fixture's `?dropIndex=` param), which mounts `TabStripDropIndicator`
+  // inside the single tab with no real drag gesture needed.
+  await client.send("Page.navigate", { url: dropIndexPageUrl(1, 0) });
+  await waitForStrip(client, 1);
+  await waitFor(
+    client,
+    "the tab strip drop indicator to mount",
+    `document.querySelector('${STRIP} [role="tab"] ${DROP_INDICATOR}') !== null`,
+  );
+  // Let the indicator's 120ms mount animation (opacity/scaleY) settle before
+  // measuring its rect.
+  await settle(client);
+  const dropIndicatorState = await readDropIndicatorState(client);
+  assert.equal(
+    dropIndicatorState.indicatorTopFromTabTop,
+    EXPECTED_DROP_INDICATOR_TOP_FROM_TAB_TOP_PX,
+    `the drop indicator's top must sit ` +
+      `${EXPECTED_DROP_INDICATOR_TOP_FROM_TAB_TOP_PX}px below the tab's top ` +
+      `- where inset-y-1 placed it on the old fixed 36px tab (measured ` +
+      `${dropIndicatorState.indicatorTopFromTabTop}px)`,
+  );
+  assert.equal(
+    dropIndicatorState.indicatorBottomFromTabTop,
+    EXPECTED_DROP_INDICATOR_BOTTOM_FROM_TAB_TOP_PX,
+    `the drop indicator's bottom must sit ` +
+      `${EXPECTED_DROP_INDICATOR_BOTTOM_FROM_TAB_TOP_PX}px below the tab's ` +
+      `top (a ${
+        EXPECTED_DROP_INDICATOR_BOTTOM_FROM_TAB_TOP_PX -
+        EXPECTED_DROP_INDICATOR_TOP_FROM_TAB_TOP_PX
+      }px-tall line) - the drop line sits where it did when the tab was a ` +
+      `fixed 36px (inset-y-1 on 36px) (measured ` +
+      `${dropIndicatorState.indicatorBottomFromTabTop}px)`,
+  );
+
   // ── (c): enough tabs to overflow, a vertical wheel scrolls horizontally ───
   await client.send("Page.navigate", { url: pageUrl(OVERFLOW_TAB_COUNT) });
   await waitForStrip(client, OVERFLOW_TAB_COUNT);
@@ -301,7 +352,10 @@ try {
       `${singleStart.scroller.clientHeight}px, icon centre ` +
       `${singleStart.iconCenterYFromStripTop}px / title centre ` +
       `${singleStart.titleCenterYFromStripTop}px from strip top, wheel left ` +
-      `tab top and accent unmoved; overflowing strip ` +
+      `tab top and accent unmoved; drop indicator spans ` +
+      `${dropIndicatorState.indicatorTopFromTabTop}px-` +
+      `${dropIndicatorState.indicatorBottomFromTabTop}px from the tab top; ` +
+      `overflowing strip ` +
       `${overflowStart.scroller.scrollWidth}/${overflowStart.scroller.clientWidth}px ` +
       `scrolled horizontally to ${overflowAfterWheel.scroller.scrollLeft}px ` +
       `by the same wheel, scrollTop stayed 0`,
@@ -326,6 +380,12 @@ try {
 
 function pageUrl(tabs) {
   return `http://127.0.0.1:${vitePort}${fixtureUrlPath}?tabs=${tabs}`;
+}
+
+/** Same as `pageUrl`, plus the fixture's `?dropIndex=` param that seeds an
+ * `artifact-tab-strip` drop preview before the first render. */
+function dropIndexPageUrl(tabs, dropIndex) {
+  return `${pageUrl(tabs)}&dropIndex=${dropIndex}`;
 }
 
 async function setViewport(cdpClient) {
@@ -407,6 +467,35 @@ async function readStripState(cdpClient) {
   );
 }
 
+/**
+ * The strip's first tab's rect, and its `TabStripDropIndicator`'s rect
+ * relative to that tab's top - null when either is absent.
+ */
+async function readDropIndicatorState(cdpClient) {
+  return evaluate(
+    cdpClient,
+    `(() => {
+       const strip = document.querySelector('${STRIP}');
+       const tab = strip.querySelector('[role="tab"]');
+       const indicator = tab === null
+         ? null
+         : tab.querySelector('${DROP_INDICATOR}');
+       const tabRect = tab === null ? null : tab.getBoundingClientRect();
+       const indicatorRect = indicator === null
+         ? null
+         : indicator.getBoundingClientRect();
+       return {
+         indicatorTopFromTabTop: (tabRect === null || indicatorRect === null)
+           ? null
+           : indicatorRect.top - tabRect.top,
+         indicatorBottomFromTabTop: (tabRect === null || indicatorRect === null)
+           ? null
+           : indicatorRect.bottom - tabRect.top,
+       };
+     })()`,
+  );
+}
+
 function settle(cdpClient) {
   return evaluate(cdpClient, `new Promise((r) => setTimeout(r, 250))`);
 }
@@ -439,45 +528,6 @@ async function waitForHttp(url, child, readError, label) {
     await delay(150);
   }
   throw new Error(`${label} did not become reachable: ${readError()}`);
-}
-
-function connectCdp(url) {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    const pending = new Map();
-    let nextId = 0;
-    const connectTimer = setTimeout(
-      () => reject(new Error("CDP connect timed out")),
-      15_000,
-    );
-    socket.addEventListener("error", (event) =>
-      reject(new Error(String(event))),
-    );
-    socket.addEventListener("message", (event) => {
-      const message = JSON.parse(String(event.data));
-      if (typeof message.id !== "number") return;
-      const request = pending.get(message.id);
-      if (request === undefined) return;
-      pending.delete(message.id);
-      if (message.error === undefined) request.resolve(message.result);
-      else request.reject(new Error(message.error.message));
-    });
-    socket.addEventListener("open", () => {
-      clearTimeout(connectTimer);
-      resolve({
-        send(method, params = {}) {
-          return new Promise((requestResolve, requestReject) => {
-            const id = ++nextId;
-            pending.set(id, { resolve: requestResolve, reject: requestReject });
-            socket.send(JSON.stringify({ id, method, params }));
-          });
-        },
-        close() {
-          socket.close();
-        },
-      });
-    });
-  });
 }
 
 async function evaluate(cdpClient, expression) {

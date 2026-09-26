@@ -1224,13 +1224,16 @@ function TabStripDropIndicator(props: { readonly visible: boolean }) {
   // for the length of the exit (~110ms measured). A drop indicator states one
   // destination, so it unmounts immediately and only its entry animates.
   if (!props.visible) return null;
+  // `bottom-0.75`, not `bottom-1`: the tab is 35px (it fills the strip's row),
+  // and the 3px inset keeps the line at 4px-32px, where it sat when the tab
+  // was a fixed 36px.
   return (
     <m.span
       aria-hidden
       initial={{ opacity: 0, scaleY: 0.45 }}
       animate={{ opacity: 1, scaleY: 1 }}
       transition={EPIC_TAB_DROP_INDICATOR_TRANSITION}
-      className="absolute inset-y-1 left-0 z-20 -translate-x-0.5 origin-center"
+      className="absolute top-1 bottom-0.75 left-0 z-20 -translate-x-0.5 origin-center"
     >
       <DropLine
         orientation="vertical"

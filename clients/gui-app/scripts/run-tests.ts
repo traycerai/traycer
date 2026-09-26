@@ -214,6 +214,15 @@ if (runsFirstShard) {
       exitCode,
       runBrowserRegression("scripts/canvas-tab-strip-overflow-browser.mjs"),
     );
+    // The CDP client every driver above talks over: a command in flight when
+    // Chrome dies must reject rather than hang, since each driver is spawned
+    // with no timeout and a hang holds the CI job until its own limit. Needs a
+    // real DevTools socket to die under it. Ablated before wiring: removing
+    // the client's close/error handlers leaves the command pending (red).
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/cdp-client-browser.mjs"),
+    );
     // NOT here, deliberately, and each for its own reason:
     // - `scripts/window-host-modal-alignment-browser.mjs` measures the
     //   local-bootstrap body against ONE LEFT EDGE (A1/A2/A5/PC4) - the design

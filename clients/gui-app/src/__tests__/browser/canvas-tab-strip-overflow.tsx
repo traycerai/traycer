@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client";
+import { LazyMotion, domMax } from "motion/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DndContext } from "@dnd-kit/core";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -20,6 +21,8 @@ import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeBlankTileRef } from "@/stores/epics/canvas/tile-schema/blank-tile";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import type { EpicCanvasDropPreview } from "@/components/epic-canvas/dnd/dnd";
 import "@/index.css";
 
 /**
@@ -45,7 +48,11 @@ import "@/index.css";
  * This renders the PRODUCTION `TabStrip` against the real stylesheet, with a
  * single blank tab that is both active and globally active (so the top
  * accent bar renders) or with enough blank tabs to overflow the strip
- * horizontally, chosen by `?tabs=N` (default 1). Structure follows
+ * horizontally, chosen by `?tabs=N` (default 1). `?dropIndex=N` additionally
+ * seeds the dnd store with an `artifact-tab-strip` drop preview at index N
+ * before the first render, so `TabStripDropIndicator` mounts inside tab N
+ * without a real drag gesture; omitted, no preview is seeded and behaviour is
+ * unchanged. Structure follows
  * `status-bar-usage-scroll.tsx` (vite + headless Chrome over CDP via
  * `scripts/chrome-launcher.mjs`); wired into `scripts/run-tests.ts` behind
  * `RUN_DIFF_EDIT_BROWSER_REGRESSION`, next to that fixture's entry.
@@ -77,6 +84,16 @@ import "@/index.css";
  *    suites use to hand a component a genuine, empty `OpenEpicStoreHandle`.
  *  - `TooltipProvider`, `NotificationConsumptionContext.Provider` - mirror
  *    the jsdom test's wrapper (`tab-strip.test.tsx`).
+ *  - `LazyMotion features={domMax}` - `motion/react-m` (`import * as m from
+ *    "motion/react-m"`, used throughout `tab-strip.tsx` for the drop
+ *    indicator, tab motion frame, and the strip-end indicator) is the "mini"
+ *    bundle: its `m.*` components render but never animate without a
+ *    `LazyMotion` ancestor supplying the feature bundle - they stay frozen at
+ *    their `initial` prop forever, not merely unanimated at their `animate`
+ *    target. `traycer-app.tsx` wraps the whole app in exactly this provider;
+ *    without it here, `TabStripDropIndicator`'s mount transition
+ *    (`opacity`/`scaleY`) would never run and its measured rect would be the
+ *    unscaled `initial` box, not the settled one production shows.
  *
  * `BrowserSessionsContext` is deliberately NOT provided: its strict reader is
  * only reached by a `browser-session` tab, and this fixture never mounts one
@@ -215,6 +232,29 @@ const tiles: EpicCanvasTileRef[] = Array.from({ length: tabCount }, () =>
 );
 seedCanvas(tiles);
 
+// `?dropIndex=N` seeds an `artifact-tab-strip` drop preview at index N before
+// the first render, so `TabStripDropIndicator` mounts inside tab N with no
+// real drag gesture involved. Absent (the default), no preview is seeded and
+// the strip renders exactly as before this param existed.
+const dropIndexParam = new URLSearchParams(window.location.search).get(
+  "dropIndex",
+);
+if (dropIndexParam !== null) {
+  const dropIndex = Number(dropIndexParam);
+  if (!Number.isFinite(dropIndex)) {
+    throw new Error(
+      `canvas-tab-strip-overflow fixture: invalid dropIndex ` +
+        `"${dropIndexParam}"`,
+    );
+  }
+  const dropPreview: EpicCanvasDropPreview = {
+    kind: "artifact-tab-strip",
+    groupId: GROUP_ID,
+    index: dropIndex,
+  };
+  useEpicDndStore.getState().dropPreviewChanged(dropPreview);
+}
+
 const runnerHost = new MockRunnerHost({
   signInUrl: "https://auth.traycer.invalid/sign-in",
   authnBaseUrl: "http://127.0.0.1:1",
@@ -242,30 +282,32 @@ const queryClient = new QueryClient({
 const container = document.querySelector("#root");
 if (container === null) throw new Error("probe root missing");
 createRoot(container).render(
-  <QueryClientProvider client={queryClient}>
-    <RunnerHostProvider runnerHost={runnerHost}>
-      <HostRuntimeProvider
-        registry={hostRpcRegistry}
-        messengerFactory={fixtureMessengerFactory}
-        invalidator={null}
-        requestId={null}
-        remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
-        fallback={
-          <div data-testid="fixture-runtime-fallback">
-            Booting host runtime…
-          </div>
-        }
-      >
-        <TooltipProvider>
-          <NotificationConsumptionContext.Provider value={() => undefined}>
-            <EpicSessionContext.Provider value={epicHandle}>
-              <DndContext>
-                <CanvasTabStripOverflowFixture tiles={tiles} />
-              </DndContext>
-            </EpicSessionContext.Provider>
-          </NotificationConsumptionContext.Provider>
-        </TooltipProvider>
-      </HostRuntimeProvider>
-    </RunnerHostProvider>
-  </QueryClientProvider>,
+  <LazyMotion features={domMax}>
+    <QueryClientProvider client={queryClient}>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <HostRuntimeProvider
+          registry={hostRpcRegistry}
+          messengerFactory={fixtureMessengerFactory}
+          invalidator={null}
+          requestId={null}
+          remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
+          fallback={
+            <div data-testid="fixture-runtime-fallback">
+              Booting host runtime…
+            </div>
+          }
+        >
+          <TooltipProvider>
+            <NotificationConsumptionContext.Provider value={() => undefined}>
+              <EpicSessionContext.Provider value={epicHandle}>
+                <DndContext>
+                  <CanvasTabStripOverflowFixture tiles={tiles} />
+                </DndContext>
+              </EpicSessionContext.Provider>
+            </NotificationConsumptionContext.Provider>
+          </TooltipProvider>
+        </HostRuntimeProvider>
+      </RunnerHostProvider>
+    </QueryClientProvider>
+  </LazyMotion>,
 );

@@ -12,8 +12,9 @@
 // runner had to reap exactly that orphan pile; it lives here so a fix lands
 // once instead of five times.
 //
-// Consumers own everything downstream of the DevTools endpoint (CDP client,
-// fixtures, assertions) - this module owns only the process.
+// Consumers own everything downstream of the DevTools endpoint (fixtures,
+// assertions) - this module owns only the process. The CDP client they talk
+// over is `cdp-client.mjs`.
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdtemp, rm } from "node:fs/promises";

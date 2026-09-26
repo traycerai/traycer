@@ -11,6 +11,7 @@ import {
   launchChromeWithDevTools,
   terminateProcessTree,
 } from "./chrome-launcher.mjs";
+import { connectCdp } from "./cdp-client.mjs";
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -495,79 +496,6 @@ async function waitForHttp(url, child, readError, label) {
     await delay(50);
   }
   throw new Error(`Timed out waiting for ${label}:\n${readError()}`);
-}
-
-async function connectCdp(url) {
-  return await new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    const pending = new Map();
-    let nextId = 0;
-    let connectTimer;
-    const rejectPending = (error) => {
-      for (const request of pending.values()) request.reject(error);
-      pending.clear();
-    };
-    const fail = (error) => {
-      clearTimeout(connectTimer);
-      reject(error);
-      rejectPending(error);
-    };
-    connectTimer = setTimeout(() => {
-      fail(new Error("Timed out connecting to the CDP socket"));
-      socket.close();
-    }, 15_000);
-    socket.addEventListener("error", () =>
-      fail(new Error("CDP socket failed")),
-    );
-    socket.addEventListener("close", () =>
-      fail(new Error("CDP socket closed")),
-    );
-    socket.addEventListener("message", (event) => {
-      const message = JSON.parse(String(event.data));
-      if (typeof message.id !== "number") return;
-      const request = pending.get(message.id);
-      if (request === undefined) return;
-      pending.delete(message.id);
-      if (message.error === undefined) request.resolve(message.result);
-      else request.reject(new Error(message.error.message));
-    });
-    socket.addEventListener("open", () => {
-      clearTimeout(connectTimer);
-      resolve({
-        send(method, params) {
-          return new Promise((requestResolve, requestReject) => {
-            const id = ++nextId;
-            const timer = setTimeout(() => {
-              pending.delete(id);
-              requestReject(
-                new Error(`Timed out sending CDP command ${method}`),
-              );
-            }, 15_000);
-            pending.set(id, {
-              resolve(value) {
-                clearTimeout(timer);
-                requestResolve(value);
-              },
-              reject(error) {
-                clearTimeout(timer);
-                requestReject(error);
-              },
-            });
-            try {
-              socket.send(JSON.stringify({ id, method, params }));
-            } catch (error) {
-              pending.delete(id);
-              clearTimeout(timer);
-              requestReject(error);
-            }
-          });
-        },
-        close() {
-          socket.close();
-        },
-      });
-    });
-  });
 }
 
 async function evaluate(targetClient, expression) {
