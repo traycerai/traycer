@@ -290,6 +290,74 @@ describe("main-owned browser.sessions streams held by preparation and UI", () =>
     // The snapshot the host was already going to send reaches the renderer.
     session.emit(snapshotFrame(), null);
     expect(eventKinds(harness.emitted)).toEqual(["status", "frame"]);
+    // Adopting the stream did not promote it: it keeps announcing on-demand
+    // readiness, so it cannot relocate an unrelated live headless session.
+    expect(
+      session.framesOfKind("electronTabLifecycleReadyOnDemand"),
+    ).toHaveLength(1);
+    expect(session.framesOfKind("electronTabLifecycleReady")).toEqual([]);
+  });
+
+  it("on a 2.1 host, a renderer that adopts an automatic stream before its snapshot keeps its stream, and only the preparation is refused", async () => {
+    const unavailable = vi.fn();
+    registry.acquirePreparation("window-1", KEY, unavailable);
+    await settle();
+    const session = harness.clients.at(-1)?.sessions[0];
+    if (session === undefined) throw new Error("no stream was subscribed");
+    session.negotiatedSchemaVersion = { major: 2, minor: 1 };
+    session.emitStatus("open");
+    registry.open("window-1", KEY);
+
+    session.emit(snapshotFrame(), null);
+
+    // The waiting preparation is told once; the UI's stream is not dropped.
+    expect(unavailable).toHaveBeenCalledTimes(1);
+    expect(session.closed).toBe(false);
+    expect(harness.closedTransports).toEqual([]);
+    // Ordinary readiness, never the on-demand kind a 2.1 host cannot read.
+    expect(session.framesOfKind("electronTabLifecycleReadyOnDemand")).toEqual(
+      [],
+    );
+    expect(session.framesOfKind("electronTabLifecycleReady")).toHaveLength(1);
+    // A later preparation is refused, and the stream lives until the UI leaves.
+    expect(
+      registry.acquirePreparation("window-1", KEY, () => undefined),
+    ).toBeNull();
+    expect(session.closed).toBe(false);
+
+    registry.close("window-1", KEY);
+    await settle();
+    expect(session.closed).toBe(true);
+  });
+
+  it("a reconnect that comes back as 2.1 refuses preparation on an adopted automatic stream but keeps the UI's stream and readiness", async () => {
+    const unavailable = vi.fn();
+    registry.acquirePreparation("window-1", KEY, unavailable);
+    const session = await openNewestStream(CURRENT_LINE);
+    registry.open("window-1", KEY);
+    expect(
+      session.framesOfKind("electronTabLifecycleReadyOnDemand"),
+    ).toHaveLength(1);
+
+    session.emitStatus("reconnecting");
+    session.negotiatedSchemaVersion = { major: 2, minor: 1 };
+    session.emitStatus("open");
+    session.emit(snapshotFrame(), null);
+    await settle();
+
+    expect(unavailable).toHaveBeenCalledTimes(1);
+    expect(session.closed).toBe(false);
+    expect(
+      session.framesOfKind("electronTabLifecycleReadyOnDemand"),
+    ).toHaveLength(1);
+    expect(session.framesOfKind("electronTabLifecycleReady")).toHaveLength(1);
+    expect(
+      registry.acquirePreparation("window-1", KEY, () => undefined),
+    ).toBeNull();
+
+    registry.close("window-1", KEY);
+    await settle();
+    expect(session.closed).toBe(true);
   });
 
   it("on a host older than 2.2 a UI close still closes the stream that holds a native tab", async () => {

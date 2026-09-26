@@ -1234,13 +1234,21 @@ class BrowserSessionsStream {
     ) {
       return;
     }
-    this.lifecycleReadySent = true;
-    if (this.demandOnly && !this.client?.supportsDemandPlacement()) {
-      this.failToOpen(
-        "Update this host to prepare a native browser automatically.",
-      );
-      return;
+    const supportsDemandPlacement =
+      this.client?.supportsDemandPlacement() ?? false;
+    if (this.demandOnly && !supportsDemandPlacement) {
+      if (!this.rendererHeld) {
+        this.failToOpen(
+          "Update this host to prepare a native browser automatically.",
+        );
+        return;
+      }
+      // A renderer that adopted this stream can still use an older host's
+      // ordinary browser route, even though automatic preparation cannot.
+      this.notifyPreparationsUnavailable();
+      if (this.disposed) return;
     }
+    this.lifecycleReadySent = true;
     // ONE synchronous burst, and the order in it is the attach ordering
     // guarantee. `electronTabLifecycleReady` is what makes the host CHALLENGE
     // this stream for a desktop identity; the ledger digest rides immediately
@@ -1253,9 +1261,10 @@ class BrowserSessionsStream {
     // result, so the burst stays synchronous with nothing deferred: the cache
     // and its deferred-push machinery went away with the process boundary.
     this.sendClientFrame({
-      kind: this.demandOnly
-        ? "electronTabLifecycleReadyOnDemand"
-        : "electronTabLifecycleReady",
+      kind:
+        this.demandOnly && supportsDemandPlacement
+          ? "electronTabLifecycleReadyOnDemand"
+          : "electronTabLifecycleReady",
       hasBinaryPayload: false,
       coLocatedHostId: localHostId,
       // Which window this subscriber speaks for. Streams are keyed by window
