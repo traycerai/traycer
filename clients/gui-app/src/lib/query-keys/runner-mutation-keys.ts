@@ -58,6 +58,11 @@ export const runnerMutationKeys = {
   hostRunDoctor: () => ["runner.host.runDoctor"] as const,
   hostFreePortAndRestart: () => ["runner.host.freePortAndRestart"] as const,
   hostNameSet: () => ["runner.host.name.set"] as const,
+  // This machine's host lifecycle mode (Settings → General → "When you quit
+  // Traycer", and the no-local-host card's "Run a host here instead").
+  hostLifecycleSet: () => ["runner.hostLifecycle.set"] as const,
+  // The quit modal's one answer to main's held-open quit.
+  hostQuitRespond: () => ["runner.hostLifecycle.quitRespond"] as const,
   // In-app "Remove Traycer" (Settings → General → Danger Zone) and the
   // removed-surface "Reinstall" escape hatch.
   uninstallTraycer: () => ["runner.host.uninstallTraycer"] as const,
@@ -309,6 +314,15 @@ export const runnerQueryKeys = {
   hostCliManifestUnavailable: () =>
     ["runner.host.cliManifest", "unavailable"] as const,
   hostName: (management: object) => ["runner.host.name", management] as const,
+  // The lifecycle policy as desktop main reads it. Keyed on the runner's scope
+  // id, not the bridge object: the bridge is method-only and would hash to
+  // `{}`. Pushed by `hostLifecycle.onChange`, so a reader never polls it.
+  hostLifecycleView: (runnerHostScopeId: number) =>
+    ["runner.hostLifecycle.view", runnerHostScopeId] as const,
+  // The no-bridge placeholder (mobile, web, tests): the disabled query still
+  // needs a key of its own.
+  hostLifecycleViewUnavailable: () =>
+    ["runner.hostLifecycle.view", "unavailable"] as const,
   // Direct removal-sentinel read used by the host gate, independent of
   // `ensureHost`'s one-shot auto-provision result.
   hostRemovalState: (management: object) =>

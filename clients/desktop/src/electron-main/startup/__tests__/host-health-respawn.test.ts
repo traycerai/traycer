@@ -49,6 +49,11 @@ function fakeControllerWithRecoverOutcome(
         "fakeController.deregisterService: not used by these tests",
       );
     },
+    refreshServiceDefinition: () => {
+      throw new Error(
+        "fakeController.refreshServiceDefinition: not used by these tests",
+      );
+    },
     respawn: () => {
       throw new Error("fakeController.respawn: not used by these tests");
     },

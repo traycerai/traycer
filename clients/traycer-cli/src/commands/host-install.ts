@@ -36,6 +36,7 @@ import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { hostHomeDir } from "../store/paths";
 import { resolveChatStoreSurveyRoots } from "../host/chat-store-survey-roots";
 import { commitHostInstallSourceWithAttempt } from "../host/update-mutation";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
 import {
   gateStoreFormatFloor,
   ungatedStoreFormatFloorEvidence,
@@ -138,6 +139,11 @@ export interface HostInstallArgs {
   readonly acceptStoreFormatLoss: boolean;
   /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
   readonly attemptAdoption: string | null;
+  /**
+   * `--lifecycle-origin`, recorded in the adoption proof the post-swap start
+   * publishes (`host/lifecycle-origin.ts`). Informational only.
+   */
+  readonly lifecycleOrigin: HostStartOrigin;
 }
 
 /**
@@ -317,6 +323,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
               return commitHostInstallSourceWithAttempt(
                 capability,
                 contenderOptions,
+                args.lifecycleOrigin,
                 {
                   environment: ctx.runtime.environment,
                   staged,
@@ -412,7 +419,15 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         credentialProvision,
       },
       human,
-      exitCode: 0,
+      // A post-swap start that failed is a failed install to a shell: the
+      // bytes are committed but nothing is serving them, and a script that
+      // gates on the exit status (the dev-desktop loops) used to go on to
+      // report "service registered". The payload is unchanged - Desktop
+      // trusts a terminal `ok` line over a non-zero exit on both of its
+      // runners and reads `serviceLifecycle.postSwapError` exactly as before.
+      // Not `host apply`'s contract: that primitive's exit 0 answers "did the
+      // swap commit?" by design (see host-apply.ts).
+      exitCode: handle !== null && handle.state.postSwapError !== null ? 1 : 0,
     };
   };
 }

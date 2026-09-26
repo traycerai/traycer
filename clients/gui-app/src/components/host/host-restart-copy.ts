@@ -23,6 +23,24 @@ export const HOST_CHANGED_DESCRIPTION =
   "This machine's host was replaced while this dialog was open, so nothing " +
   "was stopped. Restart again to check the new host.";
 
+/**
+ * The idle-gated service restart found work in progress and stopped nothing.
+ * The dialog lists that work beneath this sentence, so it names none itself:
+ * the service leg has no `host.restart` verdict to count from.
+ */
+export const SERVICE_RESTART_BUSY_MESSAGE =
+  "This host has work in progress, so it wasn't restarted. Nothing was " +
+  "interrupted; try again when the work finishes. Force restart ends it " +
+  "immediately.";
+
+/**
+ * The service restart is fenced to this machine's host by id, and there was
+ * no id to fence it to - so nothing ran, and nothing is forced in its place.
+ */
+export const SERVICE_RESTART_NO_LOCAL_HOST_MESSAGE =
+  "Traycer couldn't identify this computer's host, so nothing was " +
+  "restarted. Try again in a moment.";
+
 export interface DescribeHostBusyInput {
   readonly breakdown: HostBusyBreakdown | null;
   readonly busySessionCount: number | null;

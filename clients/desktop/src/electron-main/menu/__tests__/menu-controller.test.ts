@@ -14,6 +14,7 @@ import type {
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
 import { PerWindowState } from "../../windows/per-window-state";
 import type {
+  MenuLocalHostLanes,
   MenuManagedWindow,
   MenuWindowRecord,
   MenuWindowRegistry,
@@ -257,6 +258,43 @@ class FakeZoomController implements MenuZoomController {
   }
 }
 
+/**
+ * Fake `MenuLocalHostLanes`. `active` starts the object's
+ * `localHostLanesActive()` answer and can be flipped directly between
+ * assertions; `fireChange()` replays what `HostLifecycleService` does on a
+ * real lane transition, and `listenerCount` lets a test prove `dispose()`
+ * actually unsubscribed rather than merely not crashing.
+ */
+class FakeLocalHostLanes implements MenuLocalHostLanes {
+  active: boolean;
+  private readonly listeners = new Set<() => void>();
+
+  constructor(active: boolean) {
+    this.active = active;
+  }
+
+  localHostLanesActive(): boolean {
+    return this.active;
+  }
+
+  onChange(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  fireChange(): void {
+    for (const listener of Array.from(this.listeners)) {
+      listener();
+    }
+  }
+
+  get listenerCount(): number {
+    return this.listeners.size;
+  }
+}
+
 class EmptyWindowRegistry extends EventEmitter implements MenuWindowRegistry {
   readonly createRequests: Array<{
     readonly initialRoute: string | null;
@@ -495,6 +533,9 @@ function createController(options: {
     zoomController: new FakeZoomController(),
     dispatchRendererCommand: options.dispatchRendererCommand,
     checkForUpdates: () => Promise.resolve(),
+    // The managed default: existing fixtures using this helper are not
+    // about the `offerRestartHost` mechanism, so lanes are active.
+    localHostLanes: new FakeLocalHostLanes(true),
   });
 }
 
@@ -614,6 +655,7 @@ describe("MenuController", () => {
       zoomController: new FakeZoomController(),
       dispatchRendererCommand: () => true,
       checkForUpdates: () => Promise.resolve(),
+      localHostLanes: new FakeLocalHostLanes(true),
     });
 
     controller.install();
@@ -648,6 +690,7 @@ describe("MenuController", () => {
       zoomController: new FakeZoomController(),
       dispatchRendererCommand: () => true,
       checkForUpdates: () => Promise.resolve(),
+      localHostLanes: new FakeLocalHostLanes(true),
     });
 
     controller.install();
@@ -934,6 +977,7 @@ describe("MenuController", () => {
       zoomController,
       dispatchRendererCommand,
       checkForUpdates: () => Promise.resolve(),
+      localHostLanes: new FakeLocalHostLanes(true),
     });
 
     controller.install();
@@ -1332,6 +1376,43 @@ describe("MenuController", () => {
         menuItemInTopLevel("Help", "Toggle Developer Tools"),
       ).toThrow("missing");
       controller.dispose();
+    });
+  });
+
+  describe("offerRestartHost (localHostLanes)", () => {
+    it("omits Restart Host while lanes are inactive, shows it once onChange fires them active, and dispose() unsubscribes", () => {
+      const localHostLanes = new FakeLocalHostLanes(false);
+      const controller = new MenuController({
+        appName: "Traycer",
+        platform: "darwin",
+        windowRegistry: new FakeWindowRegistry(),
+        host: new FakeHost(),
+        authSession: new DesktopAuthSession(),
+        perWindowState: new PerWindowState(null),
+        tray: null,
+        zoomController: new FakeZoomController(),
+        dispatchRendererCommand: () => true,
+        checkForUpdates: () => Promise.resolve(),
+        localHostLanes,
+      });
+
+      controller.install();
+      expect(() => menuItemInTopLevel("Traycer", "Restart Host")).toThrow(
+        "missing",
+      );
+      expect(() => menuItemInTopLevel("Help", "Restart Host")).toThrow(
+        "missing",
+      );
+      expect(localHostLanes.listenerCount).toBe(1);
+
+      localHostLanes.active = true;
+      localHostLanes.fireChange();
+
+      expect(menuItemInTopLevel("Traycer", "Restart Host")).toBeDefined();
+      expect(menuItemInTopLevel("Help", "Restart Host")).toBeDefined();
+
+      controller.dispose();
+      expect(localHostLanes.listenerCount).toBe(0);
     });
   });
 });

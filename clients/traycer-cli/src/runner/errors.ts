@@ -80,6 +80,13 @@ export const CLI_ERROR_CODES = {
   // while the command reports success. Retryable once the directory is
   // writable.
   HOST_STOP_INTENT_UNWRITABLE: "E_HOST_STOP_INTENT_UNWRITABLE",
+  // A plain or `--if-idle` stop asked the service manager to stop the host,
+  // and the host running is not the service's: `traycer host start` in a
+  // terminal (a `foreground` run). The service stop reached nothing, so the
+  // command refuses rather than report a stop the host outlived, and names
+  // the two ways that do end it (Ctrl-C there, or `--force`). Expected: it
+  // describes where the host came from, not a broken machine.
+  HOST_NOT_SERVICE_RUN: "E_HOST_NOT_SERVICE_RUN",
 
   // --- Port-conflict repair (`host free-port`, `host free-port-and-restart`)
   // All three replace what used to be an `exitCode: 0` result carrying a
@@ -161,6 +168,17 @@ export const CLI_ERROR_CODES = {
   SERVICE_UNINSTALL_FAILED: "E_SERVICE_UNINSTALL_FAILED",
   SERVICE_CONTROL_FAILED: "E_SERVICE_CONTROL_FAILED",
   SERVICE_CLI_PATH_UNRESOLVED: "E_SERVICE_CLI_PATH_UNRESOLVED",
+  // The registered definition could not be brought to the current launcher
+  // form (`host service refresh`, or the lifecycle mode change that runs it).
+  // Nothing was started or stopped; the message names the repair.
+  SERVICE_DEFINITION_REFRESH_FAILED: "E_SERVICE_DEFINITION_REFRESH_FAILED",
+  // A start found the service's own supervisor alive and relaunching its
+  // host, so it started nothing, and the relaunch did not bring the host back
+  // within the supervisor's longest backoff plus a boot allowance. Nothing
+  // was changed; the supervisor may still succeed, or exhaust its budget and
+  // exit, after which a start takes the ordinary path. Deliberately not
+  // expected: a host its supervisor cannot bring back is a real failure.
+  SERVICE_SUPERVISOR_RELAUNCHING: "E_SERVICE_SUPERVISOR_RELAUNCHING",
 
   // --- CLI install lifecycle (foundation only in NP-1) ---
   CLI_LOCK_BUSY: "E_CLI_LOCK_BUSY",
@@ -200,6 +218,7 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.HOST_NOT_RUNNING,
     CLI_ERROR_CODES.HOST_BUSY,
     CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
+    CLI_ERROR_CODES.HOST_NOT_SERVICE_RUN,
     CLI_ERROR_CODES.HOST_ALREADY_RUNNING,
     CLI_ERROR_CODES.HOST_NOT_INSTALLED,
     CLI_ERROR_CODES.HOST_INCOMPATIBLE,

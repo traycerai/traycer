@@ -135,6 +135,40 @@ export type UpdateMaintenanceExemption =
    */
   | "supervisor-relaunch-maintenance"
   /**
+   * The `host start` supervisor STOPPING its own host because the desktop
+   * that owned the run is gone under a `stop` verdict (Linked mode's "the
+   * host ends with the app"). The CLI's lifecycle teardown actuator is its
+   * only taker (`traycer-cli`'s `host/lifecycle-teardown.ts`).
+   *
+   * Deliberately its own name rather than a use of `service-maintenance`,
+   * which refuses over every nonterminal record. That refusal made a PARKED
+   * update - the routine outcome of updating exactly the busy host Linked
+   * mode stops - defer the teardown for the whole park, leaving a host
+   * running for hours after its desktop died.
+   *
+   * **With a durable nonterminal attempt it REFUSES**, with two parked
+   * exceptions, and the exceptions are an upgrade applied by
+   * `dispositionForAttempt`, never a different base answer:
+   *
+   *  - `waiting-for-work` and `waiting-to-activate` ALLOW. A park has no
+   *    holder mid-segment: resuming one is a claim that takes this same
+   *    attempt lock, so while this contender holds it and reads a park,
+   *    nobody is inside a swap. The teardown only STOPS the host - the one
+   *    edge `recoveryActionFor` already calls safe for both shapes
+   *    (`stop-only` / `restart-current`) - and it never writes the record, so
+   *    the park stands untouched for the next supervisor start to resume
+   *    through `supervisor-relaunch-maintenance`.
+   *  - Every ACTIVE phase refuses, including the placed-byte ones a
+   *    supervisor relaunch admits: a teardown must never run inside a swap,
+   *    and an active record may have a live holder momentarily outside the
+   *    lock (see `supervisorRelaunchOverActive`).
+   *
+   * The criterion is the one `supervisor-relaunch-maintenance`'s parked arm
+   * uses: the stop is not a parallel update step, because a park's next act
+   * happens only after a claim this lock serializes against.
+   */
+  | "lifecycle-teardown-maintenance"
+  /**
    * User-confirmed restart/doctor recovery. This performs only the existing
    * service/process recovery edge; it neither creates nor advances a v2
    * attempt and is deliberately distinct from Desktop activation.
@@ -1231,6 +1265,9 @@ function dispositionFor(
     // a relaunch into an ACTIVE segment - the crash-during-activation case,
     // which is exactly what must keep refusing.
     case "supervisor-relaunch-maintenance":
+    // The same shape: refuse is the base, and `lifecycleTeardownDisposition`
+    // upgrades the two parked phases only.
+    case "lifecycle-teardown-maintenance":
       return "refuse";
     // ## The two WHOLE-PRODUCT admissions
     //
@@ -1285,7 +1322,7 @@ function dispositionFor(
 }
 
 /**
- * The admission a nonterminal record actually gets, which for one exemption
+ * The admission a nonterminal record actually gets, which for two exemptions
  * depends on the record rather than only on the name.
  *
  * Everything else is `dispositionFor` unchanged, evaluated first, so this
@@ -1298,8 +1335,31 @@ async function dispositionForAttempt(
   readInstalledIdentity: SupervisorRelaunchIdentityReader | null,
 ): Promise<ActiveAttemptDisposition> {
   const base = dispositionFor(admission);
+  if (admission === "lifecycle-teardown-maintenance") {
+    return lifecycleTeardownDisposition(activeAttempt);
+  }
   if (admission !== "supervisor-relaunch-maintenance") return base;
   return supervisorRelaunchDisposition(activeAttempt, readInstalledIdentity);
+}
+
+/**
+ * Whether the supervisor's lifecycle teardown may stop the host with this
+ * record standing: only over a park, named phase by phase.
+ *
+ * The two phases are spelled out rather than read through `isParkedPhase`,
+ * so a future parked phase does not silently join this exemption - it has to
+ * make its own case here. No install-identity read is needed, unlike the
+ * relaunch's `waiting-to-activate` arm: that one STARTS bytes and must prove
+ * they are the attempt's; this one only stops the host, and the park's bytes,
+ * claim and baseline are left exactly as they were.
+ */
+function lifecycleTeardownDisposition(
+  record: HostUpdateAttemptRecord,
+): ActiveAttemptDisposition {
+  return record.phase === "waiting-for-work" ||
+    record.phase === "waiting-to-activate"
+    ? "allow"
+    : "refuse";
 }
 
 /**

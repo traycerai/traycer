@@ -400,6 +400,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
     const applyPromise = applyHostWithAttempt(
       fakeCapability,
       fakeContenderOptions,
+      "terminal",
       {
         environment: ENV,
         force: false,
@@ -486,7 +487,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
     let beforeSwapCommitCalled = false;
 
     await expect(
-      applyHostWithAttempt(fakeCapability, fakeContenderOptions, {
+      applyHostWithAttempt(fakeCapability, fakeContenderOptions, "terminal", {
         environment: ENV,
         force: false,
         noService: false,
@@ -536,7 +537,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
     let afterSwapCalled = false;
 
     await expect(
-      applyHostWithAttempt(fakeCapability, fakeContenderOptions, {
+      applyHostWithAttempt(fakeCapability, fakeContenderOptions, "terminal", {
         environment: ENV,
         force: false,
         noService: false,
@@ -591,7 +592,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
     );
 
     await expect(
-      applyHostWithAttempt(fakeCapability, fakeContenderOptions, {
+      applyHostWithAttempt(fakeCapability, fakeContenderOptions, "terminal", {
         environment: ENV,
         force: false,
         noService: false,

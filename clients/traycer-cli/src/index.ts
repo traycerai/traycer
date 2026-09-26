@@ -82,6 +82,10 @@ import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-an
 import { buildHostInstallCommand } from "./commands/host-install";
 import { buildHostLogsCommand } from "./commands/host-logs";
 import {
+  buildHostLifecycleSetCommand,
+  hostLifecycleGetCommand,
+} from "./commands/host-lifecycle";
+import {
   parseHostMaintenanceLeaseTarget,
   runHostMaintenanceLease,
   type HostMaintenanceLeaseAdmission,
@@ -89,6 +93,10 @@ import {
 import { buildHostRestartCommand } from "./commands/host-restart";
 import { runHostStart, type RunHostStartOptions } from "./commands/host-start";
 import { readHostStartAdoptionNonce } from "./host/host-start-adoption";
+import {
+  HOST_START_ORIGINS,
+  hostStartOriginFromOption,
+} from "./host/lifecycle-origin";
 import {
   acknowledgeRelocationEntry,
   relocateOutOfHostCgroupIfNeeded,
@@ -109,9 +117,13 @@ import { buildLinkPhoneCommand } from "./commands/link-phone";
 import { buildLoginCommand } from "./commands/login";
 import { logoutCommand } from "./commands/logout";
 import { buildServiceInstallCommand } from "./commands/service-install";
-import { serviceStartCommand } from "./commands/service-start";
+import { buildServiceStartCommand } from "./commands/service-start";
 import { serviceStatusCommand } from "./commands/service-status";
 import { serviceUninstallCommand } from "./commands/service-uninstall";
+import {
+  refreshServiceDefinitionUnderContender,
+  serviceRefreshCommand,
+} from "./commands/service-refresh";
 import { buildWhoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
 import {
@@ -199,6 +211,32 @@ function attemptAdoptionOption(): Option {
     "--attempt-adoption <nonce>",
     "Internal: adopt a parent update segment's live attempt lock instead of acquiring",
   ).hideHelp();
+}
+
+/**
+ * `--lifecycle-origin <origin>` - who is asking for this host start, recorded
+ * in the adoption proof the start publishes and printed by `host status` /
+ * `host doctor` (`host/lifecycle-origin.ts`).
+ *
+ * Hidden: Traycer Desktop is the caller that passes `desktop` (from its
+ * `HostController`), and every other caller is a terminal, which is the default - so an
+ * invocation that predates the flag keeps its argv valid and is described
+ * truthfully. `.choices` makes a misspelling a parse error through the
+ * runner's envelope instead of a silently mislabelled start.
+ *
+ * Registered on every command Desktop invokes that can start the host, and on
+ * `host stop`, which starts nothing but is on Desktop's same invocation path.
+ * On `host restart` and `host free-port-and-restart` the relaunch is always
+ * recorded as `maintenance` whatever this says: a restart brings back a run
+ * that already existed.
+ */
+function lifecycleOriginOption(): Option {
+  return new Option(
+    "--lifecycle-origin <origin>",
+    "Internal: who is asking for this host start (desktop, terminal, maintenance)",
+  )
+    .choices(HOST_START_ORIGINS)
+    .hideHelp();
 }
 
 /**
@@ -922,7 +960,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--cwd <path>",
-        "Working directory for the host (defaults to the install directory)",
+        "Working directory for the host (defaults to the host home directory)",
       )
       // Identity binding for journal-authorised reclaim probes. Existing
       // registrations remain valid without these options; a probe requires
@@ -1213,6 +1251,8 @@ function registerHostCommands(program: Command): void {
     () => hostDoctorCommand,
   );
 
+  registerHostLifecycleCommands(host);
+
   withRunner(
     host
       .command("restart")
@@ -1251,7 +1291,8 @@ function registerHostCommands(program: Command): void {
           "--defer-if-parked",
           "Internal: when a parked packaged activation makes a generic restart unsafe, refuse without stopping the service instead of stopping it",
         ).hideHelp(),
-      ),
+      )
+      .addOption(lifecycleOriginOption()),
     (opts) =>
       buildHostRestartCommand({
         ifIdle: opts.ifIdle === true,
@@ -1264,13 +1305,23 @@ function registerHostCommands(program: Command): void {
     host
       .command("stop")
       .description("Stop the host service")
+      // Hidden: the desktop's automatic idle-only quit stop, not a
+      // user-facing switch - see commands/host-stop.ts.
+      .addOption(
+        new Option(
+          "--if-idle",
+          "Internal: refuse with E_HOST_BUSY if the host has work in progress, probed immediately before stop",
+        ).hideHelp(),
+      )
       .option(
         "--force",
         "Stop even if the host has work in progress: skip the cooperative shutdown claim and kill the host process (SIGTERM, then SIGKILL after the exit grace). Running terminal sessions and in-flight agent work are killed.",
-      ),
+      )
+      .addOption(lifecycleOriginOption()),
     (opts) =>
       buildHostStopCommand({
         force: opts.force === true,
+        ifIdle: opts.ifIdle === true,
       }),
   );
 
@@ -1321,6 +1372,7 @@ function registerHostCommands(program: Command): void {
       )
       .option("--accept-store-format-loss", ACCEPT_STORE_FORMAT_LOSS_HELP)
       .addOption(attemptAdoptionOption())
+      .addOption(lifecycleOriginOption())
       .addHelpText(
         "after",
         [
@@ -1366,6 +1418,7 @@ function registerHostCommands(program: Command): void {
         }
         return buildHostInstallCommand({
           attemptAdoption: attemptAdoptionNonce(opts),
+          lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
           // Registry path defaults to "latest" when neither flag is set.
           // For --from installs the value is unused (the archive supplies
           // the version), but the underlying command contract still wants
@@ -1425,7 +1478,8 @@ function registerHostCommands(program: Command): void {
         "--keep-installed",
         "Liveness only: keep whatever non-yanked host is installed, whatever its version, instead of converging to this build's default. Ignored when --release names a version. The default when nothing is installed still installs the packaged/pinned host.",
       )
-      .addOption(attemptAdoptionOption()),
+      .addOption(attemptAdoptionOption())
+      .addOption(lifecycleOriginOption()),
     (opts) => {
       const explicitVersion =
         typeof opts.release === "string" && opts.release.length > 0
@@ -1446,6 +1500,7 @@ function registerHostCommands(program: Command): void {
         }
         return buildHostEnsureCommand({
           attemptAdoption: attemptAdoptionNonce(opts),
+          lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
           versionRequest: explicitVersion,
           fromPath,
           enableLinger: opts.linger !== false,
@@ -1494,6 +1549,7 @@ function registerHostCommands(program: Command): void {
         ).hideHelp(),
       )
       .addOption(attemptAdoptionOption())
+      .addOption(lifecycleOriginOption())
       .addHelpText(
         "after",
         [
@@ -1527,6 +1583,7 @@ function registerHostCommands(program: Command): void {
             : null,
         respectHold: opts.respectHold === true,
         attemptAdoption: attemptAdoptionNonce(opts),
+        lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
       }),
   );
 
@@ -1962,7 +2019,8 @@ function registerHostCommands(program: Command): void {
           "--defer-if-parked",
           "Internal: when a parked packaged activation makes a generic restart unsafe, refuse without stopping the service instead of stopping it",
         ).hideHelp(),
-      ),
+      )
+      .addOption(lifecycleOriginOption()),
     (opts) => {
       const pid =
         typeof opts.pid === "string" ? parsePositiveIntegerArg(opts.pid) : null;
@@ -2149,10 +2207,12 @@ function registerServiceCommands(host: Command): void {
         "--takeover",
         "macOS only: move host management from the Traycer Desktop app to the CLI (stops the Desktop-managed host cooperatively, deregisters its agent, then registers the CLI-owned service)",
       )
-      .addOption(attemptAdoptionOption()),
+      .addOption(attemptAdoptionOption())
+      .addOption(lifecycleOriginOption()),
     (opts) =>
       buildServiceInstallCommand({
         attemptAdoption: attemptAdoptionNonce(opts),
+        lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
         enableLinger: opts.linger !== false,
         allowSelfInvocation: opts.allowSelfInvocation === true,
         takeover: opts.takeover === true,
@@ -2169,8 +2229,12 @@ function registerServiceCommands(host: Command): void {
       .command("start")
       .description(
         "Start the registered OS service in the background and return (the host keeps running after this command exits). Needs an existing registration; if the start fails and none is found, it points you at 'traycer host service install'.",
-      ),
-    () => serviceStartCommand,
+      )
+      .addOption(lifecycleOriginOption()),
+    (opts) =>
+      buildServiceStartCommand({
+        lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
+      }),
   );
 
   withRunner(
@@ -2182,6 +2246,18 @@ function registerServiceCommands(host: Command): void {
     () => serviceStatusCommand,
   );
 
+  // Definition-only, beside the verbs that also start or stop: see
+  // commands/service-refresh.ts. Traycer Desktop runs it after a lifecycle
+  // mode change it writes, and the doctor names it as the repair.
+  withRunner(
+    service
+      .command("refresh")
+      .description(
+        "Rewrite the registered OS service definition to this CLI's current launcher, without starting, stopping or restarting anything. The running host keeps running; the new launcher applies from its next start (on macOS, for a definition older than the launcher file, from the next login). Needed for a lifecycle mode other than background to park login starts. Does nothing when the definition is already current or nothing is registered.",
+      ),
+    () => serviceRefreshCommand,
+  );
+
   withRunner(
     service
       .command("uninstall")
@@ -2189,6 +2265,39 @@ function registerServiceCommands(host: Command): void {
         "Deregister the OS service for the current environment. Deregistration also asks the supervised host to stop, but that is best-effort: on Linux and Windows the teardown commands tolerate their own failures, so a host can survive it - check with 'traycer host status'. The installed host bytes are kept; use 'traycer host uninstall' to remove those.",
       ),
     () => serviceUninstallCommand,
+  );
+}
+
+// `host lifecycle get | set <mode>` - the CLI half of the host lifecycle
+// setting Traycer Desktop shows in Settings (see commands/host-lifecycle.ts).
+function registerHostLifecycleCommands(host: Command): void {
+  const lifecycle = host
+    .command("lifecycle")
+    .description(
+      "Show or choose how the host's lifetime follows Traycer Desktop: background (starts at login, keeps running), linked (starts and stops with the app), ask, stop-if-idle, or none (no local host)",
+    );
+
+  withRunner(
+    lifecycle
+      .command("get")
+      .description(
+        "Show the lifecycle mode, the desktop presence, who started and owns the running host, and whether the running supervisor enforces the mode. Read-only.",
+      ),
+    () => hostLifecycleGetCommand,
+  );
+
+  withRunner(
+    lifecycle
+      .command("set")
+      .description(
+        "Choose the lifecycle mode. Nothing is started or stopped, and 'none' does not stop a running host. The mode applies to the next unattended host start. Choosing a mode other than background also brings the registered service definition to the current launcher (as 'traycer host service refresh' does), so login starts can be parked.",
+      )
+      .argument("<mode>", "background | linked | ask | stop-if-idle | none"),
+    (_opts, args) =>
+      buildHostLifecycleSetCommand({
+        mode: args[0],
+        refreshServiceDefinition: refreshServiceDefinitionUnderContender,
+      }),
   );
 }
 

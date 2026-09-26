@@ -1177,6 +1177,7 @@ describe("applyHostWithAttempt (through the real host/update-mutation wrapper)",
     const result = await applyHostWithAttempt(
       fakeCapability,
       fakeContenderOptions,
+      "terminal",
       {
         environment: ENV,
         force: false,
@@ -1243,7 +1244,7 @@ describe("applyHostWithAttempt (through the real host/update-mutation wrapper)",
     };
 
     await expect(
-      applyHostWithAttempt(fakeCapability, fakeContenderOptions, {
+      applyHostWithAttempt(fakeCapability, fakeContenderOptions, "terminal", {
         environment: ENV,
         force: false,
         noService: false,

@@ -1,7 +1,8 @@
-import { app, nativeImage } from "electron";
+import { app, dialog, nativeImage } from "electron";
 import type { Event as ElectronEvent } from "electron";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { initLogger, log } from "../app/logger";
 import { configureNativeAboutPanel } from "../app/about";
 import {
@@ -34,6 +35,21 @@ import {
   smAppServiceAgentLabelId,
 } from "../host/host-paths";
 import { backfillSubstrateOwnerAtLaunch } from "../host/substrate-backfill-contender";
+import { HostLifecyclePolicyStore } from "../host/host-lifecycle-policy";
+import {
+  HOST_LIFECYCLE_OBSERVATION_POLL_MS,
+  HostLifecycleService,
+} from "../host/host-lifecycle-transitions";
+import {
+  localHostCapabilityForMode,
+  setAppliedLocalHostCapability,
+} from "../host/local-host-capability";
+import { ownProcessStartIdentityAsync } from "../host/process-identity";
+import type { LocalHostCapability } from "../../ipc-contracts/host-lifecycle-types";
+import {
+  startLocalHostLanes,
+  type LocalHostLaneStarters,
+} from "./local-host-lanes";
 import { readPublishedHostProcessLiveness } from "../host/host-process-liveness";
 import { createHostRecoveryGovernor } from "../host/host-recovery-governor";
 import {
@@ -46,7 +62,34 @@ import {
   runUpdateInstallQuitSequence,
 } from "./update-install-quit";
 import { applyQuitDecision } from "./quit-decision";
+import {
+  QUIT_STOP_DEADLINE_MS,
+  QUIT_STOPPING_REVEAL_DELAY_MS,
+  QuitTransactions,
+} from "./quit-transaction";
+import {
+  askHostQuitNatively,
+  confirmQuitAndStopHost,
+} from "./host-quit-native-dialog";
+import {
+  ensureReachableAfterStayOpen,
+  revealHiddenWindowForStopping,
+} from "./quit-stay-open";
 import { RunnerIpcBridge } from "../ipc/register-runner-ipc";
+import {
+  CLOSE_TO_TRAY_NOTICE_FILE_NAME,
+  CloseToTray,
+  createCloseToTrayNoticeOnce,
+  parseCloseToTrayNoticeState,
+  registryCloseToTrayWindows,
+  type CloseToTrayNoticeState,
+} from "../windows/close-to-tray";
+import { createJsonFileStore } from "../app/json-file-store";
+import { trayHostLifecyclePresentation } from "../tray/tray-host-lifecycle";
+import {
+  probeLinuxTrayHost,
+  trayVisibleAtClose,
+} from "../tray/linux-tray-host";
 import {
   applyHostUpdateMenuState,
   armLocalHostBootOnSignIn,
@@ -241,6 +284,7 @@ export interface DesktopStartupTestHooks {
     readonly hostController: IpcHostController;
     readonly menu: HostUpdateMenuSurface;
     readonly signedIn: SignedInGate;
+    readonly localHostCapability: LocalHostCapability;
   }>;
   runDeferredBackground(): void;
 }
@@ -274,6 +318,20 @@ interface AppServices {
   readonly zoomController: WindowZoomController;
   /** Consent gate for booting the local host; see `armLocalHostBootOnSignIn`. */
   readonly signedIn: SignedInGate;
+  /**
+   * Whether this instance runs the local-host lanes, pinned at boot from the
+   * lifecycle policy. `none` skips every one of them for the life of the
+   * process.
+   */
+  readonly localHostCapability: LocalHostCapability;
+  /** The lifecycle mode surface; the quit transaction writes verdicts through it. */
+  readonly hostLifecycle: HostLifecycleService;
+  /**
+   * Settles once the launch presence record is on disk (at once in `none`
+   * mode, which publishes none). The mutation lane already waits on it; lanes
+   * that spawn the CLI outside that lane wait on it themselves.
+   */
+  readonly launchPresence: Promise<void>;
 }
 
 interface DeferredStartupPlan {
@@ -282,6 +340,7 @@ interface DeferredStartupPlan {
     readonly hostController: IpcHostController;
     readonly menu: HostUpdateMenuSurface;
     readonly signedIn: SignedInGate;
+    readonly localHostCapability: LocalHostCapability;
   };
   runBackground(): void;
 }
@@ -464,13 +523,21 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   const closingWindowIds = new Set<string>();
   let zoomController: WindowZoomController | null = null;
   let windowRegistry: WindowRegistry | null = null;
+  // Built once the tray and the lifecycle service exist; until then a close
+  // is an ordinary close.
+  let closeToTray: CloseToTray | null = null;
   /**
    * Read `state.bridge` / `windowRegistry` at call time: a window can close
    * before the bridge exists, and a `close` listener captured at window
    * construction must not silently skip the final browser capture in that
    * gap.
+   *
+   * Close-to-tray goes first: a last window it hides is not closing, so its
+   * browser guests stay alive and need no final capture. A close it lets
+   * through (re-issued) comes back here and takes the capture path below.
    */
   function onWindowClose(windowId: string, event: ElectronEvent): void {
+    if (closeToTray?.interceptClose(windowId, event) === true) return;
     const bridge = state.bridge;
     const registry = windowRegistry;
     if (bridge === null || registry === null) return;
@@ -583,6 +650,27 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
 
   const hostLabel = labelForEnvironment(config.environment);
   const hostLayout = getHostFsLayout(config.environment);
+  // The host lifecycle policy, read ONCE for the capability this instance
+  // boots with, before any host object or IPC handler exists. `none` means
+  // this machine runs no local host: every local-host lane below is skipped
+  // for the life of the process, and turning the lanes back on is
+  // restart-to-apply. Every later decision re-reads the file (the CLI
+  // co-writes it); only this boot fact is pinned.
+  const lifecycleStore = new HostLifecyclePolicyStore({
+    hostHomeDir: hostLayout.rootDir,
+    pidMetadataFile: hostLayout.pidMetadataFile,
+    ownPid: process.pid,
+    readOwnStartIdentity: ownProcessStartIdentityAsync,
+    now: () => new Date(),
+  });
+  const bootPolicy = await lifecycleStore.readPolicy();
+  const localHostCapability = localHostCapabilityForMode(bootPolicy.mode);
+  setAppliedLocalHostCapability(localHostCapability);
+  log.info("[host-lifecycle] boot policy read", {
+    mode: bootPolicy.mode,
+    rev: bootPolicy.rev,
+    reason: localHostCapability === "none" ? "no-local-host" : "managed",
+  });
   // Desktop never bundles or supervises the host binary - the CLI is the
   // lifecycle authority. This lifecycle is metadata-first: it watches the
   // environment-scoped pid.json and connects.
@@ -593,6 +681,13 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     readyTimeoutMs: undefined,
     reachabilityProbe: undefined,
   });
+  if (localHostCapability === "none") {
+    // Constructed (the IPC surface and the lifecycle-record watch need it)
+    // but never bootstrapped: its snapshot stays null, which is what makes
+    // every local-host consumer - browser-view locality, the renderer's
+    // local-host subscription - read "no local host".
+    host.disableLocalHostTracking();
+  }
   // Single main-process owner of every host-lifecycle mutation (Host Update
   // Layer Redesign Tech Plan, "Desktop main: HostController"). `host`
   // (`HostLifecycle`) stays the read side - metadata-first discovery,
@@ -617,6 +712,29 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
     desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
   });
+  if (localHostCapability === "none") {
+    // Belt and braces behind the skipped lanes: any automatic start that
+    // still reached the controller (an ensure from the renderer, a stray
+    // converge) is a no-op for the life of the process.
+    hostController.quiesce();
+  }
+  const hostLifecycle = new HostLifecycleService({
+    store: lifecycleStore,
+    controller: hostController,
+    records: host,
+    localHostCapability,
+    pollIntervalMs: HOST_LIFECYCLE_OBSERVATION_POLL_MS,
+  });
+  // The presence record goes on disk BEFORE any converge intent can spawn the
+  // CLI: a supervisor the desktop's own grant admits, and a crash relaunch
+  // shortly after, must both see a live presence. The lane is held on the
+  // write rather than first paint waiting for it - the record needs this
+  // process's start identity, which on Windows is a PowerShell probe.
+  const launchPresence =
+    localHostCapability === "managed"
+      ? hostLifecycle.writeLaunchPresence()
+      : Promise.resolve();
+  hostController.deferMutationsUntil(launchPresence);
   // The mutation lane's NDJSON progress is the only evidence main has that a
   // first install is still downloading/extracting rather than stuck. Feeding it
   // to the lifecycle is what keeps `bootstrap()` from declaring "Traycer Host
@@ -636,6 +754,40 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   });
 
   const tray = await createTraySafe(createMruWindowProxy(windowRegistry));
+  const registryForClose = windowRegistry;
+  closeToTray = new CloseToTray({
+    platform: process.platform,
+    // A constructed tray is enough on Windows (the notification area always
+    // exists); on Linux the icon is seen only when a StatusNotifier host is
+    // registered right now.
+    hasTray: () =>
+      trayVisibleAtClose({
+        platform: process.platform,
+        trayConstructed: tray !== null,
+        probe: () => probeLinuxTrayHost(null),
+      }),
+    isQuitting: () => shellQuitState.isQuitting(),
+    readQuitMode: async () => (await hostLifecycle.readQuitPolicy()).mode,
+    windows: registryCloseToTrayWindows(registryForClose),
+    requestQuit: () => {
+      app.quit();
+    },
+    showNoticeOnce: createCloseToTrayNoticeOnce({
+      store: createJsonFileStore<CloseToTrayNoticeState>(
+        join(app.getPath("userData"), CLOSE_TO_TRAY_NOTICE_FILE_NAME),
+        { shown: false },
+        parseCloseToTrayNoticeState,
+      ),
+      show: () =>
+        tray === null
+          ? Promise.resolve(false)
+          : tray.showNotice({
+              title: "Traycer is still running",
+              content:
+                "Traycer is still running in the tray. Quit from the tray to stop the host.",
+            }),
+    }),
+  });
 
   log.debug("[desktop] authn base URL", { authnBaseUrl: config.authnBaseUrl });
   const bridge = new RunnerIpcBridge({
@@ -657,7 +809,12 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     quitState: shellQuitState,
   });
   bridge.install();
+  // Before any window loads: the preload reads `localHostCapability`
+  // synchronously at load.
+  bridge.installHostLifecycle(hostLifecycle, localHostCapability);
   state.bridge = bridge;
+  hostLifecycle.startObserving();
+  bridge.disposeFns.push(() => hostLifecycle.dispose());
 
   installAccessibilityThemeForwarder((snapshot) => {
     bridge.fanOut(RunnerHostEvent.accessibilityThemeChange, snapshot);
@@ -685,6 +842,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
       bridge.dispatchMenuCommand(command) ?? false,
     checkForUpdates: () =>
       checkForUpdatesNow(config.isDev, "manual").then(() => undefined),
+    localHostLanes: hostLifecycle,
   });
   menu.install();
 
@@ -729,6 +887,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   wireAppLifecycle(state, {
     host,
     hostController,
+    hostLifecycle,
     menu,
     windowRegistry,
     bridge,
@@ -745,6 +904,9 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     windowRegistry,
     zoomController: createdZoomController,
     signedIn: signedInGateFromAuthSession(authSession),
+    localHostCapability,
+    hostLifecycle,
+    launchPresence,
   };
 }
 
@@ -781,180 +943,12 @@ let lastHostRegistryResumeCheckMs = 0;
 // the startup composition test drive the entry point with a focused fake.
 function runDeferredBackground(state: BootState, services: AppServices): void {
   startRendererMemorySampler();
-  if (state.bridge !== null) {
-    const bridge = state.bridge;
-    bridge.disposeFns.push(
-      onHostControllerStatusBroadcast(bridge, (status) => {
-        applyHostUpdateMenuState(services.menu, status);
-      }),
-    );
-  }
-
-  // Captured (not just fire-and-forget) so the host auto-update idle gate can
-  // wait for discovery to settle before trusting the host snapshot - `timed`
-  // resolves void and never rejects, so awaiting it just blocks until bootstrap
-  // finishes.
-  const hostReady = timed("deferred", "host-watcher", () => {
-    services.host.on("error", (err: HostStartupError) => {
-      log.error("[desktop] host startup error", err);
-    });
-    return bootstrapHostWithInstallState(
-      services.host,
-      services.hostController,
-    );
-  });
-
-  // All-platform watchdog for a host that dies without rewriting pid.json
-  // (external kill/crash): the pid-file watcher never fires for those, so the
-  // cached snapshot stays "reachable" against a dead endpoint forever. On
-  // Windows it also owns auto-respawn (the Scheduled Task cannot
-  // restart-on-failure - its hidden-launcher action detaches the host and
-  // exits, so the task completes long before the host can die). On
-  // macOS/Linux the service manager (launchd KeepAlive / systemd Restart)
-  // respawns crashes itself, but the SUPERVISOR cannot fix the desktop's
-  // stale snapshot when the respawned host binds a new port and the watcher
-  // edge is missed - the monitor's reload-first convergence covers exactly
-  // that, and only falls back to `HostController.recoverIfDown()` when the
-  // disk still names an unreachable host. Started after bootstrap so the
-  // initial 60s readiness wait can't register as an outage. On a machine with
-  // no host installed that wait is skipped, so this starts promptly instead -
-  // harmless, because `tick` returns immediately while the snapshot is null
-  // and no recovery is pending, and so never reaches `recoverIfDown`.
-  void hostReady.then(() => {
-    // One authority for automatic restarts, holding both the liveness gate and
-    // the attempt budget. It re-reads pid.json itself inside `requestRespawn`
-    // so the "never kill a live host" rule can't be bypassed by adding another
-    // caller later.
-    const recoveryGovernor = createHostRecoveryGovernor({
-      now: undefined,
-      readLiveness: () =>
-        readPublishedHostProcessLiveness(services.host.pidMetadataFile),
-    });
-    const healthMonitor = startHostHealthMonitor({
-      host: services.host,
-      intervalMs: undefined,
-      probe: undefined,
-      readMetadata: undefined,
-      respawn: () => respawnIfDown(services.hostController),
-      governor: recoveryGovernor,
-      readLiveness: undefined,
-    });
-    state.bridge?.disposeFns.push(() => healthMonitor.dispose());
-  });
-
-  // macOS-only: commit the durable service-registration owner before any
-  // other host mutation this launch.
-  //
-  // Ordering is the point, not tidiness. `substrate.json` is the only durable
-  // answer to "who owns launchd for this host", and on the installed base it
-  // has never been written - so every machine reads `unknown` until this
-  // lands. The two darwin sections below both take the same desktop lock and
-  // can both mutate registration, so they await this rather than racing it:
-  // an owner committed AFTER a repair has already run is a fact about a
-  // machine that was in a different state when the repair decided.
-  //
-  // Fail-open by construction: every refusal path leaves the record untouched
-  // and the projection at `unknown`, which is fail-closed for service
-  // mutation and never resolves to `raw-fallback` by guess. A launch that
-  // cannot backfill is therefore no worse than today.
-  const substrateBackfilled: Promise<void> =
-    process.platform === "darwin"
-      ? timed("deferred", "substrate-owner-backfill", async () => {
-          if (!(await hostManagesHostLoginItem())) return;
-          const launchLayout = getHostFsLayout(state.config.environment);
-          const cliLabelId = labelForEnvironment(state.config.environment).id;
-          const outcome = await backfillSubstrateOwnerAtLaunch({
-            layout: launchLayout,
-            lockPath: cliLockPath(state.config.environment),
-            waitMs: DESKTOP_LOCK_WAIT_MS,
-            pollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
-            agentLabelId: smAppServiceAgentLabelId(cliLabelId),
-            cliLabelId,
-          });
-          log.debug("[host-owner] launch substrate backfill outcome", {
-            outcome,
-          });
-        }).then(
-          () => undefined,
-          () => undefined,
-        )
-      : Promise.resolve();
-
-  // macOS-only: guarantees a busy-preserved install's pending LaunchAgent
-  // revision (see `desktop-install-cloud.js`'s marker +
-  // `HostController.applyPendingLoginItemRevisionIfIdle`) gets applied
-  // within this running session once the host goes idle, not only at the
-  // next relaunch - a renderer-triggered `convergeReady` only gets one shot
-  // at it per app launch. Gated on `hostManagesHostLoginItem()` since a
-  // non-macOS build, a dev build, or a build without the in-bundle plist
-  // never has SMAppService registration (or a marker) to refresh in the
-  // first place.
-  if (process.platform === "darwin") {
-    void hostReady.then(async () => {
-      if (state.bridge === null) return;
-      if (!(await hostManagesHostLoginItem())) return;
-      await substrateBackfilled;
-      if (state.bridge === null) return;
-      const revisionMonitor = startPendingLoginItemRevisionMonitor({
-        hostController: services.hostController,
-        intervalMs: undefined,
-      });
-      state.bridge?.disposeFns.push(() => revisionMonitor.dispose());
-    });
-  }
-
-  // macOS-only dual-registration repair, on EVERY launch. A machine that
-  // acquired a competing `~/Library/LaunchAgents/<cli-label>.plist` during
-  // the v1.1.7 window starts two hosts against one data dir at every login,
-  // and nothing else clears it: the register cycle that would
-  // (`retireLegacyLabelRegistrations`) only runs when registration is
-  // actually re-done, which the routine healthy-host launch never does.
-  // Deliberately not gated on `hostReady` - the repair is about what starts
-  // at the NEXT login and must still run on a launch whose host never
-  // becomes ready. All of its own gates live inside; see its doc comment.
-  if (process.platform === "darwin") {
-    void timed("deferred", "competing-registration-repair", async () => {
-      await substrateBackfilled;
-      const launchLayout = getHostFsLayout(state.config.environment);
-      const outcome = await retireCompetingCliRegistrationWithContender({
-        hostHomeDir: launchLayout.rootDir,
-        lockPath: cliLockPath(state.config.environment),
-        waitMs: DESKTOP_LOCK_WAIT_MS,
-        pollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
-      });
-      log.debug("[host-login-item] launch repair outcome", { outcome });
-    });
-  }
-
-  void timed("deferred", "registry-probe", async () => {
-    // `force: true` - matches the app's own `checkForUpdatesNow` on launch
-    // (app/updater.ts): always a real probe, never a cache read, so a
-    // relaunch shortly after a release still sees it immediately.
-    const result = await refreshRegistryUpdateState(services.hostController, {
-      force: true,
-      maxAgeMs: null,
-    });
-    // The registry probe's own result only carries version-comparison state
-    // (no activation domain) - the menu label is derived from a fresh
-    // `getStatus()` read taken right after, since the probe's background
-    // `stageLatest()` may have just changed `stagedVersion`.
-    const status = await services.hostController.getStatus();
-    applyHostUpdateMenuState(services.menu, status);
-    log.debug("[host-registry] launch probe complete", {
-      reachable: result.reachable,
-      latestVersion: result.latestVersion,
-      installedVersion: result.installedVersion,
-      updateAvailable: result.updateAvailable,
-    });
-  });
-
-  void timed("deferred", "cli-reconcile", async () => {
-    const outcome = await runLaunchTimeCliReconciliation({
-      isDevDesktop: state.config.environment === "dev",
-      deps: defaultReconcileCliDeps(),
-    });
-    log.debug("[cli-reconcile] launch outcome", { kind: outcome.kind });
-  });
+  // Everything that exists only for a LOCAL host, behind one gate: a desktop
+  // booted in `none` mode starts none of it (see `local-host-lanes.ts`).
+  startLocalHostLanes(
+    services.localHostCapability,
+    localHostLaneStarters(state, services),
+  );
 
   void timed("deferred", "auto-updater", () =>
     installAutoUpdater(state.config.isDev, {
@@ -1022,8 +1016,9 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
       // immediately instead of waiting out a staleness threshold.
       const nowMs = Date.now();
       if (
+        services.localHostCapability === "managed" &&
         nowMs - lastHostRegistryResumeCheckMs >=
-        HOST_REGISTRY_RESUME_DEBOUNCE_MS
+          HOST_REGISTRY_RESUME_DEBOUNCE_MS
       ) {
         lastHostRegistryResumeCheckMs = nowMs;
         void refreshHostRegistryIfNotRemoved(
@@ -1034,24 +1029,234 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
       }
     }),
   );
+}
 
-  // Process-lifetime timer - Electron main is a single long-lived process
-  // with no natural unmount point, so this is intentionally never cleared;
-  // it dies with the process. Backstop only: launch and resume above already
-  // force a real probe, so this only matters for a session that neither
-  // relaunches nor sleeps for an extended stretch. `maxAgeMs` matches the
-  // poll interval, so it only skips a network hit when a launch/resume probe
-  // already refreshed the cache more recently than this tick's own cadence.
-  setInterval(() => {
-    void refreshHostRegistryIfNotRemoved(
-      services.hostController,
-      services.menu,
-      {
-        force: false,
-        maxAgeMs: HOST_REGISTRY_PERIODIC_MAX_AGE_MS,
-      },
-    );
-  }, HOST_REGISTRY_PERIODIC_CHECK_INTERVAL_MS);
+/**
+ * The local-host half of the deferred work, one starter per lane in
+ * `LOCAL_HOST_LANE_NAMES`. `startLocalHostLanes` runs them in that order, so
+ * a promise one lane produces (`hostReady`, `substrateBackfilled`) is assigned
+ * before the lanes after it read it.
+ */
+function localHostLaneStarters(
+  state: BootState,
+  services: AppServices,
+): LocalHostLaneStarters {
+  let hostReady: Promise<void> = Promise.resolve();
+  let substrateBackfilled: Promise<void> = Promise.resolve();
+  return {
+    "host-update-menu-state": () => {
+      if (state.bridge !== null) {
+        const bridge = state.bridge;
+        bridge.disposeFns.push(
+          onHostControllerStatusBroadcast(bridge, (status) => {
+            applyHostUpdateMenuState(services.menu, status);
+          }),
+        );
+      }
+    },
+    "host-watcher": () => {
+      // Captured (not just fire-and-forget) so the host auto-update idle gate can
+      // wait for discovery to settle before trusting the host snapshot - `timed`
+      // resolves void and never rejects, so awaiting it just blocks until bootstrap
+      // finishes.
+      hostReady = timed("deferred", "host-watcher", () => {
+        services.host.on("error", (err: HostStartupError) => {
+          log.error("[desktop] host startup error", err);
+        });
+        return bootstrapHostWithInstallState(
+          services.host,
+          services.hostController,
+        );
+      });
+    },
+    "health-monitor": () => {
+      // All-platform watchdog for a host that dies without rewriting pid.json
+      // (external kill/crash): the pid-file watcher never fires for those, so the
+      // cached snapshot stays "reachable" against a dead endpoint forever. On
+      // Windows it also owns auto-respawn (the Scheduled Task cannot
+      // restart-on-failure - its hidden-launcher action detaches the host and
+      // exits, so the task completes long before the host can die). On
+      // macOS/Linux the service manager (launchd KeepAlive / systemd Restart)
+      // respawns crashes itself, but the SUPERVISOR cannot fix the desktop's
+      // stale snapshot when the respawned host binds a new port and the watcher
+      // edge is missed - the monitor's reload-first convergence covers exactly
+      // that, and only falls back to `HostController.recoverIfDown()` when the
+      // disk still names an unreachable host. Started after bootstrap so the
+      // initial 60s readiness wait can't register as an outage. On a machine with
+      // no host installed that wait is skipped, so this starts promptly instead -
+      // harmless, because `tick` returns immediately while the snapshot is null
+      // and no recovery is pending, and so never reaches `recoverIfDown`.
+      void hostReady.then(() => {
+        // One authority for automatic restarts, holding both the liveness gate and
+        // the attempt budget. It re-reads pid.json itself inside `requestRespawn`
+        // so the "never kill a live host" rule can't be bypassed by adding another
+        // caller later.
+        const recoveryGovernor = createHostRecoveryGovernor({
+          now: undefined,
+          readLiveness: () =>
+            readPublishedHostProcessLiveness(services.host.pidMetadataFile),
+        });
+        const healthMonitor = startHostHealthMonitor({
+          host: services.host,
+          intervalMs: undefined,
+          probe: undefined,
+          readMetadata: undefined,
+          respawn: () => respawnIfDown(services.hostController),
+          automaticRecoverySuspended: () =>
+            services.hostController.automaticIntentsSuspended,
+          governor: recoveryGovernor,
+          readLiveness: undefined,
+        });
+        state.bridge?.disposeFns.push(() => healthMonitor.dispose());
+      });
+    },
+    "substrate-owner-backfill": () => {
+      // macOS-only: commit the durable service-registration owner before any
+      // other host mutation this launch.
+      //
+      // Ordering is the point, not tidiness. `substrate.json` is the only durable
+      // answer to "who owns launchd for this host", and on the installed base it
+      // has never been written - so every machine reads `unknown` until this
+      // lands. The two darwin sections below both take the same desktop lock and
+      // can both mutate registration, so they await this rather than racing it:
+      // an owner committed AFTER a repair has already run is a fact about a
+      // machine that was in a different state when the repair decided.
+      //
+      // Fail-open by construction: every refusal path leaves the record untouched
+      // and the projection at `unknown`, which is fail-closed for service
+      // mutation and never resolves to `raw-fallback` by guess. A launch that
+      // cannot backfill is therefore no worse than today.
+      substrateBackfilled =
+        process.platform === "darwin"
+          ? timed("deferred", "substrate-owner-backfill", async () => {
+              if (!(await hostManagesHostLoginItem())) return;
+              const launchLayout = getHostFsLayout(state.config.environment);
+              const cliLabelId = labelForEnvironment(
+                state.config.environment,
+              ).id;
+              const outcome = await backfillSubstrateOwnerAtLaunch({
+                layout: launchLayout,
+                lockPath: cliLockPath(state.config.environment),
+                waitMs: DESKTOP_LOCK_WAIT_MS,
+                pollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+                agentLabelId: smAppServiceAgentLabelId(cliLabelId),
+                cliLabelId,
+              });
+              log.debug("[host-owner] launch substrate backfill outcome", {
+                outcome,
+              });
+            }).then(
+              () => undefined,
+              () => undefined,
+            )
+          : Promise.resolve();
+    },
+    "pending-login-item-revision-monitor": () => {
+      // macOS-only: guarantees a busy-preserved install's pending LaunchAgent
+      // revision (see `desktop-install-cloud.js`'s marker +
+      // `HostController.applyPendingLoginItemRevisionIfIdle`) gets applied
+      // within this running session once the host goes idle, not only at the
+      // next relaunch - a renderer-triggered `convergeReady` only gets one shot
+      // at it per app launch. Gated on `hostManagesHostLoginItem()` since a
+      // non-macOS build, a dev build, or a build without the in-bundle plist
+      // never has SMAppService registration (or a marker) to refresh in the
+      // first place.
+      if (process.platform === "darwin") {
+        void hostReady.then(async () => {
+          if (state.bridge === null) return;
+          if (!(await hostManagesHostLoginItem())) return;
+          await substrateBackfilled;
+          // Its SMAppService cycle restarts the host OUTSIDE the mutation lane,
+          // so it waits for the launch presence itself (the lane already does).
+          await services.launchPresence;
+          if (state.bridge === null) return;
+          const revisionMonitor = startPendingLoginItemRevisionMonitor({
+            hostController: services.hostController,
+            intervalMs: undefined,
+          });
+          state.bridge?.disposeFns.push(() => revisionMonitor.dispose());
+        });
+      }
+    },
+    "competing-registration-repair": () => {
+      // macOS-only dual-registration repair, on EVERY launch. A machine that
+      // acquired a competing `~/Library/LaunchAgents/<cli-label>.plist` during
+      // the v1.1.7 window starts two hosts against one data dir at every login,
+      // and nothing else clears it: the register cycle that would
+      // (`retireLegacyLabelRegistrations`) only runs when registration is
+      // actually re-done, which the routine healthy-host launch never does.
+      // Deliberately not gated on `hostReady` - the repair is about what starts
+      // at the NEXT login and must still run on a launch whose host never
+      // becomes ready. All of its own gates live inside; see its doc comment.
+      if (process.platform === "darwin") {
+        void timed("deferred", "competing-registration-repair", async () => {
+          await substrateBackfilled;
+          const launchLayout = getHostFsLayout(state.config.environment);
+          const outcome = await retireCompetingCliRegistrationWithContender({
+            hostHomeDir: launchLayout.rootDir,
+            lockPath: cliLockPath(state.config.environment),
+            waitMs: DESKTOP_LOCK_WAIT_MS,
+            pollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+          });
+          log.debug("[host-login-item] launch repair outcome", { outcome });
+        });
+      }
+    },
+    "registry-probe": () => {
+      void timed("deferred", "registry-probe", async () => {
+        // `force: true` - matches the app's own `checkForUpdatesNow` on launch
+        // (app/updater.ts): always a real probe, never a cache read, so a
+        // relaunch shortly after a release still sees it immediately.
+        const result = await refreshRegistryUpdateState(
+          services.hostController,
+          {
+            force: true,
+            maxAgeMs: null,
+          },
+        );
+        // The registry probe's own result only carries version-comparison state
+        // (no activation domain) - the menu label is derived from a fresh
+        // `getStatus()` read taken right after, since the probe's background
+        // `stageLatest()` may have just changed `stagedVersion`.
+        const status = await services.hostController.getStatus();
+        applyHostUpdateMenuState(services.menu, status);
+        log.debug("[host-registry] launch probe complete", {
+          reachable: result.reachable,
+          latestVersion: result.latestVersion,
+          installedVersion: result.installedVersion,
+          updateAvailable: result.updateAvailable,
+        });
+      });
+    },
+    "cli-reconcile": () => {
+      void timed("deferred", "cli-reconcile", async () => {
+        const outcome = await runLaunchTimeCliReconciliation({
+          isDevDesktop: state.config.environment === "dev",
+          deps: defaultReconcileCliDeps(),
+        });
+        log.debug("[cli-reconcile] launch outcome", { kind: outcome.kind });
+      });
+    },
+    "registry-periodic-refresh": () => {
+      // Process-lifetime timer - Electron main is a single long-lived process
+      // with no natural unmount point, so this is intentionally never cleared;
+      // it dies with the process. Backstop only: launch and resume above already
+      // force a real probe, so this only matters for a session that neither
+      // relaunches nor sleeps for an extended stretch. `maxAgeMs` matches the
+      // poll interval, so it only skips a network hit when a launch/resume probe
+      // already refreshed the cache more recently than this tick's own cadence.
+      setInterval(() => {
+        void refreshHostRegistryIfNotRemoved(
+          services.hostController,
+          services.menu,
+          {
+            force: false,
+            maxAgeMs: HOST_REGISTRY_PERIODIC_MAX_AGE_MS,
+          },
+        );
+      }, HOST_REGISTRY_PERIODIC_CHECK_INTERVAL_MS);
+    },
+  };
 }
 
 // Deferred, fire-and-forget launch convergence. This is deliberately a
@@ -1069,6 +1274,7 @@ export function runDeferred<
     readonly hostController: IpcHostController;
     readonly menu: HostUpdateMenuSurface;
     readonly signedIn: SignedInGate;
+    readonly localHostCapability: LocalHostCapability;
   },
 >(
   state: TState,
@@ -1076,6 +1282,15 @@ export function runDeferred<
   runBackground: (state: TState, services: TServices) => void,
 ): void {
   runBackground(state, services);
+  // `none` mode: this desktop runs no local host, so neither the boot actor
+  // nor the launch reconcile is armed at all - nothing here may start,
+  // install, apply or activate one.
+  if (services.localHostCapability === "none") {
+    log.info("[startup] local host launch converge skipped", {
+      reason: "no-local-host",
+    });
+    return;
+  }
   // Two DIFFERENT actions, deliberately not merged. The reconciler settles the
   // debt of a host that exists, once; the boot actor gets a host RUNNING -
   // installing one that never existed if need be - only for a signed-in user,
@@ -1104,6 +1319,7 @@ export function runDeferred<
 interface LifecycleServices {
   readonly host: HostLifecycle;
   readonly hostController: HostController;
+  readonly hostLifecycle: HostLifecycleService;
   readonly menu: MenuController;
   readonly windowRegistry: WindowRegistry;
   readonly bridge: RunnerIpcBridge;
@@ -1125,32 +1341,12 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
     if (services.windowRegistry.focusMru()) {
       return;
     }
-    // No live window to focus (e.g. macOS red-light close of the last window
-    // left the app running). Restore the preserved window snapshot(s) rather
-    // than minting a blank window, so a close-then-reopen keeps the user's tabs,
-    // canvas, and drafts. Falls back to a blank window when nothing restorable
-    // survives.
-    const plan = planActivateWithoutLiveWindow(
-      services.desktopStateStore.getRestorableWindowEntries(),
-    );
-    if (plan.kind === "restore") {
-      for (const entry of plan.entries) {
-        restorePreservedWindowOnActivate(services, entry);
-      }
-      return;
-    }
-    void services.windowRegistry.create({
-      initialRoute: null,
-      beforeLoad: null,
-    });
+    openWindowWithoutLiveWindow(services);
   });
 
-  // Flag flipped once the renderer authorizes the quit. Subsequent
-  // `before-quit` fires short-circuit so `app.quit()` can complete.
+  // Flag flipped once the quit is authorized. Subsequent `before-quit` fires
+  // short-circuit so `app.quit()` can complete.
   let quitAuthorized = false;
-  // Guards the one-shot quit-time host update so our own re-`quit()` (after the
-  // attempt settles) doesn't re-enter the attempt.
-  let quitTimeHostUpdateStarted = false;
 
   const flushShellState = async (): Promise<void> => {
     await Promise.all([
@@ -1194,6 +1390,83 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
       });
   };
 
+  const quitTransactions = new QuitTransactions({
+    isInstallingUpdate,
+    lifecycle: services.hostLifecycle,
+    controller: services.hostController,
+    requestDecision: (prompt) =>
+      services.bridge.requestHostQuitDecision(prompt),
+    withdrawDecision: (error) => {
+      services.bridge.withdrawHostQuitDecisions(error);
+    },
+    askNatively: (prompt, signal) =>
+      askHostQuitNatively(prompt, signal, (options) =>
+        dialog.showMessageBox(options),
+      ),
+    publishState: (event) => {
+      services.bridge.publishHostQuitState(event);
+    },
+    revealStopping: () => {
+      if (revealHiddenWindowForStopping(services.windowRegistry)) {
+        log.info("[host-quit] window shown for stopping", {
+          phase: "stopping",
+          reason: "stop-running",
+        });
+      }
+    },
+    setStoppingIndicator: (stopping) => {
+      services.tray?.setQuitStopping(stopping);
+    },
+    revealDelayMs: QUIT_STOPPING_REVEAL_DELAY_MS,
+    unsyncedEditsGate: () => runUnsyncedEditsGate(services.bridge),
+    // Never START a new host mutation this late - only drain whatever
+    // `HostController` mutation is already in flight (bounded), so the
+    // desktop doesn't swap its own bytes out from under a subprocess
+    // mid-swap. Drain the renderer's freshest per-window projection into the
+    // state store, then re-quit. Fail-open at every step - a wedged mutation,
+    // failure, or the bounded drain timeout all fall through to the quit; the
+    // launch-time `applyStaged` reconcile is the guaranteed fallback either
+    // way.
+    runUpdateInstallSequence: (hooks) =>
+      runUpdateInstallQuitSequence({
+        drainHostMutation: () =>
+          services.hostController.awaitMutationLaneIdle(
+            QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS,
+          ),
+        isInstallPending: isInstallingUpdate,
+        drainRendererProjection: () =>
+          services.bridge.requestFreshUnsyncedSnapshot(
+            QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS,
+          ),
+        authorizeQuitAfterFlush: hooks.authorizeQuit,
+        stayOpen: hooks.stayOpen,
+      }),
+    authorizeQuitAfterFlush,
+    authorizeQuitNow: () => {
+      quitAuthorized = true;
+      app.quit();
+    },
+    stayOpen: () => {
+      services.quitState.resetQuitting();
+      const reopened = ensureReachableAfterStayOpen({
+        platform: process.platform,
+        windows: services.windowRegistry,
+        openWindow: () => {
+          openWindowWithoutLiveWindow(services);
+        },
+      });
+      if (reopened) {
+        log.info("[host-quit] window reopened after cancelled quit", {
+          reason: "unreachable",
+        });
+      }
+    },
+    deadlineMs: QUIT_STOP_DEADLINE_MS,
+  });
+  if (services.tray !== null) {
+    installTrayHostLifecycle(services.tray, services, quitTransactions);
+  }
+
   app.on("before-quit", (event) => {
     // Mark the shell as quitting on the FIRST pass, before any preventDefault or
     // async work, so the windows registry-change listener preserves every
@@ -1204,100 +1477,154 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
       teardownShellObservers();
       return;
     }
-    const activeBridge = state.bridge;
-    if (activeBridge === null) {
+    if (state.bridge === null) {
       event.preventDefault();
       authorizeQuitAfterFlush();
       return;
     }
 
-    // `quitAndInstall` drives this quit after the user chose "Restart" to
-    // install an update. Let it through - intercepting with the unsynced-edits
-    // prompt would silently swallow the install. State is still flushed via
-    // `teardownShellObservers`.
-    if (isInstallingUpdate()) {
-      // Second pass: our quit-time host update settled and re-fired `quit()`.
-      // Let it through.
-      if (quitTimeHostUpdateStarted) {
-        log.info(
-          "[desktop] before-quit - update install in progress, allowing quit",
-        );
-        quitAuthorized = true;
-        teardownShellObservers();
-        return;
-      }
-      // First pass: never START a new host mutation this late - only drain
-      // whatever `HostController` mutation is already in flight (bounded),
-      // so the desktop doesn't swap its own bytes out from under a
-      // subprocess mid-swap. Drain the renderer's freshest per-window
-      // projection into the state store, then re-quit. Fail-open at every
-      // step - a wedged mutation, failure, or the bounded drain timeout all
-      // fall through to the quit; the launch-time `applyStaged` reconcile is
-      // the guaranteed fallback either way.
-      quitTimeHostUpdateStarted = true;
-      event.preventDefault();
+    // One transaction per quit (see `quit-transaction.ts`): the first pass
+    // creates it, a repeat joins it. Its update-install branch keeps the
+    // existing order - `quitAndInstall` drives that quit after the user chose
+    // "Restart", and intercepting it with the unsynced-edits prompt would
+    // silently swallow the install - and its only "allow" is that branch's
+    // existing second pass: the updater re-firing `quit()` is let through,
+    // once the `handoff` verdict is on disk.
+    if (quitTransactions.onBeforeQuit() === "allow") {
       log.info(
-        "[desktop] before-quit - install pending; draining any in-flight host mutation first",
+        "[desktop] before-quit - update install in progress, allowing quit",
       );
-      void runUpdateInstallQuitSequence({
-        drainHostMutation: () =>
-          services.hostController.awaitMutationLaneIdle(
-            QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS,
-          ),
-        isInstallPending: isInstallingUpdate,
-        drainRendererProjection: () =>
-          activeBridge.requestFreshUnsyncedSnapshot(
-            QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS,
-          ),
-        authorizeQuitAfterFlush,
-        stayOpen: () => {
-          // Re-arm the first-pass sequence: leaving the flag set would make
-          // the NEXT Restart-to-install take the second-pass shortcut above,
-          // skipping the host reconcile, the renderer drain, AND the shell
-          // flush for that quit.
-          quitTimeHostUpdateStarted = false;
-          services.quitState.resetQuitting();
-        },
-      });
+      quitAuthorized = true;
+      teardownShellObservers();
       return;
     }
-
     event.preventDefault();
-    void activeBridge
-      .requestFreshUnsyncedSnapshot(QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS)
-      .then((snapshot) => {
-        if (!activeBridge.hasUnsyncedEdits()) {
-          log.info(
-            "[desktop] before-quit - no unsynced edits after fresh query",
-            { affectedEpics: snapshot.length },
-          );
-          authorizeQuitAfterFlush();
-          return;
-        }
-        log.info(
-          "[desktop] before-quit intercepted - awaiting renderer decision",
-          { affectedEpics: snapshot.length },
-        );
-        return activeBridge
-          .requestQuitDecision(snapshot)
-          .then((decision) => {
-            applyQuitDecision(decision, {
-              authorizeQuitAfterFlush,
-              stayOpen: () => {
-                services.quitState.resetQuitting();
-              },
-            });
-          })
-          .catch((err) => {
-            log.warn("[desktop] quit decision failed - staying alive", err);
-            services.quitState.resetQuitting();
-          });
-      })
-      .catch((err) => {
-        log.warn("[desktop] fresh-snapshot query failed - staying alive", err);
-        services.quitState.resetQuitting();
-      });
   });
+}
+
+/**
+ * The existing unsynced-edits intercept, as the quit transaction's first
+ * step: `proceed` when nothing is unsynced after a fresh query or the user
+ * chose to quit anyway, `stay-open` when they cancelled or the intercept
+ * failed (the safe direction for an answer nothing here understood).
+ */
+function runUnsyncedEditsGate(
+  bridge: RunnerIpcBridge,
+): Promise<"proceed" | "stay-open"> {
+  return bridge
+    .requestFreshUnsyncedSnapshot(QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS)
+    .then((snapshot): Promise<"proceed" | "stay-open"> | "proceed" => {
+      if (!bridge.hasUnsyncedEdits()) {
+        log.info(
+          "[desktop] before-quit - no unsynced edits after fresh query",
+          {
+            affectedEpics: snapshot.length,
+          },
+        );
+        return "proceed";
+      }
+      log.info(
+        "[desktop] before-quit intercepted - awaiting renderer decision",
+        { affectedEpics: snapshot.length },
+      );
+      return bridge
+        .requestQuitDecision(snapshot)
+        .then((decision) => {
+          let outcome: "proceed" | "stay-open" = "stay-open";
+          applyQuitDecision(decision, {
+            authorizeQuitAfterFlush: () => {
+              outcome = "proceed";
+            },
+            stayOpen: () => {
+              outcome = "stay-open";
+            },
+          });
+          return outcome;
+        })
+        .catch((err: unknown): "stay-open" => {
+          log.warn("[desktop] quit decision failed - staying alive", err);
+          return "stay-open";
+        });
+    })
+    .catch((err: unknown): "stay-open" => {
+      log.warn("[desktop] fresh-snapshot query failed - staying alive", err);
+      return "stay-open";
+    });
+}
+
+/**
+ * No live window to focus (e.g. macOS red-light close of the last window left
+ * the app running, or a cancelled tray-less quit on Windows/Linux). Restore
+ * the preserved window snapshot(s) rather than minting a blank window, so a
+ * close-then-reopen keeps the user's tabs, canvas, and drafts. Falls back to
+ * a blank window when nothing restorable survives.
+ */
+function openWindowWithoutLiveWindow(services: LifecycleServices): void {
+  const plan = planActivateWithoutLiveWindow(
+    services.desktopStateStore.getRestorableWindowEntries(),
+  );
+  if (plan.kind === "restore") {
+    for (const entry of plan.entries) {
+      restorePreservedWindowOnActivate(services, entry);
+    }
+    return;
+  }
+  void services.windowRegistry.create({
+    initialRoute: null,
+    beforeLoad: null,
+  });
+}
+
+/**
+ * The tray's host lifecycle line and "Quit and Stop Host" item, kept current
+ * from the policy (a fresh read on every lifecycle change) and the local host
+ * snapshot. Detached with the bridge.
+ */
+function installTrayHostLifecycle(
+  tray: DesktopTrayController,
+  services: LifecycleServices,
+  quitTransactions: QuitTransactions,
+): void {
+  let generation = 0;
+  const refresh = (): void => {
+    generation += 1;
+    const current = generation;
+    void services.hostLifecycle
+      .readQuitPolicy()
+      .then((policy) => {
+        if (current !== generation) return;
+        tray.setHostLifecyclePresentation(
+          trayHostLifecyclePresentation({
+            lanesActive: services.hostLifecycle.localHostLanesActive(),
+            mode: policy.mode,
+            hostRunning: services.host.getSnapshot() !== null,
+          }),
+        );
+      })
+      .catch(() => undefined);
+  };
+  tray.setQuitAndStopHostHandler(() => {
+    void confirmQuitAndStopHost((options) =>
+      dialog.showMessageBox(options),
+    ).then((confirmation) => {
+      log.info("[host-quit] quit and stop host confirm", {
+        reason: confirmation.confirmed ? "confirmed" : "declined",
+        remembered: confirmation.remember,
+      });
+      if (!confirmation.confirmed) return;
+      quitTransactions.quitAndStopHost(confirmation.remember, () => {
+        app.quit();
+      });
+    });
+  });
+  services.host.on("change", refresh);
+  const disposeLifecycleChange = services.hostLifecycle.onChange(refresh);
+  services.bridge.disposeFns.push(() => {
+    services.host.off("change", refresh);
+    disposeLifecycleChange();
+    tray.setQuitAndStopHostHandler(null);
+  });
+  refresh();
 }
 
 // Recreate a preserved window on macOS `activate`, reusing its original id so

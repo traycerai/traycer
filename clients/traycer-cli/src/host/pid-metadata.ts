@@ -1,6 +1,5 @@
 import { readFile, rm } from "node:fs/promises";
 import {
-  compareProcessStartIdentity,
   isProcessStartIdentity,
   type ProcessStartIdentity,
 } from "@traycer/protocol/host/lifecycle";
@@ -9,7 +8,7 @@ import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import { isProcessAlive } from "../store/cli-lock";
 import { hostPidMetadataPath } from "../store/paths";
-import { readProcessStartIdentity } from "../store/process-identity";
+import { matchLiveProcessStartIdentity } from "../store/process-identity";
 import { isReadablePid } from "./pid-value";
 
 // Mirror of the writer contract owned by the host (the external
@@ -148,9 +147,9 @@ export function publishedHostProcessGone(metadata: HostPidMetadata): boolean {
   if (!isProcessAlive(metadata.pid)) return true;
   if (!isProcessStartIdentity(metadata.processStartIdentity)) return false;
   return (
-    compareProcessStartIdentity(
+    matchLiveProcessStartIdentity(
+      metadata.pid,
       metadata.processStartIdentity,
-      readProcessStartIdentity(metadata.pid),
     ) === "different"
   );
 }

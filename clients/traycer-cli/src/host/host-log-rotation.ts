@@ -115,13 +115,14 @@ async function isRegularFile(filePath: string): Promise<boolean> {
  * Ordering matters: the rename is attempted FIRST, so a move that cannot
  * happen never destroys the evidence it was supposed to preserve. On POSIX that
  * single call atomically replaces the destination, so the old file is dropped
- * only once the new one is safely in place. Windows can refuse to replace an
- * existing destination (EPERM/EACCES/EEXIST: a handle held open on it, a
- * read-only attribute), so that (and only that) case falls back to moving the
- * previous file aside and retrying - by which point we already know the
- * destination exists and the source is intact. The displaced file is restored
- * if the retry fails, so an unrelated source/permission failure cannot destroy
- * the previous generation.
+ * only once the new one is safely in place. Windows `rename` (`MoveFileExW`
+ * with REPLACE_EXISTING) replaces an existing destination too, but can refuse
+ * to (EPERM/EACCES/EEXIST: a handle held open on it, a read-only attribute),
+ * so that (and only that) case falls back to moving the previous file aside,
+ * which an open handle does not block, and retrying - by which point we
+ * already know the destination exists and the source is intact. The displaced
+ * file is restored if the retry fails, so an unrelated source/permission
+ * failure cannot destroy the previous generation.
  */
 async function rotate(
   logPath: string,

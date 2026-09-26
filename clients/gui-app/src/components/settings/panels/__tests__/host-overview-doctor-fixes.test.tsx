@@ -66,12 +66,14 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
+  DoctorRepairDispatch,
   IHostManagement,
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -170,6 +172,22 @@ const FREE_PORT_ISSUE: HostDoctorIssue = {
   fixAction: "host-free-port-and-restart",
   terminalCommand: "traycer host restart --free-port 8765",
   details: { port: 8765, conflictingPid: 4242, conflictingProcess: "node" },
+};
+
+/**
+ * The other local-bridge repair shape: no confirm dialog, straight through to
+ * `runDoctorRepairIfIdle` (`doctorRepairIntentFor("service-install")` ->
+ * `"register-service"`). FREE_PORT_ISSUE above covers the confirm-gated call
+ * site; this one covers the plain click-through call site.
+ */
+const SERVICE_NOT_REGISTERED: HostDoctorIssue = {
+  code: "SERVICE_NOT_REGISTERED",
+  severity: "warning",
+  title: "Host service isn't registered",
+  message: "The host has no OS service registration.",
+  fixAction: "service-install",
+  terminalCommand: "traycer host service register",
+  details: null,
 };
 
 /**
@@ -299,6 +317,44 @@ function renderDoctor(options: {
     extra: options.extra,
   });
   return { management, queryClient };
+}
+
+/**
+ * Mounts the Overview with SERVICE_NOT_REGISTERED on the FIRST `host.doctor`
+ * answer and `secondReportIssues` on every answer after that, so a suite can
+ * drive the local fix and then look at what the re-run actually reported
+ * (or prove there was no re-run) rather than only asserting an end state.
+ */
+function renderDoctorLocalFix(options: {
+  readonly doctorCalls: { count: number };
+  readonly secondReportIssues: readonly HostDoctorIssue[];
+  readonly managementOverrides: Partial<IHostManagement>;
+}): { readonly management: IHostManagement } {
+  const management = buildOverviewManagement({
+    installedRecord: vi.fn(() => Promise.resolve(makeInstalledRecord("1.5.0"))),
+    ...options.managementOverrides,
+  });
+  renderDoctorPanel({
+    hostId: "host-local",
+    isLocalMachine: true,
+    negotiatedMethods: OVERVIEW_METHODS,
+    overrideHandlers: {
+      "host.doctor": () => {
+        options.doctorCalls.count += 1;
+        return {
+          status: "ok" as const,
+          issues:
+            options.doctorCalls.count === 1
+              ? [SERVICE_NOT_REGISTERED]
+              : [...options.secondReportIssues],
+          triviallyGreenIssueCodes: [],
+        };
+      },
+    },
+    management,
+    extra: undefined,
+  });
+  return { management };
 }
 
 describe("Overview doctor — the three local-only repairs", () => {
@@ -469,6 +525,174 @@ describe("Overview doctor — the three local-only repairs", () => {
       releaseExternal?.();
       await externalGate;
     });
+  });
+});
+
+describe("Overview doctor — a local fix re-runs Doctor only when applied", () => {
+  // DOCTOR-RPC-CARD-STALE-AFTER-FIX: before the fix, `onLocalFix` took no
+  // `onApplied` callback, so the card never re-read the report after a local
+  // repair — the fixed issue's row, and its still-enabled fix button, stayed
+  // on screen until someone clicked "Re-run Doctor" by hand. The four tests
+  // below pin the re-run to exactly the APPLIED outcome, at both call sites
+  // (`onLocalFix(issue, run)` and the free-port confirm's `onLocalFix(freePortIssue, run)`).
+
+  it("an applied local fix re-runs Doctor exactly once, and the fixed row is gone without a manual re-run", async () => {
+    const doctorCalls = { count: 0 };
+    const runDoctorRepairIfIdle = vi.fn((): Promise<DoctorRepairDispatch> =>
+      Promise.resolve({
+        kind: "dispatched",
+        outcome: { kind: "ok", value: null },
+      }),
+    );
+    renderDoctorLocalFix({
+      doctorCalls,
+      secondReportIssues: [],
+      managementOverrides: { runDoctorRepairIfIdle },
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-SERVICE_NOT_REGISTERED"),
+    );
+
+    await waitFor(() => {
+      expect(runDoctorRepairIfIdle).toHaveBeenCalledWith({
+        repair: "register-service",
+        expectedHostId: "host-local",
+      });
+    });
+    // The card passes its own `run` as `onApplied`, so the SAME `host.doctor`
+    // handler that answered the mount also answers this re-run — mount plus
+    // one, not zero and not a loop.
+    await waitFor(() => {
+      expect(doctorCalls.count).toBe(2);
+    });
+    expect(
+      screen.queryByTestId("host-doctor-issue-SERVICE_NOT_REGISTERED"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("host-doctor-fix-SERVICE_NOT_REGISTERED"),
+    ).toBeNull();
+  });
+
+  it("a declined local fix does not re-run Doctor", async () => {
+    const doctorCalls = { count: 0 };
+    const runDoctorRepairIfIdle = vi.fn((): Promise<DoctorRepairDispatch> =>
+      Promise.resolve({
+        kind: "lane-busy",
+        message: "Another maintenance action is already running.",
+      }),
+    );
+    renderDoctorLocalFix({
+      doctorCalls,
+      secondReportIssues: [],
+      managementOverrides: { runDoctorRepairIfIdle },
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-SERVICE_NOT_REGISTERED"),
+    );
+
+    await waitFor(() => {
+      expect(runDoctorRepairIfIdle).toHaveBeenCalledTimes(1);
+    });
+    // `outcome.applied` is what gates `onApplied` in `host-settings-panel.tsx`
+    // — wait for the declined toast to settle before asserting the negative,
+    // so a late re-run isn't mistaken for none.
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith(
+        "Register service didn't run",
+        expect.objectContaining({
+          description: "Another maintenance action is already running.",
+        }),
+      );
+    });
+    expect(doctorCalls.count).toBe(1);
+    expect(
+      screen.getByTestId("host-doctor-issue-SERVICE_NOT_REGISTERED"),
+    ).toBeTruthy();
+  });
+
+  it("a failed local fix does not re-run Doctor", async () => {
+    const doctorCalls = { count: 0 };
+    const runDoctorRepairIfIdle = vi.fn((): Promise<DoctorRepairDispatch> =>
+      Promise.resolve({
+        kind: "dispatched",
+        outcome: { kind: "failed", message: "CLI exited nonzero." },
+      }),
+    );
+    renderDoctorLocalFix({
+      doctorCalls,
+      secondReportIssues: [],
+      managementOverrides: { runDoctorRepairIfIdle },
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
+    fireEvent.click(
+      await screen.findByTestId("host-doctor-fix-SERVICE_NOT_REGISTERED"),
+    );
+
+    await waitFor(() => {
+      expect(runDoctorRepairIfIdle).toHaveBeenCalledTimes(1);
+    });
+    // A thrown `mutationFn` lands in `onError`, never `onSuccess` — so
+    // `onApplied` cannot fire on this arm either. Wait for the failure toast
+    // to settle before checking the count stayed put.
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalled();
+    });
+    expect(doctorCalls.count).toBe(1);
+  });
+
+  it("the free-port confirm's applied fix re-runs Doctor too — the card's other onLocalFix call site", async () => {
+    const doctorCalls = { count: 0 };
+    const management = buildOverviewManagement({
+      installedRecord: vi.fn(() =>
+        Promise.resolve(makeInstalledRecord("1.5.0")),
+      ),
+      // `freePortAndRestartIfIdle`'s fixture default already resolves
+      // dispatched + ok (applied); no override needed for this arm.
+    });
+    renderDoctorPanel({
+      hostId: "host-local",
+      isLocalMachine: true,
+      negotiatedMethods: OVERVIEW_METHODS,
+      overrideHandlers: {
+        "host.doctor": () => {
+          doctorCalls.count += 1;
+          return {
+            status: "ok" as const,
+            issues: doctorCalls.count === 1 ? [FREE_PORT_ISSUE] : [],
+            triviallyGreenIssueCodes: [],
+          };
+        },
+      },
+      management,
+      extra: undefined,
+    });
+
+    await openHostOverviewMenu();
+    fireEvent.click(screen.getByTestId("host-overview-run-doctor"));
+    fireEvent.click(await screen.findByTestId("host-doctor-fix-PORT_CONFLICT"));
+    await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(management.freePortAndRestartIfIdle).toHaveBeenCalledWith({
+        port: 8765,
+        pid: 4242,
+        processName: "node",
+        expectedHostId: "host-local",
+      });
+    });
+    await waitFor(() => {
+      expect(doctorCalls.count).toBe(2);
+    });
+    expect(screen.queryByTestId("host-doctor-issue-PORT_CONFLICT")).toBeNull();
   });
 });
 

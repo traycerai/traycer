@@ -19,10 +19,12 @@ import {
 import { readCliManifest, resolveBundledCliPath } from "../cli/cli-discovery";
 import {
   runBundledTraycerCliJson,
+  spawnDetachedBundledTraycerCliJson,
   streamBundledTraycerCliJson,
   TraycerCliError,
   type NdjsonEvent,
 } from "../cli/traycer-cli";
+import { withDesktopLifecycleOrigin } from "./lifecycle-origin-args";
 import {
   withDesktopUpdateContender,
   withDesktopAttemptMutation,
@@ -96,6 +98,8 @@ import {
   type HostEndpointReachabilityProbe,
 } from "./host-state";
 import {
+  AUTOMATIC_INTENTS_HELD_MESSAGE,
+  AUTOMATIC_INTENTS_QUIESCED_MESSAGE,
   HOST_REMOVED_BY_USER_MESSAGE,
   type AbandonedByGuard,
   type ActivateInstalledOk,
@@ -107,6 +111,7 @@ import {
   type DownloadLaneStatus,
   type GuardedMutationOutcome,
   type HostControllerIntent,
+  type HostRespawnMode,
   type HostControllerStatus,
   type LocalAttemptFacts,
   type LocalAttemptLiveness,
@@ -119,7 +124,10 @@ import {
   type PendingRevisionCaller,
   type RemoveTraycerOk,
   type LocalHostMutationIntent,
+  type ServiceDefinitionRefreshOk,
   type ServiceRegistrationOk,
+  type StopHostOutcome,
+  type StopHostRequest,
   type UninstallOk,
 } from "./host-controller-types";
 
@@ -165,7 +173,15 @@ export const DESKTOP_LOCK_POLL_INTERVAL_MS = 100;
 const CLI_LOCK_BUSY_CODE = "E_CLI_LOCK_BUSY";
 const HOST_BUSY_CODE = "E_HOST_BUSY";
 const HOST_UPDATE_ATTEMPT_ACTIVE_CODE = "E_HOST_UPDATE_ATTEMPT_ACTIVE";
+const HOST_NOT_SERVICE_RUN_CODE = "E_HOST_NOT_SERVICE_RUN";
 const LOCK_BUSY_MESSAGE = "Another Traycer process is managing the host.";
+/** Where a detached CLI child's stdout/stderr files go, under the host home. */
+const DETACHED_CLI_OUTPUT_DIRNAME = "desktop-cli";
+
+/** A reversible suspension of the automatic intents; see `holdAutomaticIntents`. */
+export interface AutomaticIntentHold {
+  release(): void;
+}
 
 /**
  * How long `readLocalAttemptFacts` may reuse a holder verdict for an UNCHANGED
@@ -204,6 +220,22 @@ function localAttemptFacts(
     liveness,
     livenessObservedAtMs,
   };
+}
+
+/**
+ * `host stop`'s own `forced` field when its result carries one, else what was
+ * asked for. The CLI reports whether the stop actually had to force.
+ */
+function stopForcedFrom(raw: unknown, requestedForce: boolean): boolean {
+  if (
+    raw !== null &&
+    typeof raw === "object" &&
+    "forced" in raw &&
+    typeof raw.forced === "boolean"
+  ) {
+    return raw.forced;
+  }
+  return requestedForce;
 }
 
 class HostReadinessError extends Error {
@@ -611,6 +643,31 @@ function parseServiceStartResult(raw: unknown): ServiceStartResultShape {
     // safe-stop into a silent no-op report.
     deferredForParkedActivation: data.deferredForParkedActivation === true,
   };
+}
+
+/**
+ * `host service refresh`'s `data.result`. The verb ships in this same bundle,
+ * so a shape outside its three arms is a contract break, and it throws (the
+ * lane reports it as the refresh failing) rather than reading as "current".
+ */
+function parseServiceDefinitionRefresh(
+  raw: unknown,
+): ServiceDefinitionRefreshOk {
+  const data = isPlainObject(raw) && isPlainObject(raw.data) ? raw.data : raw;
+  const result =
+    isPlainObject(data) && isPlainObject(data.result) ? data.result : null;
+  const kind = result === null ? null : result.kind;
+  if (kind === "not-registered" || kind === "current") {
+    return { result: kind, appliesAt: null };
+  }
+  if (
+    kind === "refreshed" &&
+    result !== null &&
+    (result.appliesAt === "next-start" || result.appliesAt === "next-login")
+  ) {
+    return { result: "refreshed", appliesAt: result.appliesAt };
+  }
+  throw new Error("host service refresh returned an unrecognized result");
 }
 
 interface UninstallResultShape {
@@ -1058,6 +1115,12 @@ export class HostController {
   // the old module-level flag did.
   private pendingRevisionRefreshQuarantined = false;
 
+  // Automatic-intent suspension (host lifecycle modes, "Automatic producers
+  // during quit and in `none`"). `quiesced` is permanent; `holds` counts the
+  // reversible suspensions still open. See `quiesce` / `holdAutomaticIntents`.
+  private automaticIntentsQuiesced = false;
+  private automaticIntentHolds = 0;
+
   constructor(opts: HostControllerOptions) {
     this.environment = opts.environment;
     this.layout = getHostFsLayout(opts.environment);
@@ -1273,7 +1336,7 @@ export class HostController {
 
   private readonly inFlightMutations = new Map<
     string,
-    Promise<MutationOutcome<unknown> | AbandonedByGuard>
+    Promise<MutationOutcome<unknown> | AbandonedByGuard | StopHostOutcome>
   >();
 
   // Apply and activation both run asynchronous eligibility/download-lane
@@ -1310,7 +1373,7 @@ export class HostController {
   // receives - which is why a guard refusal must be an outcome arm rather
   // than per-caller state (see `AbandonedByGuard`).
   private enqueueMutation<
-    R extends MutationOutcome<unknown> | AbandonedByGuard,
+    R extends MutationOutcome<unknown> | AbandonedByGuard | StopHostOutcome,
   >(
     kind: MutationKind,
     coalesceKey: string,
@@ -1490,7 +1553,11 @@ export class HostController {
     const spawnEpoch = this.mutationEpoch;
     const spawnedInLane = this.mutationStatus !== null;
     const result = await streamBundledTraycerCliJson<T>({
-      args,
+      // The ONE place `--lifecycle-origin desktop` is added, and only to the
+      // start-capable commands the CLI registers it on (see
+      // `withDesktopLifecycleOrigin`): every lane call reaches the CLI here or
+      // through `runBundled` below.
+      args: withDesktopLifecycleOrigin(args),
       env: null,
       idleTimeoutMs: CLI_STREAM_IDLE_TIMEOUT_MS,
       // Every mutation-lane call goes through here - none of them are
@@ -1511,7 +1578,7 @@ export class HostController {
   }
 
   private async runBundled<T>(args: readonly string[]): Promise<T> {
-    return runBundledTraycerCliJson<T>(args);
+    return runBundledTraycerCliJson<T>(withDesktopLifecycleOrigin(args));
   }
 
   // ---- Lock-contention terminal contract ----------------------------------
@@ -2971,6 +3038,215 @@ export class HostController {
     return !timedOut;
   }
 
+  // ---- Automatic-intent suspension ------------------------------------------
+  //
+  // The host lifecycle policy has two moments the desktop's own automatic
+  // producers must not undo: a committed `→ none` (the host was stopped on
+  // purpose and this machine runs none) and the quit transaction (the host is
+  // being stopped as the app leaves). The automatic producers are a
+  // BACKGROUND `convergeReady` (the launch converge, the sign-in boot actor
+  // and the selection authority's ensure port), `recoverIfDown` (the health
+  // monitor), and the launch reconcile's `applyStaged("launch")` and
+  // implicit `activateInstalled(_, false)` - each would bring a stopped host
+  // back. While suspended they resolve `deferred` (`suppressed` for
+  // `recoverIfDown`, its own "nothing to do" arm) without reaching the CLI,
+  // checked at submission AND again at the head of the lane, so an intent
+  // queued before the suspension began does not start the host after it. The
+  // `deferred` message says which form is in force
+  // (`AUTOMATIC_INTENTS_QUIESCED_MESSAGE` / `_HELD_MESSAGE`), because the
+  // retrying callers - the sign-in boot actor - must retire on the first and
+  // keep pacing on the second; the health monitor reads
+  // `automaticIntentsSuspended` before it asks at all.
+  // Explicit intents - a person clicking Restart, Install or Update - are
+  // never suspended. Neither form can stop a CLI child already running; the
+  // stop that follows queues behind it on the same lane.
+
+  /** Suspend the automatic intents for the rest of the process. */
+  quiesce(): void {
+    if (this.automaticIntentsQuiesced) return;
+    this.automaticIntentsQuiesced = true;
+    log.info("[host-controller] automatic host intents quiesced", {
+      reason: "host-lifecycle",
+    });
+  }
+
+  /**
+   * The reversible form of `quiesce`: the automatic intents stay suspended
+   * until every open hold is released. For a destructive step that can still
+   * be refused or cancelled - `→ none`'s stop, a quit the user may Cancel -
+   * where a permanent quiesce would leave the rest of the session without its
+   * health monitor after the step did not happen. Releasing twice is a no-op.
+   */
+  holdAutomaticIntents(): AutomaticIntentHold {
+    this.automaticIntentHolds += 1;
+    let released = false;
+    return {
+      release: () => {
+        if (released) return;
+        released = true;
+        this.automaticIntentHolds -= 1;
+      },
+    };
+  }
+
+  get automaticIntentsSuspended(): boolean {
+    return this.automaticIntentsQuiesced || this.automaticIntentHolds > 0;
+  }
+
+  private automaticIntentSuspendedOutcome<T>(
+    kind: MutationKind,
+  ): MutationOutcome<T> {
+    log.debug("[host-controller] automatic intent suspended", { kind });
+    return {
+      kind: "deferred",
+      message: this.automaticIntentsQuiesced
+        ? AUTOMATIC_INTENTS_QUIESCED_MESSAGE
+        : AUTOMATIC_INTENTS_HELD_MESSAGE,
+    };
+  }
+
+  /**
+   * Hold the mutation lane until `barrier` settles: nothing enqueued after this
+   * call starts before it, whether the barrier resolves or rejects. Launch
+   * uses it to put the desktop presence record on disk before any converge can
+   * spawn the CLI (a supervisor admitted by that spawn must see a live
+   * presence), without making first paint wait for the process-identity probe
+   * the record needs.
+   */
+  deferMutationsUntil(barrier: Promise<unknown>): void {
+    this.mutationTail = this.mutationTail
+      .then(() => barrier)
+      .then(
+        () => undefined,
+        () => undefined,
+      );
+  }
+
+  // ---- stopHost ------------------------------------------------------------
+
+  /**
+   * `host stop --if-idle | --force --lifecycle-origin desktop` on the exclusive
+   * mutation lane: the stop behind a `→ none` mode change and behind the quit
+   * transaction's Linked / Stop branches.
+   *
+   * Never coalesced - every request carries its own mode and withdrawal, and a
+   * force must not join an if-idle that is about to be refused. A request
+   * withdrawn before the lane reaches it spawns nothing (`withdrawn`); once
+   * its child is spawned it runs to completion, and a `detached` child keeps
+   * running after this process exits. Resolves, never rejects.
+   */
+  stopHost(request: StopHostRequest): Promise<StopHostOutcome> {
+    if (request.withdrawal !== null && request.withdrawal.aborted) {
+      return Promise.resolve({ kind: "withdrawn" });
+    }
+    return this.enqueueMutation<StopHostOutcome>(
+      "stopHost",
+      `stopHost:${randomUUID()}`,
+      async (): Promise<StopHostOutcome> => {
+        if (request.withdrawal !== null && request.withdrawal.aborted) {
+          log.info("[host-controller] host stop withdrawn", {
+            mode: request.mode,
+            reason: "withdrawn-before-admission",
+          });
+          return { kind: "withdrawn" };
+        }
+        const args = [
+          "host",
+          "stop",
+          request.mode === "force" ? "--force" : "--if-idle",
+        ];
+        let raw: unknown;
+        try {
+          raw =
+            request.spawn === "detached"
+              ? await this.runDetachedBundled<unknown>(args, "stop")
+              : await this.streamBundled<unknown>(args);
+        } catch (err) {
+          return this.classifyStopHostError(err, request);
+        }
+        try {
+          await this.hostLifecycle.reloadSnapshotFromDisk();
+        } catch (err) {
+          log.warn("[host-controller] snapshot reload after host stop failed", {
+            err: describeError(err),
+          });
+        }
+        const forced = stopForcedFrom(raw, request.mode === "force");
+        log.info("[host-controller] host stopped", {
+          mode: request.mode,
+          spawn: request.spawn,
+          forced,
+        });
+        return { kind: "stopped", forced };
+      },
+    );
+  }
+
+  private classifyStopHostError(
+    err: unknown,
+    request: StopHostRequest,
+  ): StopHostOutcome {
+    const code = err instanceof TraycerCliError ? err.code : null;
+    const message = describeError(err);
+    switch (code) {
+      case HOST_BUSY_CODE:
+        log.info("[host-controller] host stop refused", {
+          mode: request.mode,
+          reason: "host-busy",
+        });
+        return { kind: "host-busy", message };
+      case CLI_LOCK_BUSY_CODE:
+        log.info("[host-controller] host stop refused", {
+          mode: request.mode,
+          reason: "cli-lock-busy",
+        });
+        return { kind: "lock-busy", message: LOCK_BUSY_MESSAGE };
+      case HOST_UPDATE_ATTEMPT_ACTIVE_CODE:
+        log.info("[host-controller] host stop refused", {
+          mode: request.mode,
+          reason: "update-active",
+        });
+        return { kind: "update-active", message };
+      case HOST_NOT_SERVICE_RUN_CODE:
+        // Not a failure of this app or the CLI: the host is a terminal's
+        // `traycer host start`, which the service stop cannot reach.
+        log.info("[host-controller] host stop refused", {
+          mode: request.mode,
+          reason: "not-service-run",
+          code,
+        });
+        return { kind: "not-service-run", message };
+      default:
+        log.warn("[host-controller] host stop failed", {
+          mode: request.mode,
+          reason: "cli-error",
+          code,
+        });
+        return { kind: "failed", message };
+    }
+  }
+
+  /**
+   * A CLI command spawned detached with file-backed stdio (see
+   * `spawnDetachedBundledTraycerCliJson`), resolved with its result once it
+   * exits - if this process is still here to see it.
+   */
+  private async runDetachedBundled<T>(
+    args: readonly string[],
+    outputStem: string,
+  ): Promise<T> {
+    const run = await spawnDetachedBundledTraycerCliJson<T>({
+      args: withDesktopLifecycleOrigin(args),
+      outputDir: join(this.layout.rootDir, DETACHED_CLI_OUTPUT_DIRNAME),
+      outputStem,
+    });
+    log.info("[host-controller] detached CLI child spawned", {
+      command: args.slice(0, 2).join(" "),
+      pid: run.pid,
+    });
+    return run.completion;
+  }
+
   // ---- convergeReady -------------------------------------------------------
 
   async convergeReady(
@@ -2978,6 +3254,12 @@ export class HostController {
     intent: LocalHostMutationIntent,
     versionPolicy: ConvergeReadyVersionPolicy,
   ): Promise<GuardedMutationOutcome<ConvergeReadyOk>> {
+    // A background converge is an AUTOMATIC start (launch converge, the
+    // sign-in boot actor, the selection authority's ensure port); a user
+    // repair is a person asking for the host back and is never suspended.
+    if (intent.kind === "background" && this.automaticIntentsSuspended) {
+      return this.automaticIntentSuspendedOutcome<ConvergeReadyOk>("ensure");
+    }
     return this.enqueueMutation<GuardedMutationOutcome<ConvergeReadyOk>>(
       "ensure",
       // The intent is part of the coalesce key, not decoration, and so is the
@@ -2993,6 +3275,13 @@ export class HostController {
       // `--keep-installed` and report applied having moved nothing.
       `ensure:${force}:${versionPolicy}:${this.reprovisionCoalesceKeySuffix(intent)}`,
       async () => {
+        // Re-asked at the head of the lane: a converge queued before the
+        // suspension began must not start the host after it.
+        if (intent.kind === "background" && this.automaticIntentsSuspended) {
+          return this.automaticIntentSuspendedOutcome<ConvergeReadyOk>(
+            "ensure",
+          );
+        }
         const abandoned = await this.admitReprovision(intent);
         if (abandoned !== null) return abandoned;
         // Only a BACKGROUND converge obeys the sentinel. `admitReprovision`
@@ -3691,6 +3980,13 @@ export class HostController {
     trigger: ApplyStagedTrigger,
     force: boolean,
   ): Promise<MutationOutcome<ApplyStagedOk>> {
+    // A `launch` apply is the launch reconcile's automatic step (it restarts
+    // the host onto the staged bytes); a `manual` "Update now" is explicit.
+    if (trigger === "launch" && this.automaticIntentsSuspended) {
+      return Promise.resolve(
+        this.automaticIntentSuspendedOutcome<ApplyStagedOk>("apply"),
+      );
+    }
     // Fixup A6: reconcile BEFORE entering the exclusive mutation lane. The
     // ordering edge ("apply awaits any in-flight-or-due eligibility
     // reconcile for the staged version") still holds - it's just no longer
@@ -3726,6 +4022,11 @@ export class HostController {
           const outcome = await this.enqueueMutation<
             MutationOutcome<ApplyStagedOk>
           >("apply", `apply:${trigger}:${force}`, async () => {
+            if (trigger === "launch" && this.automaticIntentsSuspended) {
+              return this.automaticIntentSuspendedOutcome<ApplyStagedOk>(
+                "apply",
+              );
+            }
             if (trigger === "launch" && (await isHostRemovedByUser())) {
               return {
                 kind: "deferred",
@@ -3898,6 +4199,14 @@ export class HostController {
     // and an explicit activation never collapse into one job.
     promoteReadyStage: boolean,
   ): Promise<MutationOutcome<ActivateInstalledOk>> {
+    // `promoteReadyStage: false` is passed only by the implicit launch
+    // reconcile (every explicit caller passes true), so it marks the one
+    // automatic activation - a host restart nobody asked for.
+    if (!promoteReadyStage && this.automaticIntentsSuspended) {
+      return Promise.resolve(
+        this.automaticIntentSuspendedOutcome<ActivateInstalledOk>("activate"),
+      );
+    }
     // Fixup A6: reconcile BEFORE entering the exclusive mutation lane, same
     // reasoning as `applyStaged` - determining whether a ready update
     // supersedes activation debt needs fresh `updateReady` state, and
@@ -3917,6 +4226,11 @@ export class HostController {
           const outcome = await this.enqueueMutation<
             MutationOutcome<ActivateInstalledOk>
           >("activate", `activate:${force}:${promoteReadyStage}`, async () => {
+            if (!promoteReadyStage && this.automaticIntentsSuspended) {
+              return this.automaticIntentSuspendedOutcome<ActivateInstalledOk>(
+                "activate",
+              );
+            }
             // A ready update supersedes activation debt - prevents the
             // restart-old -> stamp -> restart-new double cycle. The reconcile
             // already ran above; this only re-reads the (now-fresh) state and
@@ -4351,6 +4665,38 @@ export class HostController {
   }
 
   /**
+   * `host service refresh` on the exclusive mutation lane: bring the
+   * registered OS service definition to the bundled CLI's current launcher
+   * WITHOUT starting, stopping or restarting anything (the CLI's
+   * `service/service-definition.ts`). The desktop's one route to that verb,
+   * with two callers: `HostLifecycleService` after a mode write that parks
+   * (`refreshOnModeChange`), and the Doctor's "Update service" repair.
+   *
+   * Coalesced: the refresh reads the definition when it runs, so a second
+   * request while one is queued is answered by it. The flat run wrapper, not
+   * the streaming one: the verb emits no progress, and its worst case - the
+   * CLI's 30 s lock wait plus a definition write - fits the run bound.
+   * Resolves, never rejects; a refused or failed refresh is its outcome.
+   */
+  refreshServiceDefinition(): Promise<
+    MutationOutcome<ServiceDefinitionRefreshOk>
+  > {
+    return this.enqueueMutation<MutationOutcome<ServiceDefinitionRefreshOk>>(
+      "refreshService",
+      "refreshService",
+      async (): Promise<MutationOutcome<ServiceDefinitionRefreshOk>> => {
+        let raw: unknown;
+        try {
+          raw = await this.runBundled<unknown>(["host", "service", "refresh"]);
+        } catch (err) {
+          return this.classifyMutationSubprocessError(err, "retry-with-force");
+        }
+        return { kind: "ok", value: parseServiceDefinitionRefresh(raw) };
+      },
+    );
+  }
+
+  /**
    * Independent recovery deliberately uses the CLI's attempt-aware restart
    * path on every platform, including packaged macOS. A direct SMAppService
    * activation would be allowed to register whichever bundle is currently on
@@ -4402,17 +4748,25 @@ export class HostController {
 
   // ---- respawn / recoverIfDown --------------------------------------------
 
-  // `respawn` is always force=true (`host restart --force` / a
-  // force-activation cycle, never `--if-idle`): it is the explicit "restart
-  // the host now" intent - Settings → Force restart on a busy denial, a
-  // doctor-recommended restart, the health monitor's recovery hook. The
-  // caller deliberately asked for an immediate restart; silently downgrading
-  // to "only if idle" would make the action a no-op exactly when the user is
+  // `respawn` takes its mode from the caller, never from a default.
+  //
+  // `force` (`host restart --force` / a force-activation cycle) is the
+  // explicit "restart the host now" intent - Settings → Force restart on a
+  // busy denial, a doctor-recommended restart, the tray and menu. The caller
+  // deliberately asked for an immediate restart; silently downgrading to
+  // "only if idle" would make the action a no-op exactly when the user is
   // trying to recover from a stuck host, which is the case it exists for.
   // `--force` on the CLI leg is load-bearing for the same reason: without it
   // `host restart` runs the cooperative shutdown claim, and the busy host
   // that made the user reach for Force restart denies it - the forced
   // restart would report the very declined outcome it exists to override.
+  //
+  // `if-idle` (`host restart --if-idle`) is the lifecycle card's restart for
+  // an old supervisor (MIX-OLD-SUPERVISOR): the host's cooperative
+  // `host.restart` is an in-process CHILD respawn by whatever supervisor is
+  // running, so only a service cycle puts this CLI in the supervisor's place.
+  // It must not end work nobody disclosed, so it refuses busy, and the card
+  // offers Force - this route's `force` mode - only after showing that work.
   // Bumped when a respawn lane job completes an actual restart. Coalescing
   // dedupes identical submissions (same key, still in flight), but the key is
   // intent- and target-discriminated, so a watched user repair and a
@@ -4867,6 +5221,7 @@ export class HostController {
 
   async respawn(
     intent: LocalHostMutationIntent,
+    mode: HostRespawnMode,
   ): Promise<GuardedMutationOutcome<ActivateInstalledOk>> {
     // Sampled at SUBMISSION, synchronously: a restart completed after this
     // point satisfies this request; one completed before it does not.
@@ -4877,8 +5232,11 @@ export class HostController {
       // background respawns still collapse to one restart; a user repair is
       // its own job so it cannot join a background restart and skip the
       // guard question below. The cross-key dedupe that this key split gave
-      // up is `respawnGeneration`'s job above.
-      `respawn:${this.reprovisionCoalesceKeySuffix(intent)}`,
+      // up is `respawnGeneration`'s job above. The mode is part of the key:
+      // an idle-only restart joining a forced one would end work it promised
+      // to leave alone, and a forced one joining an idle-only one would be
+      // refused on the host's word after the person chose to override it.
+      `respawn:${mode}:${this.reprovisionCoalesceKeySuffix(intent)}`,
       async () => {
         // Guard only - NOT `admitReprovision`. A restart is not a
         // reprovision: it must keep the removed-by-user deferral below and
@@ -4904,6 +5262,30 @@ export class HostController {
         // resurrect them instead of respecting the removal.
         if (await isHostRemovedByUser()) {
           return { kind: "deferred", message: HOST_REMOVED_BY_USER_MESSAGE };
+        }
+        if (mode === "if-idle") {
+          // No F3 continuation: it overrides the drain on the strength of a
+          // Force confirmation this mode never had. `--defer-if-parked`
+          // leaves a parked activation to the command, under its own lock.
+          //
+          // No `notifyRespawning` either: a busy host refuses and keeps
+          // running, and a refused restart must leave no trace it was tried.
+          // A completed cycle publishes the NEW host itself
+          // (`completeServiceStart`), and the identity verdict cache is keyed
+          // by pid, so the replacement is judged on its own evidence - the
+          // same shape `activateAroundParkedRegistration`'s idle cycle has.
+          const prePid =
+            (await readRunningHostIdentity(this.layout))?.pid ?? null;
+          const recovery = await this.runCliRecoveryServiceCycle(
+            ["host", "restart", "--if-idle", "--defer-if-parked"],
+            prePid,
+          );
+          if (recovery.kind === "ok" && recovery.value.activated) {
+            this.respawnGeneration += 1;
+          } else if (recovery.kind !== "ok") {
+            await this.hostLifecycle.reloadSnapshotFromDisk();
+          }
+          return recovery;
         }
         // F3. Runs AFTER the removed-by-user deferral (a removed host is not
         // one to continue activating) and BEFORE `notifyRespawning`, because a
@@ -4964,13 +5346,18 @@ export class HostController {
   async recoverIfDown(): Promise<
     MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
   > {
-    if (this.mutationStatus !== null) {
+    if (this.mutationStatus !== null || this.automaticIntentsSuspended) {
       return { kind: "suppressed" };
     }
     return this.enqueueMutation<MutationOutcome<ActivateInstalledOk>>(
       "recoverIfDown",
       "recoverIfDown",
       async () => {
+        if (this.automaticIntentsSuspended) {
+          return this.automaticIntentSuspendedOutcome<ActivateInstalledOk>(
+            "recoverIfDown",
+          );
+        }
         const runningRuntimeVersion = await readRunningRuntimeVersion(
           this.layout,
           this.reachabilityProbe,

@@ -621,6 +621,24 @@ describe("withUpdateContender - canonical first-run boundary", () => {
         () => false,
       ),
     ).toBe(false);
+
+    // Pins "TERM-resistant" through the grace window. The supervisor's reap
+    // has already sent the descendant two SIGTERMs, one to the group and one
+    // to its pid; a third, sent from here, must not kill it either. With a
+    // `once` listener the first TERM reset the disposition to SIG_DFL, so a
+    // later one killed the descendant this case calls TERM-resistant, and no
+    // barrier below could show it: the supervisor writes `descendant-exited
+    // {kind: "sigkill"}` however the descendant died. The probe runs after the
+    // window check above so it adds nothing to that window, and it stops short
+    // of the window's end, before the supervisor escalates at
+    // `graceStartedAt` + TERM_GRACE_MS (2_100 ms), so the SIGKILL is never
+    // what it sees.
+    process.kill(rebound.descendantPid, "SIGTERM");
+    const probeEnd = Math.min(Date.now() + 200, graceStartedAt + 2_000);
+    do {
+      expect(() => process.kill(rebound.descendantPid, 0)).not.toThrow();
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    } while (Date.now() < probeEnd);
     forgetChild(blocked);
     await waitForFile(join(barrierDir, "descendant-killed"), 10_000);
     await waitForFile(join(barrierDir, "group-absent"), 10_000);

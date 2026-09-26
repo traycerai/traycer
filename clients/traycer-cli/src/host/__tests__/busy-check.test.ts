@@ -25,7 +25,7 @@ vi.mock("../../store/cli-lock", () => ({
   isProcessAlive: mocks.isProcessAliveMock,
 }));
 
-import { assertHostNotBusy } from "../busy-check";
+import { assertHostIdleForStop, assertHostNotBusy } from "../busy-check";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 
 const VALID_META = {
@@ -110,6 +110,60 @@ describe("assertHostNotBusy", () => {
     mocks.isProcessAliveMock.mockReturnValue(false);
     const fetchSpy = stubFetch(async () => jsonResponse({ busy: true }, 200));
     await expect(assertHostNotBusy("production")).resolves.toBeUndefined();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("assertHostIdleForStop", () => {
+  beforeEach(() => {
+    mocks.isProcessAliveMock.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.resetAllMocks();
+  });
+
+  it("resolves when a live host reports busy:false", async () => {
+    mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
+    stubFetch(async () => jsonResponse({ busy: false }, 200));
+    await expect(assertHostIdleForStop("production")).resolves.toBeUndefined();
+  });
+
+  it("throws E_HOST_BUSY when a live host reports busy:true", async () => {
+    mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
+    stubFetch(async () => jsonResponse({ busy: true }, 200));
+    await expect(assertHostIdleForStop("production")).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+    });
+  });
+
+  it("treats an unprobeable live host as busy", async () => {
+    mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
+    stubFetch(async () => {
+      throw new Error("ECONNREFUSED");
+    });
+    await expect(assertHostIdleForStop("production")).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+    });
+    stubFetch(async () => new Response("Not Found", { status: 404 }));
+    await expect(assertHostIdleForStop("production")).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+    });
+  });
+
+  it("resolves with no probe when there is no pid.json", async () => {
+    mocks.readHostPidMetadataMock.mockResolvedValue(null);
+    const fetchSpy = stubFetch(async () => jsonResponse({ busy: true }, 200));
+    await expect(assertHostIdleForStop("production")).resolves.toBeUndefined();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("resolves with no probe for a stale pid.json", async () => {
+    mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
+    mocks.isProcessAliveMock.mockReturnValue(false);
+    const fetchSpy = stubFetch(async () => jsonResponse({ busy: true }, 200));
+    await expect(assertHostIdleForStop("production")).resolves.toBeUndefined();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

@@ -133,6 +133,9 @@ function buildManagementSpy(): ManagementSpy {
     maintenanceInstallationInfo: notImplemented("maintenanceInstallationInfo"),
     maintenanceInstallVersion: notImplemented("maintenanceInstallVersion"),
     restartHostIfIdle: notImplemented("restartHostIfIdle"),
+    restartHostServiceIfHostIdle: notImplemented(
+      "restartHostServiceIfHostIdle",
+    ),
     runDoctorRepairIfIdle: notImplemented("runDoctorRepairIfIdle"),
     getHostName: () =>
       Promise.resolve({

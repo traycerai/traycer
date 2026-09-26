@@ -122,6 +122,13 @@ export function HostIdentityCard(props: {
    */
   readonly healthAction: ReactNode;
   /**
+   * What happens to this host when the app quits ("keeps running after
+   * quit"), or `null`. A slot for the same reason `healthAction` is one: the
+   * line reads the desktop lifecycle bridge, which this presentational card
+   * must not reach for. Only this machine's own host has one.
+   */
+  readonly lifecycleLine: ReactNode;
+  /**
    * The live update pill, last on the health line, or `null`.
    *
    * A SLOT like `healthAction`, for the same reason: the pill reads the
@@ -235,6 +242,7 @@ export function HostIdentityCard(props: {
               </span>
             )}
             {props.healthAction}
+            {props.lifecycleLine}
             {facts.length === 0 ? null : (
               // Folded up from its own line. The card gained a footer verb bar,
               // and three stacked lines of identity above it pushed Host ID and

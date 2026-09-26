@@ -339,6 +339,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
       */}
       <LocalHostRestartFlow
         requested={forceRestartRequested}
+        firstLeg="cooperative"
         onClose={() => {
           setForceRestartRequested(false);
         }}

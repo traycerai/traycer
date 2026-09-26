@@ -23,6 +23,12 @@ const mocks = vi.hoisted(() => ({
   // (lock span must fully enclose finalize+start) instead of only each
   // mock's own call count.
   callOrder: [] as string[],
+  // When set, the stub's start crosses the REAL service spawn edge, which is
+  // what publishes the adoption proof - so the proof's origin becomes
+  // observable in `publishedOrigins`. Off by default: every other case pins
+  // command-level wiring and never publishes.
+  crossSpawnEdge: false,
+  publishedOrigins: [] as string[],
 }));
 
 vi.mock("../cli-upgrade", () => ({
@@ -57,6 +63,11 @@ vi.mock("../../service", async (importOriginal) => {
         mocks.controllerCalls.push("start");
         mocks.callOrder.push("service-start");
         if (mocks.serviceStartThrows !== null) throw mocks.serviceStartThrows;
+        if (mocks.crossSpawnEdge) {
+          const { atServiceSpawnEdge } =
+            await import("../../service/spawn-edge");
+          await atServiceSpawnEdge();
+        }
       },
       restart: async () => {
         mocks.controllerCalls.push("restart");
@@ -72,10 +83,18 @@ vi.mock("../../service", async (importOriginal) => {
 // wiring, not the adoption handshake (that's `host-start-adoption.
 // test.ts`), so replace it with an immediately-satisfied lease.
 vi.mock("../../host/host-start-adoption", () => ({
-  publishHostStartAdoption: async () => ({
-    waitForSpawn: async () => undefined,
-    cancel: async () => undefined,
-  }),
+  publishHostStartAdoption: async (
+    _capability: unknown,
+    _contenderOptions: unknown,
+    _serviceLabel: string,
+    origin: string,
+  ) => {
+    mocks.publishedOrigins.push(origin);
+    return {
+      waitForSpawn: async () => undefined,
+      cancel: async () => undefined,
+    };
+  },
 }));
 
 vi.mock("../../store/cli-lock", async (importOriginal) => {
@@ -156,6 +175,8 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     mocks.lockCalls = [];
     mocks.lockThrows = null;
     mocks.callOrder = [];
+    mocks.crossSpawnEdge = false;
+    mocks.publishedOrigins = [];
   });
 
   afterEach(() => {
@@ -240,6 +261,26 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   // actually has (Linux/macOS) and would catch an orchestration or lock-
   // scope regression regardless of OS - it just can't stand in for a real
   // Windows PowerShell + Scheduled Task run.
+  it("publishes the service start's adoption proof as `maintenance`", async () => {
+    // Lifecycle modes (T03): this start completes the restart whose stop
+    // released the CLI binary - a relaunch of a run that already existed -
+    // so it records `maintenance` in the proof the supervisor consumes.
+    mocks.finalizeResult = {
+      status: "finalised",
+      previousVersion: "1.4.0",
+      version: "1.5.0",
+      binaryPath: "/opt/traycer/cli/traycer",
+    };
+    mocks.crossSpawnEdge = true;
+
+    const { cliFinalizeUpgradeCommand } =
+      await import("../cli-finalize-upgrade");
+    await cliFinalizeUpgradeCommand(fakeCtx());
+
+    expect(mocks.controllerCalls).toEqual(["start"]);
+    expect(mocks.publishedOrigins).toEqual(["maintenance"]);
+  });
+
   it("orchestration: cli-lock spans the whole rename-then-service-start sequence in order, never released in between", async () => {
     mocks.finalizeResult = {
       status: "finalised",

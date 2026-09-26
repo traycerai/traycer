@@ -728,6 +728,7 @@ describe.skipIf(process.platform === "win32")(
         ifIdle: false,
         force: false,
         attemptAdoption: null,
+        lifecycleOrigin: "terminal",
         acceptStoreFormatLoss: false,
       })(commandContext());
       const pid = writePid({});

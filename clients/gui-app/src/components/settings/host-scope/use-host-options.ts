@@ -114,9 +114,13 @@ function mutationBringsHostUp(kind: MutationKind): boolean {
     case "recoverIfDown":
     case "freePortAndRestart":
       return true;
+    // `refreshService` rewrites the service definition only; the host is
+    // neither brought up nor taken down.
+    case "refreshService":
     case "deregister":
     case "uninstallHost":
     case "removeTraycer":
+    case "stopHost":
       return false;
   }
 }

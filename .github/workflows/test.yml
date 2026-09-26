@@ -300,6 +300,13 @@ jobs:
         run: bun run --filter @traycer-clients/traycer-cli smoke:sea
       - name: Exit-code repro loop
         run: bun run --filter @traycer-clients/traycer-cli smoke:exit-code
+      # The only Windows run of the host-lock verifying read against a real
+      # process whose exact read is DENIED (session 0, or higher integrity). It
+      # self-skips when this runner can read every process, so its value is on
+      # an unelevated runner; it is here so the file is not Linux-skipped only.
+      - name: Denied-read fallback, a real session-0 process
+        working-directory: clients/shared
+        run: bunx vitest run host-lock/__tests__/process-identity-windows-denied-read.win32.test.ts
 
   # macOS job: the desktop workspace's packaging/signing-adjacent assertions
   # (prepack unit suite + the real electron-builder pack in test:packaging)

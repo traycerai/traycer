@@ -10,6 +10,11 @@ import {
   readHostPidMetadata,
   type HostPidMetadata,
 } from "../host/pid-metadata";
+import {
+  lifecycleSnapshotRows,
+  readHostLifecycleSnapshot,
+  type HostLifecycleSnapshot,
+} from "../host/lifecycle-snapshot";
 import { bootstrapLogPath } from "../store/paths";
 import { makeColorizer, shouldUseColor, type Colorizer } from "../runner/ansi";
 import type { CommandFn, CommandResult } from "../runner/runner";
@@ -29,6 +34,13 @@ interface HostStatusOutput {
   // there is no decision left to report; `commands/login.ts` carries the same
   // pinned-null field for the same reason.
   readonly bootstrap: null;
+  /**
+   * The host lifecycle policy, the desktop presence, and whether the running
+   * supervisor enforces the policy - so "why is my host not running after a
+   * reboot" has an answer here (lifecycle mechanics, D7). Additive: existing
+   * parsers of this payload ignore it.
+   */
+  readonly lifecycle: HostLifecycleSnapshot;
 }
 
 // Runner-aware `traycer host status` - reads pid metadata, bootstrap
@@ -45,9 +57,10 @@ interface HostStatusOutput {
 // `traycer login` had already dropped its own auto-bootstrap call for the
 // same reason; this removes the last one.
 //
-// Nothing here writes: the three reads below touch pid.json and
-// bootstrap.log and nothing else, so `host status` is safe to poll, safe in
-// CI, and safe on a machine whose host is deliberately uninstalled.
+// Nothing here writes: the reads below touch pid.json, bootstrap.log and the
+// lifecycle records (`host/lifecycle-snapshot.ts`) and nothing else, so `host
+// status` is safe to poll, safe in CI, and safe on a machine whose host is
+// deliberately uninstalled.
 //
 // JSON mode emits the runner's NDJSON envelope; the legacy `--json`
 // pretty-print is replaced by the runner's `{ type:"result", status:"ok",
@@ -78,6 +91,10 @@ export const hostStatusCommand: CommandFn = async (
     bootstrapLogPath: bootstrapLogPath(ctx.runtime.environment),
     bootstrapLogTail,
     bootstrap: null,
+    lifecycle: await readHostLifecycleSnapshot(
+      ctx.runtime.environment,
+      running,
+    ),
   };
 
   return {
@@ -139,6 +156,13 @@ function renderHumanStatus(
     lines.push(...kvBlock(c, rows));
   }
 
+  // Lifecycle: the mode, who asked for this run and who owns it. A parked
+  // unattended start leaves no marker behind, so on a machine in Linked or
+  // Ask mode this block is what explains a host that is down after a reboot.
+  lines.push("");
+  lines.push(c.bold("Lifecycle"));
+  lines.push(...kvBlock(c, lifecycleSnapshotRows(output.lifecycle)));
+
   // Reading a status is no longer what starts a host (CLI-001), so the
   // not-running branch has to SAY what does. Without this the command is
   // observational and unhelpful in the same breath: it reports a stopped host
@@ -167,7 +191,10 @@ function renderHumanStatus(
   return lines.join("\n");
 }
 
-function kvBlock(c: Colorizer, rows: readonly [string, string][]): string[] {
+function kvBlock(
+  c: Colorizer,
+  rows: readonly (readonly [string, string])[],
+): string[] {
   const keyWidth = rows.reduce((w, [k]) => Math.max(w, k.length), 0);
   return rows.map(([k, v]) => `  ${c.dim(k.padEnd(keyWidth))}  ${v}`);
 }

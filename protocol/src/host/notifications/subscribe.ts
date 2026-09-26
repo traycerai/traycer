@@ -27,7 +27,7 @@
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
-import { hostBusyBreakdownSchema } from "@traycer/protocol/host/status/contracts";
+import { hostBusyBreakdownV1Schema } from "@traycer/protocol/host/status/contracts";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
@@ -163,7 +163,10 @@ export const hostRuntimeStatusAwarenessSchema = lazySchema(() =>
         error: z.string().nullable(),
       })
       .nullable(),
-    busyBreakdown: hostBusyBreakdownSchema.nullable().optional(),
+    // V1 for good: awareness is unnegotiated, so a wider breakdown here would
+    // reach every older client in the room at once. The shell and wake counts
+    // are `host.status` @1.6 only.
+    busyBreakdown: hostBusyBreakdownV1Schema.nullable().optional(),
   }),
 );
 export type HostRuntimeStatusAwareness = z.infer<

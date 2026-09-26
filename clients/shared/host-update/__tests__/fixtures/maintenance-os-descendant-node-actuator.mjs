@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { stat, writeFile } from "node:fs/promises";
+import { rename, stat, writeFile } from "node:fs/promises";
+import { renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const barrierDir = process.env.MAINTENANCE_BARRIER_DIR;
@@ -30,10 +31,31 @@ async function waitFor(path) {
   throw new Error(`node actuator fixture timed out waiting for ${path}`);
 }
 
+// Publishes a barrier file the test reads back by CONTENT, not just
+// existence. `writeFile` truncates-then-streams: a reader that stats the
+// path between those two steps can observe an empty file. Writing to a temp
+// name in the same directory and renaming over the real name makes the
+// publish atomic from the reader's side - it only ever observes the file
+// absent or fully written.
+async function publish(path, content) {
+  const tmp = `${path}.tmp-${process.pid}`;
+  await writeFile(tmp, content);
+  await rename(tmp, path);
+}
+
+// Synchronous counterpart for the SIGTERM handler below, which must publish
+// before returning to the event loop rather than leaving a write in flight
+// across a signal-delivery boundary.
+function publishSync(path, content) {
+  const tmp = `${path}.tmp-${process.pid}`;
+  writeFileSync(tmp, content);
+  renameSync(tmp, path);
+}
+
 async function descendant() {
   if (!termResistant) {
     process.once("SIGTERM", () => {
-      void writeFile(
+      void publish(
         join(barrierDir, "descendant-exited"),
         String(process.pid),
       ).then(() => process.exit(0));
@@ -42,21 +64,36 @@ async function descendant() {
     // The supervisor must escalate a real, TERM-resistant descendant to
     // SIGKILL and still keep the C envelope published until the reap. There
     // is deliberately no release-barrier exit path in this mode.
-    process.once("SIGTERM", () => {
-      void writeFile(
+    //
+    // `once` is wrong here: after it fires, Node removes the listener, and
+    // with no SIGTERM listener left libuv restores SIG_DFL. The supervisor's
+    // reap sends two SIGTERMs in quick succession - one to the group, one
+    // directly to this pid - and a second TERM landing after the reset killed
+    // the process the test calls "TERM-resistant", before the async barrier
+    // write had run (the test then timed out waiting for the barrier) or
+    // after it (the test passed with the descendant already dead). `on` keeps
+    // a listener registered for every SIGTERM that follows, so the default
+    // disposition is never restored. The publish is synchronous and atomic:
+    // the barrier is complete before this handler returns, so its appearance
+    // means the handler ran to the end, not that a write was merely queued.
+    let termReceived = false;
+    process.on("SIGTERM", () => {
+      if (termReceived) return;
+      termReceived = true;
+      publishSync(
         join(barrierDir, "descendant-term-received"),
         String(Date.now()),
       );
     });
   }
-  await writeFile(join(barrierDir, "descendant-ready"), String(process.pid));
+  await publish(join(barrierDir, "descendant-ready"), String(process.pid));
   if (termResistant) {
     setInterval(() => undefined, 1_000);
     await new Promise(() => undefined);
     return;
   }
   await waitFor(join(barrierDir, "descendant-release"));
-  await writeFile(join(barrierDir, "descendant-exited"), String(process.pid));
+  await publish(join(barrierDir, "descendant-exited"), String(process.pid));
 }
 
 async function actuator() {
@@ -115,10 +152,7 @@ async function supervisor() {
     }
     if (termResistant) {
       await waitFor(join(barrierDir, "descendant-term-received"));
-      await writeFile(
-        join(barrierDir, "term-grace-started"),
-        String(Date.now()),
-      );
+      await publish(join(barrierDir, "term-grace-started"), String(Date.now()));
       await new Promise((resolve) => setTimeout(resolve, TERM_GRACE_MS));
       try {
         process.kill(-wrapper.pid, "SIGKILL");
@@ -150,19 +184,13 @@ async function supervisor() {
           "TERM-resistant process group remained live after SIGKILL",
         );
       }
-      await writeFile(
-        join(barrierDir, "descendant-killed"),
-        String(Date.now()),
-      );
-      await writeFile(join(barrierDir, "group-absent"), String(Date.now()));
-      await writeFile(
+      await publish(join(barrierDir, "descendant-killed"), String(Date.now()));
+      await publish(join(barrierDir, "group-absent"), String(Date.now()));
+      await publish(
         join(barrierDir, "descendant-exited"),
         JSON.stringify({ kind: "sigkill", at: Date.now() }),
       );
-      await writeFile(
-        join(barrierDir, "supervisor-exited"),
-        String(process.pid),
-      );
+      await publish(join(barrierDir, "supervisor-exited"), String(process.pid));
       process.exit(0);
       return;
     }
@@ -179,7 +207,7 @@ async function supervisor() {
         // The direct child may have exited between the probe and kill.
       }
     }
-    await writeFile(join(barrierDir, "supervisor-exited"), String(process.pid));
+    await publish(join(barrierDir, "supervisor-exited"), String(process.pid));
     process.exit(0);
   };
   process.once("SIGTERM", () => void reapGroup());
@@ -200,7 +228,7 @@ async function supervisor() {
           // the "bind-actuator" stdout line and then immediately reads this
           // file. Publishing first raced the write - the reader could
           // observe the stdout line before the file existed.
-          await writeFile(
+          await publish(
             join(barrierDir, "wrapper-bind"),
             JSON.stringify({ wrapperPid: wrapper.pid, descendantPid }),
           );

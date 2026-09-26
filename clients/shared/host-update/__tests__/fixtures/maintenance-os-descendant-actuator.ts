@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   acquireUpdateAttemptLock,
@@ -56,16 +56,28 @@ async function waitForProcessGone(pid: number): Promise<boolean> {
   return false;
 }
 
+// Publishes a barrier file the test reads back by CONTENT, not just
+// existence. `writeFile` truncates-then-streams: a reader that stats the
+// path between those two steps can observe an empty file. Writing to a temp
+// name in the same directory and renaming over the real name makes the
+// publish atomic from the reader's side - it only ever observes the file
+// absent or fully written.
+async function publish(path: string, content: string): Promise<void> {
+  const tmp = `${path}.tmp-${process.pid}`;
+  await writeFile(tmp, content);
+  await rename(tmp, path);
+}
+
 async function descendant(): Promise<void> {
   process.once("SIGTERM", () => {
-    void writeFile(
+    void publish(
       join(barrierDir, "descendant-exited"),
       String(process.pid),
     ).then(() => process.exit(0));
   });
-  await writeFile(join(barrierDir, "descendant-ready"), String(process.pid));
+  await publish(join(barrierDir, "descendant-ready"), String(process.pid));
   await waitFor(join(barrierDir, "descendant-release"));
-  await writeFile(join(barrierDir, "descendant-exited"), String(process.pid));
+  await publish(join(barrierDir, "descendant-exited"), String(process.pid));
 }
 
 async function actuatorWrapper(): Promise<void> {
@@ -145,11 +157,11 @@ async function supervisor(): Promise<void> {
     }
     // E normally writes this from its signal handler. C records the barrier
     // too so the handoff cannot disappear before the reap is observable.
-    await writeFile(
+    await publish(
       join(barrierDir, "descendant-exited"),
       String(descendantPid ?? -1),
     );
-    await writeFile(join(barrierDir, "supervisor-exited"), String(process.pid));
+    await publish(join(barrierDir, "supervisor-exited"), String(process.pid));
     process.exit(0);
   };
   process.once("SIGTERM", () => {
@@ -177,7 +189,7 @@ async function supervisor(): Promise<void> {
           // "bind-actuator" stdout line and then immediately reads this
           // file. Publishing first raced the write - the reader could
           // observe the stdout line before the file existed.
-          await writeFile(
+          await publish(
             join(barrierDir, "wrapper-bind"),
             JSON.stringify({
               wrapperPid,
@@ -270,7 +282,7 @@ async function helper(): Promise<void> {
               readonly wrapperPid: number;
               readonly descendantPid: number;
             };
-            await writeFile(
+            await publish(
               join(barrierDir, "helper-rebound"),
               JSON.stringify({
                 helperPid: process.pid,

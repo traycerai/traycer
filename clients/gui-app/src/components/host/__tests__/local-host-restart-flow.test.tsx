@@ -20,6 +20,14 @@ interface HostBindingFixture {
   readonly directory: {
     readonly getLocalEntry: () => HostDirectoryEntry | null;
   };
+  /**
+   * The app-wide/binding host id `HostRuntimeBinding.hostId` would carry.
+   * Optional and unused by every pre-existing test in this file — production
+   * dispatch never reads it, only the local entry's id. Set explicitly by the
+   * fence test below, which binds it to a DIFFERENT host than the local
+   * entry to prove the service dispatch still fences to the local one.
+   */
+  readonly hostId?: string | null;
 }
 const hostBindingMock = vi.hoisted(
   (): { current: HostBindingFixture | null } => ({ current: null }),
@@ -95,10 +103,20 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { HostRpcRegistry } from "@/lib/host";
-import { LocalHostRestartFlow } from "@/components/host/local-host-restart-flow";
+import {
+  LocalHostRestartFlow,
+  type LocalHostRestartFirstLeg,
+} from "@/components/host/local-host-restart-flow";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
-import { buildOverviewHostFixture } from "@/components/settings/panels/__tests__/host-overview-test-support";
+import {
+  buildOverviewHostFixture,
+  buildOverviewManagement,
+} from "@/components/settings/panels/__tests__/host-overview-test-support";
+import {
+  SERVICE_RESTART_BUSY_MESSAGE,
+  SERVICE_RESTART_NO_LOCAL_HOST_MESSAGE,
+} from "@/components/host/host-restart-copy";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 
 const PRESENT_BINDING: HostBindingFixture = {
@@ -161,7 +179,11 @@ function makeQueryClient(): QueryClient {
  * unmounting the flow (which is exactly what a real re-open sequence does -
  * `armedRestartIdRef` lives inside the flow instance and must survive it).
  */
-function RestartFlowHarness(): ReactNode {
+function RestartFlowHarness({
+  firstLeg,
+}: {
+  readonly firstLeg: LocalHostRestartFirstLeg;
+}): ReactNode {
   const [requested, setRequested] = useState(false);
   return (
     <>
@@ -170,17 +192,21 @@ function RestartFlowHarness(): ReactNode {
       </button>
       <LocalHostRestartFlow
         requested={requested}
+        firstLeg={firstLeg}
         onClose={() => setRequested(false)}
       />
     </>
   );
 }
 
-function renderFlow(runnerHost: IRunnerHost): void {
+function renderFlow(
+  runnerHost: IRunnerHost,
+  firstLeg: LocalHostRestartFirstLeg,
+): void {
   render(
     <QueryClientProvider client={makeQueryClient()}>
       <RunnerHostProvider runnerHost={runnerHost}>
-        <RestartFlowHarness />
+        <RestartFlowHarness firstLeg={firstLeg} />
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
@@ -212,7 +238,7 @@ describe("<LocalHostRestartFlow /> - no host runtime binding (ForceOnly arm)", (
       Promise.resolve({ kind: "restarted" as const }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    renderFlow(runnerHost);
+    renderFlow(runnerHost, "cooperative");
 
     fireEvent.click(screen.getByRole("button", { name: "Open restart" }));
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
@@ -239,7 +265,7 @@ describe("<LocalHostRestartFlow /> - no host runtime binding (ForceOnly arm)", (
       }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    renderFlow(runnerHost);
+    renderFlow(runnerHost, "cooperative");
 
     await openAndConfirm();
 
@@ -273,7 +299,7 @@ describe("<LocalHostRestartFlow /> - no host runtime binding (ForceOnly arm)", (
     render(
       <QueryClientProvider client={queryClient}>
         <RunnerHostProvider runnerHost={runnerHost}>
-          <RestartFlowHarness />
+          <RestartFlowHarness firstLeg="cooperative" />
         </RunnerHostProvider>
       </QueryClientProvider>,
     );
@@ -323,7 +349,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
       Promise.resolve({ kind: "restarted" as const }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    renderFlow(runnerHost);
+    renderFlow(runnerHost, "cooperative");
 
     await openAndConfirm();
 
@@ -347,7 +373,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
       Promise.resolve({ kind: "restarted" as const }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    renderFlow(runnerHost);
+    renderFlow(runnerHost, "cooperative");
 
     await openAndConfirm();
 
@@ -388,7 +414,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
         Promise.resolve({ kind: "restarted" as const }),
       );
       const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-      renderFlow(runnerHost);
+      renderFlow(runnerHost, "cooperative");
 
       await openAndConfirm();
 
@@ -436,7 +462,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
       Promise.resolve({ kind: "restarted" as const }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    renderFlow(runnerHost);
+    renderFlow(runnerHost, "cooperative");
 
     await openAndConfirm();
     const errorDialog = await screen.findByTestId(
@@ -516,7 +542,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
       return (
         <QueryClientProvider client={queryClient}>
           <RunnerHostProvider runnerHost={runnerHost}>
-            <RestartFlowHarness />
+            <RestartFlowHarness firstLeg="cooperative" />
           </RunnerHostProvider>
         </QueryClientProvider>
       );
@@ -580,7 +606,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
     clientForHostIdMock.current = (hostId) =>
       hostId === "host-a" ? fixture.client : null;
     const runnerHost = createFakeRunnerHost({});
-    renderFlow(runnerHost);
+    renderFlow(runnerHost, "cooperative");
 
     await openAndConfirm();
     await screen.findByTestId("host-busy-force-defer-dialog");
@@ -621,7 +647,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
       Promise.resolve({ kind: "restarted" as const }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    renderFlow(runnerHost);
+    renderFlow(runnerHost, "cooperative");
 
     await openAndConfirm();
     await screen.findByTestId("host-busy-force-defer-dialog");
@@ -675,7 +701,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
       }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    renderFlow(runnerHost);
+    renderFlow(runnerHost, "cooperative");
 
     await openAndConfirm();
     await screen.findByTestId("host-busy-force-defer-dialog");
@@ -719,7 +745,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
       Promise.resolve({ kind: "restarted" as const }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    renderFlow(runnerHost);
+    renderFlow(runnerHost, "cooperative");
 
     await openAndConfirm();
 
@@ -749,7 +775,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
       Promise.resolve({ kind: "restarted" as const }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    renderFlow(runnerHost);
+    renderFlow(runnerHost, "cooperative");
 
     await openAndConfirm();
 
@@ -788,7 +814,7 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
       Promise.resolve({ kind: "restarted" as const }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    renderFlow(runnerHost);
+    renderFlow(runnerHost, "cooperative");
 
     await openAndConfirm();
 
@@ -843,7 +869,7 @@ describe("<LocalHostRestartFlow /> - a local host identity change under an open 
       return (
         <QueryClientProvider client={queryClient}>
           <RunnerHostProvider runnerHost={runnerHost}>
-            <RestartFlowHarness />
+            <RestartFlowHarness firstLeg="cooperative" />
           </RunnerHostProvider>
         </QueryClientProvider>
       );
@@ -907,7 +933,7 @@ describe("<LocalHostRestartFlow /> - a local host identity change under an open 
       Promise.resolve({ kind: "restarted" as const }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    renderFlow(runnerHost);
+    renderFlow(runnerHost, "cooperative");
 
     await openAndConfirm();
     await screen.findByTestId("host-busy-force-defer-dialog");
@@ -966,7 +992,7 @@ describe("<LocalHostRestartFlow /> - confirm re-reads the live local host (Findi
       Promise.resolve({ kind: "restarted" as const }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    renderFlow(runnerHost);
+    renderFlow(runnerHost, "cooperative");
 
     // Open the confirm dialog but do NOT confirm yet - `openAndConfirm()`
     // clicks confirm immediately, which is not what this test needs.
@@ -1012,7 +1038,7 @@ describe("<LocalHostRestartFlow /> - a dialable host with no client is offered f
       Promise.resolve({ kind: "restarted" as const }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    renderFlow(runnerHost);
+    renderFlow(runnerHost, "cooperative");
 
     await openAndConfirm();
 
@@ -1042,7 +1068,7 @@ describe("<LocalHostRestartFlow /> - a dialable host with no client is offered f
       Promise.resolve({ kind: "restarted" as const }),
     );
     const runnerHost = createFakeRunnerHost({ requestHostRespawn });
-    renderFlow(runnerHost);
+    renderFlow(runnerHost, "cooperative");
 
     await openAndConfirm();
 
@@ -1052,5 +1078,290 @@ describe("<LocalHostRestartFlow /> - a dialable host with no client is offered f
     // Pins that the down-host recovery path stays a single click: the busy/
     // force-offer dialog must never have appeared along the way.
     expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+  });
+});
+
+// MIX-OLD-SUPERVISOR: the lifecycle card's `firstLeg="service"` arm. Uses the
+// SAME bound/unbound split as the cooperative-first tests above, but through
+// `restartHostServiceIfHostIdle` instead of the `host.restart` RPC or a
+// straight-to-force respawn.
+describe('<LocalHostRestartFlow /> - firstLeg="service" (the lifecycle card idle-gated restart)', () => {
+  it("confirm calls restartHostServiceIfHostIdle with the local entry's host id, never the cooperative host.restart RPC nor requestHostRespawn", async () => {
+    hostBindingMock.current = PRESENT_BINDING;
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    // A working cooperative client IS resolvable here, deliberately - the
+    // point is that the service leg never even tries it.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+    });
+    clientForHostIdMock.current = (hostId) =>
+      hostId === "host-a" ? fixture.client : null;
+    const restartHostServiceIfHostIdle = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({
+      requestHostRespawn,
+      hostManagement: buildOverviewManagement({
+        restartHostServiceIfHostIdle,
+      }),
+    });
+    renderFlow(runnerHost, "service");
+
+    await openAndConfirm();
+
+    await waitFor(() => {
+      expect(restartHostServiceIfHostIdle).toHaveBeenCalledTimes(1);
+    });
+    expect(restartHostServiceIfHostIdle).toHaveBeenCalledWith({
+      expectedHostId: "host-a",
+    });
+    expect(requestHostRespawn).not.toHaveBeenCalled();
+    expect(fixture.restartCalls()).toBe(0);
+  });
+
+  // FENCE: the binding's own app-wide host id (`HostRuntimeBinding.hostId`,
+  // which production never reads) is a DIFFERENT, remote host than the local
+  // entry `directory.getLocalEntry()` resolves. `dispatchService` must still
+  // fence to the LOCAL entry's id - an M8-style regression that swapped in
+  // `binding.hostId` would send the wrong `expectedHostId` here and this test
+  // would catch it while the "confirm calls..." test above could not (there
+  // the two ids never diverge).
+  it("FENCE: a different app-wide/binding host id than the local entry still dispatches to the local entry's id", async () => {
+    hostBindingMock.current = {
+      directory: { getLocalEntry: () => localEntry("host-a") },
+      hostId: "host-remote",
+    };
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    clientForHostIdMock.current = () => null;
+    const restartHostServiceIfHostIdle = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({
+      hostManagement: buildOverviewManagement({
+        restartHostServiceIfHostIdle,
+      }),
+    });
+    renderFlow(runnerHost, "service");
+
+    await openAndConfirm();
+
+    await waitFor(() => {
+      expect(restartHostServiceIfHostIdle).toHaveBeenCalledWith({
+        expectedHostId: "host-a",
+      });
+    });
+  });
+
+  it("a host identity change between render and confirm refuses instead of dispatching", async () => {
+    // Same mutable-binding technique as the cooperative-arm "Finding 1" test
+    // above: `getLocalEntry` is swapped out from under the mounted component
+    // after the confirm dialog is already open, no re-render.
+    const mutableBinding: {
+      directory: { getLocalEntry: () => HostDirectoryEntry | null };
+    } = {
+      directory: { getLocalEntry: () => localEntry("host-a") },
+    };
+    hostBindingMock.current = mutableBinding;
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    const restartHostServiceIfHostIdle = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({
+      hostManagement: buildOverviewManagement({
+        restartHostServiceIfHostIdle,
+      }),
+    });
+    renderFlow(runnerHost, "service");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open restart" }));
+    await screen.findByTestId("confirm-destructive-dialog");
+
+    mutableBinding.directory.getLocalEntry = () => localEntry("host-b");
+
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith(
+        "Host changed",
+        expect.objectContaining({ description: HOST_CHANGED_DESCRIPTION }),
+      );
+    });
+    expect(restartHostServiceIfHostIdle).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+  });
+
+  it("no local directory entry resolves - declined toast, nothing dispatched", async () => {
+    hostBindingMock.current = {
+      directory: { getLocalEntry: () => null },
+    };
+    directoryListMock.current = { data: [] };
+    const restartHostServiceIfHostIdle = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({
+      requestHostRespawn,
+      hostManagement: buildOverviewManagement({
+        restartHostServiceIfHostIdle,
+      }),
+    });
+    renderFlow(runnerHost, "service");
+
+    await openAndConfirm();
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith(
+        "Host not restarted",
+        expect.objectContaining({
+          description: SERVICE_RESTART_NO_LOCAL_HOST_MESSAGE,
+        }),
+      );
+    });
+    expect(restartHostServiceIfHostIdle).not.toHaveBeenCalled();
+    expect(requestHostRespawn).not.toHaveBeenCalled();
+  });
+
+  it("host-busy opens the busy dialog with SERVICE_RESTART_BUSY_MESSAGE; Force runs the bridge respawn once, Defer closes with no call", async () => {
+    hostBindingMock.current = PRESENT_BINDING;
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    clientForHostIdMock.current = () => null;
+    const restartHostServiceIfHostIdle = vi.fn(() =>
+      Promise.resolve({ kind: "host-busy" as const }),
+    );
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({
+      requestHostRespawn,
+      hostManagement: buildOverviewManagement({
+        restartHostServiceIfHostIdle,
+      }),
+    });
+    renderFlow(runnerHost, "service");
+
+    await openAndConfirm();
+
+    const busyDialog = await screen.findByTestId(
+      "host-busy-force-defer-dialog",
+    );
+    expect(busyDialog.textContent).toContain(SERVICE_RESTART_BUSY_MESSAGE);
+    expect(requestHostRespawn).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("host-busy-force"));
+
+    await waitFor(() => {
+      expect(requestHostRespawn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("Defer on the host-busy dialog closes without ever calling requestHostRespawn", async () => {
+    hostBindingMock.current = PRESENT_BINDING;
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    clientForHostIdMock.current = () => null;
+    const restartHostServiceIfHostIdle = vi.fn(() =>
+      Promise.resolve({ kind: "host-busy" as const }),
+    );
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({
+      requestHostRespawn,
+      hostManagement: buildOverviewManagement({
+        restartHostServiceIfHostIdle,
+      }),
+    });
+    renderFlow(runnerHost, "service");
+
+    await openAndConfirm();
+    await screen.findByTestId("host-busy-force-defer-dialog");
+
+    fireEvent.click(screen.getByTestId("host-busy-defer"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    });
+    expect(requestHostRespawn).not.toHaveBeenCalled();
+  });
+
+  it('a "restarted" outcome shows the requested toast and closes', async () => {
+    hostBindingMock.current = PRESENT_BINDING;
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    clientForHostIdMock.current = () => null;
+    const restartHostServiceIfHostIdle = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({
+      hostManagement: buildOverviewManagement({
+        restartHostServiceIfHostIdle,
+      }),
+    });
+    renderFlow(runnerHost, "service");
+
+    await openAndConfirm();
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Host restart requested");
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+  });
+
+  it('a "declined" outcome shows the declined toast with the outcome\'s message', async () => {
+    hostBindingMock.current = PRESENT_BINDING;
+    directoryListMock.current = { data: [localEntry("host-a")] };
+    clientForHostIdMock.current = () => null;
+    const restartHostServiceIfHostIdle = vi.fn(() =>
+      Promise.resolve({
+        kind: "declined" as const,
+        message: "Another Traycer process holds the management lock.",
+      }),
+    );
+    const runnerHost = createFakeRunnerHost({
+      hostManagement: buildOverviewManagement({
+        restartHostServiceIfHostIdle,
+      }),
+    });
+    renderFlow(runnerHost, "service");
+
+    await openAndConfirm();
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith(
+        "Host not restarted",
+        expect.objectContaining({
+          description: "Another Traycer process holds the management lock.",
+        }),
+      );
+    });
+  });
+
+  it("no host runtime binding at all - declined toast, requestHostRespawn never called (the ForceOnly arm's fallback is NOT used)", async () => {
+    hostBindingMock.current = null;
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const runnerHost = createFakeRunnerHost({ requestHostRespawn });
+    renderFlow(runnerHost, "service");
+
+    await openAndConfirm();
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith(
+        "Host not restarted",
+        expect.objectContaining({
+          description: SERVICE_RESTART_NO_LOCAL_HOST_MESSAGE,
+        }),
+      );
+    });
+    expect(requestHostRespawn).not.toHaveBeenCalled();
   });
 });

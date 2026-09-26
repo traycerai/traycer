@@ -36,6 +36,7 @@ export type {
   HostRegistryUpdateState,
   HostRemovalState,
   HostRestartRequestResult,
+  HostServiceRestartResult,
   HostTrayCommand,
   HostUninstallResult,
   InstallVersionOk,

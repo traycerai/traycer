@@ -3,8 +3,8 @@ import {
   __processStartTimeMsFromElapsedSecondsForTest,
   __setAsyncProcessLivenessReaderForTest,
   __setAsyncProcessStartIdentityReaderForTest,
-  __setAsyncProcessStartTimeReaderForTest,
   getPublishedProcessIdentityVerdict,
+  probeProcessExistenceWithoutSpawn,
   readLiveProcessStartTimeMs,
   readProcessStartIdentity,
   verifyProcessIdentity,
@@ -50,7 +50,6 @@ describe("POSIX elapsed-time validation", () => {
 afterEach(() => {
   __setAsyncProcessLivenessReaderForTest(null);
   __setAsyncProcessStartIdentityReaderForTest(null);
-  __setAsyncProcessStartTimeReaderForTest(null);
   vi.useRealTimers();
 });
 
@@ -215,5 +214,97 @@ describe("start identity survives a wall-clock step", () => {
     expect(derivedAfter).not.toBeNull();
     if (derivedBefore === null || derivedAfter === null) return;
     expect(derivedAfter - derivedBefore).toBeGreaterThan(CLOCK_STEP_MS / 2);
+  });
+});
+
+/**
+ * `probeProcessExistenceWithoutSpawn` answers "does this pid name a running
+ * process" with `process.kill(pid, 0)` alone - no `ps`/`tasklist` spawn - so a
+ * caller that re-asks on a fast timer (`HostLifecycle`'s cached identity
+ * verdict, DESKTOP-DEAD-HOST-CACHED-ALIVE) can afford to check on every read
+ * instead of trusting a verdict that is up to 120s stale. `exists` may only
+ * ever KEEP an answer a full identity probe already gave; `gone` and
+ * `unknown` both send the caller back to the full read - see the doc comment
+ * on the export itself for why EPERM splits by platform.
+ */
+describe("probeProcessExistenceWithoutSpawn", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // Errno-style failures, built the way the rest of this codebase does: a
+  // real `Error` plus a `code` property, never a cast.
+  function errnoError(code: string): NodeJS.ErrnoException {
+    return Object.assign(new Error(`simulated ${code}`), { code });
+  }
+
+  function stubPlatform(value: string): () => void {
+    const original = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", {
+      value,
+      configurable: true,
+    });
+    return () => {
+      if (original !== undefined) {
+        Object.defineProperty(process, "platform", original);
+      }
+    };
+  }
+
+  it("P1: reports exists for this process's own live pid, and gone for a pid that cannot name one", () => {
+    expect(probeProcessExistenceWithoutSpawn(process.pid)).toBe("exists");
+    expect(probeProcessExistenceWithoutSpawn(0)).toBe("gone");
+    expect(probeProcessExistenceWithoutSpawn(-1)).toBe("gone");
+    expect(probeProcessExistenceWithoutSpawn(1.5)).toBe("gone");
+  });
+
+  it("P2: reports gone when the kernel positively has no process at this pid (ESRCH)", () => {
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw errnoError("ESRCH");
+    });
+
+    expect(probeProcessExistenceWithoutSpawn(4242)).toBe("gone");
+  });
+
+  it("P3: reports exists for EPERM on a POSIX platform - the kernel found the pid to check permissions against", () => {
+    const restorePlatform = stubPlatform("linux");
+    try {
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw errnoError("EPERM");
+      });
+
+      expect(probeProcessExistenceWithoutSpawn(4242)).toBe("exists");
+    } finally {
+      restorePlatform();
+    }
+  });
+
+  /*
+   * On win32, libuv OPENS the process handle before it reads the exit code,
+   * so EPERM there only says an object exists that this token cannot open - a
+   * higher-integrity (or another user's) process that has already EXITED
+   * while some handle still holds it answers exactly the same way. Not
+   * evidence of life; `unknown` sends the caller back to the full identity
+   * read rather than letting a stale cached verdict stand in for one.
+   */
+  it("P4: reports unknown for EPERM on win32, where EPERM is not positive evidence", () => {
+    const restorePlatform = stubPlatform("win32");
+    try {
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw errnoError("EPERM");
+      });
+
+      expect(probeProcessExistenceWithoutSpawn(4242)).toBe("unknown");
+    } finally {
+      restorePlatform();
+    }
+  });
+
+  it("P5: reports unknown for any other errno - a probe failure is never positive evidence either way", () => {
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw errnoError("EINVAL");
+    });
+
+    expect(probeProcessExistenceWithoutSpawn(4242)).toBe("unknown");
   });
 });

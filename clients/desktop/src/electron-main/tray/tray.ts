@@ -1,4 +1,4 @@
-import { Menu, Tray, app, nativeImage } from "electron";
+import { Menu, Notification, Tray, app, nativeImage } from "electron";
 import { access, constants } from "node:fs/promises";
 import { join } from "node:path";
 import { platform as nodePlatform } from "node:process";
@@ -16,6 +16,12 @@ const TRAY_GUID = "9b1d3a7e-4c52-4f8a-bd62-3e7f1a8c5d09";
 
 // Recent epics rendered inline; any beyond this collapse into a "More" submenu.
 const TRAY_EPIC_PRIMARY_LIMIT = 5;
+
+/**
+ * How long `showNotice` waits for the platform to confirm a notice was
+ * displayed before treating it as not shown.
+ */
+export const TRAY_NOTICE_CONFIRM_TIMEOUT_MS = 5_000;
 
 /**
  * Inputs to `resolveTrayIconPath`. Kept as plain data so the helper is
@@ -143,6 +149,30 @@ export interface DesktopTrayPresentation {
 }
 
 /**
+ * The host lifecycle part of the tray (host-lifecycle-modes T06): the mode
+ * line ("Host: running · stops with app") shown in the tooltip and as a
+ * disabled menu row, and whether to offer "Quit and Stop Host" and "Restart
+ * Host".
+ */
+export interface DesktopTrayHostLifecyclePresentation {
+  /** `null` hides the row and leaves the tooltip as the indicator alone. */
+  readonly line: string | null;
+  readonly offerQuitAndStopHost: boolean;
+  /**
+   * Whether this instance runs a local host to restart. Off in `none`, where
+   * the restart would only be refused: offering a destructive confirm for an
+   * action the app has already ruled out is a dead control.
+   */
+  readonly offerRestartHost: boolean;
+}
+
+/** A one-off notice from the tray icon (the close-to-tray explainer). */
+export interface DesktopTrayNotice {
+  readonly title: string;
+  readonly content: string;
+}
+
+/**
  * Identity line shown beside the Sign Out action: `Name (email)` when a
  * display name is known, otherwise just the email.
  */
@@ -173,6 +203,17 @@ export class DesktopTrayController {
   private onCommand:
     | ((command: MenuCommandId, hostUpdateVersion: string | null) => void)
     | null;
+  // Restart Host is offered until the first presentation says otherwise: it
+  // is the remedy for a broken host, so a policy read that never lands must
+  // not take it away. The `none` refusal in the host IPC is the backstop.
+  private hostLifecycle: DesktopTrayHostLifecyclePresentation = {
+    line: null,
+    offerQuitAndStopHost: false,
+    offerRestartHost: true,
+  };
+  private onQuitAndStopHost: (() => void) | null = null;
+  /** A quit is stopping the host: the mode line reads "Stopping host…". */
+  private quitStopping = false;
   // Display-only - `registerAccelerator: false` on the "Open Traycer" item's
   // `accelerator` below means the OS never binds this key combo from the
   // menu; the real registration lives solely in the global-shortcuts
@@ -218,12 +259,106 @@ export class DesktopTrayController {
 
   setIndicator(state: DesktopTrayIndicatorState): void {
     this.indicator = state;
-    this.tray.setToolTip(`Traycer (${state})`);
+    this.refreshToolTip();
   }
 
   setPresentation(presentation: DesktopTrayPresentation): void {
     this.presentation = presentation;
     this.rebuildMenu();
+  }
+
+  setHostLifecyclePresentation(
+    presentation: DesktopTrayHostLifecyclePresentation,
+  ): void {
+    if (
+      this.hostLifecycle.line === presentation.line &&
+      this.hostLifecycle.offerQuitAndStopHost ===
+        presentation.offerQuitAndStopHost &&
+      this.hostLifecycle.offerRestartHost === presentation.offerRestartHost
+    ) {
+      return;
+    }
+    this.hostLifecycle = presentation;
+    this.refreshToolTip();
+    this.rebuildMenu();
+  }
+
+  /**
+   * The quit transaction's stopping phase. The mode line - tooltip and menu
+   * row - reads "Stopping host…" while it lasts, which also covers a quit with
+   * no window to show its progress in (macOS after the last close).
+   */
+  setQuitStopping(stopping: boolean): void {
+    if (this.quitStopping === stopping) {
+      return;
+    }
+    this.quitStopping = stopping;
+    this.refreshToolTip();
+    this.rebuildMenu();
+  }
+
+  /** What "Quit and Stop Host" runs; `null` detaches it (bridge teardown). */
+  setQuitAndStopHostHandler(handler: (() => void) | null): void {
+    this.onQuitAndStopHost = handler;
+  }
+
+  /**
+   * A notice anchored to the tray icon: a balloon on Windows, a system
+   * notification on Linux (Electron has no tray balloon there), nothing on
+   * macOS, where no caller needs one - a closed window never hides the app
+   * there.
+   *
+   * Resolves `true` only when the platform confirms the notice was DISPLAYED
+   * (`balloon-show`, the notification's `show`) within
+   * `TRAY_NOTICE_CONFIRM_TIMEOUT_MS`. A Linux session with no notification
+   * daemon fails the show (libnotify cannot reach
+   * `org.freedesktop.Notifications`), so "asked to show" is not "shown", and
+   * the caller must not record it as such.
+   */
+  showNotice(notice: DesktopTrayNotice): Promise<boolean> {
+    if (nodePlatform === "win32") {
+      return new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => {
+          this.tray.removeListener("balloon-show", onShown);
+          resolve(false);
+        }, TRAY_NOTICE_CONFIRM_TIMEOUT_MS);
+        const onShown = (): void => {
+          clearTimeout(timer);
+          resolve(true);
+        };
+        this.tray.once("balloon-show", onShown);
+        this.tray.displayBalloon({
+          title: notice.title,
+          content: notice.content,
+          iconType: "info",
+        });
+      });
+    }
+    if (nodePlatform === "linux" && Notification.isSupported()) {
+      return new Promise<boolean>((resolve) => {
+        const notification = new Notification({
+          title: notice.title,
+          body: notice.content,
+        });
+        const settle = (shown: boolean): void => {
+          clearTimeout(timer);
+          notification.removeAllListeners("show");
+          notification.removeAllListeners("failed");
+          resolve(shown);
+        };
+        const timer = setTimeout(() => {
+          settle(false);
+        }, TRAY_NOTICE_CONFIRM_TIMEOUT_MS);
+        notification.once("show", () => {
+          settle(true);
+        });
+        notification.once("failed", () => {
+          settle(false);
+        });
+        notification.show();
+      });
+    }
+    return Promise.resolve(false);
   }
 
   setSummonAccelerator(accelerator: string | null): void {
@@ -236,6 +371,16 @@ export class DesktopTrayController {
 
   dispose(): void {
     this.tray.destroy();
+  }
+
+  private refreshToolTip(): void {
+    const base = `Traycer (${this.indicator})`;
+    const line = this.lifecycleLine();
+    this.tray.setToolTip(line === null ? base : `${base}\n${line}`);
+  }
+
+  private lifecycleLine(): string | null {
+    return this.quitStopping ? "Stopping host…" : this.hostLifecycle.line;
   }
 
   private showMainWindow(): void {
@@ -308,6 +453,20 @@ export class DesktopTrayController {
             },
           ]
         : [];
+    const lifecycleLine = this.lifecycleLine();
+    const lifecycleLineItems =
+      lifecycleLine === null ? [] : [{ label: lifecycleLine, enabled: false }];
+    const quitAndStopHostItems = this.hostLifecycle.offerQuitAndStopHost
+      ? [
+          {
+            label: "Quit and Stop Host",
+            click: () => {
+              log.info("[tray] quit and stop host from tray menu");
+              this.onQuitAndStopHost?.();
+            },
+          },
+        ]
+      : [];
     const menu = Menu.buildFromTemplate([
       {
         label: "Open Traycer",
@@ -332,10 +491,15 @@ export class DesktopTrayController {
         enabled: this.presentation.canCheckForUpdates,
         click: () => this.runCommand("app.checkForUpdates", null),
       },
-      {
-        label: "Restart Host",
-        click: () => this.runCommand("host.restart", null),
-      },
+      ...lifecycleLineItems,
+      ...(this.hostLifecycle.offerRestartHost
+        ? [
+            {
+              label: "Restart Host",
+              click: () => this.runCommand("host.restart", null),
+            },
+          ]
+        : []),
       {
         label: "Open Logs",
         click: () => this.runCommand("app.openLogs", null),
@@ -349,6 +513,7 @@ export class DesktopTrayController {
           this.runCommand(isSignedIn ? "app.signOut" : "app.signIn", null),
       },
       { type: "separator" },
+      ...quitAndStopHostItems,
       {
         label: "Quit Traycer",
         click: () => {

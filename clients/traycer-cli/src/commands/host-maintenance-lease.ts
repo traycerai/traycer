@@ -568,9 +568,12 @@ async function superviseRootMaintenanceExecutor(
       if (actuatorGroupId !== null) {
         if (process.platform === "win32") {
           // Node has no Job-object membership proof. Keep the token published
-          // with retain-on-death so release refuses to unlink it; a repair can
-          // resolve this fail-closed state, but no contender can race an
-          // actuator whose tree we cannot positively enumerate.
+          // with retain-on-death so release refuses to unlink it, and no
+          // contender can race an actuator whose tree we cannot positively
+          // enumerate. Nothing automatic ever breaks that record: the repair
+          // is a person removing the file once no installer is running, which
+          // `traycer host doctor` names (HOST_UPDATE_ATTEMPT_LOCK_UNBREAKABLE)
+          // as soon as this process is gone.
           reject(error);
           return;
         }
@@ -875,6 +878,7 @@ async function executeAction(
         createServiceController(),
         serviceLabelFor(environment),
         { force: false },
+        "unconditional",
       );
       return;
     }

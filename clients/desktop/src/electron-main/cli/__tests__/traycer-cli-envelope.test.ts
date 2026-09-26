@@ -603,6 +603,58 @@ describe("streamTraycerCliJson trusts a completed terminal result over the exit 
   });
 });
 
+// SSH-USERDOMAIN-WORKGROUP (R1): `host install` / `host ensure` now exit 1
+// whenever the post-swap service start itself failed, even though their
+// JSON payload is a fully-formed `ok` envelope carrying
+// `serviceLifecycle.postSwapError` (or, for `host ensure`, the top-level
+// `postSwapError`). This is exactly the "trusts a completed terminal result
+// over the exit code" contract pinned generically above, with the real
+// install-shaped payload and the WARN log line this desktop-facing case
+// depends on to be diagnosable from a support bundle.
+describe("streamTraycerCliJson resolves the real install/ensure payload under exit 1 and logs the tolerated mismatch", () => {
+  it("resolves with the exact serviceLifecycle.postSwapError payload, and warns once", async () => {
+    const installPayload = {
+      version: "2.0.0",
+      installedAt: "2026-05-15T00:00:00Z",
+      executablePath: "/opt/traycer/host/traycer-host",
+      serviceLifecycle: {
+        priorState: "running",
+        stoppedBeforeSwap: true,
+        postSwapAction: "start",
+        postSwapError: "failed to start the host process",
+      },
+    };
+    const terminalLine = JSON.stringify({
+      type: "result",
+      status: "ok",
+      data: installPayload,
+      timestamp: "2026-05-15T00:00:00Z",
+    });
+    spawnImpl = () =>
+      new FakeChild({
+        stdoutLines: [terminalLine],
+        stderr: "",
+        exitCode: 1,
+      });
+    const { streamTraycerCliJson } = await import("../traycer-cli");
+    const { log } = await import("../../app/logger");
+
+    const result = await streamTraycerCliJson<typeof installPayload>({
+      args: ["host", "install", "latest"],
+      onEvent: () => undefined,
+      env: null,
+      idleTimeoutMs: 5_000,
+      signal: null,
+    });
+
+    expect(result.data).toEqual(installPayload);
+    expect(log.warn).toHaveBeenCalledWith(
+      "[traycer-cli] non-zero exit after a successful result",
+      expect.objectContaining({ exitCode: 1, signal: null }),
+    );
+  });
+});
+
 // Fixup C4: `streamBundledTraycerCliJson`'s only cancellable caller
 // (`runDownloadLane`'s `AbortController`) used to abort a signal nothing
 // downstream ever read - the spawned subprocess ran to completion
@@ -969,6 +1021,45 @@ describe("runTraycerCliJson preserves successful envelopes on non-zero exit", ()
     );
     expect(pending?.fixAction).toBe("host-restart");
     expect(pending?.terminalCommand).toBe("traycer host restart");
+  });
+
+  // SSH-USERDOMAIN-WORKGROUP (R2): the same tolerance, with the real
+  // `host install` payload shape - `serviceLifecycle.postSwapError` set,
+  // exitCode 1 from the CLI's own "a post-swap start failure fails the
+  // command" rule. `runTraycerCliJsonWithInvocation`'s `extractTerminalEnvelope`
+  // branch (reached via execFile's non-zero-exit rejection, not a thrown
+  // TraycerCliError) is the seam - it existed before this finding, pinned
+  // generically by the Doctor case above; this is the install-shaped case.
+  it("resolves with the exact serviceLifecycle.postSwapError payload under exit 1 (host install case)", async () => {
+    const installPayload = {
+      version: "2.0.0",
+      installedAt: "2026-05-15T00:00:00Z",
+      executablePath: "/opt/traycer/host/traycer-host",
+      serviceLifecycle: {
+        priorState: "running",
+        stoppedBeforeSwap: true,
+        postSwapAction: "start",
+        postSwapError: "failed to start the host process",
+      },
+    };
+    const envelope = {
+      type: "result",
+      status: "ok",
+      data: installPayload,
+      timestamp: "2026-05-15T00:00:00Z",
+    };
+    configureExecFile({
+      stdout: `${JSON.stringify(envelope)}\n`,
+      stderr: "",
+      exitCode: 1,
+    });
+    const { runTraycerCliJson } = await import("../traycer-cli");
+    const result = await runTraycerCliJson<typeof installPayload>([
+      "host",
+      "install",
+      "latest",
+    ]);
+    expect(result).toEqual(installPayload);
   });
 
   it("still rejects with TraycerCliError when non-zero exit emits an error terminal envelope on stdout", async () => {

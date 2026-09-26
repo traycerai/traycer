@@ -10,13 +10,36 @@ import {
   type CommitHostInstallSourceResult,
 } from "../installer/install";
 import type { WithCliUpdateContenderOptions } from "./update-contender";
-import { requireCliUpdateMutationCapability } from "./update-contender";
+import {
+  requireCliUpdateMutationCapability,
+  withCliUpdateContender,
+} from "./update-contender";
+import {
+  LIFECYCLE_TEARDOWN_ADMISSION,
+  LIFECYCLE_TEARDOWN_LOCK_WAIT_MS,
+  LIFECYCLE_TEARDOWN_OPERATION,
+  type LifecycleTeardownPlatform,
+} from "./lifecycle-teardown";
+import { readHostPidMetadata } from "./pid-metadata";
+import {
+  forceStopHostProcessReporting,
+  removeHostPidMetadataIfUnchanged,
+  requestCooperativeShutdown,
+} from "../service/platforms/desktop-agent-shutdown";
+import {
+  epochMicrosNow,
+  killSupervisedHostTree,
+} from "../service/platforms/windows";
+import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
 import {
   verifyServiceMutationAuthority,
   withServiceMutationAuthority,
 } from "../service/mutation-authority";
 import { runWithLeaseAtServiceSpawnEdge } from "../service/spawn-edge";
+import { assertHostIdleForStop } from "./busy-check";
 import { publishHostStartAdoption } from "./host-start-adoption";
+import { findLiveServiceSupervisor } from "./service-supervisor-relaunch";
+import type { HostStartOrigin } from "./lifecycle-origin";
 import type {
   DesktopRegistrationTakeover,
   InstallServiceOptions,
@@ -26,6 +49,8 @@ import type {
   StopServiceOptions,
   UninstallServiceOptions,
 } from "../service";
+import type { ServiceDefinitionRefresher } from "../service/definition-refresh";
+import type { ServiceDefinitionRefresh } from "../service/service-definition";
 
 /**
  * The only contender-aware way for commands to mutate the install tree.
@@ -38,6 +63,7 @@ import type {
 export async function applyHostWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  origin: HostStartOrigin,
   options: Omit<ApplyHostOptions, "verifyMutationCapability">,
 ): Promise<ApplyHostOutcome> {
   const verify = (): Promise<void> =>
@@ -47,7 +73,12 @@ export async function applyHostWithAttempt(
     ...options,
     verifyMutationCapability: verify,
     publishHostStartAdoption: (serviceLabel) =>
-      publishHostStartAdoption(capability, contenderOptions, serviceLabel),
+      publishHostStartAdoption(
+        capability,
+        contenderOptions,
+        serviceLabel,
+        origin,
+      ),
   });
 }
 
@@ -55,6 +86,7 @@ export async function applyHostWithAttempt(
 export async function commitHostInstallSourceWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  origin: HostStartOrigin,
   options: Omit<CommitHostInstallSourceOptions, "verifyMutationCapability">,
 ): Promise<CommitHostInstallSourceResult> {
   const verify = (): Promise<void> =>
@@ -64,7 +96,12 @@ export async function commitHostInstallSourceWithAttempt(
     options.lifecycle.setHostStartAdoptionPublisher !== undefined
   ) {
     options.lifecycle.setHostStartAdoptionPublisher((serviceLabel) =>
-      publishHostStartAdoption(capability, contenderOptions, serviceLabel),
+      publishHostStartAdoption(
+        capability,
+        contenderOptions,
+        serviceLabel,
+        origin,
+      ),
     );
   }
   await requireCliUpdateMutationCapability(capability, contenderOptions);
@@ -78,6 +115,7 @@ export async function commitHostInstallSourceWithAttempt(
 export async function installHostServiceWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  origin: HostStartOrigin,
   controller: Pick<ServiceController, "install" | "hostStartAdoptionLabel">,
   options: InstallServiceOptions,
 ): Promise<void> {
@@ -87,6 +125,7 @@ export async function installHostServiceWithAttempt(
     await runWithHostStartAdoption(
       capability,
       contenderOptions,
+      origin,
       controller,
       options.label,
       async () => {
@@ -95,6 +134,24 @@ export async function installHostServiceWithAttempt(
       },
     );
   });
+}
+
+/**
+ * Final-actuator facade for a definition-only refresh (`host service
+ * refresh`, and the lifecycle mode change that runs it). Unlike
+ * {@link installHostServiceWithAttempt} there is no host-start adoption: a
+ * refresh starts nothing, so it publishes no grant and waits for no spawn.
+ * The authority scope is what every platform write re-checks.
+ */
+export async function refreshHostServiceDefinitionWithAttempt(
+  capability: UpdateMutationCapability,
+  contenderOptions: WithCliUpdateContenderOptions,
+  refresher: Pick<ServiceDefinitionRefresher, "refresh">,
+  label: ServiceLabel,
+): Promise<ServiceDefinitionRefresh> {
+  const verify = (): Promise<void> =>
+    requireCliUpdateMutationCapability(capability, contenderOptions);
+  return withServiceMutationAuthority(verify, () => refresher.refresh(label));
 }
 
 /** Final-actuator facade for an OS-service deregistration/bootout. */
@@ -111,6 +168,20 @@ export async function uninstallHostServiceWithAttempt(
   );
 }
 
+/**
+ * Whether a stop must first find the host idle.
+ *
+ * - `if-idle` - probe `assertHostIdleForStop` immediately before the
+ *   controller's stop, inside the caller's lock and after the capability is
+ *   re-proved; busy (or unprovably idle) throws `E_HOST_BUSY` with nothing
+ *   touched, not even the stop intent (`withStopIntent` announces inside
+ *   `controller.stop`). The same answer on every platform, which plain stop
+ *   is not: Linux `systemctl stop`, Windows `schtasks /End` and a CLI-owned
+ *   macOS `launchctl kill` reach the host with no probe at all.
+ * - `unconditional` - today's stop, unchanged.
+ */
+export type HostStopBusyGate = "if-idle" | "unconditional";
+
 /** Final-actuator facade for a stop or force-stop. */
 export async function stopHostServiceWithAttempt(
   capability: UpdateMutationCapability,
@@ -118,18 +189,23 @@ export async function stopHostServiceWithAttempt(
   controller: Pick<ServiceController, "stop">,
   label: ServiceLabel,
   options: StopServiceOptions,
+  busyGate: HostStopBusyGate,
 ): Promise<void> {
   const verify = (): Promise<void> =>
     requireCliUpdateMutationCapability(capability, contenderOptions);
-  await withServiceMutationAuthority(verify, () =>
-    controller.stop(label, options),
-  );
+  await withServiceMutationAuthority(verify, async () => {
+    if (busyGate === "if-idle") {
+      await assertHostIdleForStop(label.environment);
+    }
+    await controller.stop(label, options);
+  });
 }
 
 /** Final-actuator facade for a restart. */
 export async function restartHostServiceWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  origin: HostStartOrigin,
   controller: Pick<ServiceController, "restart" | "hostStartAdoptionLabel">,
   label: ServiceLabel,
 ): Promise<void> {
@@ -139,6 +215,7 @@ export async function restartHostServiceWithAttempt(
     await runWithHostStartAdoption(
       capability,
       contenderOptions,
+      origin,
       controller,
       label,
       async () => {
@@ -149,19 +226,57 @@ export async function restartHostServiceWithAttempt(
   });
 }
 
-/** Final-actuator facade for a service start. */
+/**
+ * What a service start did.
+ *
+ * - `started` - a host-start adoption proof was published and the service
+ *   manager was asked to start the service.
+ * - `supervisor-relaunching` - the service's own supervisor is alive, so the
+ *   host is down only between its relaunches: nothing was published and
+ *   nothing started (`host/service-supervisor-relaunch.ts`). The caller waits
+ *   for that relaunch OUTSIDE its lock, or reports it; it must not escalate.
+ */
+export type ServiceStartOutcome =
+  | { readonly kind: "started" }
+  | {
+      readonly kind: "supervisor-relaunching";
+      readonly supervisorPid: number;
+    };
+
+/**
+ * Final-actuator facade for a service start.
+ *
+ * The one place every service start passes through - `host ensure` (and the
+ * desktop's ensure through it), `host service start`, and the post-swap start
+ * of `cli finalize-upgrade` - so the one place that asks first whether the
+ * service's supervisor is still alive. A start then could never be consumed:
+ * the service manager starts nothing for a running service, and the pending
+ * proof it left made the supervisor refuse its own relaunches
+ * (CRASH-RELAUNCH-ENSURE-RACE). A start after an update or restart stop finds
+ * no live supervisor - that stop ended it and it removed its records - and
+ * takes the ordinary path.
+ */
 export async function startHostServiceWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  origin: HostStartOrigin,
   controller: Pick<ServiceController, "start" | "hostStartAdoptionLabel">,
   label: ServiceLabel,
-): Promise<void> {
+): Promise<ServiceStartOutcome> {
+  const supervisor = await findLiveServiceSupervisor(label.environment);
+  if (supervisor !== null) {
+    return {
+      kind: "supervisor-relaunching",
+      supervisorPid: supervisor.supervisorPid,
+    };
+  }
   const verify = (): Promise<void> =>
     requireCliUpdateMutationCapability(capability, contenderOptions);
   await withServiceMutationAuthority(verify, async () => {
     await runWithHostStartAdoption(
       capability,
       contenderOptions,
+      origin,
       controller,
       label,
       async () => {
@@ -170,6 +285,7 @@ export async function startHostServiceWithAttempt(
       },
     );
   });
+  return { kind: "started" };
 }
 
 /**
@@ -214,6 +330,7 @@ export async function stopHostForRestartWithAttempt(
 export async function relaunchHostAfterRestartWithAttempt(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  origin: HostStartOrigin,
   controller: Pick<
     ServiceController,
     "relaunchAfterRestart" | "hostStartAdoptionLabel"
@@ -227,6 +344,7 @@ export async function relaunchHostAfterRestartWithAttempt(
     await runWithHostStartAdoption(
       capability,
       contenderOptions,
+      origin,
       controller,
       label,
       async () => {
@@ -237,9 +355,15 @@ export async function relaunchHostAfterRestartWithAttempt(
   });
 }
 
+// `origin` is the one field every start facade above threads through to the
+// proof it publishes (`host/lifecycle-origin.ts`): a command's own
+// `--lifecycle-origin` for a start it asks for, `maintenance` for the relaunch
+// legs of `host update` and `host restart`. It never decides whether the
+// supervisor runs - a grant always runs - only what `host status` reports.
 async function runWithHostStartAdoption(
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  origin: HostStartOrigin,
   controller: Pick<ServiceController, "hostStartAdoptionLabel">,
   label: ServiceLabel,
   start: () => Promise<void>,
@@ -256,7 +380,13 @@ async function runWithHostStartAdoption(
   // `runWithLeaseAtServiceSpawnEdge`. A call that never reaches an edge
   // publishes no grant and waits for no child.
   await runWithLeaseAtServiceSpawnEdge(
-    () => publishHostStartAdoption(capability, contenderOptions, serviceLabel),
+    () =>
+      publishHostStartAdoption(
+        capability,
+        contenderOptions,
+        serviceLabel,
+        origin,
+      ),
     start,
   );
 }
@@ -316,4 +446,45 @@ export async function startHostServiceLegacy(
   label: ServiceLabel,
 ): Promise<void> {
   await controller.start(label);
+}
+
+/**
+ * Final-actuator facade for the supervisor's own lifecycle teardown
+ * (`host/lifecycle-teardown.ts`): the lock it runs under and the platform
+ * stop machinery it drives. The actuator re-proves the hold through the
+ * `verify` it is handed before each destructive step.
+ */
+export function createLifecycleTeardownPlatform(): LifecycleTeardownPlatform {
+  return {
+    platform: process.platform,
+    withLock: (environment, run) => {
+      // ONE options value for acquisition and revalidation, as `host stop`
+      // does. Its own admission: refused inside any active attempt, so the
+      // teardown never interleaves with a swap, but admitted over a park,
+      // which it leaves standing for the next supervisor start to resume.
+      const options: WithCliUpdateContenderOptions = {
+        environment,
+        reason: LIFECYCLE_TEARDOWN_OPERATION,
+        waitMs: LIFECYCLE_TEARDOWN_LOCK_WAIT_MS,
+        pollIntervalMs: 100,
+        admission: LIFECYCLE_TEARDOWN_ADMISSION,
+      };
+      return withCliUpdateContender(options, (capability) =>
+        run(() => requireCliUpdateMutationCapability(capability, options)),
+      );
+    },
+    readPidMetadata: (environment) => readHostPidMetadata(environment),
+    requestCooperativeShutdown: (environment, operation, intent) =>
+      requestCooperativeShutdown(environment, operation, intent),
+    forceStopPublishedHost: (environment, operation) =>
+      forceStopHostProcessReporting(environment, operation, null),
+    killHostTree: (environment, rootPid, verify) =>
+      killSupervisedHostTree(environment, rootPid, verify, null, {
+        now: epochMicrosNow,
+      }),
+    verifyPublishedInstance: (pid, startIdentity) =>
+      getPublishedProcessIdentityVerdict(pid, startIdentity),
+    removePidMetadataIfUnchanged: (environment, instance) =>
+      removeHostPidMetadataIfUnchanged(environment, instance),
+  };
 }

@@ -158,7 +158,9 @@ describe.skipIf(process.platform === "win32")(
         await waitForFile(join(holdBarrierDir, "held"));
 
         const { buildHostStopCommand } = await import("../host-stop");
-        const pending = buildHostStopCommand({ force: false })(fakeCtx());
+        const pending = buildHostStopCommand({ force: false, ifIdle: false })(
+          fakeCtx(),
+        );
 
         // Give the command every chance to (wrongly) proceed while the
         // worker still genuinely holds the lock on disk.

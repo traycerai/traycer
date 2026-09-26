@@ -11,6 +11,7 @@ import type {
 import type {
   ConvergeReadyVersionPolicy,
   GuardedMutationOutcome,
+  HostRespawnMode,
   LifecycleAdmissionBlock,
   LocalHostMutationIntent,
 } from "../../host/host-controller-types";
@@ -117,11 +118,13 @@ const ALL_MUTATION_KINDS: readonly MutationKind[] = [
   "install",
   "register",
   "deregister",
+  "refreshService",
   "respawn",
   "recoverIfDown",
   "freePortAndRestart",
   "uninstallHost",
   "removeTraycer",
+  "stopHost",
 ];
 
 describe("laneBusyRestartMessage", () => {
@@ -145,6 +148,9 @@ describe("laneBusyRestartMessage", () => {
     expect(laneBusyRestartMessage("ensure")).toBe(installing);
     expect(laneBusyRestartMessage("register")).toBe(service);
     expect(laneBusyRestartMessage("deregister")).toBe(service);
+    // M1: `refreshService` ("host service refresh") groups with the other
+    // service-definition mutations, not with update work.
+    expect(laneBusyRestartMessage("refreshService")).toBe(service);
     expect(laneBusyRestartMessage("uninstallHost")).toBe(removing);
     expect(laneBusyRestartMessage("removeTraycer")).toBe(removing);
     expect(laneBusyRestartMessage("respawn")).toBe(restarting);
@@ -239,6 +245,7 @@ interface HandlerBridge {
       ) => Promise<MutationOutcome<InstallVersionOk>>;
       respawn: (
         intent: LocalHostMutationIntent,
+        mode: HostRespawnMode,
       ) => Promise<GuardedMutationOutcome<{ readonly activated: boolean }>>;
       convergeReady: (
         force: boolean,
@@ -248,6 +255,12 @@ interface HandlerBridge {
       registerService: (
         intent: LocalHostMutationIntent,
       ) => Promise<GuardedMutationOutcome<null>>;
+      refreshServiceDefinition: () => Promise<
+        MutationOutcome<{
+          readonly result: "not-registered" | "current" | "refreshed";
+          readonly appliesAt: "next-start" | "next-login" | null;
+        }>
+      >;
       freePortAndRestart: (
         pid: number | undefined,
         port: number | undefined,
@@ -288,6 +301,11 @@ function makeBridge(): HandlerBridge {
           Promise.resolve({ kind: "ok" as const, value: null }),
         registerService: () =>
           Promise.resolve({ kind: "ok" as const, value: null }),
+        refreshServiceDefinition: () =>
+          Promise.resolve({
+            kind: "ok" as const,
+            value: { result: "current" as const, appliesAt: null },
+          }),
         freePortAndRestart: () =>
           Promise.resolve({
             kind: "ok" as const,
@@ -920,11 +938,16 @@ describe("maintenanceInstallVersion IPC", () => {
       ensure: false,
       register: false,
       deregister: false,
+      // M1: rewrites the service definition only, moves no version.
+      refreshService: false,
       respawn: false,
       recoverIfDown: false,
       freePortAndRestart: false,
       uninstallHost: false,
       removeTraycer: false,
+      // A lifecycle stop is seconds-long and brings nothing up; it can
+      // never be the update tail the latch is waiting on.
+      stopHost: false,
     } satisfies Record<MutationKind, boolean>;
     expect([...ALL_MUTATION_KINDS].sort()).toEqual(
       Object.keys(updateWorkByKind).sort(),
@@ -2209,10 +2232,18 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
         value: { activated: true },
       }),
     );
+    const refreshServiceDefinition = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { result: "current" as const, appliesAt: null },
+      }),
+    );
     const bridge = makeBridge();
     bridge.options.hostController.convergeReady = convergeReady;
     bridge.options.hostController.registerService = registerService;
     bridge.options.hostController.respawn = respawn;
+    bridge.options.hostController.refreshServiceDefinition =
+      refreshServiceDefinition;
     const handler = await registerHandler(
       bridge,
       invoke.traycerDoctorRepairQueued,
@@ -2237,9 +2268,17 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       kind: "declined",
       message: HOST_CHANGED_MESSAGE,
     });
+    // M1: refresh-service is refused the same way, before any refresh call.
+    await expect(
+      handler(null, { repair: "refresh-service", ...mismatched }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: HOST_CHANGED_MESSAGE,
+    });
     expect(convergeReady).not.toHaveBeenCalled();
     expect(registerService).not.toHaveBeenCalled();
     expect(respawn).not.toHaveBeenCalled();
+    expect(refreshServiceDefinition).not.toHaveBeenCalled();
   });
 
   it("queued repair unverifiable enrollment declines without dispatching any controller", async () => {
@@ -2257,10 +2296,18 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
         value: { activated: true },
       }),
     );
+    const refreshServiceDefinition = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { result: "current" as const, appliesAt: null },
+      }),
+    );
     const bridge = makeBridge();
     bridge.options.hostController.convergeReady = convergeReady;
     bridge.options.hostController.registerService = registerService;
     bridge.options.hostController.respawn = respawn;
+    bridge.options.hostController.refreshServiceDefinition =
+      refreshServiceDefinition;
     const handler = await registerHandler(
       bridge,
       invoke.traycerDoctorRepairQueued,
@@ -2285,9 +2332,17 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       kind: "declined",
       message: HOST_UNVERIFIED_MESSAGE,
     });
+    // M1: same unverifiable-enrollment refusal, before any refresh call.
+    await expect(
+      handler(null, { repair: "refresh-service", ...payload }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: HOST_UNVERIFIED_MESSAGE,
+    });
     expect(convergeReady).not.toHaveBeenCalled();
     expect(registerService).not.toHaveBeenCalled();
     expect(respawn).not.toHaveBeenCalled();
+    expect(refreshServiceDefinition).not.toHaveBeenCalled();
   });
 
   it("queued converge-ready and register-service reject a non-ok controller outcome", async () => {
@@ -2345,6 +2400,314 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
     ).resolves.toEqual({
       kind: "declined",
       message: "Another process holds the host lock.",
+    });
+  });
+
+  it("queued refresh-service dispatches hostController.refreshServiceDefinition exactly once, and no other controller mutation", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    const refreshServiceDefinition = vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: {
+          result: "refreshed" as const,
+          appliesAt: "next-start" as const,
+        },
+      }),
+    );
+    const convergeReady = vi.fn(() =>
+      Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    const registerService = vi.fn(() =>
+      Promise.resolve({ kind: "ok" as const, value: null }),
+    );
+    const respawn = vi.fn(() =>
+      Promise.resolve({ kind: "ok" as const, value: { activated: true } }),
+    );
+    bridge.options.hostController.refreshServiceDefinition =
+      refreshServiceDefinition;
+    bridge.options.hostController.convergeReady = convergeReady;
+    bridge.options.hostController.registerService = registerService;
+    bridge.options.hostController.respawn = respawn;
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairQueued,
+    );
+
+    await expect(
+      handler(null, {
+        repair: "refresh-service",
+        expectedHostId: LIVE_HOST_ID,
+      }),
+    ).resolves.toEqual({ kind: "applied" });
+    expect(refreshServiceDefinition).toHaveBeenCalledTimes(1);
+    expect(convergeReady).not.toHaveBeenCalled();
+    expect(registerService).not.toHaveBeenCalled();
+    expect(respawn).not.toHaveBeenCalled();
+  });
+
+  it("queued refresh-service rejects with the failure message on a non-ok outcome", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    const bridge = makeBridge();
+    bridge.options.hostController.refreshServiceDefinition = vi.fn(() =>
+      Promise.resolve({ kind: "failed" as const, message: "refresh failed" }),
+    );
+    const handler = await registerHandler(
+      bridge,
+      invoke.traycerDoctorRepairQueued,
+    );
+
+    await expect(
+      handler(null, {
+        repair: "refresh-service",
+        expectedHostId: LIVE_HOST_ID,
+      }),
+    ).rejects.toThrow("refresh failed");
+  });
+
+  // Coordinator's required test: drive the REAL doctor read and queued
+  // repair handlers against a fake bundled CLI that keeps reporting
+  // HOST_SERVICE_DEFINITION_STALE until it has actually seen `host service
+  // refresh` - proving the wire-through (queued repair -> hostController
+  // .refreshServiceDefinition -> the CLI verb -> the next doctor read),
+  // not just each handler in isolation.
+  interface FakeServiceRefreshResult {
+    readonly kind: "not-registered" | "current" | "refreshed";
+    readonly appliesAt: "next-start" | "next-login" | null;
+  }
+  interface FakeServiceRefreshPayload {
+    readonly result: FakeServiceRefreshResult;
+  }
+
+  it("the HOST_SERVICE_DEFINITION_STALE doctor issue clears after the queued refresh-service repair runs, against a fake CLI", async () => {
+    writeEnrollment(LIVE_HOST_ID);
+    const invoke = RunnerHostInvoke;
+    let refreshSeen = 0;
+    installFakeCli((args) => {
+      if (args[0] === "host" && args[1] === "doctor") {
+        return Promise.resolve({
+          issues:
+            refreshSeen > 0
+              ? []
+              : [
+                  {
+                    code: "HOST_SERVICE_DEFINITION_STALE",
+                    severity: "warning",
+                    title: "Host service definition is out of date",
+                    message:
+                      "The registered service predates the current launcher.",
+                    fixAction: "service-refresh",
+                    terminalCommand: "traycer host service refresh",
+                    details: null,
+                  },
+                ],
+        });
+      }
+      if (
+        args[0] === "host" &&
+        args[1] === "service" &&
+        args[2] === "refresh"
+      ) {
+        refreshSeen += 1;
+        return Promise.resolve({
+          label: "traycer",
+          environment: "production",
+          result: {
+            kind: "refreshed",
+            form: "launcher-file",
+            appliesAt: "next-start",
+          },
+        });
+      }
+      return Promise.reject(
+        new Error(`unexpected CLI call: ${args.join(" ")}`),
+      );
+    });
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const bridge = makeBridge();
+    bridge.options.hostController.refreshServiceDefinition = async () => {
+      const { runBundledTraycerCliJson } =
+        await import("../../cli/traycer-cli");
+      const raw = await runBundledTraycerCliJson<FakeServiceRefreshPayload>([
+        "host",
+        "service",
+        "refresh",
+      ]);
+      return {
+        kind: "ok" as const,
+        value: { result: raw.result.kind, appliesAt: raw.result.appliesAt },
+      };
+    };
+    mgmt.registerHostManagementIpc(bridge as never);
+    const doctor = bridge.handlers.get(invoke.traycerMaintenanceDoctor);
+    const repair = bridge.handlers.get(invoke.traycerDoctorRepairQueued);
+    if (doctor === undefined || repair === undefined) {
+      throw new Error("expected doctor and repair handlers");
+    }
+
+    const before = await doctor(null, { expectedHostId: LIVE_HOST_ID });
+    expect(before).toEqual({
+      status: "ok",
+      issues: [
+        {
+          code: "HOST_SERVICE_DEFINITION_STALE",
+          severity: "warning",
+          title: "Host service definition is out of date",
+          message: "The registered service predates the current launcher.",
+          fixAction: "service-refresh",
+          terminalCommand: "traycer host service refresh",
+          details: null,
+        },
+      ],
+    });
+
+    await expect(
+      repair(null, {
+        repair: "refresh-service",
+        expectedHostId: LIVE_HOST_ID,
+      }),
+    ).resolves.toEqual({ kind: "applied" });
+
+    const after = await doctor(null, { expectedHostId: LIVE_HOST_ID });
+    expect(after).toEqual({ status: "ok", issues: [] });
+
+    const refreshCalls = bundledCliCalls.filter(
+      (call) => call.join(" ") === "host service refresh",
+    );
+    expect(refreshCalls).toHaveLength(1);
+  });
+
+  // MIX-OLD-SUPERVISOR: the lifecycle card's new idle-gated SERVICE channel
+  // (`traycerHostServiceRestartIfHostIdle`), which shares
+  // `respawnWatchedLocalHost`'s identity fence and admission block with the
+  // pre-existing `traycerHostRestartIfIdle` above - mirrored here rather than
+  // re-proving the fence/admission mechanics (already covered by the
+  // mismatch/admission-block tests above) - plus the ONE way it differs: the
+  // mode it passes to `respawn()` and how it renders a busy outcome.
+  describe("traycerHostServiceRestartIfHostIdle IPC", () => {
+    it("an identity mismatch declines without calling respawn", async () => {
+      writeEnrollment(LIVE_HOST_ID);
+      const respawn = vi.fn(() =>
+        Promise.resolve({ kind: "ok" as const, value: { activated: true } }),
+      );
+      const bridge = makeBridge();
+      bridge.options.hostController.respawn = respawn;
+      const restart = await registerHandler(
+        bridge,
+        RunnerHostInvoke.traycerHostServiceRestartIfHostIdle,
+      );
+
+      await expect(
+        restart(null, { expectedHostId: OTHER_HOST_ID }),
+      ).resolves.toEqual({ kind: "declined", message: HOST_CHANGED_MESSAGE });
+      expect(respawn).not.toHaveBeenCalled();
+    });
+
+    it("an admission block declines without calling respawn", async () => {
+      const respawn = vi.fn(() =>
+        Promise.resolve({ kind: "ok" as const, value: { activated: true } }),
+      );
+      const bridge = makeBridge();
+      bridge.options.hostController.lifecycleAdmissionBlock = {
+        kind: "login-item-refresh",
+      };
+      bridge.options.hostController.respawn = respawn;
+      const restart = await registerHandler(
+        bridge,
+        RunnerHostInvoke.traycerHostServiceRestartIfHostIdle,
+      );
+
+      await expect(
+        restart(null, { expectedHostId: LIVE_HOST_ID }),
+      ).resolves.toEqual({
+        kind: "declined",
+        message: LOGIN_ITEM_REFRESH_MESSAGE,
+      });
+      expect(respawn).not.toHaveBeenCalled();
+    });
+
+    it('otherwise respawn runs once with a user-repair intent fenced to expectedHostId and mode "if-idle"', async () => {
+      writeEnrollment(LIVE_HOST_ID);
+      const calls: Array<{
+        readonly intent: LocalHostMutationIntent;
+        readonly mode: HostRespawnMode;
+      }> = [];
+      const respawn = vi.fn(
+        (intent: LocalHostMutationIntent, mode: HostRespawnMode) => {
+          calls.push({ intent, mode });
+          return Promise.resolve({
+            kind: "ok" as const,
+            value: { activated: true },
+          });
+        },
+      );
+      const bridge = makeBridge();
+      bridge.options.hostController.respawn = respawn;
+      const restart = await registerHandler(
+        bridge,
+        RunnerHostInvoke.traycerHostServiceRestartIfHostIdle,
+      );
+
+      await expect(
+        restart(null, { expectedHostId: LIVE_HOST_ID }),
+      ).resolves.toEqual({ kind: "restarted" });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].mode).toBe("if-idle");
+      if (calls[0].intent.kind !== "user-repair") {
+        throw new Error("expected a user-repair intent");
+      }
+      expect(calls[0].intent.targetHostId).toBe(LIVE_HOST_ID);
+    });
+
+    it("a busy outcome maps to host-busy, not declined - the host's own refusal text is dropped", async () => {
+      writeEnrollment(LIVE_HOST_ID);
+      const respawn = vi.fn(() =>
+        Promise.resolve({
+          kind: "busy" as const,
+          continuation: "retry-with-force" as const,
+          message:
+            "The host has work in progress; refusing to restart it and lose that work.",
+        }),
+      );
+      const bridge = makeBridge();
+      bridge.options.hostController.respawn = respawn;
+      const restart = await registerHandler(
+        bridge,
+        RunnerHostInvoke.traycerHostServiceRestartIfHostIdle,
+      );
+
+      await expect(
+        restart(null, { expectedHostId: LIVE_HOST_ID }),
+      ).resolves.toEqual({ kind: "host-busy" });
+    });
+
+    it('traycerHostRestartIfIdle (the cooperative-fallback channel) still calls respawn with "force"', async () => {
+      writeEnrollment(LIVE_HOST_ID);
+      const modes: HostRespawnMode[] = [];
+      const respawn = vi.fn(
+        (_intent: LocalHostMutationIntent, mode: HostRespawnMode) => {
+          modes.push(mode);
+          return Promise.resolve({
+            kind: "ok" as const,
+            value: { activated: true },
+          });
+        },
+      );
+      const bridge = makeBridge();
+      bridge.options.hostController.respawn = respawn;
+      const restart = await registerHandler(
+        bridge,
+        RunnerHostInvoke.traycerHostRestartIfIdle,
+      );
+
+      await expect(
+        restart(null, { expectedHostId: LIVE_HOST_ID }),
+      ).resolves.toEqual({ kind: "restarted" });
+      expect(modes).toEqual(["force"]);
     });
   });
 });

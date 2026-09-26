@@ -719,3 +719,219 @@ describe("DesktopTrayController menu structure", () => {
     );
   });
 });
+
+describe("DesktopTrayController host lifecycle (T06)", () => {
+  beforeEach(() => {
+    mockAppState.appPath = REPO_DESKTOP_ROOT;
+    mockMenuState.lastBuiltMenu = null;
+    trayInstances.length = 0;
+    Object.defineProperty(process, "resourcesPath", {
+      configurable: true,
+      value: join(REPO_DESKTOP_ROOT, "resources"),
+    });
+  });
+
+  function newController(): DesktopTrayController {
+    return new DesktopTrayController(makeWindow(), trayImage(), {
+      onEpicSelected: null,
+      onCommand: null,
+    });
+  }
+
+  function labels(): (string | undefined)[] {
+    return latestMenuTemplate().map((entry) => entry.label);
+  }
+
+  it("shows the mode line as a disabled row and in the tooltip", () => {
+    const controller = newController();
+    controller.setIndicator("attention");
+    controller.setHostLifecyclePresentation({
+      line: "Host: running · stops with app",
+      offerQuitAndStopHost: false,
+      offerRestartHost: true,
+    });
+    const row = latestMenuTemplate().find(
+      (entry) => entry.label === "Host: running · stops with app",
+    );
+    expect(row?.enabled).toBe(false);
+    expect(row?.click).toBeUndefined();
+    const tray = mostRecentTray();
+    expect(tray.toolTips.at(-1)).toBe(
+      "Traycer (attention)\nHost: running · stops with app",
+    );
+  });
+
+  it("a null line hides the row and leaves the tooltip as the indicator alone", () => {
+    const controller = newController();
+    controller.setHostLifecyclePresentation({
+      line: "Host: running · x",
+      offerQuitAndStopHost: false,
+      offerRestartHost: true,
+    });
+    controller.setHostLifecyclePresentation({
+      line: null,
+      offerQuitAndStopHost: false,
+      offerRestartHost: true,
+    });
+    expect(labels().some((label) => label?.startsWith("Host:"))).toBe(false);
+    expect(mostRecentTray().toolTips.at(-1)).toBe("Traycer (idle)");
+  });
+
+  it("'Quit and Stop Host' appears only when offered, right above 'Quit Traycer' (which stays last), and runs its handler", () => {
+    const controller = newController();
+    let ran = 0;
+    controller.setQuitAndStopHostHandler(() => {
+      ran += 1;
+    });
+    expect(labels()).not.toContain("Quit and Stop Host");
+
+    controller.setHostLifecyclePresentation({
+      line: "Host: running · keeps running after quit",
+      offerQuitAndStopHost: true,
+      offerRestartHost: true,
+    });
+    const all = labels();
+    const at = all.indexOf("Quit and Stop Host");
+    expect(at).toBeGreaterThan(-1);
+    expect(all[at + 1]).toBe("Quit Traycer");
+    expect(all[all.length - 1]).toBe("Quit Traycer");
+
+    latestMenuTemplate()[at].click?.();
+    expect(ran).toBe(1);
+
+    controller.setHostLifecyclePresentation({
+      line: "Host: running · stops with app",
+      offerQuitAndStopHost: false,
+      offerRestartHost: true,
+    });
+    expect(labels()).not.toContain("Quit and Stop Host");
+  });
+
+  it("an identical presentation is a no-op: no tooltip write, no menu rebuild", () => {
+    const controller = newController();
+    controller.setHostLifecyclePresentation({
+      line: "Host: a",
+      offerQuitAndStopHost: true,
+      offerRestartHost: true,
+    });
+    const tips = mostRecentTray().toolTips.length;
+    const menu = mockMenuState.lastBuiltMenu;
+    controller.setHostLifecyclePresentation({
+      line: "Host: a",
+      offerQuitAndStopHost: true,
+      offerRestartHost: true,
+    });
+    expect(mostRecentTray().toolTips).toHaveLength(tips);
+    expect(mockMenuState.lastBuiltMenu).toBe(menu);
+  });
+
+  it("setQuitStopping(true) puts 'Stopping host…' in the tooltip and a disabled menu row; false restores the presentation line", () => {
+    const controller = newController();
+    controller.setIndicator("active");
+    controller.setHostLifecyclePresentation({
+      line: "Host: running · stops with app",
+      offerQuitAndStopHost: false,
+      offerRestartHost: true,
+    });
+
+    controller.setQuitStopping(true);
+    const tray = mostRecentTray();
+    expect(tray.toolTips.at(-1)).toBe("Traycer (active)\nStopping host…");
+    const stopping = latestMenuTemplate().find(
+      (entry) => entry.label === "Stopping host…",
+    );
+    expect(stopping?.enabled).toBe(false);
+    expect(labels()).not.toContain("Host: running · stops with app");
+
+    controller.setQuitStopping(false);
+    expect(tray.toolTips.at(-1)).toBe(
+      "Traycer (active)\nHost: running · stops with app",
+    );
+    expect(labels()).toContain("Host: running · stops with app");
+    expect(labels()).not.toContain("Stopping host…");
+  });
+
+  it("a repeated setQuitStopping(true) makes no extra setToolTip call and no menu rebuild (a change does)", () => {
+    const controller = newController();
+    controller.setQuitStopping(true);
+    const tray = mostRecentTray();
+    const tips = tray.toolTips.length;
+    const menu = mockMenuState.lastBuiltMenu;
+    controller.setQuitStopping(true);
+    expect(tray.toolTips).toHaveLength(tips);
+    expect(mockMenuState.lastBuiltMenu).toBe(menu);
+
+    controller.setQuitStopping(false);
+    expect(tray.toolTips).toHaveLength(tips + 1);
+    expect(mockMenuState.lastBuiltMenu).not.toBe(menu);
+  });
+
+  it("repeating false while off is also a no-op", () => {
+    const controller = newController();
+    const tray = mostRecentTray();
+    const tips = tray.toolTips.length;
+    controller.setQuitStopping(false);
+    expect(tray.toolTips).toHaveLength(tips);
+  });
+
+  // The deliberate fail-open default (OBS-NONE-RESTART-MENU): before any
+  // host-lifecycle presentation has landed, Restart Host must still be
+  // reachable - a policy read that never arrives must not silently remove
+  // the remedy control.
+  it("offers Restart Host by default, before any host-lifecycle presentation is set", () => {
+    newController();
+    expect(labels()).toContain("Restart Host");
+  });
+
+  it("hides Restart Host when offerRestartHost is false, shows and dispatches it when true", () => {
+    const commands: string[] = [];
+    const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+      onEpicSelected: null,
+      onCommand: (command) => {
+        commands.push(command);
+      },
+    });
+
+    controller.setHostLifecyclePresentation({
+      line: "No local host",
+      offerQuitAndStopHost: false,
+      offerRestartHost: false,
+    });
+    expect(labels()).not.toContain("Restart Host");
+
+    controller.setHostLifecyclePresentation({
+      line: "Host: running · stops with app",
+      offerQuitAndStopHost: false,
+      offerRestartHost: true,
+    });
+    expect(labels()).toContain("Restart Host");
+
+    latestMenuTemplate()
+      .find((entry) => entry.label === "Restart Host")
+      ?.click?.();
+    expect(commands).toEqual(["host.restart"]);
+  });
+
+  // The no-change check must compare `offerRestartHost` too, not just
+  // `line` and `offerQuitAndStopHost` - otherwise a presentation that only
+  // flips this field early-returns and the menu is never rebuilt.
+  it("rebuilds the menu when only offerRestartHost changes between presentations", () => {
+    const controller = newController();
+    controller.setHostLifecyclePresentation({
+      line: "Host: a",
+      offerQuitAndStopHost: true,
+      offerRestartHost: true,
+    });
+    expect(labels()).toContain("Restart Host");
+    const menu = mockMenuState.lastBuiltMenu;
+
+    controller.setHostLifecyclePresentation({
+      line: "Host: a",
+      offerQuitAndStopHost: true,
+      offerRestartHost: false,
+    });
+
+    expect(mockMenuState.lastBuiltMenu).not.toBe(menu);
+    expect(labels()).not.toContain("Restart Host");
+  });
+});

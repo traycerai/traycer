@@ -26,7 +26,37 @@ const mocks = vi.hoisted(() => ({
   gateStoreFormatFloorMock: vi.fn(),
   serviceManagerMayRespawnMock: vi.fn(),
   fetchTextMock: vi.fn(),
+  // The host-start adoption publisher the commit facade hands the install
+  // lifecycle (`setHostStartAdoptionPublisher`), and the origin each proof it
+  // published carried. The real lifecycle calls the publisher at its
+  // post-swap service spawn; the stand-in below only records it.
+  adoptionPublisher: null as
+    | ((serviceLabel: string) => Promise<unknown>)
+    | null,
+  publishedOrigins: [] as string[],
 }));
+
+// Only the publication is replaced: it records the proof's origin and hands
+// back an immediately-satisfied lease instead of waiting on a service child.
+vi.mock("../../host/host-start-adoption", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/host-start-adoption")>();
+  return {
+    ...actual,
+    publishHostStartAdoption: async (
+      _capability: unknown,
+      _contenderOptions: unknown,
+      _serviceLabel: string,
+      origin: string,
+    ) => {
+      mocks.publishedOrigins.push(origin);
+      return {
+        waitForSpawn: async () => undefined,
+        cancel: async () => undefined,
+      };
+    },
+  };
+});
 
 // The real store-format floor (kept real below) consults the registry on
 // every genuine downgrade: `lookupPublishedStoreFormats` fetches the LIVE
@@ -198,6 +228,11 @@ vi.mock("../../service/install-lifecycle", () => ({
           await options.hooks.afterSwap();
         },
         swapLockRecovery: null,
+        setHostStartAdoptionPublisher: (
+          publish: (serviceLabel: string) => Promise<unknown>,
+        ) => {
+          mocks.adoptionPublisher = publish;
+        },
       },
     };
   },
@@ -291,6 +326,8 @@ describe("installHostDowngrade", () => {
     mocks.busy = false;
     mocks.beforeSwapError = false;
     mocks.lifecycleCalls = [];
+    mocks.adoptionPublisher = null;
+    mocks.publishedOrigins = [];
     mocks.fetchTextMock.mockRejectedValue(
       new Error("registry unreachable in this sandbox"),
     );
@@ -299,6 +336,36 @@ describe("installHostDowngrade", () => {
   afterEach(() => {
     rmSync(mocks.sandboxHome, { recursive: true, force: true });
     vi.resetAllMocks();
+  });
+
+  it("hands the install lifecycle a publisher whose proof records `maintenance`", async () => {
+    // Lifecycle modes (T03): a downgrade is a `host update` leg - it replaces
+    // the bytes of a run that already existed - so the relaunch after the
+    // swap records `maintenance` in the proof the supervisor consumes,
+    // whoever invoked the update.
+    await writeInstalled("1.3.0-rc.1", "old");
+    configureRegistry("1.2.0", "new");
+
+    const outcome = await installHostDowngrade({
+      environment: ENV,
+      version: "1.2.0",
+      force: false,
+      acceptStoreFormatLoss: false,
+      onProgress: noopProgress,
+      onBeforeCommit: async () => undefined,
+      onWillDisruptHost: () => undefined,
+      beforeExtract: async () => undefined,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+    expect(outcome.outcome).toBe("applied");
+
+    // What the real lifecycle does at its post-swap service spawn.
+    const publish = mocks.adoptionPublisher;
+    if (publish === null) {
+      throw new Error("the commit never handed the lifecycle a publisher");
+    }
+    await publish("ai.traycer.host");
+    expect(mocks.publishedOrigins).toEqual(["maintenance"]);
   });
 
   it("stages and commits lower-version bytes over the current install, preserving force", async () => {

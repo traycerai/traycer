@@ -243,6 +243,25 @@ export const RunnerHostInvoke = {
   gpuAccelerationSet: "runnerHost:gpu:set",
   logLevelsGet: "runnerHost:logLevels:get",
   logLevelsSet: "runnerHost:logLevels:set",
+  // Host lifecycle mode (host-lifecycle-modes T05). A capability of its own,
+  // independent of `hostManagement` and registered in `none` mode too, so a
+  // machine that runs no local host can still switch back.
+  hostLifecycleGet: "runnerHost:hostLifecycle:get",
+  hostLifecycleSet: "runnerHost:hostLifecycle:set",
+  // The quit transaction's renderer round-trip (host-lifecycle-modes T06):
+  // the modal's answer to a `hostQuitRequest`. Main ignores an unknown or
+  // stale `requestId`.
+  hostQuitRespond: "runnerHost:hostQuit:respond",
+  // PRELOAD-INTERNAL, never on the renderer surface. `listening` is this
+  // window's readiness for a quit request (the preload reports its first
+  // `onQuitRequest` subscriber and its last dispose), and `acknowledge` is the
+  // servicing ack the preload sends once a request reached a handler that did
+  // not throw - together the host-quit equivalent of the unsynced-edits path's
+  // `appLifecycleReadyWindowIds` + `acknowledgeQuitRequest`. Without them a
+  // window that never mounted the modal, or a frozen renderer, would hold a
+  // quit open for ever.
+  hostQuitListening: "runnerHost:hostQuit:listening",
+  hostQuitAcknowledge: "runnerHost:hostQuit:acknowledge",
   featureSettingsGet: "runnerHost:featureSettings:get",
   agentRolesEnabledSet: "runnerHost:featureSettings:agentRoles:set",
   // Enumerates fonts installed on this machine for the Appearance font
@@ -316,6 +335,10 @@ export const RunnerHostInvoke = {
   // semantics for the tray/menu; a Settings restart refuses instead of
   // firing a kill against state the person never saw.
   traycerHostRestartIfIdle: "runnerHost:traycer:host:restartIfIdle",
+  // The lifecycle card's idle-gated SERVICE restart: fenced and refusing like
+  // the one above, but the host's busy veto stands (no `--force`).
+  traycerHostServiceRestartIfHostIdle:
+    "runnerHost:traycer:host:serviceRestartIfHostIdle",
   traycerDoctorRepairIfIdle: "runnerHost:traycer:doctor:repairIfIdle",
   traycerHostNameGet: "runnerHost:traycer:host:name:get",
   traycerHostNameSet: "runnerHost:traycer:host:name:set",
@@ -511,6 +534,14 @@ export const RunnerHostEvent = {
   selectionChanged: "runnerHost:event:selection:selectionChanged",
   selectionLeasesChanged: "runnerHost:event:selection:leasesChanged",
   selectionReattachRequired: "runnerHost:event:selection:reattachRequired",
+  // A fresh `HostLifecycleView` whenever it changed: a mode change from this
+  // app, or a policy / supervisor record written by the CLI.
+  hostLifecycleChange: "runnerHost:event:hostLifecycle:change",
+  // The quit transaction asking the MRU window's host quit modal for a
+  // decision (`HostQuitDecisionRequest`), and its progress after one
+  // (`HostQuitStateEvent`, fanned to every window).
+  hostQuitRequest: "runnerHost:event:hostQuit:request",
+  hostQuitState: "runnerHost:event:hostQuit:state",
 } as const;
 
 /**
@@ -527,6 +558,9 @@ export const RunnerHostSync = {
   // same pattern that serves `windowId`). No preload-local counter exists, so
   // a reloaded preload can never repeat or reset the sequence.
   selectionAttachSeq: "runnerHost:sync:selectionAttachSeq",
+  // `"managed"` or `"none"`: whether this app instance runs the local-host
+  // lanes, pinned at boot from the lifecycle policy (restart-to-apply).
+  localHostCapability: "runnerHost:sync:localHostCapability",
 } as const;
 
 type RunnerHostInvokeChannel =

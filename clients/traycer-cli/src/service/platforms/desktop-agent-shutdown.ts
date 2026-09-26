@@ -308,17 +308,12 @@ export async function forceStopHostProcessReporting(
   // recover. Re-read and remove only on an exact instance match (pid + start
   // identity, the same pair that gated the signals). Best-effort either way:
   // the stop itself already succeeded.
-  if (outcome.kind === "stopped" || outcome.kind === "no-host") {
+  if (
+    (outcome.kind === "stopped" || outcome.kind === "no-host") &&
+    actedOn !== null
+  ) {
     try {
-      const current = await readHostPidMetadata(environment);
-      if (
-        current !== null &&
-        actedOn !== null &&
-        current.pid === actedOn.pid &&
-        current.processStartIdentity === actedOn.processStartIdentity
-      ) {
-        await removeHostPidMetadata(environment);
-      }
+      await removeHostPidMetadataIfUnchanged(environment, actedOn);
     } catch (error) {
       logger.warn("Could not remove pid.json after a forced stop", {
         environment,
@@ -328,6 +323,36 @@ export async function forceStopHostProcessReporting(
     }
   }
   return outcome;
+}
+
+/**
+ * Remove `pid.json` only while it still names EXACTLY `instance` - the same
+ * pid and the same process-start identity - and report whether it did.
+ *
+ * For a stop that has just ended `instance` and owes the machine the purge a
+ * graceful host would have done itself: {@link forceStopHostProcessReporting}
+ * above, and the supervisor's lifecycle teardown (`host/lifecycle-teardown.ts`).
+ * The re-read is the guard: a supervisor relaunched mid-stop can publish a
+ * REPLACEMENT host's record in that window, and an unconditional unlink would
+ * leave that host running but undiscoverable, its absence read as a deliberate
+ * stop nothing will recover. Whether `instance` is really gone is the
+ * caller's to establish first; this only refuses to touch anybody else's
+ * record.
+ */
+export async function removeHostPidMetadataIfUnchanged(
+  environment: Environment,
+  instance: Pick<HostPidMetadata, "pid" | "processStartIdentity">,
+): Promise<boolean> {
+  const current = await readHostPidMetadata(environment);
+  if (
+    current === null ||
+    current.pid !== instance.pid ||
+    current.processStartIdentity !== instance.processStartIdentity
+  ) {
+    return false;
+  }
+  await removeHostPidMetadata(environment);
+  return true;
 }
 
 // The outcome plus the pid.json record the signals were aimed at (`null`

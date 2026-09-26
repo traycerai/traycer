@@ -276,4 +276,56 @@ describe("runDoctor RECENT_CRASH_MARKERS recovery", () => {
     const crash = result.issues.find((i) => i.code === "RECENT_CRASH_MARKERS");
     expect(crash).toBeUndefined();
   });
+
+  // O-WIN-1: on Windows, a requested stop is recorded as `killed` with the
+  // handle-bound kill's exit CODE and no signal - the same shape `persistChildExit`
+  // now writes for the arm this doctor rule must not flag. `isFatalSignal`
+  // (which `lastCrashMarker` gates on) is false for an undefined signal, so
+  // this marker never becomes a crash to begin with; this pins that the doctor
+  // rule agrees.
+  it("does not treat a Windows requested-kill (killed+code, no signal) as a crash marker", async () => {
+    stageQuietHost([
+      {
+        timestamp: "2026-01-01T00:00:00.000Z",
+        phase: "killed",
+        fields: { code: "4294967295" },
+      },
+    ]);
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: { runCommand: async () => null, platform: "darwin" },
+    });
+
+    const crash = result.issues.find((i) => i.code === "RECENT_CRASH_MARKERS");
+    expect(crash).toBeUndefined();
+  });
+
+  // Positive control for the test above: the identical fields, but as a
+  // `crashed` marker, MUST be flagged - proving the negative isn't vacuous
+  // (an empty marker list, a wrong environment, a disabled rule, ...).
+  it("positive control: the identical code, recorded as phase=crashed, IS a crash marker", async () => {
+    stageQuietHost([
+      {
+        timestamp: "2026-01-01T00:00:00.000Z",
+        phase: "crashed",
+        fields: { code: "4294967295" },
+      },
+    ]);
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: { runCommand: async () => null, platform: "darwin" },
+    });
+
+    const crash = result.issues.find((i) => i.code === "RECENT_CRASH_MARKERS");
+    expect(crash).toBeDefined();
+    expect(crash?.severity).toBe("error");
+    expect(crash?.details).toMatchObject({
+      phase: "crashed",
+      recovered: false,
+    });
+  });
 });

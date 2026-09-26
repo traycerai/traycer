@@ -1,5 +1,9 @@
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import type { CommandFn, CommandResult } from "../runner/runner";
+import type {
+  CommandContext,
+  CommandFn,
+  CommandResult,
+} from "../runner/runner";
 import {
   createServiceController,
   serviceLabelFor,
@@ -8,10 +12,14 @@ import {
 } from "../service";
 import { withCliUpdateContender } from "../host/update-contender";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
-import { startHostServiceWithAttempt } from "../host/update-mutation";
+import {
+  startHostServiceWithAttempt,
+  type ServiceStartOutcome,
+} from "../host/update-mutation";
 import type { Environment } from "../runner/environment";
 import type { ILogger } from "../logger";
 import { findLiveIncumbentHost } from "../host/incumbent-check";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
 
 // `traycer host service start` - ask the OS service manager to start the
 // already-registered host in the BACKGROUND and return.
@@ -93,9 +101,23 @@ async function statusBestEffort(
   }
 }
 
-export const serviceStartCommand: CommandFn = async (
-  ctx,
-): Promise<CommandResult> => {
+export interface ServiceStartArgs {
+  /**
+   * `--lifecycle-origin`, recorded in the adoption proof this start publishes
+   * (`host/lifecycle-origin.ts`). Informational: it never decides whether the
+   * supervisor runs.
+   */
+  readonly lifecycleOrigin: HostStartOrigin;
+}
+
+export function buildServiceStartCommand(args: ServiceStartArgs): CommandFn {
+  return (ctx) => runServiceStart(ctx, args);
+}
+
+async function runServiceStart(
+  ctx: CommandContext,
+  args: ServiceStartArgs,
+): Promise<CommandResult> {
   ctx.runtime.logger.info("Service start command started", {
     environment: ctx.runtime.environment,
   });
@@ -174,10 +196,12 @@ export const serviceStartCommand: CommandFn = async (
     // redirects the start to the agent label that launchd can actually
     // start. Refusing here would leave the one platform where Desktop is
     // the common setup without a background start.
+    let outcome: ServiceStartOutcome;
     try {
-      await startHostServiceWithAttempt(
+      outcome = await startHostServiceWithAttempt(
         capability,
         contenderOptions,
+        args.lifecycleOrigin,
         controller,
         label,
       );
@@ -195,6 +219,29 @@ export const serviceStartCommand: CommandFn = async (
         });
       }
       throw cause;
+    }
+    // The service IS running - its supervisor is, between two relaunches of a
+    // host that died - so the service manager would start nothing, and a
+    // start published over it used to stall that relaunch. The request is
+    // already satisfied by the supervisor; this command promises an accepted
+    // request, not readiness, so it says what it found and returns.
+    if (outcome.kind === "supervisor-relaunching") {
+      ctx.runtime.logger.info(
+        "Service start command found the service's supervisor relaunching the host",
+        {
+          environment: ctx.runtime.environment,
+          label: label.id,
+          supervisorPid: outcome.supervisorPid,
+        },
+      );
+      return {
+        data: {
+          ...startData(label, before?.state ?? null, before, false),
+          supervisorRelaunchingPid: outcome.supervisorPid,
+        },
+        human: `service '${label.id}' is already running: its supervisor (pid ${String(outcome.supervisorPid)}) is relaunching the host, so no start was requested; run 'traycer host status' to confirm the host came back`,
+        exitCode: 0,
+      };
     }
     // Also best-effort: the start was ACCEPTED, and a descriptive readback
     // that fails afterwards must not turn that into a nonzero result. This
@@ -217,7 +264,7 @@ export const serviceStartCommand: CommandFn = async (
       exitCode: 0,
     };
   });
-};
+}
 
 function startData(
   label: ServiceLabel,

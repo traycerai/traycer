@@ -11,6 +11,7 @@ import {
 } from "@/components/host/host-restart-copy";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
+import { HostLifecycleModeLine } from "@/components/settings/host-scope/host-lifecycle-mode-line";
 import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { useHostRegistryUpdateMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
@@ -204,7 +205,10 @@ export function HostOverviewPanel(props: {
   readonly scope: HostScope;
   /** True when this shell has a CLI bridge for the local-only doctor repairs. */
   readonly hasLocalBridge: boolean;
-  readonly onLocalDoctorFix: (issue: HostDoctorIssue) => void;
+  readonly onLocalDoctorFix: (
+    issue: HostDoctorIssue,
+    onApplied: () => void,
+  ) => void;
   readonly localDoctorFixPendingCode: string | null;
   /**
    * The selected tab, held by `HostSettingsPanel` ABOVE this page's per-host
@@ -1902,6 +1906,7 @@ export function HostOverviewPanel(props: {
         healthAction={
           <HostUpdateRequiredSlot host={host} canManageHost={canManageHost} />
         }
+        lifecycleLine={host.isLocalMachine ? <HostLifecycleModeLine /> : null}
         // Last on the health line, off Status. A phone draws it as the strip
         // above the section dropdown instead.
         updatePill={

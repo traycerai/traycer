@@ -137,6 +137,21 @@ export function isExperimentalGroupAvailable(
   return context.featureSettings !== null;
 }
 
+/**
+ * General › When you quit Traycer — the desktop's host lifecycle bridge.
+ * Present in every desktop launch, including one with no local host (where
+ * it is the only way back), and absent on the phone and in the browser.
+ */
+export function isHostLifecycleGroupAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return (
+    !context.mobileApp &&
+    context.runnerHost !== null &&
+    context.runnerHost.hostLifecycle !== null
+  );
+}
+
 /** Appearance › Zoom — the desktop zoom bridge. */
 export function isZoomRowAvailable(
   context: SettingsAvailabilityContext,

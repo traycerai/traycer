@@ -146,7 +146,7 @@ import type {
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
 import type {
-  HostStatusUpdateOperation,
+  HostStatusUpdateOperationV2,
   HostStatusUpdateProgress,
 } from "@traycer/protocol/host/status/index";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -233,6 +233,9 @@ function makeManagement(): IHostManagement {
       notImplemented("maintenanceInstallVersion"),
     ),
     restartHostIfIdle: vi.fn(notImplemented("restartHostIfIdle")),
+    restartHostServiceIfHostIdle: vi.fn(
+      notImplemented("restartHostServiceIfHostIdle"),
+    ),
     runDoctorRepairIfIdle: vi.fn(notImplemented("runDoctorRepairIfIdle")),
     getHostName: vi.fn(() =>
       Promise.resolve({
@@ -285,7 +288,7 @@ function bindLocalHost(
 }
 
 function attemptStatus(
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
   return {
     ready: true,
@@ -303,8 +306,8 @@ function attemptStatus(
 }
 
 function baseAttempt(
-  overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
-): HostStatusUpdateOperation {
+  overrides: Partial<Extract<HostStatusUpdateOperationV2, { kind: "attempt" }>>,
+): HostStatusUpdateOperationV2 {
   return {
     kind: "attempt",
     attemptId: "attempt-1",
@@ -408,7 +411,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
   // 1. Every banner state names its phase.
   const STATE_CASES: ReadonlyArray<{
     readonly name: string;
-    readonly operation: HostStatusUpdateOperation;
+    readonly operation: HostStatusUpdateOperationV2;
     readonly expectedPhrase: RegExp;
   }> = [
     {
@@ -732,7 +735,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
   // controls checked directly.
   const ISOLATION_CASES: ReadonlyArray<{
     readonly name: string;
-    readonly operation: HostStatusUpdateOperation | null;
+    readonly operation: HostStatusUpdateOperationV2 | null;
     readonly updateProgress: HostStatusUpdateProgress | null;
   }> = [
     {

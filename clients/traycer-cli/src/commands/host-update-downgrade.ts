@@ -192,6 +192,9 @@ export async function installHostDowngradeInSegment(
         const result = await commitHostInstallSourceWithAttempt(
           capability,
           contenderOptions,
+          // A `host update` leg: it replaces the bytes of a run that already
+          // existed, so its relaunch is maintenance whoever invoked the update.
+          "maintenance",
           {
             environment: input.environment,
             staged,

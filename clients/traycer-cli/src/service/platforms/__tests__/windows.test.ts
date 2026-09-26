@@ -18,6 +18,8 @@ import {
   buildWindowsSlotProcessDetailScanScript,
   buildWindowsSlotProcessTableScanScript,
   computeWindowsHostKillSet,
+  computeWindowsTreeKillSet,
+  killSupervisedHostTree,
   createWindowsController,
   describeSlotLockHolders,
   killLingeringSlotProcesses,
@@ -28,6 +30,7 @@ import {
   parseWindowsProcessTableJson,
   setWindowsStartEvidenceDepsForTests,
   setWindowsTaskInstallDepsForTests,
+  setWindowsTaskUserSidReaderForTests,
   WINDOWS_KILL_TARGETS_PER_SCRIPT,
   type ProcessRunner,
   type WindowsControllerDeps,
@@ -4027,8 +4030,19 @@ describe("Scheduled Task XML identity", () => {
     // "sh from Unknown Developer" login item, one field cheaper to fix.
     const prevDomain = process.env.USERDOMAIN;
     const prevUser = process.env.USERNAME;
+    const prevComputer = process.env.COMPUTERNAME;
+    const prevDnsDomain = process.env.USERDNSDOMAIN;
     process.env.USERDOMAIN = "TESTBOX";
     process.env.USERNAME = "testuser";
+    // Hermeticity (SSH-USERDOMAIN-WORKGROUP): `resolveTaskUserId` now
+    // prefers a real SID from `whoami /user`, and its environment fallback
+    // also reads COMPUTERNAME/USERDNSDOMAIN - none of which this test
+    // asserts on, but a real COMPUTERNAME or SID on a Windows dev machine
+    // must not be allowed to throw off `buildScheduledTaskXml`'s <UserId>
+    // resolution underneath it.
+    process.env.COMPUTERNAME = "";
+    process.env.USERDNSDOMAIN = "";
+    setWindowsTaskUserSidReaderForTests(() => null);
     try {
       const xml = buildScheduledTaskXml({
         label: serviceLabelFor("staging"),
@@ -4043,6 +4057,11 @@ describe("Scheduled Task XML identity", () => {
       else process.env.USERDOMAIN = prevDomain;
       if (prevUser === undefined) delete process.env.USERNAME;
       else process.env.USERNAME = prevUser;
+      if (prevComputer === undefined) delete process.env.COMPUTERNAME;
+      else process.env.COMPUTERNAME = prevComputer;
+      if (prevDnsDomain === undefined) delete process.env.USERDNSDOMAIN;
+      else process.env.USERDNSDOMAIN = prevDnsDomain;
+      setWindowsTaskUserSidReaderForTests(null);
     }
   });
 
@@ -4089,8 +4108,19 @@ describe("Scheduled Task XML identity", () => {
     // second run for a failed repair".
     const prevDomain = process.env.USERDOMAIN;
     const prevUser = process.env.USERNAME;
+    const prevComputer = process.env.COMPUTERNAME;
+    const prevDnsDomain = process.env.USERDNSDOMAIN;
     process.env.USERDOMAIN = "TESTBOX";
     process.env.USERNAME = "testuser";
+    // Hermeticity (SSH-USERDOMAIN-WORKGROUP): `resolveTaskUserId` now
+    // prefers a real SID from `whoami /user`, and its environment fallback
+    // also reads COMPUTERNAME/USERDNSDOMAIN - none of which this test
+    // asserts on, but a real COMPUTERNAME or SID on a Windows dev machine
+    // must not be allowed to throw off `buildScheduledTaskXml`'s <UserId>
+    // resolution underneath it.
+    process.env.COMPUTERNAME = "";
+    process.env.USERDNSDOMAIN = "";
+    setWindowsTaskUserSidReaderForTests(() => null);
     try {
       const xml = buildScheduledTaskXml({
         label: serviceLabelFor("staging"),
@@ -4107,6 +4137,11 @@ describe("Scheduled Task XML identity", () => {
       else process.env.USERDOMAIN = prevDomain;
       if (prevUser === undefined) delete process.env.USERNAME;
       else process.env.USERNAME = prevUser;
+      if (prevComputer === undefined) delete process.env.COMPUTERNAME;
+      else process.env.COMPUTERNAME = prevComputer;
+      if (prevDnsDomain === undefined) delete process.env.USERDNSDOMAIN;
+      else process.env.USERDNSDOMAIN = prevDnsDomain;
+      setWindowsTaskUserSidReaderForTests(null);
     }
   });
 
@@ -4130,8 +4165,19 @@ describe("Scheduled Task XML identity", () => {
     // is what makes that arrive as a red test rather than as a support ticket.
     const prevDomain = process.env.USERDOMAIN;
     const prevUser = process.env.USERNAME;
+    const prevComputer = process.env.COMPUTERNAME;
+    const prevDnsDomain = process.env.USERDNSDOMAIN;
     process.env.USERDOMAIN = "TESTBOX";
     process.env.USERNAME = "testuser";
+    // Hermeticity (SSH-USERDOMAIN-WORKGROUP): `resolveTaskUserId` now
+    // prefers a real SID from `whoami /user`, and its environment fallback
+    // also reads COMPUTERNAME/USERDNSDOMAIN - none of which this test
+    // asserts on, but a real COMPUTERNAME or SID on a Windows dev machine
+    // must not be allowed to throw off `buildScheduledTaskXml`'s <UserId>
+    // resolution underneath it.
+    process.env.COMPUTERNAME = "";
+    process.env.USERDNSDOMAIN = "";
+    setWindowsTaskUserSidReaderForTests(() => null);
     try {
       const xml = buildScheduledTaskXml({
         label: serviceLabelFor("staging"),
@@ -4146,6 +4192,11 @@ describe("Scheduled Task XML identity", () => {
       else process.env.USERDOMAIN = prevDomain;
       if (prevUser === undefined) delete process.env.USERNAME;
       else process.env.USERNAME = prevUser;
+      if (prevComputer === undefined) delete process.env.COMPUTERNAME;
+      else process.env.COMPUTERNAME = prevComputer;
+      if (prevDnsDomain === undefined) delete process.env.USERDNSDOMAIN;
+      else process.env.USERDNSDOMAIN = prevDnsDomain;
+      setWindowsTaskUserSidReaderForTests(null);
     }
   });
 });
@@ -4789,6 +4840,14 @@ describe("Windows controller — installService launcher-restore behavior", () =
   beforeEach(() => {
     vi.stubEnv("USERDOMAIN", "TESTBOX");
     vi.stubEnv("USERNAME", "testuser");
+    // Hermeticity (SSH-USERDOMAIN-WORKGROUP): this block runs the REAL
+    // `stageTaskDefinition` (see the block comment above), which reaches
+    // `resolveTaskUserId`. Stub COMPUTERNAME/USERDNSDOMAIN empty and force
+    // the SID reader to `null` so a Windows dev machine's real values can't
+    // change what these launcher-restore tests exercise.
+    vi.stubEnv("COMPUTERNAME", "");
+    vi.stubEnv("USERDNSDOMAIN", "");
+    setWindowsTaskUserSidReaderForTests(() => null);
     setWindowsTaskInstallDepsForTests(null);
     setWindowsStartEvidenceDepsForTests(null);
     LAUNCHER_RESTORE_FAILURE.readFile = null;
@@ -4798,6 +4857,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    setWindowsTaskUserSidReaderForTests(null);
     setWindowsTaskInstallDepsForTests(null);
     setWindowsStartEvidenceDepsForTests(null);
     LAUNCHER_RESTORE_FAILURE.readFile = null;
@@ -5353,5 +5413,217 @@ describe("Windows controller — spawn-edge placement", () => {
     expect(
       calls.some((c) => c.command === "schtasks" && c.args[0] === "/Run"),
     ).toBe(false);
+  });
+});
+
+describe("computeWindowsTreeKillSet: a supervisor killing its own host child", () => {
+  // idle 0; supervisor 200 -> host 300 (root) -> 310 -> 320;
+  // supervisor 200 -> PowerShell scan 250 (slot-matched, its own branch).
+  const table = rowsOf([
+    { processId: 0, parentProcessId: 0, slot: false },
+    { processId: 200, parentProcessId: 1, slot: false, created: 10 },
+    { processId: 300, parentProcessId: 200, slot: false, created: 20 },
+    { processId: 310, parentProcessId: 300, slot: false, created: 30 },
+    { processId: 320, parentProcessId: 310, slot: false, created: 40 },
+    { processId: 250, parentProcessId: 200, slot: true, created: 50 },
+  ]);
+
+  it("kills the placed root and every descendant, never the supervisor or its other children", () => {
+    const killSet = computeWindowsTreeKillSet(
+      table,
+      { placedRoot: 300, excludedPids: new Set([200]) },
+      nothingRemembered,
+    );
+    expect(killSet.kill).toEqual([300, 310, 320]);
+    expect(killSet.kill).not.toContain(200);
+    expect(killSet.kill).not.toContain(250);
+  });
+
+  it("without a placed root the whole supervisor branch is spared", () => {
+    const killSet = computeWindowsTreeKillSet(
+      table,
+      { placedRoot: null, excludedPids: new Set([200]) },
+      nothingRemembered,
+    );
+    expect(killSet.kill).toEqual([]);
+  });
+
+  it("never lets the excluded process into the kill set, even when it is the root's descendant", () => {
+    const cyclic = rowsOf([
+      { processId: 300, parentProcessId: 1, slot: false, created: 20 },
+      { processId: 200, parentProcessId: 300, slot: false, created: 30 },
+    ]);
+    const killSet = computeWindowsTreeKillSet(
+      cyclic,
+      { placedRoot: 300, excludedPids: new Set([200]) },
+      nothingRemembered,
+    );
+    expect(killSet.kill).not.toContain(200);
+  });
+
+  it("computeWindowsHostKillSet is the rootless form of the same algebra", () => {
+    const tables: WindowsProcessTableRow[][] = [
+      table,
+      rowsOf([
+        { processId: 0, parentProcessId: 0, slot: false },
+        { processId: 100, parentProcessId: 1, slot: true },
+        { processId: 200, parentProcessId: 100, slot: false },
+        { processId: 250, parentProcessId: 200, slot: false },
+        { processId: 400, parentProcessId: 100, slot: false },
+      ]),
+      rowsOf([
+        { processId: 100, parentProcessId: 1, slot: true },
+        { processId: 50, parentProcessId: 100, slot: false },
+        { processId: 200, parentProcessId: 50, slot: false },
+        { processId: 400, parentProcessId: 100, slot: false },
+      ]),
+    ];
+    for (const rows of tables) {
+      expect(computeWindowsHostKillSet(rows, 200, nothingRemembered)).toEqual(
+        computeWindowsTreeKillSet(
+          rows,
+          { placedRoot: null, excludedPids: new Set([200]) },
+          nothingRemembered,
+        ),
+      );
+    }
+  });
+});
+
+describe("killSupervisedHostTree", () => {
+  const supervisor = process.pid;
+  const ROOT = 900_001;
+  const CHILD = 900_002;
+
+  function scriptedRunner(tables: readonly (readonly TableRowInput[])[]): {
+    readonly runner: ProcessRunner;
+    readonly calls: RecordedCall[];
+    readonly seq: string[];
+  } {
+    const calls: RecordedCall[] = [];
+    const seq: string[] = [];
+    let scans = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      seq.push("run");
+      if (isScanCall(command, args)) {
+        const rows = tables[Math.min(scans, tables.length - 1)];
+        scans += 1;
+        return success(tableJson(rows));
+      }
+      return success("");
+    };
+    return { runner, calls, seq };
+  }
+
+  const firstScan: TableRowInput[] = [
+    { processId: 0, parentProcessId: 0, slot: false },
+    { processId: supervisor, parentProcessId: 1, slot: false, created: 10 },
+    {
+      processId: ROOT,
+      parentProcessId: supervisor,
+      slot: false,
+      created: 5_000,
+    },
+    { processId: CHILD, parentProcessId: ROOT, slot: false, created: 6_000 },
+  ];
+  const drained: TableRowInput[] = [
+    { processId: 0, parentProcessId: 0, slot: false },
+    { processId: supervisor, parentProcessId: 1, slot: false, created: 10 },
+  ];
+
+  it("seeds the root as a validated child of the supervisor and kills its whole tree", async () => {
+    const { runner, calls } = scriptedRunner([firstScan, drained]);
+    await killSupervisedHostTree(
+      "staging",
+      ROOT,
+      async () => undefined,
+      runner,
+      noTimingDeps,
+    );
+    const killed = killedPids(calls);
+    expect(killed.sort((a, b) => a - b)).toEqual([ROOT, CHILD]);
+    expect(killed).not.toContain(supervisor);
+  });
+
+  it("does not seed a root that is not the supervisor's child at first sight", async () => {
+    const stranger: TableRowInput[] = [
+      { processId: 0, parentProcessId: 0, slot: false },
+      { processId: supervisor, parentProcessId: 1, slot: false, created: 10 },
+      { processId: ROOT, parentProcessId: 1, slot: false, created: 5_000 },
+    ];
+    const { runner, calls } = scriptedRunner([stranger]);
+    await killSupervisedHostTree(
+      "staging",
+      ROOT,
+      async () => undefined,
+      runner,
+      noTimingDeps,
+    );
+    expect(killedPids(calls)).toEqual([]);
+  });
+
+  it("does not seed a later row wearing the root pid with a different birth", async () => {
+    const recycled: TableRowInput[] = [
+      { processId: 0, parentProcessId: 0, slot: false },
+      { processId: supervisor, parentProcessId: 1, slot: false, created: 10 },
+      {
+        processId: ROOT,
+        parentProcessId: supervisor,
+        slot: false,
+        created: 9_999,
+      },
+    ];
+    const { runner, calls } = scriptedRunner([firstScan, recycled, drained]);
+    await killSupervisedHostTree(
+      "staging",
+      ROOT,
+      async () => undefined,
+      runner,
+      noTimingDeps,
+    );
+    const rounds = killRounds(calls);
+    expect(rounds).toHaveLength(1);
+    expect(rounds[0].map((t) => t.processId).sort((a, b) => a - b)).toEqual([
+      ROOT,
+      CHILD,
+    ]);
+  });
+
+  it("awaits verifyAuthority before every subprocess", async () => {
+    const { runner, seq } = scriptedRunner([firstScan, drained]);
+    await killSupervisedHostTree(
+      "staging",
+      ROOT,
+      async () => {
+        seq.push("verify");
+      },
+      runner,
+      noTimingDeps,
+    );
+    const runs = seq.filter((entry) => entry === "run").length;
+    expect(runs).toBeGreaterThanOrEqual(3);
+    seq.forEach((entry, index) => {
+      if (entry === "run") expect(seq[index - 1]).toBe("verify");
+    });
+  });
+
+  it("propagates a lost authority instead of reporting a scan failure", async () => {
+    let verifications = 0;
+    const { runner } = scriptedRunner([firstScan, drained]);
+    const rejection: unknown = await killSupervisedHostTree(
+      "staging",
+      ROOT,
+      async () => {
+        verifications += 1;
+        if (verifications >= 2) throw new Error("lock lost");
+      },
+      runner,
+      noTimingDeps,
+    ).catch((cause: unknown) => cause);
+    expect(isServiceMutationAuthorityError(rejection)).toBe(true);
+    expect(
+      String(rejection instanceof Error ? rejection.message : ""),
+    ).not.toContain("could not enumerate");
   });
 });

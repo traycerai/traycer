@@ -2556,50 +2556,57 @@ async function applyArm(
     contenderOptions,
     async () => {
       try {
-        return await applyHostWithAttempt(input.capability, contenderOptions, {
-          environment: args.environment,
-          force: args.force,
-          noService: false,
-          // The apply arm can land older bytes too: a stage this executor did
-          // not promote may be incomparable to the install, which reconcile's
-          // stale-or-equal rule does not remove and no version test can prove
-          // is an upgrade. `applyHost` gates it before its busy check. The
-          // consent is the CLAIM's as much as the argument's - see
-          // `storeFormatLossAccepted`.
-          acceptStoreFormatLoss: storeFormatLossAccepted(input),
-          expectedStageFingerprint,
-          // The ONE version binding (#1752 round 10/14, ticket 08 decision 2).
-          // The executor feeds the installer the CLAIM's target - not the
-          // argument - because the claim is this attempt's authorization: an
-          // implicit `latest` that resolved to 2.0.0 is as bound to 2.0.0 as
-          // an explicit `--version 2.0.0`, and the stage another promoter
-          // replaced in the unlocked wait must not be committed under either.
-          // The installer decides it BEFORE the busy gate and before it
-          // announces anything, and reports `stage-version-mismatch` having
-          // consumed nothing.
-          expectedStagedVersion: target,
-          onProgress: input.onProgress,
-          // Deliberately NO `onWillCommitStaged`: it fires BEFORE the
-          // cooperative stop, so a denial there must still park from
-          // `preparing`, and the coarse marker is record-driven now.
-          onWillCommitStaged: null,
-          // The disruption boundary, and the ONLY one on this arm: reported
-          // by the ACTUATORS (the lifecycle's pre-stop check and the commit's
-          // pre-swap check), never inferred from the `service-stop` / `swap`
-          // progress lines, which precede both and precede the authority
-          // checks that can still refuse (#1752 rounds 10/11, cold review B
-          // C2). The progress-derived rule that used to shadow this callback
-          // is gone; nothing else marks the flag here.
-          onWillDisruptHost: () => input.mirror.markDisturbed(),
-          hooks: {
-            beforeSwapCommit: () => writer.phaseWrite("applying", null),
-            afterSwap: async () =>
-              writer.phaseWrite(
-                "restarting",
-                await generationWrittenBySwap(input.args.environment),
-              ),
+        // `maintenance`: this is `host update`'s own relaunch leg, bringing
+        // back a run that already existed, whoever invoked the update.
+        return await applyHostWithAttempt(
+          input.capability,
+          contenderOptions,
+          "maintenance",
+          {
+            environment: args.environment,
+            force: args.force,
+            noService: false,
+            // The apply arm can land older bytes too: a stage this executor did
+            // not promote may be incomparable to the install, which reconcile's
+            // stale-or-equal rule does not remove and no version test can prove
+            // is an upgrade. `applyHost` gates it before its busy check. The
+            // consent is the CLAIM's as much as the argument's - see
+            // `storeFormatLossAccepted`.
+            acceptStoreFormatLoss: storeFormatLossAccepted(input),
+            expectedStageFingerprint,
+            // The ONE version binding (#1752 round 10/14, ticket 08 decision 2).
+            // The executor feeds the installer the CLAIM's target - not the
+            // argument - because the claim is this attempt's authorization: an
+            // implicit `latest` that resolved to 2.0.0 is as bound to 2.0.0 as
+            // an explicit `--version 2.0.0`, and the stage another promoter
+            // replaced in the unlocked wait must not be committed under either.
+            // The installer decides it BEFORE the busy gate and before it
+            // announces anything, and reports `stage-version-mismatch` having
+            // consumed nothing.
+            expectedStagedVersion: target,
+            onProgress: input.onProgress,
+            // Deliberately NO `onWillCommitStaged`: it fires BEFORE the
+            // cooperative stop, so a denial there must still park from
+            // `preparing`, and the coarse marker is record-driven now.
+            onWillCommitStaged: null,
+            // The disruption boundary, and the ONLY one on this arm: reported
+            // by the ACTUATORS (the lifecycle's pre-stop check and the commit's
+            // pre-swap check), never inferred from the `service-stop` / `swap`
+            // progress lines, which precede both and precede the authority
+            // checks that can still refuse (#1752 rounds 10/11, cold review B
+            // C2). The progress-derived rule that used to shadow this callback
+            // is gone; nothing else marks the flag here.
+            onWillDisruptHost: () => input.mirror.markDisturbed(),
+            hooks: {
+              beforeSwapCommit: () => writer.phaseWrite("applying", null),
+              afterSwap: async () =>
+                writer.phaseWrite(
+                  "restarting",
+                  await generationWrittenBySwap(input.args.environment),
+                ),
+            },
           },
-        });
+        );
       } catch (err) {
         if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
           // Parked from INSIDE the same lock span the busy decision was made
@@ -3200,6 +3207,7 @@ async function activationArm(
       await relaunchHostAfterRestartWithAttempt(
         input.capability,
         contenderOptions,
+        "maintenance",
         controller,
         label,
         stopped,

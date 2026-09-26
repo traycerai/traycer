@@ -380,7 +380,14 @@ export function isProcessAlive(pid: number): boolean {
       const stdout = execFileSync(
         "tasklist",
         ["/FI", `PID eq ${pid}`, "/NH", "/FO", "CSV"],
-        { encoding: "utf8", windowsHide: true, timeout: 3000 },
+        // execFileSync copies a failing child's stderr into this process's
+        // stderr unless `stdio` is given; captured here, never forwarded.
+        {
+          encoding: "utf8",
+          windowsHide: true,
+          timeout: 3000,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
       );
       const trimmed = stdout.trim();
       if (trimmed.length === 0) return false;
@@ -456,6 +463,7 @@ function psLstart(pid: number): string | null {
       // disagree and mistake a live holder for a recycled PID - that would break
       // a live lock and let both spend the same refresh token.
       env: { ...process.env, TZ: "UTC", LC_ALL: "C", LC_TIME: "C" },
+      stdio: ["ignore", "pipe", "pipe"],
     });
     const trimmed = out.trim();
     return trimmed.length > 0 ? trimmed : null;

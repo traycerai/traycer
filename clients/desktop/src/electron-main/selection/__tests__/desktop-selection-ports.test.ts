@@ -30,6 +30,7 @@ import type {
   MutationOutcome,
   MutationProgress,
   RemoveTraycerOk,
+  ServiceDefinitionRefreshOk,
   ServiceRegistrationOk,
   UninstallOk,
 } from "../../host/host-controller-types";
@@ -2252,6 +2253,11 @@ class FakeHostController implements IpcHostController {
   }
   isPendingRevisionRefreshQuarantined(): boolean {
     return false;
+  }
+  async refreshServiceDefinition(): Promise<
+    MutationOutcome<ServiceDefinitionRefreshOk>
+  > {
+    return { kind: "ok", value: { result: "current", appliesAt: null } };
   }
   onMutationProgress(
     _listener: (progress: MutationProgress) => void,

@@ -69,6 +69,7 @@ describe("adoptionGrantExpired — fail-closed under a NaN window", () => {
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
         // Sanity: the proof really was published, fresh, with a live parent.
         const raw = await readFile(
@@ -105,6 +106,7 @@ describe("adoptionGrantExpired — fail-closed under a NaN window", () => {
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
         const proof = JSON.parse(
           await readFile(
@@ -140,6 +142,7 @@ describe("adoptionGrantExpired — fail-closed under a NaN window", () => {
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
 
         const result = await consumeHostStartAdoption("production", null, null);

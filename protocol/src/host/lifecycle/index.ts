@@ -13,11 +13,18 @@ export type {
 } from "./layer0-frame";
 
 export {
+  buildWindowsDeniedReadFallbackScript,
+  compareObservedProcessStart,
   compareProcessStartIdentity,
   formatDarwinProcessStartIdentity,
   formatLinuxProcessStartIdentity,
   formatWindowsProcessStartIdentity,
   isProcessStartIdentity,
+  parseWindowsDeniedReadFallbackOutput,
+  parseWindowsWmiCreationDate,
+  WINDOWS_DENIED_READ_CREATION_TOLERANCE_MICROS,
+  windowsProcessStartIdentityMicros,
+  type ObservedProcessStart,
   type ProcessStartIdentity,
   type ProcessStartIdentityMatch,
 } from "./process-start-identity";

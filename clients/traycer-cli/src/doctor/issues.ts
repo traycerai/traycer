@@ -1,3 +1,5 @@
+import type { HostLifecycleSnapshot } from "../host/lifecycle-snapshot";
+
 // Doctor issue codes - stable strings the Desktop failure card maps to
 // concrete CLI subcommand fixes per Tech Plan §Doctor Engine. Keep this
 // list authoritative; add new codes here rather than ad-hoc strings.
@@ -215,6 +217,44 @@ export const DOCTOR_ISSUE_CODES = {
   // different remedies: a held lock has a holder to stop; an unreadable one
   // has a file to inspect.
   HOST_UPDATE_MARKER_LOCK_UNREADABLE: "HOST_UPDATE_MARKER_LOCK_UNREADABLE",
+  // The update-attempt lock (`<host home>/update-attempt.lock`) was left by a
+  // publisher that has provably exited, but its record also names the
+  // installer tree that publisher supervised, and the lock's own liveness
+  // rule cannot verify that tree on this platform (Windows gives Node no
+  // process-group or Job-object membership proof). So it answers
+  // `indeterminate` forever and no acquisition breaks it: every
+  // `host maintenance-lease` - every scripted desktop install and uninstall -
+  // is refused as "another host update contender is in progress" until the
+  // file is removed. Fail-closed by design, because a reparented installer may
+  // still be mutating the install; this is the repair that design relies on.
+  //
+  // Warning, not error: the running host is not affected. Not reported for a
+  // publisher that is alive or unverifiable, nor for a record the rule WILL
+  // break once its publisher is gone - that lock heals on the next acquisition.
+  HOST_UPDATE_ATTEMPT_LOCK_UNBREAKABLE: "HOST_UPDATE_ATTEMPT_LOCK_UNBREAKABLE",
+  // `lifecycle-policy.json` exists but is corrupt or cannot be read. It reads
+  // as Background - the upgrade-safe default, so nothing parks - which is
+  // exactly why it needs saying: a user who chose Linked or Ask gets
+  // Background behaviour with nothing else anywhere to tell them.
+  HOST_LIFECYCLE_POLICY_UNREADABLE: "HOST_LIFECYCLE_POLICY_UNREADABLE",
+  // A non-Background mode is set while the host runs under a supervisor that
+  // does not enforce it (one that predates the policy and kept running
+  // through a CLI upgrade, or a record left by a supervisor that is gone).
+  // The mode takes effect at the next host restart.
+  HOST_LIFECYCLE_POLICY_NOT_ENFORCED: "HOST_LIFECYCLE_POLICY_NOT_ENFORCED",
+  // A non-Background mode is set, but the registered service definition is
+  // not in this CLI's current launcher form. The modes park only LABELLED
+  // service starts, and a definition older than labelled starts launches the
+  // host unlabelled at login, which no mode can park. Choosing a mode
+  // refreshes the definition, so this is what is left when that refresh
+  // failed, when the mode was already set before it existed, or when an older
+  // CLI re-registered the service since. `host service refresh` repairs it
+  // without starting or stopping anything.
+  HOST_SERVICE_DEFINITION_STALE: "HOST_SERVICE_DEFINITION_STALE",
+  // A non-Background mode is set, and the registration under this service's
+  // own name is not one a Traycer emitter wrote (or cannot be read), so the
+  // refresh leaves it alone. A full re-registration replaces it.
+  HOST_SERVICE_DEFINITION_UNRECOGNIZED: "HOST_SERVICE_DEFINITION_UNRECOGNIZED",
 } as const;
 
 export type DoctorIssueCode =
@@ -240,4 +280,11 @@ export interface DoctorIssue {
 
 export interface DoctorResult {
   readonly issues: readonly DoctorIssue[];
+  /**
+   * The host lifecycle policy, desktop presence, run origin/owner and the
+   * running supervisor's capability (D7). Facts, not issues: printed in the
+   * report whatever they are, and additive to the payload, whose existing
+   * readers take `issues` only.
+   */
+  readonly lifecycle: HostLifecycleSnapshot;
 }

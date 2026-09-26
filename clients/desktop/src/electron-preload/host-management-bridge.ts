@@ -20,6 +20,7 @@ import type {
   HostRegistryUpdateState,
   HostRemovalState,
   HostRestartRequestResult,
+  HostServiceRestartResult,
   HostTrayCommand,
   HostUninstallResult,
   HostUpdateCheckResponseV11,
@@ -108,6 +109,9 @@ export interface HostManagementBridgeSurface {
   restartHostIfIdle(input: {
     readonly expectedHostId: string;
   }): Promise<HostRestartRequestResult>;
+  restartHostServiceIfHostIdle(input: {
+    readonly expectedHostId: string;
+  }): Promise<HostServiceRestartResult>;
   runDoctorRepairQueued(input: {
     readonly repair: QueuedDoctorRepair;
     readonly expectedHostId: string;
@@ -233,6 +237,10 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
       ipcRenderer.invoke(RunnerHostInvoke.traycerHostRestartIfIdle, {
         expectedHostId,
       }) as Promise<HostRestartRequestResult>,
+    restartHostServiceIfHostIdle: ({ expectedHostId }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerHostServiceRestartIfHostIdle, {
+        expectedHostId,
+      }) as Promise<HostServiceRestartResult>,
     runDoctorRepairQueued: ({ repair, expectedHostId }) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerDoctorRepairQueued, {
         repair,

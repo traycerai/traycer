@@ -79,7 +79,7 @@ vi.mock("../../store/cli-lock", async (importOriginal) => {
   };
 });
 
-import { serviceStartCommand } from "../service-start";
+import { buildServiceStartCommand } from "../service-start";
 import type { CommandContext } from "../../runner/runner";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 
@@ -117,7 +117,7 @@ const NOT_INSTALLED = {
   pid: null,
 };
 
-describe("serviceStartCommand", () => {
+describe("buildServiceStartCommand", () => {
   beforeEach(() => {
     mocks.controllerCalls = [];
     mocks.lockCalls = [];
@@ -143,7 +143,9 @@ describe("serviceStartCommand", () => {
       { state: "running", version: "1.2.3", listenUrl: null, pid: 4242 },
     ];
 
-    const result = await serviceStartCommand(fakeCtx());
+    const result = await buildServiceStartCommand({
+      lifecycleOrigin: "terminal",
+    })(fakeCtx());
 
     expect(mocks.controllerCalls).toContain("start");
     expect(result.exitCode).toBe(0);
@@ -155,7 +157,9 @@ describe("serviceStartCommand", () => {
 
     let err: unknown;
     try {
-      await serviceStartCommand(fakeCtx());
+      await buildServiceStartCommand({ lifecycleOrigin: "terminal" })(
+        fakeCtx(),
+      );
     } catch (caught) {
       err = caught;
     }
@@ -176,7 +180,9 @@ describe("serviceStartCommand", () => {
       },
     ];
 
-    const result = await serviceStartCommand(fakeCtx());
+    const result = await buildServiceStartCommand({
+      lifecycleOrigin: "terminal",
+    })(fakeCtx());
 
     expect(mocks.controllerCalls).toEqual(["start"]);
     expect(result.data).toMatchObject({
@@ -212,7 +218,9 @@ describe("serviceStartCommand", () => {
       },
     ];
 
-    const result = await serviceStartCommand(fakeCtx());
+    const result = await buildServiceStartCommand({
+      lifecycleOrigin: "terminal",
+    })(fakeCtx());
 
     expect(mocks.controllerCalls).toEqual([]);
     expect(result.data).toMatchObject({
@@ -243,7 +251,9 @@ describe("serviceStartCommand", () => {
       { state: "running", version: "1.2.3", listenUrl: null, pid: 5555 },
     ];
 
-    const result = await serviceStartCommand(fakeCtx());
+    const result = await buildServiceStartCommand({
+      lifecycleOrigin: "terminal",
+    })(fakeCtx());
 
     expect(mocks.controllerCalls).toEqual(["start"]);
     expect(result.data).toMatchObject({ alreadyRunning: false });
@@ -265,7 +275,9 @@ describe("serviceStartCommand", () => {
       { state: "running", version: "1.2.3", listenUrl: null, pid: 4242 },
     ];
 
-    const result = await serviceStartCommand(fakeCtx());
+    const result = await buildServiceStartCommand({
+      lifecycleOrigin: "terminal",
+    })(fakeCtx());
 
     expect(mocks.controllerCalls).toEqual(["start"]);
     expect(result.data).toMatchObject({ priorState: "externally-managed" });
@@ -281,7 +293,9 @@ describe("serviceStartCommand", () => {
 
     let err: unknown;
     try {
-      await serviceStartCommand(fakeCtx());
+      await buildServiceStartCommand({ lifecycleOrigin: "terminal" })(
+        fakeCtx(),
+      );
     } catch (caught) {
       err = caught;
     }
@@ -300,7 +314,7 @@ describe("serviceStartCommand", () => {
       { state: "running", version: "1.2.3", listenUrl: null, pid: 4242 },
     ];
 
-    await serviceStartCommand(fakeCtx());
+    await buildServiceStartCommand({ lifecycleOrigin: "terminal" })(fakeCtx());
 
     expect(mocks.lockCalls).toEqual([{ reason: "service-start" }]);
   });

@@ -339,6 +339,25 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     ],
     args: [],
   },
+  { path: "host lifecycle", options: [], args: [] },
+  {
+    path: "host lifecycle get",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [],
+  },
+  {
+    path: "host lifecycle set",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [{ name: "mode", required: true, variadic: false }],
+  },
   {
     path: "host restart",
     options: [
@@ -383,6 +402,18 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   },
   {
     path: "host service status",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [],
+  },
+  // Public on purpose: the doctor, `host lifecycle set` and the service
+  // platforms all name it as the repair a person runs
+  // (SERVICE_REFRESH_COMMAND).
+  {
+    path: "host service refresh",
     options: [
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
@@ -1262,6 +1293,10 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "traycer host update --expect-sequence",
         "traycer host restart --if-idle",
         "traycer host install --if-idle",
+        // Host lifecycle modes: the desktop's automatic quit-time stop in
+        // Linked and Stop-if-idle modes. A person stops a host with plain
+        // `host stop`.
+        "traycer host stop --if-idle",
         "traycer host apply --expected-stage-fingerprint",
         "traycer host apply --no-service",
         // Implicit-apply hold check (version-hold design): the desktop's
@@ -1270,6 +1305,20 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         // An explicit "Update now" apply never sets it.
         "traycer host apply --respect-hold",
         "traycer host download --automatic",
+        // Host lifecycle modes (D3): who is asking for a host start, written
+        // into the adoption proof the supervisor consumes. The desktop passes
+        // `desktop`, update/repair legs pass `maintenance`, and a person who
+        // omits it is `terminal`. Informational only - a grant runs whatever
+        // its origin - and on `restart`, `stop` and `free-port-and-restart`
+        // it is accepted and inert, so the desktop can pass it uniformly.
+        "traycer host apply --lifecycle-origin",
+        "traycer host ensure --lifecycle-origin",
+        "traycer host install --lifecycle-origin",
+        "traycer host service install --lifecycle-origin",
+        "traycer host service start --lifecycle-origin",
+        "traycer host restart --lifecycle-origin",
+        "traycer host stop --lifecycle-origin",
+        "traycer host free-port-and-restart --lifecycle-origin",
       ].sort(),
     );
   });

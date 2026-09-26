@@ -103,6 +103,7 @@ function fakeHostController(withMutationStatus: boolean): FakeHostController {
     installVersion: notUsedByBroadcaster,
     registerService: notUsedByBroadcaster,
     deregisterService: notUsedByBroadcaster,
+    refreshServiceDefinition: notUsedByBroadcaster,
     respawn: notUsedByBroadcaster,
     recoverIfDown: notUsedByBroadcaster,
     freePortAndRestart: notUsedByBroadcaster,

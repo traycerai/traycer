@@ -5,6 +5,7 @@ import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { hostHomeDir } from "../store/paths";
 import { applyHostWithAttempt } from "../host/update-mutation";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
 import { readHostHeldVersion } from "@traycer/protocol/config/installation";
 import { readHostInstallRecord } from "../manifest/host-install";
 import { createRegistryYankLookup } from "../registry/client";
@@ -35,9 +36,12 @@ import type { CommandFn, CommandResult } from "../runner/runner";
 // convergence: Desktop's `applyStagedCliOwned` reads `postSwapError` off this
 // exit-0 envelope and renders "installed, not converged" with a Doctor
 // pointer, and it reserves the thrown-error path for applies that did not
-// commit at all (where its recovery is "retry with force"). Exiting non-zero
-// on a failed post-swap start would route a committed swap into that
-// wrong-recovery branch.
+// commit at all (where its recovery is "retry with force"). Desktop now trusts
+// a terminal `ok` line over a non-zero exit, so the exit code no longer picks
+// its branch - the contract stands on the primitive/composite split below,
+// which this command's help states. `host install` and
+// `host ensure` are composites of the other kind and exit non-zero on a
+// failed post-swap start.
 //
 // `host update` is the composite and answers the other question - it stages,
 // applies, then health-probes, and FAILS (`E_HOST_UPDATE_HEALTH_CHECK_FAILED`)
@@ -82,6 +86,12 @@ export interface HostApplyArgs {
    * which keeps the acquire-or-refuse path exactly as it was.
    */
   readonly attemptAdoption: string | null;
+  /**
+   * `--lifecycle-origin`, recorded in the adoption proof the post-swap start
+   * publishes (`host/lifecycle-origin.ts`). A direct `host apply` carries its
+   * caller's origin; only `host update`'s own apply leg is `maintenance`.
+   */
+  readonly lifecycleOrigin: HostStartOrigin;
 }
 
 export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
@@ -162,20 +172,25 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
         // (`held !== installed`) rather than by deleting the record - so there
         // is nothing to clear and no clear/ABA race. The `respectHold` guard
         // above is this command's only hold interaction.
-        return applyHostWithAttempt(capability, contenderOptions, {
-          environment: ctx.runtime.environment,
-          force: args.force,
-          noService: args.noService,
-          expectedStageFingerprint: args.expectedStageFingerprint,
-          expectedStagedVersion: null,
-          acceptStoreFormatLoss: args.acceptStoreFormatLoss,
-          onProgress: (info) => ctx.progress(info),
-          onWillCommitStaged: null,
-          onWillDisruptHost: null,
-          // `host apply` advances no attempt record of its own: Desktop
-          // drives its own lane around this call and reads the outcome.
-          hooks: NO_INSTALL_PHASE_HOOKS,
-        });
+        return applyHostWithAttempt(
+          capability,
+          contenderOptions,
+          args.lifecycleOrigin,
+          {
+            environment: ctx.runtime.environment,
+            force: args.force,
+            noService: args.noService,
+            expectedStageFingerprint: args.expectedStageFingerprint,
+            expectedStagedVersion: null,
+            acceptStoreFormatLoss: args.acceptStoreFormatLoss,
+            onProgress: (info) => ctx.progress(info),
+            onWillCommitStaged: null,
+            onWillDisruptHost: null,
+            // `host apply` advances no attempt record of its own: Desktop
+            // drives its own lane around this call and reads the outcome.
+            hooks: NO_INSTALL_PHASE_HOOKS,
+          },
+        );
       },
     );
     const activation = activationOf(outcome);

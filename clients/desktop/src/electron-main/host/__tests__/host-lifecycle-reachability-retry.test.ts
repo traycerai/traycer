@@ -25,6 +25,7 @@ vi.mock("../../cli/traycer-cli", () => ({
 import { HostLifecycle, PRODUCTION_LABEL } from "../host-lifecycle";
 import {
   __setAsyncProcessLivenessReaderForTest,
+  __setAsyncProcessStartIdentityReaderForTest,
   type ProcessLivenessVerdict,
 } from "../process-identity";
 import type { DesktopLocalHostSnapshot } from "../../../ipc-contracts/host-types";
@@ -365,6 +366,41 @@ describe("HostLifecycle reachability retry ladder (predicate, no bootstrap)", ()
 });
 
 /**
+ * `process.kill`, captured before any test in this file has a chance to spy on
+ * it, so the fake-pid spy below can delegate every OTHER pid to the real
+ * syscall instead of swallowing it.
+ */
+const realProcessKill = process.kill.bind(process);
+
+/**
+ * `readIdentityVerdict`'s cache (DESKTOP-DEAD-HOST-CACHED-ALIVE) now checks
+ * `probeProcessExistenceWithoutSpawn` before reusing a cached verdict, which
+ * calls the REAL, unmocked `process.kill(pid, 0)` - unlike the liveness reader
+ * above, which is a test seam. `PID_METADATA`'s pid (18841) names no process on
+ * the machine running this suite, so without this spy every reload the tests
+ * below expect to be served from cache instead forces a fresh read: the exact
+ * fixture hazard the fix itself documents ("a pid the OS has handed to another
+ * process reads `exists`... never stand in for [a full identity read]").
+ * Spied here so that ONE fake pid reads as existing, exactly as it did before
+ * the cache grew this guard, while every other pid still gets the real
+ * syscall - so a genuinely dead pid used elsewhere in this file is still
+ * reported dead.
+ */
+function spyProcessKillExists(pid: number): () => void {
+  const spy = vi
+    .spyOn(process, "kill")
+    .mockImplementation(
+      (target: number, signal: string | number | undefined): true => {
+        if (target === pid && (signal === 0 || signal === undefined)) {
+          return true;
+        }
+        return realProcessKill(target, signal);
+      },
+    );
+  return () => spy.mockRestore();
+}
+
+/**
  * The ladder's re-probe is cheap; the IDENTITY read behind it is not - it
  * spawns a child process. Since int #48 the busy hold no longer expires, so a
  * host that wedges for an afternoon keeps the ladder running at its 5s cap for
@@ -392,6 +428,9 @@ describe("HostLifecycle process-identity throttle", () => {
     readonly dir: string;
   }> {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    // PID_METADATA's pid names no real process on this machine - see
+    // `spyProcessKillExists`'s comment.
+    cleanups.push(spyProcessKillExists(18841));
     const dir = await mkdtemp(join(tmpdir(), "lifecycle-identity-"));
     const layout = layoutIn(dir);
     await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
@@ -473,6 +512,182 @@ describe("HostLifecycle process-identity throttle", () => {
     // liveness probe before any child process is spawned.
     expect(identity.reads()).toBe(3);
     expect(lifecycle.getSnapshot()).toBeNull();
+  });
+});
+
+/**
+ * DESKTOP-DEAD-HOST-CACHED-ALIVE, the defect this whole file's throttle
+ * exists to close: a cached `current` verdict used to be served for up to
+ * 120s off nothing but its own age, so a host SIGKILLed with its `pid.json`
+ * left behind - the file the fix's own comment cites - kept reading as
+ * `busy` (reachable) for as long as the cache lived, and the health monitor
+ * (`host-health-monitor.test.ts`) had the same shape of shield in two more
+ * places. `readIdentityVerdict` now gates reuse on
+ * `probeProcessExistenceWithoutSpawn` finding the SAME pid still there; these
+ * pin the cache honoring a live pid (L1), losing it the moment the pid dies
+ * (L2 - the regression itself, reproduced directly against the cache rather
+ * than inferred from a probe-call count), and losing it for an EPERM the
+ * platform check can't turn into positive evidence either (L3).
+ *
+ * A dedicated pid.json (with a `processStartIdentity` field the stubbed
+ * identity reader can match) is used here, rather than this file's shared
+ * `PID_METADATA`, so the cached verdict is genuinely `current` - the exact
+ * value DESKTOP-DEAD-HOST-CACHED-ALIVE found being served past a pid's death -
+ * and not merely `indeterminate`, which every row above already covers.
+ */
+describe("HostLifecycle identity-verdict cache vs process existence (DESKTOP-DEAD-HOST-CACHED-ALIVE)", () => {
+  const cleanups: (() => void)[] = [];
+  const CACHE_TEST_PID = 27182;
+  const CACHE_TEST_IDENTITY = "linux:boot-cache 27182";
+  const CACHE_TEST_PID_METADATA = JSON.stringify({
+    hostId: "5b6b0e2b-0f0a-4c2a-9d0a-9d6f9c9b6a11",
+    websocketUrl: "ws://127.0.0.1:55555/rpc",
+    version: "production.1784044433971.435b4f59c",
+    pid: CACHE_TEST_PID,
+    processStartIdentity: CACHE_TEST_IDENTITY,
+  });
+
+  afterEach(() => {
+    while (cleanups.length > 0) cleanups.pop()?.();
+    vi.useRealTimers();
+  });
+
+  async function lifecycleForCacheTest(): Promise<HostLifecycle> {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-cache-"));
+    const layout = layoutIn(dir);
+    await writeFile(layout.pidMetadataFile, CACHE_TEST_PID_METADATA, "utf8");
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 300,
+      // The endpoint never answers: only the identity-verdict cache's own
+      // reuse decision is under test here, never the reachability ladder.
+      reachabilityProbe: () => Promise.resolve(false),
+    });
+    cleanups.push(() => lifecycle.dispose());
+    cleanups.push(() => {
+      void rm(dir, { recursive: true, force: true });
+    });
+    return lifecycle;
+  }
+
+  /** Counts full identity reads the same way `countingProcessLiveness` does. */
+  function countingLivenessReader(verdictOf: () => ProcessLivenessVerdict): {
+    readonly reads: () => number;
+  } {
+    let reads = 0;
+    const previous = __setAsyncProcessLivenessReaderForTest(() => {
+      reads += 1;
+      return Promise.resolve(verdictOf());
+    });
+    cleanups.push(() => __setAsyncProcessLivenessReaderForTest(previous));
+    return { reads: () => reads };
+  }
+
+  function stubStartIdentity(identityOf: () => string | null): void {
+    const previous = __setAsyncProcessStartIdentityReaderForTest(() =>
+      Promise.resolve(identityOf()),
+    );
+    cleanups.push(() => __setAsyncProcessStartIdentityReaderForTest(previous));
+  }
+
+  it("L1: a live pid keeps the cache - the full identity reader runs exactly once across two reads", async () => {
+    const identity = countingLivenessReader(() => "alive");
+    stubStartIdentity(() => CACHE_TEST_IDENTITY);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    cleanups.push(() => killSpy.mockRestore());
+
+    const lifecycle = await lifecycleForCacheTest();
+
+    // First read: nothing cached yet, so this is unconditionally a full
+    // read - the cached verdict this test is about does not exist before it.
+    await lifecycle.reloadSnapshotFromDisk();
+    expect(identity.reads()).toBe(1);
+    expect(lifecycle.getSnapshot()?.availability).toBe("busy");
+
+    // `process.kill(P, 0)` succeeds, so the second read - still within the
+    // 120s window, endpoint still silent - is served straight from the
+    // cache: the full identity reader is not consulted again.
+    await lifecycle.reloadSnapshotFromDisk();
+    expect(identity.reads()).toBe(1);
+    expect(lifecycle.getSnapshot()?.availability).toBe("busy");
+  });
+
+  it("L2: THE DEFECT - a pid that dies between reads forces a fresh read and is never served stale as busy", async () => {
+    let livenessVerdict: ProcessLivenessVerdict = "alive";
+    const identity = countingLivenessReader(() => livenessVerdict);
+    stubStartIdentity(() => CACHE_TEST_IDENTITY);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    cleanups.push(() => killSpy.mockRestore());
+
+    const lifecycle = await lifecycleForCacheTest();
+
+    await lifecycle.reloadSnapshotFromDisk();
+    expect(identity.reads()).toBe(1);
+    expect(lifecycle.getSnapshot()?.availability).toBe("busy");
+
+    // The host is SIGKILLed between reads, `pid.json` left behind exactly as
+    // DESKTOP-DEAD-HOST-CACHED-ALIVE found it: `process.kill` now reports
+    // ESRCH, and a fresh liveness read would find the same pid gone too.
+    killSpy.mockImplementation(() => {
+      throw Object.assign(new Error("simulated ESRCH"), { code: "ESRCH" });
+    });
+    livenessVerdict = "dead";
+
+    await lifecycle.reloadSnapshotFromDisk();
+    // Before the fix, `probeProcessExistenceWithoutSpawn` did not gate reuse
+    // at all, so this second read was served the FIRST read's cached
+    // `current` verdict and the pid's death was never noticed - exactly the
+    // "reachable three times over 114s for a dead pid" finding.
+    expect(identity.reads()).toBe(2);
+    // `dead` folds to `absent` (`readPublishedHostPresence`), which publishes
+    // no host at all - never `busy`, never anything that reads as alive for
+    // this pid.
+    expect(lifecycle.getSnapshot()).toBeNull();
+  });
+
+  it("L3: EPERM on win32 is not positive evidence either - unknown existence forces a fresh read", async () => {
+    const identity = countingLivenessReader(() => "alive");
+    stubStartIdentity(() => CACHE_TEST_IDENTITY);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    cleanups.push(() => killSpy.mockRestore());
+    const originalPlatform = Object.getOwnPropertyDescriptor(
+      process,
+      "platform",
+    );
+    cleanups.push(() => {
+      if (originalPlatform !== undefined) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    });
+
+    const lifecycle = await lifecycleForCacheTest();
+
+    await lifecycle.reloadSnapshotFromDisk();
+    expect(identity.reads()).toBe(1);
+    expect(lifecycle.getSnapshot()?.availability).toBe("busy");
+
+    // A higher-integrity process that may or may not still be there,
+    // observed from win32: EPERM only says an object exists that this token
+    // cannot open, not that the pid is still the host - so
+    // `probeProcessExistenceWithoutSpawn` reads it as `unknown`, not
+    // `exists`, on this platform alone.
+    Object.defineProperty(process, "platform", {
+      value: "win32",
+      configurable: true,
+    });
+    killSpy.mockImplementation(() => {
+      throw Object.assign(new Error("simulated EPERM"), { code: "EPERM" });
+    });
+    // The liveness verdict is left `alive`: a live pid that merely answers
+    // EPERM is exactly the case `unknown` must still let the full read reach
+    // the truth for, rather than the existence probe deciding it alone.
+
+    await lifecycle.reloadSnapshotFromDisk();
+    expect(identity.reads()).toBe(2);
+    expect(lifecycle.getSnapshot()?.availability).toBe("busy");
   });
 });
 

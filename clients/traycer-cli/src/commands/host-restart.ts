@@ -171,6 +171,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             controller,
             label,
             { force: args.force },
+            "unconditional",
           );
           return {
             kind: "stopped-for-parked-activation" as const,
@@ -285,6 +286,9 @@ async function restartWithPendingCliUpgradeFinalizeWithAttempt(
       relaunchHostAfterRestartWithAttempt(
         capability,
         contenderOptions,
+        // The restart's relaunch leg: `maintenance` whoever asked for the
+        // restart, desktop or terminal (`host/lifecycle-origin.ts`).
+        "maintenance",
         args.controller,
         args.label,
         stopped,
