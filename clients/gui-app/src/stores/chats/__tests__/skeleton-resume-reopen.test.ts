@@ -334,6 +334,29 @@ describe("skeleton resume: an answer the client cannot honour", () => {
     harness.handle.dispose();
   });
 
+  it("applies a chunk that does not start at its retainedRows as sent", () => {
+    const harness = createHarness();
+    const cb = harness.callbacks();
+    openFully(harness, 3, 2 * BLOCK);
+    expect(cb.readSkeletonResume()?.blockDigests).toHaveLength(2);
+
+    // A whole stream from ordinal 0 that also claims to keep a block: the
+    // offered rows must not be spliced in front of rows that restate them.
+    cb.onWindowedSnapshot(bootstrapSnapshot(0, 2 * BLOCK));
+    cb.onSkeletonChunk(
+      chunkFrame({
+        epoch: 0,
+        fromOrdinal: 0,
+        entries: entries(0, 2 * BLOCK),
+        retainedRows: BLOCK,
+      }),
+    );
+    expect(windowOf(harness).skeleton.map((value) => value?.rowId)).toEqual(
+      entries(0, 2 * BLOCK).map((value) => value.rowId),
+    );
+    harness.handle.dispose();
+  });
+
   it("spends the offer on the first chunk, so a later stream cannot reuse it", () => {
     const harness = createHarness();
     const cb = harness.callbacks();
