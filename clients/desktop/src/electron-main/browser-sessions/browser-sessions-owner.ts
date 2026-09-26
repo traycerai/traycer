@@ -276,9 +276,31 @@ export class BrowserSessionsRegistry {
   }
 
   open(windowId: string, key: BrowserSessionsStreamKey): void {
-    if (this.disposed) return;
+    this.ensureStream(windowId, key, false)?.retainRenderer();
+  }
+
+  /** A routed cell holds this until it settles; actual native births take over. */
+  acquirePreparation(
+    windowId: string,
+    key: BrowserSessionsStreamKey,
+    onUnavailable: () => void,
+  ): (() => void) | null {
+    return (
+      this.ensureStream(windowId, key, true)?.retainPreparation(
+        onUnavailable,
+      ) ?? null
+    );
+  }
+
+  private ensureStream(
+    windowId: string,
+    key: BrowserSessionsStreamKey,
+    demandOnly: boolean,
+  ): BrowserSessionsStream | null {
+    if (this.disposed) return null;
     const id = streamKeyId(windowId, key);
-    if (this.streams.has(id)) return;
+    const existing = this.streams.get(id);
+    if (existing !== undefined) return existing;
     if (this.countStreamsForWindow(windowId) >= MAX_STREAMS_PER_WINDOW) {
       log.warn("[browser-sessions] refused a stream over the per-window cap", {
         hostId: key.hostId,
@@ -300,12 +322,13 @@ export class BrowserSessionsRegistry {
           errorMessage: BROWSER_SESSIONS_WINDOW_CAP_MESSAGE,
         },
       });
-      return;
+      return null;
     }
     const stream = new BrowserSessionsStream(
       windowId,
       key,
       this.deps,
+      demandOnly,
       () => ++this.forgetLedgerAckOrder,
       () => {
         // A stream that will never reach a socket stops holding a place under
@@ -325,6 +348,7 @@ export class BrowserSessionsRegistry {
     );
     this.streams.set(id, stream);
     stream.start();
+    return stream;
   }
 
   private countStreamsForWindow(windowId: string): number {
@@ -341,11 +365,7 @@ export class BrowserSessionsRegistry {
   }
 
   close(windowId: string, key: BrowserSessionsStreamKey): void {
-    const id = streamKeyId(windowId, key);
-    const stream = this.streams.get(id);
-    if (stream === undefined) return;
-    this.streams.delete(id);
-    stream.dispose();
+    this.streams.get(streamKeyId(windowId, key))?.releaseRenderer();
   }
 
   send(
@@ -516,7 +536,13 @@ class BrowserSessionsStream {
   private readonly key: BrowserSessionsStreamKey;
   private readonly deps: BrowserSessionsRegistryDeps;
   private readonly nextForgetLedgerAckOrder: () => number;
-  private readonly onFailedToOpen: () => void;
+  private readonly onReleaseRequested: () => void;
+  private rendererHeld = false;
+  private tearingDown = false;
+  private preparationUnavailable = false;
+  private nativeDemandSupported = false;
+  private readonly preparationHolds = new Set<() => void>();
+  private readonly demandOnly: boolean;
 
   private transport: BrowserSessionsHostTransport | null = null;
   private client: BrowserSessionsStreamClient | null = null;
@@ -617,18 +643,60 @@ class BrowserSessionsStream {
     windowId: string,
     key: BrowserSessionsStreamKey,
     deps: BrowserSessionsRegistryDeps,
+    demandOnly: boolean,
     nextForgetLedgerAckOrder: () => number,
-    onFailedToOpen: () => void,
+    onReleaseRequested: () => void,
   ) {
     this.windowId = windowId;
     this.hostId = key.hostId;
     this.key = key;
     this.deps = deps;
+    this.demandOnly = demandOnly;
     this.nextForgetLedgerAckOrder = nextForgetLedgerAckOrder;
-    this.onFailedToOpen = onFailedToOpen;
+    this.onReleaseRequested = onReleaseRequested;
+  }
+
+  retainRenderer(): void {
+    if (this.rendererHeld || this.disposed) return;
+    this.rendererHeld = true;
+    this.emitStatus(
+      browserSessionsLifecycle(this.connectionStatus, null),
+      null,
+    );
+    if (!this.snapshotReady) return;
+    // A main-owned preparation can predate the renderer coordinator. Ask the
+    // authoritative host for its inventory; do not keep another copy in main.
+    this.sendClientFrame({ kind: "requestSnapshot", hasBinaryPayload: false });
+    this.electronTabs?.replayBindings();
+  }
+
+  releaseRenderer(): void {
+    this.rendererHeld = false;
+    this.releaseIfUnused();
+  }
+
+  retainPreparation(onUnavailable: () => void): (() => void) | null {
+    if (this.disposed || this.preparationUnavailable) return null;
+    this.preparationHolds.add(onUnavailable);
+    return () => {
+      if (!this.preparationHolds.delete(onUnavailable)) return;
+      this.releaseIfUnused();
+    };
+  }
+
+  private releaseIfUnused(): void {
+    if (this.tearingDown) return;
+    if (this.disposed || this.rendererHeld || this.preparationHolds.size > 0)
+      return;
+    // Older hosts cannot replay a snapshot when the renderer later returns.
+    // Keep their renderer-owned lifetime unchanged.
+    if (this.nativeDemandSupported && this.electronTabs?.hasDemand()) return;
+    this.onReleaseRequested();
   }
 
   start(): void {
+    if (this.disposed) return;
+    this.preparationUnavailable = false;
     this.emitStatus("connecting", null);
     const userId = this.deps.userId();
     if (userId === null) {
@@ -683,7 +751,7 @@ class BrowserSessionsStream {
    */
   private failToOpen(errorMessage: string): void {
     this.emitStatus("failed", errorMessage);
-    this.onFailedToOpen();
+    this.onReleaseRequested();
   }
 
   private attach(transport: BrowserSessionsHostTransport): void {
@@ -702,6 +770,9 @@ class BrowserSessionsStream {
       onTabReleased: (capability) => {
         this.emit({ kind: "tabReleased", capability });
       },
+      // Restore can replace the last birth in one synchronous step. Observe
+      // the completed transition, not its temporary empty bookkeeping.
+      onDemandChanged: () => queueMicrotask(() => this.releaseIfUnused()),
     });
     // A forget landed in this machine's ledger, in whichever window performed
     // it. Every stream pushes its host's fresh digest.
@@ -731,7 +802,7 @@ class BrowserSessionsStream {
       // the client constructor can throw, and closing only the transport left
       // them registered until `dispose()` with nothing to drive them.
       this.teardown();
-      this.emitStatus("failed", "Browser sessions stream could not open.");
+      this.failToOpen("Browser sessions stream could not open.");
     }
   }
 
@@ -967,7 +1038,17 @@ class BrowserSessionsStream {
   }
 
   /** Everything `dispose` releases, minus the one-way `disposed` latch. */
+  private notifyPreparationsUnavailable(): void {
+    this.preparationUnavailable = true;
+    const callbacks = [...this.preparationHolds];
+    this.preparationHolds.clear();
+    for (const callback of callbacks) callback();
+    this.releaseIfUnused();
+  }
+
   private teardown(): void {
+    this.tearingDown = true;
+    this.notifyPreparationsUnavailable();
     this.generation += 1;
     this.retireConnection();
     this.resolveCaptureAckWaiters();
@@ -981,6 +1062,8 @@ class BrowserSessionsStream {
     this.snapshotReady = false;
     this.lifecycleReadySent = false;
     this.teardownTransport();
+    this.tearingDown = false;
+    this.releaseIfUnused();
   }
 
   private teardownTransport(): void {
@@ -1023,6 +1106,8 @@ class BrowserSessionsStream {
   ): void {
     if (this.disposed) return;
     this.connectionStatus = status;
+    if (status === "closed") this.notifyPreparationsUnavailable();
+    if (this.disposed) return;
     if (reason?.kind === "fatalError") {
       this.terminal = true;
       // The row this socket was built from is now suspect - a rotated Noise
@@ -1031,6 +1116,7 @@ class BrowserSessionsStream {
       this.deps.directory.invalidate(this.hostId);
     }
     if (status === "open") {
+      this.preparationUnavailable = false;
       this.connectionId = randomUUID();
       // A new incarnation has been told nothing yet, so it can ack nothing
       // yet either.
@@ -1125,6 +1211,9 @@ class BrowserSessionsStream {
   private projectUxFrame(frame: BrowserSessionsUxServerFrame): void {
     if (frame.kind === "snapshot") {
       this.snapshotReady = true;
+      this.nativeDemandSupported =
+        this.client?.supportsDemandPlacement() ?? false;
+      queueMicrotask(() => this.releaseIfUnused());
       this.emit({ kind: "frame", frame });
       this.sendLifecycleReadyIfReady();
       return;
@@ -1146,6 +1235,12 @@ class BrowserSessionsStream {
       return;
     }
     this.lifecycleReadySent = true;
+    if (this.demandOnly && !this.client?.supportsDemandPlacement()) {
+      this.failToOpen(
+        "Update this host to prepare a native browser automatically.",
+      );
+      return;
+    }
     // ONE synchronous burst, and the order in it is the attach ordering
     // guarantee. `electronTabLifecycleReady` is what makes the host CHALLENGE
     // this stream for a desktop identity; the ledger digest rides immediately
@@ -1158,7 +1253,9 @@ class BrowserSessionsStream {
     // result, so the burst stays synchronous with nothing deferred: the cache
     // and its deferred-push machinery went away with the process boundary.
     this.sendClientFrame({
-      kind: "electronTabLifecycleReady",
+      kind: this.demandOnly
+        ? "electronTabLifecycleReadyOnDemand"
+        : "electronTabLifecycleReady",
       hasBinaryPayload: false,
       coLocatedHostId: localHostId,
       // Which window this subscriber speaks for. Streams are keyed by window
@@ -1463,10 +1560,13 @@ class BrowserSessionsStream {
    * the encrypted slice to itself.
    */
   private answerIdentityChallenge(requestId: string, nonce: string): void {
+    const generation = this.generation;
     void this.deps.jar
       .attestDesktopIdentity({ hostId: this.hostId, nonce })
       .then((attestation) => {
+        if (this.disposed || generation !== this.generation) return;
         if (attestation === null) {
+          this.notifyPreparationsUnavailable();
           log.warn(
             "[browser-sessions] this machine holds no browser identity; the host stays sealed",
             { hostId: this.hostId },
@@ -1484,6 +1584,8 @@ class BrowserSessionsStream {
         });
       })
       .catch((cause: unknown) => {
+        if (this.disposed || generation !== this.generation) return;
+        this.notifyPreparationsUnavailable();
         log.warn("[browser-sessions] the desktop identity attestation failed", {
           hostId: this.hostId,
           error: describeLogError(cause),
