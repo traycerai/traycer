@@ -268,7 +268,7 @@ describe("validateFallbackPolicyDraft", () => {
     // the second group - both make the sentence point at the wrong control.
     expect(result).toEqual({
       kind: "invalid",
-      message: "Group 2 needs a name.",
+      message: "Tier 2 needs a name.",
     });
   });
 
@@ -293,7 +293,7 @@ describe("validateFallbackPolicyDraft", () => {
     // where the trim is what made them duplicates.
     expect(result).toEqual({
       kind: "invalid",
-      message: "Two model groups are both called “fast”.",
+      message: "Two tiers are both called “fast”.",
     });
   });
 
@@ -322,7 +322,7 @@ describe("validateFallbackPolicyDraft", () => {
     expect(result).toEqual({
       kind: "invalid",
       message:
-        "Model 2 in “fast” has a blank effort level - pick one, or leave it unset.",
+        "Row 2 in “fast” has a blank effort level - pick one, or leave it unset.",
     });
   });
 
@@ -345,7 +345,7 @@ describe("validateFallbackPolicyDraft", () => {
     // ["defaultTierGroupId"]`).
     expect(result).toEqual({
       kind: "invalid",
-      message: 'Choose an existing group under "For a model not in any group".',
+      message: 'Choose an existing tier under "For a model not in any tier".',
     });
   });
 });
@@ -394,6 +394,126 @@ describe("fallbackPolicyDraftReducer - edited", () => {
     });
     expect(next.displayOrder).toEqual(nextOrder);
     expect(next.draft).toEqual(state.draft);
+  });
+});
+
+describe("fallbackPolicyDraftReducer - committedTiers (C1)", () => {
+  it("createFallbackPolicyDraftState seeds committedTiers from the initial policy's tiers and default", () => {
+    const seeded = policy({
+      tierGroups: [tierGroup("flagship", [candidate("*opus*")])],
+      defaultTierGroupId: "flagship",
+    });
+    const state = createFallbackPolicyDraftState(seeded);
+    expect(state.committedTiers).toEqual({
+      tierGroups: seeded.tierGroups,
+      defaultTierGroupId: "flagship",
+    });
+  });
+
+  it("typed leaves committedTiers unchanged while the draft's tier groups already carry the keystroke", () => {
+    const initial = policy({
+      tierGroups: [tierGroup("flagship", [candidate("*opus*")])],
+      defaultTierGroupId: "flagship",
+    });
+    const state = createFallbackPolicyDraftState(initial);
+    const renamed = policy({
+      tierGroups: [tierGroup("flagship renamed", [candidate("*opus*")])],
+      defaultTierGroupId: "flagship",
+    });
+    const next = fallbackPolicyDraftReducer(state, {
+      type: "typed",
+      policy: renamed,
+      field: "tierGroups",
+      keyedTierGroups: null,
+    });
+    // The keystroke is visible in the draft the field renders from...
+    expect(next.draft.tierGroups).toEqual(renamed.tierGroups);
+    // ...but the dry run's own committed view has not moved: the rename has
+    // not committed yet.
+    expect(next.committedTiers).toEqual({
+      tierGroups: initial.tierGroups,
+      defaultTierGroupId: "flagship",
+    });
+  });
+
+  it("edited moves committedTiers to the draft's tiers and default, on blur's own keystroke-carrying commit", () => {
+    const initial = policy({
+      tierGroups: [tierGroup("flagship", [candidate("*opus*")])],
+      defaultTierGroupId: "flagship",
+    });
+    const state = createFallbackPolicyDraftState(initial);
+    const renamed = policy({
+      tierGroups: [tierGroup("flagship renamed", [candidate("*opus*")])],
+      defaultTierGroupId: "flagship",
+    });
+    const next = fallbackPolicyDraftReducer(state, {
+      type: "edited",
+      policy: renamed,
+      field: "tierGroups",
+      keyedTierGroups: null,
+    });
+    expect(next.committedTiers).toEqual({
+      tierGroups: renamed.tierGroups,
+      defaultTierGroupId: "flagship",
+    });
+  });
+
+  it("a non-edit action that changes the draft's tier groups by value also moves committedTiers", () => {
+    const initial = policy({
+      tierGroups: [tierGroup("flagship", [candidate("*opus*")])],
+      defaultTierGroupId: "flagship",
+    });
+    const state = createFallbackPolicyDraftState(initial);
+    const restored = policy({
+      tierGroups: [tierGroup("standard", [candidate("*sonnet*")])],
+      defaultTierGroupId: "standard",
+    });
+    const requestId = createFallbackSaveRequestId();
+    const started = fallbackPolicyDraftReducer(state, {
+      type: "save-started",
+      field: "danger",
+      requestId,
+      carries: "reset",
+    });
+    const next = fallbackPolicyDraftReducer(started, {
+      type: "save-succeeded",
+      requestId,
+      policy: restored,
+    });
+    expect(next.draft.tierGroups).toEqual(restored.tierGroups);
+    expect(next.committedTiers).toEqual({
+      tierGroups: restored.tierGroups,
+      defaultTierGroupId: "standard",
+    });
+  });
+
+  it("a non-edit action whose tier groups compare equal by value leaves committedTiers untouched", () => {
+    const initial = policy({
+      tierGroups: [tierGroup("flagship", [candidate("*opus*")])],
+      defaultTierGroupId: "flagship",
+    });
+    const state = createFallbackPolicyDraftState(initial);
+    const before = state.committedTiers;
+    const requestId = createFallbackSaveRequestId();
+    const started = fallbackPolicyDraftReducer(state, {
+      type: "save-started",
+      field: "enabled",
+      requestId,
+      carries: "draft",
+    });
+    // The echo carries a policy with a different `enabled` but the SAME
+    // tiers by value - only the tier-affecting fields decide this move.
+    const echoed = policy({
+      enabled: true,
+      tierGroups: [tierGroup("flagship", [candidate("*opus*")])],
+      defaultTierGroupId: "flagship",
+    });
+    const next = fallbackPolicyDraftReducer(started, {
+      type: "save-succeeded",
+      requestId,
+      policy: echoed,
+    });
+    expect(next.committedTiers).toBe(before);
   });
 });
 
@@ -1370,7 +1490,9 @@ describe("fallbackPolicyDraftReducer - composition-table cells (U / R / S togeth
     // The Model cell is now a catalog Select rather than a free-text family
     // field, so a blank row's copy points at "a model" rather than "a family
     // name" - see `draftIssueMessage`'s `fifth === "modelFamily"` arm.
-    expect(invalid.localError).toBe("Model 1 in “fast” needs a model.");
+    expect(invalid.localError).toBe(
+      "Row 1 in “fast” needs a model or pattern.",
+    );
 
     // A's reply is lost while C is on screen: the `unknown` branch.
     const aUnknown = failUnknown(invalid, a);

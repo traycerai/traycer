@@ -58,7 +58,7 @@ describe("FallbackDangerZone - confirm dialog scope", () => {
     expect(screen.getByText(/Turns automatic routing off/)).not.toBeNull();
   });
 
-  it("names the second in-flight consequence: an armed chat can still hop to the restored default groups", () => {
+  it("names the second in-flight consequence: an armed chat can still hop to the restored default tiers", () => {
     // The dialog used to stop at the reassuring half - chats already
     // switching or waiting keep their steps and timings - which reads as the
     // WHOLE truth. It is not: the tier step re-reads the groups live, so a
@@ -78,7 +78,7 @@ describe("FallbackDangerZone - confirm dialog scope", () => {
     openConfirmDialog();
     expect(
       screen.getByText(
-        /Chats already waiting or switching keep their original steps and timings\. If they still need another model, they'll use the restored default groups\./,
+        /Chats already waiting or switching keep their original steps and timings\. If they still need another model, they'll use the restored default tiers\./,
       ),
     ).not.toBeNull();
   });

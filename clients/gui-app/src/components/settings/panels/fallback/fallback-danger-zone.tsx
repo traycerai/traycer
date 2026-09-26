@@ -212,7 +212,7 @@ function resetConfirmDescription(hostLabel: string | null): string {
   // the reassuring half of a known pair, on a confirm dialog, is the one place
   // that is least affordable.
   const inFlight =
-    "Chats already waiting or switching keep their original steps and timings. If they still need another model, they'll use the restored default groups.";
+    "Chats already waiting or switching keep their original steps and timings. If they still need another model, they'll use the restored default tiers.";
   if (hostLabel === null) return `${what} ${inFlight}`;
   return `${what} Applies to your chat agents on ${hostLabel}. ${inFlight}`;
 }
