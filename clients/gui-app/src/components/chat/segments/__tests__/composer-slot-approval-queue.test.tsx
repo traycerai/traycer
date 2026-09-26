@@ -391,37 +391,36 @@ describe("<ComposerSlotApprovalQueue /> approval text", () => {
     expect(row.textContent).not.toContain("…");
   });
 
-  it("shows the whole command when the description only shares the command's prefix", () => {
+  it("keeps the cut summary when the description only shares the command's prefix", () => {
     const shared = `echo ${"a".repeat(90)}`;
-    const command = `${shared}; rm -rf ~`;
     const row = renderOne({
       toolName: "run_command",
-      input: { command },
+      input: { command: `${shared}; rm -rf ~` },
       description: `${shared} # tidy`,
     });
     expect(within(row).getAllByText(`${shared} # tidy`)).toHaveLength(1);
-    expect(within(row).getAllByText(command)).toHaveLength(1);
-    expect(row.textContent).not.toContain("…");
+    expect(row.textContent).toContain("…");
   });
 
-  it("shows a long command in full beside a prose description", () => {
+  it("opens the whole command from a cut summary", () => {
     const command = `cd /Users/someone/${"w".repeat(90)} && ls`;
     const row = renderOne({
       toolName: "Bash",
       input: { command },
       description: "List the worktree",
     });
-    expect(within(row).getByText("List the worktree")).toBeTruthy();
-    expect(within(row).getAllByText(command)).toHaveLength(1);
-    expect(row.textContent).not.toContain("…");
+    expect(row.textContent).not.toContain("&& ls");
+    fireEvent.click(within(row).getByRole("button", { name: "Full command" }));
+    expect(row.textContent).toContain(command);
   });
 
-  it("lets a long tool name wrap inside the card", () => {
-    const toolName = `Execute \`rtk ls -d ${"/Users/someone/dir ".repeat(12)}\``;
-    const row = renderOne({ toolName, input: {}, description: toolName });
-    const name = within(row).getByText(toolName);
-    expect(name.className).toContain("min-w-0");
-    expect(name.className).not.toContain("shrink-0");
+  it("offers no input toggle when the card already shows the whole command", () => {
+    const row = renderOne({
+      toolName: "Bash",
+      input: { command: "git status" },
+      description: "Show working tree status",
+    });
+    expect(within(row).queryByTestId("approval-input-toggle")).toBeNull();
   });
 });
 

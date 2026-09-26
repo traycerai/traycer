@@ -42,18 +42,23 @@ export interface ApprovalCardText {
   /**
    * The first line's `· summary`: `null` when there is none, and when the
    * headline IS the input, in full - a long command is shown once, uncut,
-   * rather than cut on one line and whole on the next. Otherwise a summary
-   * cut by its length cap is replaced by the whole input, so the card never
-   * shows only a cut command. The complete text is the one kept because it
-   * is what the user is approving: the tail a cut hides is exactly where
-   * `; rm -rf …` would sit. That is also why the headline must equal the
-   * whole input and not merely begin like it: the description comes from the
-   * harness or the model, not from the input, and one that shares the
-   * input's first 79 characters can still end differently.
+   * rather than cut on one line and whole on the next. The complete text is
+   * the one kept because it is what the user is approving: the tail a cut
+   * hides is exactly where `; rm -rf …` would sit. That is also why the
+   * headline must equal the whole input and not merely begin like it: the
+   * description comes from the harness or the model, not from the input, and
+   * one that shares the input's first 79 characters can still end
+   * differently - dropping the summary for it would hide the real tail.
    */
   readonly inputSummary: string | null;
   /** The line under it: `null` when it would only repeat the first line. */
   readonly headline: string | null;
+  /**
+   * The input panel the card can open: `null` when the two lines already show
+   * the whole input. The summary is cut at 80 characters, so without it a
+   * long command could only be approved on its first 79.
+   */
+  readonly inputDetail: ToolInputDetail | null;
 }
 
 export function approvalCardText(
@@ -62,6 +67,31 @@ export function approvalCardText(
   description: string,
   inputDetail: ToolInputDetail | null,
 ): ApprovalCardText {
+  const lines = approvalCardLines(
+    toolName,
+    inputSummary,
+    description,
+    inputDetail,
+  );
+  const detail = resolveToolInputDetail(inputDetail, lines.inputSummary);
+  const whole = singleDetailText(detail);
+  const headlineIsWhole =
+    whole !== null &&
+    lines.headline !== null &&
+    collapse(lines.headline) === collapse(whole);
+  return {
+    inputSummary: lines.inputSummary,
+    headline: lines.headline,
+    inputDetail: headlineIsWhole ? null : detail,
+  };
+}
+
+function approvalCardLines(
+  toolName: string,
+  inputSummary: string | null,
+  description: string,
+  inputDetail: ToolInputDetail | null,
+): Omit<ApprovalCardText, "inputDetail"> {
   const headline = collapse(description);
   if (headline.length === 0 || headline === collapse(toolName)) {
     return { inputSummary, headline: null };
@@ -71,13 +101,14 @@ export function approvalCardText(
     return { inputSummary, headline: null };
   }
   const fullInput = singleDetailText(inputDetail);
-  if (fullInput === null || !isTruncationOf(inputSummary, fullInput)) {
-    return { inputSummary, headline: description };
-  }
-  if (headline === collapse(fullInput)) {
+  if (
+    fullInput !== null &&
+    headline === collapse(fullInput) &&
+    isTruncationOf(inputSummary, fullInput)
+  ) {
     return { inputSummary: null, headline: description };
   }
-  return { inputSummary: fullInput, headline: description };
+  return { inputSummary, headline: description };
 }
 
 /** The resolved row's expanded body, before its decision reason. */
