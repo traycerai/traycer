@@ -177,6 +177,8 @@ function mountSubmit(args: {
   readonly draftBlobBridgeSupported?: boolean;
 }) {
   const toolbarStore = createComposerToolbarStore({
+    purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: "draft-image-submit",
     values: {
       permission: "supervised",
@@ -647,6 +649,8 @@ function mountSubmitRerenderable(initial: {
   readonly getActiveTurnForSteer?: () => ChatActiveTurn | null;
 }) {
   const toolbarStore = createComposerToolbarStore({
+    purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: "draft-image-submit-rerender",
     values: {
       permission: "supervised",
@@ -964,6 +968,8 @@ describe("useChatComposerSubmit draft images - /btw re-inlines before forking", 
     );
     const submit = vi.fn((_input: ChatComposerSubmitInput) => true);
     const toolbarStore = createComposerToolbarStore({
+      purpose: "run",
+      reasoningFallback: "model-default",
       seedKey: "btw-inline-submit",
       values: {
         permission: "supervised",

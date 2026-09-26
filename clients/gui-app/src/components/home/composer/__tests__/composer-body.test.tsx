@@ -135,6 +135,8 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
     options;
   const toolbarLayout = options.toolbarLayout ?? "full";
   const toolbarStore = createComposerToolbarStore({
+    purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: "test",
     values: {
       permission: "supervised",
@@ -155,6 +157,7 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
       pickerStore={createComposerPickerStore()}
       editorRef={{ current: null }}
       toolbarStore={toolbarStore}
+      expansion={null}
       hostId={hostId}
       composerMode={composerMode}
       chatEditorIsActive={composerMode === "chat"}

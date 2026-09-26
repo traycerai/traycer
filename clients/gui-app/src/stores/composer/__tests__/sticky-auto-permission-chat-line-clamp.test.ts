@@ -38,6 +38,8 @@ function createStickyAutoStore(
   chatLineCarriesAutoMode: boolean | null,
 ): ComposerToolbarStore {
   const store = createComposerToolbarStore({
+    purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: "seed-sticky-auto",
     values: {
       permission: "auto",
@@ -127,6 +129,8 @@ describe("composer-toolbar-store: the sticky clamp consults BOTH the catalog lin
       tuiOnly: false,
     };
     const store = createComposerToolbarStore({
+      purpose: "run",
+      reasoningFallback: "model-default",
       seedKey: "seed-sticky-auto-same-catalog",
       values: {
         permission: "auto",

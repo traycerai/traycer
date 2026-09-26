@@ -1677,6 +1677,20 @@ function withoutWithdrawnUserRow(
   );
 }
 
+/**
+ * Whether the rendered transcript carries a worktree setup card, in any state.
+ * While it does, an unstarted opening prompt drops its own "Setting up" status:
+ * the card, or the pre-turn "Working…" row once the card is no longer in flight
+ * (`setupGating` above), already shows that wait.
+ */
+export function transcriptShowsSetupCard(
+  rows: ReadonlyArray<ChatMessageModel>,
+): boolean {
+  return rows.some((row) =>
+    row.segments.some((segment) => segment.kind === "setup-card"),
+  );
+}
+
 function projectActiveTurn(
   activeTurn: ChatActiveTurn | null,
   profileLabelsByTurnKey: ReadonlyMap<string, string>,
@@ -1974,15 +1988,21 @@ function buildAutoJudgeUnattendedDenialMessages(
 }
 
 /**
- * Project an auto-mode judge notice: the line the host owes the user when the
- * judge could not run, a policy file is not the one deciding, or Automatic
- * moved the judge's billing to the conversation's own provider.
+ * Project a LEGACY auto-mode judge notice row.
  *
- * The host journals each as a `permission.blocked` event and nothing else, so
- * without this row the notice reached the chat store and was drawn nowhere.
- * Filtered and identified THROUGH the projection's own helper, like the
- * refusal row above - the host numbers this row's ordinal from
- * `autoJudgeNoticeRowSource`.
+ * Hosts used to journal a `permission.blocked` event carrying a notice (the
+ * judge could not run, a policy file was not wholly applied, Automatic moved
+ * the judge's billing to the conversation's provider). They no longer write
+ * one, but rows already on disk keep their ordinal: the host still numbers
+ * them from `autoJudgeNoticeRowSource`, so this list enumerates them too -
+ * the row-projection equivalence suite holds it to the host's list, row for
+ * row. Filtered and identified THROUGH the projection's own helper, like the
+ * refusal row above.
+ *
+ * Nothing draws the row. The chat tile withholds it before the list is built
+ * (`withholdUnpaintedRows` in `chat-special-segment.ts`), and
+ * `transcriptListRows` then omits its ordinal the way it omits a row the
+ * pinned-todo pass withholds.
  */
 function buildAutoJudgeNoticeMessages(
   events: ReadonlyArray<ChatEvent>,

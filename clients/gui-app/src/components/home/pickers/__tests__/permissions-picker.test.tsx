@@ -1,7 +1,10 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
-import type { AutoJudgeBilling } from "@/lib/auto-mode/auto-judge-billing";
+import {
+  AUTO_MID_TURN_UNRESOLVED_LOCK,
+  type AutoJudgeBilling,
+} from "@/lib/auto-mode/auto-judge-billing";
 import type { PermissionMode } from "@/components/home/data/landing-options";
 
 afterEach(() => {
@@ -22,6 +25,7 @@ interface RenderPickerOptions {
   readonly turnActive: boolean;
   readonly judgeBilling: AutoJudgeBilling | null;
   readonly onOpenPermissionSettings: (() => void) | null;
+  readonly onChange: (next: PermissionMode) => void;
 }
 
 const DEFAULT_RENDER_PICKER_OPTIONS: RenderPickerOptions = {
@@ -33,6 +37,7 @@ const DEFAULT_RENDER_PICKER_OPTIONS: RenderPickerOptions = {
   turnActive: false,
   judgeBilling: null,
   onOpenPermissionSettings: null,
+  onChange: vi.fn(),
 };
 
 // Plain object-spread merge rather than `??` defaults: several cases here
@@ -48,7 +53,7 @@ function renderPicker(overrides: Partial<RenderPickerOptions>) {
     <PermissionsPicker
       value={options.value}
       disabled={false}
-      onChange={vi.fn()}
+      onChange={options.onChange}
       supportedPermissionModes={options.supportedPermissionModes}
       harnessLabel={options.harnessLabel}
       catalogSupportedModes={options.catalogSupportedModes}
@@ -211,7 +216,11 @@ describe("<PermissionsPicker /> - the four labels and one-line descriptions", ()
 describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
   it("shows the traycer meta line naming the model", () => {
     renderPicker({
-      judgeBilling: { kind: "traycer", modelLabel: "Sonnet 5" },
+      judgeBilling: {
+        kind: "traycer",
+        modelLabel: "Sonnet 5",
+        effortLabel: null,
+      },
     });
     openMenu();
 
@@ -227,6 +236,7 @@ describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
         harnessId: "claude",
         harnessLabel: "Claude Code",
         modelLabel: "Sonnet",
+        effortLabel: null,
       },
     });
     openMenu();
@@ -243,6 +253,7 @@ describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
         harnessId: "copilot",
         harnessLabel: "Copilot",
         modelLabel: "GPT-5",
+        effortLabel: null,
       },
     });
     openMenu();
@@ -286,6 +297,7 @@ describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
         harnessId: "codex",
         harnessLabel: "Codex",
         modelLabel: "codex-judge-default",
+        effortLabel: null,
       },
     });
     openMenu();
@@ -304,8 +316,21 @@ describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
 });
 
 describe("<PermissionsPicker /> - mid-turn notice", () => {
+  // Settled billing throughout: with a turn active, an unsettled (`null`)
+  // billing locks the Auto row instead of showing the notice - see the
+  // mid-turn lock block below.
+  const SETTLED_BILLING: AutoJudgeBilling = {
+    kind: "traycer",
+    modelLabel: "Sonnet 5",
+    effortLabel: null,
+  };
+
   it("shows the notice when a turn is active and the current value is not auto", () => {
-    renderPicker({ turnActive: true, value: "full_access" });
+    renderPicker({
+      turnActive: true,
+      value: "full_access",
+      judgeBilling: SETTLED_BILLING,
+    });
     openMenu();
 
     expect(
@@ -314,7 +339,11 @@ describe("<PermissionsPicker /> - mid-turn notice", () => {
   });
 
   it("shows the notice when a turn is active and the current value is supervised", () => {
-    renderPicker({ turnActive: true, value: "supervised" });
+    renderPicker({
+      turnActive: true,
+      value: "supervised",
+      judgeBilling: SETTLED_BILLING,
+    });
     openMenu();
 
     expect(
@@ -338,6 +367,129 @@ describe("<PermissionsPicker /> - mid-turn notice", () => {
     expect(
       screen.queryByTestId("permission-option-mid-turn-notice"),
     ).toBeNull();
+  });
+});
+
+describe("<PermissionsPicker /> - mid-turn lock", () => {
+  const PROVIDER_NATIVE_BILLING: AutoJudgeBilling = {
+    kind: "provider-native",
+    harnessId: "claude",
+    harnessLabel: "Claude Code",
+  };
+
+  function autoMenuItem(): HTMLElement {
+    const item = screen
+      .getAllByRole("menuitemradio")
+      .find(
+        (option) =>
+          option.querySelector(".font-medium")?.textContent === "Auto",
+      );
+    if (item === undefined) throw new Error("Auto menu item not found");
+    return item;
+  }
+
+  it("disables the Auto item and shows the lock sentence, with no meta line or mid-turn notice, when billing is provider-native and a turn is active on a non-auto value", () => {
+    renderPicker({
+      judgeBilling: PROVIDER_NATIVE_BILLING,
+      turnActive: true,
+      value: "supervised",
+    });
+    openMenu();
+
+    const item = autoMenuItem();
+    expect(item.hasAttribute("data-disabled")).toBe(true);
+    expect(item.textContent).toContain(
+      "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Providers ▸ Claude Code ▸ Permissions.",
+    );
+    expect(screen.queryByTestId("permission-option-meta")).toBeNull();
+    expect(
+      screen.queryByTestId("permission-option-mid-turn-notice"),
+    ).toBeNull();
+  });
+
+  it("does not call onChange when the locked Auto item is selected", () => {
+    const onChange = vi.fn();
+    renderPicker({
+      judgeBilling: PROVIDER_NATIVE_BILLING,
+      turnActive: true,
+      value: "supervised",
+      onChange,
+    });
+    openMenu();
+
+    fireEvent.click(autoMenuItem());
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("does not lock Auto when the current value is already auto", () => {
+    renderPicker({
+      judgeBilling: PROVIDER_NATIVE_BILLING,
+      turnActive: true,
+      value: "auto",
+    });
+    openMenu();
+
+    expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
+  });
+
+  it("does not lock Auto when no turn is active, and still shows the provider-native meta line", () => {
+    renderPicker({
+      judgeBilling: PROVIDER_NATIVE_BILLING,
+      turnActive: false,
+      value: "supervised",
+    });
+    openMenu();
+
+    expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
+    expect(screen.getByTestId("permission-option-meta").textContent).toBe(
+      "Reviewed by Claude Code's built-in classifier · no extra cost",
+    );
+  });
+
+  it("does not lock Auto for traycer billing, and keeps the mid-turn notice", () => {
+    renderPicker({
+      judgeBilling: {
+        kind: "traycer",
+        modelLabel: "Sonnet 5",
+        effortLabel: null,
+      },
+      turnActive: true,
+      value: "supervised",
+    });
+    openMenu();
+
+    expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
+    expect(
+      screen.getByTestId("permission-option-mid-turn-notice").textContent,
+    ).toBe("Switches now. Anything already waiting still asks you.");
+  });
+
+  it("disables the Auto item with the unresolved sentence, and no notice, while billing has not settled during a turn", () => {
+    renderPicker({
+      judgeBilling: null,
+      turnActive: true,
+      value: "supervised",
+    });
+    openMenu();
+
+    const item = autoMenuItem();
+    expect(item.hasAttribute("data-disabled")).toBe(true);
+    expect(item.textContent).toContain(AUTO_MID_TURN_UNRESOLVED_LOCK);
+    expect(
+      screen.queryByTestId("permission-option-mid-turn-notice"),
+    ).toBeNull();
+  });
+
+  it("does not lock Auto on unsettled billing when no turn is active", () => {
+    renderPicker({
+      judgeBilling: null,
+      turnActive: false,
+      value: "supervised",
+    });
+    openMenu();
+
+    expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
   });
 });
 
