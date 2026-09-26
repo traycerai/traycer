@@ -40,9 +40,8 @@ import type { HostUpdateCompletion } from "@/hooks/host/use-host-update-completi
  *
  * Only successful updates can be dismissed here. Failed attempts remain
  * discoverable in this Overview even after dismissal on the landing page. The
- * acknowledgement itself is the PANEL's (`completion`): the header's
- * "Updated to vX" pill leaves on the same timer, and this card mounts only
- * once Status is visited.
+ * acknowledgement itself is the PANEL's (`completion`), so this card's own
+ * mount and unmount never restart its timer.
  *
  * Retry and Diagnostics are likewise absent ON PURPOSE. Both already exist on
  * this page: the version rows below are how a person installs again, and the
@@ -134,7 +133,7 @@ export function HostOverviewOperationCard(props: {
   readonly cliFloorBlocked: boolean;
   /**
    * The success acknowledgement (`useHostUpdateCompletion`), held by the
-   * panel so the header pill and this card leave together.
+   * panel so this card's own mount and unmount never restart its timer.
    */
   readonly completion: HostUpdateCompletion;
 }): ReactNode {

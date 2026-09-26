@@ -1367,9 +1367,9 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
         </RunnerHostProvider>
       </QueryClientProvider>,
     );
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await waitForButton("Check now"));
-    await selectHostOverviewTab("updates");
     fireEvent.click(await waitForButton(/^Install \d/));
 
     // The whole REGION retires, not just the install button. This test used to

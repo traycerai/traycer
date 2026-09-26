@@ -470,6 +470,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       extraHandshakeMethods: undefined,
       extra: undefined,
     });
+    await selectHostOverviewTab("updates");
 
     expect(await screen.findByTestId("host-overview-updates")).toBeTruthy();
     expect(screen.queryByTestId("host-overview-updates-degraded")).toBeNull();
@@ -518,6 +519,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       extraHandshakeMethods: undefined,
       extra: undefined,
     });
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(`v${BRIDGE_CHECK_VERSION} is available.`);
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
@@ -557,6 +559,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       extraHandshakeMethods: undefined,
       extra: undefined,
     });
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(`v${BRIDGE_CHECK_VERSION} is available.`);
     const updateNow = await screen.findByRole("button", { name: "Update now" });
@@ -853,6 +856,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       extraHandshakeMethods: undefined,
       extra: undefined,
     });
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(`v${BRIDGE_CHECK_VERSION} is available.`);
     expect(management.maintenanceUpdateCheck).toHaveBeenCalled();

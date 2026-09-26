@@ -1016,11 +1016,11 @@ function ResourceMonitorHostPickerRow(props: {
             props.onClose();
             carryViewedHostIntoSettingsScope(scope.hostId);
             // Named rather than left null: an Overview already open on
-            // another tab comes back to Status, as every host link does.
+            // another tab comes back to Updates, as every host link does.
             openSettings({
               section: "host",
               resetToGeneral: false,
-              tab: "status",
+              tab: "updates",
               draft: null,
               hostId: null,
             });

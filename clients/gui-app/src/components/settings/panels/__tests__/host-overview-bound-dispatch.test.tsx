@@ -394,6 +394,7 @@ describe("HostOverviewPanel — bound-dispatch sequence: accept, park, auto-open
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
     // (a), first half: the preparing frames release the accepted latch and
@@ -506,6 +507,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
     await waitFor(() => {
@@ -615,6 +617,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
     await waitFor(() => {
@@ -760,6 +763,7 @@ describe("HostOverviewPanel — dispatch ownership: unusable scope and unmount-b
       defaultOptions: { queries: { retry: false } },
     });
     const firstMount = render(panelElement(queryClient));
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
     // Dispatched, still pending — `host.update.install` has not answered.
@@ -903,6 +907,7 @@ describe("HostOverviewPanel — an accepted host-service deregister clears the d
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
     await waitFor(() => {
@@ -1112,8 +1117,15 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
     // No auto-open and no bound dispatch reachable: `updates.activate` /
     // `updates.continueAttempt` are both `null` for this host, and this
     // legacy-facts park carries no `attemptId` at all, so
-    // `deriveAttemptControl` returns `null` regardless.
-    await screen.findByText("v1.2.1 is installed — restart host to finish.");
+    // `deriveAttemptControl` returns `null` regardless. T2's notices strip
+    // carries the debt sentence while it is in-flight - the version card
+    // withholds its own answer for any in-flight kind (see
+    // host-overview-notices.test.tsx's duplication regression).
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-card").textContent,
+      ).toContain("Update installed — restart host to finish");
+    });
     expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
 
     fireEvent.click(screen.getByTestId("host-overview-operation-restart"));
@@ -1579,6 +1591,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
       hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom("host-a", fixture);
       renderPanel();
+      await selectHostOverviewTab("updates");
 
       fireEvent.click(
         await screen.findByRole("button", { name: "Update now" }),
@@ -2080,6 +2093,7 @@ describe("update dispatch onError — a transport drop keeps the accepted latch 
       hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom("host-a", fixture);
       const panel = renderPanel();
+      await selectHostOverviewTab("updates");
 
       fireEvent.click(
         await screen.findByRole("button", { name: "Update now" }),
@@ -2401,6 +2415,7 @@ describe("HostOverviewPanel — reason vocabularies are partitioned per wire fie
       hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom("host-a", fixture);
       renderPanel();
+      await selectHostOverviewTab("updates");
 
       fireEvent.click(
         await screen.findByRole("button", { name: "Update now" }),
