@@ -1,0 +1,95 @@
+---
+title: "CLI Changelog"
+sidebarTitle: "CLI"
+description: "Track the latest updates and improvements to the Traycer CLI."
+rss: true
+---
+
+<Update label="v1.1.9">
+Agent roles, the Oh My Pi coding agent, and Host installs that recover instead of leaving you stuck.
+
+* **Agent roles** — give an agent a role when you create it.
+* **Oh My Pi** — create agents with `--harness omp`.
+* **Command help** — command descriptions now spell out what each command actually does.
+* **Installing the Host** — a failed install or update offers a way forward instead of leaving you stuck. On macOS, the Host no longer runs slowed down in the background, and appears in Login Items as Traycer rather than `sh`.
+* **Fixes** — browser sign-in completes as soon as you approve it, rather than waiting out a longer polling delay, and environment variable overrides on Windows keep their original capitalization.
+</Update>
+
+<Update label="v1.1.8">
+One sign-in shared with the desktop app, and downloads that resume.
+
+* **Shared sign-in** — the CLI and Traycer Desktop use the same credentials, so signing in once really does cover both.
+* **Agent permissions** — set what an agent is allowed to do when creating or reconfiguring it.
+* **Installing the Host** — large downloads resume where they left off.
+* **Fixes** — the CLI now recognizes when the desktop app already manages the Host service, and replaces a competing registration rather than just refusing it.
+</Update>
+
+<Update label="v1.1.7">
+Account-aware agent commands, Devin and Pi, and steadier Host service registration.
+
+* **Choose an account per agent** — list the accounts available for a provider and their usage, pick one when creating an agent, and switch the account an existing agent uses.
+* **Devin and Pi** — both coding agents are now available.
+* **Shell configuration** — add or remove custom shells, and restore a shell's default arguments.
+* **Worktrees** — listings fetch current status every time you run them.
+* **Service registration** — the Host service stays correctly registered across installs and updates.
+* **Open source** — Traycer's public repository is now MIT-licensed.
+</Update>
+
+<Update label="v1.1.6">
+* **Compatibility** — a newer CLI keeps working with an older Host; anything unavailable asks you to update rather than breaking the connection.
+* **Reliability** — requests finish before their connection closes.
+</Update>
+
+<Update label="v1.1.5">
+Windows binaries, the Amp coding agent, and new worktree commands.
+
+* **Windows** — prebuilt Windows binaries alongside macOS and Linux.
+* **Amp** — the Amp coding agent from Sourcegraph is now available.
+* **Worktree commands** — `traycer worktree list` and `traycer worktree delete`, showing which worktrees are stale and paging as the list grows.
+* **Terminal agents** — Claude and OpenCode keep the correct session when it changes.
+</Update>
+
+<Update label="v1.1.4">
+* **Git diffs** — change data can include edits made inside Git submodules.
+* **Scheduled wake-ups** — remain compatible with earlier 1.1 releases.
+* Terminal agents no longer die quietly when the connection drops.
+</Update>
+
+<Update label="v1.1.3">
+* **Named agents** — give an agent a name when you create it.
+* Provider lists load correctly when the CLI and Host are on different versions.
+</Update>
+
+<Update label="v1.1.2">
+* **Homebrew** — install a specific CLI version.
+* **Sign-in** — a stalled sign-in now times out instead of hanging indefinitely.
+</Update>
+
+<Update label="v1.1.1">
+* Host updates recover instead of staying blocked, and refuse to restart while work is still running.
+</Update>
+
+<Update label="v1.1.0">
+Install from npm or Homebrew, sign in from any device, and eight new coding agents.
+
+* **Install from npm or Homebrew** — published to both.
+* **Device sign-in** — sign in by approving Traycer on a web page, shared with Traycer Desktop.
+* **Eight new coding agents** — Grok (xAI), Qwen, Kiro, Kilo Code, Copilot, Kimi, Droid, and OpenRouter.
+* **Windows Hosts** — support for bundled Windows Host archives.
+* **Diagnostics** — choose how much the CLI logs.
+* **Sign-in** — long-running `traycer monitor` sessions refresh credentials ahead of expiry and update open Host connections without reconnecting.
+* **Removing the Host** — `traycer host uninstall --all` removes the Host for good, instead of leaving it to restart itself part-way through.
+</Update>
+
+<Update label="v1.0.0">
+First public release of the Traycer CLI — the `traycer` command that provisions and supervises the Traycer Host, handles authentication, manages configuration, and exposes Traycer's workspace and agent automation. It ships inside Traycer Desktop, so most users do not install it separately.
+
+* **Single binary** — a self-contained executable with no external runtime dependency.
+* **Host lifecycle** — download, verify, install, start, update, and supervise the Host as an OS-managed service. Binaries are verified by SHA-256 checksum and minisign signature before installation.
+* **Authentication** — browser-based PKCE sign-in (`traycer login` / `whoami` / `logout`), shared with Traycer Desktop.
+* **Configuration** — shell selection and environment overrides for agent sessions.
+* **Workspaces and worktrees** — list workspaces and create isolated git worktrees.
+* **Agent automation** — list, create, and message agents, read transcripts, and stream inboxes.
+* **Scripting** — `--json` emits a structured NDJSON stream of `progress` and `result` events; honors `CI` and `TRAYCER_NONINTERACTIVE`, plus `--quiet` / `--no-progress`.
+* **Platforms** — prebuilt binaries for macOS (Apple Silicon and Intel) and Linux (x64).
+</Update>

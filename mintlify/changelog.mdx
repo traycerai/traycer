@@ -1,0 +1,178 @@
+---
+title: "Changelog"
+sidebarTitle: "Desktop"
+description: "Track the latest updates and improvements to Traycer Desktop."
+rss: true
+---
+
+<Update label="v1.1.10">
+The per-agent Epic / Regular mode control is gone. Tasks and artifacts remain.
+
+- **Per-agent mode** — the composer, settings, and `traycer agent create` no longer offer Epic Mode. That setting belonged to the agent, not to the Task. A Task is still the container for agents, files, git diff, and artifacts.
+- **Artifact workflow** — [Artifact workflow](/concepts/artifact-workflow) covers the remaining planning skills, typical order, and that Traycer does not guarantee an automatic skill pipeline. Picking a skill with `$` or `/` is a reliable way to run one; it is not a new requirement that every artifact be requested by hand.
+</Update>
+
+<Update label="v1.1.9">
+Two tabs side by side, search across artifacts and workspaces, and the Oh My Pi coding agent.
+
+- **Split the window** — put any two tabs side by side: a Task next to History, or Settings next to a draft. Each side scrolls on its own, and the divider can be dragged or resized from the keyboard. Drag a tab to the edge of the window and hold, or pick one from the list.
+- **Search** — search artifacts and workspaces, jump to nested panes by path, and find past Tasks by branch, folder, or PR number.
+- **Oh My Pi** — the Oh My Pi coding agent is now available.
+- **Agent roles** — give an agent a role, from the app or the CLI.
+- **Steer a running agent** — press ⌘Enter to send a message to a coding agent mid-turn instead of waiting for it to finish; Enter still queues it for afterwards. Not every coding agent supports this, and it can be turned off in Settings.
+- **Sidebar** — chat rows show a second line of detail and a leading icon, and archiving is easier to reach.
+- **Worktrees** — clear out a Task's finished worktrees from History or the sidebar, one at a time or several at once, and choose your own branch prefix.
+- **Context usage** — compact a conversation straight from the context chip.
+- **Grok profiles** — connect several Grok accounts and choose which one each agent uses, with isolated sessions and usage limits per account.
+- **Workspace files** — the file list keeps up as files change, and artifacts tell you once they have finished syncing.
+- **Notifications** — an agent that stops because it ran out of context, or because its request was refused, now tells you which. Clicking a notification opens the window holding that chat, and terminal agents get their own indicators.
+- **Installing and updating** — a failed install or update offers a way forward instead of leaving you stuck. On macOS, Traycer recovers from a failed background-service registration, and no longer runs slowed down in the background.
+- **Windows** — fixed the menu bar, window controls at non-default zoom levels, and theme switching. Environment variable overrides keep their original capitalization.
+- **Fixes** — drafts clear everywhere once sent; sign-in completes as soon as you approve it in the browser; updates ask once rather than twice before restarting; a terminal agent that fails to launch explains why; Worktrees keeps your selection as you move around Settings; adding an image no longer moves your cursor; a failed compaction is no longer marked as done; numbered lists keep their starting number; mentions accept spaces; the composer keeps focus when you switch panes; buttons work again after your machine wakes; and a provider being rechecked keeps its models on screen.
+</Update>
+
+<Update label="v1.1.8">
+A rebuilt notification center, the Hermes coding agent, and updates that survive being interrupted.
+
+- **Notification center** — rebuilt, with a clear way to dismiss anything needing attention and consistent wording wherever a notification appears.
+- **Updates** — large downloads resume where they left off, installing no longer freezes the app, and a Host that is still running is never restarted from under you.
+- **Hermes** — the Hermes coding agent from Nous Research is now available.
+- **Composer** — pick several skills at once with `$`, paste or drop files to insert their paths, and see why Send is unavailable. Images still attach as images.
+- **Sign-in** — the app and the CLI share one sign-in, so signing in once covers both.
+- **Rate limits** — Grok account usage appears alongside the other providers.
+- **Resource monitor** — stop an agent and everything it started in one action, with provider icons on each row.
+- **Terminals** — open a terminal from the start screen without choosing a folder first.
+- **Agent messages** — redesigned message cards, and control over what an agent is allowed to do.
+- **Worktrees** — the branch picker saves as you type and handles long branch lists, your filters persist, and a failed setup can be retried safely.
+- **Summon hotkey** — change it, or turn it off.
+- **Chats are now Agents** — the Chats panel is now Agents, and Settings › Agents is now Settings › Agent selection. New agents start in regular mode. Your history, saved titles, and existing references are unchanged.
+- **Agent selection** — guidance is now set once for everything, rather than per workspace.
+- **Fixes** — the Linux app icon appears correctly; provider sign-in failures stay visible instead of disappearing; history skips tabs you have closed; panels reconnect on their own; copying messages and pasting images work in installed builds; and file tabs can copy their path.
+</Update>
+
+<Update label="v1.1.7">
+Several accounts per provider, two new coding agents, artifact export, and terminals outside a Task.
+
+- **Several accounts per provider** — connect more than one account to the same provider and switch between them per conversation, with usage shown for each. Agents messaging each other use them too.
+- **Devin and Pi** — both coding agents are now available.
+- **Export artifacts** — save any artifact as Markdown or PDF.
+- **Terminals outside a Task** — open terminals not tied to a Task, plus a terminal panel on the start screen and a reworked Shell section in Settings.
+- **Fork an answered question** — return to a question you already answered and try a different path from there.
+- **Notifications** — tab indicators that persist, toasts you can click, alerts when a provider or workspace fails, and hooks that call a URL or run a command, filtered by severity.
+- **Rate limits** — Codex manual reset credits, a banner matching the model you actually picked, and a quicker way to switch accounts when you hit a limit.
+- **Worktrees and PRs** — worktree and PR context throughout the app, PR numbers you can search for, and status that finishes loading without scrolling and stays current.
+- **Claude sign-in** — paste an OAuth code when the browser redirect cannot complete.
+- **Artifacts** — edit the agent guide as Markdown, open links with editing behind a hover card, and pin items in a Task's history.
+- **Background work** — background tasks show elapsed time and readable results, and finished cards show what resumed the agent.
+- **Resource monitor** — counts everything an agent started, and sorts by total CPU or memory use.
+- **Analytics** — Traycer now collects product usage data. Automatic capture, session recording, page addresses, errors, and your content are all switched off; events are linked to your Traycer account.
+- **Open source** — Traycer's public repository is now MIT-licensed.
+- **Fixes** — Ctrl shortcuts on macOS no longer trigger the wrong action, terminal sizing and scrolling behave, the app recovers when the Host becomes reachable again instead of leaving chats offline, and WSL no longer fills up with crash dumps.
+</Update>
+
+<Update label="v1.1.6">
+Fork a chat while a question is still waiting on you.
+
+- **Fork a pending question** — branch a conversation while a question is still waiting for your answer, either to ask something else or to try a different answer alongside it.
+- **Compatibility** — a newer app keeps working with an older Host; anything unavailable falls back where it can, or asks you to update.
+- **Reliability** — requests finish before their connection closes.
+</Update>
+
+<Update label="v1.1.5">
+Traycer Desktop comes to Windows, with a resource monitor and worktree cleanup.
+
+- **Windows** — Traycer Desktop and the bundled CLI run on Windows, with window controls that follow your theme, on signed builds.
+- **Resource monitor** — see CPU and memory for everything Traycer runs, expand any entry to its sub-processes, and keep the section header in view while scrolling.
+- **Amp** — the Amp coding agent from Sourcegraph is now available.
+- **Worktree cleanup** — see which worktrees are stale, which have open or merged PRs, and which have landed. The list pages as it grows and links back to the Task that created each one.
+- **Queued messages** — pause and resume them.
+- **Nested agents** — Claude subagents and parallel groups appear as a tree.
+- **Terminal** — choose your cursor style and whether it blinks.
+- **Artifacts** — tabs take their name from the document's first heading, and sections can be dragged out.
+- **Start without a folder** — begin a chat before choosing a folder.
+- **Navigation** — Back and Forward follow where you have been inside a Task, including panes and tiles.
+- **Chat** — provider notices appear inline, and suggested next steps can be queued while an agent is still working.
+- **Fixes** — trackpad gestures no longer zoom the app, your window layout survives quitting, terminals stop reconnecting in a loop, and nested formatting in artifacts no longer breaks.
+</Update>
+
+<Update label="v1.1.4">
+Scheduled wake-ups get real controls, and diffs understand submodules.
+
+- **Scheduled wake-ups** — Claude's background work appears as a tree, with its status and a way to cancel a scheduled wake-up.
+- **Submodule diffs** — see changes made inside Git submodules, grouped by repository.
+- **Quote in the composer** — select text from an agent's reply and quote it.
+- **Long-running sessions** — chats and terminals pick up a refreshed sign-in without being reopened.
+- **Fixes** — terminal agents no longer die quietly when the connection drops, launching one no longer leaves an empty "New tab" behind, usage limits recover after a failed refresh, and deleting a chat clears the waiting indicator it left behind.
+</Update>
+
+<Update label="v1.1.3">
+Account usage moves into the header, alongside display scaling and font controls.
+
+- **Account usage** — check Codex, Claude Code, OpenRouter, Kilo Code, and Traycer usage from the header.
+- **Appearance** — scale the interface, and set separate fonts for the interface, code, and terminal.
+- **Canvas** — drag artifact cards, and references to specs or tickets in the same Task, onto the canvas.
+- **Mentions** — preview the highlighted result in a tighter menu, with results that no longer jump while you type.
+- **Terminals** — heavy output is faster and more reliable.
+- **Named agents** — give an agent a name when you create it. Provider lists also load correctly when the CLI and Host are on different versions.
+- **Fixes** — closing and reordering tabs works reliably, cancelling an edit restores your previous draft, actions unavailable to viewers explain why, and terminal agents no longer clutter the Terminals palette.
+</Update>
+
+<Update label="v1.1.2">
+Full access becomes the default permission mode.
+
+- **Permissions** — new conversations default to full access.
+- **Model picker** — Traycer models being retired carry a Deprecated badge and an explanation.
+- **Updating the Host** — restarts ask first, install and update no longer collide, progress appears in both the banner and Settings, and Traycer checks for new releases on launch and when your machine wakes.
+- **New Conversation** — the branch and worktree pickers scroll properly.
+- **Terminal agents** — worktree setup progress appears in the tile, with retry and open-terminal actions if it fails.
+- **Homebrew** — install a specific Desktop release, with x86_64 Linux AppImage support.
+- **Fixes** — on WSL and manually installed Linux packages, Traycer now explains how to update by hand instead of quietly reopening the old version, and sign-in steps time out rather than hanging.
+</Update>
+
+<Update label="v1.1.1">
+Traycer remembers your model and reasoning effort for each coding agent.
+
+- **Remembered settings** — your model, reasoning effort, and speed tier are kept for each coding agent.
+- **Child chats** — create them from the same New Conversation dialog.
+- **Composer** — place image attachments where you want them in the message.
+- **Background work** — when work continues past a reply, Stop is no longer left active, restores are no longer blocked, and the duplicate "working" row is gone.
+- **Fixes** — the Mermaid editor no longer crashes, and creating a Task from the start page no longer leaves the tab loading forever.
+</Update>
+
+<Update label="v1.1.0">
+Eight new coding agents, device sign-in, and a much faster first launch.
+
+- **Eight new coding agents** — Grok (xAI), Qwen, Kiro, Kilo Code, Copilot, Kimi, Droid, and OpenRouter join the ones already supported.
+- **Faster first launch** — providers appear as they finish loading, so a new install no longer waits for all of them.
+- **Device sign-in** — sign in by approving Traycer on a web page.
+- **Model picker** — consistent provider order, OpenRouter models grouped by vendor, and keyboard shortcuts.
+- **Search** — ⌘F within a canvas tile.
+- **Navigation** — Back and Forward inside the app.
+- **Background Claude subagents** — progress keeps updating after the main reply ends, with clearer finished, failed, and stopped states.
+- **Context usage** — a clearer breakdown, which you can pin.
+- **History** — activity shown on each row, a right-click menu, and titles that fill in once generated.
+- **Diagnostics** — choose how much Traycer logs, in Settings → Diagnostics.
+- **Worktrees** — delete many at once with progress that persists, and preview a branch's setup scripts before creating one.
+- **Terminals** — reconnecting replays a clean screen without leftover output.
+- **Approvals** — approval cards summarize the command.
+- **Updates** — start an update yourself, move from a prerelease to the final version, and installs that were relocated or are read-only on macOS are handled.
+- **Homebrew** — install Traycer Desktop as a cask.
+- **Removing Traycer** — the Host no longer comes back after removal, and the app shows the removed state without needing a reload.
+- **Mermaid** — PNG downloads work.
+</Update>
+
+<Update label="v1.0.0">
+First public release of Traycer Desktop — the native app for delegating engineering work to coding agents in a local-first workspace. It bundles the Traycer CLI and provisions the local Host automatically, so there is nothing else to install.
+
+- **Tasks** — long-lived, repository-bound workspaces where you plan, chat, run terminal agents, review diffs, and keep history. Everything is stored locally.
+- **Coding agents, your choice** — connect Claude (Claude Code), OpenAI Codex, Cursor, OpenCode, or Traycer Inference and switch per conversation. Set reasoning effort and an optional Fast tier on supported models.
+- **Chats** — persistent conversations, run several in parallel, per-conversation change tracking, auto-saved drafts.
+- **Terminal agents** — terminal-based agents on a full xterm terminal; sessions persist across host restarts.
+- **Plan and review** — side-by-side git diffs, file viewing, and line-level comment threads.
+- **Worktrees** — isolated git worktrees keep your main checkout clean.
+- **Multiple machines** — choose the machine a chat or terminal runs on; each tab stays bound to its host for life.
+- **Native desktop** — system tray, native notifications, command palette, customizable keybindings, multiple windows, the `traycer://` deep-link scheme, and light/dark/system themes.
+- **Sign in once** — browser-based (PKCE) sign-in, shared with the bundled CLI.
+- **Background updates** — downloaded in the background and installed on quit, using signed release artifacts.
+- **Platforms** — macOS 12+ (Apple Silicon and Intel, signed and notarized) and 64-bit Linux.
+</Update>

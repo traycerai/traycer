@@ -1,0 +1,307 @@
+---
+title: 'Workflows'
+description: 'Create and manage structured development processes. Define custom workflows with commands that guide your team through your unique methodology.'
+keywords: ['workflows', 'custom workflows', 'workflow commands', 'development methodology', 'structured processes', 'agile', 'workflow creation', 'command structure', 'frontmatter', 'markdown workflows']
+---
+
+Workflows are structured processes that guide you through development tasks using a series of commands. Each workflow represents a methodology or approach to software development, from initial requirements to implementation.
+
+Traycer comes with default workflows like the **Traycer Agile Workflow**, and you can create custom workflows tailored to your team's unique processes.
+
+## What is a Workflow?
+
+A workflow is a collection of command files that guide you through a development process. Each workflow consists of:
+
+- **Name & Description**: Identify the workflow and its purpose
+- **Entrypoint Command**: The starting point (default: `trigger_workflow`, customizable)
+- **Command Files**: Additional steps in your process
+
+Workflows are used within [Epic Mode](/extension/tasks/epic) to structure your development process.
+
+<Frame>
+  <img src="/images/workflows.png" alt="Workflow Structure" />
+</Frame>
+
+### Workflow Structure
+
+Each workflow has:
+
+- **Workflow Metadata**: Name and description
+- **One Entrypoint**: The command file that starts the workflow
+- **Multiple Commands**: Each command is a file with instructions for the AI
+
+**Important**: The file name and command name are the same thing.
+
+## Using Workflows
+
+### Triggering a Workflow
+
+To start a workflow in Epic Mode:
+
+1. **Select a workflow** from the dropdown when creating or working in an Epic. Available options include:
+   - Your custom workflows
+   - **Traycer Agile Workflow** (default)
+   - **No Workflow** - Run without a structured workflow
+
+2. **Choose a command** by typing `/` in the chat input to see all available commands from your selected workflow:
+   - `/trigger_workflow` (or your custom entrypoint) - Start the workflow
+   - `/command-name` - Any other command in the workflow
+
+3. **Provide context** after selecting the command - the slash becomes regular text after selection, allowing you to add your requirements or arguments.
+
+**Note**: Only one command per query. After selecting a command with `/`, the slash character will be treated as regular text.
+
+## Creating Custom Workflows
+
+You can create custom workflows tailored to your team's methodology using the **+ Add Workflow** button.
+
+### Creating a Workflow
+
+1. Click **+ Add Workflow** in the Workflows panel
+2. Enter a **Name** and **Description** for your workflow
+3. An entrypoint command file is automatically created (default: `trigger_workflow`)
+
+<Frame>
+<img src="/images/add-new-workflow.gif" alt="Adding new workflow" />
+</Frame>
+
+### Adding Commands
+
+To add commands to your workflow:
+
+1. Click **+ Add Command** in the Workflow Commands panel
+2. Give your command a descriptive name (this becomes the file name)
+3. Configure the command's properties and content
+
+### Command Configuration
+
+Each command has three key components:
+
+#### 1. Description
+
+A brief explanation of what this command does - shown to users when they type `/` to select commands.
+
+#### 2. Argument Hints
+
+Optional hints that guide what information should be passed when calling this command. Click **Add new hint** to add hints.
+
+See [Using Arguments](#using-arguments) for details on how to reference arguments in your command instructions.
+
+#### 3. Next Steps
+
+Define which commands can follow this one. Click **Add next step** to select commands from your workflow.
+
+See [Multi-Path Workflows](#multi-path-workflows) for details on how the AI suggests next steps.
+
+### Writing Command Instructions
+
+Use the markdown editor to write instructions for the AI. You can structure your instructions however makes sense for your workflow, and reference arguments using `$1`, `$2`, etc. where needed.
+
+## Managing Workflows
+
+### Viewing Workflows
+
+Workflows are organized in the Workflows panel on the left side:
+
+- **Default Workflows**: Marked as "Default (Read-only)" - these are bundled with Traycer and cannot be edited
+- **Custom Workflows**: Your own workflows that you can fully edit and customize
+
+Access workflows through:
+- The Workflows panel in the sidebar
+- Workflow selector when creating a new Epic
+- Click the menu (three dots) and select "Manage workflow" to open the workflow viewer
+
+<Frame>
+<img src="/images/view-workflow.gif" alt="Viewing workflow" />
+</Frame>
+
+### Cloning Workflows
+
+**Default Workflows** are read-only but can be cloned. Click **Clone to Edit** to create an editable copy that you can customize.
+
+<Frame>
+<img src="/images/clone-workflow.gif" alt="Cloning workflow" />
+</Frame>
+
+### Editing Workflows
+
+**Custom Workflows** are fully editable:
+
+1. Select your workflow from the Workflows panel
+2. Click on any command to edit its content
+3. Modify command metadata (description, argument hints, next steps)
+4. Changes save automatically
+
+### Managing Commands
+
+| Action | Description |
+|--------|-------------|
+| **Add Command** | Create a new command file in your workflow using **+ Add Command** |
+| **Edit Command** | Click any command to modify its content and metadata (description, argument hints, next steps) |
+| **Delete Command** | Remove a command (entrypoint cannot be deleted) |
+
+### Deleting Workflows
+
+Custom workflows can be deleted from the Workflows panel. Default workflows cannot be deleted.
+
+## Integration with Epic Mode
+
+Workflows are the backbone of [Epic Mode](/extension/tasks/epic):
+
+- **Structured Guidance**: Workflows guide the development process
+- **Context Preservation**: Decisions flow between commands
+- **Artifact Creation**: Commands generate specs and tickets
+- **Flexible Execution**: Follow or adapt workflow as needed
+
+## Advanced Workflow Features
+
+### Using Arguments
+
+Commands can accept arguments that provide context when they're called. Here's how to set them up:
+
+**1. Configure Argument Hints**
+
+When editing a command, add argument hints that describe what information users should provide. For example:
+- "Feature name or requirement"
+- "Technology or approach"
+
+**2. Reference Arguments in Command File**
+
+In your command instructions, use `$1`, `$2`, `$3`, etc. to reference the arguments:
+
+```markdown
+<processing_user_request>
+The user wants to implement: $1
+Using technology: $2
+</processing_user_request>
+```
+
+**3. Call the Command with Arguments**
+
+When users call the command, they provide the actual values:
+
+```
+/create-feature User authentication OAuth2 and JWT
+```
+
+The AI automatically maps the arguments:
+
+| Reference | Argument Hint | Actual Value |
+|-----------|---------------|--------------|
+| `$1` | "Feature name or requirement" | User authentication |
+| `$2` | "Technology or approach" | OAuth2 and JWT |
+
+### Multi-Path Workflows
+
+Use Next Steps to create workflows with alternative paths. The AI will suggest or let the user choose from the configured next commands based on the context.
+
+**Example:** A command might have multiple possible next steps:
+- `design-review` - for UI-heavy features
+- `tech-plan` - for backend features
+- `spike-investigation` - for uncertain requirements
+
+The AI will recommend the most appropriate next step or present options to the user.
+
+### Agent Modes
+
+Workflows support different **agent modes** that can be selected per command. Each mode is optimized for specific use cases with dedicated models, reasoning configurations, and system prompts.
+
+<Frame>
+<img src="https://assets.traycer.ai/agent_modes_selection.png" alt="Agent mode selection in workflows" />
+</Frame>
+
+#### Available Modes
+
+**Planner Mode**
+- Optimized for strategic thinking and planning tasks
+- Uses extended reasoning capabilities for complex analysis
+- Ideal for commands that create specs, design systems, or break down requirements
+- Custom system prompts focused on thorough exploration and documentation
+
+**Reviewer Mode**
+- Optimized for evaluation and quality assessment
+- Configured for detailed review and verification workflows
+- Ideal for commands that validate, critique, or provide feedback on artifacts
+- System prompts emphasize thoroughness, edge cases, and improvement suggestions
+
+#### Using Agent Modes
+
+When creating or editing a command, you can specify which agent mode should be used when that command executes:
+
+1. Select the command in your workflow
+2. Choose the appropriate agent mode from the dropdown
+3. The selected mode will be used whenever that command runs
+
+This gives you fine-grained control over how each step in your workflow behaves, ensuring the right "thinking style" is applied at each stage of your development process.
+
+## Traycer Agile Workflow
+
+The default workflow guides you through feature development with a collaborative, spec-driven approach.
+
+### Workflow Commands
+
+<Steps>
+  <Step title="trigger_workflow">
+    **Purpose**: Initial requirements gathering and clarification
+
+    - Discuss user's request and goals
+    - Ask clarifying questions
+    - Build shared understanding
+    - No assumptions - alignment first
+
+    **Next Steps**: `epic-brief` or `core-flows`
+  </Step>
+
+  <Step title="epic-brief">
+    **Purpose**: Define problem and context collaboratively
+
+    - Capture who's affected and current pain points
+    - Document the problem at a product level
+    - Create concise Epic Brief spec (under 50 lines)
+    - No UI specifics or technical design yet
+
+    **Next Steps**: `core-flows`
+  </Step>
+
+  <Step title="core-flows">
+    **Purpose**: Map out user flows and interactions
+
+    - Explore current product flows
+    - Design UX decisions (information hierarchy, user journeys)
+    - Document step-by-step user actions
+    - Include wireframes or ASCII sketches
+
+    **Next Steps**: `tech-plan` or `ticket-breakdown`
+  </Step>
+
+  <Step title="tech-plan">
+    **Purpose**: Create technical implementation plan
+
+    - Define architecture and technical approach
+    - Identify files and components to modify
+    - Document technical decisions and rationale
+    - Reference existing code patterns
+
+    **Next Steps**: `ticket-breakdown`
+  </Step>
+
+  <Step title="ticket-breakdown">
+    **Purpose**: Break down work into actionable tickets
+
+    - Create independently implementable tickets
+    - Link tickets to relevant specs
+    - Define acceptance criteria
+    - Prioritize and sequence work
+
+    **Next Steps**: Implementation via Phases, Plan, or Agent handoff
+  </Step>
+</Steps>
+
+### Workflow Philosophy
+
+The Traycer Agile Workflow emphasizes:
+
+- **Collaboration First**: Discuss and align before drafting artifacts
+- **Questions as Investments**: Clarification prevents costly mistakes
+- **Shared Understanding**: Multiple rounds of questions is normal
+- **Readable Artifacts**: Optimize for human parsability

@@ -1,0 +1,47 @@
+---
+title: "Providers"
+description: "Configure coding agents, provider credentials, CLI binaries, and provider environment variables."
+---
+
+Providers settings control the coding agents and providers Traycer can launch.
+
+For supported coding agents and capability differences, see [Agents & Models](/agents-and-models/coding-agents).
+
+## Common Controls
+
+| Control | What it changes |
+|---|---|
+| **Profiles & Limits** | Creates and selects managed account profiles where supported, and shows their usage limits. |
+| **Enable provider** | Makes a coding agent available or unavailable. |
+| **API key** | Adds or clears credentials for providers that need a key. |
+| **CLI binary** | Chooses bundled, detected, or custom CLI paths where supported. |
+| **Provider environment variables** | Adds variables scoped to the provider Traycer launches. |
+| **Terminal interface CLI arguments** | Sets default CLI arguments used when starting an agent on the Terminal interface. |
+| **Host selector** | Chooses which host's provider settings you are editing. |
+
+Provider environment variables live here. Shell-wide host environment variables live in [Shell](/settings/shell).
+
+Terminal interface CLI arguments are passed to the underlying CLI. Use bypass or full-auto flags deliberately.
+
+## Managed Profiles
+
+Use **Profiles & Limits** to add a managed profile and sign in with its account.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Add a managed provider profile">
+  <source src="https://assets.traycer.ai/docs/videos/provider-profile-add.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+## Provider Tabs
+
+Tabs depend on the selected provider. Claude Code and Codex show **Profiles & Limits**, **CLI & Args**, **Env**, **MCP**, **Plugins**, and **Skills**. They do not show an **Account** or **Model Providers** tab. Other providers expose account or model-provider controls when their integration supports them.
+
+**Skills** and **Plugins** are separate tabs. Use **Skills** to create a named skill with a description and Markdown instructions. **Plugins** installs a plugin from a source string.
+
+## MCP Servers
+
+Add and check provider-specific tool servers in the **MCP** tab. See [MCP servers](/settings/providers/mcp-servers).
+
+## Skills
+
+Create reusable Markdown instructions in the **Skills** tab. See [Skills](/settings/providers/skills).

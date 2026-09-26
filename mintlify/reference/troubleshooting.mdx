@@ -1,0 +1,110 @@
+---
+title: "Troubleshooting"
+description: "Common Traycer Desktop issues and what they mean."
+---
+
+Use this page to recognize common unavailable states in Traycer Desktop.
+
+## Host Status
+
+For the Host mental model, see [Hosts](/concepts/hosts). For Host controls, see [Settings > Host](/settings/host).
+
+| State | Meaning |
+|---|---|
+| **Running** | The host is running and reachable. |
+| **Stopped** | The host is installed, but the process is not running. |
+| **Not installed** | The host is not installed for this channel. |
+| **Registry unreachable** | Traycer could not reach the host registry. |
+| **Update check unavailable** | Traycer could not check for host updates. |
+
+If Desktop shows **Starting local host…** for too long, use the retry action or open [Settings > Host](/settings/host).
+
+## Report An Issue
+
+Use **Report Issue** when you want to send a bug report with desktop and host details attached.
+
+To open it:
+
+1. Open the desktop **Help** menu.
+2. Select **Report Issue**.
+3. Fill in the title, what happened, steps to reproduce, expected behavior, and actual behavior.
+4. Select **Submit Report**. Traycer uploads the report privately and opens a pre-filled GitHub issue.
+
+You can also open **Report Issue** from the command palette. If an app-update error appears, its toast can include a **Report Issue** button that opens the same dialog.
+
+## Open Logs
+
+Use logs when an issue involves startup, host status, updates, provider setup, terminal sessions, or other desktop/host behavior.
+
+To open logs from the app:
+
+1. Open the desktop **Help** menu.
+2. Select **Open Logs**.
+3. In the **Open Logs** dialog, expand a log entry to preview recent output.
+4. Select **Reveal** to open the selected log file in your file manager.
+
+You can also open logs from the Traycer tray menu with **Open Logs**. The tray path opens **Settings → Host** and the logs dialog.
+
+From a terminal, use:
+
+```bash
+traycer host logs --tail 200
+```
+
+Use `traycer host logs --follow` to stream new host log lines.
+
+## Provider Auth
+
+Provider setup states can include:
+
+| State | Meaning |
+|---|---|
+| **Checking account** | Traycer is checking provider/account availability. |
+| **Not authenticated** | The provider needs login, API key, or CLI auth. |
+| **API key set** | A required key is configured. |
+| **Account status unavailable** | Traycer could not confirm provider status. |
+
+For Cursor, add the Cursor API key in **Settings → Providers** or export `CURSOR_API_KEY` in the environment used by the host.
+
+## Terminal and Host-Bound Tabs
+
+For why tabs bind to a Host, see [Hosts](/concepts/hosts).
+
+| Message | Meaning |
+|---|---|
+| `Host "{label}" is unreachable. This terminal is permanently closed.` | A raw terminal PTY is gone and cannot move to another Host. Close the tab and start a new terminal session. |
+| `Host "{label}" is unreachable, so this agent is unavailable until that host is back.` | An Agent on the Terminal interface remains bound to its owning Host. The Agent and its transcript are preserved; closing the tab only removes it from the canvas. |
+| `Bound host "{label}" is offline. Continuing here creates a new agent on the active host; this one stays bound to "{label}".` | An Agent on the Chat interface can continue by cloning onto the Current Host. The clone is a new Agent; the original stays bound to its Host. |
+| `This file is on host "{label}", which is currently unreachable.` | A file preview cannot load until the host comes back. |
+| `This file is on host "{label}". Switch your active host to "{label}" to view it.` | The file is reachable, but not through the Current Host. |
+| `This diff is on host "{label}", which is currently unreachable.` | A diff cannot load until the host comes back. |
+
+The important distinction: an Agent on the Chat interface can clone to another Host; raw terminals and Agents on the Terminal interface cannot migrate. Cloning never moves the original Agent—it creates a second one.
+
+## Worktree Setup
+
+Agent worktree setup can show states such as:
+
+| State | Meaning |
+|---|---|
+| **Creating worktree** | Traycer is creating the worktree for the run. |
+| **Setting up worktree** | Setup is still running. |
+| **Worktree ready** | The worktree is ready. |
+| **Setup failed** | Setup failed before the first message could run. |
+| **Setup cancelled** | Setup was cancelled. |
+| **Worktree setup incomplete** | The run cannot continue until setup is resolved. |
+
+If a workspace folder no longer exists or became unreachable, choose an available workspace folder and retry the run.
+
+## Model Picker
+
+| State | Meaning |
+|---|---|
+| **Loading models** | Traycer is loading available model options. |
+| **Couldn't load providers** | Provider list failed to load. |
+| **Couldn't load models** | Model list failed to load for the selected provider. |
+| **No models available** | The selected provider returned no usable models. |
+| **No models match** | Search/filtering removed all model choices. |
+| **Connect Cursor** / **Add API key** | Cursor needs a configured API key before use. |
+
+If a provider is missing from the picker, it may be unavailable, not installed, or not configured.

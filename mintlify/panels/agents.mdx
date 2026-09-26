@@ -1,0 +1,201 @@
+---
+title: "Agents"
+description: "Create, organize, and work with agents in a Task using the Chat or Terminal interface. Formerly the Chats panel."
+---
+
+An **agent** is a durable coding-agent session inside a Task. The **Agents** panel is where agents are listed and organized.
+
+You interact with an agent through one of two **interfaces**: **Chat** or **Terminal**. The interface changes how you work with the agent and how much can change after it starts. It does not change what the agent is — both are agents, both live in the Agents panel, and both can be referenced, organized, and nested the same way.
+
+| Interface    | What it looks like                          | What can change after start                                                                                                                                                                             |
+| ------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Chat**     | In-app conversation with composer controls. | Model, permissions, thinking effort, fast mode, attachments, and voice can change turn by turn.                                                                                                         |
+| **Terminal** | Terminal-style coding-agent session.        | Workspace folder or worktree, coding agent, model, thinking effort, and CLI arguments are chosen at launch and stay fixed. Traycer can resume the underlying coding-agent session on its original Host. |
+
+A plain **Terminal** is a different thing entirely: it is a shell session and lives under [Terminals](/panels/terminals). The full distinction is covered in [Terminal Agents VS Terminals](/concepts/terminal-agents-vs-terminals).
+
+<Info>
+  The Agents panel was previously called **Chats**. Existing agents, links, and
+  history are unchanged — only the naming moved to match the model: the agent is
+  the durable thing, and Chat and Terminal are interfaces on it.
+</Info>
+
+## What Agents Keep
+
+Every agent keeps:
+
+- conversation history or terminal transcript
+- the selected coding agent and model for each run
+- permission and thinking-effort choices
+- artifacts, file changes, tool calls, and follow-up context it produced
+
+Agents on the Chat interface also use the composer controls for attachments, voice input, per-turn permission changes, and model changes.
+
+Agents are separate sessions. Changing settings on one agent does not rewrite another.
+
+## Composer
+
+See [Composer](/panels/agents/composer) for mentions, stashed prompts, quotes, and context usage.
+
+The composer is the prompt area for an agent on the Chat interface.
+
+| Control                  | What it changes                                               |
+| ------------------------ | ------------------------------------------------------------- |
+| **Coding agent / model** | Pick the coding agent and model used for the next turn.       |
+| **Permissions**          | Decide what the agent can do before asking.                   |
+| **Thinking effort**      | Choose reasoning depth when the selected model supports it.   |
+| **Fast mode**            | Use a faster service tier when the selected model offers one. |
+| **Attachments**          | Add files, images, or context to the prompt.                  |
+| **Skills**               | Attach Traycer skills with `$` or `/`. See [Artifact workflow](/concepts/artifact-workflow). |
+| **Voice**                | Dictate a prompt instead of typing.                           |
+| **Send / Stop**          | Start the next turn or stop the active one.                   |
+
+Model, permission, thinking effort, and fast-mode changes apply to the next agent turn. They do not rewrite a turn that already started.
+
+## Message Queue
+
+Use the [Message queue](/panels/agents/message-queue) to reorder, edit, pause, or steer follow-ups while an agent runs.
+
+## Agent Questions
+
+Answer structured questions inline or compare an alternative answer in a fork. See [Agent questions](/panels/agents/agent-questions).
+
+## Undo A Turn
+
+Click **Undo** on an assistant turn’s **Changes** card to restore its files. See [Undo a turn](/panels/agents/undo-a-turn).
+
+## The Terminal Interface
+
+An agent on the Terminal interface starts with a fixed launch setup:
+
+- workspace folder or worktree
+- coding agent
+- model, when supported
+- thinking effort, when supported
+- Terminal interface CLI arguments, when supplied
+
+After it starts, those launch choices stay with that agent. Traycer stores the upstream coding-agent session id so the agent can resume the same underlying session on its original Host. Start a new agent when you need a different workspace folder, worktree, coding agent, model, thinking effort, or launch argument set.
+
+Worktree choices are covered in [Worktrees](/concepts/worktrees).
+
+Agents on the Terminal interface also receive Traycer's agent context: artifact guidance, skills, and agent-to-agent instructions. Reading one's transcript and _sending_ it a message are narrower than referencing it, and both carry user and Host requirements — see [Agent-to-Agent](/concepts/agent-to-agent) for the capability matrix.
+
+Not every coding agent can back the Terminal interface. The supported set is listed in [Agents & Models](/agents-and-models/coding-agents).
+
+## Permissions
+
+Permissions control how much the agent can do without another approval.
+
+| Permission            | Meaning                                       |
+| --------------------- | --------------------------------------------- |
+| **Supervised**        | Ask before commands and file changes.         |
+| **Auto-accept edits** | Auto-approve edits, ask before other actions. |
+| **Full access**       | Allow commands and edits without prompts.     |
+
+Supervised is the safest starting point. Some coding agents expose fewer permission options; those compatibility details live in [Agents & Models](/agents-and-models/coding-agents).
+
+## Thinking Effort And Fast Mode
+
+**Thinking effort** controls the reasoning level for models that support it. The available levels depend on the selected coding agent and model.
+
+**Fast mode** appears only when the selected model offers a faster service tier. It is a Chat-interface control, not a Terminal launch option.
+
+Both live in the footer of the model picker: drag the slider to change the effort, and click **Fast** to turn fast mode on. The model pill shows the effort you picked.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Raise the thinking effort and turn on fast mode">
+  <source src="https://assets.traycer.ai/docs/videos/thinking-effort-fast-mode.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+## Attachments And Voice
+
+Attachments add context to the next turn. Use them when the prompt needs a screenshot, file, or specific supporting material. Dragging a file or folder from the **File Tree** into the composer inserts an inline `@` mention, just like selecting it from the mention picker.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Drag a File Tree item into the composer">
+  <source src="https://assets.traycer.ai/docs/videos/dnd-file-to-composer.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+Voice input turns speech into prompt text. It is useful for longer instructions, quick notes, or hands-free follow-up while reviewing code.
+
+Click the microphone in the composer to start dictating. Speech is transcribed on the device, and text lands in the composer as you pause. Click **Stop** to finish, then review the text and send it.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Dictate a prompt into the composer">
+  <source src="https://assets.traycer.ai/docs/videos/voice-input.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+## Creating An Agent
+
+Click `+` in the Agents panel to open **Start a new agent**. The dialog opens in Chat mode; use **Switch to Terminal** or **Switch to Chat** above the composer to change the interface:
+
+- **Chat** for an in-app conversation you steer turn by turn.
+- **Terminal** for a terminal-style session with a fixed launch setup.
+
+In Chat mode, write a prompt and send it to create the agent and start its first turn. In Terminal mode, configure the launch and click **Start**. Until the agent has a generated title, it appears as **Untitled agent**.
+
+The `+` on an agent row creates a **child agent** beneath it, so delegated work stays attached to where it came from.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Create an agent from the Agents panel">
+  <source src="https://assets.traycer.ai/docs/videos/create-agent.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+## Hierarchy
+
+The Agents panel is a tree, not a flat list.
+
+Top-level agents appear at the root of the panel. When an agent starts another agent, the new agent appears beneath the agent that spawned it. This creates a visible lineage:
+
+```text
+Agent: feature planning                  (Chat)
+├─ Agent: investigate failing tests      (Terminal)
+│  ├─ Agent: summarize the failure cause (Chat)
+│  └─ Agent: rerun the focused test      (Terminal)
+├─ Agent: review proposed fix            (Chat)
+└─ Agent: update release notes           (Chat)
+```
+
+These nested entries are often the sub-agents of the original work. They are separate agents with their own history, but the tree shows which agent created them.
+
+The delegation model is covered in [Agent-to-Agent](/concepts/agent-to-agent).
+
+The hierarchy helps answer:
+
+- which agent started which follow-up
+- which agents belong to the same branch of work
+- where a delegated agent came from
+- what context a child agent is attached to
+
+Agents can also be grouped under artifacts, so an investigation or follow-up can sit beneath the spec, ticket, story, or review it belongs to.
+
+Parent and child relationships are navigation and provenance. They do not restrict which agents you can reference — see [Agent-to-Agent](/concepts/agent-to-agent).
+
+## Parents And Children
+
+In the Agents panel, a parent can be:
+
+- a root Task-level agent
+- another agent
+- an artifact that the agent is grouped under
+
+A child is always another agent, on either interface.
+
+Manual organization is intentionally narrower than agent-spawned lineage. You can group agents under artifacts, but agents are not general-purpose folders for arbitrary items.
+
+## Controls
+
+The panel supports:
+
+- filtering by interface: **All**, **Chat**, or **Terminal**
+- sorting by **Last Updated**, **Date Created**, or **Name**
+- creating agents with the `+` action
+- renaming and deleting entries from row actions
+
+Filtering narrows the interface view only. It does not change agent identity or the hierarchy, and an empty result means no agent uses that interface — not that the Task has no agents.
+
+When a filter is active, Traycer keeps the relevant parent chain visible so a matching child agent does not appear detached from its context.
+
+## Session State
+
+Each agent keeps its own history and active run state. An agent on the Chat interface is flexible turn by turn. An agent on the Terminal interface is fixed after launch, because it runs through a terminal-style coding-agent session.

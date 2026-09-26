@@ -1,0 +1,226 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Traycer AI",
+  "colors": {
+    "primary": "#454545",
+    "light": "#ffffff",
+    "dark": "#454545"
+  },
+  "favicon": {
+    "light": "/favicons/favicon-light.svg",
+    "dark": "/favicons/favicon-dark.svg"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Desktop",
+        "pages": [
+          "index",
+          {
+            "group": "Quickstart",
+            "pages": ["install", "quickstart"]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/tasks-and-workspace-folders",
+              "concepts/artifact-workflow",
+              "concepts/agent-to-agent",
+              {
+                "group": "Panels",
+                "expanded": true,
+                "pages": [
+                  "panels/index",
+                  {
+                    "group": "Agents",
+                    "pages": [
+                      "panels/agents",
+                      "panels/agents/composer",
+                      "panels/agents/message-queue",
+                      "panels/agents/agent-questions",
+                      "panels/agents/undo-a-turn"
+                    ]
+                  },
+                  "panels/terminals",
+                  {
+                    "group": "Artifacts",
+                    "pages": [
+                      "panels/artifacts",
+                      "panels/artifacts/diagrams",
+                      "panels/artifacts/wireframes"
+                    ]
+                  },
+                  "panels/git-diff",
+                  "panels/file-tree",
+                  "panels/sharing",
+                  "panels/comments"
+                ]
+              },
+              "concepts/terminal-agents-vs-terminals",
+              "concepts/worktrees",
+              "concepts/sweep",
+              {
+                "group": "Hosts",
+                "pages": [
+                  "concepts/hosts",
+                  "concepts/hosts/remote-hosts",
+                  "concepts/hosts/resource-monitor"
+                ]
+              },
+              "concepts/history"
+            ]
+          },
+          {
+            "group": "Agents & Models",
+            "pages": ["agents-and-models/coding-agents"]
+          },
+          {
+            "group": "Account",
+            "pages": ["account/pricing", "account/organizations"]
+          },
+          {
+            "group": "CLI",
+            "pages": ["cli/commands"]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              {
+                "group": "Settings",
+                "pages": [
+                  "settings/general",
+                  "settings/appearance",
+                  {
+                    "group": "Providers",
+                    "pages": [
+                      "settings/providers",
+                      "settings/providers/mcp-servers",
+                      "settings/providers/skills"
+                    ]
+                  },
+                  "settings/agents",
+                  "settings/keybindings",
+                  "settings/shell",
+                  "settings/worktrees",
+                  "settings/host"
+                ]
+              },
+              "reference/troubleshooting"
+            ]
+          },
+          {
+            "group": "Changelog",
+            "pages": ["changelog", "host/changelog", "cli/changelog"]
+          }
+        ]
+      },
+      {
+        "tab": "Extension",
+        "pages": [
+          "extension/index",
+          {
+            "group": "Tasks",
+            "pages": [
+              "extension/tasks/index",
+              {
+                "group": "Task Modes",
+                "expanded": true,
+                "pages": [
+                  "extension/tasks/phases",
+                  "extension/tasks/plan",
+                  "extension/tasks/review",
+                  "extension/tasks/epic"
+                ]
+              },
+              "extension/tasks/collaboration",
+              "extension/tasks/workflows",
+              "extension/tasks/yolo-mode",
+              "extension/tasks/mermaid",
+              "extension/tasks/verification",
+              "extension/tasks/history",
+              "extension/tasks/agents-md",
+              "extension/tasks/models"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "extension/integrations/agents",
+              "extension/integrations/custom-cli-agents",
+              "extension/integrations/templates",
+              "extension/integrations/mcp"
+            ]
+          },
+          "extension/pricing",
+          "extension/changelog"
+        ]
+      }
+    ]
+  },
+  "redirects": [
+    { "source": "/panels/chats", "destination": "/panels/agents" },
+    { "source": "/legacy", "destination": "/extension" },
+    { "source": "/changelog-extension", "destination": "/extension/changelog" },
+    { "source": "/tasks/:slug*", "destination": "/extension/tasks/:slug*" },
+    {
+      "source": "/integrations/:slug*",
+      "destination": "/extension/integrations/:slug*"
+    }
+  ],
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/traycerai/traycer"
+      },
+      {
+        "label": "Contact Us",
+        "href": "https://traycer.ai/contact"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Login",
+      "href": "https://platform.traycer.ai"
+    }
+  },
+  "contextual": {
+    "options": ["copy", "view", "chatgpt"]
+  },
+  "footer": {
+    "socials": {
+      "x": "https://x.com/TraycerAI",
+      "github": "https://github.com/traycerai",
+      "linkedin": "https://linkedin.com/company/traycer",
+      "website": "https://traycer.ai",
+      "discord": "https://traycer.ai/discord",
+      "bluesky": "https://bsky.app/profile/traycerai.bsky.social"
+    }
+  },
+  "interaction": {
+    "drilldown": false
+  },
+  "seo": {
+    "indexing": "all",
+    "metatags": {
+      "title": "Traycer Docs",
+      "description": "Traycer docs for Tasks, agents, Chat and Terminal interfaces, artifacts, coding agents, models, storage, sync, and IDE extension workflows.",
+      "keywords": "Traycer AI, Traycer, agents, Chat interface, Terminal interface, coding agents, chats, terminal agents, Codex, Claude Code, OpenCode, Cursor, artifacts, specs, tickets, stories, reviews",
+      "author": "Traycer AI",
+      "og:site_name": "Traycer AI Documentation",
+      "og:url": "https://docs.traycer.ai",
+      "og:type": "website",
+      "og:title": "Traycer Docs",
+      "og:description": "Learn Traycer: Tasks, agents, Chat and Terminal interfaces, artifacts, coding agents, models, storage, sync, and IDE extension workflows.",
+      "twitter:site": "@TraycerAI",
+      "twitter:creator": "@TraycerAI",
+      "twitter:title": "Traycer Docs",
+      "twitter:description": "Learn Traycer: Tasks, artifacts, coding agents, and models."
+    }
+  }
+}

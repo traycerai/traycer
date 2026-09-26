@@ -1,0 +1,39 @@
+---
+title: "Git Diff"
+description: "Use Git Diff to inspect changed files in a worktree."
+---
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Choose a worktree and inspect a file diff">
+  <source src="https://assets.traycer.ai/docs/videos/git-diff-panel.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+The **Git Diff** panel shows changed files for the selected worktree.
+
+Use it to inspect what changed before asking an agent to continue, before creating a review artifact, or before switching context.
+
+For how agents choose worktrees, see [Worktrees](/concepts/worktrees).
+
+## Controls
+
+The panel includes:
+
+- a worktree picker
+- a refresh action
+- changed-file search
+- changed-file rows with file path and change summary
+
+Changed files can be grouped and searched.
+
+Open a changed file to inspect its diff. The diff tile provides a **Split view** toggle and **Diff settings**, including word wrap and indicator style.
+
+## States
+
+The panel shows explicit states for common cases:
+
+- no git worktrees
+- no changes in the selected worktree
+- loading changed files
+- subscription or git-listing errors
+- repository warnings such as conflicts or detached HEAD
+- binary files that cannot be previewed as text
