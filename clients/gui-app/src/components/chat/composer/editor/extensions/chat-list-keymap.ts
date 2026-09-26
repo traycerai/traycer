@@ -74,7 +74,10 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
         find: /^```$/,
         handler: ({ state, range }) => {
           const $start = state.doc.resolve(range.from);
-          if (range.to !== $start.end()) return null;
+          const caretOffset = range.to - $start.start();
+          if (!hasOnlyWhitespaceTextAfter($start.parent, caretOffset)) {
+            return null;
+          }
 
           const parent = $start.node(-1);
           if (
@@ -87,8 +90,10 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
             return null;
           }
 
+          // Delete through the textblock end so trailing whitespace after the
+          // caret is dropped rather than becoming the code block's first line.
           const tr = state.tr
-            .delete(range.from, range.to)
+            .delete(range.from, $start.end())
             .setBlockType(range.from, range.from, codeBlockType);
           // Keep StarterKit's trailing-paragraph invariant inside the same
           // undoable input-rule transaction. If TrailingNode appended it in a
@@ -119,6 +124,7 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
  * mobile-width viewport.
  */
 function insertSoftNewline(editor: Editor): boolean {
+  moveCaretPastTrailingWhitespace(editor);
   if (handleListEnter(editor)) return true;
   if (editor.isActive("codeBlock")) {
     // `splitBlock` would fragment one code block into two; `newlineInCode`
@@ -140,6 +146,22 @@ function insertSoftNewline(editor: Editor): boolean {
   return editor.chain().splitBlock().scrollIntoView().run();
 }
 
+// A caret followed only by whitespace sits before trailing padding - chiefly
+// the space `stabilizeTerminalImageAttachmentCaret` leaves after an image chip.
+// Splitting there carries the padding onto the new line, which is then not
+// empty: a blank list item or quote line no longer exits, and a fence typed on
+// it is not alone on its line. Split after the padding instead. Code blocks are
+// exempt: their whitespace is content.
+function moveCaretPastTrailingWhitespace(editor: Editor): void {
+  const { $from, empty } = editor.state.selection;
+  if (!empty || !$from.parent.isTextblock || $from.parent.type.spec.code) {
+    return;
+  }
+  if ($from.parentOffset === $from.parent.content.size) return;
+  if (!hasOnlyWhitespaceTextAfter($from.parent, $from.parentOffset)) return;
+  editor.commands.setTextSelection($from.end());
+}
+
 // The composer owns both Enter (submit) and Shift-Enter (paragraph split), so
 // Tiptap never sees the newline that completes its native fenced-code input
 // rule. Recognize the opening fence before either shortcut: a paragraph
@@ -148,11 +170,13 @@ function insertSoftNewline(editor: Editor): boolean {
 function handleOpeningCodeFence(editor: Editor): boolean {
   const { $from, empty } = editor.state.selection;
   if (!empty || $from.parent.type.name !== "paragraph") return false;
-  if ($from.parentOffset !== $from.parent.content.size) return false;
-
-  const fenceText = $from.parent.textContent;
-  if (!/^```(?:[a-z]+)?$/.test(fenceText)) return false;
   if (!hasOnlyTextChildren($from.parent)) return false;
+  if (!hasOnlyWhitespaceTextAfter($from.parent, $from.parentOffset)) {
+    return false;
+  }
+
+  const fenceText = $from.parent.textBetween(0, $from.parentOffset);
+  if (!/^```(?:[a-z]+)?$/.test(fenceText)) return false;
 
   const fenceRange = { from: $from.start(), to: $from.end() };
   const language = fenceText.slice(3);
@@ -172,6 +196,24 @@ function hasOnlyTextChildren(node: ProseMirrorNode): boolean {
     if (!node.child(index).isText) return false;
   }
   return true;
+}
+
+// True when nothing but whitespace text follows `offset`: the caret is at the
+// end of the line as far as anyone can see. Opening fences treat that trailing
+// whitespace as absent (and drop it) rather than as content to preserve.
+function hasOnlyWhitespaceTextAfter(
+  textblock: ProseMirrorNode,
+  offset: number,
+): boolean {
+  let whitespaceOnly = true;
+  textblock.nodesBetween(offset, textblock.content.size, (node, pos) => {
+    const textAfterCaret = node.textContent.slice(Math.max(0, offset - pos));
+    if (!node.isText || textAfterCaret.trim() !== "") {
+      whitespaceOnly = false;
+    }
+    return false;
+  });
+  return whitespaceOnly;
 }
 
 // A closing fence typed on its own line exits the rich code block immediately:

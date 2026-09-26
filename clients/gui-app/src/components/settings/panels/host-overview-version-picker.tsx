@@ -33,17 +33,16 @@ export interface VersionPickerProps {
   /** True before the first check has answered — no list to show yet. */
   readonly awaitingFirstCheck: boolean;
   readonly checking: boolean;
-  /** The same forced check used by the Status answer. */
+  /** The same forced check the version card's Check now runs. */
   readonly onCheck: () => void;
-  /** One failure state shared with the Status answer. */
+  /** One failure state shared with the version card's answer. */
   readonly failureDescription: string | null;
 }
 
 /**
  * "Pick a different version" — the list the card body used to hold open, and
  * then Installation's Advanced disclosure held shut. It is the Updates tab's
- * now, shown open, where a tab of its own puts it one click from the answer on
- * Status without burying that answer.
+ * now, shown open, directly under the version card's answer.
  *
  * The RC checkbox re-asks the HOST rather than filtering a list already in hand,
  * which is why it is here and not a client-side predicate: `host available`
