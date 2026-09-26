@@ -1342,5 +1342,66 @@ describe("CommGraphCloudSubscriptionManager", () => {
 
       expect(listener).toHaveBeenCalledTimes(5);
     });
+
+    it("a frame that prunes rows publishes at once, inside an open window", () => {
+      // `setUp()` wires the manager with `() => undefined` as `onRowsPruned`,
+      // so this case builds the manager the same way `setUp()` does but with
+      // a recording callback instead - the smaller diff, since no other case
+      // in this block needs the pruned keys back.
+      const recorded = recordedOpener();
+      const prunedRowKeyBatches: ReadonlySet<string>[] = [];
+      const manager = new CommGraphCloudSubscriptionManager(
+        "epic-1",
+        recorded.opener,
+        (rowKeys) => {
+          prunedRowKeyBatches.push(rowKeys);
+        },
+        WINDOW_MS,
+      );
+      manager.setRelayHostIds(["relay-b"]);
+      manager.attach();
+      const listener = vi.fn();
+      manager.subscribe(listener);
+      const handlers = recorded.requests[0].handlers;
+      handlers.onAvailability("available");
+      vi.advanceTimersByTime(1_000);
+      listener.mockClear();
+
+      const rowA = cloudEvent({ eventId: "a", ingestVersion: 1 });
+      handlers.onEvent(rowA);
+      expect(listener).toHaveBeenCalledTimes(1);
+      const rowAPublished = manager.getSnapshot().events[0];
+
+      const rowB = cloudEvent({ eventId: "b", ingestVersion: 5 });
+      handlers.onEvent(rowB);
+      // Still one call, and the published snapshot still holds only A - the
+      // window is open and the trailing timer is pending. This is what proves
+      // the prune below arrives INSIDE an open window rather than after one
+      // had already closed on its own.
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(
+        manager.getSnapshot().events.map((event) => event.eventId),
+      ).toEqual(["a"]);
+
+      // Frontier 3: A's ingestVersion (1) is below it and is pruned; B's (5)
+      // survives.
+      handlers.onSnapshot([], 5, 3);
+
+      // Synchronous, with no timer advanced: the prune commits at once
+      // instead of waiting for the trailing timer.
+      expect(listener).toHaveBeenCalledTimes(2);
+      expect(
+        manager.getSnapshot().events.map((event) => event.eventId),
+      ).toEqual(["b"]);
+      expect(prunedRowKeyBatches).toHaveLength(1);
+      expect(prunedRowKeyBatches[0].has(commGraphEventKey(rowAPublished))).toBe(
+        true,
+      );
+
+      // The prune commit retired the trailing timer armed by row B, so there
+      // is nothing left to publish when it would have fired.
+      vi.advanceTimersByTime(WINDOW_MS);
+      expect(listener).toHaveBeenCalledTimes(2);
+    });
   });
 });

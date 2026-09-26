@@ -212,11 +212,13 @@ function CommGraphTransportTrack(props: {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const hasEvents = events.length > 0;
 
-  // THE HOVER IS A KEY, not an index. A commit can insert rows ahead of the
-  // hovered one or prune it, and between that commit and the next pointer move
-  // an index would name a different row or none. The key is resolved against
-  // the current markers on every render, so a row that has gone shows nothing.
-  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  // THE HOVER IS WHERE THE POINTER IS, not which tick it was on. Rows landing
+  // while history arrives rescale every tick, so a tick chosen at the last
+  // pointer move can drift away from a pointer that has not moved, and a row
+  // can be pruned outright. The tick under the pointer is therefore resolved
+  // against the CURRENT markers on every render, from the pointer's last
+  // position, and a tick that has drifted out of reach shows nothing.
+  const [hoverPointer, setHoverPointer] = useState<PointerOnTrack | null>(null);
   const [hoverArmed, setHoverArmed] = useState(false);
   const hoverDelayRef = useRef<number | null>(null);
 
@@ -254,7 +256,7 @@ function CommGraphTransportTrack(props: {
       event.currentTarget.setPointerCapture(event.pointerId);
       // A drag carries no label. It never did: with the pointer captured the
       // ticks stopped receiving it, so none of their tooltips could open.
-      setHoveredKey(null);
+      setHoverPointer(null);
       onSeekToFraction(pointer.fraction);
     },
     [onSeekToFraction, pointerOnTrack],
@@ -276,16 +278,12 @@ function CommGraphTransportTrack(props: {
           setHoverArmed(true);
         }, MARKER_HOVER_DELAY_MS);
       }
-      const index = commGraphMarkerIndexNearFraction(
-        markers,
-        pointer.fraction,
-        MARKER_HOVER_REACH_PX / pointer.width,
-      );
-      // Setting the key it already holds is not a render, so a pointer sliding
-      // along one tick costs the track nothing.
-      setHoveredKey(index === null ? null : markers[index].key);
+      // A render per move while the pointer is over the track, and a cheap
+      // one: the tick layer below is memoized on `markers`, which a move does
+      // not change, and the label is keyed so the same tick is not remounted.
+      setHoverPointer(pointer);
     },
-    [hoverArmed, markers, onSeekToFraction, pointerOnTrack],
+    [hoverArmed, onSeekToFraction, pointerOnTrack],
   );
 
   // `pointerleave` alone is not enough: it is not delivered while the track
@@ -293,13 +291,13 @@ function CommGraphTransportTrack(props: {
   // hover set. Releasing clears the tick and keeps the delay paid - the
   // pointer has not left.
   const clearHoveredMarker = useCallback(() => {
-    setHoveredKey(null);
+    setHoverPointer(null);
   }, []);
 
   const handlePointerLeave = useCallback(() => {
     cancelHoverDelay();
     setHoverArmed(false);
-    setHoveredKey(null);
+    setHoverPointer(null);
   }, [cancelHoverDelay]);
 
   const handleKeyDown = useCallback(
@@ -332,10 +330,9 @@ function CommGraphTransportTrack(props: {
   if (!hasEvents)
     return <CommGraphEmptyTrack following={transport.following} />;
 
-  const hoveredMarker =
-    hoverArmed && hoveredKey !== null
-      ? (markers.find((marker) => marker.key === hoveredKey) ?? null)
-      : null;
+  const hoveredMarker = hoverArmed
+    ? markerUnderPointer(markers, hoverPointer)
+    : null;
 
   return (
     <div
@@ -396,6 +393,20 @@ interface PointerOnTrack {
   readonly fraction: number;
   /** The track's laid-out width in pixels, to turn a reach in pixels into a fraction. */
   readonly width: number;
+}
+
+/** The tick within reach of the pointer, among the ticks drawn now. */
+function markerUnderPointer(
+  markers: ReadonlyArray<CommGraphTransportMarker>,
+  pointer: PointerOnTrack | null,
+): CommGraphTransportMarker | null {
+  if (pointer === null) return null;
+  const index = commGraphMarkerIndexNearFraction(
+    markers,
+    pointer.fraction,
+    MARKER_HOVER_REACH_PX / pointer.width,
+  );
+  return index === null ? null : markers[index];
 }
 
 /**

@@ -469,7 +469,17 @@ export class CommGraphCloudSubscriptionManager {
       this.events = this.events.concat(accepted);
       this.events.sort(compareCommGraphEvents);
     }
-    if (accepted.length > 0 || headVersion !== null || prunedRowKeys.size > 0) {
+    // A PRUNE PUBLISHES NOW. `onRowsPruned` has already reset the timeline
+    // cursor and the open rows in their stores, synchronously, and those
+    // stores render in this same task. Holding the snapshot for the window
+    // would render that reset against the rows it was reset FOR, a live graph
+    // still drawing the pruned rows until the timer fired. A frontier moves
+    // rarely, so publishing it at once costs the window nothing.
+    if (prunedRowKeys.size > 0) {
+      this.commit();
+      return;
+    }
+    if (accepted.length > 0 || headVersion !== null) {
       this.requestDataCommit();
     }
   }
@@ -664,11 +674,12 @@ export class CommGraphCloudSubscriptionManager {
    * which publishes all of them together. A burst of any size is therefore two
    * publishes, and what is published is always the merged log in order.
    *
-   * ONLY THIS PATH WAITS. Status, availability, the relay directory, caught-up
-   * and detach publish as they happen (`commit`): they are rare, and what
-   * reads them - the feed-health dot, the resume cursor - reads them in the
-   * same tick. Such a publish carries every row applied so far, so it also
-   * retires the timer.
+   * ONLY THIS PATH WAITS. Status, availability, the relay directory, caught-up,
+   * detach and a frame that prunes rows publish as they happen (`commit`):
+   * they are rare, and what reads them - the feed-health dot, the resume
+   * cursor, the timeline cursor a prune resets - reads them in the same tick.
+   * Such a publish carries every row applied so far, so it also retires the
+   * timer.
    *
    * WHAT A BATCH COSTS: `lastArrival` holds the newest arrival only, so live
    * rows that land inside one window pulse once between them, where each used

@@ -320,6 +320,84 @@ describe("what a playback step costs the transport bar", () => {
       screen.getByTestId("comm-graph-transport-marker-hover"),
     ).toBeTruthy();
   });
+
+  it("re-resolves the hovered tick when rows land under a pointer that has not moved", () => {
+    const events = rows();
+    const { rerender } = render(
+      <CommGraphTransportBar epicId={EPIC} events={events} />,
+    );
+
+    armHover(10);
+    expect(
+      screen
+        .getByTestId("comm-graph-transport-marker-hover")
+        .getAttribute("data-marker-key"),
+    ).toBe(commGraphEventKey(events[10]));
+
+    // Ten more rows land, still 1000ms apart, so all 50 rows are now evenly
+    // spaced at i/49 of the track instead of i/39 - every tick rescales even
+    // though none of the original 40 objects changed. The pointer never
+    // moved: it is still sitting at 10/39*400 ~= 102.56px. Under the new
+    // scale, tick 13 sits at 13/49*400 ~= 106.12px (3.56px away - inside the
+    // 4px reach) and tick 12 sits at 12/49*400 ~= 97.96px (4.6px away -
+    // outside it), so the hover should now resolve to row 13.
+    const grown = [
+      ...events,
+      ...Array.from({ length: 10 }, (_unused, index) => event(41 + index)),
+    ];
+    rerender(<CommGraphTransportBar epicId={EPIC} events={grown} />);
+
+    const hoverAfterGrowth = screen.getByTestId(
+      "comm-graph-transport-marker-hover",
+    );
+    expect(hoverAfterGrowth.getAttribute("data-marker-key")).toBe(
+      commGraphEventKey(grown[13]),
+    );
+    expect(hoverAfterGrowth.getAttribute("data-marker-key")).not.toBe(
+      commGraphEventKey(events[10]),
+    );
+
+    // Control: back to the original 40 rows, pointer still unmoved - the
+    // resolution follows the markers back too, rather than sticking to
+    // whatever was resolved last.
+    rerender(<CommGraphTransportBar epicId={EPIC} events={events} />);
+    expect(
+      screen
+        .getByTestId("comm-graph-transport-marker-hover")
+        .getAttribute("data-marker-key"),
+    ).toBe(commGraphEventKey(events[10]));
+  });
+
+  it("shows nothing when the hovered row is pruned and nothing else is in reach", () => {
+    const events = rows();
+    const { rerender } = render(
+      <CommGraphTransportBar epicId={EPIC} events={events} />,
+    );
+
+    armHover(20);
+    expect(
+      screen.getByTestId("comm-graph-transport-marker-hover"),
+    ).toBeTruthy();
+
+    // Dropping row 0 alone would land the new first tick back at x=0 - right
+    // where a hover on row 0 already sits - so this hovers a MIDDLE tick
+    // (row 20, at 20/39*400 ~= 205.13px) and prunes down to 5 rows instead of
+    // dropping one row off an end. Every original row here is 1000ms from its
+    // neighbour, comfortably above the 700ms-per-step cap
+    // `commGraphTransportTrack` applies, so ANY subset still gets one full
+    // 700ms step per adjacent pair - the tick grid depends only on how many
+    // rows remain, not on which specific rows they are. With 5 rows left the
+    // grid is 0, 100, 200, 300, 400px: the nearest to the still-unmoved
+    // pointer (205.13px) is 200px, 5.13px away - outside the 4px reach - and
+    // its only neighbour (300px) is 94.87px away. Nothing is close enough to
+    // hover.
+    const pruned = events.slice(0, 5);
+    rerender(<CommGraphTransportBar epicId={EPIC} events={pruned} />);
+
+    expect(
+      screen.queryByTestId("comm-graph-transport-marker-hover"),
+    ).toBeNull();
+  });
 });
 
 /**
