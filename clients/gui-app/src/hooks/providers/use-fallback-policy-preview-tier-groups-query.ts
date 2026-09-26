@@ -45,11 +45,13 @@ const NO_GROUPS: readonly TierGroup[] = [];
  * Two gates, and they are different questions:
  *
  *  - **`groups === null`** - the caller says there is nothing worth previewing.
- *    The panel passes `null` while the draft is INVALID, and it must: the
- *    request schema is `tierGroupSchema[]`, whose `modelFamily` is non-empty, so
- *    a draft holding the empty row that "Add a model" creates cannot even be
- *    encoded. Sending it would produce a malformed-request error for a state the
- *    editor manufactures with one click.
+ *    The panel passes `null` while the groups on screen are not the groups the
+ *    host holds. On a 1.0 line that includes any draft holding the empty row
+ *    "Add model" creates, and it must: the 1.0 request is `tierGroupSchema[]`,
+ *    whose `modelFamily` is non-empty, so such a draft cannot even be encoded
+ *    there. A 1.1 line takes blank rows (`tierGroupDraftSchema`) and answers
+ *    each as a skipped row, so the panel sends them - gated on the negotiated
+ *    line, never on this hook's presence check (`useFallbackPolicyPatternLines`).
  *  - **the host must advertise the method.** It is optional rather than part of
  *    the released floor, so an older host negotiates it away instead of failing
  *    the handshake. `useHostSupportsMethod` fails closed, and a host that has

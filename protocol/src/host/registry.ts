@@ -332,11 +332,17 @@ import {
   hostRestartV12,
 } from "@traycer/protocol/host/restart/contracts";
 import {
+  providersFallbackPolicyGetUpgradeV10ToV11,
   providersFallbackPolicyGetV10,
+  providersFallbackPolicyGetV11,
+  providersFallbackPolicyPreviewTierGroupsUpgradeV10ToV11,
   providersFallbackPolicyPreviewTierGroupsV10,
+  providersFallbackPolicyPreviewTierGroupsV11,
   providersFallbackPolicyResetV10,
   providersFallbackPolicyRestoreTierGroupsV10,
+  providersFallbackPolicySetUpgradeV10ToV11,
   providersFallbackPolicySetV10,
+  providersFallbackPolicySetV11,
 } from "@traycer/protocol/host/fallback-policy";
 import {
   chatFallbackCancelV10,
@@ -10519,11 +10525,15 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   "providers.fallbackPolicy.get": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersFallbackPolicyGetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: providersFallbackPolicyGetV11,
+          upgradeFromPreviousVersion: providersFallbackPolicyGetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -10532,11 +10542,15 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   "providers.fallbackPolicy.set": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersFallbackPolicySetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: providersFallbackPolicySetV11,
+          upgradeFromPreviousVersion: providersFallbackPolicySetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -10571,11 +10585,16 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   "providers.fallbackPolicy.previewTierGroups": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersFallbackPolicyPreviewTierGroupsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: providersFallbackPolicyPreviewTierGroupsV11,
+          upgradeFromPreviousVersion:
+            providersFallbackPolicyPreviewTierGroupsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
