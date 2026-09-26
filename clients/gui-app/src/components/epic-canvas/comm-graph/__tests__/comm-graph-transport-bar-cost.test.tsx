@@ -398,6 +398,134 @@ describe("what a playback step costs the transport bar", () => {
       screen.queryByTestId("comm-graph-transport-marker-hover"),
     ).toBeNull();
   });
+
+  it("drops an armed hover when the log empties, and pays the delay again when rows return", () => {
+    const events = rows();
+    const { rerender } = render(
+      <CommGraphTransportBar epicId={EPIC} events={events} />,
+    );
+
+    armHover(10);
+    expect(
+      screen.getByTestId("comm-graph-transport-marker-hover"),
+    ).toBeTruthy();
+
+    // The log empties: `CommGraphTransportTrack` swaps in
+    // `CommGraphEmptyTrack`, unmounting the scrub track and dropping the
+    // hover state (pointer, arm, delay timer) it owned.
+    rerender(<CommGraphTransportBar epicId={EPIC} events={[]} />);
+    expect(
+      screen.queryByTestId("comm-graph-transport-marker-hover"),
+    ).toBeNull();
+    expect(screen.getByTestId("comm-graph-transport-empty")).toBeTruthy();
+
+    // Rows return - the same 40 row objects, no pointer event. This is the
+    // regression: before the split, the armed state and stored pointer
+    // survived the empty interval on a shared component and the label
+    // reopened here at once.
+    rerender(<CommGraphTransportBar epicId={EPIC} events={events} />);
+    expect(
+      screen.queryByTestId("comm-graph-transport-marker-hover"),
+    ).toBeNull();
+
+    // The fresh scrub track owes the delay again - a move alone isn't enough.
+    fireEvent.pointerMove(track(), { pointerId: 1, clientX: tickX(10) });
+    expect(
+      screen.queryByTestId("comm-graph-transport-marker-hover"),
+    ).toBeNull();
+
+    // Paying it opens the label, on the row the pointer is actually over.
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(
+      screen
+        .getByTestId("comm-graph-transport-marker-hover")
+        .getAttribute("data-marker-key"),
+    ).toBe(commGraphEventKey(events[10]));
+  });
+
+  it("re-measures a still pointer against the track after it resizes", () => {
+    // The global MockResizeObserver from test-browser-apis is a total no-op,
+    // so this test installs its own controllable one - and only for the
+    // duration of this test, since a stub left in place would silence every
+    // other case's real (no-op) ResizeObserver too.
+    const observers: RecordingResizeObserver[] = [];
+
+    class RecordingResizeObserver implements ResizeObserver {
+      readonly callback: ResizeObserverCallback;
+
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+        observers.push(this);
+      }
+
+      observe(): void {}
+
+      unobserve(): void {}
+
+      disconnect(): void {}
+    }
+
+    // Installed BEFORE render: the scrub track constructs its ResizeObserver
+    // in a mount effect, so a stub swapped in afterwards would miss it.
+    vi.stubGlobal("ResizeObserver", RecordingResizeObserver);
+
+    try {
+      const events = rows();
+      render(<CommGraphTransportBar epicId={EPIC} events={events} />);
+      expect(observers).toHaveLength(1);
+
+      armHover(10);
+      expect(
+        screen
+          .getByTestId("comm-graph-transport-marker-hover")
+          .getAttribute("data-marker-key"),
+      ).toBe(commGraphEventKey(events[10]));
+
+      // The track narrows from 400px to 200px. Spying an already-spied
+      // method returns the SAME spy (vitest, like jest, recognises the
+      // target is already mocked), so this changes what the existing spy
+      // from `stubTrackGeometry` returns rather than stacking a second one -
+      // the describe's `afterEach` still restores it with the one handle it
+      // kept.
+      vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 200,
+        bottom: 24,
+        width: 200,
+        height: 24,
+        toJSON: () => ({}),
+      });
+
+      // Fire the resize callback without moving the pointer.
+      act(() => {
+        for (const observer of observers) observer.callback([], observer);
+      });
+
+      // The pointer sits at 10/39*400 ~= 102.56px, stored as `clientX` on
+      // the hover. On the new 200px-wide track that is fraction
+      // 102.56/200 = 0.512820..., which is exactly 20/39 - tick 20's own
+      // fraction, since 102.56 was itself 400*10/39 and (400*10/39)/200 is
+      // 2*10/39 = 20/39. So the hover follows the tick actually under the
+      // still pointer, landing on row 20, not row 10.
+      const hover = screen.getByTestId("comm-graph-transport-marker-hover");
+      expect(hover.getAttribute("data-marker-key")).toBe(
+        commGraphEventKey(events[20]),
+      );
+      // Anti-vacuity: it was on row 10 before the resize callback fired, so
+      // firing it is what moved it, not something that would have happened
+      // anyway.
+      expect(hover.getAttribute("data-marker-key")).not.toBe(
+        commGraphEventKey(events[10]),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 /**

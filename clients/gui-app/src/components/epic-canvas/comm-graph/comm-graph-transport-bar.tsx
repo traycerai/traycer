@@ -196,21 +196,36 @@ export function CommGraphTransportBar(props: CommGraphTransportBarProps) {
   );
 }
 
-/**
- * The scrubber itself. Split out so the bar stays a layout shell and the track's
- * one real subtlety - what it means when there is nothing to scrub - lives in
- * one place.
- */
-function CommGraphTransportTrack(props: {
+interface CommGraphTransportTrackProps {
   readonly transport: CommGraphTransport;
   readonly events: ReadonlyArray<CommGraphEvent>;
   readonly markers: ReadonlyArray<CommGraphTransportMarker>;
   readonly playhead: number;
   readonly onSeekToFraction: (fraction: number) => void;
-}) {
+}
+
+/**
+ * The scrubber itself. Split out so the bar stays a layout shell and the track's
+ * one real subtlety - what it means when there is nothing to scrub - lives in
+ * one place.
+ *
+ * THE TWO TRACKS ARE TWO COMPONENTS, so that everything the scrubbing track
+ * holds - the pointer it is hovering, the delay it has paid, the timer paying
+ * it - is dropped with it. The log can empty while a label is armed (a
+ * frontier can prune every row), and the empty track has no pointer handlers
+ * to notice the pointer leaving. Held above the split, that state would
+ * survive the empty interval and open a label the moment a row came back,
+ * wherever the pointer had gone meanwhile.
+ */
+function CommGraphTransportTrack(props: CommGraphTransportTrackProps) {
+  if (props.events.length === 0)
+    return <CommGraphEmptyTrack following={props.transport.following} />;
+  return <CommGraphScrubTrack {...props} />;
+}
+
+function CommGraphScrubTrack(props: CommGraphTransportTrackProps) {
   const { events, markers, onSeekToFraction, playhead, transport } = props;
   const trackRef = useRef<HTMLDivElement | null>(null);
-  const hasEvents = events.length > 0;
 
   // THE HOVER IS WHERE THE POINTER IS, not which tick it was on. Rows landing
   // while history arrives rescale every tick, so a tick chosen at the last
@@ -234,18 +249,31 @@ function CommGraphTransportTrack(props: {
     (clientX: number): PointerOnTrack | null => {
       const track = trackRef.current;
       if (track === null) return null;
-      const rect = track.getBoundingClientRect();
-      // jsdom (and a track that has not been laid out yet) reports zero width;
-      // dividing by it would seek to NaN, so a pointer seek simply does not
-      // happen until there is a real track to seek along.
-      if (rect.width <= 0) return null;
-      return {
-        fraction: (clientX - rect.left) / rect.width,
-        width: rect.width,
-      };
+      return measurePointerOnTrack(track, clientX);
     },
     [],
   );
+
+  // A RESIZE MOVES THE TICKS UNDER A STILL POINTER. The fraction a hover was
+  // stored at was measured against the track as it was at the last pointer
+  // event; a window, sidebar or split resize changes the track's width, and
+  // the same screen position is then a different place along it. So the
+  // stored screen position is re-measured against the new rect whenever the
+  // track resizes. The epic canvas is tiled and does not pan, so resizing is
+  // the only way the track moves while the pointer rests on it; a move that
+  // takes the track out from under the pointer altogether reaches the track
+  // as `pointerleave`.
+  useEffect(() => {
+    const track = trackRef.current;
+    if (track === null) return;
+    const observer = new ResizeObserver(() => {
+      setHoverPointer((current) =>
+        current === null ? null : measurePointerOnTrack(track, current.clientX),
+      );
+    });
+    observer.observe(track);
+    return () => observer.disconnect();
+  }, []);
 
   const handlePointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
@@ -326,10 +354,6 @@ function CommGraphTransportTrack(props: {
     [events, transport],
   );
 
-  // After the hooks, so the two renderings share one hook order.
-  if (!hasEvents)
-    return <CommGraphEmptyTrack following={transport.following} />;
-
   const hoveredMarker = hoverArmed
     ? markerUnderPointer(markers, hoverPointer)
     : null;
@@ -389,10 +413,32 @@ function CommGraphTransportTrack(props: {
 }
 
 interface PointerOnTrack {
+  /** The pointer's viewport x, kept so a resized track can re-measure it. */
+  readonly clientX: number;
   /** Where along the track the pointer is; outside 0..1 when it is past an end. */
   readonly fraction: number;
   /** The track's laid-out width in pixels, to turn a reach in pixels into a fraction. */
   readonly width: number;
+}
+
+/**
+ * Where a viewport x falls along the track as it is laid out now.
+ *
+ * `null` for a track with no width: jsdom (and a track that has not been laid
+ * out yet) reports zero, and dividing by it would seek to NaN, so a pointer
+ * seek simply does not happen until there is a real track to seek along.
+ */
+function measurePointerOnTrack(
+  track: HTMLElement,
+  clientX: number,
+): PointerOnTrack | null {
+  const rect = track.getBoundingClientRect();
+  if (rect.width <= 0) return null;
+  return {
+    clientX,
+    fraction: (clientX - rect.left) / rect.width,
+    width: rect.width,
+  };
 }
 
 /** The tick within reach of the pointer, among the ticks drawn now. */
