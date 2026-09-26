@@ -163,12 +163,27 @@ export interface ArtifactBodyLeaseBridge {
    * `docGuid: null` on the lane arm is forward-only, which is un-demotable.
    * The second `body/materialize` answers with the full identity.
    *
-   * The readiness predicate is the CALLER's, over doc keys, because the
+   * The readiness answer is the CALLER's, over doc keys, because the
    * projection is main's and there must be one reader of it - the same reason
    * `dropBodiesWhoseRoomIsGone` computes its ready set in the store and this
    * module never touches a slice.
+   *
+   * It answers WHICH ARTIFACT to ask with, not just whether to ask: `null` for
+   * a doc key whose room is not ready, otherwise an artifact the projection
+   * currently files under that key - `preferredArtifactId` (the one this body
+   * was acquired or installed through) while it still is. The distinction is
+   * `@1`'s, where a doc key is a ROOM hosting several artifacts: a body that
+   * `forget` sent back to wait carries whichever artifact installed it, and if
+   * that artifact has since left the room while another still holds the body,
+   * asking with it re-resolves to no doc key and the retry stalls. On the lane
+   * arm the key is the artifact, so the answer is always the preferred one.
    */
-  retryAwaitingBodies(isReadyDocKey: (docKey: string) => boolean): void;
+  retryAwaitingBodies(
+    readyArtifactFor: (
+      docKey: string,
+      preferredArtifactId: string,
+    ) => string | null,
+  ): void;
   /**
    * Re-post every demote that was posted but never acknowledged.
    *
@@ -223,6 +238,10 @@ interface BodyEntry {
    * `body/materialize` is addressed that way. Held rather than derived from the
    * doc key for the reason {@link AwaitingBody.artifactId} states: the two are
    * equal on the lane arm and not on `@1`, where the key is a room id.
+   *
+   * Only the retry's STARTING preference: `retryAwaitingBodies` swaps it for an
+   * artifact the projection still files under the key, because on `@1` the
+   * installer may have left the room while another artifact holds the body.
    */
   readonly artifactId: string;
   /**
@@ -281,10 +300,16 @@ interface AwaitingBody {
    * The artifact the retry re-materializes.
    *
    * Held rather than derived from the doc key: the two are equal on the lane
-   * arm and NOT on `@1`, where the key is a room id - and `@1` never awaits, so
-   * a reader could "simplify" this away and be right in every case it tested.
+   * arm and NOT on `@1`, where the key is a room id - and `@1` awaits only on
+   * its rarer paths (a room reassignment mid-seed, a `forget` of a still-held
+   * body), so a reader could "simplify" this away and be right in every case
+   * it tested.
+   *
+   * MUTABLE: each ready-edge retry re-reads it from the projection
+   * (`retryAwaitingBodies`), so on `@1` it follows whichever artifact still
+   * names the room rather than the one that happened to acquire it first.
    */
-  readonly artifactId: string;
+  artifactId: string;
   leases: number;
   /** A retry is in flight; a second projection push must not start another. */
   retrying: boolean;
@@ -929,7 +954,7 @@ export function createArtifactBodyLeaseBridge(options: {
       inFlight.set(artifactId, record);
       return grantFor(await record.answer, retention);
     },
-    retryAwaitingBodies(isReadyDocKey): void {
+    retryAwaitingBodies(readyArtifactFor): void {
       // A COPY of the keys: each iteration can resolve an entry and delete it,
       // and mutating the map mid-iteration is how a body gets skipped and left
       // waiting for a push that already happened.
@@ -938,7 +963,9 @@ export function createArtifactBodyLeaseBridge(options: {
         // what keeps this loop bounded: it runs once per delivered projection,
         // never on a timer, and does nothing at all for a body whose room is
         // still not ready.
-        if (!isReadyDocKey(docKey)) continue;
+        const artifactId = readyArtifactFor(docKey, held.artifactId);
+        if (artifactId === null) continue;
+        held.artifactId = artifactId;
         startAwaitingRetry(docKey, held);
       }
     },
@@ -986,7 +1013,7 @@ export function createArtifactBodyLeaseBridge(options: {
       if (entry.leases > 0) {
         holdAwaiting(docKey, entry.artifactId, entry.leases);
       } else {
-        postAwaitingRelease(docKey);
+        releaseDemandOnceAcquiresSettle(docKey);
       }
       // The hot charge is LOCAL and still has to come back. The doc-comment
       // argument for this method - "there is nothing on the far side to settle
@@ -1383,7 +1410,43 @@ export function createArtifactBodyLeaseBridge(options: {
     held.leases -= 1;
     if (held.leases > 0) return;
     awaiting.delete(docKey);
-    postAwaitingRelease(docKey);
+    releaseDemandOnceAcquiresSettle(docKey);
+  }
+
+  /**
+   * Release the worker's demand for a body nobody on this side holds - but
+   * not while an acquire that may resolve to it is still in flight.
+   *
+   * The worker keeps ONE demand per doc key and folds every later materialize
+   * into it (`holdAwaitingDemand` / `holdResidentLease` release the newcomer's
+   * lease when one is already held). So an acquire posted BEFORE this release
+   * was answered as sharing the existing demand, and the release, arriving
+   * second, then drops that demand out from under it: the acquire's holder is
+   * handed an awaiting or granted body the worker no longer backs, with no
+   * subscription and no observer. The last holder leaving while another tile
+   * mounts the same artifact is the ordinary way to get there, and a body that
+   * `forget` sent back to wait makes it easy - every mount goes through
+   * `body/materialize` again.
+   *
+   * Every in-flight acquire is waited on, not only the one named by this key:
+   * on `@1` the key is a room, and an acquire for a different artifact can
+   * resolve to it. Once they settle, the bookkeeping they did is re-read - an
+   * acquire that joined this key made it held again, and its own release will
+   * post when it goes - and only an unheld key is released. Acquires are single
+   * round trips, so this defers a release by at most that long, and it
+   * re-checks for acquires that started meanwhile rather than racing them.
+   */
+  function releaseDemandOnceAcquiresSettle(docKey: string): void {
+    if (inFlight.size === 0) {
+      postAwaitingRelease(docKey);
+      return;
+    }
+    const pending = [...inFlight.values()].map((record) => record.answer);
+    void Promise.allSettled(pending).then(() => {
+      const current = currentKeyFor(docKey);
+      if (awaiting.has(current) || entries.has(current)) return;
+      releaseDemandOnceAcquiresSettle(current);
+    });
   }
 
   /**
@@ -1513,7 +1576,10 @@ export function createArtifactBodyLeaseBridge(options: {
         // held again and its own release will post when it unmounts. Posting
         // here would drop a body someone is using.
         if (awaiting.has(current) || entries.has(current)) return;
-        postAwaitingRelease(current);
+        // Through the same in-flight check as a last release: this re-post is
+        // one too, and an acquire started inside the window is folded into the
+        // demand it would drop.
+        releaseDemandOnceAcquiresSettle(current);
       }),
     );
   }

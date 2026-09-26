@@ -264,7 +264,7 @@ describe("an awaiting body whose doc key MOVES before its seed arrives", () => {
     expect(grant.docKey).toBe(DOC_KEY);
     expect(worker.materializeCalls).toHaveLength(1);
 
-    leases.retryAwaitingBodies(() => true);
+    leases.retryAwaitingBodies((_docKey, preferred) => preferred);
     await flushMicrotasks();
 
     // THE REDDENING ASSERTION. Installed under `DOC_KEY`, the doc is invisible
@@ -282,7 +282,7 @@ describe("an awaiting body whose doc key MOVES before its seed arrives", () => {
     if (grant.kind !== "awaiting-seed") {
       throw new Error(`expected an awaiting-seed grant, got ${grant.kind}`);
     }
-    leases.retryAwaitingBodies(() => true);
+    leases.retryAwaitingBodies((_docKey, preferred) => preferred);
     await flushMicrotasks();
 
     // The holder still holds the closure it was handed at acquire time, over

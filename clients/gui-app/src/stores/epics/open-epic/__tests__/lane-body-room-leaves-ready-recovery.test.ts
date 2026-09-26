@@ -374,6 +374,58 @@ describe("a body whose room leaves ready while a lease is still held", () => {
     expect(rig.closeCount()).toBe(1);
   });
 
+  it("a last release must not drop the worker's demand while another acquire is still resolving it", async () => {
+    // The reviewer's recipe: A holds the body, the room drops, and a SECOND
+    // mount (B) starts acquiring the same artifact while A's release is still
+    // in flight. Before the P1 fix, the last KNOWN holder's release posted
+    // `body/release` (or the equivalent awaiting release) as soon as its own
+    // count hit zero, with no regard for an acquire that was ABOUT to be told
+    // it shared that exact demand - so B's materialize resolved to a body the
+    // worker had already dropped: no subscription, no observer, nothing a
+    // later seed could ever reach.
+    const rig = rigUnderTest();
+    await rig.announceEpoch();
+    const a = await rig.mountTile();
+
+    await rig.seed("hello");
+    await rig.dropRoom();
+
+    // B mounts while A still holds its lease. NOT awaited yet: `mountTile`
+    // takes its two leases synchronously before its first `await`, so B's
+    // `body/materialize` is already in flight by the time A releases below.
+    const bPending = rig.mountTile();
+    a.release();
+
+    const b = await bPending;
+    await rig.handle.flush();
+
+    // THE REDDENING ASSERTION pre-fix: a release posted the instant A's own
+    // count reached zero, regardless of B's still-resolving acquire.
+    expect(rig.subscriptionIsOpen()).toBe(true);
+    expect(rig.closeCount()).toBe(0);
+
+    // B recovers exactly like a fresh cold open does - the room being ready
+    // again is what completes its still-retained demand.
+    await rig.seed("recovered");
+    const fragment = rig.handle.store.getState().getArtifactFragment(ARTIFACT);
+    if (fragment === null) {
+      throw new Error("expected the body to be resident for B");
+    }
+    expect(fragment.toJSON()).toContain("recovered");
+
+    // NOT asserted closed here: B recovered while its ORIGINAL two leases are
+    // still both live (a genuine single-holder resident body), so `b.release()`
+    // is an ordinary last-holder release under "linger" retention - it arms the
+    // cooldown exactly as `lane-body-lease-survives-mount.test.ts` and case 4
+    // above do, and does not itself post anything. Confirmed empirically
+    // (`closeCount()` stays 0, `subscriptionIsOpen()` stays true immediately
+    // after this release+flush): this is not the defect under test, which is
+    // already proven above by the "no extra close" assertions around A's
+    // release while B's acquire was in flight.
+    b.release();
+    await rig.handle.flush();
+  });
+
   it("a lingering body whose room leaves ready releases its demand", async () => {
     const rig = rigUnderTest();
     await rig.announceEpoch();

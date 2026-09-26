@@ -1194,7 +1194,9 @@ describe("an awaiting body reassigned to another byteless room", () => {
 
     // The projection calls room-1 ready, so the bridge re-materializes - and
     // the answer names room-2, still byteless.
-    leases.retryAwaitingBodies((docKey) => docKey === "room-1");
+    leases.retryAwaitingBodies((docKey, preferred) =>
+      docKey === "room-1" ? preferred : null,
+    );
     await settle();
 
     // BEFORE the holder releases anything: room-1's demand comes off at the
@@ -1226,7 +1228,9 @@ describe("an awaiting body reassigned to another byteless room", () => {
       throw new Error("expected an awaiting-seed grant");
     }
 
-    leases.retryAwaitingBodies((docKey) => docKey === "room-1");
+    leases.retryAwaitingBodies((docKey, preferred) =>
+      docKey === "room-1" ? preferred : null,
+    );
     await settle();
 
     grant.release();
@@ -1254,9 +1258,13 @@ describe("an awaiting body reassigned to another byteless room", () => {
       throw new Error("expected an awaiting-seed grant");
     }
 
-    leases.retryAwaitingBodies((docKey) => docKey === "room-1");
+    leases.retryAwaitingBodies((docKey, preferred) =>
+      docKey === "room-1" ? preferred : null,
+    );
     await settle();
-    leases.retryAwaitingBodies((docKey) => docKey === "room-2");
+    leases.retryAwaitingBodies((docKey, preferred) =>
+      docKey === "room-2" ? preferred : null,
+    );
     await settle();
 
     expect(releases).toEqual(["room-1", "room-2"]);
@@ -1373,7 +1381,7 @@ describe("forget — a still-held, still-releasing, or lingering body", () => {
     // AND to the retry below.
     expect(releases).toEqual([]);
 
-    leases.retryAwaitingBodies(() => true);
+    leases.retryAwaitingBodies((_docKey, preferred) => preferred);
     await Promise.resolve();
     await Promise.resolve();
 
@@ -1454,5 +1462,266 @@ describe("forget — a still-held, still-releasing, or lingering body", () => {
     expect(demotes).toHaveLength(0);
     second.release();
     expect(demotes).toHaveLength(1);
+  });
+});
+
+/**
+ * A last release must not drop the worker's demand while another acquire is
+ * still resolving it (P1).
+ *
+ * The worker keeps ONE demand per doc key, and every later `body/materialize`
+ * for an already-demanded key folds its own lease into it
+ * (`hasBodyDemand`/`holdAwaitingDemand`/`holdResidentLease` in
+ * `epic-runtime-core-ports.ts`). Before this fix, a release that found the
+ * doc key unheld posted `body/release` (or the awaiting equivalent) the
+ * INSTANT its own count reached zero, with no regard for an acquire ALREADY
+ * IN FLIGHT for the same key: that acquire is answered as sharing the
+ * existing demand, and the release - arriving second - drops that demand out
+ * from under it. The fix is `releaseDemandOnceAcquiresSettle`: it waits for
+ * every in-flight acquire to settle, then re-checks whether the key is held
+ * again before posting anything.
+ *
+ * A controllable worker is required here rather than the file's usual
+ * scripted ones, because the defect is about ORDER: the release has to run
+ * while a `body/materialize` reply is still outstanding, which means this
+ * suite - not the worker - decides when that reply lands.
+ */
+describe("a last release must not drop demand while an acquire is still in flight", () => {
+  interface PendingMaterialize {
+    readonly artifactId: string;
+    respond(value: {
+      readonly docKey: string | null;
+      readonly update: Uint8Array | null;
+      readonly docGuid: string | null;
+      readonly seedMode: "full";
+      readonly hostStateVector: string | null;
+      readonly awarenessFrames: readonly Uint8Array[];
+    }): void;
+  }
+
+  function createControllableWorker(pair: FakeBridgePair): {
+    readonly materializes: PendingMaterialize[];
+    readonly releases: string[];
+  } {
+    const materializes: PendingMaterialize[] = [];
+    const releases: string[] = [];
+    pair.worker.subscribe((message) => {
+      if (!isMainToWorkerFrame(message) || message.frame !== "call") return;
+      const { callId, call } = message;
+      const respond = (value: unknown): void => {
+        pair.worker.post(
+          { frame: "result", callId, result: { outcome: "ok", value } },
+          [],
+        );
+      };
+      if (call.kind === "body/materialize") {
+        materializes.push({ artifactId: call.request.artifactId, respond });
+        return;
+      }
+      if (call.kind === "body/release") {
+        releases.push(call.request.docKey);
+        respond({ released: true, reason: null });
+      }
+    });
+    return { materializes, releases };
+  }
+
+  function setupControllable() {
+    const pair = createFakeBridgePair("sync");
+    const worker = createControllableWorker(pair);
+    const leases = createArtifactBodyLeaseBridge({
+      bridge: createMainBridgeEndpoint(pair.main, stubMainCallHandlers({})),
+      docs: createDocs(),
+      budget: createBudget(),
+      scheduler: createScheduler(),
+      lingerMs: LINGER_MS,
+      maxHotDocs: MAX_HOT,
+      reportAwaitingStalled: IGNORE_STALL_REPORT,
+    });
+    return { leases, worker };
+  }
+
+  const AWAITING_ANSWER = {
+    docKey: "artifact-1",
+    update: null,
+    docGuid: null,
+    seedMode: "full" as const,
+    hostStateVector: null,
+    awarenessFrames: [],
+  };
+
+  /** Several rounds, since `releaseDemandOnceAcquiresSettle` chains a
+   * `Promise.allSettled` on top of the acquire it is waiting for - strictly
+   * more ticks than a plain `.then` on that same promise. */
+  async function settle(): Promise<void> {
+    for (let round = 0; round < 6; round += 1) await Promise.resolve();
+  }
+
+  it("holds off the release until the in-flight acquire settles, and skips it once that acquire re-holds the key", async () => {
+    const { leases, worker } = setupControllable();
+
+    const firstAcquire = leases.acquire("artifact-1", "linger");
+    worker.materializes[0]?.respond(AWAITING_ANSWER);
+    const firstGrant = await firstAcquire;
+    if (firstGrant.kind !== "awaiting-seed") {
+      throw new Error("expected an awaiting-seed grant");
+    }
+
+    // A second acquire for the SAME key - its own materialize, held back so
+    // this test controls exactly when the reply lands.
+    const secondAcquire = leases.acquire("artifact-1", "linger");
+    expect(worker.materializes).toHaveLength(2);
+
+    firstGrant.release();
+    // THE REDDENING ASSERTION pre-fix: the old code posted `body/release` the
+    // moment this release's count reached zero, before the second acquire
+    // had any chance to be told it shared the demand.
+    expect(worker.releases).toEqual([]);
+
+    // Answer the held-back materialize as AWAITING - same doc key, no bytes -
+    // exactly the answer a room that is still not ready produces.
+    worker.materializes[1]?.respond(AWAITING_ANSWER);
+    const secondGrant = await secondAcquire;
+    if (secondGrant.kind !== "awaiting-seed") {
+      throw new Error("expected an awaiting-seed grant");
+    }
+    await settle();
+
+    // Still nothing posted: the second acquire re-holds the same key, so the
+    // deferred release found it held again and stood down.
+    expect(worker.releases).toEqual([]);
+
+    secondGrant.release();
+    expect(worker.releases).toEqual(["artifact-1"]);
+  });
+
+  it("still releases once the deferred acquire settles UNAVAILABLE, for the original key", async () => {
+    const { leases, worker } = setupControllable();
+
+    const firstAcquire = leases.acquire("artifact-1", "linger");
+    worker.materializes[0]?.respond(AWAITING_ANSWER);
+    const firstGrant = await firstAcquire;
+    if (firstGrant.kind !== "awaiting-seed") {
+      throw new Error("expected an awaiting-seed grant");
+    }
+
+    const secondAcquire = leases.acquire("artifact-1", "linger");
+    expect(worker.materializes).toHaveLength(2);
+
+    firstGrant.release();
+    expect(worker.releases).toEqual([]);
+
+    // The worker answers UNAVAILABLE this time - no body at all, and nothing
+    // retained for the second acquire to hold.
+    worker.materializes[1]?.respond({
+      docKey: null,
+      update: null,
+      docGuid: null,
+      seedMode: "full",
+      hostStateVector: null,
+      awarenessFrames: [],
+    });
+    const secondGrant = await secondAcquire;
+    expect(secondGrant.kind).toBe("unavailable");
+    await settle();
+
+    // The deferred release re-checked once the second acquire settled, found
+    // the key held by nothing, and posted for the ORIGINAL key.
+    expect(worker.releases).toEqual(["artifact-1"]);
+  });
+});
+
+/**
+ * `retryAwaitingBodies` retries with the artifact the caller now prefers, not
+ * necessarily the one that first acquired the body (P2).
+ *
+ * On `@1`, a doc key is a ROOM hosting several artifacts. A body `forget`
+ * sends back to `awaiting` carries whichever artifact installed it - but that
+ * artifact can leave the room before the room comes back, while another
+ * artifact that still names it keeps the lease alive. Before this fix, the
+ * retry always re-asked with the installer's own artifact id, which could by
+ * then name no room at all, and the retry silently stalled. The fix threads
+ * the caller's per-retry answer through `held.artifactId` before
+ * `startAwaitingRetry` fires.
+ */
+describe("retryAwaitingBodies re-materializes with the artifact the caller names", () => {
+  function sharedRoomSetup() {
+    const pair = createFakeBridgePair("sync");
+    const materializeArtifactIds: string[] = [];
+    pair.worker.subscribe((message) => {
+      if (!isMainToWorkerFrame(message) || message.frame !== "call") return;
+      const { callId, call } = message;
+      const respond = (value: unknown): void => {
+        pair.worker.post(
+          { frame: "result", callId, result: { outcome: "ok", value } },
+          [],
+        );
+      };
+      if (call.kind === "body/materialize") {
+        materializeArtifactIds.push(call.request.artifactId);
+        respond({
+          docKey: "room-1",
+          update: Uint8Array.from([1, 2, 3]),
+          docGuid: "guid-room-1",
+          seedMode: "full",
+          hostStateVector: null,
+          awarenessFrames: [],
+        });
+        return;
+      }
+      if (call.kind === "body/release") {
+        respond({ released: true, reason: null });
+      }
+    });
+    const leases = createArtifactBodyLeaseBridge({
+      bridge: createMainBridgeEndpoint(pair.main, stubMainCallHandlers({})),
+      docs: createDocs(),
+      budget: createBudget(),
+      scheduler: createScheduler(),
+      lingerMs: LINGER_MS,
+      maxHotDocs: MAX_HOT,
+      reportAwaitingStalled: IGNORE_STALL_REPORT,
+    });
+    return { leases, materializeArtifactIds };
+  }
+
+  async function settle(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it("materializes with the artifact the projection now prefers, not the one that installed it", async () => {
+    const { leases, materializeArtifactIds } = sharedRoomSetup();
+
+    const grant = await leases.acquire("a1", "linger");
+    if (grant.kind !== "granted") throw new Error("expected a grant");
+    expect(materializeArtifactIds).toEqual(["a1"]);
+
+    // Forgotten while still held - the `@1` shape where the room's live
+    // holder is "a1", moved back to `awaiting` with that same artifact id.
+    leases.forget("room-1");
+
+    // "a1" has left the room by the time it comes back; "a2" is what still
+    // names it.
+    leases.retryAwaitingBodies((docKey) => (docKey === "room-1" ? "a2" : null));
+    await settle();
+
+    // THE REDDENING ASSERTION pre-fix: the retry always re-asked with the
+    // installer's own artifact id, so this would read `["a1", "a1"]` and
+    // stall for good once "a1" no longer named any room.
+    expect(materializeArtifactIds).toEqual(["a1", "a2"]);
+  });
+
+  it("control: materializes with the SAME artifact when the caller still prefers it", async () => {
+    const { leases, materializeArtifactIds } = sharedRoomSetup();
+
+    const grant = await leases.acquire("a1", "linger");
+    if (grant.kind !== "granted") throw new Error("expected a grant");
+
+    leases.forget("room-1");
+    leases.retryAwaitingBodies((_docKey, preferred) => preferred);
+    await settle();
+
+    expect(materializeArtifactIds).toEqual(["a1", "a1"]);
   });
 });
