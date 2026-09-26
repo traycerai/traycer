@@ -24,7 +24,7 @@ import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import {
-  organizationSubscribeV10,
+  organizationSubscribeV11,
   type OrganizationAction,
   type OrganizationCommand,
   type OrganizationView,
@@ -235,7 +235,6 @@ export function OrganizationProvider({
       void queryClient.invalidateQueries({
         predicate: (entry) =>
           entry.queryKey.includes("cloud.listTasks") &&
-          entry.queryKey.includes(hostId) &&
           entry.queryKey.includes(userId),
       });
     }
@@ -386,7 +385,7 @@ function OrganizationSubscription(props: {
     });
     session.onServerFrame((envelope) => {
       const result =
-        organizationSubscribeV10.serverFrameSchema.safeParse(envelope);
+        organizationSubscribeV11.serverFrameSchema.safeParse(envelope);
       if (active && result.success) {
         receivedFrame.current = true;
         accept(result.data.view, taskIds);
@@ -455,10 +454,7 @@ function organizationFiltersChanged(
       const current = next.appearances.find(
         (row) => row.taskId === appearance.taskId,
       );
-      return (
-        current !== undefined &&
-        JSON.stringify(appearance) !== JSON.stringify(current)
-      );
+      return JSON.stringify(appearance) !== JSON.stringify(current);
     })
   )
     return true;

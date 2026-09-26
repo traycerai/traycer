@@ -1,9 +1,14 @@
 import {
   organizationReadV10,
+  organizationReadV11,
+  organizationReadUpgradeV10ToV11,
   organizationRefreshV10,
+  organizationRefreshV11,
+  organizationRefreshUpgradeV10ToV11,
   organizationCommandV10,
   organizationHistoryV10,
   organizationSubscribeV10,
+  organizationSubscribeV11,
 } from "./organization/contracts";
 import {
   defineDowngradePath,
@@ -4932,9 +4937,13 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "organization.read": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: { contract: organizationReadV10, upgradeFromPreviousVersion: null },
+        1: {
+          contract: organizationReadV11,
+          upgradeFromPreviousVersion: organizationReadUpgradeV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -4942,11 +4951,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "organization.refresh": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: organizationRefreshV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: organizationRefreshV11,
+          upgradeFromPreviousVersion: organizationRefreshUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -11393,8 +11406,11 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   "organization.subscribe": {
     1: {
-      latestMinor: 0,
-      versions: { 0: { contract: organizationSubscribeV10 } },
+      latestMinor: 1,
+      versions: {
+        0: { contract: organizationSubscribeV10 },
+        1: { contract: organizationSubscribeV11 },
+      },
     },
   },
   "epic.subscribe": {
