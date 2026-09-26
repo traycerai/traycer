@@ -5638,6 +5638,34 @@ describe("<HarnessModelPicker />", () => {
         outside.remove();
       });
 
+      it("reports a close once when it unmounts while open, and nothing when it unmounts closed", async () => {
+        const opened = renderSuggested({
+          rows: [CLAUDE_ROW],
+          stagedRowId: null,
+          closeRef: null,
+          footer: null,
+          selectionMarked: true,
+        });
+        await openPickerByTriggerName("Routing face");
+        expect(opened.spies.onOpenChange.mock.calls).toEqual([[true]]);
+        opened.spies.onOpenChange.mockClear();
+
+        cleanup();
+
+        expect(opened.spies.onOpenChange.mock.calls).toEqual([[false]]);
+
+        const closed = renderSuggested({
+          rows: [CLAUDE_ROW],
+          stagedRowId: null,
+          closeRef: null,
+          footer: null,
+          selectionMarked: true,
+        });
+        cleanup();
+
+        expect(closed.spies.onOpenChange).not.toHaveBeenCalled();
+      });
+
       it("clears closeRef on unmount", () => {
         const closeRef: RefObject<(() => void) | null> = { current: null };
         const spy = spies();

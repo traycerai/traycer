@@ -2091,11 +2091,13 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                                 "type": "object",
                                                                 "properties": {
                                                                   "kind": {
+                                                                    "default": "unknown",
                                                                     "type": "string",
                                                                     "enum": [
                                                                       "switch",
                                                                       "wait",
-                                                                      "retry"
+                                                                      "retry",
+                                                                      "unknown"
                                                                     ]
                                                                   },
                                                                   "providerLabel": {

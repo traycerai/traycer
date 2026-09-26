@@ -502,13 +502,14 @@ describe("RoutingDestinationPicker", () => {
       expect(kit.hold).not.toHaveBeenCalled();
     });
 
-    it("releases on unmount while open - the one close it never hears about", async () => {
+    it("releases once on unmount while open - the wrapper's own cleanup and the picker's unmount close report pay one hold", async () => {
       kit.lease = heldLease("held", "tok-1");
       const view = mount(countdown());
       await open();
       expect(kit.release).not.toHaveBeenCalled();
 
       view.unmount();
+      // Both paths fire on this unmount; the count is what guards the double.
 
       expect(kit.release).toHaveBeenCalledTimes(1);
     });

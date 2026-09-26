@@ -13,6 +13,7 @@ import {
   removeOptimisticQueuedItemByClientActionId,
   removeOptimisticQueuedItemByMessageId,
 } from "@/stores/chats/optimistic-queue";
+import { queuePausedAfterError } from "@/components/chat/chat-queue-utils";
 
 const CONTENT: JsonContent = {
   type: "doc",
@@ -142,6 +143,149 @@ describe("optimistic-queue keeps the queue's pausedReason", () => {
     for (const next of [byAction, byMessage]) {
       expect(next.items).toHaveLength(1);
       expect(next.pausedReason).toBe(pausedReason);
+    }
+  });
+});
+
+// A queue's `pausedReason` only means something while the queue is paused.
+// Every rebuild that can change the status must clear a carried reason when it
+// leaves `paused`, or the "Paused after an error" pill outlives the pause.
+describe("optimistic-queue clears pausedReason when it leaves paused", () => {
+  it.each([
+    ["by client action id", removeOptimisticQueuedItemByClientActionId],
+    [
+      "by message id",
+      (queue: ChatQueueState) =>
+        removeOptimisticQueuedItemByMessageId(queue, "a-1-message"),
+    ],
+  ] as const)(
+    "removing the only item %s from a turn_error queue makes it idle with no reason",
+    (_name, remove) => {
+      const queue: ChatQueueState = {
+        status: "paused",
+        items: [optimisticPromptItem("a-1")],
+        pausedReason: "turn_error",
+      };
+
+      const result = remove(queue, "a-1");
+
+      expect(result.items).toEqual([]);
+      expect(result.status).toBe("idle");
+      expect(result.pausedReason).toBeNull();
+      expect(queuePausedAfterError(result)).toBe(false);
+    },
+  );
+
+  it("removing an optimistic item leaves the queue paused, with its reason, when a host item remains", () => {
+    const queue: ChatQueueState = {
+      status: "paused",
+      items: [managedCommandItem("queue-managed"), optimisticPromptItem("a-1")],
+      pausedReason: "turn_error",
+    };
+
+    const result = removeOptimisticQueuedItemByClientActionId(queue, "a-1");
+
+    expect(result.status).toBe("paused");
+    expect(result.pausedReason).toBe("turn_error");
+    expect(queuePausedAfterError(result)).toBe(true);
+  });
+
+  it("appending to an idle queue with a stale reason makes it running with no reason", () => {
+    const queue: ChatQueueState = {
+      status: "idle",
+      items: [],
+      pausedReason: "routing",
+    };
+
+    const result = appendOptimisticQueuedItem(
+      queue,
+      optimisticPromptItem("a-1"),
+    );
+
+    expect(result.status).toBe("running");
+    expect(result.pausedReason).toBeNull();
+  });
+
+  it("appending to a paused queue keeps it paused with its reason", () => {
+    const queue: ChatQueueState = {
+      status: "paused",
+      items: [managedCommandItem("queue-managed")],
+      pausedReason: "turn_error",
+    };
+
+    const result = appendOptimisticQueuedItem(
+      queue,
+      optimisticPromptItem("a-1"),
+    );
+
+    expect(result.status).toBe("paused");
+    expect(result.pausedReason).toBe("turn_error");
+  });
+
+  it("merging a running authoritative queue with a stale reason and a retained item gives running with no reason", () => {
+    const current: ChatQueueState = {
+      status: "running",
+      items: [optimisticPromptItem("a-1")],
+    };
+    const authoritative: ChatQueueState = {
+      status: "running",
+      items: [],
+      pausedReason: "turn_error",
+    };
+
+    const merged = mergeQueueWithOptimisticQueuedItems(
+      authoritative,
+      current,
+      new Set(["a-1"]),
+    );
+
+    expect(merged.items).toHaveLength(1);
+    expect(merged.status).toBe("running");
+    expect(merged.pausedReason).toBeNull();
+  });
+
+  it("merging a paused authoritative queue keeps it paused with its reason", () => {
+    const current: ChatQueueState = {
+      status: "running",
+      items: [optimisticPromptItem("a-1")],
+    };
+    const authoritative: ChatQueueState = {
+      status: "paused",
+      items: [],
+      pausedReason: "turn_error",
+    };
+
+    const merged = mergeQueueWithOptimisticQueuedItems(
+      authoritative,
+      current,
+      new Set(["a-1"]),
+    );
+
+    expect(merged.status).toBe("paused");
+    expect(merged.pausedReason).toBe("turn_error");
+  });
+
+  it("leaves a queue with NO pausedReason key without one through a status-changing rebuild (an older host)", () => {
+    const idle: ChatQueueState = { status: "idle", items: [] };
+    const appended = appendOptimisticQueuedItem(
+      idle,
+      optimisticPromptItem("a-1"),
+    );
+    const removed = removeOptimisticQueuedItemByClientActionId(
+      { status: "running", items: [optimisticPromptItem("a-2")] },
+      "a-2",
+    );
+    const merged = mergeQueueWithOptimisticQueuedItems(
+      { status: "idle", items: [] },
+      { status: "running", items: [optimisticPromptItem("a-3")] },
+      new Set(["a-3"]),
+    );
+
+    expect(appended.status).toBe("running");
+    expect(removed.status).toBe("idle");
+    expect(merged.status).toBe("running");
+    for (const result of [appended, removed, merged]) {
+      expect(Object.hasOwn(result, "pausedReason")).toBe(false);
     }
   });
 });

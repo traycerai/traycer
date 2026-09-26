@@ -118,9 +118,13 @@ const PAUSED_AFTER_ERROR_REASONS: ReadonlySet<string> = new Set([
  * separate card for it.
  *
  * Read off the queue alone. The reason survives a host restart, so this never
- * consults a live session or a failed attempt to confirm it.
+ * consults a live session or a failed attempt to confirm it. It does consult
+ * the queue's own status: a reason names why a PAUSED queue is paused, and one
+ * left behind on an idle or running queue (a rebuild that changed the status
+ * but kept the key) must not make the pill claim a pause that has ended.
  */
 export function queuePausedAfterError(queue: ChatQueueState): boolean {
+  if (queue.status !== "paused") return false;
   const reason = queue.pausedReason ?? null;
   return reason !== null && PAUSED_AFTER_ERROR_REASONS.has(reason);
 }

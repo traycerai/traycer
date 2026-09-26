@@ -990,26 +990,30 @@ function useRoutingLease(input: {
     hostId,
   });
   const traversalId = countdown === null ? null : countdown.traversalId;
-  const skipReleaseRef = useRef(false);
+  // Whether this chooser still owes the host its hold back: set by an open
+  // that asks for one, cleared by the ONE release that pays it - a close, the
+  // unmount, or an applied pick (which leaves nothing to hand back). Every
+  // path goes through it, so no two can release one hold: an unmount while
+  // open reaches both this hook's own unmount cleanup and, through the
+  // picker's unmount close report, `onClosed`.
+  const owesReleaseRef = useRef(false);
   useReaskHoldOnRetire({ open, lease, pending: countdown, hold });
-  useReleaseOnUnmount(open && traversalId !== null, release);
-  const onOpened = useCallback(() => {
-    skipReleaseRef.current = false;
-    if (traversalId !== null) hold(traversalId);
-  }, [hold, traversalId]);
   // A plain `release()`: the session store owns the rest, because chooser
   // visibility and lease lifetime are different facts - a close that beats
   // the ack leaves the store owing the release, paid when the token lands.
-  const onClosed = useCallback(() => {
-    if (traversalId === null) return;
-    if (skipReleaseRef.current) {
-      skipReleaseRef.current = false;
-      return;
-    }
+  const payRelease = useCallback(() => {
+    if (!owesReleaseRef.current) return;
+    owesReleaseRef.current = false;
     release();
-  }, [release, traversalId]);
+  }, [release]);
+  useReleaseOnUnmount(payRelease);
+  const onOpened = useCallback(() => {
+    if (traversalId === null) return;
+    owesReleaseRef.current = true;
+    hold(traversalId);
+  }, [hold, traversalId]);
   const skipNextRelease = useCallback(() => {
-    skipReleaseRef.current = true;
+    owesReleaseRef.current = false;
   }, []);
   return {
     token: lease === null ? null : lease.token,
@@ -1020,7 +1024,7 @@ function useRoutingLease(input: {
         countdown.state === "choosing"),
     refused: countdown !== null && lease !== null && lease.status === "refused",
     onOpened,
-    onClosed,
+    onClosed: payRelease,
     skipNextRelease,
   };
 }
@@ -1051,23 +1055,24 @@ function useReaskHoldOnRetire(input: {
 }
 
 /**
- * Hands the hold back when the chooser unmounts open - the one close it never
- * hears about. A released chat session stays warm for ten minutes, so closing
- * the tile over an open chooser would otherwise leave the host holding a
- * window with no UI anywhere to give it back.
+ * Hands the hold back when the chooser unmounts open. A released chat session
+ * stays warm for ten minutes, so closing the tile over an open chooser would
+ * otherwise leave the host holding a window with no UI anywhere to give it
+ * back. Kept even though the picker now reports that close too: this is the
+ * wrapper's own guarantee, not a dependency on how its child unmounts.
  *
- * Latest-value refs, so the cleanup runs on unmount and on nothing else.
+ * `payRelease` releases only a hold still owed, so this and the picker's own
+ * unmount close report cannot both pay it. A latest-value ref, so the cleanup
+ * runs on unmount and on nothing else.
  */
-function useReleaseOnUnmount(holding: boolean, release: () => void): void {
-  const holdingRef = useRef(holding);
-  const releaseRef = useRef(release);
+function useReleaseOnUnmount(payRelease: () => void): void {
+  const payReleaseRef = useRef(payRelease);
   useEffect(() => {
-    holdingRef.current = holding;
-    releaseRef.current = release;
+    payReleaseRef.current = payRelease;
   });
   useEffect(
     () => () => {
-      if (holdingRef.current) releaseRef.current();
+      payReleaseRef.current();
     },
     [],
   );

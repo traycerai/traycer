@@ -28,15 +28,11 @@ export function appendOptimisticQueuedItem(
   item: ChatQueuedPromptItem,
 ): ChatQueueState {
   if (queueContainsQueuedSend(queue, item)) return queue;
-  // Every rebuild here SPREADS the queue it starts from: the host's queue
-  // grows optional keys (`pausedReason`, `chat.subscribe@1.18`), and a copy
-  // that names its fields drops each new one without the compiler noticing -
-  // here, the reason a paused queue's pill gives for being paused.
-  return {
-    ...queue,
-    status: queueStatusWithOptimisticItems(queue.status, queue.status),
-    items: [...queue.items, item],
-  };
+  return queueWithStatus(
+    queue,
+    queueStatusWithOptimisticItems(queue.status, queue.status),
+    [...queue.items, item],
+  );
 }
 
 export function mergeQueueWithOptimisticQueuedItems(
@@ -52,14 +48,14 @@ export function mergeQueueWithOptimisticQueuedItems(
     ),
   );
   if (retainedOptimisticItems.length === 0) return authoritativeQueue;
-  return {
-    ...authoritativeQueue,
-    status: queueStatusWithOptimisticItems(
+  return queueWithStatus(
+    authoritativeQueue,
+    queueStatusWithOptimisticItems(
       authoritativeQueue.status,
       currentQueue.status,
     ),
-    items: [...authoritativeQueue.items, ...retainedOptimisticItems],
-  };
+    [...authoritativeQueue.items, ...retainedOptimisticItems],
+  );
 }
 
 export function removeOptimisticQueuedItemByClientActionId(
@@ -115,11 +111,33 @@ function withoutOptimisticQueuedItems(
     (item) => !isOptimisticQueuedItem(item) || !shouldRemove(item),
   );
   if (items.length === queue.items.length) return queue;
-  return {
-    ...queue,
-    status: items.length === 0 ? "idle" : queue.status,
+  return queueWithStatus(
+    queue,
+    items.length === 0 ? "idle" : queue.status,
     items,
-  };
+  );
+}
+
+/**
+ * The queue rebuilt with a status and items of its own.
+ *
+ * It SPREADS the queue it starts from: the host's queue grows optional keys
+ * (`pausedReason`, `chat.subscribe@1.18`), and a copy that names its fields
+ * drops each new one without the compiler noticing. But `pausedReason` is the
+ * reason a PAUSED queue is paused, so a rebuild that lands on any other status
+ * clears it - a spread alone would carry a paused queue's reason onto the idle
+ * or running queue it became, and the pill would say "Paused after an error"
+ * about a queue that is not paused. A queue that never carried the key (an
+ * older host) is left without one.
+ */
+function queueWithStatus(
+  queue: ChatQueueState,
+  status: ChatQueueState["status"],
+  items: ChatQueueState["items"],
+): ChatQueueState {
+  const next: ChatQueueState = { ...queue, status, items };
+  if (status === "paused" || (queue.pausedReason ?? null) === null) return next;
+  return { ...next, pausedReason: null };
 }
 
 function queueContainsQueuedSend(

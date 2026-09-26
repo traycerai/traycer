@@ -27,6 +27,13 @@ export function receiptCrossesProviders(
  * maps back to. A provider this build does not know leaves the slug a slug.
  * `providerLabel` and `profileLabel` are the host's display strings and are
  * printed as they are.
+ *
+ * `unknown` is a kind a newer host wrote that this build has no sentence for
+ * (the wire reads it so rather than rejecting the whole message). It claims
+ * no move - only that something was tried, and where - and names the provider
+ * whatever the rest of the receipt does, because the provider-once rule rests
+ * on knowing what each step was. The row's `endedLabel` still says how it
+ * ended.
  */
 export function receiptStepText(
   step: ProviderNoticeReceiptStep,
@@ -49,5 +56,12 @@ export function receiptStepText(
   const tuple = context.crossesProviders
     ? `${step.providerLabel} · ${model} · ${step.profileLabel}`
     : `${model} · ${step.profileLabel}`;
-  return step.kind === "switch" ? `Switched to ${tuple}` : `Retried ${tuple}`;
+  switch (step.kind) {
+    case "switch":
+      return `Switched to ${tuple}`;
+    case "retry":
+      return `Retried ${tuple}`;
+    case "unknown":
+      return `Tried ${step.providerLabel} · ${model} on ${step.profileLabel}`;
+  }
 }

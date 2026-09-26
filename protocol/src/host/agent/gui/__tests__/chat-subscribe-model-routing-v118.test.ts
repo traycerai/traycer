@@ -414,21 +414,54 @@ describe("notice receipt schemas", () => {
     expect(parsed.data.receipt).toEqual(RECEIPT);
   });
 
-  it("rejects a receipt step with an unknown kind (a closed enum by design)", () => {
+  it("degrades a receipt step kind a newer writer added to 'unknown', keeping every other field", () => {
     const step = RECEIPT.steps[0];
-    expect(providerNoticeReceiptStepSchema.safeParse(step).success).toBe(true);
-    expect(
-      providerNoticeReceiptStepSchema.safeParse({ ...step, kind: "abandon" })
-        .success,
-    ).toBe(false);
-    expect(
-      providerNoticeMetadataSchema.safeParse({
-        ...base,
-        receipt: {
-          ...RECEIPT,
-          steps: [{ ...step, kind: "abandon" }],
-        },
-      }).success,
-    ).toBe(false);
+    const parsed = providerNoticeReceiptStepSchema.parse({
+      ...step,
+      kind: "future",
+    });
+    expect(parsed).toEqual({ ...step, kind: "unknown" });
+  });
+
+  it("keeps a known receipt step kind as written", () => {
+    for (const step of RECEIPT.steps) {
+      expect(providerNoticeReceiptStepSchema.parse(step).kind).toBe(step.kind);
+    }
+  });
+});
+
+describe("chat.subscribe@1.18: a receipt step kind from a newer writer does not fail the frame", () => {
+  const futureReceipt = {
+    ...RECEIPT,
+    steps: [RECEIPT.steps[0], { ...RECEIPT.steps[1], kind: "future" }],
+  };
+  const expectedReceipt = {
+    ...RECEIPT,
+    steps: [RECEIPT.steps[0], { ...RECEIPT.steps[1], kind: "unknown" }],
+  };
+
+  it("snapshot tail: the row parses and the step reads 'unknown'", () => {
+    const { message } = snapshotParts(
+      parseAtHead(
+        snapshotFrame(
+          assistantRow(notice({ present: true, value: futureReceipt })),
+          queue({ present: false, value: undefined }),
+        ),
+      ),
+    );
+    expect(noticeOf(message).receipt).toEqual(expectedReceipt);
+  });
+
+  it("range frame: the row parses and the step reads 'unknown'", () => {
+    const parsedNotice = noticeOf(
+      rangeMessage(
+        parseAtHead(
+          rangeFrame(
+            assistantRow(notice({ present: true, value: futureReceipt })),
+          ),
+        ),
+      ),
+    );
+    expect(parsedNotice.receipt).toEqual(expectedReceipt);
   });
 });

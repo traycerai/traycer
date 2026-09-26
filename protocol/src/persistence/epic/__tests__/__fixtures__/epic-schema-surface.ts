@@ -3446,11 +3446,13 @@ export const epicSchemaSurfaceBaseline = {
                                                     "type": "object",
                                                     "properties": {
                                                       "kind": {
+                                                        "default": "unknown",
                                                         "type": "string",
                                                         "enum": [
                                                           "switch",
                                                           "wait",
-                                                          "retry"
+                                                          "retry",
+                                                          "unknown"
                                                         ]
                                                       },
                                                       "providerLabel": {
@@ -3477,7 +3479,6 @@ export const epicSchemaSurfaceBaseline = {
                                                       }
                                                     },
                                                     "required": [
-                                                      "kind",
                                                       "providerLabel",
                                                       "modelLabel",
                                                       "profileLabel",
@@ -12308,11 +12309,13 @@ export const epicSchemaSurfaceBaseline = {
                                                     "type": "object",
                                                     "properties": {
                                                       "kind": {
+                                                        "default": "unknown",
                                                         "type": "string",
                                                         "enum": [
                                                           "switch",
                                                           "wait",
-                                                          "retry"
+                                                          "retry",
+                                                          "unknown"
                                                         ]
                                                       },
                                                       "providerLabel": {

@@ -277,7 +277,15 @@ export type ProviderNoticeNormalizedMetadata = z.infer<
  */
 export const providerNoticeReceiptStepSchema = lazySchema(() =>
   z.object({
-    kind: z.enum(["switch", "wait", "retry"]),
+    /**
+     * A CLOSED enum on a record that is persisted AND published, so it carries
+     * the `.catch(...)` guard the interview block's settlement enums do: a kind
+     * a newer writer adds (a fourth step shape) would otherwise make every
+     * older reader reject the whole assistant message over one rendered row.
+     * `"unknown"` is the degraded reading, never a value a writer emits; a
+     * renderer shows such a step from its labels alone.
+     */
+    kind: z.enum(["switch", "wait", "retry", "unknown"]).catch("unknown"),
     providerLabel: z.string(),
     modelLabel: z.string(),
     profileLabel: z.string(),

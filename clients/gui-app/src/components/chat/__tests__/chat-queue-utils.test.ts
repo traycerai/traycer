@@ -179,25 +179,33 @@ describe("queueWithoutPersistedPrompts keeps the queue's optional keys", () => {
 });
 
 describe("queuePausedAfterError", () => {
-  it("is true for the two reasons that mean a turn failed", () => {
+  function paused(pausedReason: string | null): ChatQueueState {
+    return { ...queue([]), status: "paused", pausedReason };
+  }
+
+  it("is true for a PAUSED queue carrying either reason that means a turn failed", () => {
     for (const pausedReason of ["turn_error", "routing"]) {
-      expect(queuePausedAfterError({ ...queue([]), pausedReason })).toBe(true);
+      expect(queuePausedAfterError(paused(pausedReason))).toBe(true);
     }
   });
 
-  it("is false for any other reason, a null reason and an absent one", () => {
-    expect(queuePausedAfterError({ ...queue([]), pausedReason: "user" })).toBe(
+  it.each(["running", "idle"] as const)(
+    "is false for a %s queue that still carries a stale turn_error or routing reason",
+    (status) => {
+      for (const pausedReason of ["turn_error", "routing"]) {
+        expect(
+          queuePausedAfterError({ ...queue([]), status, pausedReason }),
+        ).toBe(false);
+      }
+    },
+  );
+
+  it("is false for a paused queue with any other reason, a null reason and an absent one", () => {
+    expect(queuePausedAfterError(paused("user"))).toBe(false);
+    expect(queuePausedAfterError(paused("some_future_reason"))).toBe(false);
+    expect(queuePausedAfterError(paused(null))).toBe(false);
+    expect(queuePausedAfterError({ ...queue([]), status: "paused" })).toBe(
       false,
     );
-    expect(
-      queuePausedAfterError({
-        ...queue([]),
-        pausedReason: "some_future_reason",
-      }),
-    ).toBe(false);
-    expect(queuePausedAfterError({ ...queue([]), pausedReason: null })).toBe(
-      false,
-    );
-    expect(queuePausedAfterError(queue([]))).toBe(false);
   });
 });

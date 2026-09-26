@@ -147,3 +147,30 @@ describe("receiptStepText", () => {
     expect(line).not.toContain("Claude Code");
   });
 });
+
+describe("receiptStepText for a step kind this build does not know", () => {
+  // The wire reads a newer host's kind as `unknown`; the type is the protocol's.
+  const unknownStep = step({ kind: "unknown" });
+
+  it("names the provider even when the receipt stays inside one provider", () => {
+    expect(text(unknownStep, false)).toBe("Tried Claude Code · Fable on Surya");
+  });
+
+  it("reads the same across providers", () => {
+    expect(text(unknownStep, true)).toBe("Tried Claude Code · Fable on Surya");
+  });
+
+  it("names the model through the resolver, and leaves a slug it cannot resolve", () => {
+    expect(text(unknownStep, false)).toContain("Fable");
+    expect(text(unknownStep, false)).not.toContain("claude-fable-5");
+    expect(
+      text(step({ kind: "unknown", providerLabel: "Mystery Agent" }), false),
+    ).toBe("Tried Mystery Agent · claude-fable-5 on Surya");
+  });
+
+  it("never claims a move", () => {
+    for (const crosses of [false, true]) {
+      expect(text(unknownStep, crosses)).not.toMatch(/Switched|Retried|Waited/);
+    }
+  });
+});

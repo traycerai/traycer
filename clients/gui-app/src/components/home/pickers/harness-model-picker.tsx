@@ -1479,18 +1479,35 @@ function useEmbeddingCloseHandle(
  * the reducer's direct closes, a disabled surface) and a missed close would
  * leave a hold taken on open with nobody to give it back. The ref starts at
  * `false`, the reducer's initial state, so mounting closed says nothing.
+ *
+ * Unmounting while visibly open is a close too - the popover goes with the
+ * picker - so it is reported once, through the latest callback, exactly as
+ * any other close is. An embedding that also cleans up on its own unmount
+ * must make the two idempotent (the routing chooser pays its hold once).
  */
 function useReportedOpenState(
   visibleOpen: boolean,
   onOpenChange: ((open: boolean) => void) | null,
 ): void {
   const reportedRef = useRef(false);
+  const onOpenChangeRef = useRef(onOpenChange);
+  useEffect(() => {
+    onOpenChangeRef.current = onOpenChange;
+  });
   useEffect(() => {
     if (onOpenChange === null) return;
     if (reportedRef.current === visibleOpen) return;
     reportedRef.current = visibleOpen;
     onOpenChange(visibleOpen);
   }, [onOpenChange, visibleOpen]);
+  useEffect(
+    () => () => {
+      if (!reportedRef.current) return;
+      reportedRef.current = false;
+      onOpenChangeRef.current?.(false);
+    },
+    [],
+  );
 }
 
 /**
