@@ -31,6 +31,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { connectCdp } from "./cdp-client.mjs";
 
 const FACES = [
   "runtime",
@@ -460,65 +461,6 @@ async function waitForHttp(url, child, readError, label) {
     await delay(150);
   }
   throw new Error(`${label} did not become reachable: ${readError()}`);
-}
-
-function connectCdp(url) {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    const pending = new Map();
-    let nextId = 0;
-    const connectTimer = setTimeout(
-      () => reject(new Error("CDP connect timed out")),
-      15_000,
-    );
-    // A socket that dies mid-run must FAIL the run, not hang it: every
-    // in-flight request is rejected on close/error, and a send on a socket
-    // that is not open rejects immediately, so a Chrome crash surfaces as an
-    // error with a message rather than as a driver that never exits.
-    const failAll = (reason) => {
-      for (const [id, request] of pending) {
-        pending.delete(id);
-        request.reject(reason);
-      }
-    };
-    socket.addEventListener("error", (event) => {
-      const error = new Error(`CDP socket error: ${String(event)}`);
-      reject(error);
-      failAll(error);
-    });
-    socket.addEventListener("close", (event) => {
-      failAll(new Error(`CDP socket closed (${event.code})`));
-    });
-    socket.addEventListener("message", (event) => {
-      const message = JSON.parse(String(event.data));
-      if (typeof message.id !== "number") return;
-      const request = pending.get(message.id);
-      if (request === undefined) return;
-      pending.delete(message.id);
-      if (message.error === undefined) request.resolve(message.result);
-      else request.reject(new Error(message.error.message));
-    });
-    socket.addEventListener("open", () => {
-      clearTimeout(connectTimer);
-      resolve({
-        send(method, params = {}) {
-          if (socket.readyState !== WebSocket.OPEN) {
-            return Promise.reject(
-              new Error(`CDP socket not open for ${method}`),
-            );
-          }
-          return new Promise((requestResolve, requestReject) => {
-            const id = ++nextId;
-            pending.set(id, { resolve: requestResolve, reject: requestReject });
-            socket.send(JSON.stringify({ id, method, params }));
-          });
-        },
-        close() {
-          socket.close();
-        },
-      });
-    });
-  });
 }
 
 async function evaluate(client, expression) {

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { connectCdp } from "./cdp-client.mjs";
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -313,55 +314,6 @@ async function waitForHttp(url, process, readError, label) {
     await delay(50);
   }
   throw new Error(`Timed out waiting for ${label}:\n${readError()}`);
-}
-
-async function connectCdp(url) {
-  return await new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    const pending = new Map();
-    let nextId = 0;
-    const failPending = (error) => {
-      for (const request of pending.values()) request.reject(error);
-      pending.clear();
-    };
-    const connectTimer = setTimeout(() => {
-      reject(new Error("CDP connect timed out"));
-      socket.close();
-    }, 15_000);
-    socket.addEventListener("error", () => {
-      const error = new Error("CDP socket failed");
-      reject(error);
-      failPending(error);
-    });
-    socket.addEventListener("close", () => {
-      clearTimeout(connectTimer);
-      failPending(new Error("CDP socket closed"));
-    });
-    socket.addEventListener("message", (event) => {
-      const message = JSON.parse(String(event.data));
-      if (typeof message.id !== "number") return;
-      const request = pending.get(message.id);
-      if (request === undefined) return;
-      pending.delete(message.id);
-      if (message.error === undefined) request.resolve(message.result);
-      else request.reject(new Error(message.error.message));
-    });
-    socket.addEventListener("open", () => {
-      clearTimeout(connectTimer);
-      resolve({
-        send(method, params = {}) {
-          return new Promise((requestResolve, requestReject) => {
-            const id = ++nextId;
-            pending.set(id, { resolve: requestResolve, reject: requestReject });
-            socket.send(JSON.stringify({ id, method, params }));
-          });
-        },
-        close() {
-          socket.close();
-        },
-      });
-    });
-  });
 }
 
 async function evaluate(cdp, expression) {
