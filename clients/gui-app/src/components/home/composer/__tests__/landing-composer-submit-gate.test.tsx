@@ -140,6 +140,7 @@ vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
     // already drives, so this gate suite's "a create is in flight" setup
     // still reaches the composer now that it goes through this seam.
     isPending: testState.createPending,
+    attachmentUpload: null,
   }),
 }));
 

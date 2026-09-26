@@ -432,6 +432,7 @@ describe("a refused prompt's restore retracts this host's blob acks", () => {
       client: resend.client,
       plan: { eligible: [SHA256], ineligible: [], hasInlineHashedNode: false },
       ownerUserId: OWNER_ID,
+      onProgress: null,
     });
 
     expect(resend.putCalls).toEqual([SHA256]);
@@ -473,6 +474,7 @@ describe("a refused prompt's restore retracts this host's blob acks", () => {
       client: resend.client,
       plan: { eligible: [SHA256], ineligible: [], hasInlineHashedNode: false },
       ownerUserId: OWNER_ID,
+      onProgress: null,
     });
 
     expect(resend.putCalls).toEqual([SHA256]);
@@ -551,6 +553,7 @@ describe("a refused prompt's restore retracts this host's blob acks", () => {
       client: resend.client,
       plan: { eligible: [SHA256], ineligible: [], hasInlineHashedNode: false },
       ownerUserId: OWNER_ID,
+      onProgress: null,
     });
 
     expect(resend.putCalls).toEqual([]);
@@ -812,6 +815,7 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
       client: resend.client,
       plan: { eligible: [SHA256], ineligible: [], hasInlineHashedNode: false },
       ownerUserId: OWNER_ID,
+      onProgress: null,
     });
     expect(resend.putCalls).toEqual([SHA256]);
   });
