@@ -1,0 +1,69 @@
+---
+title: "Model Profiles and Cost Calculator"
+description: "Understanding model profiles, selection modes, and cost estimation."
+keywords: ['model selection', 'model profiles', 'balanced profile', 'frontier profile', 'credits', 'pricing', 'custom profile', 'single model', 'cost']
+---
+
+import { ModelPricingCalculator } from "/snippets/model-pricing-calculator.jsx";
+
+## Introduction
+
+Traycer uses different models for different steps (planning, review, verification, iteration, etc.). You can control this behavior through **profiles** and **model selection modes**.
+
+## Understanding Profiles
+
+A **profile** is a preset configuration that maps specific models to each step in your Traycer tasks.
+
+- Different steps have different requirements-some need deep reasoning, others benefit from speed
+- Profiles bundle these step-to-model mappings with specific capability/cost tradeoffs
+- Steps include operations like planning, iteration, review, verification, and orchestration
+
+## System Profiles
+
+Traycer provides two built-in profiles that serve as the foundation for model selection:
+
+### Balanced
+
+The default profile for everyday usage. Offers a carefully tuned mix of quality, speed, and cost across all steps.
+
+### Frontier
+
+The premium profile using top-tier models with maximum reasoning capability. Best for complex tasks where quality is the priority.
+
+## Model Selection Modes
+
+Traycer supports three different ways to select models:
+
+### 1. Profile Mode (Default)
+
+Use **Balanced** or **Frontier** as-is. Each step automatically uses its pre-configured model from the selected profile.
+
+### 2. Custom Profile
+
+Start from **Balanced** or **Frontier**, then override specific steps with different models:
+
+- Modify only the steps you want to change
+- Unmodified steps continue using the base profile's models
+- Save your configuration as a reusable custom profile
+- Great for optimizing specific workflow patterns
+
+### 3. Single Model
+
+Select one model to use across **all** steps:
+
+- Simplest option-one model everywhere
+- Less optimized than profiles, but easier to reason about
+- Useful when you want consistent behavior or have a preferred model
+
+## Cost Calculator and Comparison
+
+Use the interactive calculator below to compare profiles, switch between selection modes, and estimate credit usage for each step.
+
+<ModelPricingCalculator />
+
+## Where to Access Model Selection
+
+Model selection controls are available throughout Traycer:
+
+- **Task features**: Configure models when creating tasks, generating plans, iterating, or running verifications
+- **YOLO or Executions configuration**: Define model behavior for autonomous features via the configuration modal

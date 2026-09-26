@@ -1,0 +1,27 @@
+---
+title: "Shell"
+description: "Configure the shell and host environment used for terminal sessions."
+---
+
+Shell settings affect terminal surfaces launched by the host.
+
+## Shell Command
+
+| Control | What it changes |
+|---|---|
+| **Shell program** | Chooses the executable Traycer uses for shell sessions. |
+| **Startup flags** | Adds arguments such as login or interactive shell flags. |
+| **Effective command preview** | Shows the command Traycer will run. |
+| **Reset to defaults** | Restores the default shell configuration. |
+
+## Using WSL
+
+Selecting WSL as your shell opens terminal tabs inside WSL. Agents always run on Windows, so they use the Windows environment and can't see tools installed inside WSL.
+
+To run agents with your WSL toolchain, run the Traycer host inside WSL.
+
+## Environment Variables
+
+Host environment variables are configured here and apply after host restart.
+
+Per-provider variables live in [Providers](/settings/providers). Use provider variables for coding-agent-specific credentials or endpoints; use Shell variables for host-wide terminal environment.

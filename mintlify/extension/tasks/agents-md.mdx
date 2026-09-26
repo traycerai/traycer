@@ -1,0 +1,47 @@
+---
+title: "AGENTS.md"
+description: "Traycer automatically detects and uses AGENTS.md files to enhance AI task execution with project-specific context"
+keywords: ['AGENTS.md', 'agent instructions', 'project context', 'AI agents', 'automatic detection', 'workspace configuration', 'coding standards', 'build instructions']
+---
+
+## Overview
+
+AGENTS.md is an open standard that provides AI coding agents with machine-readable, project-specific instructions. Unlike README.md files designed for human developers, AGENTS.md focuses on giving AI agents clear guidance about build processes, testing procedures, coding conventions, and architectural patterns.
+
+Traycer automatically detects and uses AGENTS.md files when generating and executing Tasks - no configuration or setup required.
+
+## How Traycer Uses AGENTS.md
+
+When you create a Task, Traycer automatically searches for AGENTS.md files to gather project context:
+
+1. **Finds the nearest AGENTS.md**: Starts from the location of attached file references or the current working directory during exploration
+2. **Traverses to workspace root**: Continues up the directory tree if no AGENTS.md is found nearby
+3. **Incorporates into Task context**: Uses the instructions to inform plan generation and execution
+
+This means:
+- Place AGENTS.md at your repository root for project-wide instructions
+- Add nested AGENTS.md files in subdirectories for component-specific guidance (ideal for monorepos)
+- No manual configuration needed - detection happens automatically
+
+## What This Means for Your Tasks
+
+When Traycer finds an AGENTS.md file, it uses the project-specific instructions to:
+
+- **Generate more accurate plans**: Understands your project's structure, conventions, and patterns
+- **Follow your standards**: Respects your team's coding style, testing requirements, and workflows
+- **Reduce iterations**: Creates plans aligned with your project from the start
+- **Support monorepos**: Uses the most relevant AGENTS.md based on your working directory
+
+The result is faster, more accurate Task execution that respects your project's unique requirements.
+
+## Industry Standard
+
+AGENTS.md is supported by AI coding tools including Cursor, GitHub Copilot, Factory, Codex, Jules, and others. By adding an AGENTS.md file to your repository, you provide consistent instructions across all these tools.
+
+<Tip>
+  Learn more about the AGENTS.md standard and what to include at [agents.md](https://agents.md).
+</Tip>
+
+## Disabling AGENTS.md Detection
+
+You can disable AGENTS.md detection at any time in your Traycer settings if you prefer not to use this feature.

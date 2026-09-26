@@ -11,6 +11,8 @@ are **not** here — the CLI provisions a signed host from GitHub Releases; see
 - [`clients/gui-app/AGENTS.md`](clients/gui-app/AGENTS.md)
 - [`clients/desktop/AGENTS.md`](clients/desktop/AGENTS.md)
 - [`clients/mobile/AGENTS.md`](clients/mobile/AGENTS.md)
+- [`mintlify/AGENTS.md`](mintlify/AGENTS.md) — public docs site
+  (docs.traycer.ai); every page there is published
 
 ## Map
 
@@ -21,6 +23,8 @@ are **not** here — the CLI provisions a signed host from GitHub Releases; see
 | `clients/shared/`      | `@traycer-clients/shared`      | Transport / auth / formatting    |
 | `clients/gui-app/`     | `@traycer-clients/gui-app`     | GUI renderer                     |
 | `clients/desktop/`     | `@traycer-clients/desktop`     | Electron shell                   |
+| `mintlify/`            | —                              | Public docs site (Mintlify)      |
+| `docs/`                | —                              | Contributor docs (not published) |
 
 ## Commands
 

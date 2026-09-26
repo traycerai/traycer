@@ -1,0 +1,20 @@
+---
+title: "MCP servers"
+description: "Configure MCP servers for a selected coding-agent provider."
+---
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Add and check a local MCP server">
+  <source src="https://assets.traycer.ai/docs/videos/mcp-setup.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+Open **Settings → Providers**, select a provider, and open its **MCP** tab.
+
+## Add A Server
+
+1. Click **Add MCP server**.
+2. Choose the transport. **Remote** is the default; choose **Local (stdio)** for a command launched on the Host.
+3. Enter a name and the transport's configuration. Local servers use a command, arguments, and any required environment variables.
+4. Click **Add server** and check the resulting status.
+
+For Claude Code, **Reachable** and the discovered tool count describe a connectivity check. The row provides **Refresh** and **Delete** actions; it has no per-server enable switch. Controls and status reporting can differ by provider.

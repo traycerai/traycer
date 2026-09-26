@@ -1,0 +1,30 @@
+---
+title: "Agent selection"
+description: "Configure the global instructions Traycer uses to pick a coding agent, model, and reasoning effort for delegated work."
+---
+
+**Agent selection** settings store the global instructions Traycer uses when an agent spawns or configures a child agent.
+
+This page configures _how a coding agent gets chosen_. It does not manage the agents inside a Task - those live in the [Agents](/panels/agents) panel. For the coordination model, see [Agent-to-Agent](/concepts/agent-to-agent).
+
+## Agent-Selection Instructions
+
+The global agent-selection guide helps Traycer decide:
+
+- which coding agent to use for delegated work
+- which model and thinking effort to prefer
+- how to route implementation, review, and exploration work
+
+## Global And Workspace-Specific Guides
+
+The global guide is stored on the Current Host and applies by default.
+
+For a specific repo, add a workspace-level guide at:
+
+```text
+<workspace>/.traycer/agent-selection-guide.md
+```
+
+Workspace-level instructions refine or override the global guide for that workspace. Use them when one repo needs different agent choices, models, review expectations, or implementation preferences.
+
+For how child agents appear in the Agents tree, see [Agents](/panels/agents). For supported coding agents, see [Agents & Models](/agents-and-models/coding-agents).
