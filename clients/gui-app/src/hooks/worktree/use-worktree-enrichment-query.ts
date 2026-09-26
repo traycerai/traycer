@@ -1,5 +1,9 @@
 import { useMemo } from "react";
-import { useQueries, type UseQueryResult } from "@tanstack/react-query";
+import {
+  useQueries,
+  useQueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -7,8 +11,9 @@ import type {
   WorktreeListAllForHostResponseV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
-  createWorktreeEnrichmentBatcherForClient,
   perPathEnrichmentQueryOptions,
+  sharedWorktreeEnrichmentBatcher,
+  WORKTREE_BACKGROUND_ENRICHMENT_STALE_MS,
 } from "@/components/settings/panels/worktrees-enrichment-batcher";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -72,11 +77,15 @@ export function useWorktreeEnrichmentForClient(
   paths: readonly string[],
   enabled: boolean,
 ): WorktreeEnrichment {
+  const queryClient = useQueryClient();
   const readiness = useReactiveHostReadiness(client);
+  const hostId = readiness.hostId;
   const batcher = useMemo(
     () =>
-      client === null ? null : createWorktreeEnrichmentBatcherForClient(client),
-    [client],
+      client === null || hostId === null
+        ? null
+        : sharedWorktreeEnrichmentBatcher(queryClient, hostId, client),
+    [queryClient, hostId, client],
   );
   // One observer per path: a repeated path would be a second observer of the
   // same key, and its rows would be listed twice.
@@ -85,13 +94,15 @@ export function useWorktreeEnrichmentForClient(
   return useQueries({
     queries: uniquePaths.map((path) =>
       perPathEnrichmentQueryOptions({
-        hostId: readiness.hostId,
+        hostId,
         path,
         batcher,
         enabled: queriesEnabled,
-        // The app default: a remount after it re-probes, so a PR fact the
-        // host warmed in the background still reaches these surfaces.
-        staleTime: null,
+        // Longer than the app default: a navigation's remount no longer
+        // re-probes every row. A `worktree.changed` frame and Refresh still
+        // re-probe at once; a PR fact the host warmed in the background reaches
+        // these surfaces on the next remount after this.
+        staleTime: WORKTREE_BACKGROUND_ENRICHMENT_STALE_MS,
       }),
     ),
     combine: combineEnrichmentResults,

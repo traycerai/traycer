@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { WORKTREE_BACKGROUND_ENRICH_BATCH_LIMIT } from "@/components/settings/panels/worktrees-enrichment-batcher";
 import {
   QueryClientProvider,
   type QueryClient,
@@ -31,10 +32,10 @@ import {
  *
  * Against the pre-fix code, (mount), (a), (b) and (d) ALL fail on their
  * assertions: the old hook read ONE `activityPaths: ownedPaths` key rather
- * than one batched call per 8 owned paths, so (mount) alone already
- * mismatches (1 selection call, not 4); and the old invalidator refetched any
+ * than one batched call per chunk of owned paths, so (mount) alone already
+ * mismatches; and the old invalidator refetched any
  * multi-path key on every path frame - so a frame for one row, or for a row
- * not on the page at all, re-requested all 27 paths. (c) is the control and
+ * not on the page at all, re-requested every owned path. (c) is the control and
  * passes on both: a root frame re-reads every owned row either way.
  *
  * Every count is read only once NOTHING is fetching. A per-path refetch waits
@@ -46,9 +47,11 @@ import {
 const HOST_ID = mockLocalHostEntry.hostId;
 const EPIC_ID = "epic-1";
 const EPIC_OTHER = "epic-other";
-const OWNED_COUNT = 27;
+// More than one background chunk, so (mount) sees the chunking.
+const OWNED_COUNT = 40;
 const OTHER_COUNT = 3;
-const BATCH_LIMIT = 8;
+// The background surfaces' chunk (History, the Epic sweep row), not Settings'.
+const BATCH_LIMIT = WORKTREE_BACKGROUND_ENRICH_BATCH_LIMIT;
 
 const OWNED_PATHS: readonly string[] = Array.from(
   { length: OWNED_COUNT },
@@ -200,7 +203,7 @@ function selectionCallsOf(fixture: Fixture): readonly ListAllForHostCall[] {
 }
 
 describe("useTaskWorktreeMetadataForClient - worktree.changed frame refetch cost", () => {
-  it("(mount) costs exactly one base call and one selection call per 8 owned paths, covering every owned path once", async () => {
+  it("(mount) costs exactly one base call and one selection call per background chunk of owned paths, covering every owned path once", async () => {
     const fixture = createFixture();
     await mountAndSettle(fixture);
 
@@ -266,7 +269,7 @@ describe("useTaskWorktreeMetadataForClient - worktree.changed frame refetch cost
         fixture.queryClient.getQueryState(perPathKey(path))?.dataUpdateCount,
       ).toBe(beforeOthers.get(path));
     }
-    // Still mounted with the same 27 owned rows - the burst didn't drop
+    // Still mounted with the same owned rows - the burst didn't drop
     // anything from the page.
     expect(rendered.result.current.worktreesByEpicId.get(EPIC_ID)).toHaveLength(
       OWNED_COUNT,

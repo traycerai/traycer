@@ -6,9 +6,14 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { WorktreeHostEntryV16 } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeHostEntryV16,
+  WorktreeListAllForHostResponseV14,
+} from "@traycer/protocol/host/worktree-schemas";
 import {
   createWorktreeEnrichmentBatcher,
+  WORKTREE_ENRICH_BATCH_LIMIT,
+  type WorktreeEnrichmentBatcher,
   perPathEnrichmentQueryKey,
 } from "@/components/settings/panels/worktrees-enrichment-batcher";
 import { useWorktreeEnrichmentForClient } from "@/hooks/worktree/use-worktree-enrichment-query";
@@ -53,9 +58,21 @@ afterEach(() => {
   cleanup();
 });
 
+/** The Settings chunk size, which these fan-out cases do not depend on. */
+function batcherOf(
+  requestBatch: (
+    paths: readonly string[],
+  ) => Promise<WorktreeListAllForHostResponseV14>,
+): WorktreeEnrichmentBatcher {
+  return createWorktreeEnrichmentBatcher(
+    requestBatch,
+    WORKTREE_ENRICH_BATCH_LIMIT,
+  );
+}
+
 describe("createWorktreeEnrichmentBatcher - path-match fan-out", () => {
   it("resolves a trailing-slash request with the host's un-slashed row", async () => {
-    const batcher = createWorktreeEnrichmentBatcher((paths) => {
+    const batcher = batcherOf((paths) => {
       expect(paths).toEqual(["/wt/app/"]);
       return Promise.resolve({
         worktrees: [hostRow("/wt/app", "feature/login")],
@@ -71,7 +88,7 @@ describe("createWorktreeEnrichmentBatcher - path-match fan-out", () => {
   });
 
   it("still resolves an exact request to its exact row, ahead of any lexical match in the same batch", async () => {
-    const batcher = createWorktreeEnrichmentBatcher((paths) => {
+    const batcher = batcherOf((paths) => {
       expect(paths).toEqual(["/wt/app", "/wt/app/"]);
       return Promise.resolve({
         worktrees: [hostRow("/wt/app", "feature/login")],
@@ -91,7 +108,7 @@ describe("createWorktreeEnrichmentBatcher - path-match fan-out", () => {
   });
 
   it("resolves a requested path with no matching row (exact or lexical) to an empty listing", async () => {
-    const batcher = createWorktreeEnrichmentBatcher(() =>
+    const batcher = batcherOf(() =>
       Promise.resolve({ worktrees: [], nextCursor: null }),
     );
 
