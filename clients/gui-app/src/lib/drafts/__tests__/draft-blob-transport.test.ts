@@ -967,6 +967,73 @@ describe("draft blob transport", () => {
     expect(confirmed.length).toBeLessThan(hashes.length);
   });
 
+  it("returns at the capability verdict without waiting for a delayed sibling", async () => {
+    // Three distinct digests, one host: the FIRST request answered rejects as
+    // "old host" and the other two are parked on a promise this test controls,
+    // never resolving until `release()` is called. `putDraftBlobsWithProgress`
+    // must return at the capability verdict - it must not await the two
+    // siblings already on the wire, and nothing they settle after it returns
+    // may reach `confirmed` or the progress listener.
+    const hashes: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      hashes.push(await putImage(pngBytesTagged(210 + index)));
+    }
+    let calls = 0;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const requestWithOptions = (async (_method, _params) => {
+      calls += 1;
+      if (calls === 1) {
+        throw unsupportedError("drafts.putBlob");
+      }
+      await gate;
+      return { ok: true as const };
+    }) as HostRequester<HostRpcRegistry>["requestWithOptions"];
+    const request = (() =>
+      Promise.reject(
+        new Error(
+          "returns at the capability verdict: unexpected request() call",
+        ),
+      )) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions };
+
+    const progress: DraftBlobUploadProgress[] = [];
+    let resolved: ReadonlyArray<string> | null = null;
+    void putDraftBlobsWithProgress({
+      hostId: HOST,
+      client,
+      hashes,
+      ownerUserId: OWNER,
+      onProgress: (update) => progress.push(update),
+    }).then((value) => {
+      resolved = value;
+    });
+
+    // Bounded on the call actually resolving - a regression that awaits the
+    // hanging siblings would leave `resolved` null forever and this times out
+    // instead of silently passing.
+    await vi.waitFor(() => {
+      if (resolved === null) throw new Error("not yet resolved");
+    });
+
+    expect(resolved).toEqual([]);
+    expect(hostWithholdsDraftBlobs(HOST)).toBe(true);
+    // The two siblings are still on the wire, holding their slots - the call
+    // returned WITHOUT waiting for them.
+    expect(draftBlobUploadsInFlight(HOST)).toBeGreaterThan(0);
+    const progressCountAtResolution = progress.length;
+
+    release();
+    await vi.waitFor(() => {
+      expect(draftBlobUploadsInFlight(HOST)).toBe(0);
+    });
+    // Nothing the siblings settled after the call returned was reported to the
+    // progress listener.
+    expect(progress.length).toBe(progressCountAtResolution);
+  });
+
   // ─── F7: no detached unhandled rejection ────────────────────────────────
 
   it("F7 (11): a rejecting local byte reader never escapes as a detached unhandled rejection", async () => {

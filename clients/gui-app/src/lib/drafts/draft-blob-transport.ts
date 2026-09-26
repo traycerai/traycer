@@ -440,11 +440,25 @@ export async function putDraftBlobsWithProgress(input: {
   if (pending.length === 0) return confirmed;
   const total = pending.length;
   let completed = 0;
+  let settled = false;
   onProgress?.({ completed, total });
+  // The capability verdict ends the call on its own. Once one request has
+  // answered that the host withholds the method, every digest not yet sent
+  // is skipped - but the siblings already on the wire are still awaited by
+  // a plain `Promise.all`, and a sibling whose response is delayed or lost
+  // would hold an old-host fallback that is already decided until its own
+  // budget expired. The serial loop returned at the first refusal; this
+  // does the same by racing the fan-out against the verdict. The siblings
+  // finish on their own (their flights never reject and release their slots
+  // in `finally`), and nothing they settle after this returns is reported.
+  let resolveVerdict: () => void = () => undefined;
+  const verdict = new Promise<void>((resolve) => {
+    resolveVerdict = resolve;
+  });
   // Every digest queues on the HOST's gate (see "The per-host upload gate"),
   // not on a pool of this call's own, so the limit holds across overlapping
   // callers. Each digest still settles into this call's own progress count.
-  await Promise.all(
+  const fanOut = Promise.all(
     pending.map(async (sha256) => {
       const slot = acquireUploadSlot(hostId);
       if (slot !== null) await slot;
@@ -456,17 +470,22 @@ export async function putDraftBlobsWithProgress(input: {
         // ones are never sent.
         if (
           !blobUnsupportedHosts.has(hostId) &&
-          (await joinOrStartBlobUpload(hostId, client, sha256, ownerUserId))
+          (await joinOrStartBlobUpload(hostId, client, sha256, ownerUserId)) &&
+          !settled
         ) {
           confirmed.push(sha256);
         }
       } finally {
         releaseUploadSlot(hostId);
       }
+      if (blobUnsupportedHosts.has(hostId)) resolveVerdict();
+      if (settled) return;
       completed += 1;
       onProgress?.({ completed, total });
     }),
   );
+  await Promise.race([fanOut, verdict]);
+  settled = true;
   return confirmed;
 }
 

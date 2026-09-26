@@ -1025,6 +1025,12 @@ export function useLandingComposerActions(
             });
             return;
           }
+          // Back to the "preparing" line for the inline fallback: the
+          // listener's last update was "N of N", and the bounded reads and
+          // encodes below take real time for a cold draft with large images,
+          // during which a counter that reads as finished is the stall this
+          // notice exists to remove.
+          setAttachmentUpload({ completed: 0, total: 0 });
           const bytesByHash = await resolveBase64ByHash(
             confirmed.inline,
             draftImageByteTargetForHost(hostId),
