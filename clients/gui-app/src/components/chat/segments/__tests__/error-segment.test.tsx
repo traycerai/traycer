@@ -31,6 +31,8 @@ describe("<ErrorSegment />", () => {
         findUnitId={null}
         harnessId={null}
         failure={null}
+        settledNotice={null}
+        settledNoticeFindUnitId={null}
       />,
     );
 
@@ -49,6 +51,8 @@ describe("<ErrorSegment />", () => {
         findUnitId={null}
         harnessId={null}
         failure={null}
+        settledNotice={null}
+        settledNoticeFindUnitId={null}
       />,
     );
 
@@ -70,6 +74,8 @@ describe("<ErrorSegment />", () => {
           findUnitId={null}
           harnessId={null}
           failure={null}
+          settledNotice={null}
+          settledNoticeFindUnitId={null}
         />
       </TooltipProvider>,
     );
@@ -101,6 +107,8 @@ describe("<ErrorSegment />", () => {
           findUnitId={null}
           harnessId={null}
           failure={null}
+          settledNotice={null}
+          settledNoticeFindUnitId={null}
         />
       </TooltipProvider>,
     );
@@ -146,6 +154,8 @@ describe("<ErrorSegment />", () => {
           findUnitId={null}
           harnessId={null}
           failure={null}
+          settledNotice={null}
+          settledNoticeFindUnitId={null}
         />
       </TooltipProvider>,
     );
@@ -159,6 +169,8 @@ describe("<ErrorSegment />", () => {
           findUnitId={null}
           harnessId={null}
           failure={null}
+          settledNotice={null}
+          settledNoticeFindUnitId={null}
         />
       </TooltipProvider>,
     );
@@ -201,6 +213,8 @@ describe("<ErrorSegment />", () => {
           findUnitId={null}
           harnessId={null}
           failure={null}
+          settledNotice={null}
+          settledNoticeFindUnitId={null}
         />
       </TooltipProvider>,
     );
@@ -237,6 +251,8 @@ describe("<ErrorSegment />", () => {
             findUnitId={null}
             harnessId={null}
             failure={null}
+            settledNotice={null}
+            settledNoticeFindUnitId={null}
           />
         </TooltipProvider>,
       );
@@ -260,6 +276,8 @@ describe("<ErrorSegment />", () => {
           findUnitId={null}
           harnessId={null}
           failure={null}
+          settledNotice={null}
+          settledNoticeFindUnitId={null}
         />
       </TooltipProvider>,
     );
@@ -305,6 +323,8 @@ describe("<ErrorSegment />", () => {
           findUnitId={null}
           harnessId="claude"
           failure={null}
+          settledNotice={null}
+          settledNoticeFindUnitId={null}
         />,
       );
 
@@ -333,6 +353,8 @@ describe("<ErrorSegment />", () => {
           findUnitId={null}
           harnessId={null}
           failure={null}
+          settledNotice={null}
+          settledNoticeFindUnitId={null}
         />,
       );
 
@@ -354,6 +376,8 @@ describe("<ErrorSegment />", () => {
           findUnitId={null}
           harnessId="claude"
           failure={null}
+          settledNotice={null}
+          settledNoticeFindUnitId={null}
         />,
       );
 
@@ -375,6 +399,8 @@ describe("<ErrorSegment />", () => {
           findUnitId={null}
           harnessId="claude"
           failure={null}
+          settledNotice={null}
+          settledNoticeFindUnitId={null}
         />,
       );
 

@@ -13,6 +13,7 @@ import type {
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { FallbackNoticeSettingsLink } from "@/components/chat/fallback/fallback-notice-attribution";
 import { isFallbackNoticeKind } from "@/components/chat/fallback/fallback-notice-kinds";
+import { Button } from "@/components/ui/button";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { cn } from "@/lib/utils";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -40,9 +41,12 @@ const TONE_ICON: Record<ProviderNoticeTone, typeof Info> = {
   warning: TriangleAlert,
 };
 
+// The status token, never a palette hue: `text-warning-foreground` is verified
+// against every preset's background, where a fixed amber pair was tuned for
+// the default light/dark themes only.
 const TONE_TEXT_CLASS: Record<ProviderNoticeTone, string> = {
   info: "text-muted-foreground",
-  warning: "text-amber-700 dark:text-amber-300",
+  warning: "text-warning-foreground",
 };
 
 export function ProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
@@ -74,17 +78,17 @@ function CodexRetryNotice(
         sideOffset={undefined}
         align="start"
       >
-        <button
-          type="button"
+        <Button
+          size="inline-xs"
+          variant="muted"
           data-find-include="true"
           aria-expanded={expanded}
           aria-label={`${title}. Reported by Codex. ${expanded ? "Hide" : "Show"} details.`}
           onClick={() => setExpanded((current) => !current)}
-          className="flex items-center gap-2 rounded-sm outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
         >
           <Wifi className="size-3.5 shrink-0" aria-hidden />
           <span>{title}</span>
-        </button>
+        </Button>
       </TooltipWrapper>
       {expanded ? (
         <dl
@@ -150,17 +154,14 @@ function StandardProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
       <div className="flex items-center gap-3">
         <span aria-hidden className="h-px flex-1 bg-border/60" />
         {hasDetails ? (
-          <button
-            type="button"
+          <Button
+            size="inline-xs-wrap"
+            variant="muted"
             onClick={toggleExpanded}
             aria-expanded={expanded}
-            className={cn(
-              "rounded-sm outline-none transition-colors",
-              "hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
-            )}
           >
             {labelInner}
-          </button>
+          </Button>
         ) : (
           labelInner
         )}

@@ -38,6 +38,7 @@ import { CommandSegment } from "./segments/command-segment";
 import { CompactionSegment } from "./segments/compaction-segment";
 import { AutonomousResumeSegment } from "./segments/autonomous-resume-segment";
 import { ErrorSegment } from "./segments/error-segment";
+import type { RoutingSettledNotice } from "@/components/chat/fallback/routing-settled-card";
 import { FileChangeGroupSegment } from "./segments/file-change-group-segment";
 import { FileChangeSegment } from "./segments/file-change-segment";
 import { InterviewSegment } from "./segments/interview-segment";
@@ -128,9 +129,96 @@ interface AssistantBodyProps {
    * for one failed attempt.
    */
   manualRungAnchorId: string | null;
+  /**
+   * The settled routing notice the anchor's card absorbs, or `null` - see
+   * `ChatMessage.routingSettledNoticeId`. The notice then renders nothing of
+   * its own and the anchor error renders the settled card.
+   */
+  routingSettledNoticeId: string | null;
   nextStepActions: NextStepActionHandler | null;
   forkAction: ChatMessageForkAction | null;
   interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
+}
+
+type ProviderNoticeMessageSegment = Extract<
+  MessageSegment,
+  { kind: "provider_notice" }
+>;
+
+/**
+ * The settled notice on this row, as the card reads it - or `null` when the
+ * row absorbs none, or when the id names no receipt-carrying notice here
+ * (which the projection rules out, and which then leaves the divider and the
+ * plain card exactly as an older host's transcript has them).
+ *
+ * Only beside an anchor on this row: the settled card IS the anchor's card,
+ * and a notice with no card to fold into stays a divider.
+ */
+function settledNoticeOnRow(
+  segments: ReadonlyArray<MessageSegment>,
+  routingSettledNoticeId: string | null,
+  manualRungAnchorId: string | null,
+): { readonly id: string; readonly notice: RoutingSettledNotice } | null {
+  if (routingSettledNoticeId === null || manualRungAnchorId === null) {
+    return null;
+  }
+  const segment = segments.find(
+    (candidate): candidate is ProviderNoticeMessageSegment =>
+      candidate.kind === "provider_notice" &&
+      candidate.id === routingSettledNoticeId,
+  );
+  if (segment === undefined || segment.receipt === null) return null;
+  return {
+    id: segment.id,
+    notice: {
+      title: segment.title,
+      message: segment.message,
+      details: segment.details,
+      receipt: segment.receipt,
+    },
+  };
+}
+
+/** The recovery props one timeline item renders with. */
+interface RecoveryProps {
+  readonly turnId: string | null;
+  readonly settledNotice: RoutingSettledNotice | null;
+  readonly settledNoticeFindUnitId: string | null;
+}
+
+const NO_RECOVERY: RecoveryProps = {
+  turnId: null,
+  settledNotice: null,
+  settledNoticeFindUnitId: null,
+};
+
+/**
+ * What one item of this row is to the turn's recovery: the anchor (it gets the
+ * turn id, and the settled notice when the row has one), the absorbed settled
+ * notice (it renders nothing - the anchor's card paints it), or neither.
+ */
+function recoveryRoleOf(
+  itemId: string,
+  input: {
+    readonly manualRungAnchorId: string | null;
+    readonly turnId: string | null;
+    readonly settled: {
+      readonly id: string;
+      readonly notice: RoutingSettledNotice;
+    } | null;
+  },
+): RecoveryProps | "absorbed" {
+  const { manualRungAnchorId, turnId, settled } = input;
+  if (settled !== null && itemId === settled.id) return "absorbed";
+  if (manualRungAnchorId === null || itemId !== manualRungAnchorId) {
+    return NO_RECOVERY;
+  }
+  return {
+    turnId,
+    settledNotice: settled === null ? null : settled.notice,
+    settledNoticeFindUnitId:
+      settled === null ? null : chatFindSegmentUnitId(settled.id),
+  };
 }
 
 export function AssistantMessageBody({
@@ -148,11 +236,17 @@ export function AssistantMessageBody({
   meta,
   turnId,
   manualRungAnchorId,
+  routingSettledNoticeId,
   nextStepActions,
   forkAction,
   interviewDeliveryRetry,
 }: AssistantBodyProps) {
   const activityTimelineTurnState = runState === null ? "complete" : "active";
+  const settled = useMemo(
+    () =>
+      settledNoticeOnRow(segments, routingSettledNoticeId, manualRungAnchorId),
+    [manualRungAnchorId, routingSettledNoticeId, segments],
+  );
   const timeline = useMemo(
     () =>
       buildChatActivityTimeline(segments, {
@@ -256,6 +350,13 @@ export function AssistantMessageBody({
             </ChatBlockNavigationAnchor>
           );
         }
+        const recovery = recoveryRoleOf(item.id, {
+          manualRungAnchorId,
+          turnId,
+          settled,
+        });
+        // The settled notice is painted inside the anchor's settled card.
+        if (recovery === "absorbed") return null;
         return (
           <ChatBlockNavigationAnchor key={key} blockId={item.id}>
             <AssistantSegment
@@ -291,11 +392,9 @@ export function AssistantMessageBody({
               // turn rendered as several rows still names exactly one. On every
               // other row `manualRungAnchorId` is null and nothing here matches
               // - the same answer a row with no turn identity already gets.
-              turnId={
-                manualRungAnchorId !== null && item.id === manualRungAnchorId
-                  ? turnId
-                  : null
-              }
+              turnId={recovery.turnId}
+              settledNotice={recovery.settledNotice}
+              settledNoticeFindUnitId={recovery.settledNoticeFindUnitId}
             />
           </ChatBlockNavigationAnchor>
         );
@@ -972,6 +1071,9 @@ interface AssistantSegmentProps {
   harnessId: GuiHarnessId | null;
   /** See `AssistantBodyProps.turnId`. */
   turnId: string | null;
+  /** The settled notice the anchor error absorbs; `null` on every other item. */
+  settledNotice: RoutingSettledNotice | null;
+  settledNoticeFindUnitId: string | null;
 }
 
 function ApprovalSegmentCard({
@@ -1010,6 +1112,8 @@ function AssistantSegment({
   interviewDeliveryRetry,
   harnessId,
   turnId,
+  settledNotice,
+  settledNoticeFindUnitId,
 }: AssistantSegmentProps) {
   const findUnitId = chatFindSegmentUnitId(id);
   switch (segment.kind) {
@@ -1161,6 +1265,8 @@ function AssistantSegment({
           harnessId={harnessId}
           failure={segment.failure}
           turnId={turnId}
+          settledNotice={settledNotice}
+          settledNoticeFindUnitId={settledNoticeFindUnitId}
         />
       );
     case "compaction":

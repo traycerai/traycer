@@ -123,6 +123,7 @@ import {
   chatRangeResponseSchemaPreMessageDelivery,
   chatRangeResponseSchemaPreBrowser,
   chatRangeResponseSchemaPreFallback,
+  chatRangeResponseSchemaPreReceipt,
   chatRangeResponseSchemaPreShellHost,
   chatRecordSchema,
   chatSkeletonChunkSchema,
@@ -132,6 +133,7 @@ import {
   chatTranscriptWindowSchemaPreMessageDelivery,
   chatTranscriptWindowSchemaPreBrowser,
   chatTranscriptWindowSchemaPreFallback,
+  chatTranscriptWindowSchemaPreReceipt,
   chatTranscriptWindowSchemaPreShellHost,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
@@ -736,9 +738,43 @@ export const chatQueueStateSchema = lazySchema(() =>
   z.object({
     status: z.enum(["idle", "running", "paused"]),
     items: z.array(chatQueuedItemSchema),
+    // Why the queue is paused, as the host knows it (`chat.subscribe@1.18`):
+    // `"turn_error"`, `"routing"`, `"queued_prompt"`, `"managed_command"`,
+    // `"user"`, and whatever the host adds later. An OPEN string, not an enum:
+    // a reason a released client has never heard of must still leave it a
+    // queue it can decode, and a client that does not recognise one renders
+    // the generic paused pill. Lines `1.13`-`1.17` bind hand-frozen queue
+    // states without the key (`chatQueueStateSchemaPrePausedReason` and the
+    // older freezes below), so a peer on one of them strips it.
+    //
+    // `null` means the host says the queue is not paused; ABSENT means NOT
+    // RECORDED - a host too old to say, or a queue this client built itself.
+    // A reader folds both with `?? null` and renders the generic pill.
+    // Spelled `.optional()` rather than `.default(null)`, as
+    // `assistantMessageSchema.turnProfile` is: a defaulted key is REQUIRED on
+    // the inferred type, and a queue state is built as an object literal
+    // across the host, the GUI and their suites. What that costs is the
+    // compiler's help on a COPY: a rebuild that picks fields
+    // (`{ status: queue.status, items }`) now drops the reason silently
+    // instead of failing to compile, so every rebuild must spread the queue
+    // (`{ ...queue, items }`) - the GUI's `chat-queue-utils.ts` and
+    // `chat-tile-lower-surfaces.tsx` rebuilds among them.
+    pausedReason: z.string().nullable().optional(),
   }),
 );
 export type ChatQueueState = z.infer<typeof chatQueueStateSchema>;
+
+// Wire-freeze of the queue as `chat.subscribe@1.17` ships it: the live three
+// arms and the live prompt item (sender host included), without the
+// `pausedReason` that `1.18` added. A hand-copied object, NOT `.omit()` off the
+// live one, so a later key cannot reach `1.17` through it. Bound to that
+// line's snapshot and `queueChanged` frames.
+const chatQueueStateSchemaPrePausedReason = lazySchema(() =>
+  z.object({
+    status: z.enum(["idle", "running", "paused"]),
+    items: z.array(chatQueuedItemSchema),
+  }),
+);
 
 /**
  * Wire-freeze copy of the queued prompt item as every line from
@@ -2704,8 +2740,25 @@ const chatSubscribeCommonServerFrameSchemasV116 =
     },
   });
 
-// The live common frames (`chat.subscribe@1.17`): the queued prompt item
-// names the machine it was sent from.
+// `chat.subscribe@1.17`'s common frames: the live set with the queue as it was
+// before `1.18` added `pausedReason`, the one axis `1.18` adds here.
+const chatSubscribeCommonServerFrameSchemasV117 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchema,
+    queue: chatQueueStateSchemaPrePausedReason,
+    event: chatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchema,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
+  });
+
+// The live common frames (`chat.subscribe@1.18`): the queue says why it is
+// paused.
 const chatSubscribeCommonServerFrameSchemas =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
@@ -2817,6 +2870,15 @@ const chatSubscribeSharedServerFrameSchemasV115 = [
 const chatSubscribeSharedServerFrameSchemasV116 = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasV116,
+  blockDeltaServerFrameSchema(runtimeEventSchema),
+];
+// `chat.subscribe@1.17`'s shared frames: the live list with the
+// pre-`pausedReason` queue. `blockDelta` stays live: `provider_notice.upsert`
+// carries its own field list, not the notice metadata, so `1.18`'s receipt
+// never reaches it.
+const chatSubscribeSharedServerFrameSchemasV117 = [
+  messageDeliveryChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasV117,
   blockDeltaServerFrameSchema(runtimeEventSchema),
 ];
 const chatSubscribeSharedServerFrameSchemas = [
@@ -4881,10 +4943,12 @@ const chatWindowedSnapshotSchemaV114 = lazySchema(() =>
 );
 // The windowed snapshot as `chat.subscribe@1.15` ships it: `1.14` plus the
 // message delivery state and the delivery-aware tail, with the pre-tier card.
+// The tail is the pre-receipt one, which `1.16` and `1.17` inherit and only
+// the live line re-widens.
 const chatWindowedSnapshotSchemaV115 = lazySchema(() =>
   chatWindowedSnapshotSchemaV114.extend({
     messageDelivery: chatMessageDeliverySchema.nullable().optional(),
-    tail: chatTranscriptWindowSchema,
+    tail: chatTranscriptWindowSchemaPreReceipt,
   }),
 );
 // The windowed snapshot as `chat.subscribe@1.16` ships it: `1.15` with the
@@ -4896,11 +4960,21 @@ const chatWindowedSnapshotSchemaV116 = lazySchema(() =>
     pendingApprovals: z.array(chatApprovalStateSchema),
   }),
 );
-// The live windowed snapshot (`chat.subscribe@1.17`): `1.16` with the queue
-// re-widened so its prompt item names the machine it was sent from.
-export const chatWindowedSnapshotSchema = lazySchema(() =>
+// The windowed snapshot as `chat.subscribe@1.17` ships it: `1.16` with the
+// queue re-widened so its prompt item names the machine it was sent from, but
+// without the `pausedReason` `1.18` added to the queue.
+const chatWindowedSnapshotSchemaV117 = lazySchema(() =>
   chatWindowedSnapshotSchemaV116.extend({
+    queue: chatQueueStateSchemaPrePausedReason,
+  }),
+);
+// The live windowed snapshot (`chat.subscribe@1.18`): `1.17` with the queue's
+// `pausedReason` and a tail whose notices may carry a settled `receipt`. Both
+// are existing keys, so `.extend` keeps their positions.
+export const chatWindowedSnapshotSchema = lazySchema(() =>
+  chatWindowedSnapshotSchemaV117.extend({
     queue: chatQueueStateSchema,
+    tail: chatTranscriptWindowSchema,
   }),
 );
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
@@ -5026,6 +5100,18 @@ const chatSubscribeRangeServerFrameSchemaPreBrowser = lazySchema(() =>
   }),
 );
 
+// The same frame as `1.15`-`1.17` ship it: a scrolled-back row is the second
+// channel a settled notice's `receipt` could reach those lines on, frozen for
+// the reason the snapshot's `tail` is.
+const chatSubscribeRangeServerFrameSchemaPreReceipt = lazySchema(() =>
+  z.object({
+    kind: z.literal("range"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    range: chatRangeResponseSchemaPreReceipt,
+  }),
+);
+
 const chatRangeResponseSchemaV18 = lazySchema(() =>
   z.object({
     // Reuse this unchanged scalar validator, not the live response's field set.
@@ -5061,7 +5147,8 @@ const chatSubscribeServerFrameSchemaV114 = lazySchema(() =>
 );
 
 // `chat.subscribe@1.15`'s server frames: the live union with the pre-tier
-// approval card, on the snapshot and on the approval frames alike.
+// approval card, on the snapshot and on the approval frames alike, and the
+// pre-receipt message bodies on the tail and on `range`.
 const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchema.extend({
@@ -5070,7 +5157,7 @@ const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
     chatSubscribeSkeletonChunkServerFrameSchema,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPreReceipt,
     chatSubscribeTurnStateChangedServerFrameSchema,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
@@ -5080,7 +5167,8 @@ const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
 );
 
 // `chat.subscribe@1.16`'s server frames: the live union with the
-// pre-sender-host prompt item, on the snapshot and on the queue frames alike.
+// pre-sender-host prompt item, on the snapshot and on the queue frames alike,
+// and the pre-receipt message bodies.
 const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchema.extend({
@@ -5089,12 +5177,32 @@ const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
     chatSubscribeSkeletonChunkServerFrameSchema,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPreReceipt,
     chatSubscribeTurnStateChangedServerFrameSchema,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasV116,
+  ]),
+);
+
+// `chat.subscribe@1.17`'s server frames: the live union without the two keys
+// `1.18` added - the queue's `pausedReason` (on the snapshot and on
+// `queueChanged`) and a notice's `receipt` (on the tail and on `range`).
+const chatSubscribeServerFrameSchemaV117 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV117,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPreReceipt,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV117,
   ]),
 );
 
@@ -5747,10 +5855,54 @@ export const chatSubscribeV116 = defineStreamRpcContract({
  * a peer whether the key can be present - and because the checkpoint gate
  * freezes every line but the newest, so adding the key to `1.13`–`1.16` in
  * place moved their captured surfaces.
+ *
+ * Frozen at the pre-`pausedReason` queue and the pre-receipt message bodies
+ * since `1.18` opened above it (`chatSubscribeServerFrameSchemaV117`). Its
+ * client frames are `1.18`'s, unchanged: both keys are host-authored.
  */
 export const chatSubscribeV117 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 17 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV117,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The model-routing line.
+ *
+ * `1.18` adds two optional keys, and deliberately no union member:
+ *
+ *   - `receipt` on a provider notice's metadata
+ *     (`providerNoticeMetadataSchema`): the structured account of a traversal
+ *     that ended - the rendered cause and one row per hop - carried on the one
+ *     `fallback_settled` notice a failure settlement writes. Every superseded
+ *     `fallback_settled` notice carries `null` and every other notice `null`
+ *     or nothing, which is what lets the settled card key on the receipt
+ *     rather than the kind;
+ *   - `pausedReason` on the queue (`chatQueueStateSchema`): why the host paused
+ *     it, as an open string, so a client stops inferring "paused after an
+ *     error" from state that cannot tell it from a hand pause.
+ *
+ * TOLERANCE, not projection. Both keys are `.nullable().optional()` inside
+ * non-strict objects, so the host writes them at every minor: a `<=1.17`
+ * peer's decoder - the frozen `1.13`-`1.17` schemas, which hold neither key -
+ * drops them as unknown members and keeps the row and the queue (the settled
+ * notice degrades to the divider it rendered before, the pill to the generic
+ * one), and a `1.18` client reading a `<=1.17` host's frame sees both keys
+ * absent, which it reads as `null`. Nothing is withheld and nothing is
+ * refused. A new notice KIND or metadata ARM would instead fail an old peer's
+ * whole row, which is why neither is used.
+ *
+ * Optional rather than defaulted for the `turnProfile` reason (see the two
+ * keys' own comments): absence means "not recorded", and a defaulted key would
+ * be required on every object literal of either type.
+ *
+ * The client frames are `1.17`'s, unchanged.
+ */
+export const chatSubscribeV118 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 18 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

@@ -291,6 +291,7 @@ import {
   chatSubscribeV115,
   chatSubscribeV116,
   chatSubscribeV117,
+  chatSubscribeV118,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -348,8 +349,11 @@ import {
   chatFallbackCancelV10,
   chatFallbackChooseTargetV10,
   chatFallbackListTargetsV10,
+  chatFallbackProceedV10,
   chatFallbackReturnToPreferredV10,
+  chatFallbackRunManualRungUpgradeV10ToV11,
   chatFallbackRunManualRungV10,
+  chatFallbackRunManualRungV11,
 } from "@traycer/protocol/host/chat-fallback";
 import {
   hostIdentityGetV10,
@@ -6217,7 +6221,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // The four external fallback actions. All off-floor: a client meeting a host
+  // The five external fallback actions. All off-floor: a client meeting a host
   // without the fallback engine must simply not render the affordance, which is
   // exactly what `unsupported` degradation gives it. Unary rather than stream
   // actions because they name a traversal rather than a subscription - the two
@@ -6250,14 +6254,22 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // `1.1` adds the refusal `detail` beside `rung_unavailable` /
+  // `rung_target_unavailable`. A `1.0` client is served by reparsing through
+  // the `1.0` response, which strips it; a `1.1` client on a `1.0` host is
+  // lifted to `detail: null` by the upgrade path.
   "chat.fallback.runManualRung": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: chatFallbackRunManualRungV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: chatFallbackRunManualRungV11,
+          upgradeFromPreviousVersion: chatFallbackRunManualRungUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6270,6 +6282,23 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: chatFallbackReturnToPreferredV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // "Switch now" / "Wait now" / "Retry now": end the hold through the expiry
+  // path so the planned step runs and the ladder continues. `unsupported` like
+  // its siblings: a client meeting a host without it draws no "now" button,
+  // which is the card that host already renders.
+  "chat.fallback.proceed": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatFallbackProceedV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -12251,7 +12280,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 17,
+      latestMinor: 18,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -12347,6 +12376,13 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // a non-strict object at every minor, so the host withholds nothing.
         17: {
           contract: chatSubscribeV117,
+        },
+        // @1.18 adds `receipt` on a provider notice's metadata (the settled
+        // fallback card) and `pausedReason` on the queue. Optional keys in
+        // non-strict objects at every minor, so the host withholds nothing: a
+        // @1.17 peer drops both on parse.
+        18: {
+          contract: chatSubscribeV118,
         },
       },
     },

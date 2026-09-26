@@ -3,9 +3,6 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import { ChatComposerBannerPortal } from "@/components/chat/composer/chat-composer-banner-portal";
 import type { ComposerTopBannerKind } from "@/components/chat/composer/chat-composer-top-banner";
 import type { HostRpcRegistry } from "@/lib/host";
-import { FallbackGraceMenu, FallbackWaitingMenu } from "./fallback-card-menus";
-import { FallbackGraceCard } from "./fallback-grace-card";
-import { FallbackReturnBanner } from "./fallback-return-banner";
 import {
   returnBannerLowUsage,
   type ComposerRateLimitAdvisory,
@@ -15,12 +12,12 @@ import {
   fallbackWaitingCardVisible,
   type ChatProviderFallbackState,
 } from "./fallback-state";
+import { RoutingCard } from "./routing-card";
 import {
   routingCardActionKey,
   useRoutingCardDismissed,
   type RoutingCardKind,
 } from "./use-dismissed-routing-cards";
-import { FallbackWaitingCard } from "./fallback-waiting-card";
 
 /**
  * Which dismissible card this frame would put in the composer.
@@ -31,9 +28,10 @@ import { FallbackWaitingCard } from "./fallback-waiting-card";
  *
  * Everything that is not the wait card answers `countdown`, `undefined` and
  * `retrying` included. Neither draws a dismissible card here (the retry row is
- * an inline transcript row with no ×), so the value is never read for them; a
- * nullable return would only have pushed a `?? "countdown"` into the hook call,
- * where it would look like a decision rather than the dead branch it is.
+ * an inline transcript row with no hide control), so the value is never read
+ * for them; a nullable return would only have pushed a `?? "countdown"` into
+ * the hook call, where it would look like a decision rather than the dead
+ * branch it is.
  */
 function dismissibleCardKind(
   pending: ChatProviderFallbackState["pending"],
@@ -43,7 +41,8 @@ function dismissibleCardKind(
 }
 
 /**
- * The composer's two provider-fallback banner slots.
+ * The composer's two routing-card slots: the live traversal's card (countdown
+ * or waiting) and the switch-back offer. Both draw the one `RoutingCard`.
  *
  * Extracted from `ChatComposerImpl` rather than inlined there for two reasons,
  * and the second is the one that matters.
@@ -57,7 +56,7 @@ function dismissibleCardKind(
  * comment claiming the opposite: that the two predicates are kept separate
  * "so a traversal state that neither claims must fail to render rather than
  * fall through to whichever branch happens to be last." A sixth traversal
- * state added upstream would have rendered a grace card describing a state it
+ * state added upstream would have rendered a countdown describing a state it
  * knows nothing about. Here each predicate is checked on its own and an
  * unclaimed state renders nothing, which is what the comment always said.
  */
@@ -114,6 +113,7 @@ export function ChatComposerFallbackBanners({
         client={client}
         chatId={chatId}
         epicId={epicId}
+        hostId={hostId}
         canAct={canAct}
       />
     </>
@@ -121,7 +121,7 @@ export function ChatComposerFallbackBanners({
 }
 
 /**
- * The waiting card and the grace card share one slot and are chosen by two
+ * The waiting and countdown states share one slot and are chosen by two
  * INDEPENDENT predicates - never by an else-branch. See the note above.
  */
 function FallbackPendingBanner({
@@ -152,41 +152,31 @@ function FallbackPendingBanner({
     chatId,
     pending?.traversalId ?? "",
     dismissibleCardKind(pending),
-    // Same frame, same derivation as the × handlers on the cards themselves,
-    // so a re-planned destination inside one traversal is a card the user has
-    // not dismissed rather than one silently inheriting the last plan's answer.
+    // Same frame, same derivation as the card's hide handler, so a re-planned
+    // destination inside one traversal is a card the user has not hidden
+    // rather than one silently inheriting the last plan's answer.
     routingCardActionKey(pending),
   );
   // BY VALUE, never by key presence: on a live `chat.subscribe@1.10` frame the
   // host sets the key unconditionally and `undefined` is what CLEARS the card,
   // so a `"pending" in ...` test would pin it open for the life of the chat.
   if (!visible || pending === undefined) return null;
-  // Waved away for THIS episode, and for this card of it. The traversal is
+  // Hidden for THIS episode, and for this card of it. The traversal is
   // untouched and still holds dispatch - see `use-dismissed-routing-cards.ts`
-  // for why a dismissal is deliberately not an answer to the card's question,
-  // and why dismissing the countdown must not also swallow the wait card a
-  // later rung of the same traversal raises.
+  // for why hiding is deliberately not an answer to the card's question, and
+  // why hiding the countdown must not also swallow the waiting state a later
+  // rung of the same traversal raises.
   if (dismissed) return null;
   if (fallbackWaitingCardVisible(pending)) {
     return (
       <FallbackBannerSlot>
-        <FallbackWaitingCard
-          pending={pending}
+        <RoutingCard
+          state={{ kind: "waiting", pending }}
           client={client}
           chatId={chatId}
           epicId={epicId}
           hostId={hostId}
           canAct={canAct}
-          menu={
-            <FallbackWaitingMenu
-              pending={pending}
-              client={client}
-              epicId={epicId}
-              chatId={chatId}
-              hostId={hostId}
-              canAct={canAct}
-            />
-          }
         />
       </FallbackBannerSlot>
     );
@@ -194,23 +184,13 @@ function FallbackPendingBanner({
   if (fallbackGraceCardVisible(pending)) {
     return (
       <FallbackBannerSlot>
-        <FallbackGraceCard
-          pending={pending}
+        <RoutingCard
+          state={{ kind: "countdown", pending }}
           client={client}
           chatId={chatId}
           epicId={epicId}
           hostId={hostId}
           canAct={canAct}
-          menu={
-            <FallbackGraceMenu
-              pending={pending}
-              client={client}
-              epicId={epicId}
-              chatId={chatId}
-              hostId={hostId}
-              canAct={canAct}
-            />
-          }
         />
       </FallbackBannerSlot>
     );
@@ -225,6 +205,7 @@ function FallbackReturnBannerSlot({
   client,
   chatId,
   epicId,
+  hostId,
   canAct,
 }: {
   readonly visible: boolean;
@@ -233,17 +214,25 @@ function FallbackReturnBannerSlot({
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly chatId: string;
   readonly epicId: string;
+  readonly hostId: string;
   readonly canAct: boolean;
 }) {
   if (!visible || offer === undefined) return null;
   return (
     <FallbackBannerSlot>
-      <FallbackReturnBanner
-        offer={offer}
-        lowUsage={returnBannerLowUsage(rateLimitAdvisory, offer.fallbackTuple)}
+      <RoutingCard
+        state={{
+          kind: "return",
+          offer,
+          lowUsage: returnBannerLowUsage(
+            rateLimitAdvisory,
+            offer.fallbackTuple,
+          ),
+        }}
         client={client}
         chatId={chatId}
         epicId={epicId}
+        hostId={hostId}
         canAct={canAct}
       />
     </FallbackBannerSlot>

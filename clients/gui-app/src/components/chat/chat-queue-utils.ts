@@ -94,5 +94,37 @@ export function queueWithoutPersistedPrompts(
     return queueIsPaused || item.status === "paused";
   });
   if (items.length === queue.items.length) return queue;
-  return { status: queue.status, items };
+  // SPREAD, never picked: the queue grows optional keys (`pausedReason`, from
+  // `chat.subscribe@1.18`), and a copy naming its fields drops each new one
+  // without the compiler noticing.
+  return { ...queue, items };
+}
+
+/**
+ * The `pausedReason` values that mean "held because the last turn failed".
+ *
+ * An OPEN string on the wire, so it is matched here rather than parsed: a
+ * reason this build has not heard of keeps today's plain "Paused", which is
+ * still true.
+ */
+const PAUSED_AFTER_ERROR_REASONS: ReadonlySet<string> = new Set([
+  "turn_error",
+  "routing",
+]);
+
+/**
+ * Whether the queue is held because a turn failed - the paused pill then says
+ * so ("Paused after an error"), since the transcript no longer carries a
+ * separate card for it.
+ *
+ * Read off the queue alone. The reason survives a host restart, so this never
+ * consults a live session or a failed attempt to confirm it. It does consult
+ * the queue's own status: a reason names why a PAUSED queue is paused, and one
+ * left behind on an idle or running queue (a rebuild that changed the status
+ * but kept the key) must not make the pill claim a pause that has ended.
+ */
+export function queuePausedAfterError(queue: ChatQueueState): boolean {
+  if (queue.status !== "paused") return false;
+  const reason = queue.pausedReason ?? null;
+  return reason !== null && PAUSED_AFTER_ERROR_REASONS.has(reason);
 }

@@ -38,10 +38,12 @@ export type FallbackTargetsResult = UseQueryResult<
  * the previous open's rows off the screen. A stale entry is refetched AND
  * returned: within `gcTime` a reopen resolves `status: "success"` with the old
  * `data` on the very first render, and only `isFetching` says a newer answer is
- * on its way. So the "must not paint rows from the last time it was open" rule
- * is a RENDER gate, not a cache setting, and it lives at the consumer -
- * `MenuBody` in `fallback-destination-menu.tsx`, whose `isPending` branch is
- * false in exactly that state.
+ * on its way. So telling a settled answer from last open's is a RENDER gate,
+ * not a cache setting, and it lives at the consumer -
+ * `RoutingDestinationPicker` in `routing-destination-picker.tsx`, whose
+ * heading marks the kept rows as refreshing while `isFetching`, and whose
+ * preselect waits for a fetch that has settled. `isPending` alone is false in
+ * exactly that state.
  *
  * `gcTime: 0` is not the alternative and is deliberately not set here: under
  * StrictMode's double mount a zero-`gcTime` query is evicted between the paired

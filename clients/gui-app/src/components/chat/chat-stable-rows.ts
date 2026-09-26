@@ -121,6 +121,8 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
     b.turnHasOnlyAutonomousResumeSegments,
   turnId: (a, b) => a.turnId === b.turnId,
   manualRungAnchorId: (a, b) => a.manualRungAnchorId === b.manualRungAnchorId,
+  routingSettledNoticeId: (a, b) =>
+    a.routingSettledNoticeId === b.routingSettledNoticeId,
   showCompletionFooter: (a, b) =>
     a.showCompletionFooter === b.showCompletionFooter,
   completedAt: (a, b) => a.completedAt === b.completedAt,

@@ -155,6 +155,27 @@ export function fallbackKnownHarnessFor(
   );
 }
 
+/**
+ * The harness behind a provider DISPLAY NAME, or `null`.
+ *
+ * For the settled receipt, whose steps carry host-rendered strings and no ids:
+ * `providerLabel` is `PROVIDER_DISPLAY_NAMES`' own word ("Claude Code"), and
+ * the step's `modelLabel` is the raw slug the host did not resolve (it does not
+ * read the catalogue on the settle path). Naming that slug the way every other
+ * routing surface does needs the harness whose catalogue to ask, and the
+ * display name is the only key the step has. An unrecognised name - a provider
+ * this build does not know - answers `null`, and the slug stays a slug.
+ */
+export function fallbackHarnessForProviderLabel(
+  providerLabel: string,
+): FallbackTupleIdentity["harnessId"] | null {
+  return (
+    ORDERED_PROVIDERS.find(
+      (provider) => providerDisplayName(provider.providerId) === providerLabel,
+    )?.harnessId ?? null
+  );
+}
+
 export function fallbackHarnessLabelFor(harnessId: string): string {
   const known = ORDERED_PROVIDERS.find(
     (provider) => provider.harnessId === harnessId,
@@ -185,12 +206,11 @@ function fallbackProviderLabelForHarness(harnessId: GuiHarnessId): string {
  * "Claude Code · default" - a chat's provider and model, and nothing else.
  *
  * The subject of every sentence about what a chat IS rather than where it is
- * going: the error card's explanation of a withheld switch, and the destination
- * menu's empty state. Deliberately WITHOUT the account and without the effort
- * that {@link fallbackDestinationRowTitle} and
- * {@link fallbackDestinationSentence} carry - "No other model is set up for
- * Claude Code · opus · high on work" reads as a claim about that account at
- * that effort, when the fact is about the model.
+ * going: the error card's explanation of a withheld switch, and the routing
+ * chooser's empty state. Deliberately WITHOUT the account and without the
+ * effort that {@link fallbackDestinationSentence} carries - "No other model is
+ * set up for Claude Code · opus · high on work" reads as a claim about that
+ * account at that effort, when the fact is about the model.
  *
  * One function for both surfaces on purpose. They are explaining one host
  * verdict, and the rule this file exists to enforce is that two surfaces
@@ -825,26 +845,6 @@ export function fallbackDestinationOfModelTarget(
 }
 
 /**
- * "Codex · gpt-6-astra · high" - a destination menu row's title.
- *
- * The provider is always named here even though the section heading groups
- * these rows, because the heading says "Equivalent models" and not which
- * provider each one lives on; two rows from two providers are otherwise
- * distinguishable only by their glyph, which is decorative.
- */
-export function fallbackDestinationRowTitle(
-  destination: FallbackDestinationDescription,
-): string {
-  return [
-    destination.providerLabel,
-    destination.modelLabel,
-    destination.effortLabel,
-  ]
-    .filter((part): part is string => part !== null)
-    .join(" · ");
-}
-
-/**
  * "Codex · gpt-6-astra · high on Terminal account" - the one sentence a card
  * headline and the transcript announcer both name a destination with.
  *
@@ -967,6 +967,23 @@ export function pendingFallbackResumesFailedTuple(
     destination.harnessId === failed.harnessId &&
     destination.model === failed.model &&
     destination.profileId === failed.profileId
+  );
+}
+
+/**
+ * Whether the countdown's refusal is "Sign in instead" rather than a plain
+ * "Don't switch".
+ *
+ * Only a signed-out traversal, and only one that HAS somewhere to sign in: a
+ * harness with no provider-CLI account (`providerCliIdForHarness` → `null`)
+ * would cancel the switch and then open nothing. One predicate for the card
+ * that draws the button and the announcer that names it, so the spoken
+ * instruction can never point at a button the card does not have.
+ */
+export function pendingFallbackOffersSignIn(pending: PendingFallback): boolean {
+  return (
+    pending.reason === "auth" &&
+    providerCliIdForHarness(pending.failedTuple.harnessId) !== null
   );
 }
 

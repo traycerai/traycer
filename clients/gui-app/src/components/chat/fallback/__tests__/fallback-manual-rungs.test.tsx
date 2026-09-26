@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 import {
   act,
   cleanup,
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -12,19 +13,18 @@ import type {
   FallbackWaitDisposition,
   LastFailedAttempt,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { ChatFallbackListTargetsResponse } from "@traycer/protocol/host/chat-fallback";
+import type { FallbackRungRefusalDetail } from "@traycer/protocol/host/chat-fallback";
 import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { FallbackManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
+import type { RoutingDestinationPicker } from "@/components/chat/fallback/routing-destination-picker";
+import { chatFallbackMutationKeys } from "@/lib/query-keys";
 import { formatClockTime, formatResetDateTime } from "@/lib/relative-time";
 import {
   BANNED_VOCABULARY,
   FAILED_CLAUDE_TUPLE,
-  TARGET_CODEX_TUPLE,
   chatRunSettings,
-  fallbackModelTarget,
   lastFailedAttempt,
-  listTargetsResponse,
 } from "./fallback-fixtures";
 
 const EPIC_ID = "epic-manual";
@@ -34,15 +34,10 @@ const TURN_ID = "turn-attempt";
 const USER_MESSAGE_ID = "user-msg-attempt";
 const RESETS_AT = new Date(2026, 5, 15, 15, 0, 0).getTime();
 
-/**
- * Cold-review re-review: the `rung_unavailable` cases used to compute this
- * from `describeFallbackOutcome("rung_unavailable")` and assert against that
- * same call - a test that derives its expectation from the code under test
- * cannot reject a change to that code (restoring the withdrawn "this chat has
- * moved on" copy would still satisfy such an assertion). Written out
- * literally instead.
- */
-const RUNG_UNAVAILABLE_LABEL = "That action isn't available right now.";
+interface MockRungResponse {
+  readonly outcome: string;
+  readonly detail: FallbackRungRefusalDetail | null;
+}
 
 const harness = vi.hoisted(() => {
   // The published confirmed actions, in order. The announcer reads this slot
@@ -76,6 +71,7 @@ const harness = vi.hoisted(() => {
     lastFailedAttempt: LastFailedAttempt | undefined;
     access: { readonly canAct: boolean } | null;
     connectionStatus: "connecting" | "open" | "reconnecting" | "closed";
+    chat: { readonly settings: ChatRunSettings | null } | null;
     publishConfirmedManualFallbackAction: (input: unknown) => void;
     publishUnattendedFallbackOutcome: (input: unknown) => void;
   };
@@ -83,6 +79,7 @@ const harness = vi.hoisted(() => {
     lastFailedAttempt: undefined,
     access: { canAct: true },
     connectionStatus: "open",
+    chat: null,
     publishConfirmedManualFallbackAction: (input: unknown): void => {
       publishedActions.push(input);
     },
@@ -113,49 +110,46 @@ const harness = vi.hoisted(() => {
       };
     },
   };
+  // Typed by its return rather than an `as`: a case sets the entry to null, and
+  // the lint's autofix strips a widening assertion on a non-null literal.
+  const hostEntry = (): { readonly label: string } | null => ({
+    label: "Surya's MacBook",
+  });
   return {
     mutate: vi.fn(),
+    // `useIsMutating`'s answer, and the filters it was asked with.
+    mutating: 0,
+    mutatingArgs: [] as unknown[],
+    // Every props object the stubbed chooser rendered with, newest last.
+    pickerProps: [] as ComponentProps<typeof RoutingDestinationPicker>[],
     openSettings: vi.fn(),
     toast: vi.fn(),
     store,
     publishedActions,
     publishedUnattended,
-    listCalls: [] as Array<{
-      readonly enabled: boolean;
-      readonly selector: unknown;
-    }>,
-    listData: undefined as ChatFallbackListTargetsResponse | undefined,
-    mutationResult: null as { readonly outcome: string } | null,
+    mutationResult: null as {
+      readonly outcome: string;
+      readonly detail: FallbackRungRefusalDetail | null;
+    } | null,
+    // The tab host record's directory entry: the refusal that names a machine
+    // reads its label from here, never from the host's detail.
+    hostEntry: hostEntry(),
     // Deferred mode, for the ONE thing a synchronous double cannot express:
     // the ORDER of the newer-turn frame and the host's answer. Every other case
     // here resolves inside `mutate`, which fixes that order to "answer first"
     // and therefore cannot reach MF11's failing sequence at all.
     deferResponses: false,
     pendingResponses: [] as Array<
-      (result: { readonly outcome: string }) => void
+      (result: {
+        readonly outcome: string;
+        readonly detail: FallbackRungRefusalDetail | null;
+      }) => void
     >,
   };
 });
 
 vi.mock("sonner", () => ({
   toast: harness.toast,
-}));
-
-vi.mock("@/components/chat/fallback/use-fallback-targets", () => ({
-  useFallbackListTargets: (
-    _client: unknown,
-    input: { readonly enabled: boolean; readonly selector: unknown },
-  ) => {
-    harness.listCalls.push({
-      enabled: input.enabled,
-      selector: input.selector,
-    });
-    return {
-      data: harness.listData,
-      isPending: false,
-      isError: false,
-    };
-  },
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
@@ -192,8 +186,38 @@ vi.mock(
   },
 );
 
-vi.mock("@/lib/registries/chat-session-registry", () => ({
+vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/registries/chat-session-registry")
+  >()),
   useExistingChatSessionHandle: () => ({ store: harness.store }),
+}));
+
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
+  useIsMutating: (filters: unknown) => {
+    harness.mutatingArgs.push(filters);
+    return harness.mutating;
+  },
+}));
+
+// The chooser has its own suite. Here it is a button that records what the row
+// handed it and goes quiet the way the real trigger does.
+vi.mock("@/components/chat/fallback/routing-destination-picker", () => ({
+  RoutingDestinationPicker: (
+    props: ComponentProps<typeof RoutingDestinationPicker>,
+  ) => {
+    harness.pickerProps.push(props);
+    return (
+      <button
+        type="button"
+        data-variant={props.triggerVariant}
+        disabled={props.triggerDisabled || !props.canAct}
+      >
+        {props.triggerLabel}
+      </button>
+    );
+  },
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -204,12 +228,16 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => harness.hostEntry,
+}));
+
 vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
   useHostScopedMutationForClient: (
     _client: unknown,
     args: {
       readonly onSuccess:
-        | ((response: { readonly outcome: string }, variables: unknown) => void)
+        | ((response: MockRungResponse, variables: unknown) => void)
         | undefined;
     },
   ) => {
@@ -232,10 +260,7 @@ vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
         opts:
           | {
               readonly onSuccess:
-                | ((
-                    response: { readonly outcome: string },
-                    variables: unknown,
-                  ) => void)
+                | ((response: MockRungResponse, variables: unknown) => void)
                 | undefined;
             }
           | undefined,
@@ -243,7 +268,7 @@ vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
         harness.mutate(vars);
         setState({ isPending: true, variables: vars });
         // TanStack runs the hook-level onSuccess in addition to the per-call
-        // one. The Switch-vs-toast pin depends on both firing.
+        // one. The refusal note (per-call) and the announcer hand-off (hook-level) both depend on firing.
         //
         // BOTH receive `vars` as the second argument, because that is TanStack's
         // real signature - `onSuccess(data, variables, context)` - and the
@@ -256,7 +281,7 @@ vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
         // 'rung')` thrown INSIDE `use-fallback-actions.ts`, which reads as a
         // production bug rather than a fixture gap. Model the full signature even
         // where a parameter is currently unread.
-        const deliver = (result: { readonly outcome: string }): void => {
+        const deliver = (result: MockRungResponse): void => {
           setState({ isPending: false, variables: undefined });
           if (args.onSuccess !== undefined) {
             args.onSuccess(result, vars);
@@ -403,6 +428,12 @@ function buttonNamed(name: string): HTMLButtonElement {
   return element;
 }
 
+function lastPickerProps(): ComponentProps<typeof RoutingDestinationPicker> {
+  const props = harness.pickerProps.at(-1);
+  if (props === undefined) throw new Error("the chooser never rendered");
+  return props;
+}
+
 function renderActions(turnId: string) {
   return render(
     <TabHostProvider hostId={HOST_ID}>
@@ -416,11 +447,14 @@ function renderActions(turnId: string) {
 describe("FallbackManualRungActions", () => {
   beforeEach(() => {
     harness.mutate.mockReset();
+    harness.mutating = 0;
+    harness.mutatingArgs = [];
+    harness.pickerProps = [];
+    harness.store.setState({ chat: null });
     harness.openSettings.mockReset();
     harness.toast.mockReset();
-    harness.listCalls = [];
-    harness.listData = undefined;
     harness.mutationResult = null;
+    harness.hostEntry = { label: "Surya's MacBook" };
     // In place, not reassigned: the recorder closure captured this array when
     // the slice was built, so a fresh array here would be written to by
     // nothing and every later assertion would read an empty list.
@@ -443,7 +477,7 @@ describe("FallbackManualRungActions", () => {
     cleanup();
   });
 
-  it("renders Retry, Switch…, and Wait until for a fully eligible rate-limit attempt", () => {
+  it("draws Switch to…, Wait until and Retry for a fully eligible rate-limit attempt, the lead filled and the rest outlined", () => {
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -455,17 +489,25 @@ describe("FallbackManualRungActions", () => {
       }),
     );
     renderActions(TURN_ID);
-    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
-    expect(screen.getByRole("button", { name: "Switch…" })).toBeDefined();
-    expect(
-      screen.getByRole("button", {
-        name: `Wait until ${formatClockTime(RESETS_AT)}`,
-      }),
-    ).toBeDefined();
-    const root = screen.getByRole("button", { name: "Retry" }).parentElement;
-    const text = root?.textContent ?? "";
+    const row = screen.getByTestId("failed-turn-actions");
+    const buttons = within(row).getAllByRole("button");
+    // The cause's order of usefulness: a spent quota is not cured by trying the
+    // same account again, so the switch leads and Retry is the last resort.
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      "Switch to…",
+      `Wait until ${formatClockTime(RESETS_AT)}`,
+      "Retry",
+    ]);
+    expect(buttons.map((b) => b.getAttribute("data-variant"))).toEqual([
+      "default",
+      "outline",
+      "outline",
+    ]);
+    const text = row.parentElement?.textContent ?? "";
     expect(text).not.toMatch(BANNED_VOCABULARY);
     expect(text).not.toContain("rate_limit");
+    // The retired text-link entry into settings is gone from this card.
+    expect(screen.queryByRole("button", { name: "Model routing" })).toBeNull();
   });
 
   // The policy's wait cap reaches seven days, so "Wait until" needs its
@@ -495,18 +537,14 @@ describe("FallbackManualRungActions", () => {
   });
 
   // The negative twins of the case above, and the reason this card needed a
-  // gate at all: `ErrorSegment` is DURABLE TRANSCRIPT, so these affordances
-  // mount for anyone who can open the chat, and `chat.fallback.runManualRung`
-  // is a plain unary RPC with nothing client-side in front of it. Before the
-  // `useChatFallbackActionsCanAct` gate, `busy` was `runManualRung.isPending`
-  // and nothing else, so both rows below rendered ENABLED buttons that really
-  // dispatched.
+  // gate at all: `ErrorSegment` is DURABLE TRANSCRIPT, so this row mounts for
+  // anyone who can open the chat, and `chat.fallback.runManualRung` is a plain
+  // unary RPC with nothing client-side in front of it.
   //
-  // Same fixture as the fully-eligible case above - the attempt, the rungs and
-  // the disposition are identical, and only the capability moves. That is what
-  // makes these two a control pair rather than two spot checks: neither can
-  // pass because the buttons happened not to render.
-  it("disables every affordance for a VIEWER, and dispatches nothing", () => {
+  // A VIEWER of someone else's chat has no standing to steer it, now or after a
+  // reconnect, so the actions are not drawn at all (spec Flow 4): greying them
+  // with "Reconnecting…" would promise something that is not coming.
+  it("draws no actions and no reconnecting label for a VIEWER, and dispatches nothing", () => {
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -522,24 +560,22 @@ describe("FallbackManualRungActions", () => {
     seedActCapability({ canAct: false, connectionStatus: "open" });
     renderActions(TURN_ID);
 
-    const retry = buttonNamed("Retry");
-    // Falsification: drop the `|| !canAct` term from `busy` and all three of
-    // these go red, because the buttons are still RENDERED either way - the
-    // host said this failure admits all three rungs, and that is unchanged by
-    // who is looking at it.
-    expect(retry.disabled).toBe(true);
-    expect(buttonNamed("Switch…").disabled).toBe(true);
-    expect(
-      buttonNamed(`Wait until ${formatClockTime(RESETS_AT)}`).disabled,
-    ).toBe(true);
-
-    fireEvent.click(retry);
-    // The assertion that makes the three above mean something: a disabled
-    // button is only a claim about the DOM, this is the claim about the wire.
+    expect(screen.queryByTestId("failed-turn-actions")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByText("Reconnecting…")).toBeNull();
     expect(harness.mutate).not.toHaveBeenCalled();
+    // The viewer's answer holds through a dropped stream too: settled for the
+    // session, not "come back later".
+    act(() => {
+      seedActCapability({ canAct: false, connectionStatus: "reconnecting" });
+    });
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByText("Reconnecting…")).toBeNull();
   });
 
-  it("disables every affordance for an OWNER whose chat stream has dropped", () => {
+  // The control pair for the viewer case: the SAME fixture, only the capability
+  // moves, so neither can pass because the buttons happened not to render.
+  it("keeps the actions on screen, disabled, with Reconnecting… for an OWNER whose chat stream has dropped", () => {
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -551,27 +587,30 @@ describe("FallbackManualRungActions", () => {
       }),
     );
     // The role is fine; the transport is not. `canSendAction` refuses the
-    // stream-side hold in exactly this state, and this card now agrees with
-    // it. Falsification: drop the `connectionStatus === "open"` term from
-    // `useChatFallbackActionsCanAct` and this cell goes red while the viewer
-    // cell above stays green.
+    // stream-side hold in exactly this state, and this card agrees with it.
     seedActCapability({ canAct: true, connectionStatus: "reconnecting" });
     renderActions(TURN_ID);
 
     const retry = buttonNamed("Retry");
     expect(retry.disabled).toBe(true);
-    expect(buttonNamed("Switch…").disabled).toBe(true);
+    expect(buttonNamed("Switch to…").disabled).toBe(true);
+    expect(
+      buttonNamed(`Wait until ${formatClockTime(RESETS_AT)}`).disabled,
+    ).toBe(true);
+    expect(screen.getByText("Reconnecting…")).toBeDefined();
 
     fireEvent.click(retry);
     expect(harness.mutate).not.toHaveBeenCalled();
+
+    // And it comes back on its own when the stream does.
+    act(() => {
+      seedActCapability({ canAct: true, connectionStatus: "open" });
+    });
+    expect(buttonNamed("Retry").disabled).toBe(false);
+    expect(screen.queryByText("Reconnecting…")).toBeNull();
   });
 
-  // F10: this card always calls `switchConsequencesText(null)` - a failed
-  // ATTEMPT carries no queue figure - and nothing pinned that the menu it
-  // opens actually says so, as opposed to staying silent about the queue or
-  // (the waiting-menu bug this batch is fixing elsewhere) reading a stale
-  // zero as "nothing queued".
-  it("states the switch consequences, with the no-queue-figure phrasing, in the Switch… menu header", () => {
+  it("treats a host that has not said who this reader is yet as reconnecting", () => {
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -582,17 +621,15 @@ describe("FallbackManualRungActions", () => {
         waitDisposition: "eligible",
       }),
     );
+    // An open stream with no `access` yet: not enough to dispatch on.
+    harness.store.setState({ access: null, connectionStatus: "open" });
     renderActions(TURN_ID);
-    fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
-    // Falsification: change `switchConsequencesText(null)` to
-    // `switchConsequencesText(0)` at this card's call site - both compile,
-    // but `0` takes the "queue not mentioned" branch instead of the "no
-    // figure exists" one, and this exact sentence goes red.
-    expect(
-      screen.getByText(
-        "Replays this message on the destination you pick. Starts a fresh session from this transcript. Any queued messages move with it.",
-      ),
-    ).toBeDefined();
+
+    expect(buttonNamed("Retry").disabled).toBe(true);
+    expect(buttonNamed("Switch to…").disabled).toBe(true);
+    expect(screen.getByText("Reconnecting…")).toBeDefined();
+    fireEvent.click(buttonNamed("Retry"));
+    expect(harness.mutate).not.toHaveBeenCalled();
   });
 
   // F6: `describeWaitDisposition`'s sentence is shared by the card (`Body`'s
@@ -604,7 +641,7 @@ describe("FallbackManualRungActions", () => {
   // rename also dropped the sentence itself - see that module) and so is no
   // longer a fixture that demonstrates two renderers sharing one source. The
   // null-sentence behaviour has its own pin below.
-  it("states the wait disposition on the card, and repeats it inside the empty Switch… menu", () => {
+  it("states the wait disposition on the card", () => {
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -618,15 +655,6 @@ describe("FallbackManualRungActions", () => {
         waitDisposition: "no_verified_reset",
       }),
     );
-    // Empty listing, so the menu's own empty-state branch (which carries
-    // `emptyStateActions`, and therefore this sentence) is what renders.
-    harness.listData = listTargetsResponse({
-      outcome: "listed",
-      failedTuple: FAILED_CLAUDE_TUPLE,
-      profileTargets: [],
-      modelTargets: [],
-      modelTargetsSkip: null,
-    });
     renderActions(TURN_ID);
     // Falsification: change `no_verified_reset`'s copy in
     // `describeWaitDisposition` and both assertions below go red - they are
@@ -636,18 +664,6 @@ describe("FallbackManualRungActions", () => {
         "The provider hasn't said when this limit resets, so there's nothing to wait for.",
       ),
     ).toBeDefined();
-
-    fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
-    // Falsification (the other half): delete the `waitExplanation` block from
-    // `emptyStateActions` in `fallback-manual-rungs.tsx` - the card-level
-    // sentence above stays green and this one alone goes red, which is the
-    // whole reason F6 needs its own menu-side pin rather than trusting the
-    // card's copy to cover both renderers.
-    expect(
-      screen.getAllByText(
-        "The provider hasn't said when this limit resets, so there's nothing to wait for.",
-      ),
-    ).toHaveLength(2);
   });
 
   // Cold-review re-review, F6 gap 1: `checking` and `beyond_cap` had NO render
@@ -791,7 +807,7 @@ describe("FallbackManualRungActions", () => {
     expect(retry.disabled).toBe(false);
   });
 
-  it("renders no action buttons and does render the settings link when eligibleRungs is empty", () => {
+  it("renders no action row when eligibleRungs is empty, and no settings link in its place", () => {
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -804,36 +820,15 @@ describe("FallbackManualRungActions", () => {
     );
     renderActions(TURN_ID);
     // Falsification: drop the rungs.includes(...) guards and render the buttons unconditionally — this assertion must go red.
+    expect(screen.queryByTestId("failed-turn-actions")).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Switch…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Wait until/ })).toBeNull();
-    expect(screen.getByRole("button", { name: "Model routing" })).toBeDefined();
-  });
-
-  // F12: the companion case to the one above. The Settings link is not the
-  // consolation prize for an empty state - the ticket's own wording is that
-  // it "stays reachable" on an ACTIONABLE card too, alongside Retry/Switch…/
-  // Wait until, not only in their absence.
-  it("renders the settings link alongside the action buttons when rungs are available", () => {
-    seedAttempt(
-      positiveAttempt({
-        userMessageId: USER_MESSAGE_ID,
-        turnId: TURN_ID,
-        reason: "rate_limit",
-        eligibleRungs: ALL_RUNGS,
-        resetsAt: RESETS_AT,
-        waitDisposition: "eligible",
-      }),
-    );
-    renderActions(TURN_ID);
-    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
-    // Falsification: wrap `<FallbackNoticeSettingsLink />` at :331 in the
-    // condition it used to be guarded by - render it only when no rung
-    // buttons exist - and this assertion goes red while the all-disabled
-    // menu case (F12's other half, `fallback-destination-menu.test.tsx`)
-    // stays green: that split is what distinguishes "the link exists
-    // somewhere" from "the link exists where the user has other options".
-    expect(screen.getByRole("button", { name: "Model routing" })).toBeDefined();
+    // The "Model routing" text link was retired from the card: the settings
+    // entry is the routing card's gear, and an action-less failed row is not a
+    // place to bring it back.
+    expect(screen.queryByRole("button", { name: "Model routing" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Model routing" })).toBeNull();
   });
 
   it("renders nothing when lastFailedAttempt is undefined", () => {
@@ -841,7 +836,7 @@ describe("FallbackManualRungActions", () => {
     renderActions(TURN_ID);
     // Falsification: delete the if (attempt === undefined) return null line — this assertion must go red.
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Switch…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Model routing" })).toBeNull();
   });
 
@@ -880,7 +875,7 @@ describe("FallbackManualRungActions", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
-  it("renders no rungs for an auth failure even when every rung is eligible", () => {
+  it("renders the eligible rungs for an auth failure in the non-switch-lead order, Retry filled", () => {
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -892,10 +887,21 @@ describe("FallbackManualRungActions", () => {
       }),
     );
     renderActions(TURN_ID);
-    // Falsification: delete the auth guard — Retry appears and this assertion must go red.
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Switch…" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Wait until/ })).toBeNull();
+    // Falsification: reinstate an auth early return - no button renders and
+    // this goes red. Make `switchLeads` true for auth - the order flips.
+    const buttons = screen.getAllByRole("button", {
+      name: /^(Retry|Switch to…|Wait until )/,
+    });
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      "Retry",
+      "Switch to…",
+      `Wait until ${formatClockTime(RESETS_AT)}`,
+    ]);
+    expect(buttons.map((b) => b.getAttribute("data-variant"))).toEqual([
+      "default",
+      "outline",
+      "outline",
+    ]);
   });
 
   it("gates the wait button on wait_once eligibility, never on resetsAt alone", () => {
@@ -954,7 +960,7 @@ describe("FallbackManualRungActions", () => {
   // carries its OWN inline spinner, driven by `retryInFlight` - `isPending`
   // AND `variables.rung === "retry"` - so a Switch pick in flight does not
   // light up a Retry button that never fired.
-  it("shows the inline spinner on Retry only while ITS OWN mutation is in flight, not while a Switch is", () => {
+  it("shows the inline spinner on Retry only while ITS OWN mutation is in flight", () => {
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -981,44 +987,11 @@ describe("FallbackManualRungActions", () => {
     expect(harness.pendingResponses).toHaveLength(1);
 
     act(() => {
-      harness.pendingResponses[0]({ outcome: "applied" });
+      harness.pendingResponses[0]({ outcome: "applied", detail: null });
     });
     // Delivered, not removed - the recorder only ever pushes. Clear it so the
     // Switch below is unambiguously the NEXT entry.
     harness.pendingResponses.length = 0;
-    expect(retry.querySelector('[aria-hidden="true"]')).toBeNull();
-
-    // Now drive a SWITCH through the same shared mutation instance (one hook
-    // serves all three rungs - see `useFallbackRunManualRung`'s own doc for
-    // why) and confirm Retry stays quiet: `variables.rung` is `"switch"`
-    // while this one is in flight, so `retryInFlight` must read `false`.
-    harness.listData = listTargetsResponse({
-      outcome: "listed",
-      failedTuple: FAILED_CLAUDE_TUPLE,
-      profileTargets: [],
-      modelTargets: [
-        fallbackModelTarget({
-          groupId: "grp-internal-secret-xyz",
-          harnessId: "codex",
-          modelFamily: "gpt-5",
-          model: "gpt-5",
-          reasoningEffort: null,
-          profileId: TARGET_CODEX_TUPLE.profileId,
-          severity: "ok",
-          usedPercent: 10,
-          target: TARGET_CODEX_TUPLE,
-          warnings: [],
-          selectable: true,
-          skip: null,
-        }),
-      ],
-      modelTargetsSkip: null,
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /Codex · gpt-5/ }));
-    });
-    expect(harness.pendingResponses).toHaveLength(1);
     expect(retry.querySelector('[aria-hidden="true"]')).toBeNull();
   });
 
@@ -1046,7 +1019,7 @@ describe("FallbackManualRungActions", () => {
       );
       const { unmount } = renderActions(TURN_ID);
       const buttons = screen.getAllByRole("button", {
-        name: /^(Retry|Switch…)$/,
+        name: /^(Retry|Switch to…)$/,
       });
       // Falsification: delete the `switchLeads` gate around `retryButton`'s
       // two placements in `fallback-manual-rungs.tsx` - Retry would render
@@ -1054,17 +1027,16 @@ describe("FallbackManualRungActions", () => {
       expect(
         buttons.map((b) => b.textContent),
         reason,
-      ).toEqual(["Switch…", "Retry"]);
+      ).toEqual(["Switch to…", "Retry"]);
       unmount();
     }
   });
 
   it("keeps Retry before Switch… for a reason outside the reordering rule, even with a switch available", () => {
     // `positiveAttempt` only builds `"rate_limit" | "auth"` failures (see its
-    // own type), and `auth` never reaches this row at all (the auth guard in
-    // `ManualRungActions` returns before rungs render) - so the reason
-    // OUTSIDE the reordering rule is built literally here instead, the same
-    // way `withheldSwitchAttempt`'s sibling cases do.
+    // own type), and `auth` is covered by its own case above - so a reason
+    // OUTSIDE the reordering rule that is not one of those is built literally
+    // here instead, the same way `withheldSwitchAttempt`'s sibling cases do.
     seedAttempt(
       lastFailedAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -1078,9 +1050,9 @@ describe("FallbackManualRungActions", () => {
     );
     renderActions(TURN_ID);
     const buttons = screen.getAllByRole("button", {
-      name: /^(Retry|Switch…)$/,
+      name: /^(Retry|Switch to…)$/,
     });
-    expect(buttons.map((b) => b.textContent)).toEqual(["Retry", "Switch…"]);
+    expect(buttons.map((b) => b.textContent)).toEqual(["Retry", "Switch to…"]);
   });
 
   it("sends the attempt's ids, not the row's, on Retry and Wait until", () => {
@@ -1097,7 +1069,7 @@ describe("FallbackManualRungActions", () => {
     // Settles the mutation immediately, so Retry's own pick does not leave
     // every affordance `busy` (disabled) for the Wait-until click that
     // follows it.
-    harness.mutationResult = { outcome: "applied" };
+    harness.mutationResult = { outcome: "applied", detail: null };
     renderActions(TURN_ID);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     // Falsification: hard-code userMessageId: "" at the call site — this assertion must go red.
@@ -1126,7 +1098,10 @@ describe("FallbackManualRungActions", () => {
     });
   });
 
-  it("lists destinations with the attempt selector and sends runManualRung switch with both ids", () => {
+  // The Switch… control is `RoutingDestinationPicker`; this suite stubs it and
+  // pins the seam - what the row hands it. The chooser's own behaviour (rows,
+  // confirm, refusals, the lease) is `routing-destination-picker.test.tsx`.
+  it("hands the Switch… chooser a failed-turn entry: the attempt and its own failed tuple", () => {
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -1137,103 +1112,59 @@ describe("FallbackManualRungActions", () => {
         waitDisposition: "eligible",
       }),
     );
-    harness.listData = listTargetsResponse({
-      outcome: "listed",
-      failedTuple: FAILED_CLAUDE_TUPLE,
-      profileTargets: [],
-      modelTargets: [
-        fallbackModelTarget({
-          groupId: "grp-internal-secret-xyz",
-          harnessId: "codex",
-          modelFamily: "gpt-5",
-          model: "gpt-5",
-          reasoningEffort: null,
-          profileId: TARGET_CODEX_TUPLE.profileId,
-          severity: "ok",
-          usedPercent: 10,
-          target: TARGET_CODEX_TUPLE,
-          warnings: [],
-          selectable: true,
-          skip: null,
-        }),
-      ],
-      modelTargetsSkip: null,
-    });
     renderActions(TURN_ID);
-    fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
-    const issued = harness.listCalls.filter((call) => call.enabled);
-    expect(
-      issued.length,
-      "listTargets must run after the menu opened",
-    ).toBeGreaterThan(0);
-    const lastIssued = issued[issued.length - 1];
-    expect(lastIssued.selector).toEqual({
-      kind: "attempt",
-      userMessageId: USER_MESSAGE_ID,
-      turnId: TURN_ID,
-    });
-    fireEvent.click(screen.getByRole("button", { name: /Codex · gpt-5/ }));
-    expect(
-      harness.mutate.mock.calls.length,
-      "runManualRung must be called",
-    ).toBeGreaterThan(0);
-    const first = harness.mutate.mock.calls[0];
-    expect(first[0]).toEqual({
-      epicId: EPIC_ID,
-      chatId: CHAT_ID,
-      rung: "switch",
-      target: TARGET_CODEX_TUPLE,
-      userMessageId: USER_MESSAGE_ID,
-      turnId: TURN_ID,
-    });
+    const props = lastPickerProps();
+    expect(props.entry.kind).toBe("failed-turn");
+    if (props.entry.kind !== "failed-turn") return;
+    expect(props.entry.attempt.userMessageId).toBe(USER_MESSAGE_ID);
+    expect(props.entry.attempt.turnId).toBe(TURN_ID);
+    expect(props.entry.seedTuple).toEqual(FAILED_CLAUDE_TUPLE);
+    expect(props.triggerLabel).toBe("Switch to…");
+    expect(props.canAct).toBe(true);
+    expect(props.epicId).toBe(EPIC_ID);
+    expect(props.chatId).toBe(CHAT_ID);
+    expect(props.hostId).toBe(HOST_ID);
   });
 
-  it("reports a Switch refusal inline and does not toast", () => {
+  it("seeds the chooser from the chat's own settings when the host named no failed tuple", () => {
+    harness.store.setState({ chat: { settings: DEFAULT_SHAPED_TUPLE } });
     seedAttempt(
-      positiveAttempt({
+      lastFailedAttempt({
         userMessageId: USER_MESSAGE_ID,
         turnId: TURN_ID,
-        reason: "rate_limit",
+        failure: { reason: "rate_limit" },
         eligibleRungs: ALL_RUNGS,
-        resetsAt: RESETS_AT,
-        waitDisposition: "eligible",
+        waitDisposition: "no_verified_reset",
+        switchDisposition: "eligible",
+        failedTuple: null,
       }),
     );
-    harness.listData = listTargetsResponse({
-      outcome: "listed",
-      failedTuple: FAILED_CLAUDE_TUPLE,
-      profileTargets: [],
-      modelTargets: [
-        fallbackModelTarget({
-          groupId: "grp-internal-secret-xyz",
-          harnessId: "codex",
-          modelFamily: "gpt-5",
-          model: "gpt-5",
-          reasoningEffort: null,
-          profileId: TARGET_CODEX_TUPLE.profileId,
-          severity: "ok",
-          usedPercent: 10,
-          target: TARGET_CODEX_TUPLE,
-          warnings: [],
-          selectable: true,
-          skip: null,
-        }),
-      ],
-      modelTargetsSkip: null,
-    });
-    harness.mutationResult = { outcome: "rung_unavailable" };
     renderActions(TURN_ID);
-    fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /Codex · gpt-5/ }));
-    });
-    expect(screen.getByText(RUNG_UNAVAILABLE_LABEL)).toBeDefined();
-    expect(screen.getByRole("button", { name: /Codex · gpt-5/ })).toBeDefined();
-    // Falsification: restore onSuccess: toastFallbackOutcome on the useFallbackRunManualRung hook and this assertion must go red.
-    expect(harness.toast).not.toHaveBeenCalled();
+    const props = lastPickerProps();
+    expect(props.entry.kind).toBe("failed-turn");
+    if (props.entry.kind !== "failed-turn") return;
+    expect(props.entry.seedTuple).toEqual(DEFAULT_SHAPED_TUPLE);
   });
 
-  it("a refused switch picked while the menu is OPEN reports inline only - no toast, and no unattended publication (no duplicate channel)", () => {
+  it("offers no Switch… when neither the attempt nor the chat has a tuple to seed from", () => {
+    harness.store.setState({ chat: { settings: null } });
+    seedAttempt(
+      lastFailedAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        failure: { reason: "rate_limit" },
+        eligibleRungs: ALL_RUNGS,
+        waitDisposition: "no_verified_reset",
+        switchDisposition: "eligible",
+        failedTuple: null,
+      }),
+    );
+    renderActions(TURN_ID);
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+  });
+
+  it("quiets Retry, Wait until and the Switch… trigger while ANY runManualRung for the chat is in flight", () => {
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -1244,59 +1175,59 @@ describe("FallbackManualRungActions", () => {
         waitDisposition: "eligible",
       }),
     );
-    harness.listData = listTargetsResponse({
-      outcome: "listed",
-      failedTuple: FAILED_CLAUDE_TUPLE,
-      profileTargets: [],
-      modelTargets: [
-        fallbackModelTarget({
-          groupId: "grp-internal-secret-xyz",
-          harnessId: "codex",
-          modelFamily: "gpt-5",
-          model: "gpt-5",
-          reasoningEffort: null,
-          profileId: TARGET_CODEX_TUPLE.profileId,
-          severity: "ok",
-          usedPercent: 10,
-          target: TARGET_CODEX_TUPLE,
-          warnings: [],
-          selectable: true,
-          skip: null,
-        }),
-      ],
-      modelTargetsSkip: null,
-    });
-    harness.mutationResult = { outcome: "rung_unavailable" };
+    // A rung the CHOOSER sent: this hook instance is not the one pending, so
+    // only the shared mutation key can tell the bare buttons about it.
+    harness.mutating = 1;
     renderActions(TURN_ID);
-    fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /Codex · gpt-5/ }));
+    expect(harness.mutatingArgs).toContainEqual({
+      mutationKey: chatFallbackMutationKeys.runManualRung(CHAT_ID),
     });
-    expect(screen.getByText(RUNG_UNAVAILABLE_LABEL)).toBeDefined();
+    expect(buttonNamed("Retry").disabled).toBe(true);
+    expect(
+      buttonNamed(`Wait until ${formatClockTime(RESETS_AT)}`).disabled,
+    ).toBe(true);
+    expect(buttonNamed("Switch to…").disabled).toBe(true);
+    fireEvent.click(buttonNamed("Retry"));
+    expect(harness.mutate).not.toHaveBeenCalled();
+  });
+
+  // Spec Flow 4: a toast never carries a refusal. The answer is written where
+  // the button was, as a status note, and nothing goes to sonner.
+  it("answers a refused Retry inline with the literal sentence, never a toast, and keeps every button", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.mutationResult = { outcome: "rung_unavailable", detail: null };
+    renderActions(TURN_ID);
+    expect(screen.queryByTestId("failed-turn-refusal")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    // Falsification: put the `toast(message)` line back in
+    // `useFallbackRunManualRung`'s hook-level onSuccess and this goes red.
     expect(harness.toast).not.toHaveBeenCalled();
-    // Falsification: drop the `reportingRef.current.inlineMenuOpen` early
-    // return in `useFallbackRunManualRung`'s hook-level onSuccess (so the
-    // hook always publishes to the announcer regardless of the open menu) and
-    // THIS assertion must go red - the refusal would be reported twice, once
-    // inline and once through the announcer.
+    const note = screen.getByTestId("failed-turn-refusal");
+    expect(note.getAttribute("role")).toBe("status");
+    // No detail from an older host: the neutral sentence for the action, not
+    // the shared outcome sentence and not a cause.
+    expect(note.textContent).toBe("Couldn't retry just now.");
+    expect(buttonNamed("Retry").disabled).toBe(false);
+    expect(screen.getByRole("button", { name: "Switch to…" })).toBeDefined();
+    expect(
+      screen.getByRole("button", {
+        name: `Wait until ${formatClockTime(RESETS_AT)}`,
+      }),
+    ).toBeDefined();
+    // The inline surface answers, so the announcer stays quiet.
     expect(harness.publishedUnattended).toEqual([]);
   });
 
-  /**
-   * The P1 case, and the falsifier the `runManualRung` widening was missing.
-   *
-   * Every other switch case here resolves the mutation INSIDE `mutate`, which
-   * fixes the order to "host answers, then the frame lands" - the order in
-   * which nothing is wrong. `attempt_not_latest` means the opposite order: a
-   * newer turn already exists, so the frame that carries it arrives FIRST and
-   * takes the menu with it. That is the sequence this case drives, and until
-   * the affordances became their own component it delivered the refusal to
-   * nobody: the gate returned `null` while `ManualRungAffordances`' predecessor
-   * stayed MOUNTED, so `menuOpen` was still `true`, the per-render layout effect
-   * kept republishing `inlineMenuOpen: true` from a subtree rendering nothing,
-   * and the hook deferred to an inline line that no longer existed.
-   */
-  it("a switch refused AFTER a newer turn replaces the attempt reaches the announcer - the surface it was picked from is gone", () => {
+  it("answers a refused Wait until inline too, with the wait's own neutral sentence", () => {
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -1307,197 +1238,441 @@ describe("FallbackManualRungActions", () => {
         waitDisposition: "eligible",
       }),
     );
-    harness.listData = listTargetsResponse({
-      outcome: "listed",
-      failedTuple: FAILED_CLAUDE_TUPLE,
-      profileTargets: [],
-      modelTargets: [
-        fallbackModelTarget({
-          groupId: "grp-internal-secret-xyz",
-          harnessId: "codex",
-          modelFamily: "gpt-5",
-          model: "gpt-5",
-          reasoningEffort: null,
-          profileId: TARGET_CODEX_TUPLE.profileId,
-          severity: "ok",
-          usedPercent: 10,
-          target: TARGET_CODEX_TUPLE,
-          warnings: [],
-          selectable: true,
-          skip: null,
-        }),
-      ],
-      modelTargetsSkip: null,
-    });
-    harness.deferResponses = true;
-    renderActions(TURN_ID);
-    fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /Codex · gpt-5/ }));
-    });
-    expect(harness.pendingResponses).toHaveLength(1);
-
-    // The newer turn lands while the pick is still in flight. This is the real
-    // production transition - the host reassigns `lastFailedAttempt` by value -
-    // not a test-driven unmount of the component under test.
-    act(() => {
-      seedAttempt(
-        positiveAttempt({
-          userMessageId: "user-msg-later",
-          turnId: "turn-later",
-          reason: "rate_limit",
-          eligibleRungs: ALL_RUNGS,
-          resetsAt: RESETS_AT,
-          waitDisposition: "eligible",
-        }),
-      );
-    });
-    // The whole surface the pick came from is gone: no trigger, no rows, and
-    // no inline refusal line to write into.
-    expect(screen.queryByRole("button", { name: "Switch…" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Codex · gpt-5/ })).toBeNull();
-
-    // ONLY NOW does the host answer.
-    act(() => {
-      harness.pendingResponses[0]({ outcome: "attempt_not_latest" });
-    });
-
-    // Written literally, like `RUNG_UNAVAILABLE_LABEL` above and for the same
-    // reason - `CHAT_MOVED_ON_LABEL` is module-private to `fallback-copy.ts`.
-    //
-    // Falsification: move `menuOpen`/`refusal`/`useFallbackRunManualRung` back
-    // up into `ManualRungActions` (i.e. undo the split, so the gate becomes an
-    // early `return null` inside the mounted component again) and THIS must go
-    // red at zero entries - the hook reads a stale `inlineMenuOpen: true` and
-    // defers to an inline line that is not rendering.
-    expect(harness.publishedUnattended).toHaveLength(1);
-    expect(harness.publishedUnattended[0]).toMatchObject({
-      chatId: CHAT_ID,
-      epicId: EPIC_ID,
-      hostId: HOST_ID,
-      text: "This chat has moved on since that message.",
-    });
-    // One channel, not two: a bare rung would have toasted, a live menu would
-    // have answered inline. This surface has neither.
-    expect(harness.toast).not.toHaveBeenCalled();
-  });
-
-  it("closes the Switch menu on applied and still does not toast", () => {
-    seedAttempt(
-      positiveAttempt({
-        userMessageId: USER_MESSAGE_ID,
-        turnId: TURN_ID,
-        reason: "rate_limit",
-        eligibleRungs: ALL_RUNGS,
-        resetsAt: RESETS_AT,
-        waitDisposition: "eligible",
-      }),
-    );
-    harness.listData = listTargetsResponse({
-      outcome: "listed",
-      failedTuple: FAILED_CLAUDE_TUPLE,
-      profileTargets: [],
-      modelTargets: [
-        fallbackModelTarget({
-          groupId: "grp-internal-secret-xyz",
-          harnessId: "codex",
-          modelFamily: "gpt-5",
-          model: "gpt-5",
-          reasoningEffort: null,
-          profileId: TARGET_CODEX_TUPLE.profileId,
-          severity: "ok",
-          usedPercent: 10,
-          target: TARGET_CODEX_TUPLE,
-          warnings: [],
-          selectable: true,
-          skip: null,
-        }),
-      ],
-      modelTargetsSkip: null,
-    });
-    harness.mutationResult = { outcome: "applied" };
-    renderActions(TURN_ID);
-    fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /Codex · gpt-5/ }));
-    });
-    expect(screen.queryByRole("button", { name: /Codex · gpt-5/ })).toBeNull();
-    expect(
-      screen.queryByText(
-        "That isn't available any more — this chat has moved on.",
-      ),
-    ).toBeNull();
-    expect(harness.toast).not.toHaveBeenCalled();
-  });
-
-  it("toasts a Retry refusal with the literal rung_unavailable copy", () => {
-    seedAttempt(
-      positiveAttempt({
-        userMessageId: USER_MESSAGE_ID,
-        turnId: TURN_ID,
-        reason: "rate_limit",
-        eligibleRungs: ALL_RUNGS,
-        resetsAt: RESETS_AT,
-        waitDisposition: "eligible",
-      }),
-    );
-    harness.mutationResult = { outcome: "rung_unavailable" };
-    renderActions(TURN_ID);
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    // Falsification: delete the `toast(message)` line from the
-    // `variables.rung !== "switch"` branch of `useFallbackRunManualRung`'s
-    // hook-level onSuccess (use-fallback-actions.ts) and this must go red.
-    //
-    // The falsifier this comment used to name - "drop the per-call onSuccess
-    // from the run() call site" - no longer exists: MF11 moved a bare rung's
-    // refusal off the per-call handler, which TanStack skips once the row's
-    // observer is gone, onto the hook-level one that outlives it. `run()`'s
-    // `mutate()` now passes no options object at all.
-    expect(harness.toast).toHaveBeenCalledWith(RUNG_UNAVAILABLE_LABEL);
-  });
-
-  it("a refused Retry (bare button) toasts once with the literal refusal sentence and publishes nothing to the announcer", () => {
-    seedAttempt(
-      positiveAttempt({
-        userMessageId: USER_MESSAGE_ID,
-        turnId: TURN_ID,
-        reason: "rate_limit",
-        eligibleRungs: ALL_RUNGS,
-        resetsAt: RESETS_AT,
-        waitDisposition: "eligible",
-      }),
-    );
-    harness.mutationResult = { outcome: "rung_unavailable" };
-    renderActions(TURN_ID);
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(harness.toast).toHaveBeenCalledTimes(1);
-    expect(harness.toast).toHaveBeenCalledWith(RUNG_UNAVAILABLE_LABEL);
-    // Falsification: route the `rung !== "switch"` branch in
-    // `useFallbackRunManualRung`'s onSuccess through `publishUnattended`
-    // instead of (or in addition to) `toast`, and THIS assertion must go red -
-    // a bare rung's refusal has exactly one channel, the toast.
-    expect(harness.publishedUnattended).toEqual([]);
-  });
-
-  it("toasts a Wait-until refusal too", () => {
-    seedAttempt(
-      positiveAttempt({
-        userMessageId: USER_MESSAGE_ID,
-        turnId: TURN_ID,
-        reason: "rate_limit",
-        eligibleRungs: ALL_RUNGS,
-        resetsAt: RESETS_AT,
-        waitDisposition: "eligible",
-      }),
-    );
-    harness.mutationResult = { outcome: "rung_unavailable" };
+    harness.mutationResult = { outcome: "rung_unavailable", detail: null };
     renderActions(TURN_ID);
     fireEvent.click(
       screen.getByRole("button", {
         name: `Wait until ${formatClockTime(RESETS_AT)}`,
       }),
     );
-    expect(harness.toast).toHaveBeenCalledWith(RUNG_UNAVAILABLE_LABEL);
+    expect(harness.toast).not.toHaveBeenCalled();
+    expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+      "Couldn't start the wait just now.",
+    );
+  });
+
+  it("clears the note when the next press starts", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.mutationResult = { outcome: "rung_unavailable", detail: null };
+    renderActions(TURN_ID);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(screen.getByTestId("failed-turn-refusal")).toBeDefined();
+    harness.deferResponses = true;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(screen.queryByTestId("failed-turn-refusal")).toBeNull();
+  });
+
+  it("says the chat moved on, with the next step, and draws no buttons, for attempt_not_latest", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.mutationResult = { outcome: "attempt_not_latest", detail: null };
+    renderActions(TURN_ID);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(harness.toast).not.toHaveBeenCalled();
+    expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+      "This chat has moved on since that message. Send a new message to continue.",
+    );
+    expect(screen.queryByTestId("failed-turn-actions")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  /**
+   * One render per refusal kind (spec Flow 4's table): the sentence the card
+   * writes, and the buttons it leaves. The expectations are literal and NOT read
+   * from the copy module, so a change to the module is a change here.
+   *
+   * The names are the buttons drawn after the refusal, in order, for a
+   * `rate_limit` attempt offering all three actions - so `Switch to…` leads and
+   * `Retry` is last, and dropping one shows as a shorter list rather than a
+   * different render.
+   */
+  describe("a refusal, by kind", () => {
+    const WAIT = `Wait until ${formatClockTime(RESETS_AT)}`;
+    const ALL = ["Switch to…", WAIT, "Retry"];
+    const REFUSALS: ReadonlyArray<{
+      readonly kind: string;
+      readonly text: string | null;
+      readonly left: ReadonlyArray<string>;
+    }> = [
+      {
+        kind: "turn_running",
+        text: "This chat is busy. The actions come back when the current turn ends.",
+        left: [],
+      },
+      { kind: "routing_active", text: null, left: [] },
+      {
+        kind: "worktree_missing",
+        text: "This chat's worktree no longer exists on Surya's MacBook. Start a new chat from this task.",
+        left: [],
+      },
+      {
+        kind: "no_workspace",
+        text: "This chat has no folder to run in any more. Start a new chat from this task.",
+        left: [],
+      },
+      {
+        kind: "message_changed",
+        text: "The original message changed, so it can't be replayed. Send it again from the composer.",
+        left: [],
+      },
+      {
+        kind: "prelaunch_failed",
+        text: "Couldn't start the replacement turn. Try again, or switch.",
+        left: ["Switch to…", "Retry"],
+      },
+      {
+        kind: "reset_passed",
+        text: "That limit has reset. Retry instead.",
+        left: ["Switch to…", "Retry"],
+      },
+      {
+        kind: "no_verified_reset",
+        text: "The provider hasn't said when this limit resets, so there's nothing to wait for.",
+        left: ["Switch to…", "Retry"],
+      },
+      {
+        kind: "host_unavailable",
+        text: "This chat's host is restarting. Try again in a moment.",
+        left: ALL,
+      },
+      {
+        kind: "settings_missing",
+        text: "This chat has no model set. Pick one in the composer and send again.",
+        left: [],
+      },
+      {
+        kind: "storage_failed",
+        text: "Couldn't save this chat's state just now. Try again.",
+        left: ALL,
+      },
+      {
+        kind: "target_unusable",
+        text: "That model can't be used right now. Pick another.",
+        left: ["Switch to…"],
+      },
+    ];
+
+    function refuse(input: {
+      readonly kind: string;
+      readonly retryable: boolean;
+      readonly label: string;
+    }): void {
+      seedAttempt(
+        positiveAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          reason: "rate_limit",
+          eligibleRungs: ALL_RUNGS,
+          resetsAt: RESETS_AT,
+          waitDisposition: "eligible",
+        }),
+      );
+      harness.mutationResult = {
+        outcome: "rung_unavailable",
+        detail: {
+          kind: input.kind,
+          label: input.label,
+          retryable: input.retryable,
+        },
+      };
+      renderActions(TURN_ID);
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    }
+
+    function buttonsLeft(): ReadonlyArray<string | null> {
+      return screen.queryAllByRole("button").map((b) => b.textContent);
+    }
+
+    it.each(REFUSALS)(
+      "$kind writes its sentence and leaves $left",
+      ({ kind, text, left }) => {
+        refuse({ kind, retryable: false, label: "the host's own label" });
+        expect(harness.toast).not.toHaveBeenCalled();
+        if (text === null) {
+          // The routing card on screen is the explanation; a second line here
+          // would be the same fact twice.
+          expect(screen.queryByTestId("failed-turn-refusal")).toBeNull();
+        } else {
+          expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+            text,
+          );
+        }
+        expect(buttonsLeft()).toEqual(left);
+        if (left.length === 0) {
+          expect(screen.queryByTestId("failed-turn-actions")).toBeNull();
+        } else {
+          // The lead is still exactly one filled button after a refusal took
+          // some away: the next action steps up rather than leaving no primary.
+          const filled = screen
+            .getAllByRole("button")
+            .filter((b) => b.getAttribute("data-variant") === "default");
+          expect(filled.map((b) => b.textContent)).toEqual([left[0]]);
+        }
+      },
+    );
+
+    it.each(REFUSALS)(
+      "$kind keeps every button when the host says pressing again can work",
+      ({ kind }) => {
+        refuse({ kind, retryable: true, label: "the host's own label" });
+        // The two kinds that say the chat is busy hide the row whatever the
+        // host says; the host brings the actions back itself.
+        const busy = kind === "turn_running" || kind === "routing_active";
+        expect(buttonsLeft()).toEqual(busy ? [] : ALL);
+      },
+    );
+
+    it("renders the host's label for the residue kind and keeps every button", () => {
+      refuse({
+        kind: "unknown",
+        retryable: false,
+        label: "Something unexpected happened.",
+      });
+      expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+        "Something unexpected happened.",
+      );
+      expect(buttonsLeft()).toEqual(ALL);
+    });
+
+    it("renders the host's label for a kind this build has never heard of", () => {
+      refuse({
+        kind: "a_kind_from_a_newer_host",
+        retryable: false,
+        label: "The newer host's sentence.",
+      });
+      expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+        "The newer host's sentence.",
+      );
+      expect(buttonsLeft()).toEqual(ALL);
+    });
+
+    it("says the neutral sentence, with Retry still enabled, when the host's label is blank", () => {
+      refuse({ kind: "unknown", retryable: false, label: "  " });
+      expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+        "Couldn't retry just now.",
+      );
+      expect(buttonNamed("Retry").disabled).toBe(false);
+      expect(buttonsLeft()).toEqual(ALL);
+    });
+
+    it("names the machine from the tab host record, and omits it without one", () => {
+      harness.hostEntry = null;
+      refuse({
+        kind: "worktree_missing",
+        retryable: false,
+        label: "Some other machine",
+      });
+      expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+        "This chat's worktree no longer exists on its host. Start a new chat from this task.",
+      );
+    });
+
+    it("carries no banned word and no raw code on any refusal sentence", () => {
+      for (const { kind } of REFUSALS) {
+        refuse({ kind, retryable: false, label: "the host's own label" });
+        const note = screen.queryByTestId("failed-turn-refusal");
+        if (note !== null) {
+          expect(note.textContent).not.toMatch(BANNED_VOCABULARY);
+          expect(note.textContent).not.toMatch(/fallback/i);
+          expect(note.textContent).not.toContain(kind);
+        }
+        cleanup();
+        harness.mutate.mockReset();
+      }
+    });
+  });
+
+  it("hands a refusal to the chat's announcer when the card is gone before the host answers", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.deferResponses = true;
+    const { unmount } = renderActions(TURN_ID);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(harness.pendingResponses).toHaveLength(1);
+    // A newer turn removed the row under the press - what `attempt_not_latest`
+    // MEANS - and the host answers a beat later.
+    unmount();
+    harness.pendingResponses[0]({
+      outcome: "attempt_not_latest",
+      detail: null,
+    });
+    // Never a toast, and not lost either: one channel, the announcer.
+    expect(harness.toast).not.toHaveBeenCalled();
+    expect(harness.publishedUnattended).toEqual([
+      {
+        hostId: HOST_ID,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        text: "This chat has moved on since that message. Send a new message to continue.",
+      },
+    ]);
+  });
+
+  it("publishes a confirmed action, and nothing else, when the press applies", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.mutationResult = { outcome: "applied", detail: null };
+    renderActions(TURN_ID);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(harness.toast).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("failed-turn-refusal")).toBeNull();
+    expect(harness.publishedUnattended).toEqual([]);
+    expect(harness.publishedActions).toHaveLength(1);
+  });
+
+  // The lead by cause, and exactly one filled button in every arrangement.
+  describe("the lead action", () => {
+    const CAUSES: ReadonlyArray<{
+      readonly reason:
+        | "rate_limit"
+        | "billing"
+        | "model_unavailable"
+        | "provider_unavailable";
+      readonly order: ReadonlyArray<string>;
+    }> = [
+      {
+        reason: "rate_limit",
+        order: [
+          "Switch to…",
+          `Wait until ${formatClockTime(RESETS_AT)}`,
+          "Retry",
+        ],
+      },
+      {
+        reason: "billing",
+        order: [
+          "Switch to…",
+          `Wait until ${formatClockTime(RESETS_AT)}`,
+          "Retry",
+        ],
+      },
+      {
+        reason: "model_unavailable",
+        order: [
+          "Retry",
+          "Switch to…",
+          `Wait until ${formatClockTime(RESETS_AT)}`,
+        ],
+      },
+      {
+        reason: "provider_unavailable",
+        order: [
+          "Retry",
+          "Switch to…",
+          `Wait until ${formatClockTime(RESETS_AT)}`,
+        ],
+      },
+    ];
+
+    it.each(CAUSES)(
+      "orders $reason as $order with one default button first",
+      ({ reason, order }) => {
+        seedAttempt(
+          lastFailedAttempt({
+            userMessageId: USER_MESSAGE_ID,
+            turnId: TURN_ID,
+            failure: {
+              reason,
+              resetsAt: RESETS_AT,
+              resetsAtSource: "provider",
+            },
+            eligibleRungs: ALL_RUNGS,
+            waitDisposition: "eligible",
+            switchDisposition: "eligible",
+            failedTuple: FAILED_CLAUDE_TUPLE,
+          }),
+        );
+        renderActions(TURN_ID);
+        const buttons = within(
+          screen.getByTestId("failed-turn-actions"),
+        ).getAllByRole("button");
+        expect(buttons.map((b) => b.textContent)).toEqual(order);
+        // Exactly one default; the rest outline. Never ghost or secondary.
+        expect(buttons.map((b) => b.getAttribute("data-variant"))).toEqual([
+          "default",
+          "outline",
+          "outline",
+        ]);
+      },
+    );
+
+    it("steps the next action up to the lead when the lead is not on offer", () => {
+      // A rate limit with no destination: the switch is withheld, so the wait
+      // leads rather than leaving a row with no filled button.
+      seedAttempt(
+        lastFailedAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          failure: {
+            reason: "rate_limit",
+            resetsAt: RESETS_AT,
+            resetsAtSource: "provider",
+          },
+          eligibleRungs: ["retry", "wait_once"],
+          waitDisposition: "eligible",
+          switchDisposition: "no_destination",
+          failedTuple: FAILED_CLAUDE_TUPLE,
+        }),
+      );
+      renderActions(TURN_ID);
+      const buttons = within(
+        screen.getByTestId("failed-turn-actions"),
+      ).getAllByRole("button");
+      expect(
+        buttons.map((b) => [b.textContent, b.getAttribute("data-variant")]),
+      ).toEqual([
+        [`Wait until ${formatClockTime(RESETS_AT)}`, "default"],
+        ["Retry", "outline"],
+      ]);
+    });
+
+    it("hands the Switch to… chooser the same variant the row drew for it", () => {
+      seedAttempt(
+        positiveAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          reason: "rate_limit",
+          eligibleRungs: ALL_RUNGS,
+          resetsAt: RESETS_AT,
+          waitDisposition: "eligible",
+        }),
+      );
+      renderActions(TURN_ID);
+      expect(lastPickerProps().triggerVariant).toBe("default");
+    });
   });
 
   /**
@@ -1519,7 +1694,7 @@ describe("FallbackManualRungActions", () => {
       seedAttempt(withheldSwitchAttempt(DEFAULT_SHAPED_TUPLE));
       renderActions(TURN_ID);
 
-      expect(screen.queryByRole("button", { name: "Switch…" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
       // The row is not merely bare - `retry` survives. A card that lost every
       // control would satisfy the line above with the whole DTO withheld.
       expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
@@ -1592,7 +1767,7 @@ describe("FallbackManualRungActions", () => {
       );
       renderActions(TURN_ID);
 
-      expect(screen.getByRole("button", { name: "Switch…" })).toBeDefined();
+      expect(screen.getByRole("button", { name: "Switch to…" })).toBeDefined();
       const root = screen.getByRole("button", { name: "Retry" }).parentElement;
       // No explanation beside a working button. The sentence exists to explain
       // an ABSENCE, and one printed next to the control it describes would be
@@ -1622,7 +1797,7 @@ describe("FallbackManualRungActions", () => {
       );
       renderActions(TURN_ID);
 
-      expect(screen.getByRole("button", { name: "Switch…" })).toBeDefined();
+      expect(screen.getByRole("button", { name: "Switch to…" })).toBeDefined();
       const root = screen.getByRole("button", { name: "Retry" }).parentElement;
       expect(root?.textContent ?? "").not.toContain("No other model is set up");
     });
@@ -1635,7 +1810,7 @@ describe("FallbackManualRungActions", () => {
       seedAttempt(withheldSwitchAttempt(null));
       renderActions(TURN_ID);
 
-      expect(screen.queryByRole("button", { name: "Switch…" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
       const root = screen.getByRole("button", { name: "Retry" }).parentElement;
       expect(root?.textContent ?? "").not.toContain("No other model is set up");
     });

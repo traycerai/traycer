@@ -12,16 +12,17 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
  * silently, through a panel that looks entirely correct.
  *
  * Every fallback surface with a settings link routes through this hook rather
- * than calling `openSettings` itself. That is not tidiness: the links are the
- * grace card, the waiting card, both attribution shapes (the divider-rule
- * notice's expanded details and the resumed-turn marker's body), the error
- * card's `auth` row, and the destination menu's empty state - and a rule
- * applied at six call sites is a rule that holds at five of them.
+ * than calling `openSettings` itself. That is not tidiness: the entry points
+ * are the routing card's gear (countdown and waiting), the settled card's gear,
+ * both attribution shapes (the divider-rule notice's expanded details and the
+ * resumed-turn marker's body), and the destination picker's empty state - and
+ * a rule applied at five call sites is a rule that holds at four of them.
  *
- * The two fallback surfaces that deliberately carry NO link are the
- * switch-back banner and the background-items row. Both describe a chat that
- * is working: the banner is offering a return and the row is counting down a
- * wait, and neither is a moment where "why did this happen" is the question.
+ * The routing surfaces that deliberately carry NO entry point are the
+ * switch-back offer, the background-items row and the plain failed-turn card.
+ * The first two describe a chat that is working - one offers a return, the
+ * other counts down a wait - and the failed-turn card's job is the next action
+ * on the turn, not the policy behind it.
  *
  * `hostId` is the TAB's host (`useTabHostId()`), never the app-wide effective
  * host: a chat tab is bound to its host for life, and the policy the card

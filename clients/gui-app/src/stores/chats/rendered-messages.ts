@@ -101,6 +101,7 @@ import type {
 } from "@/stores/composer/chat-store";
 import type { AgentSenderDisplay } from "@/lib/chat/sender-display";
 import { manualRungAnchorSegmentId } from "@/stores/chats/manual-rung-anchor";
+import { routingSettledNoticeSegmentId } from "@/stores/chats/routing-settled-notice";
 import type {
   LiveAssistantMessage,
   PendingUserMessage,
@@ -364,10 +365,16 @@ function textBlockContentVersion(
   hash = hashStringField(hash, notice.tone);
   hash = hashStringField(hash, notice.title);
   hash = hashStringField(hash, notice.message ?? "");
-  return notice.details.reduce((next, detail) => {
+  hash = notice.details.reduce((next, detail) => {
     const withLabel = hashStringField(next, detail.label);
     return hashStringField(withLabel, detail.value);
   }, hash);
+  // The receipt is a rendered field too, and the one that turns a divider into
+  // the settled card: a re-upsert that only ADDS it (or clears it, when a
+  // later settlement supersedes this one) must not serve the cached segment.
+  // JSON rather than a field walk: every value in it is a rendered string or
+  // a timestamp, and its shape is the protocol's to grow.
+  return hashStringField(hash, JSON.stringify(notice.receipt ?? null));
 }
 
 function planBlockContentVersion(
@@ -3204,6 +3211,11 @@ function renderAssistantTurnRows(
  * `chat-stable-rows.ts` compares `manualRungAnchorId` like every other field,
  * and handing back a fresh object for a row whose answer is "not you" would
  * churn a row per projection to say nothing.
+ *
+ * The anchor's row also learns whether it holds the settled routing notice
+ * (`routingSettledNoticeSegmentId`, asked of that ROW only): the settled card
+ * is the anchor's card with the notice folded in, so the two stamps are made
+ * together and cannot name different rows.
  */
 function withManualRungAnchor(
   rows: ReadonlyArray<ChatMessageModel>,
@@ -3211,12 +3223,22 @@ function withManualRungAnchor(
   const anchorId = manualRungAnchorSegmentId(assistantTurnSegments(rows));
   // The common case by a wide margin: a turn with no error segment at all.
   if (anchorId === null) return rows;
-  return rows.map((row) =>
-    row.role === "assistant" &&
-    row.segments.some((segment) => segment.id === anchorId)
+  return rows.map((row) => {
+    if (
+      row.role !== "assistant" ||
+      !row.segments.some((segment) => segment.id === anchorId)
+    ) {
+      return row;
+    }
+    const settledId = routingSettledNoticeSegmentId(row.segments);
+    return settledId === null
       ? { ...row, manualRungAnchorId: anchorId }
-      : row,
-  );
+      : {
+          ...row,
+          manualRungAnchorId: anchorId,
+          routingSettledNoticeId: settledId,
+        };
+  });
 }
 
 /**
@@ -3994,6 +4016,7 @@ function buildAssistantSegments(
         title: codexRetryTitle(block.message),
         message: null,
         details: [{ label: "Reported by Codex", value: block.message }],
+        receipt: null,
         parentId: block.parentBlockId ?? null,
       });
       continue;
@@ -4607,6 +4630,9 @@ const BLOCK_HANDLERS: {
         title: notice.title,
         message: notice.message,
         details: notice.details,
+        // Absent (an older host, or a notice persisted before the key) and
+        // `null` (a superseded settlement) are one answer here: a divider.
+        receipt: notice.receipt ?? null,
         parentId: block.parentBlockId ?? null,
       };
     }

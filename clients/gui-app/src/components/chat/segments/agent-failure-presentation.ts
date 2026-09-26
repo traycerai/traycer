@@ -92,3 +92,38 @@ export function agentFailureHeadline(
   if (reason === null) return null;
   return fallbackReasonLabel(reason);
 }
+
+/**
+ * Host error codes that arrive with NO typed `failure` and are still
+ * interruptions, each with its headline.
+ *
+ * The untyped rule above ("nothing can vouch for it, so it is red") is right
+ * for a row the client knows nothing about, and wrong for a code the client
+ * DOES know: `CLAUDE_RUNTIME_DISPOSED` is the host tearing a Claude Code
+ * session down under a running turn - a host restart, an idle eviction - which
+ * the host marks recoverable and which a Retry answers. Rendering it red with
+ * the raw code as the loudest thing on the card is the "looks like a crash"
+ * complaint this module exists to answer. A list of codes, not a pattern: each
+ * entry is a claim about one code's meaning, made where it can be reviewed.
+ */
+const INTERRUPTED_UNTYPED_CODES: ReadonlyMap<string, string> = new Map([
+  ["CLAUDE_RUNTIME_DISPOSED", "Session ended"],
+]);
+
+export interface UntypedCodePresentation {
+  readonly presentation: "interrupted";
+  readonly headline: string;
+}
+
+/**
+ * The presentation for a row with no typed reason, by its code - or `null`
+ * when the code is not one this client can vouch for, which keeps the red row.
+ */
+export function presentationForUntypedCode(
+  code: string | null,
+): UntypedCodePresentation | null {
+  if (code === null) return null;
+  const headline = INTERRUPTED_UNTYPED_CODES.get(code);
+  if (headline === undefined) return null;
+  return { presentation: "interrupted", headline };
+}

@@ -1010,7 +1010,8 @@ function foldedQueue(
   if (!agentsFolded) return queue;
   const items = queue.items.filter((item) => !isReceivedAgentResponse(item));
   if (items.length === queue.items.length) return queue;
-  return { status: queue.status, items };
+  // Spread, so `pausedReason` (and any later optional key) survives the fold.
+  return { ...queue, items };
 }
 
 function fileCountPhrase(count: number): string {

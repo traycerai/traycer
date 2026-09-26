@@ -72,6 +72,7 @@ import { FRESH_SESSION_HELPER } from "@/components/chat/fallback/fallback-copy";
 import { usePublishConfirmedManualFallbackAction } from "@/components/chat/fallback/use-confirmed-manual-action";
 import { usePublishUnattendedFallbackOutcome } from "@/components/chat/fallback/use-unattended-fallback-outcome";
 import { useFallbackRunManualRung } from "@/components/chat/fallback/use-fallback-actions";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
 import { ChatComposerFallbackBanners } from "@/components/chat/fallback/chat-composer-fallback-banners";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -286,6 +287,7 @@ function providerNoticeSegment(input: {
   return {
     id: input.id,
     kind: "provider_notice",
+    receipt: null,
     status: "completed",
     noticeKind: input.noticeKind,
     tone: "info",
@@ -694,7 +696,7 @@ const runManualRungState = vi.hoisted(() => ({
   // working unchanged; only the unmount-survival test below swaps in a
   // controllable deferred promise.
   handler: (): Promise<RunManualRungResponse> =>
-    Promise.resolve({ outcome: "applied" }),
+    Promise.resolve({ outcome: "applied", detail: null }),
   callCount: { current: 0 },
 }));
 
@@ -744,9 +746,62 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+// The routing chooser (opened from the waiting card's "Choose another model…")
+// reads the host through these hooks. The picker suites' shared doubles stand
+// in for them here, and nothing else changes: the store, the announcer and the
+// pick's mutation lifecycle - what this file proves - stay real.
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", async () =>
+  (await import("../fallback/__tests__/routing-picker-kit")).catalogModule(),
+);
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).providersEnsurePackModule(),
+);
+vi.mock(
+  "@/hooks/providers/use-providers-set-profile-enabled-mutation",
+  async () =>
+    (
+      await import("../fallback/__tests__/routing-picker-kit")
+    ).providersSetProfileEnabledModule(),
+);
+vi.mock("@/hooks/host/use-reactive-host-readiness", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).reactiveHostReadinessModule(),
+);
+vi.mock("@/hooks/agent/use-host-reachability", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).hostReachabilityModule(),
+);
+vi.mock("@/hooks/host/use-addressable-host-id", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).addressableHostIdModule(),
+);
+vi.mock("@/hooks/host/use-host-directory-entry", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).hostDirectoryEntryModule(),
+);
+vi.mock("@/hooks/host/use-host-directory-list-query", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).hostDirectoryListModule(),
+);
+vi.mock("@/hooks/rate-limits/use-profile-usage-comparison", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).usageComparisonModule(),
+);
+vi.mock("react-virtuoso", async () =>
+  (await import("../fallback/__tests__/routing-picker-kit")).virtuosoModule(),
+);
+
 /**
  * `useFallbackModelLabels` alone, kept real everywhere else in the module -
- * same double as `fallback-grace-card.test.tsx`, and for the same reason:
+ * same double as the retired grace-card suite used, and for the same reason:
  * this file's real `HostClient`/`MockHostMessenger` has no
  * `agent.gui.listHarnesses`/`agent.gui.listModels` handler, so the real hook
  * would hit an unhandled-method `HostRpcError` on every mount - which is
@@ -1025,18 +1080,20 @@ function renderBanners(
 ) {
   const result = render(
     <QueryClientProvider client={queryClient}>
-      <ChatComposerBannerPortalProvider>
-        <ChatComposerFallbackBanners
-          topBannerKind="fallback"
-          fallback={{ pending, pendingReturn: undefined }}
-          rateLimitAdvisory={null}
-          client={liveHostClient}
-          chatId={CHAT_ID}
-          epicId={EPIC_ID}
-          hostId={HOST_ID}
-          canAct
-        />
-      </ChatComposerBannerPortalProvider>
+      <TabHostProvider hostId={HOST_ID}>
+        <ChatComposerBannerPortalProvider>
+          <ChatComposerFallbackBanners
+            topBannerKind="fallback"
+            fallback={{ pending, pendingReturn: undefined }}
+            rateLimitAdvisory={null}
+            client={liveHostClient}
+            chatId={CHAT_ID}
+            epicId={EPIC_ID}
+            hostId={HOST_ID}
+            canAct
+          />
+        </ChatComposerBannerPortalProvider>
+      </TabHostProvider>
     </QueryClientProvider>,
   );
   return {
@@ -1044,18 +1101,20 @@ function renderBanners(
     rerenderWith: (nextPending: PendingFallback | undefined) => {
       result.rerender(
         <QueryClientProvider client={queryClient}>
-          <ChatComposerBannerPortalProvider>
-            <ChatComposerFallbackBanners
-              topBannerKind="fallback"
-              fallback={{ pending: nextPending, pendingReturn: undefined }}
-              rateLimitAdvisory={null}
-              client={liveHostClient}
-              chatId={CHAT_ID}
-              epicId={EPIC_ID}
-              hostId={HOST_ID}
-              canAct
-            />
-          </ChatComposerBannerPortalProvider>
+          <TabHostProvider hostId={HOST_ID}>
+            <ChatComposerBannerPortalProvider>
+              <ChatComposerFallbackBanners
+                topBannerKind="fallback"
+                fallback={{ pending: nextPending, pendingReturn: undefined }}
+                rateLimitAdvisory={null}
+                client={liveHostClient}
+                chatId={CHAT_ID}
+                epicId={EPIC_ID}
+                hostId={HOST_ID}
+                canAct
+              />
+            </ChatComposerBannerPortalProvider>
+          </TabHostProvider>
         </QueryClientProvider>,
       );
     },
@@ -1248,7 +1307,8 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       chatTurnMinimapSide: "right",
       quoteReplyEnabled: false,
     });
-    runManualRungState.handler = () => Promise.resolve({ outcome: "applied" });
+    runManualRungState.handler = () =>
+      Promise.resolve({ outcome: "applied", detail: null });
     runManualRungState.callCount.current = 0;
     modelLabelOverride.value = null;
     catalogueSettled.value = true;
@@ -2011,7 +2071,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // the QueryClient's mutation cache, not by the unmounted component) is
     // what must still fire.
     await act(async () => {
-      firstDeferred.resolve({ outcome: "applied" });
+      firstDeferred.resolve({ outcome: "applied", detail: null });
       await firstDeferred.promise;
     });
     await flushAnnouncer();
@@ -2050,7 +2110,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     });
     secondTrigger.unmount();
     await act(async () => {
-      secondDeferred.resolve({ outcome: "applied" });
+      secondDeferred.resolve({ outcome: "applied", detail: null });
       await secondDeferred.promise;
     });
     await flushAnnouncer();
@@ -2341,7 +2401,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
     const chat = renderChat(baselineEpoch, undefined);
     runManualRungState.handler = () =>
-      Promise.resolve({ outcome: "no_active_traversal" });
+      Promise.resolve({ outcome: "no_active_traversal", detail: null });
     const trigger = renderTrigger(
       {
         userMessageId: "user-msg-refused",
@@ -2416,11 +2476,13 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       const deferred = makeDeferred<ChooseTargetResponse>();
       chooseTargetState.handler = () => deferred.promise;
 
-      fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Choose another model…" }),
+      );
+      // The chooser stages a pick and the footer's Switch sends it.
+      fireEvent.click(screen.getByRole("option", { name: /gpt-6-astra-mini/ }));
       act(() => {
-        fireEvent.click(
-          screen.getByRole("button", { name: /gpt-6-astra-mini/ }),
-        );
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
       });
 
       // The RPC stays unresolved. The PARENT transitions to "switching" -
@@ -2430,7 +2492,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       // teardown.
       banners.rerenderWith(switchingPending(2));
       expect(
-        screen.queryByRole("button", { name: /gpt-6-astra-mini/ }),
+        screen.queryByRole("option", { name: /gpt-6-astra-mini/ }),
       ).toBeNull();
 
       const commits = await captureLiveRegionCommits(() => {
@@ -2478,11 +2540,13 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       const deferred = makeDeferred<ChooseTargetResponse>();
       chooseTargetState.handler = () => deferred.promise;
 
-      fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Choose another model…" }),
+      );
+      // The chooser stages a pick and the footer's Switch sends it.
+      fireEvent.click(screen.getByRole("option", { name: /gpt-6-astra-mini/ }));
       act(() => {
-        fireEvent.click(
-          screen.getByRole("button", { name: /gpt-6-astra-mini/ }),
-        );
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
       });
       banners.rerenderWith(switchingPending(2));
 
@@ -2509,11 +2573,13 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       const deferred = makeDeferred<ChooseTargetResponse>();
       chooseTargetState.handler = () => deferred.promise;
 
-      fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Choose another model…" }),
+      );
+      // The chooser stages a pick and the footer's Switch sends it.
+      fireEvent.click(screen.getByRole("option", { name: /gpt-6-astra-mini/ }));
       act(() => {
-        fireEvent.click(
-          screen.getByRole("button", { name: /gpt-6-astra-mini/ }),
-        );
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
       });
       // Deliberately NO parent transition here - the menu stays mounted and
       // OPEN (`inlineMenuOpen: true`) for the whole test, which is what stops
@@ -3117,7 +3183,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // and (module-mocked) the exact same resolver function the announcer
     // above just read.
     renderBanners(pending, chat.queryClient);
-    const card = screen.getByTestId("fallback-grace-card").textContent;
+    const card = screen.getByTestId("routing-card").textContent;
     expect(card).toContain("Astra Mini");
     expect(card).not.toContain(TARGET_TUPLE.model);
   });

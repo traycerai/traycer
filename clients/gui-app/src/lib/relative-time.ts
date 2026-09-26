@@ -656,6 +656,31 @@ export function formatGraceCountdown(deadline: number, now: number): string {
  * with it.
  */
 export function useGraceCountdown(deadline: number | null): string | null {
+  const state = useGraceCountdownState(deadline);
+  return state === null ? null : state.label;
+}
+
+/** A grace countdown's label and how much of it is left, from one clock sample. */
+export interface GraceCountdownState {
+  /** {@link formatGraceCountdown}'s string for this sample. */
+  readonly label: string;
+  /** Milliseconds left at this sample, clamped at zero. */
+  readonly remainingMs: number;
+}
+
+/**
+ * {@link useGraceCountdown} with the number behind the label, for a surface
+ * that draws the countdown as well as saying it (the routing card's drain
+ * bar).
+ *
+ * Both halves come from the SAME `useSyncExternalStore` return, and that is
+ * the whole contract: a render-time read of the clock is memoized on the
+ * deadline under the React Compiler, so a bar sized from a second read would
+ * freeze at its first width while the label beside it kept ticking.
+ */
+export function useGraceCountdownState(
+  deadline: number | null,
+): GraceCountdownState | null {
   const now = useSyncExternalStore(
     secondClock.subscribe,
     secondClock.sampledNow,
@@ -672,5 +697,8 @@ export function useGraceCountdown(deadline: number | null): string | null {
     secondClock.resample();
   }, [deadline]);
   if (deadline === null) return null;
-  return formatGraceCountdown(deadline, now);
+  return {
+    label: formatGraceCountdown(deadline, now),
+    remainingMs: Math.max(0, deadline - now),
+  };
 }

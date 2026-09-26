@@ -1,4 +1,5 @@
 import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
+import { modelRowElementId } from "@/components/home/pickers/harness-model-picker-keyboard";
 import { Badge } from "@/components/ui/badge";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
@@ -125,8 +126,4 @@ function modelRowTooltipLabel(
   return imageLabel === null
     ? deprecationNotice
     : `${deprecationNotice} · ${imageLabel}`;
-}
-
-function modelRowElementId(idPrefix: string, rowId: string): string {
-  return `${idPrefix}-row-${rowId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 }

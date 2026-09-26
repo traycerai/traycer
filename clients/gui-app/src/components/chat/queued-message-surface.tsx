@@ -53,7 +53,14 @@ import type {
   ChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ComposerContentPreview } from "@/components/chat/composer/composer-content-preview";
-import { isReceivedAgentResponse } from "@/components/chat/chat-queue-utils";
+import {
+  isReceivedAgentResponse,
+  queuePausedAfterError,
+} from "@/components/chat/chat-queue-utils";
+import {
+  QUEUE_PAUSED_AFTER_ERROR_LABEL,
+  QUEUE_PAUSED_AFTER_ERROR_TOOLTIP,
+} from "@/components/chat/fallback/fallback-copy";
 import {
   QUEUED_MESSAGE_DND_MODIFIERS,
   useQueuedMessageReorderDnd,
@@ -157,6 +164,7 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
     [items],
   );
   const queueStatus = props.queue.status;
+  const pausedAfterError = queuePausedAfterError(props.queue);
   const hasSteerRestartPending = useMemo(
     () =>
       items.some(
@@ -260,6 +268,7 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
                       index={index}
                       orderKey={reorderDnd.orderKey}
                       queueStatus={queueStatus}
+                      pausedAfterError={pausedAfterError}
                       canReorder={reorderableCount > 1}
                       canAct={props.canAct}
                       readOnly={props.readOnly}
@@ -539,6 +548,8 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   readonly index: number;
   readonly orderKey: string;
   readonly queueStatus: ChatSessionState["queue"]["status"];
+  /** The queue is held because the last turn failed (`queuePausedAfterError`). */
+  readonly pausedAfterError: boolean;
   readonly canReorder: boolean;
   readonly canAct: boolean;
   readonly readOnly: boolean;
@@ -561,6 +572,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     index,
     orderKey,
     queueStatus,
+    pausedAfterError,
     canReorder,
     canAct,
     readOnly,
@@ -621,7 +633,11 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     onAbortSteer(promptItem);
   }, [onAbortSteer, promptItem]);
   const editActionCopy = queuedMessageEditActionCopy(item);
-  const statusLabel = queuedMessageStatusLabel(item);
+  const statusLabel = queuedMessageStatusLabel(item, pausedAfterError);
+  const statusTooltip =
+    item.status === "paused" && pausedAfterError
+      ? QUEUE_PAUSED_AFTER_ERROR_TOOLTIP
+      : null;
   const showDropIndicatorBefore = dropPreview?.index === index;
   const showDropIndicatorAfter = shouldShowDropIndicatorAfter({
     dropPreview,
@@ -665,6 +681,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
       <QueuedMessageRowContent
         item={item}
         statusLabel={statusLabel}
+        statusTooltip={statusTooltip}
         actionState={actionState}
         showOwnerActions={chrome.showOwnerActions}
         showManagedCommandCancel={chrome.showManagedCommandCancel}
@@ -686,6 +703,8 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
 function QueuedMessageRowContent(props: {
   readonly item: ChatQueuedItem;
   readonly statusLabel: string | null;
+  /** Why the status is what it is, where the label alone does not say. */
+  readonly statusTooltip: string | null;
   readonly actionState: QueuedMessageRowActionState;
   readonly showOwnerActions: boolean;
   readonly showManagedCommandCancel: boolean;
@@ -735,6 +754,7 @@ function QueuedMessageRowContent(props: {
             {props.statusLabel !== null ? (
               <QueuedMessageStatusBadge
                 label={props.statusLabel}
+                tooltip={props.statusTooltip}
                 pulsing={props.actionState.isSteering}
                 embedded={framed}
               />
@@ -998,7 +1018,19 @@ function queuedMessageRowActionState(
   };
 }
 
-function queuedMessageStatusLabel(item: ChatQueuedItem): string | null {
+/**
+ * The row's status pill. A paused row says WHY when the queue is held after a
+ * failed turn ("Paused after an error") - the transcript no longer carries a
+ * separate card for the held queue, so this pill is where it is said (user
+ * ruling, 2026-09-26). Any other pause keeps today's "Paused".
+ */
+function queuedMessageStatusLabel(
+  item: ChatQueuedItem,
+  pausedAfterError: boolean,
+): string | null {
+  const pausedLabel = pausedAfterError
+    ? QUEUE_PAUSED_AFTER_ERROR_LABEL
+    : "Paused";
   if (isOptimisticQueuedItem(item)) return "Queuing";
   if (item.kind !== "prompt") {
     // Both host-authored kinds (a shell's output, a forward's interruption)
@@ -1012,7 +1044,7 @@ function queuedMessageStatusLabel(item: ChatQueuedItem): string | null {
     // received-agent rows' "Will steer"), so the user knows the cancel
     // window is the current turn, not some later one.
     if (item.status === "steering") return "Delivering";
-    if (item.status === "paused") return "Paused";
+    if (item.status === "paused") return pausedLabel;
     return item.delivery === "same_turn" ? "Will deliver" : null;
   }
   if (item.status === "steer_requested") {
@@ -1023,7 +1055,7 @@ function queuedMessageStatusLabel(item: ChatQueuedItem): string | null {
   if (item.status === "steering") return "Steering";
   if (item.status === "injected") return "Embedding";
   if (item.status === "fallback") return "After turn";
-  if (item.status === "paused") return "Paused";
+  if (item.status === "paused") return pausedLabel;
   if (item.delivery === "same_turn") {
     // Received A2A responses ride the same `same_turn` (steer) delivery as user
     // follow-ups, but they are system-owned and read-only: the user can only
@@ -1036,26 +1068,41 @@ function queuedMessageStatusLabel(item: ChatQueuedItem): string | null {
 
 function QueuedMessageStatusBadge(props: {
   readonly label: string;
+  /** The reason behind the label, on hover and focus; `null` for none. */
+  readonly tooltip: string | null;
   readonly pulsing: boolean;
   readonly embedded: boolean;
 }) {
+  // `TooltipWrapper` degrades to a plain Slot on a `null` label, so the badge
+  // is the same element with or without a reason.
   return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground",
-        props.embedded ? null : "border border-border/60 bg-background/70",
-      )}
+    <TooltipWrapper
+      label={props.tooltip}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {props.pulsing ? (
-        <LivePulse
-          size="xs"
-          tone="active"
-          ariaLabel={`${props.label} queued message`}
-          className={undefined}
-        />
-      ) : null}
-      {props.label}
-    </span>
+      <span
+        data-testid="queued-message-status-badge"
+        // Focusable only when there is a reason to reveal, so keyboard users
+        // reach the tooltip without every pill becoming a tab stop.
+        tabIndex={props.tooltip === null ? undefined : 0}
+        className={cn(
+          "inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground",
+          props.embedded ? null : "border border-border/60 bg-background/70",
+        )}
+      >
+        {props.pulsing ? (
+          <LivePulse
+            size="xs"
+            tone="active"
+            ariaLabel={`${props.label} queued message`}
+            className={undefined}
+          />
+        ) : null}
+        {props.label}
+      </span>
+    </TooltipWrapper>
   );
 }
 

@@ -1,15 +1,21 @@
+import type { ReactNode } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   readableModelMatch,
   resolveModelBySlug,
 } from "@traycer/protocol/host/agent/gui/model-slug-resolution";
+import type { ProfileDropdownUsageEntry } from "@/components/providers/profile-dropdown-usage";
 import {
   type HarnessModelSelection,
   type HarnessOption,
   type ModelOption,
   type ProviderId,
+  type ReasoningFallback,
+  type ReasoningLevel,
   modelDisplayLabel,
   modelMetadataString,
+  normalizeReasoningForModel,
 } from "@/components/home/data/landing-options";
 
 export interface HarnessModelSource {
@@ -60,6 +66,133 @@ export interface HarnessModelRow {
   readonly searchProviderId: string;
   readonly searchOpenCodeProviderLabel: string;
   readonly searchOpenCodeProviderId: string;
+}
+
+/**
+ * A catalog model row as the picker's list carries it, beside the rows an
+ * embedding injects. The search index and every helper below keep working on
+ * the bare {@link HarnessModelRow}; only the list tags it.
+ */
+export type HarnessModelListRow = { readonly kind: "model" } & HarnessModelRow;
+
+/** What confirming a suggestion does, beyond moving the picker's selection. */
+export type SuggestionAction =
+  | {
+      readonly kind: "switch";
+      /**
+       * The run tuple the host built for this destination. The row commits
+       * its (harness, model, profile) and this effort to the store, so the
+       * rail, the model list and the effort footer follow it. `null` for a
+       * destination the host could not build a tuple for - such a row is
+       * never selectable, and is listed for the reason it carries.
+       */
+      readonly target: ChatRunSettings | null;
+    }
+  | { readonly kind: "retry" }
+  | { readonly kind: "wait"; readonly resetsAt: number };
+
+/**
+ * A suggestion's usage cell. `none` draws nothing (a row with no account to
+ * read, or a provider this client cannot check); `not-checked` is a check
+ * that failed, and carries the refresh that asks again.
+ */
+export type SuggestionUsage =
+  | { readonly kind: "none" }
+  | { readonly kind: "checking" }
+  | { readonly kind: "reading"; readonly entry: ProfileDropdownUsageEntry }
+  | { readonly kind: "not-checked"; readonly onRefresh: () => void };
+
+/**
+ * A row an embedding puts above the browsed provider's models - the routing
+ * chooser's "Suggested" destinations. Rendered by `SuggestionItem`, and in the
+ * same list as the model rows so arrows, Enter and the active descendant treat
+ * both alike.
+ */
+export interface SuggestionRow {
+  readonly kind: "suggestion";
+  readonly id: string;
+  readonly harnessId: ProviderId;
+  /** The slug a `switch` commits; `""` for a row with nothing to commit. */
+  readonly modelId: string;
+  readonly profileId: string | null;
+  /**
+   * What the row is titled. Usually text; a node where the surface draws part
+   * of it specially (the routing chooser's tier PATTERN, badged and in a mono
+   * face) - the picker renders it as given and reads nothing from it.
+   */
+  readonly title: ReactNode;
+  readonly subtitle: string | null;
+  /** One short reason, shown under the title - why a row is dimmed, most often. */
+  readonly note: string | null;
+  readonly usage: SuggestionUsage;
+  readonly selectable: boolean;
+  readonly recommended: boolean;
+  readonly action: SuggestionAction;
+}
+
+/** The non-selectable item that heads the injected rows. */
+export interface SuggestionHeadingRow {
+  readonly kind: "suggestion-heading";
+  readonly id: string;
+}
+
+export type HarnessModelPickerRow =
+  | HarnessModelListRow
+  | SuggestionRow
+  | SuggestionHeadingRow;
+
+/** The store's pick, as {@link suggestionIsPick} compares it. */
+export interface SuggestionPickState {
+  readonly selection: HarnessModelSelection;
+  /** The store's DERIVED effort: what a turn on the pick would run at. */
+  readonly reasoning: ReasoningLevel;
+  readonly selectedModel: ModelOption | null;
+  /** The fallback the surface's store resolves an unset effort through. */
+  readonly reasoningFallback: ReasoningFallback;
+}
+
+/**
+ * Whether a suggestion IS the store's current pick: a selectable `switch` row
+ * naming the same (harness, model, account) at the same EFFECTIVE effort.
+ *
+ * One definition for the two questions that must agree - which row the list
+ * checks, and whether the confirm sends that row's host-built tuple. Effort is
+ * part of it because two rows can differ in nothing else, and a row checked
+ * after its effort changed would be a check mark over a tuple the confirm
+ * does not send.
+ *
+ * Effective on both sides, never the raw representation. The store's side is
+ * its derived effort. The row's is its target's effort or, where the target
+ * names none ("the model's default"), what the store derives `""` to on that
+ * model under its own fallback. So a plain model pick that resolves to a row's
+ * explicit effort matches that row, and a row with no effort matches the store
+ * that committed it - a raw `""` the derive has already turned into the
+ * default's name on any model that advertises efforts.
+ */
+export function suggestionIsPick(
+  row: SuggestionRow,
+  pick: SuggestionPickState,
+): boolean {
+  if (!row.selectable || row.action.kind !== "switch") return false;
+  const target = row.action.target;
+  if (target === null) return false;
+  if (
+    row.harnessId !== pick.selection.harnessId ||
+    row.modelId !== pick.selection.modelSlug ||
+    row.profileId !== pick.selection.profileId
+  ) {
+    return false;
+  }
+  const rowEffort =
+    target.reasoningEffort ??
+    normalizeReasoningForModel("", pick.selectedModel, pick.reasoningFallback);
+  return rowEffort === pick.reasoning;
+}
+
+export function toModelListRows(
+  rows: ReadonlyArray<HarnessModelRow>,
+): ReadonlyArray<HarnessModelListRow> {
+  return rows.map((row) => ({ kind: "model", ...row }));
 }
 
 export interface HarnessModelRowSection {

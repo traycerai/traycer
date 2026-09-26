@@ -24,6 +24,7 @@ import type {
   InterviewSegment,
   MessageSegment,
 } from "@/stores/composer/chat-store";
+import { QUEUE_PAUSED_AFTER_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import { makeMessage } from "./chat-message-fixtures";
 
 const TILE_INSTANCE_ID = "chat-find-test-tile";
@@ -1054,6 +1055,7 @@ describe("chat find projection", () => {
         {
           id: "notice-top",
           kind: "provider_notice",
+          receipt: null,
           status: "completed",
           noticeKind: "model_rerouted",
           tone: "warning",
@@ -1088,6 +1090,7 @@ describe("chat find projection", () => {
         {
           id: "retry-notice",
           kind: "provider_notice",
+          receipt: null,
           status: "streaming",
           noticeKind: "harness_message",
           presentation: "retry",
@@ -1137,6 +1140,7 @@ describe("chat find projection", () => {
             {
               id: "notice-nested",
               kind: "provider_notice",
+              receipt: null,
               status: "completed",
               noticeKind: "model_rerouted",
               tone: "info",
@@ -1346,6 +1350,184 @@ describe("chat find projection", () => {
     )[0];
 
     expect(row.units).toEqual([]);
+  });
+
+  describe("the settled routing card's units", () => {
+    const NOTICE_TITLE = "Routing stopped zqtitle";
+    const NOTICE_MESSAGE = "Every account said no zqmessage.";
+    const ERROR_MESSAGE = "Provider blew up zqerror";
+    const ERROR_CODE = "ZQ_ERROR_CODE";
+    const DETAIL_VALUE = "zqdetailvalue";
+
+    function settledRow(ids: {
+      readonly routingSettledNoticeId: string | null;
+      readonly manualRungAnchorId: string | null;
+    }): ChatMessageModel {
+      const base: ChatMessageModel = {
+        ...makeMessage(60, "assistant"),
+        segments: [
+          {
+            id: "settled-text",
+            kind: "text",
+            markdown: "Other segment zqtext stays findable.",
+            isStreaming: false,
+          },
+          {
+            id: "settled-error",
+            kind: "error",
+            message: ERROR_MESSAGE,
+            recoverable: true,
+            code: ERROR_CODE,
+            failure: null,
+          },
+          {
+            id: "settled-notice",
+            kind: "provider_notice",
+            receipt: {
+              causeLabel: "Rate limit reached",
+              steps: [],
+            },
+            status: "completed",
+            noticeKind: "fallback_applied",
+            tone: "warning",
+            title: NOTICE_TITLE,
+            message: NOTICE_MESSAGE,
+            details: [{ label: "Reported by", value: DETAIL_VALUE }],
+            parentId: null,
+          },
+        ],
+      };
+      return {
+        ...base,
+        ...(ids.routingSettledNoticeId === null
+          ? {}
+          : { routingSettledNoticeId: ids.routingSettledNoticeId }),
+        ...(ids.manualRungAnchorId === null
+          ? {}
+          : { manualRungAnchorId: ids.manualRungAnchorId }),
+      };
+    }
+
+    it("indexes the notice's title and message under its own unit, and nothing of the error or the notice's details", () => {
+      const row = buildChatFindRows(
+        [
+          settledRow({
+            routingSettledNoticeId: "settled-notice",
+            manualRungAnchorId: "settled-error",
+          }),
+        ],
+        TILE_INSTANCE_ID,
+        new Set(),
+      )[0];
+
+      const noticeUnit = row.units.find(
+        (unit) => unit.unitId === chatFindSegmentUnitId("settled-notice"),
+      );
+      expect(noticeUnit?.text).toBe(`${NOTICE_TITLE} ${NOTICE_MESSAGE}`);
+      expect(noticeUnit?.owningChain).toEqual([]);
+
+      const text = rowSearchText(row);
+      expect(text).not.toContain("zqerror");
+      expect(text).not.toContain(ERROR_CODE);
+      expect(text).not.toContain(DETAIL_VALUE);
+      expect(
+        row.units.some(
+          (unit) => unit.unitId === chatFindSegmentUnitId("settled-error"),
+        ),
+      ).toBe(false);
+    });
+
+    it("still indexes every other segment on the row", () => {
+      const row = buildChatFindRows(
+        [
+          settledRow({
+            routingSettledNoticeId: "settled-notice",
+            manualRungAnchorId: "settled-error",
+          }),
+        ],
+        TILE_INSTANCE_ID,
+        new Set(),
+      )[0];
+
+      expect(rowSearchText(row)).toContain("zqtext");
+    });
+
+    it.each([
+      ["the notice id without an anchor id", "settled-notice", null],
+      ["the anchor id without a notice id", null, "settled-error"],
+      ["neither id", null, null],
+    ] as const)(
+      "indexes the notice as its divider and the error as its own row with %s",
+      (_name, noticeId, anchorId) => {
+        const row = buildChatFindRows(
+          [
+            settledRow({
+              routingSettledNoticeId: noticeId,
+              manualRungAnchorId: anchorId,
+            }),
+          ],
+          TILE_INSTANCE_ID,
+          new Set(),
+        )[0];
+        const text = rowSearchText(row);
+
+        // The same tokens the settled case above hides are findable here, so
+        // those negatives can fail.
+        expect(text).toContain("zqerror");
+        expect(text).toContain(ERROR_CODE);
+        expect(text).toContain(NOTICE_TITLE);
+        expect(text).toContain(NOTICE_MESSAGE);
+        expect(text).toContain(DETAIL_VALUE);
+      },
+    );
+  });
+
+  describe("a queue-pause error block", () => {
+    const HELD = "1 queued message was held";
+
+    function errorSegment(id: string, code: string) {
+      return {
+        id,
+        kind: "error" as const,
+        message: HELD,
+        recoverable: true,
+        code,
+        failure: null,
+      };
+    }
+
+    it("has no find unit, and its text is not findable", () => {
+      const assistant: ChatMessageModel = {
+        ...makeMessage(70, "assistant"),
+        segments: [errorSegment("queue-pause", QUEUE_PAUSED_AFTER_ERROR_CODE)],
+      };
+      const row = buildChatFindRows(
+        [assistant],
+        TILE_INSTANCE_ID,
+        new Set(),
+      )[0];
+
+      expect(
+        row.units.some(
+          (unit) => unit.unitId === chatFindSegmentUnitId("queue-pause"),
+        ),
+      ).toBe(false);
+      expect(rowSearchText(row)).not.toContain("queued message was held");
+    });
+
+    it("is findable under any other code (control: the negative can fail)", () => {
+      const assistant: ChatMessageModel = {
+        ...makeMessage(71, "assistant"),
+        segments: [errorSegment("not-queue-pause", "RUNTIME")],
+      };
+      const row = buildChatFindRows(
+        [assistant],
+        TILE_INSTANCE_ID,
+        new Set(),
+      )[0];
+
+      expect(rowSearchText(row)).toContain("queued message was held");
+    });
   });
 });
 

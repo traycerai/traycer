@@ -166,6 +166,7 @@ function bodyProps(overrides: BodyPropsOverrides) {
     nextStepActions: null,
     forkAction: null,
     interviewDeliveryRetry: null,
+    routingSettledNoticeId: null,
   };
 }
 
