@@ -625,6 +625,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     // The summary answers on its own — no longer an invitation to go ask.
     await screen.findByText("v1.7.0 is available.");
@@ -740,11 +741,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await waitForButton("Check now"));
-    // The list is on the Updates tab, whose body is not mounted until it is
-    // visited — so this is the difference between "no rows" and "no tab".
-    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     expect(rows).toHaveLength(3);
@@ -1131,9 +1130,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await waitForButton("Check now"));
-    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     const downgrade = within(rowFor(rows, "1.2.0")).getByRole("button", {
@@ -1321,6 +1320,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     // The summary tells the truth instead of advertising a version the CLI
     // would refuse: no plain "available", no Update now.
@@ -1330,7 +1330,6 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     expect(screen.queryByText("v1.7.0 is available.")).toBeNull();
     expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
 
-    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     expect(
@@ -1364,13 +1363,13 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(
       "v1.7.0 is available, but host-a can't install it.",
     );
     expect(screen.queryByText("v1.7.0 is available.")).toBeNull();
 
-    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     await waitFor(() => {
       const rows = within(picker).getAllByRole("listitem");
@@ -1414,9 +1413,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       }),
     };
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText("v1.7.0 is available.");
-    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     expect(
@@ -1682,11 +1681,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await waitForButton("Check now"));
-    // The list is on the Updates tab, whose body is not mounted until it is
-    // visited — so this is the difference between "no rows" and "no tab".
-    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     expect(within(picker).getAllByRole("listitem")).toHaveLength(
       VERSION_LIST_PREVIEW,
@@ -1855,6 +1852,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await waitFor(() => {
       expect(screen.getByText("v2.0.0 is available.")).toBeTruthy();
@@ -1965,6 +1963,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await waitFor(() => {
       expect(
@@ -1978,7 +1977,6 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     expect(summary.textContent).toContain("won't update to it automatically");
 
     // The manual route stays open: the newer row is present and installable.
-    await selectHostOverviewTab("updates");
     const rows = within(await screen.findByTestId("host-version-rows"));
     const row = rowFor(rows.getAllByRole("listitem"), "2.1.0");
     expect(
@@ -2009,6 +2007,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await waitFor(() => {
       expect(
@@ -2053,6 +2052,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await waitFor(() => {
       expect(screen.getByText("v2.0.0-rc.3 is available.")).toBeTruthy();
@@ -2087,6 +2087,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await waitFor(() => {
       expect(
@@ -2097,7 +2098,6 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
 
     // The RC the user asked to see is still there and still installable — the
     // gate changes the sentence, never the manual route.
-    await selectHostOverviewTab("updates");
     const rows = within(await screen.findByTestId("host-version-rows"));
     const row = rowFor(rows.getAllByRole("listitem"), "2.0.0-rc.1");
     expect(
@@ -2134,6 +2134,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(
       "First update Traycer's command-line tools on host-a. Open a terminal on that machine and run the copied command. When it finishes, come back here: this page rechecks while it is open, and Update now appears once the host accepts the update.",
@@ -2172,6 +2173,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(
       "Traycer's command-line tools on host-a were updated, but the host is still using an older copy. Run the command again: First update Traycer's command-line tools on host-a. Open a terminal on that machine and run the copied command. When it finishes, come back here: this page rechecks while it is open, and Update now appears once the host accepts the update.",
@@ -2208,6 +2210,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText("v1.2.1 is installed — restart host to finish.");
     // Removing the activation-debt arm from describeCheckState would let the
@@ -2239,6 +2242,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(
       "Traycer couldn't determine how its command-line tools were installed on host-a.",
@@ -2307,6 +2311,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
     await screen.findByText(
       "v1.3.0 is available, but host-a can't install it.",
     );
@@ -2355,6 +2360,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(
       "v1.3.0 is available, but host-a can't install it.",
@@ -2397,6 +2403,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(yankedLatestFixture.client);
     scopeOverrides.current = scopeFrom("host-a", yankedLatestFixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(
       "v1.3.0 is available, but host-a can't install it.",
@@ -2447,6 +2454,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const { queryClient } = renderPanel();
+    await selectHostOverviewTab("updates");
 
     // checks=1 (mount): the asset is AVAILABLE (`floorManifest`'s second
     // argument), so the staged version carries no floor and Force update is
@@ -2584,6 +2592,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     // The catalog answered. The installed line (1.3.0) has no matching stable
     // and no later RC, so the summary walk names nothing and no remedy
@@ -2660,6 +2669,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     // The floored latest renders the remedy: the recheck is armed.
     await screen.findByRole("button", { name: "Copy command" });
@@ -2667,7 +2677,6 @@ describe("Overview updates — CLI floor remedy", () => {
 
     // An install of the lower installable row discovers the host is
     // externally managed; the region retires behind its notice.
-    await selectHostOverviewTab("updates");
     fireEvent.click(await waitForButton("Install 1.2.5"));
     await screen.findByTestId("host-overview-updates-degraded");
     expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
@@ -2999,6 +3008,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     const sentence =
       "On host-a, run this command to prepare the host update: npm install -g @traycerai/cli@1.3.0-rc.4. This page rechecks while it is open, and Update now appears once the host accepts the update.";
@@ -3052,6 +3062,7 @@ describe("Overview updates — a settled first check with no catalog (T2 fixup 1
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const { queryClient } = renderPanel();
+    await selectHostOverviewTab("updates");
 
     await waitForCheckSettled(queryClient, "host-a");
 
@@ -3089,6 +3100,7 @@ describe("Overview updates — a settled first check with no catalog (T2 fixup 1
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const { queryClient } = renderPanel();
+    await selectHostOverviewTab("updates");
 
     await waitForCheckSettled(queryClient, "host-a");
 
@@ -3128,6 +3140,7 @@ describe("Overview updates — a settled first check with no catalog (T2 fixup 1
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     expect(await screen.findByRole("status")).toHaveProperty(
       "textContent",
@@ -3651,12 +3664,19 @@ describe("Overview updates — activation debt", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    await screen.findByText(
-      "v1.3.0-rc.3 is installed — restart host to finish.",
+    // T2: the debt is an in-flight park (`waiting-to-activate`), so it is the
+    // notices strip's operation card that carries the sentence now - the
+    // version card withholds its own tag and answer for any in-flight kind
+    // (see host-overview-notices.test.tsx's duplication regression), so
+    // asserting the installed-version text there would just find nothing.
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain(
+      "Update installed — restart host to finish",
     );
     // Falsification: comparing the catalog against the RUNNING version
     // (1.3.0-rc.2) instead of the installed one would offer "Update now" for
     // the very version already sitting on disk.
+    await selectHostOverviewTab("updates");
     expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
   });
 
@@ -3688,11 +3708,14 @@ describe("Overview updates — activation debt", () => {
     // offer - see `describeCheckState`'s ordering comment. Activation debt is
     // itself an in-flight park (`waiting-to-activate`), and T2's version card
     // withholds Update now and Check now for every in-flight kind - the debt
-    // sentence stays (it is about the wait itself), but there is no button to
-    // press until the restart resolves the debt.
-    await screen.findByText(
-      "v1.3.0-rc.3 is installed — restart host to finish.",
+    // sentence stays (it is about the wait itself, and now lives on the
+    // notices strip's operation card, not the version card), but there is no
+    // button to press until the restart resolves the debt.
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain(
+      "Update installed — restart host to finish",
     );
+    await selectHostOverviewTab("updates");
     expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
   });
 
@@ -3778,22 +3801,34 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     const { queryClient } = renderPanel();
 
     // Live debt: the record (rc.3) is ahead of the running host (rc.2), and
-    // the catalog's rc.3 is what is installed - no offer, a restart.
+    // the catalog's rc.3 is what is installed - no offer, a restart. T2's
+    // notices strip carries this while it is live (the version card
+    // withholds its own answer for any in-flight kind - see
+    // host-overview-notices.test.tsx's duplication regression), and its
+    // Restart control lives there too.
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toBe(
-        "v1.3.0-rc.3 is installed — restart host to finish.",
-      );
+      expect(
+        screen.getByTestId("host-overview-operation-card").textContent,
+      ).toContain("Update installed — restart host to finish");
     });
-    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
     await screen.findByTestId("host-overview-operation-restart");
+    await selectHostOverviewTab("updates");
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
 
     // The record poll fails while the status read keeps succeeding beside
-    // it. The debt is retained as EVIDENCE (the comparison baseline), said
-    // as last known; the controls that would dispatch on it are withdrawn.
+    // it. `legacyFacts` (the live-gated leg the notices strip's park reads)
+    // drops out entirely, so the strip's operation card disappears along
+    // with its Restart control - but `legacyFactsRead` (the catalog's
+    // baseline, qualified by liveness rather than erased by it) still holds
+    // the debt, no longer in-flight from the panel's own perspective, so the
+    // version card picks the answer back up, said as last known.
     await act(async () => {
       await queryClient.invalidateQueries();
     });
     await waitFor(() => expect(installationCalls).toBe(2));
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-notices")).toBeNull();
+    });
     await waitFor(() => {
       expect(screen.getByRole("status").textContent).toBe(
         "v1.3.0-rc.3 is installed (last known) — restart host to finish.",
@@ -3802,15 +3837,16 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
     expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
 
-    // The next successful read restores the live sentence and its control.
+    // The next successful read restores the live sentence, back on the
+    // notices strip, and its control.
     await act(async () => {
       await queryClient.invalidateQueries();
     });
     await waitFor(() => expect(installationCalls).toBe(3));
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toBe(
-        "v1.3.0-rc.3 is installed — restart host to finish.",
-      );
+      expect(
+        screen.getByTestId("host-overview-operation-card").textContent,
+      ).toContain("Update installed — restart host to finish");
     });
     await screen.findByTestId("host-overview-operation-restart");
   });
@@ -3866,21 +3902,32 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const { queryClient } = renderPanel();
 
+    // Live, on the notices strip - the version card withholds its own
+    // answer for any in-flight kind (see host-overview-notices.test.tsx's
+    // duplication regression).
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toBe(
-        "v1.3.0-rc.3 is installed — restart host to finish.",
-      );
+      expect(
+        screen.getByTestId("host-overview-operation-card").textContent,
+      ).toContain("Update installed — restart host to finish");
     });
 
+    // A failed status read demotes the shared observation itself (the same
+    // "Last seen: …" mechanism host-overview-lifecycle-gate.test.tsx pins at
+    // the model level) - unlike the record-read failure above, this leaves
+    // `usable` and the notices strip itself untouched, so the card stays and
+    // is what carries the qualifier, not `role="status"` on the version card
+    // (which the strip's in-flight card keeps suppressed throughout).
     await act(async () => {
       await queryClient.invalidateQueries();
     });
     await waitFor(() => expect(statusCalls).toBe(2));
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toBe(
-        "v1.3.0-rc.3 is installed (last known) — restart host to finish.",
-      );
+      expect(
+        screen.getByTestId("host-overview-operation-card").textContent,
+      ).toBe("Last seen: Update installed — restart host to finish");
     });
+    expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
+    await selectHostOverviewTab("updates");
     expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
   });
 
@@ -3935,6 +3982,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     // Help on screen, no command - and no recheck behind it.
     await waitFor(() => expect(checks).toBe(1));

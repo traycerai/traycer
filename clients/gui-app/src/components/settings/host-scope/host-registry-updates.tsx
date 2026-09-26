@@ -12,12 +12,13 @@ import { deriveUpdateAffordance } from "@/components/settings/panels/my-hosts-mo
 /**
  * The auto-update policy switch.
  *
- * On the Overview's Updates tab, apart from the drain gate below on Status, and
- * the split is about urgency rather than topic. This is a preference someone
- * sets once and forgets, so it belongs with the other settings a person opens
- * Updates to find; "Apply now — ends N sessions" appears only while an update is
- * genuinely blocked on open sessions, and hiding THAT behind a tab the page
- * does not open on would bury the one control here with a deadline on it.
+ * On the Overview's Updates tab, apart from the drain gate below, which sits in
+ * the notices strip above the tab bar, and the split is about urgency rather
+ * than topic. This is a preference someone sets once and forgets, so it belongs
+ * with the other settings a person opens Updates to find; "Apply now — ends N
+ * sessions" appears only while an update is genuinely blocked on open
+ * sessions, and hiding THAT behind a tab would bury the one control here with a
+ * deadline on it.
  *
  * Works without a live session on purpose: the policy is stored in the
  * account's host registry and the host reads it on its next check-in, which is
@@ -145,8 +146,8 @@ export function HostUpdateDrainGateRow(props: {
     liveBusyBreakdown: props.liveBusyBreakdown,
   });
   if (affordance.applyNowLabel === null) return null;
-  // A warning callout on Status, in the column the update card shares: a
-  // wait on someone, the same tone the host's own wait wears there.
+  // A warning callout in the Overview's notices strip, under the update card:
+  // a wait on someone, the same tone the host's own wait wears there.
   return (
     <div
       className="flex flex-wrap items-center gap-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-warning-foreground"

@@ -2089,14 +2089,6 @@ function handleBoundDispatchOutcome(input: {
 }
 
 /**
- * The words the version card uses for "Pick it in Updates", which select the
- * Updates tab. Exported so the card can find them in the sentence and draw
- * them as the link they are. The sentence stays one string for everything
- * that reads it as text: the live region, and every test pinning it.
- */
-export const PICK_IN_UPDATES = "Pick it in Updates";
-
-/**
  * Which answer the update sentence gives, for the version card's tag. One
  * value per arm of {@link describeCheckState}, so the tag and the sentence
  * cannot describe two different states.
@@ -2216,12 +2208,12 @@ function describeCheckState(input: {
   if (input.upToDate) {
     // Honest about BOTH halves: the newer version exists, and this host will
     // not take it on its own. Naming the installed version names the line, and
-    // pointing at the Updates list is not decoration — those rows are enabled,
-    // and they are the only way across. The version card draws
-    // `PICK_IN_UPDATES` as a link to that tab.
+    // pointing at the version list is not decoration — those rows are enabled,
+    // and they are the only way across. The version card leads the Updates
+    // tab, so the list is directly below the sentence.
     if (input.strandedOnLine !== null && input.installedVersion !== null) {
       return {
-        text: `v${input.strandedOnLine} is available, but ${input.installedVersion} follows its own release line and won't update to it automatically. ${PICK_IN_UPDATES} to move.`,
+        text: `v${input.strandedOnLine} is available, but ${input.installedVersion} follows its own release line and won't update to it automatically. Pick it from the versions below to move.`,
         kind: "stranded",
       };
     }
