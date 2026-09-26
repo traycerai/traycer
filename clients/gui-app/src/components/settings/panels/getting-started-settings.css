@@ -13,6 +13,9 @@
 
 .settings-setup-meter {
   appearance: none;
+  /* The UA sheet gives <progress> a fixed inline size, which beats the
+     stretch that runs the meter across the card's full width. */
+  inline-size: auto;
   border: 0;
   background-color: color-mix(in oklab, var(--foreground) 10%, transparent);
 }

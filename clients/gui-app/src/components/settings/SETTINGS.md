@@ -131,6 +131,16 @@ The start page offers the checklist through a persistent, dismissible toast once
 the first-task guide ends. Dismissing it is remembered locally across reloads;
 the checklist remains available in Settings. Completed checklists hide the toast.
 
+The Home tab draws the checklist itself, above its task sections
+(`home-focus/home-getting-started-section.tsx`), from the same cards
+(`onboarding/getting-started-cards.tsx`) and the same count
+(`onboarding/getting-started-checklist.ts`) as this panel. The Home copy is
+denser, steps between whole rows (4 / 2×2 / 1) off its own container width,
+omits a guide the shell can never offer, and carries no search anchors, so the
+reveal still lands on the Settings card when both are mounted. While anything
+is left it is open; once every offered guide is complete it folds into one row,
+closed by default each time Home mounts.
+
 ## Search
 
 The rail's first control is a search box (`settings-search-box.tsx`), rendered
@@ -2639,7 +2649,11 @@ browsers` is omitted at zero for a sharper reason still: that plane is
       than enabled-but-partial.
     - **Coverage moves under the host that earned it.** `coverage.activity` is
       still the worst slice's verdict for the page, and
-      `coverage.degradedHostIds` is the per-host breakdown behind it. When the
+      `coverage.degradedHosts` is the per-host breakdown behind it, each host
+      with the link that is down (`focusActivityDegradedReason`: this
+      client's stream lost or reconnecting, or that host's cloud link down or
+      reconnecting). The page-wide banner prints one line per host naming it
+      and that reason, worst first. When the
       page is grouped and EVERY degraded host has a group to carry it, the
       notice renders under those subheadings and the page-wide banner stands
       down - saying "some activity may be missing" over a page that names WHICH

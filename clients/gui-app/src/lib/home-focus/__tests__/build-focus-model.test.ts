@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { AgentActivityCloudSyncStatus } from "@traycer/protocol/host/agent/activity";
 import {
   buildFocusModel,
   EMPTY_FOCUS_MODEL,
   focusActivityCoverage,
+  focusActivityDegradedReason,
   type BuildFocusModelInput,
   type FocusActivityHealth,
 } from "@/lib/home-focus/build-focus-model";
+import type {
+  FocusDegradedHost,
+  FocusDegradedReason,
+} from "@/lib/home-focus/focus-model";
 import {
   makeApprovalPayload,
   makeBrowserSessionPayload,
@@ -18,7 +25,7 @@ function baseModelInput(
 ): BuildFocusModelInput {
   return {
     notificationRows: [],
-    degradedHostIds: [],
+    degradedHosts: [],
     browsers: { epics: [], agentIdentities: new Map() },
     tasks: {
       byEpic: new Map(),
@@ -297,6 +304,151 @@ describe("buildFocusModel", () => {
     });
   });
 
+  describe("focusActivityDegradedReason", () => {
+    interface DegradedReasonCase {
+      readonly name: string;
+      readonly connectionStatus: StreamConnectionStatus;
+      readonly cloudSyncStatus: AgentActivityCloudSyncStatus | null;
+      readonly stateFrameSeenThisEpoch: boolean;
+      readonly expected: FocusDegradedReason | null;
+    }
+
+    const CASES: ReadonlyArray<DegradedReasonCase> = [
+      {
+        name: "closed -> host-lost",
+        connectionStatus: "closed",
+        cloudSyncStatus: null,
+        stateFrameSeenThisEpoch: true,
+        expected: "host-lost",
+      },
+      {
+        name: "closed -> host-lost even with cloud disconnected",
+        connectionStatus: "closed",
+        cloudSyncStatus: "disconnected",
+        stateFrameSeenThisEpoch: true,
+        expected: "host-lost",
+      },
+      {
+        name: "connecting -> host-reconnecting",
+        connectionStatus: "connecting",
+        cloudSyncStatus: null,
+        stateFrameSeenThisEpoch: true,
+        expected: "host-reconnecting",
+      },
+      {
+        name: "reconnecting -> host-reconnecting",
+        connectionStatus: "reconnecting",
+        cloudSyncStatus: null,
+        stateFrameSeenThisEpoch: true,
+        expected: "host-reconnecting",
+      },
+      {
+        name: "reconnecting -> host-reconnecting even with cloud disconnected",
+        connectionStatus: "reconnecting",
+        cloudSyncStatus: "disconnected",
+        stateFrameSeenThisEpoch: true,
+        expected: "host-reconnecting",
+      },
+      {
+        name: "open without a state frame this epoch -> null",
+        connectionStatus: "open",
+        cloudSyncStatus: null,
+        stateFrameSeenThisEpoch: false,
+        expected: null,
+      },
+      {
+        name: "open without a state frame this epoch -> null, even with cloud disconnected",
+        connectionStatus: "open",
+        cloudSyncStatus: "disconnected",
+        stateFrameSeenThisEpoch: false,
+        expected: null,
+      },
+      {
+        name: "open + frame + cloud reconnecting -> cloud-reconnecting",
+        connectionStatus: "open",
+        cloudSyncStatus: "reconnecting",
+        stateFrameSeenThisEpoch: true,
+        expected: "cloud-reconnecting",
+      },
+      {
+        name: "open + frame + cloud disconnected -> cloud-disconnected",
+        connectionStatus: "open",
+        cloudSyncStatus: "disconnected",
+        stateFrameSeenThisEpoch: true,
+        expected: "cloud-disconnected",
+      },
+      {
+        name: "open + frame + cloud connected -> null",
+        connectionStatus: "open",
+        cloudSyncStatus: "connected",
+        stateFrameSeenThisEpoch: true,
+        expected: null,
+      },
+      {
+        name: "open + frame + cloud null -> null",
+        connectionStatus: "open",
+        cloudSyncStatus: null,
+        stateFrameSeenThisEpoch: true,
+        expected: null,
+      },
+    ];
+
+    it.each(CASES)("$name", (testCase) => {
+      expect(
+        focusActivityDegradedReason({
+          connectionStatus: testCase.connectionStatus,
+          cloudSyncStatus: testCase.cloudSyncStatus,
+          stateFrameSeenThisEpoch: testCase.stateFrameSeenThisEpoch,
+        }),
+      ).toBe(testCase.expected);
+    });
+  });
+
+  it("focusActivityCoverage still returns disconnected/reconnecting/unknown/live for the matching reasons", () => {
+    // host-lost and cloud-disconnected both read as "disconnected".
+    expect(focusActivityCoverage(health({ connectionStatus: "closed" }))).toBe(
+      "disconnected",
+    );
+    expect(
+      focusActivityCoverage(
+        health({
+          connectionStatus: "open",
+          stateFrameSeenThisEpoch: true,
+          cloudSyncStatus: "disconnected",
+        }),
+      ),
+    ).toBe("disconnected");
+    // host-reconnecting and cloud-reconnecting both read as "reconnecting".
+    expect(
+      focusActivityCoverage(health({ connectionStatus: "reconnecting" })),
+    ).toBe("reconnecting");
+    expect(
+      focusActivityCoverage(
+        health({
+          connectionStatus: "open",
+          stateFrameSeenThisEpoch: true,
+          cloudSyncStatus: "reconnecting",
+        }),
+      ),
+    ).toBe("reconnecting");
+    // No reason (null), but no state frame yet this epoch -> "unknown".
+    expect(
+      focusActivityCoverage(
+        health({ connectionStatus: "open", stateFrameSeenThisEpoch: false }),
+      ),
+    ).toBe("unknown");
+    // No reason (null), frame seen, cloud connected -> "live".
+    expect(
+      focusActivityCoverage(
+        health({
+          connectionStatus: "open",
+          stateFrameSeenThisEpoch: true,
+          cloudSyncStatus: "connected",
+        }),
+      ),
+    ).toBe("live");
+  });
+
   it("coverage.notifications follows feed mode", () => {
     const cloudModel = buildFocusModel(
       baseModelInput({ feedMode: "cloud" }),
@@ -340,6 +492,50 @@ describe("buildFocusModel", () => {
     const second = buildFocusModel(input, first);
 
     expect(second).toBe(first);
+  });
+
+  it("reuses previous.coverage.degradedHosts by identity when hosts and reasons are equal, and mints a new array when a reason changes", () => {
+    const degradedHostsA: ReadonlyArray<FocusDegradedHost> = [
+      { hostId: "host-a", reason: "host-reconnecting" },
+      { hostId: "host-b", reason: "cloud-disconnected" },
+    ];
+    const first = buildFocusModel(
+      baseModelInput({ degradedHosts: degradedHostsA }),
+      EMPTY_FOCUS_MODEL,
+    );
+    // A fresh model built against the EMPTY baseline (whose degradedHosts is
+    // empty) has nothing to reuse, so it carries the input array itself.
+    expect(first.coverage.degradedHosts).toBe(degradedHostsA);
+
+    const second = buildFocusModel(
+      baseModelInput({
+        // A new array, same hostId/reason pairs in the same order.
+        degradedHosts: [
+          { hostId: "host-a", reason: "host-reconnecting" },
+          { hostId: "host-b", reason: "cloud-disconnected" },
+        ],
+      }),
+      first,
+    );
+    expect(second.coverage.degradedHosts).toBe(first.coverage.degradedHosts);
+
+    const third = buildFocusModel(
+      baseModelInput({
+        degradedHosts: [
+          // Only the reason for host-a changed.
+          { hostId: "host-a", reason: "host-lost" },
+          { hostId: "host-b", reason: "cloud-disconnected" },
+        ],
+      }),
+      second,
+    );
+    expect(third.coverage.degradedHosts).not.toBe(
+      second.coverage.degradedHosts,
+    );
+    expect(third.coverage.degradedHosts).toEqual([
+      { hostId: "host-a", reason: "host-lost" },
+      { hostId: "host-b", reason: "cloud-disconnected" },
+    ]);
   });
 
   // The browser plane is window-local for the same shape of reason the

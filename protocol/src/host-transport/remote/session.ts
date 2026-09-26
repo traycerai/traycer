@@ -124,6 +124,7 @@ import {
 import {
   ChunkReassembler,
   ChunkReassemblyError,
+  MuxFrameOverExpansionError,
   STREAM_FRAME_NOT_ALLOWED_CODE,
   StreamFrameNotAllowedError,
   unchunkedStreamFrameViolation,
@@ -2511,6 +2512,16 @@ export class RemoteSession<
       !(error instanceof MuxMessageSizeError) &&
       !(error instanceof MuxFrameDecodeError)
     ) {
+      return false;
+    }
+    // The one decode fault that IS session-level: a compressed frame that
+    // inflated past its own declaration. No genuine sender produces it, and
+    // it is the only inbound fault whose cost is paid in full before it can
+    // be rejected, so leaving it per-stream would let a peer repeat ~66 MB
+    // of receiver work per fresh stream id at no cost to itself. Falling
+    // through to the caller's re-throw routes it to `handleConnectionLost`
+    // like a malformed frame header. See `MuxFrameOverExpansionError`.
+    if (error instanceof MuxFrameOverExpansionError) {
       return false;
     }
     if (frame.streamId === SESSION_CONTROL_STREAM_ID) {

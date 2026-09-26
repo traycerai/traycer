@@ -17,6 +17,8 @@ import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import { readDraftBlobsForRecovery } from "@/lib/drafts/draft-blob-transport";
 import {
+  DRAFT_BLOB_UPLOAD_CONCURRENCY,
+  draftBlobUploadsInFlight,
   forgetBlobUnsupportedHost,
   forgetConfirmedDraftBlobs,
   isDraftBlobConfirmed,
@@ -24,9 +26,11 @@ import {
   markDraftBlobUnbridgeable,
   hostWithholdsDraftBlobs,
   putDraftBlobs,
+  putDraftBlobsWithProgress,
   readDraftBlobsIntoLocalStore,
   resetDraftBlobTransportForTests,
   type DraftBlobClient,
+  type DraftBlobUploadProgress,
 } from "@/lib/drafts/draft-blob-transport";
 
 // F7 needs a local byte reader that REJECTS, to prove `uploadOneDraftBlob`
@@ -124,6 +128,161 @@ function countingClient(
 
 function pngBytes(): Uint8Array<ArrayBuffer> {
   return new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+}
+
+/** A distinct PNG-prefixed byte array per `tag`, for tests needing several digests. */
+function pngBytesTagged(tag: number): Uint8Array<ArrayBuffer> {
+  return new Uint8Array([...pngBytes(), tag]);
+}
+
+/**
+ * A client whose `drafts.putBlob` requests never resolve on their own: each
+ * call is recorded and parks on a promise this helper controls, so a test can
+ * observe how many requests are open at once before letting any of them
+ * finish. Every OTHER fake in this file resolves synchronously (or on a
+ * caller-provided `respond`), which is exactly what would hide a concurrency
+ * regression - a serial implementation and a bounded-concurrent one both
+ * produce the same eventual result, and only watching how many are open AT
+ * ONCE tells them apart.
+ */
+function deferredTrackingClient(): {
+  readonly client: DraftBlobClient;
+  /** Resolve every request currently parked, as `{ ok: true }`. */
+  readonly releaseOpen: () => void;
+  /** The largest number of requests ever open at the same time. */
+  readonly peakConcurrent: () => number;
+  readonly totalCalls: () => number;
+} {
+  let openCount = 0;
+  let peak = 0;
+  let calls = 0;
+  let pending: Array<() => void> = [];
+  const requestWithOptions = ((_method, _params) => {
+    calls += 1;
+    openCount += 1;
+    peak = Math.max(peak, openCount);
+    return new Promise<{ readonly ok: true }>((resolve) => {
+      pending.push(() => {
+        openCount -= 1;
+        resolve({ ok: true });
+      });
+    });
+  }) as HostRequester<HostRpcRegistry>["requestWithOptions"];
+  const request = (() =>
+    Promise.reject(
+      new Error("deferredTrackingClient: unexpected request() call"),
+    )) as HostRequester<HostRpcRegistry>["request"];
+  return {
+    client: { request, requestWithOptions },
+    releaseOpen: () => {
+      const toRelease = pending;
+      pending = [];
+      for (const release of toRelease) release();
+    },
+    peakConcurrent: () => peak,
+    totalCalls: () => calls,
+  };
+}
+
+/**
+ * A client whose very FIRST `drafts.putBlob` call answers "old host"
+ * (`E_HOST_UNSUPPORTED`) and every later call would otherwise succeed - used
+ * to prove every worker stops pulling further digests once one of them
+ * discovers the host withholds the method, not only the worker that hit it.
+ */
+function firstCallUnsupportedClient(): {
+  readonly client: DraftBlobClient;
+  readonly totalCalls: () => number;
+} {
+  let calls = 0;
+  const requestWithOptions = ((_method, _params) => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.reject(unsupportedError("drafts.putBlob"));
+    }
+    return Promise.resolve({ ok: true as const });
+  }) as HostRequester<HostRpcRegistry>["requestWithOptions"];
+  const request = (() =>
+    Promise.reject(
+      new Error("firstCallUnsupportedClient: unexpected request() call"),
+    )) as HostRequester<HostRpcRegistry>["request"];
+  return {
+    client: { request, requestWithOptions },
+    totalCalls: () => calls,
+  };
+}
+
+/**
+ * A client whose `drafts.putBlob` requests all park on a promise this helper
+ * controls, keyed by the request's OWN digest - so a test can settle one
+ * particular in-flight request (by the `sha256` it carries) while every other
+ * one stays parked forever. `deferredTrackingClient` above releases every
+ * open request together; this one is for the case that needs to single out
+ * exactly one of several concurrent requests, such as a refusal landing on
+ * one call's digest while a sibling call's digests never answer at all.
+ */
+function digestGatingClient(): {
+  readonly client: DraftBlobClient;
+  readonly calls: () => number;
+  /** Reject the pending request for this digest with `error`. Throws if none is pending. */
+  readonly rejectDigest: (sha256: string, error: Error) => void;
+  /** Resolve the pending request for this digest as `{ ok: true }`. Throws if none is pending. */
+  readonly resolveDigest: (sha256: string) => void;
+  /** Resolve every still-pending request as `{ ok: true }`. */
+  readonly releaseAll: () => void;
+} {
+  let calls = 0;
+  const resolvers = new Map<string, () => void>();
+  const settlers = new Map<string, (error: Error) => void>();
+  const requestWithOptions = ((_method, params) => {
+    calls += 1;
+    const { sha256 } = params as { readonly sha256: string };
+    return new Promise<{ readonly ok: true }>((resolve, reject) => {
+      resolvers.set(sha256, () => {
+        resolve({ ok: true });
+      });
+      settlers.set(sha256, (error: Error) => {
+        reject(error);
+      });
+    });
+  }) as HostRequester<HostRpcRegistry>["requestWithOptions"];
+  const request = (() =>
+    Promise.reject(
+      new Error("digestGatingClient: unexpected request() call"),
+    )) as HostRequester<HostRpcRegistry>["request"];
+  return {
+    client: { request, requestWithOptions },
+    calls: () => calls,
+    rejectDigest: (sha256, error) => {
+      const reject = settlers.get(sha256);
+      if (reject === undefined) {
+        throw new Error(`digestGatingClient: no pending request for ${sha256}`);
+      }
+      settlers.delete(sha256);
+      resolvers.delete(sha256);
+      reject(error);
+    },
+    resolveDigest: (sha256) => {
+      const release = resolvers.get(sha256);
+      if (release === undefined) {
+        throw new Error(`digestGatingClient: no pending request for ${sha256}`);
+      }
+      resolvers.delete(sha256);
+      settlers.delete(sha256);
+      release();
+    },
+    releaseAll: () => {
+      const toRelease = [...resolvers.values()];
+      resolvers.clear();
+      settlers.clear();
+      for (const release of toRelease) release();
+    },
+  };
+}
+
+/** One macrotask - enough for a FileReader/IndexedDB callback queued this tick to run. */
+async function tick(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 beforeEach(() => {
@@ -631,6 +790,487 @@ describe("draft blob transport", () => {
     forgetBlobUnsupportedHost(HOST);
     expect(isDraftBlobConfirmed(HOST, hash, OWNER)).toBe(false);
     expect(isDraftBlobUnbridgeable(HOST, hash)).toBe(false);
+  });
+
+  // ─── T7: bounded concurrency, progress and the withheld-method fence ───
+
+  it("uploads at most DRAFT_BLOB_UPLOAD_CONCURRENCY digests at once, and all of them", async () => {
+    // Seven distinct images so at least one wave of the pool has to wait for
+    // a slot: with 3 workers and 7 digests, a serial-in-disguise
+    // implementation and a genuinely bounded-concurrent one both eventually
+    // return all seven confirmed, so only watching how many requests are
+    // OPEN AT ONCE (never resolving until we say so) tells them apart.
+    const hashes: string[] = [];
+    for (let index = 0; index < 7; index += 1) {
+      hashes.push(await putImage(pngBytesTagged(index)));
+    }
+    const { client, releaseOpen, peakConcurrent, totalCalls } =
+      deferredTrackingClient();
+
+    const resultPromise = putDraftBlobs(HOST, client, hashes, OWNER);
+
+    // Let every worker reach its request before any of them is released.
+    // `getImageBytes` and `bytesToBase64Async` (FileReader) each cross a
+    // macrotask, so the pool needs a few ticks to fill before it stabilises
+    // at its cap.
+    for (let index = 0; index < 20 && peakConcurrent() < 3; index += 1) {
+      await tick();
+    }
+    expect(peakConcurrent()).toBe(DRAFT_BLOB_UPLOAD_CONCURRENCY);
+
+    // Drain the remaining waves: release whatever is open and let the next
+    // wave's requests land, a fixed number of times that comfortably covers
+    // every wave (3 workers, 7 digests, so at most 3 waves) plus slack for
+    // the FileReader/IndexedDB hops between them. `putDraftBlobs` itself is
+    // what is awaited below for the actual completion signal - this loop
+    // only needs to keep unblocking it.
+    for (let wave = 0; wave < 10; wave += 1) {
+      releaseOpen();
+      await tick();
+    }
+
+    const confirmed = await resultPromise;
+    expect(totalCalls()).toBe(7);
+    expect([...confirmed].sort()).toEqual([...hashes].sort());
+    for (const hash of hashes) {
+      expect(isDraftBlobConfirmed(HOST, hash, OWNER)).toBe(true);
+    }
+  });
+
+  it("two overlapping calls on one host share ONE limit", async () => {
+    // Two `putDraftBlobs` calls with DISJOINT digest sets, started
+    // concurrently against the SAME host and the SAME tracked client.
+    // Pre-gate, each call ran its own pool of DRAFT_BLOB_UPLOAD_CONCURRENCY
+    // workers, so two overlapping calls could open six requests at once; the
+    // shared per-host gate caps the total at three regardless of how many
+    // callers are pulling from it.
+    const firstBatch: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      firstBatch.push(await putImage(pngBytesTagged(150 + index)));
+    }
+    const secondBatch: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      secondBatch.push(await putImage(pngBytesTagged(160 + index)));
+    }
+    const { client, releaseOpen, peakConcurrent, totalCalls } =
+      deferredTrackingClient();
+
+    const firstCall = putDraftBlobs(HOST, client, firstBatch, OWNER);
+    const secondCall = putDraftBlobs(HOST, client, secondBatch, OWNER);
+
+    for (let index = 0; index < 20 && peakConcurrent() < 3; index += 1) {
+      await tick();
+    }
+    // Never six: one host, one gate, regardless of how many callers are
+    // pulling from it.
+    expect(peakConcurrent()).toBe(DRAFT_BLOB_UPLOAD_CONCURRENCY);
+    expect(draftBlobUploadsInFlight(HOST)).toBe(3);
+
+    for (let wave = 0; wave < 10; wave += 1) {
+      releaseOpen();
+      await tick();
+    }
+
+    const [firstConfirmed, secondConfirmed] = await Promise.all([
+      firstCall,
+      secondCall,
+    ]);
+    const allHashes = [...firstBatch, ...secondBatch];
+    const allConfirmed = [...firstConfirmed, ...secondConfirmed];
+    expect(totalCalls()).toBe(8);
+    expect([...allConfirmed].sort()).toEqual([...allHashes].sort());
+    for (const hash of allHashes) {
+      expect(isDraftBlobConfirmed(HOST, hash, OWNER)).toBe(true);
+    }
+    expect(draftBlobUploadsInFlight(HOST)).toBe(0);
+  });
+
+  it("two hosts have independent gates", async () => {
+    // Same shape as the overlapping-calls case above, but across two DISTINCT
+    // hosts - the gate is keyed by host, so neither call's concurrency should
+    // bleed into the other's budget.
+    const HOST_2 = "host-blobs-2";
+    const batchA: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      batchA.push(await putImage(pngBytesTagged(170 + index)));
+    }
+    const batchB: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      batchB.push(await putImage(pngBytesTagged(180 + index)));
+    }
+    const trackerA = deferredTrackingClient();
+    const trackerB = deferredTrackingClient();
+
+    const callA = putDraftBlobs(HOST, trackerA.client, batchA, OWNER);
+    const callB = putDraftBlobs(HOST_2, trackerB.client, batchB, OWNER);
+
+    for (
+      let index = 0;
+      index < 20 &&
+      (trackerA.peakConcurrent() < 3 || trackerB.peakConcurrent() < 3);
+      index += 1
+    ) {
+      await tick();
+    }
+    expect(trackerA.peakConcurrent()).toBe(DRAFT_BLOB_UPLOAD_CONCURRENCY);
+    expect(trackerB.peakConcurrent()).toBe(DRAFT_BLOB_UPLOAD_CONCURRENCY);
+    // Six in flight TOTAL across both hosts - three apiece, never sharing one
+    // budget.
+    expect(
+      draftBlobUploadsInFlight(HOST) + draftBlobUploadsInFlight(HOST_2),
+    ).toBe(6);
+
+    for (let wave = 0; wave < 10; wave += 1) {
+      trackerA.releaseOpen();
+      trackerB.releaseOpen();
+      await tick();
+    }
+
+    const [confirmedA, confirmedB] = await Promise.all([callA, callB]);
+    expect(trackerA.totalCalls()).toBe(4);
+    expect(trackerB.totalCalls()).toBe(4);
+    expect([...confirmedA].sort()).toEqual([...batchA].sort());
+    expect([...confirmedB].sort()).toEqual([...batchB].sort());
+    expect(draftBlobUploadsInFlight(HOST)).toBe(0);
+    expect(draftBlobUploadsInFlight(HOST_2)).toBe(0);
+  });
+
+  it("a slot released by a failing upload is handed to the next waiter", async () => {
+    // Four digests, three workers: the FIRST request answered rejects with a
+    // generic error (not E_HOST_UNSUPPORTED, so this is not the
+    // withheld-method fence - the remaining digests are still sent). If the
+    // gate's `finally` failed to release on this failure path, the fourth
+    // digest would wait forever for a slot that never frees and this test
+    // would hang rather than fail cleanly.
+    const hashes: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      hashes.push(await putImage(pngBytesTagged(190 + index)));
+    }
+    let calls = 0;
+    const requestWithOptions = ((_method, _params) => {
+      calls += 1;
+      if (calls === 1) {
+        return Promise.reject(new Error("boom - transient failure"));
+      }
+      return Promise.resolve({ ok: true as const });
+    }) as HostRequester<HostRpcRegistry>["requestWithOptions"];
+    const request = (() =>
+      Promise.reject(
+        new Error(
+          "a slot released by a failing upload: unexpected request() call",
+        ),
+      )) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions };
+
+    const confirmed = await putDraftBlobs(HOST, client, hashes, OWNER);
+
+    // Every digest was sent - the failing one, and the three the freed slot
+    // let through afterward.
+    expect(calls).toBe(4);
+    expect(confirmed).toHaveLength(3);
+    expect(draftBlobUploadsInFlight(HOST)).toBe(0);
+  });
+
+  it("reports progress once up front and once per settled digest, counting only what it sends", async () => {
+    // One digest confirmed BEFORE this call, so it is a memo hit the call
+    // never sends - and `total` must exclude it.
+    const confirmedHash = await putImage(pngBytesTagged(100));
+    const { client, calls } = countingClient(() =>
+      Promise.resolve({ ok: true }),
+    );
+    await putDraftBlobs(HOST, client, [confirmedHash], OWNER);
+    expect(calls()).toBe(1);
+    expect(isDraftBlobConfirmed(HOST, confirmedHash, OWNER)).toBe(true);
+
+    const a = await putImage(pngBytesTagged(101));
+    const b = await putImage(pngBytesTagged(102));
+    const c = await putImage(pngBytesTagged(103));
+
+    const progress: DraftBlobUploadProgress[] = [];
+    const confirmed = await putDraftBlobsWithProgress({
+      hostId: HOST,
+      client,
+      hashes: [confirmedHash, a, b, c],
+      ownerUserId: OWNER,
+      onProgress: (update) => progress.push(update),
+    });
+
+    expect([...confirmed].sort()).toEqual([confirmedHash, a, b, c].sort());
+    // Only the three PENDING digests are counted - the memo hit never sends.
+    expect(progress.map((entry) => entry.completed)).toEqual([0, 1, 2, 3]);
+    expect(progress.every((entry) => entry.total === 3)).toBe(true);
+  });
+
+  it("a duplicated digest is uploaded once and returned once", async () => {
+    const a = await putImage(pngBytesTagged(110));
+    const b = await putImage(pngBytesTagged(111));
+    const { client, calls } = countingClient(() =>
+      Promise.resolve({ ok: true }),
+    );
+
+    const confirmed = await putDraftBlobs(HOST, client, [a, a, b], OWNER);
+
+    expect(calls()).toBe(2);
+    expect(confirmed).toHaveLength(2);
+    expect(new Set(confirmed)).toEqual(new Set([a, b]));
+  });
+
+  it("a host that withholds the method stops the remaining digests, even with workers in flight", async () => {
+    // Six digests, three workers: the first request answered rejects as
+    // "old host" and every later one WOULD succeed, so a version that only
+    // stopped the worker that hit the refusal (rather than every worker,
+    // checked before it pulls its next digest) would still send the other
+    // five.
+    const hashes: string[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      hashes.push(await putImage(pngBytesTagged(120 + index)));
+    }
+    const { client, totalCalls } = firstCallUnsupportedClient();
+
+    const confirmed = await putDraftBlobs(HOST, client, hashes, OWNER);
+
+    // Only the first wave (at most the concurrency cap) was ever sent.
+    expect(totalCalls()).toBeLessThanOrEqual(DRAFT_BLOB_UPLOAD_CONCURRENCY);
+    expect(hostWithholdsDraftBlobs(HOST)).toBe(true);
+    expect(confirmed.length).toBeLessThan(hashes.length);
+  });
+
+  it("a caller that waited for a slot and then finds the digest already up gives its slot back before joining", async () => {
+    // A holds the whole gate with x, y and z. B and C both ask for w while
+    // it is full, so both queue for a slot. x finishing hands its slot to B,
+    // which starts w's flight; y finishing hands the next slot to C, which
+    // now finds w already up. C must give that slot back before joining B's
+    // flight: held through the join, one slow body would occupy two slots
+    // while issuing one request.
+    const x = await putImage(pngBytesTagged(240));
+    const y = await putImage(pngBytesTagged(241));
+    const z = await putImage(pngBytesTagged(242));
+    const w = await putImage(pngBytesTagged(243));
+    const { client, calls, resolveDigest, releaseAll } = digestGatingClient();
+
+    const first = putDraftBlobs(HOST, client, [x, y, z], OWNER);
+    for (let index = 0; index < 20 && calls() < 3; index += 1) {
+      await tick();
+    }
+    expect(calls()).toBe(3);
+    const second = putDraftBlobs(HOST, client, [w], OWNER);
+    const third = putDraftBlobs(HOST, client, [w], OWNER);
+    await tick();
+    expect(calls()).toBe(3);
+
+    resolveDigest(x);
+    for (let index = 0; index < 20 && calls() < 4; index += 1) {
+      await tick();
+    }
+    // B took x's slot and started w.
+    expect(calls()).toBe(4);
+    expect(draftBlobUploadsInFlight(HOST)).toBe(3);
+
+    resolveDigest(y);
+    for (let index = 0; index < 10; index += 1) {
+      await tick();
+    }
+    // C took y's slot, found w up, and gave the slot back: only z and w
+    // hold slots now, and C issued no request of its own.
+    expect(draftBlobUploadsInFlight(HOST)).toBe(2);
+    expect(calls()).toBe(4);
+
+    releaseAll();
+    expect([...(await first)].sort()).toEqual([x, y, z].sort());
+    expect(await second).toEqual([w]);
+    expect(await third).toEqual([w]);
+    expect(calls()).toBe(4);
+    expect(draftBlobUploadsInFlight(HOST)).toBe(0);
+  });
+
+  it("a caller joining a flight that holds the gate's last slots neither takes a slot nor re-uploads the digest once the flight lands", async () => {
+    // Call A fills the gate with three distinct digests. Call B asks for one
+    // of them while they are up: it must JOIN that flight - not queue for a
+    // slot behind the flight, which would release only when the flight's
+    // cleanup has already forgotten the in-flight entry, so the waiter would
+    // then start a second multi-megabyte upload of a digest the memo now
+    // holds. Under the fix B issues no request of its own, ever.
+    const x = await putImage(pngBytesTagged(230));
+    const y = await putImage(pngBytesTagged(231));
+    const z = await putImage(pngBytesTagged(232));
+    const { client, releaseOpen, peakConcurrent, totalCalls } =
+      deferredTrackingClient();
+
+    const first = putDraftBlobs(HOST, client, [x, y, z], OWNER);
+    for (let index = 0; index < 20 && peakConcurrent() < 3; index += 1) {
+      await tick();
+    }
+    expect(draftBlobUploadsInFlight(HOST)).toBe(DRAFT_BLOB_UPLOAD_CONCURRENCY);
+
+    const second = putDraftBlobs(HOST, client, [x], OWNER);
+    await tick();
+    // Joining charged nothing: the gate still holds exactly the three flights.
+    expect(draftBlobUploadsInFlight(HOST)).toBe(DRAFT_BLOB_UPLOAD_CONCURRENCY);
+
+    for (let wave = 0; wave < 10; wave += 1) {
+      releaseOpen();
+      await tick();
+    }
+    expect([...(await first)].sort()).toEqual([x, y, z].sort());
+    expect(await second).toEqual([x]);
+    // Three requests in total: B's answer came from A's flight.
+    expect(totalCalls()).toBe(3);
+    expect(draftBlobUploadsInFlight(HOST)).toBe(0);
+  });
+
+  it("returns at the capability verdict without waiting for a delayed sibling", async () => {
+    // Three distinct digests, one host: the FIRST request answered rejects as
+    // "old host" and the other two are parked on a promise this test controls,
+    // never resolving until `release()` is called. `putDraftBlobsWithProgress`
+    // must return at the capability verdict - it must not await the two
+    // siblings already on the wire, and nothing they settle after it returns
+    // may reach `confirmed` or the progress listener.
+    const hashes: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      hashes.push(await putImage(pngBytesTagged(210 + index)));
+    }
+    let calls = 0;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // The refusal is held until BOTH siblings have entered their requests:
+    // each digest acquires its slot before its bytes are read and encoded,
+    // so a refusal thrown on entry could land while the siblings still hold
+    // slots but have not reached `requestWithOptions` - and the "still on the
+    // wire" assertions below would then be about encodes, not requests.
+    let refuse: () => void = () => undefined;
+    const firstRefusal = new Promise<never>((_resolve, reject) => {
+      refuse = () => {
+        reject(unsupportedError("drafts.putBlob"));
+      };
+    });
+    const requestWithOptions = (async (_method, _params) => {
+      calls += 1;
+      if (calls === 1) {
+        await firstRefusal;
+      }
+      await gate;
+      return { ok: true as const };
+    }) as HostRequester<HostRpcRegistry>["requestWithOptions"];
+    const request = (() =>
+      Promise.reject(
+        new Error(
+          "returns at the capability verdict: unexpected request() call",
+        ),
+      )) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions };
+
+    const progress: DraftBlobUploadProgress[] = [];
+    let resolved: ReadonlyArray<string> | null = null;
+    void putDraftBlobsWithProgress({
+      hostId: HOST,
+      client,
+      hashes,
+      ownerUserId: OWNER,
+      onProgress: (update) => progress.push(update),
+    }).then((value) => {
+      resolved = value;
+    });
+
+    await vi.waitFor(() => {
+      expect(calls).toBe(3);
+    });
+    refuse();
+
+    // Bounded on the call actually resolving - a regression that awaits the
+    // hanging siblings would leave `resolved` null forever and this times out
+    // instead of silently passing.
+    await vi.waitFor(() => {
+      if (resolved === null) throw new Error("not yet resolved");
+    });
+
+    expect(resolved).toEqual([]);
+    expect(hostWithholdsDraftBlobs(HOST)).toBe(true);
+    // The two siblings are still on the wire, holding their slots - the call
+    // returned WITHOUT waiting for them.
+    expect(draftBlobUploadsInFlight(HOST)).toBeGreaterThan(0);
+    const progressCountAtResolution = progress.length;
+
+    release();
+    await vi.waitFor(() => {
+      expect(draftBlobUploadsInFlight(HOST)).toBe(0);
+    });
+    // Nothing the siblings settled after the call returned was reported to the
+    // progress listener.
+    expect(progress.length).toBe(progressCountAtResolution);
+  });
+
+  it("a refusal observed by one call releases every other call waiting on the same host", async () => {
+    // Call A carries two digests, call B a distinct third - three digests
+    // total, so every one of them fits in the per-host gate (cap 3) at once
+    // and nothing here is gated on waiting for a slot. The client parks
+    // EVERY request until told to settle a specific one, so the refusal can
+    // be delivered to exactly B's digest while A's two requests never answer
+    // at all. The verdict is the HOST's: `putDraftBlobsWithProgress` must
+    // still resolve A, because every call registered on that host's verdict
+    // wakes, not only the call whose own request was the one refused.
+    const a1 = await putImage(pngBytesTagged(240));
+    const a2 = await putImage(pngBytesTagged(241));
+    const b1 = await putImage(pngBytesTagged(242));
+    const gating = digestGatingClient();
+
+    const progressA: DraftBlobUploadProgress[] = [];
+    let resolvedA: ReadonlyArray<string> | null = null;
+    void putDraftBlobsWithProgress({
+      hostId: HOST,
+      client: gating.client,
+      hashes: [a1, a2],
+      ownerUserId: OWNER,
+      onProgress: (update) => progressA.push(update),
+    }).then((value) => {
+      resolvedA = value;
+    });
+
+    let resolvedB: ReadonlyArray<string> | null = null;
+    void putDraftBlobs(HOST, gating.client, [b1], OWNER).then((value) => {
+      resolvedB = value;
+    });
+
+    await vi.waitFor(() => {
+      expect(gating.calls()).toBe(3);
+    });
+
+    // Negative control: before the refusal is delivered, neither call has
+    // resolved - proves what unblocks A below is the broadcast, not a timer
+    // or a coincidence of the fan-out's own shape.
+    for (let index = 0; index < 5; index += 1) await tick();
+    expect(resolvedA).toBeNull();
+    expect(resolvedB).toBeNull();
+
+    // Refuse only B's request. A's two requests stay parked forever - they
+    // are released only at the very end, and by then A must already have
+    // resolved.
+    gating.rejectDigest(b1, unsupportedError("drafts.putBlob"));
+
+    await vi.waitFor(() => {
+      expect(resolvedA).not.toBeNull();
+      expect(resolvedB).not.toBeNull();
+    });
+    // The broadcast: A resolves to no confirmations at all, though neither of
+    // ITS requests ever answered.
+    expect(resolvedA).toEqual([]);
+    expect(resolvedB).toEqual([]);
+    expect(hostWithholdsDraftBlobs(HOST)).toBe(true);
+    const progressCountAtResolution = progressA.length;
+
+    // A's own two requests are still on the wire, holding their slots - it
+    // returned WITHOUT waiting for them.
+    expect(draftBlobUploadsInFlight(HOST)).toBeGreaterThan(0);
+
+    gating.releaseAll();
+    await vi.waitFor(() => {
+      expect(draftBlobUploadsInFlight(HOST)).toBe(0);
+    });
+
+    // Nothing the released siblings settled after A had already resolved
+    // reached its progress listener.
+    expect(progressA.length).toBe(progressCountAtResolution);
   });
 
   // ─── F7: no detached unhandled rejection ────────────────────────────────

@@ -85,6 +85,7 @@ import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-s
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
+import { ComposerUploadProgressNotice } from "@/components/home/composer/composer-upload-progress-notice";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -739,6 +740,7 @@ export function LandingComposer(props: LandingComposerProps) {
             notice={hostNotice}
             onDismiss={dismissHostNotice}
           />
+          <ComposerUploadProgressNotice progress={actions.attachmentUpload} />
           {profileEligibility.disabled ? (
             <ProfileDisabledBanner
               profileLabel={profileEligibility.profileLabel}
