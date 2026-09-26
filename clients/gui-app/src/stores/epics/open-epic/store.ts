@@ -1464,8 +1464,11 @@ export function createOpenEpicStore(
    * each time any room was seeded. Availability says which rooms exist right
    * now, which is the question actually being asked.
    *
-   * Entries are forgotten WITHOUT posting: there is nothing on the far side to
-   * settle into, and a demote would sit pending on a `not-held`.
+   * Entries are forgotten WITHOUT a demote: there is nothing on the far side to
+   * settle into, and a demote would sit pending on a `not-held`. What `forget`
+   * does with the worker's demand is its own business - a still-held body goes
+   * back to awaiting, so the sibling below re-materializes it into the mounted
+   * editor when its room is ready again.
    */
   /**
    * Doc keys the projection currently calls `ready`.

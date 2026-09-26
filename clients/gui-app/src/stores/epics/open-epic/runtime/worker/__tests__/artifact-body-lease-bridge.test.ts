@@ -1269,3 +1269,190 @@ describe("an awaiting body reassigned to another byteless room", () => {
     expect(releases).toEqual(["room-1", "room-2", "room-3"]);
   });
 });
+
+/**
+ * `forget` when a body's room drops out from under a lease that is still
+ * held, still releasing, or already lingering.
+ *
+ * Before the fix, `forget` deleted the `entries` record for a docKey and
+ * posted NOTHING on either side - it neither retained the still-held demand
+ * nor released an unheld one. A still-held body was invisible to
+ * `retryAwaitingBodies` (which only ever walks `awaiting`) and invisible to
+ * every later release (which found no entry and did nothing), so the
+ * worker's demand - the body-lane SUBSCRIPTION on that arm - stayed retained
+ * for the rest of the session no matter what the main thread did next.
+ *
+ * The fix moves a still-held body into `awaiting` with its lease count
+ * intact (the same shape a cold open is in) and, for an unheld or already-
+ * lingering one, posts the release immediately rather than leaving it to a
+ * lifecycle nothing will ever complete.
+ */
+describe("forget — a still-held, still-releasing, or lingering body", () => {
+  function forgetSetup() {
+    const pair = createFakeBridgePair("sync");
+    const materializes: string[] = [];
+    const releases: string[] = [];
+    const demotes: DemoteRecord[] = [];
+    pair.worker.subscribe((message) => {
+      if (!isMainToWorkerFrame(message) || message.frame !== "call") return;
+      const { callId, call } = message;
+      const respond = (value: unknown): void => {
+        pair.worker.post(
+          { frame: "result", callId, result: { outcome: "ok", value } },
+          [],
+        );
+      };
+      if (call.kind === "body/materialize") {
+        materializes.push(call.request.artifactId);
+        respond({
+          docKey: call.request.artifactId,
+          update: Uint8Array.from([1, 2, 3]),
+          docGuid: `guid-${call.request.artifactId}`,
+          seedMode: "full",
+          hostStateVector: null,
+          awarenessFrames: [],
+        });
+        return;
+      }
+      if (call.kind === "body/release") {
+        releases.push(call.request.docKey);
+        respond({ released: true, reason: null });
+        return;
+      }
+      if (call.kind === "body/demote") {
+        const { docKey, generation, docGuid, update } = call.request;
+        demotes.push({
+          docKey,
+          generation,
+          docGuid,
+          bytes: [...update],
+          settle: (answer) => {
+            respond({
+              ...answer,
+              reason: answer.accepted ? null : "not-held",
+            });
+          },
+          fail: (message) => {
+            pair.worker.post(
+              {
+                frame: "result",
+                callId,
+                result: { outcome: "error", name: "Error", message },
+              },
+              [],
+            );
+          },
+        });
+      }
+    });
+    const docs = createDocs();
+    const leases = createArtifactBodyLeaseBridge({
+      bridge: createMainBridgeEndpoint(pair.main, stubMainCallHandlers({})),
+      docs,
+      budget: createBudget(),
+      scheduler: createScheduler(),
+      lingerMs: LINGER_MS,
+      maxHotDocs: MAX_HOT,
+      reportAwaitingStalled: IGNORE_STALL_REPORT,
+    });
+    return { leases, docs, releases, materializes, demotes };
+  }
+
+  it("does not post a release for a body forget finds still held, and re-materializes it once the room is ready again", async () => {
+    const { leases, docs, releases, materializes } = forgetSetup();
+    const first = await leases.acquire("artifact-1", "linger");
+    const second = await leases.acquire("artifact-1", "linger");
+    if (first.kind !== "granted" || second.kind !== "granted") {
+      throw new Error("expected both acquires to be granted");
+    }
+    expect(materializes).toHaveLength(1);
+
+    leases.forget("artifact-1");
+    // THE REDDENING ASSERTION pre-fix: the old `forget` deleted the entry and
+    // posted nothing, so this held demand was invisible to `body/release`
+    // AND to the retry below.
+    expect(releases).toEqual([]);
+
+    leases.retryAwaitingBodies(() => true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(materializes).toHaveLength(2);
+    expect(docs.installed).toEqual(["artifact-1", "artifact-1"]);
+    expect(releases).toEqual([]);
+  });
+
+  it("forget with 2 granted holders, then both release, posts exactly ONE body/release - only after the second", async () => {
+    const { leases, releases } = forgetSetup();
+    const first = await leases.acquire("artifact-1", "linger");
+    const second = await leases.acquire("artifact-1", "linger");
+    if (first.kind !== "granted" || second.kind !== "granted") {
+      throw new Error("expected both acquires to be granted");
+    }
+
+    leases.forget("artifact-1");
+    expect(releases).toEqual([]);
+
+    first.release();
+    // THE REDDENING ASSERTION: an under-count here would post at the FIRST
+    // release rather than the second, dropping the worker's demand while the
+    // other holder still believes it owns a lease.
+    expect(releases).toEqual([]);
+
+    second.release();
+    expect(releases).toEqual(["artifact-1"]);
+  });
+
+  it("forget of a lingering entry (its holder already released, no linger fired) posts one body/release", async () => {
+    const { leases, releases } = forgetSetup();
+    const grant = await leases.acquire("artifact-1", "linger");
+    if (grant.kind !== "granted") throw new Error("expected a grant");
+
+    grant.release();
+    // Lingering: the release armed a cooldown rather than posting anything,
+    // and the window has not fired.
+    expect(releases).toEqual([]);
+
+    leases.forget("artifact-1");
+    expect(releases).toEqual(["artifact-1"]);
+  });
+
+  it("bytes answering a key already awaiting (from a forget that found it still held) join the earlier holders, and only the LAST release ends the merged lifecycle", async () => {
+    // The production change this pins: `resolveAcquire`'s granted-with-bytes
+    // branch used to install straight over an `awaiting` record with only
+    // ITS OWN holder count, discarding the holders already waiting there.
+    // Their releases then found no accounting for their share, so an entry
+    // three holders were bound to could be demoted by the first one of them
+    // to let go.
+    const { leases, docs, materializes, demotes } = forgetSetup();
+    const first = await leases.acquire("artifact-1", "immediate");
+    const second = await leases.acquire("artifact-1", "immediate");
+    if (first.kind !== "granted" || second.kind !== "granted") {
+      throw new Error("expected both acquires to be granted");
+    }
+    expect(materializes).toHaveLength(1);
+
+    // Forgotten while still held: the bridge moves it into `awaiting` with
+    // both holders' leases intact, rather than releasing or dropping them.
+    leases.forget("artifact-1");
+
+    // A fresh acquire while the body is awaiting - not resident, and not
+    // in-flight, since `forget` clears neither - issues its OWN materialize,
+    // and this rig always answers with bytes.
+    const third = await leases.acquire("artifact-1", "immediate");
+    if (third.kind !== "granted") throw new Error("expected a granted body");
+    expect(materializes).toHaveLength(2);
+    expect(docs.installed).toEqual(["artifact-1", "artifact-1"]);
+
+    // THE REDDENING ASSERTION pre-fix: installing over the awaiting record
+    // with only the third holder's own count would let releasing this ONE
+    // holder alone reach zero and post a demote, while the first two
+    // holders' releases were still outstanding.
+    third.release();
+    expect(demotes).toHaveLength(0);
+    first.release();
+    expect(demotes).toHaveLength(0);
+    second.release();
+    expect(demotes).toHaveLength(1);
+  });
+});

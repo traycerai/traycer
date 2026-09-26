@@ -210,29 +210,36 @@ export function CollabTileBody(props: CollabTileBodyProps) {
     artifactRoomAwareness === null;
 
   /**
-   * Whether this tile has shown THIS artifact's body in its editor, latched
-   * with the same derived-state idiom as `bodyAnsweredOnce` above.
+   * Whether this tile has held THIS artifact's body BOUND - the host served
+   * it and its fragment and awareness were resident here - latched with the
+   * same derived-state idiom as `bodyAnsweredOnce` above.
    *
    * It is what tells a reconnect from a first open, and nothing else can: both
    * arrive here as `retrying` with no fragment. A room that leaves `ready`
    * discards its local replica (`applyAvailability` -> `tier.invalidate`), so
-   * the fragment goes `null` and a mounted editor falls back to this
-   * pre-editor path - that is a real lost connection, and the reader is owed a
-   * sentence. A tile that has never had a body is waiting on its first open
+   * the fragment goes `null` and a bound tile falls back to this pre-editor
+   * path - that is a real lost connection, and the reader is owed a sentence.
+   * A tile that has never had a body bound is waiting on its first open
    * attempt, which the host also reports as `retrying`, and is owed the
    * skeleton. See `collabTileNotice`.
+   *
+   * Deliberately the binding and not the editor's first paint. Tiptap builds
+   * its editor in an effect (`immediatelyRender: false`), so there is a commit
+   * with a bound body and no editor yet; a room that leaves `ready` inside that
+   * window has still been served and lost, which is what "Reconnecting" says.
+   * The sentence is a claim about the connection, not about the pixels.
    *
    * Keyed by artifact id rather than a boolean, so a tile that is handed a
    * different artifact does not carry the previous one's history into the new
    * document's first open.
    */
-  const [bodyShownForId, setBodyShownForId] = useState<string | null>(
+  const [bodyBoundForId, setBodyBoundForId] = useState<string | null>(
     bodyPending ? null : props.node.id,
   );
-  if (!bodyPending && bodyShownForId !== props.node.id) {
-    setBodyShownForId(props.node.id);
+  if (!bodyPending && bodyBoundForId !== props.node.id) {
+    setBodyBoundForId(props.node.id);
   }
-  const bodyShownOnce = bodyShownForId === props.node.id;
+  const bodyBoundOnce = bodyBoundForId === props.node.id;
 
   // Invariant 6. The artifact room is doc-scoped rather than host-scoped, so
   // this bounds on the node itself rather than reaching for a host lease -
@@ -248,7 +255,7 @@ export function CollabTileBody(props: CollabTileBodyProps) {
         testId={props.testId}
         bodyAvailability={bodyAvailability}
         subscribeAnswered={bodyAnsweredOnce}
-        bodyShownOnce={bodyShownOnce}
+        bodyBoundOnce={bodyBoundOnce}
         budgetElapsed={loadBudgetElapsed}
       />
     );
@@ -282,7 +289,7 @@ export function CollabTileBody(props: CollabTileBodyProps) {
  *
  * "The answer", precisely: `subscribeAnswered` is false until the body plane
  * has stated something about this artifact, and an UNANSWERED tile is a
- * loading one however `bodyAvailability` reads. `bodyShownOnce` is what
+ * loading one however `bodyAvailability` reads. `bodyBoundOnce` is what
  * separates a reconnect from a first open. All three are separate props
  * rather than one pre-collapsed value so the DOM carries each - a tile that
  * looks stuck can be told apart from one that was refused, or one that lost
@@ -292,7 +299,7 @@ function CollabTileSkeleton(props: {
   readonly testId: string;
   readonly bodyAvailability: EpicArtifactRoomAvailability;
   readonly subscribeAnswered: boolean;
-  readonly bodyShownOnce: boolean;
+  readonly bodyBoundOnce: boolean;
   readonly budgetElapsed: boolean;
 }) {
   const testIdSuffix =
@@ -303,7 +310,7 @@ function CollabTileSkeleton(props: {
     props.bodyAvailability,
     props.budgetElapsed,
     props.subscribeAnswered,
-    props.bodyShownOnce,
+    props.bodyBoundOnce,
   );
 
   return (
@@ -311,7 +318,7 @@ function CollabTileSkeleton(props: {
       data-testid={`${props.testId}-${testIdSuffix}`}
       data-artifact-room-availability={props.bodyAvailability}
       data-body-subscribe-answered={props.subscribeAnswered ? "true" : "false"}
-      data-body-shown-once={props.bodyShownOnce ? "true" : "false"}
+      data-body-bound-once={props.bodyBoundOnce ? "true" : "false"}
       data-budget-elapsed={props.budgetElapsed ? "true" : "false"}
       className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 py-8"
     >
