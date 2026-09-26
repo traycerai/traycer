@@ -5,13 +5,18 @@ import { collabTileNotice } from "../collab-tile-availability-copy";
  * `unavailable` and `loading`(budget-elapsed) used to render byte-identical
  * markup - the same pulsing-bars placeholder, told apart only by a
  * `data-testid` suffix nothing visible carries. These pins are the whole
- * reason this module exists: the three outcomes must be three DISTINCT
- * strings, not one generic notice reused three ways.
+ * reason this module exists: the two spoken outcomes must be two DISTINCT
+ * strings, not one generic notice reused two ways.
  *
- * A fourth outcome hides inside `"unavailable"` itself: every layer below
+ * A third outcome hides inside `"unavailable"` itself: every layer below
  * collapses an artifact the body plane has not answered yet into the same
  * `"unavailable"` union member a genuine host refusal produces, so
  * `subscribeAnswered` is what tells the two apart here.
+ *
+ * `retrying` is NOT a spoken outcome. On the wire it means an open attempt is
+ * in flight - the first attempt included - so it is the first answer most
+ * tiles get on a cold open, and a sentence there replaced the skeleton one
+ * frame after it appeared with a "Reconnecting…" no connection had preceded.
  */
 describe("collabTileNotice", () => {
   it("unanswered + unavailable + budget NOT elapsed: renders null - this is the lever. A tile that has not been asked yet must not speak a host-refusal verdict nobody gave", () => {
@@ -30,9 +35,18 @@ describe("collabTileNotice", () => {
     );
   });
 
-  it("answered + retrying: says it is reconnecting", () => {
-    const message = collabTileNotice("retrying", false, true);
-    expect(message).toBe("Reconnecting to this document…");
+  it("answered + retrying + budget NOT elapsed: renders null - an open attempt in flight is the placeholder, not a reconnect sentence", () => {
+    expect(collabTileNotice("retrying", false, true)).toBeNull();
+  });
+
+  it("unanswered + retrying + budget NOT elapsed: renders null too", () => {
+    expect(collabTileNotice("retrying", false, false)).toBeNull();
+  });
+
+  it("answered + retrying + budget elapsed: says it hasn't loaded yet - the attempt in flight is bounded by the same budget as every other wait", () => {
+    expect(collabTileNotice("retrying", true, true)).toBe(
+      "This document hasn't loaded yet.",
+    );
   });
 
   it("ready + budget elapsed: says it hasn't loaded yet", () => {
@@ -50,16 +64,22 @@ describe("collabTileNotice", () => {
     );
   });
 
-  it("answered + retrying wins over an elapsed budget too", () => {
-    expect(collabTileNotice("retrying", true, true)).toBe(
-      "Reconnecting to this document…",
-    );
-  });
-
-  it("all three non-null outcomes are pairwise DISTINCT strings", () => {
+  it("the two non-null outcomes are DISTINCT strings, and no outcome says 'Reconnecting'", () => {
     const unavailable = collabTileNotice("unavailable", false, true);
-    const retrying = collabTileNotice("retrying", false, true);
     const elapsed = collabTileNotice("ready", true, true);
-    expect(new Set([unavailable, retrying, elapsed]).size).toBe(3);
+    expect(new Set([unavailable, elapsed]).size).toBe(2);
+    const availabilities = ["ready", "unavailable", "retrying"] as const;
+    for (const availability of availabilities) {
+      for (const budgetElapsed of [false, true]) {
+        for (const answered of [false, true]) {
+          const notice = collabTileNotice(
+            availability,
+            budgetElapsed,
+            answered,
+          );
+          expect(notice ?? "").not.toMatch(/reconnect/i);
+        }
+      }
+    }
   });
 });

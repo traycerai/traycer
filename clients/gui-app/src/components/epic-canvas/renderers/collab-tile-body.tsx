@@ -238,7 +238,7 @@ export function CollabTileBody(props: CollabTileBodyProps) {
 }
 
 /**
- * The three pre-editor states, which used to be ONE.
+ * The pre-editor states, which used to be ONE.
  *
  * `unavailable` and `loading` rendered byte-identical markup - the same three
  * pulsing bars - distinguished only by a `data-testid` suffix no reader can
@@ -246,10 +246,12 @@ export function CollabTileBody(props: CollabTileBodyProps) {
  * document that was about to appear, and the only way to tell them apart was
  * to keep waiting: indefinitely, since neither state ended.
  *
- * Now each says which one it is, and the wait has a deadline (invariant 6).
- * The pulsing bars are kept for the short, genuinely-loading window - they
- * are a good placeholder for content that is coming - and retired the moment
- * the answer is anything else.
+ * Now a refusal says so, and the wait has a deadline (invariant 6). The
+ * pulsing bars are kept for the genuinely-loading window - they are a good
+ * placeholder for content that is coming - and that window includes a body
+ * reported `retrying`, which on the wire is an open attempt in flight (the
+ * first one included) and not a lost connection. `collabTileNotice` holds the
+ * copy and the reasoning.
  *
  * "The answer", precisely: `subscribeAnswered` is false until the body plane
  * has stated something about this artifact, and an UNANSWERED tile is a
@@ -800,8 +802,8 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
  * subscription, so a sync-state change re-renders this strip and nothing else:
  * the editor is never hidden, unmounted or re-keyed by it. The pre-editor
  * states stay `collabTileNotice`'s - a body that is syncing is not a body that
- * is missing, and saying "Reconnecting to this document…" over one the host
- * already holds is the state this strip replaced.
+ * is missing, and reporting one the host already holds as `retrying` (which
+ * the pre-editor placeholder then sat over) is the state this strip replaced.
  *
  * The same sweep and the same words as every other surface that says it is
  * syncing, escalated the same way: after `LINK_DOWN_ESCALATION_MS` the bar
