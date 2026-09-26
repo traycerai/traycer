@@ -9,11 +9,10 @@ import {
   isHostOverviewTab,
   type HostOverviewTab,
 } from "@/components/settings/panels/host-overview.definitions";
-import {
-  HostOverviewSelectTabContext,
-  type HostOverviewSelectTab,
-  type HostOverviewTabBadges,
-  type HostOverviewTabBodies,
+import type {
+  HostOverviewSelectTab,
+  HostOverviewTabBadges,
+  HostOverviewTabBodies,
 } from "@/components/settings/panels/host-overview-tab-state";
 import {
   Select,
@@ -28,24 +27,9 @@ import { cn } from "@/lib/utils";
 
 /*
  * The components that draw the Overview's tabs. The tab state they are handed
- * - the selected tab, the hooks that move it, the select-tab seam - lives in
+ * - the selected tab and the hook that moves it - lives in
  * `host-overview-tab-state.ts`.
  */
-
-/**
- * Provides `useHostOverviewSelectTab()` (`host-overview-tab-state.ts`) to the
- * header and every tab body.
- */
-export function HostOverviewSelectTabProvider(props: {
-  readonly selectTab: HostOverviewSelectTab;
-  readonly children: ReactNode;
-}): ReactNode {
-  return (
-    <HostOverviewSelectTabContext value={props.selectTab}>
-      {props.children}
-    </HostOverviewSelectTabContext>
-  );
-}
 
 /**
  * The tab bar and the tab bodies under the pinned host header.
@@ -55,7 +39,7 @@ export function HostOverviewSelectTabProvider(props: {
  * host connects or cannot be reached.
  *
  * A VISITED tab stays mounted, hidden while inactive - the Permissions Rules
- * tab's rule - so a half-typed retention limit survives a look at Status.
+ * tab's rule - so a half-typed retention limit survives a look at Updates.
  * Never before its first visit, so opening the page starts no read a tab the
  * reader never opens would make. Visited tabs live with this component, below
  * the per-host remount, so they reset when the page closes or the host
@@ -72,13 +56,6 @@ export function HostOverviewTabs(props: {
   readonly isMobile: boolean;
   readonly badges: HostOverviewTabBadges;
   readonly bodies: HostOverviewTabBodies;
-  /**
-   * The live update pill as a phone's full-width strip, drawn directly above
-   * the section dropdown, or `null`. The panel passes it only while a section
-   * other than Status is selected and the pill would show; on desktop it is
-   * never drawn here, since the pill sits on the header's health line.
-   */
-  readonly phoneStrip: ReactNode;
 }): ReactNode {
   const { tab, isMobile } = props;
   const [visited, setVisited] = useState<ReadonlySet<HostOverviewTab>>(
@@ -104,18 +81,13 @@ export function HostOverviewTabs(props: {
       }}
       className="gap-0 md:min-h-0"
     >
-      <div
-        className={cn("shrink-0 px-5", isMobile && "flex flex-col gap-2 pb-3")}
-      >
+      <div className={cn("shrink-0 px-5", isMobile && "pb-3")}>
         {isMobile ? (
-          <>
-            {props.phoneStrip}
-            <HostOverviewTabSelect
-              tab={tab}
-              onSelect={props.onSelectTab}
-              badges={props.badges}
-            />
-          </>
+          <HostOverviewTabSelect
+            tab={tab}
+            onSelect={props.onSelectTab}
+            badges={props.badges}
+          />
         ) : (
           <TabsList
             variant="line"

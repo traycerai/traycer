@@ -129,7 +129,6 @@ function regionElement(
           onInstallationHelp: vi.fn(),
         }}
         inFlight={false}
-        autoUpdate={null}
       />
     </TooltipProvider>
   );
