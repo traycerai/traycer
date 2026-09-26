@@ -1,0 +1,115 @@
+---
+title: "Artifacts"
+description: "Use Artifacts to browse, organize, and update specs, tickets, stories, and reviews."
+---
+
+Artifacts are durable documents or outputs inside a Task. They preserve important context so it does not disappear into an agent transcript.
+
+The **Artifacts** panel shows the Task's artifact tree:
+
+- **Spec**
+- **Ticket**
+- **Story**
+- **Review**
+
+## Artifact Types
+
+| Artifact type | Role                                                                                                     | Status | Assignee |
+| ------------- | -------------------------------------------------------------------------------------------------------- | ------ | -------- |
+| **Spec**      | Captures goals, requirements, constraints, decisions, and plan context.                                  | No     | No       |
+| **Ticket**    | Tracks implementation work, what needs to change, and how to verify it.                                  | Yes    | Yes      |
+| **Story**     | Organizes a user journey, workflow slice, or larger outcome that may span multiple implementation steps. | Yes    | Yes      |
+| **Review**    | Captures review findings, critique, decisions, and follow-ups.                                           | No     | No       |
+
+Specs and reviews are shared context. Tickets and stories are work-tracking artifacts.
+
+## Hierarchy
+
+Artifacts can be arranged in a parent-child hierarchy. This keeps related work grouped inside the Task.
+
+The common shape is:
+
+```text
+Task
+└─ Spec
+   ├─ Ticket
+   ├─ Story
+   └─ Review
+```
+
+Use hierarchy to keep planning context close to implementation and review context. For example, a spec can hold the tickets that implement it, and a review can sit next to the work it evaluates.
+
+Deleting a parent artifact also deletes the artifacts nested underneath it, so check the hierarchy before removing a spec or story with children. Nested agents are not deleted with that artifact subtree; they move up to the parent level.
+
+## Status
+
+Tickets and stories use three status values:
+
+| Status          | Meaning                          |
+| --------------- | -------------------------------- |
+| **Todo**        | Work exists but has not started. |
+| **In Progress** | Work is currently active.        |
+| **Done**        | Work is complete.                |
+
+Specs and reviews do not have status because they are not implementation units.
+
+Use the status pill at the top of an open ticket or story to update its status.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Change a ticket status">
+  <source src="https://assets.traycer.ai/docs/videos/artifact-status.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+## Assignees
+
+Tickets and stories can have assignees. An assignee marks who is responsible for that piece of work.
+
+Specs and reviews are usually shared context rather than assigned work items.
+
+## Controls
+
+The panel supports:
+
+- filtering by artifact type
+- filtering by read state
+- filtering tickets and stories by status
+- sorting by **Last Updated**, **Date Created**, or **Name**
+- creating specs, tickets, and stories from the panel
+- renaming, deleting, and moving artifacts
+
+## Working With Artifacts
+
+| Action            | What happens                                                                                  |
+| ----------------- | --------------------------------------------------------------------------------------------- |
+| **Create**        | Adds a new spec, ticket, story, or review to the Task. New tickets and stories start as Todo. |
+| **Rename**        | Changes the artifact title shown in the sidebar, tab, and artifact references.                |
+| **Move**          | Drag an artifact in the sidebar to change its parent.                                         |
+| **Change status** | Updates a ticket or story between Todo, In Progress, and Done.                                |
+| **Delete**        | Deletes the selected artifact and its nested artifact children.                               |
+| **Comment**       | Adds a thread to selected text inside an artifact.                                            |
+
+## Comments
+
+Artifacts support anchored comment threads. Select text in an artifact, add a comment, reply in the thread, and resolve it when the discussion is complete.
+
+Comments are useful for review findings, unresolved decisions, and collaboration notes that should stay attached to the exact text they refer to.
+
+## Storage
+
+Artifacts are stored as markdown documents on disk and synchronized through Traycer's live document layer when sync is active. The markdown file keeps the artifact type, title, and status metadata with the body content.
+
+## How Artifacts Are Created
+
+Artifacts are created explicitly, whenever something should outlive the conversation or be put in front of you.
+
+Specs, tickets, stories, and reviews are all first-class: they capture intent the code cannot express and drive planning, implementation, and review.
+
+For the remaining planning skills, typical order, and how that relates to the Task container after per-agent Epic Mode was removed, see [Artifact workflow](/concepts/artifact-workflow).
+
+## Diagrams
+
+Mermaid blocks render inline. Click a diagram to zoom, pan, or export it. See [Diagrams](/panels/artifacts/diagrams).
+
+## Wireframes
+
+Wireframe blocks render live HTML previews with fullscreen and copy controls. See [Wireframes](/panels/artifacts/wireframes).

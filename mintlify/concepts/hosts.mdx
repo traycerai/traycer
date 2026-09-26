@@ -1,0 +1,81 @@
+---
+title: "Hosts"
+description: "Understand the Traycer process that owns workspace, terminal, file, and agent operations."
+---
+
+A **Host** is the Traycer process that connects Desktop to workspace folders, files, terminals, git state, and coding agents. A Host can run on the same machine as Desktop or on another reachable machine.
+
+Most of the time, you do not manage Hosts directly. You notice them when Traycer is starting, offline, updating, or when a tab is tied to a different machine.
+
+## What The Host Owns
+
+The Host owns live work that depends on where it is running:
+
+- workspace-folder access
+- file previews
+- git diffs
+- terminal sessions
+- agents on the Terminal interface
+- provider and coding-agent setup that depends on tools available to that Host
+
+Cloud sync can move durable Task data across machines, but live surfaces still depend on the Host that opened them.
+
+## Multiple Hosts
+
+A user can have more than one Host. For example, your laptop and a workstation can each run a Host, and each Host owns the work it can reach on that machine.
+
+Open the host switcher in Settings and choose **Add host…** to connect another machine. Follow the setup commands in the dialog. Once **Host connected** appears, choose **Set up host**, then click **Activate** on its identity card. The button becomes an **Active** tag.
+
+The switcher lists Hosts without health dots. Connection status appears on the Host identity card and the dialog's **Host connected** card.
+
+The model is:
+
+- each device can run its own Host
+- Desktop can connect to a Host when that Host is reachable
+- live surfaces still depend on the Host that started them
+- cloud sync carries durable Task data across devices
+
+## Current Host And Tab Host
+
+Traycer can use a Host in two ways:
+
+| Host relationship | Meaning |
+|---|---|
+| **Current Host** | The Host Desktop is currently using for app-wide actions, such as opening Tasks, files, git diffs, and settings. |
+| **Tab Host** | The Host a specific tab or session started on. |
+
+Some tabs keep using their original Host:
+
+| Surface | Behavior |
+|---|---|
+| **Chat interface** | Can continue on another Host by cloning the agent. The clone is a NEW agent; the original stays bound to its Host. |
+| **Terminal / Terminal interface** | Cannot migrate because the PTY is tied to the Host that started it. The agent stays durable and reachable once its Host returns. |
+| **File preview** | Loads from its Tab Host. |
+| **Git diff** | Loads from its Tab Host. |
+
+If a Host becomes unavailable, affected tabs show an unavailable state. Terminal sessions cannot move to another Host; start a new session on the Current Host when needed.
+
+## Hosts And Agent-To-Agent Work
+
+The Host boundary also gates what one agent can do to another. Referencing is unaffected — every agent in the Task can be referenced regardless of Host. The other two capabilities are not:
+
+| Capability | Host requirement |
+|---|---|
+| **Reference an agent** | None. Works across Hosts. |
+| **Read a Chat-interface transcript** | None. That history is Task-backed, so it reads across Hosts (same user still required). |
+| **Read a Terminal-interface transcript** | Must be read on the Host that owns that agent. |
+| **Send an agent-to-agent message** | Sender and receiver must both be local to the same Host. |
+
+A message to an agent on another Host is rejected rather than queued. The full matrix, including the runtime requirements that apply on top of these, is in [Agent-to-Agent](/concepts/agent-to-agent).
+
+## Where To Manage Hosts
+
+Use [Settings > Host](/settings/host) to check Host status, install or update the Host, restart it, and run Doctor diagnostics.
+
+Use [Troubleshooting](/reference/troubleshooting) for unavailable states, logs, and issue-reporting steps.
+
+## Resources
+
+Use the header’s **Resources** button to inspect CPU and memory usage. See [Resource monitor](/concepts/hosts/resource-monitor).
+
+See [Remote hosts](/concepts/hosts/remote-hosts) for the connection and activation walkthrough.
