@@ -45,7 +45,6 @@ import { InterviewSegment } from "./segments/interview-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
 import { PlanSegment } from "./segments/plan-segment";
 import { ProviderNoticeSegment } from "./segments/provider-notice-segment";
-import { FallbackWaitResumedMarker } from "@/components/chat/fallback/fallback-notice-attribution";
 import { ReasoningSegment } from "./segments/reasoning-segment";
 import { SubagentSegment } from "./segments/subagent-segment";
 import { TextSegment } from "./segments/text-segment";
@@ -1283,19 +1282,11 @@ function AssistantSegment({
         />
       );
     case "provider_notice":
-      // The resumed-turn marker is a different FRAME, not a different notice:
-      // the turn it heads had no user message, so the transcript's existing
-      // answer to "why is the agent talking" - the autonomous-resume marker -
-      // is the shape that reads correctly. A hairline rule between two
-      // assistant messages does not.
-      return segment.noticeKind === "fallback_wait_resumed" ? (
-        <FallbackWaitResumedMarker
-          title={segment.title}
-          message={segment.message}
-          details={segment.details}
-          findUnitId={findUnitId}
-        />
-      ) : (
+      // Every notice kind is the one hairline divider, `fallback_wait_resumed`
+      // included (clutter cuts, 2026-09-27): "Resumed on Surya 2 after the
+      // limit reset" reads the way the applied notice does, with its details
+      // under the same chevron, rather than as a bordered card of its own.
+      return (
         <ProviderNoticeSegment
           status={segment.status}
           noticeKind={segment.noticeKind}

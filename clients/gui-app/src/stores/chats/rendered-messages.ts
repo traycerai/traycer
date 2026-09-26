@@ -346,9 +346,10 @@ function errorBlockContentVersion(
  * usually move with it and hide the miss, which is exactly why the kind cannot
  * be left to them: two upserts inside one millisecond at an unchanged status
  * leave every hashed field equal and the turn serves its cached segment. The
- * projected kind is what `isFallbackNoticeKind` reads to offer the fallback
- * settings link, so a stale one drops that affordance silently — e.g. a block
- * re-upserted as `fallback_wait_resumed` still rendering the previous kind.
+ * projected kind decides how the row paints — `fallback_applied` prints its
+ * title without its message — so a stale one paints the wrong row silently:
+ * e.g. a block re-upserted from `fallback_applied` to another kind still
+ * hiding the message it now has to show.
  */
 function textBlockContentVersion(
   block: Extract<ContentBlock, { type: "text" }>,

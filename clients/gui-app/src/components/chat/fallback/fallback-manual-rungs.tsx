@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import { useIsMutating } from "@tanstack/react-query";
 import { Info } from "lucide-react";
 import { create, useStore } from "zustand";
@@ -10,6 +10,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import type { HostRpcRegistry } from "@/lib/host";
+import { cn } from "@/lib/utils";
 import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -22,16 +23,22 @@ import {
   RECONNECTING_LABEL,
   SWITCH_LABEL,
   describeManualRungRefusal,
-  describeSwitchDisposition,
   describeWaitDisposition,
-  type RefusalNoteCopy,
 } from "./fallback-copy";
 import {
-  fallbackProviderModelLabel,
-  useFallbackModelLabels,
-  type FallbackModelLabelResolver,
-} from "./fallback-identity";
-import { useFallbackRunManualRung } from "./use-fallback-actions";
+  failedTurnSwitchOffered,
+  failedTurnSwitchSeed,
+  recordFailedTurnRefusal,
+  refusalForAttempt,
+  refusalLeaves,
+  useFailedTurnRefusal,
+  useHoldFailedTurnRefusal,
+  type ManualAction,
+} from "./failed-turn-actions";
+import {
+  useFailedTurnRunManualRung,
+  type ManualRungRefusalRecorder,
+} from "./use-fallback-actions";
 import {
   useChatFallbackTraversalIsLive,
   useChatLastFailedAttempt,
@@ -146,15 +153,8 @@ function ManualRungActions({
   // Nothing has to be remembered: the composer's card leaving is the same
   // frame that ends the traversal (or, for a countdown with nothing to try, the
   // frame the composer declines to draw one), so this row returns exactly when
-  // it becomes the only surface again.
-  //
-  // One case DOES lose an affordance, and it is the right trade rather than an
-  // oversight: a user who HIDES the card. Hiding is not an answer to the card's
-  // question - the traversal runs on, untouched and still holding dispatch - so
-  // this row stands down and that chat has no rungs anywhere until routing
-  // ends. Restoring them here would restore them LEASELESS, into the race
-  // above, which hiding did nothing to end. If that gap is ever worth closing,
-  // it closes by giving this row the lease, not by ungating it.
+  // it becomes the only surface again. The card has no hide control, so there
+  // is no state in which neither surface offers the actions.
   if (traversalIsLive) return null;
   // The row must be the one the host is describing. A transcript holding three
   // failed attempts offers these once, not three times - and a legacy record
@@ -260,9 +260,8 @@ function useChatFallbackActionStanding(input: {
 }
 
 /**
- * What the chooser seeds from when the host named no failed tuple: the chat's
- * own persisted settings. `null` when neither exists - there is then nothing
- * to stage a switch FROM, and the switch is not offered.
+ * The chat's own persisted settings: what the chooser seeds from when the host
+ * named no failed tuple (`failedTurnSwitchSeed`).
  */
 function useChatPersistedSettings(input: {
   readonly epicId: string;
@@ -278,26 +277,7 @@ function useChatPersistedSettings(input: {
 }
 
 /**
- * The catalogue read the card below needs: its subject, and whether there is one.
- *
- * Gated on HAVING a failed tuple rather than on the switch disposition. The
- * durable failed tuple is the one thing this card always holds or does not,
- * whereas re-deriving `describeSwitchDisposition`'s branch here to decide
- * whether to read a catalogue would be a second copy of the copy module's rule
- * - the defect this module is organised against.
- */
-function manualRungCatalogueRead(failedTuple: ChatRunSettings | null): {
-  readonly subjects: ReadonlyArray<string | null>;
-  readonly enabled: boolean;
-} {
-  return {
-    subjects: [failedTuple === null ? null : failedTuple.harnessId],
-    enabled: failedTuple !== null,
-  };
-}
-
-/**
- * Whether the switch leads, and what to say when it is missing.
+ * Whether the switch leads.
  *
  * Retry re-runs the SAME account and model (`retry` is the same tuple by
  * definition). For a failure the provider will keep refusing until something
@@ -307,37 +287,17 @@ function manualRungCatalogueRead(failedTuple: ChatRunSettings | null): {
  * switch leads and the wait is its alternative (spec Flow 4); after anything
  * else Retry leads.
  *
- * The explanation's subject is the FAILED tuple the host named, resolved
- * through the same module every other routing surface names a tuple with.
- * Never the chat's current settings: this is bound to an attempt, and a chat
- * reconfigured since would be explained in terms of a model that never ran.
+ * Whether the switch is OFFERED is the host's `eligibleRungs` alone, and a
+ * missing one is not explained here: "Switch to…" opens the full model picker,
+ * so the host admits it whenever the chat has settings (clutter cuts,
+ * 2026-09-27).
  */
-function switchAffordanceFor(input: {
-  readonly attempt: LastFailedAttempt;
-  readonly modelLabelFor: FallbackModelLabelResolver;
-}): {
-  readonly offersSwitch: boolean;
-  readonly switchLeads: boolean;
-  readonly switchExplanation: string | null;
-} {
-  const { attempt, modelLabelFor } = input;
-  const offersSwitch = attempt.eligibleRungs.includes("switch");
-  const failedTuple = attempt.failedTuple;
-  return {
-    offersSwitch,
-    switchLeads:
-      attempt.failure.reason === "rate_limit" ||
-      attempt.failure.reason === "billing",
-    switchExplanation: describeSwitchDisposition(
-      attempt.switchDisposition,
-      failedTuple === null
-        ? null
-        : fallbackProviderModelLabel(failedTuple, modelLabelFor),
-    ),
-  };
+function switchLeadsFor(attempt: LastFailedAttempt): boolean {
+  return (
+    attempt.failure.reason === "rate_limit" ||
+    attempt.failure.reason === "billing"
+  );
 }
-
-type ManualAction = "retry" | "switch" | "wait";
 
 /**
  * The actions this card draws, in order, the first one filled.
@@ -354,26 +314,6 @@ function orderedManualActions(input: {
     ? ["switch", "wait", "retry"]
     : ["retry", "switch", "wait"];
   return order.filter((action) => input.offers[action]);
-}
-
-/**
- * Which actions a refusal leaves standing (the spec's "Buttons left" column).
- * No refusal yet leaves all of them.
- */
-function refusalLeaves(
-  refusal: RefusalNoteCopy | null,
-): Readonly<Record<ManualAction, boolean>> {
-  const remaining = refusal === null ? "all" : refusal.remaining;
-  switch (remaining) {
-    case "all":
-      return { retry: true, switch: true, wait: true };
-    case "retry_and_switch":
-      return { retry: true, switch: true, wait: false };
-    case "switch":
-      return { retry: false, switch: true, wait: false };
-    case "none":
-      return { retry: false, switch: false, wait: false };
-  }
 }
 
 /**
@@ -398,11 +338,13 @@ function refusalLeaves(
  * rendering, and was delivered **nowhere**.
  *
  * Splitting is what fixes it, rather than a cleverer predicate: unmounting runs
- * the reporting hook's cleanup, and destroys the refusal note with it, so a
- * returning attempt cannot reappear under a stale refusal either. Losing the
- * in-flight mutation costs nothing - the Mutation lives in the query cache and
- * its hook-level `onSuccess` hands the refusal to the chat's announcer whether
- * or not this subtree is still here.
+ * the reporting hook's cleanup, and releases this card's hold on the refusal -
+ * the last card of the attempt to go takes it along - so a returning attempt
+ * cannot reappear under a stale refusal either. Losing the in-flight mutation
+ * costs nothing - the Mutation lives in the query cache, and its hook-level
+ * `onSuccess` hands the refusal to a card of the attempt still on screen, or
+ * to the chat's announcer once there is none, whether or not this subtree is
+ * still here.
  */
 function ManualRungAffordances({
   attempt,
@@ -434,30 +376,45 @@ function ManualRungAffordances({
   // longer exists on Surya's MacBook"). Never from the host's detail: the host
   // writes a fixed sentence and the client says where.
   const hostLabel = useHostDirectoryEntry(hostId)?.label ?? null;
-  // One tuple: the only model this card names is the FAILED one, in the
-  // sentence explaining why there is no Switch… button. The picker this card
-  // opens resolves its own rows.
-  const catalogueRead = manualRungCatalogueRead(attempt.failedTuple);
-  const modelLabelFor = useFallbackModelLabels(
-    client,
-    catalogueRead.subjects,
-    catalogueRead.enabled,
+  // A refused Retry or Wait, recorded for every card of the attempt still on
+  // screen - this one, or the same chat's card in another tile. Read at
+  // answer time, so it works after this card has gone too.
+  const recordRefusal = useCallback<ManualRungRefusalRecorder>(
+    (response, variables) =>
+      recordFailedTurnRefusal(
+        { hostId, chatId },
+        variables.turnId,
+        describeManualRungRefusal({
+          outcome: response.outcome,
+          detail: response.detail,
+          rung: variables.rung,
+          hostLabel,
+        }),
+      ),
+    [chatId, hostId, hostLabel],
   );
   // The bare Retry / Wait buttons. The picker owns its own instance of this
   // verb, so the two are joined below through the shared mutation key.
   //
-  // This card answers inline while it is on screen - the refusal note below -
-  // so the hook-level report stands down until it unmounts, then speaks
-  // through the announcer. Never a toast (spec Flow 4).
-  const runManualRung = useFallbackRunManualRung(
+  // A card of this attempt answers inline while one is on screen - the
+  // refusal note below - and the announcer speaks only once none is left.
+  // Never a toast (spec Flow 4).
+  const runManualRung = useFailedTurnRunManualRung(
     client,
     chatId,
     publishConfirmed,
-    { inlineMenuOpen: true, publishUnattended },
+    { inlineMenuOpen: true, publishUnattended, recordRefusal },
   );
-  const [refusal, setRefusal] = useState<RefusalNoteCopy | null>(null);
-  const switchSeed = useChatPersistedSettings({ epicId, chatId, hostId });
-  const seedTuple = attempt.failedTuple ?? switchSeed;
+  // The refusal lives in the chat's shared record rather than in this card,
+  // because the composer's banner reads it too: a refusal that takes the
+  // Switch away has to bring the banner back (`failed-turn-actions.ts`).
+  const recordedRefusal = useFailedTurnRefusal({ hostId, chatId });
+  const refusal = refusalForAttempt(recordedRefusal, attempt);
+  // This card holds the record while it is mounted; the last card of this
+  // turn to leave - in any tile of the chat - takes the refusal with it.
+  useHoldFailedTurnRefusal({ hostId, chatId }, attempt.turnId);
+  const chatSettings = useChatPersistedSettings({ epicId, chatId, hostId });
+  const seedTuple = failedTurnSwitchSeed(attempt, chatSettings);
   // Any rung in flight for this chat - a bare button here or a pick in the
   // picker - quiets every control, so one press cannot race another.
   const rungsInFlight =
@@ -467,37 +424,24 @@ function ManualRungAffordances({
 
   const run = useCallback(
     (rung: "retry" | "wait_once") => {
-      setRefusal(null);
-      runManualRung.mutate(
-        {
-          epicId,
-          chatId,
-          rung,
-          // Null for both rungs this arm sends. `retry` is the same tuple
-          // again by definition, and `wait_once` parks on the tuple that
-          // failed - which is what the wait is FOR. Only `switch` carries a
-          // target, and that one comes from the picker below.
-          target: null,
-          userMessageId: attempt.userMessageId,
-          turnId: attempt.turnId,
-        },
-        {
-          // Per-call, so it dies with this card: once the card is gone the
-          // hook-level handler speaks the same sentence instead.
-          onSuccess: (response) => {
-            setRefusal(
-              describeManualRungRefusal({
-                outcome: response.outcome,
-                detail: response.detail,
-                rung,
-                hostLabel,
-              }),
-            );
-          },
-        },
-      );
+      // A new press clears the last answer on every card of the attempt.
+      recordFailedTurnRefusal({ hostId, chatId }, attempt.turnId, null);
+      // The answer comes back through the hook's `recordRefusal`, not a
+      // per-call handler, which would die with this card.
+      runManualRung.mutate({
+        epicId,
+        chatId,
+        rung,
+        // Null for both rungs this arm sends. `retry` is the same tuple
+        // again by definition, and `wait_once` parks on the tuple that
+        // failed - which is what the wait is FOR. Only `switch` carries a
+        // target, and that one comes from the picker below.
+        target: null,
+        userMessageId: attempt.userMessageId,
+        turnId: attempt.turnId,
+      });
     },
-    [attempt, chatId, epicId, hostLabel, runManualRung],
+    [attempt, chatId, epicId, hostId, runManualRung],
   );
 
   // The shared minute clock, for one decision only: whether a wait or reset
@@ -508,27 +452,15 @@ function ManualRungAffordances({
   // the host said this failure admits, and that is still true - what is
   // missing is a connection to send them on.
   const busy = runManualRung.isPending || rungsInFlight || reconnecting;
-  // Why there is no wait button, in the host's own terms. Never inferred from
-  // the failure payload: `resetsAt` is PRESENT for a boundary past the user's
-  // cap and ABSENT for one nobody verified, so the two states a user can act
-  // on were indistinguishable from here, and the state where a wait is
-  // impossible looked like the state where it is merely far away.
-  const waitExplanation = describeWaitDisposition(
-    attempt.waitDisposition,
-    attempt.failure.resetsAt === undefined
-      ? null
-      : formatWaitTime(attempt.failure.resetsAt, now),
-  );
-  const { offersSwitch, switchLeads, switchExplanation } = switchAffordanceFor({
-    attempt,
-    modelLabelFor,
-  });
+  const waitExplanation = waitExplanationFor(attempt, now);
   const leaves = refusalLeaves(refusal);
   const actions = orderedManualActions({
-    switchLeads,
+    switchLeads: switchLeadsFor(attempt),
     offers: {
       retry: attempt.eligibleRungs.includes("retry") && leaves.retry,
-      switch: offersSwitch && seedTuple !== null && leaves.switch,
+      // The composer's banner predicate asks the same function, so the card
+      // and the banner cannot disagree about whether "Switch to…" is here.
+      switch: failedTurnSwitchOffered({ attempt, refusal, seedTuple }),
       wait: waitUntil !== null && leaves.wait,
     },
   });
@@ -601,10 +533,11 @@ function ManualRungAffordances({
     // it, then - after a refusal - why that did not work and what to do next,
     // where the buttons are.
     <div className="mt-3 flex flex-col gap-2.5">
-      <ManualRungExplanations
-        switchExplanation={switchExplanation}
-        waitExplanation={waitExplanation}
-      />
+      {waitExplanation === null ? null : (
+        <span className="text-ui-xs text-muted-foreground">
+          {waitExplanation}
+        </span>
+      )}
       {actions.length === 0 ? null : (
         <div
           data-testid="failed-turn-actions"
@@ -618,41 +551,29 @@ function ManualRungAffordances({
           ) : null}
         </div>
       )}
-      {refusal === null || refusal.text === null ? null : (
-        <RefusalNote text={refusal.text} />
-      )}
+      <RefusalNote text={refusal?.text ?? null} />
     </div>
   );
 }
 
 /**
- * The host's reasons a control is missing, as one muted block above the row.
+ * The card's one standing line about a missing Wait button - "This limit
+ * resets at …, longer than Traycer is set to wait" - or `null` for every
+ * other disposition (`describeWaitDisposition` says why the rest are silent).
  *
- * Its own component for the reason the two sentences are grouped at all: they
- * are the same KIND of thing - a fact about this failure that the reader cannot
- * act on directly - and they belong together, above the controls that remain,
- * rather than trailing underneath them as two separately-`w-full` orphans.
- *
- * Order is deliberate. The switch sentence names the chat; the wait sentence
- * is about a provider's reset boundary. A reader with both wants the one about
- * this chat first.
- *
- * `null` when there is nothing to say, so the column above contributes no gap
- * for an empty block.
+ * Read from the host's disposition, never inferred from the failure payload:
+ * `resetsAt` is PRESENT for a boundary past the user's cap and ABSENT for one
+ * nobody verified. `now` only decides whether the reset time needs its
+ * weekday.
  */
-function ManualRungExplanations({
-  switchExplanation,
-  waitExplanation,
-}: {
-  readonly switchExplanation: string | null;
-  readonly waitExplanation: string | null;
-}) {
-  if (switchExplanation === null && waitExplanation === null) return null;
-  return (
-    <div className="flex flex-col gap-1 text-ui-xs text-muted-foreground">
-      {switchExplanation === null ? null : <span>{switchExplanation}</span>}
-      {waitExplanation === null ? null : <span>{waitExplanation}</span>}
-    </div>
+function waitExplanationFor(
+  attempt: LastFailedAttempt,
+  now: number,
+): string | null {
+  const resetsAt = attempt.failure.resetsAt;
+  return describeWaitDisposition(
+    attempt.waitDisposition,
+    resetsAt === undefined ? null : formatWaitTime(resetsAt, now),
   );
 }
 
@@ -661,22 +582,39 @@ function ManualRungExplanations({
  * (spec Flow 4: "a toast never carries a refusal").
  *
  * A live region, because the sentence REPLACES what the press was expected to
- * do: a screen-reader user who pressed Retry hears the answer to that press.
- * Info-toned, not destructive: nothing broke, the host declined a request and
- * said why.
+ * do: a screen-reader user who pressed Retry hears the answer to that press -
+ * and nothing else says it, since the hook's announcer stands down while this
+ * card is on screen. Info-toned, not destructive: nothing broke, the host
+ * declined a request and said why.
+ *
+ * Mounted for as long as the actions are, EMPTY until there is something to
+ * say, and only its content changes: a region inserted together with its text
+ * announces nothing (ARIA22), and one removed on the next press would have to
+ * be observed afresh. Empty, it is `sr-only` rather than hidden - `display:
+ * none` would take it out of the accessibility tree for exactly as long as it
+ * had nothing to say. The chooser's confirm footer keeps its refusal the same
+ * way.
  */
-function RefusalNote({ text }: { readonly text: string }) {
+function RefusalNote({ text }: { readonly text: string | null }) {
   return (
     <div
       role="status"
       data-testid="failed-turn-refusal"
-      className="flex items-start gap-2 rounded-md border border-info/30 bg-info/10 px-2.5 py-2 text-ui-xs text-foreground"
+      className={cn(
+        text === null
+          ? "sr-only"
+          : "flex items-start gap-2 rounded-md border border-info/30 bg-info/10 px-2.5 py-2 text-ui-xs text-foreground",
+      )}
     >
-      <Info
-        aria-hidden
-        className="mt-0.5 size-3.5 shrink-0 text-info-foreground"
-      />
-      <span className="min-w-0">{text}</span>
+      {text === null ? null : (
+        <>
+          <Info
+            aria-hidden
+            className="mt-0.5 size-3.5 shrink-0 text-info-foreground"
+          />
+          <span className="min-w-0">{text}</span>
+        </>
+      )}
     </div>
   );
 }

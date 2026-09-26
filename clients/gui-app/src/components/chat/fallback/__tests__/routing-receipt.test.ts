@@ -4,6 +4,7 @@ import { fallbackHarnessForProviderLabel } from "@/components/chat/fallback/fall
 import {
   receiptCrossesProviders,
   receiptStepText,
+  routingSettledReportText,
 } from "@/components/chat/fallback/routing-receipt";
 
 /**
@@ -184,5 +185,233 @@ describe("receiptStepText for a step kind this build does not know", () => {
     for (const crosses of [false, true]) {
       expect(text(unknownStep, crosses)).not.toMatch(/Switched|Retried|Waited/);
     }
+  });
+});
+
+describe("routingSettledReportText", () => {
+  const notice = {
+    title: "Routing stopped",
+    message: "Every account said no.",
+    details: [
+      { label: "Tried", value: "2 accounts" },
+      { label: "Route", value: "claude/sonnet -> claude/haiku" },
+    ],
+    receipt: {
+      causeLabel: "Rate limit reached",
+      steps: [
+        step({ kind: "switch", endedLabel: "rate limited" }),
+        step({
+          kind: "wait",
+          profileLabel: "Personal 3",
+          resumedAt: Date.UTC(2026, 5, 15, 1, 2, 3),
+          endedLabel: "still rate limited",
+        }),
+      ],
+    },
+  };
+
+  it("writes the title, message, cause, raw steps and detail rows, one per line", () => {
+    expect(routingSettledReportText(notice).split("\n")).toEqual([
+      "Routing: Routing stopped",
+      "Every account said no.",
+      "Cause: Rate limit reached",
+      "Step 1: switch · Claude Code · claude-fable-5 · Surya · ended: rate limited",
+      "Step 2: wait · Claude Code · claude-fable-5 · Personal 3 · resumed at 2026-06-15T01:02:03.000Z · ended: still rate limited",
+      "Tried: 2 accounts",
+      "Route: claude/sonnet -> claude/haiku",
+    ]);
+  });
+
+  it("keeps the raw slug, never the resolved model label", () => {
+    const report = routingSettledReportText(notice);
+    expect(report).toContain("claude-fable-5");
+    expect(report).not.toContain("Fable ·");
+  });
+
+  it.each([
+    ["null", null],
+    ["empty", ""],
+  ])("omits the message line when it is %s", (_name, message) => {
+    const lines = routingSettledReportText({ ...notice, message }).split("\n");
+    expect(lines[0]).toBe("Routing: Routing stopped");
+    expect(lines[1]).toBe("Cause: Rate limit reached");
+  });
+
+  it("says 'Steps: none' for an empty receipt", () => {
+    const report = routingSettledReportText({
+      ...notice,
+      details: [],
+      receipt: { causeLabel: "Rate limit reached", steps: [] },
+    });
+    expect(report.split("\n")).toEqual([
+      "Routing: Routing stopped",
+      "Every account said no.",
+      "Cause: Rate limit reached",
+      "Steps: none",
+    ]);
+  });
+
+  it("prints the raw number for a resumedAt Date cannot represent, without throwing", () => {
+    const report = routingSettledReportText({
+      ...notice,
+      details: [],
+      receipt: {
+        causeLabel: "Rate limit reached",
+        steps: [step({ kind: "wait", resumedAt: 9e15 })],
+      },
+    });
+    expect(report).toContain("resumed at 9000000000000000 · ended:");
+  });
+});
+
+describe("routingSettledReportText for the live-drive fixture, as the host writes it", () => {
+  const driveStep: ProviderNoticeReceiptStep = {
+    kind: "switch",
+    providerLabel: "Claude Code",
+    modelLabel: "sonnet",
+    profileLabel: "Surya 2",
+    resumedAt: null,
+    endedLabel: "Rate limit reached",
+  };
+
+  const driveDetails = [
+    { label: "Code", value: "FALLBACK_EXHAUSTED" },
+    { label: "Detail", value: "Routing tried 1 option and none worked." },
+    { label: "Cause", value: "Every step was tried" },
+    { label: "Reason", value: "Rate limit reached" },
+    { label: "Failed on", value: "claude/opus (Surya)" },
+    { label: "Tried", value: "claude/sonnet (Surya 2)" },
+    { label: "Hop 1", value: "claude/opus (Surya) → claude/sonnet (Surya 2)" },
+  ];
+
+  function drive(overrides: {
+    readonly details: ReadonlyArray<{ label: string; value: string }>;
+    readonly steps: ReadonlyArray<ProviderNoticeReceiptStep>;
+  }): string[] {
+    return routingSettledReportText({
+      title: "Routing couldn't recover this turn",
+      message: "The rate limit on Claude Code · Surya stands.",
+      details: overrides.details,
+      receipt: {
+        causeLabel: "Every step was tried",
+        steps: [...overrides.steps],
+      },
+    }).split("\n");
+  }
+
+  it("writes exactly one Cause line", () => {
+    const lines = drive({ details: driveDetails, steps: [driveStep] });
+    expect(lines.filter((line) => line.startsWith("Cause:"))).toEqual([
+      "Cause: Every step was tried",
+    ]);
+  });
+
+  it("an exact duplicate line is written once, the first occurrence winning", () => {
+    // "Reason" at positions 4 and 8 of the details.
+    const lines = drive({
+      details: [
+        ...driveDetails,
+        { label: "Reason", value: "Rate limit reached" },
+      ],
+      steps: [driveStep],
+    });
+    expect(
+      lines.filter((line) => line === "Reason: Rate limit reached"),
+    ).toEqual(["Reason: Rate limit reached"]);
+    // The first occurrence keeps its place, between Cause and Failed on.
+    const reason = lines.indexOf("Reason: Rate limit reached");
+    expect(lines[reason - 1]).toBe("Cause: Every step was tried");
+    expect(lines[reason + 1]).toBe("Failed on: claude/opus (Surya)");
+    expect(lines).toHaveLength(10);
+  });
+
+  it("writes no exact duplicate lines", () => {
+    const lines = drive({ details: driveDetails, steps: [driveStep] });
+    expect(lines.length).toBe(new Set(lines).size);
+  });
+
+  it("drops the provider and slug from a Step line the detail rows already name", () => {
+    const lines = drive({ details: driveDetails, steps: [driveStep] });
+    expect(lines).toContain(
+      "Step 1: switch · Surya 2 · ended: Rate limit reached",
+    );
+  });
+
+  it("keeps the full report, in order, for the drive fixture", () => {
+    expect(drive({ details: driveDetails, steps: [driveStep] })).toEqual([
+      "Routing: Routing couldn't recover this turn",
+      "The rate limit on Claude Code · Surya stands.",
+      "Step 1: switch · Surya 2 · ended: Rate limit reached",
+      "Code: FALLBACK_EXHAUSTED",
+      "Detail: Routing tried 1 option and none worked.",
+      "Cause: Every step was tried",
+      "Reason: Rate limit reached",
+      "Failed on: claude/opus (Surya)",
+      "Tried: claude/sonnet (Surya 2)",
+      "Hop 1: claude/opus (Surya) → claude/sonnet (Surya 2)",
+    ]);
+  });
+
+  it("keeps the Cause line and the full Step line for an older host with no detail rows", () => {
+    const lines = drive({ details: [], steps: [driveStep] });
+    expect(lines).toContain("Cause: Every step was tried");
+    expect(lines).toContain(
+      "Step 1: switch · Claude Code · sonnet · Surya 2 · ended: Rate limit reached",
+    );
+  });
+
+  it("compares the Cause row by value, so a renamed row still suppresses the GUI Cause line", () => {
+    const details = driveDetails.map((detail) =>
+      detail.label === "Cause" ? { label: "Why", value: detail.value } : detail,
+    );
+    const lines = drive({ details, steps: [driveStep] });
+    expect(lines.filter((line) => line.startsWith("Cause:"))).toEqual([]);
+    expect(lines).toContain("Why: Every step was tried");
+  });
+
+  it("still drops the provider and slug when the host renders a terminal account with no label", () => {
+    const details = [
+      { label: "Tried", value: "claude/sonnet" },
+      { label: "Hop 1", value: "claude/opus (Surya) → claude/sonnet" },
+    ];
+    const lines = drive({ details, steps: [driveStep] });
+    expect(lines).toContain(
+      "Step 1: switch · Surya 2 · ended: Rate limit reached",
+    );
+  });
+
+  it("keeps the provider and slug when the rows only name a longer slug", () => {
+    const details = [{ label: "Tried", value: "claude/sonnet-4 (Surya 2)" }];
+    const lines = drive({ details, steps: [driveStep] });
+    expect(lines).toContain(
+      "Step 1: switch · Claude Code · sonnet · Surya 2 · ended: Rate limit reached",
+    );
+  });
+
+  it("keeps the full Step line for a provider this build does not know", () => {
+    const mystery: ProviderNoticeReceiptStep = {
+      ...driveStep,
+      providerLabel: "Mystery Agent",
+    };
+    const details = [{ label: "Tried", value: "claude/sonnet (Surya 2)" }];
+    const lines = drive({ details, steps: [mystery] });
+    expect(lines).toContain(
+      "Step 1: switch · Mystery Agent · sonnet · Surya 2 · ended: Rate limit reached",
+    );
+  });
+
+  it("drops the provider and slug from a wait step on the failed tuple", () => {
+    const wait: ProviderNoticeReceiptStep = {
+      kind: "wait",
+      providerLabel: "Claude Code",
+      modelLabel: "opus",
+      profileLabel: "Surya",
+      resumedAt: Date.UTC(2026, 5, 15, 1, 2, 3),
+      endedLabel: "Rate limit reached",
+    };
+    const lines = drive({ details: driveDetails, steps: [wait] });
+    expect(lines).toContain(
+      "Step 1: wait · Surya · resumed at 2026-06-15T01:02:03.000Z · ended: Rate limit reached",
+    );
   });
 });

@@ -301,6 +301,104 @@ describe("<ErrorSegment />", () => {
       source: "Chat",
     });
   });
+  describe("settled routing row report", () => {
+    const settledNotice = {
+      title: "Routing stopped",
+      message: "Every account said no.",
+      details: [{ label: "Tried", value: "2 accounts" }],
+      receipt: {
+        causeLabel: "Rate limit reached",
+        steps: [
+          {
+            kind: "switch" as const,
+            providerLabel: "Claude Code",
+            modelLabel: "claude-sonnet-4",
+            profileLabel: "Work",
+            resumedAt: null,
+            endedLabel: "rate limited",
+          },
+        ],
+      },
+    };
+
+    it("appends the routing rows to the private cause message, never to the public prefill", () => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+      const hostileCode = "/Users/alice/private.txt?token=sk-secret";
+
+      render(
+        <TooltipProvider>
+          <ErrorSegment
+            turnId={null}
+            message="Rate limited."
+            code={hostileCode}
+            recoverable={false}
+            findUnitId={null}
+            harnessId={null}
+            failure={null}
+            settledNotice={settledNotice}
+            settledNoticeFindUnitId={null}
+          />
+        </TooltipProvider>,
+      );
+
+      expect(screen.getByTestId("routing-settled-card")).toBeDefined();
+      expect(
+        screen.queryByRole("button", { name: "Details for a bug report" }),
+      ).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+      const state = useDesktopDialogStore.getState();
+      expect(state.reportIssueContext).toEqual({
+        title: "Agent error",
+        message: null,
+        code: null,
+        source: "Chat",
+      });
+      const cause = state.reportIssueDraftContext?.privateDiagnostics.cause;
+      expect(cause?.message).toBe(
+        [
+          "Rate limited.",
+          "",
+          "Routing: Routing stopped",
+          "Every account said no.",
+          "Cause: Rate limit reached",
+          "Step 1: switch · Claude Code · claude-sonnet-4 · Work · ended: rate limited",
+          "Tried: 2 accounts",
+        ].join("\n"),
+      );
+      // Nothing of the notice reaches the public side.
+      const publicSide = JSON.stringify(state.reportIssueContext);
+      expect(publicSide).not.toContain("Routing stopped");
+      expect(publicSide).not.toContain("2 accounts");
+      expect(publicSide).not.toContain(hostileCode);
+    });
+
+    it("leaves a plain row's cause message exactly the error message", () => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+
+      render(
+        <TooltipProvider>
+          <ErrorSegment
+            turnId={null}
+            message="Rate limited."
+            code={null}
+            recoverable={false}
+            findUnitId={null}
+            harnessId={null}
+            failure={null}
+            settledNotice={null}
+            settledNoticeFindUnitId={null}
+          />
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+      const cause =
+        useDesktopDialogStore.getState().reportIssueDraftContext
+          ?.privateDiagnostics.cause;
+      expect(cause?.message).toBe("Rate limited.");
+    });
+  });
+
   // The env-credential disclosure row's remedy. The message names the variable;
   // this is the affordance that gets the user to the place it can be unset.
   describe("env-credential auth failures", () => {

@@ -133,6 +133,7 @@ import type {
 } from "@/stores/composer/chat-store";
 import {
   createFallbackAnnouncementObserver,
+  fallbackAnnouncementPlan,
   fallbackNoticeAnnouncements,
   fallbackOutcomeAnnouncement,
   fallbackReturnAnnouncement,
@@ -144,7 +145,6 @@ import {
   type ChatAnnouncementKind,
   type FallbackAnnouncement,
   type FallbackAnnouncementObserver,
-  type FallbackAnnouncementPlan,
   type FallbackNoticeAnnouncement,
 } from "@/stores/chats/chat-announcements";
 import {
@@ -166,10 +166,7 @@ import type {
 } from "@/stores/chats/chat-session-store";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import type {
-  BackgroundItem,
-  FallbackImpendingAction,
-} from "@traycer/protocol/host/agent/gui/subscribe";
+import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { LegendListRef } from "@legendapp/list/react";
 import {
   use,
@@ -1036,27 +1033,6 @@ interface ChatLiveAnnouncementsProps extends ChatAnnouncementScope {
   readonly completion: ChatAnnouncement | null;
 }
 
-function fallbackPlanForAnnouncement(
-  action: FallbackImpendingAction | null,
-  destination: string | null,
-): FallbackAnnouncementPlan | null {
-  if (action === null) return null;
-  let kind: FallbackAnnouncementPlan["action"];
-  if (action.pending !== null) {
-    kind = "checking";
-  } else if (action.rung === "profile" || action.rung === "tier") {
-    kind = "switch";
-  } else {
-    kind = action.rung;
-  }
-  return {
-    planId: action.planId,
-    action: kind,
-    destination,
-    resumesAt: action.resumesAt,
-  };
-}
-
 interface ManualFallbackAnnouncementObservation {
   readonly sequence: number;
   readonly announcement: FallbackAnnouncement | null;
@@ -1556,6 +1532,26 @@ function announcedHarnessIdsOf(
   ];
 }
 
+/**
+ * The render a deferred store event waits for, and the harnesses it waits on.
+ *
+ * `subjects` is state rather than read off the queued frames because the queue
+ * is a ref, and the catalogue request is made at render: a frame that names a
+ * harness the burst has already moved past (A → B → cleared, before React
+ * renders) still has to be spoken by a resolver asked about B. Reading only the
+ * latest state asked about nobody, so a catalogue warm in the cache was never
+ * read and the slug was spoken.
+ */
+interface DeferredAnnouncementWake {
+  readonly tick: number;
+  readonly subjects: ReadonlyArray<string>;
+}
+
+const NO_DEFERRED_ANNOUNCEMENT_WAKE: DeferredAnnouncementWake = {
+  tick: 0,
+  subjects: [],
+};
+
 function ChatFallbackAnnouncementSource(
   props: ChatLiveAnnouncementsProps & {
     readonly hostId: string;
@@ -1573,9 +1569,20 @@ function ChatFallbackAnnouncementSource(
       state.pendingReturn !== undefined ||
       state.confirmedManualFallbackAction?.rung === "switch",
   );
+  // Store events waiting for the render that points the resolvers at their
+  // subjects, in arrival order; see `observeFromStore`. The wake is that
+  // render, and it carries the queued frames' harnesses into the catalogue
+  // request below until they are spoken.
+  const deferredStates = useRef<ChatSessionState[]>([]);
+  const [deferredWake, setDeferredWake] = useState<DeferredAnnouncementWake>(
+    NO_DEFERRED_ANNOUNCEMENT_WAKE,
+  );
+  // A queued frame still has to be named after the live state has moved past
+  // it, so the reads stay on while one is waiting.
+  const announcing = hasFallback || deferredWake.subjects.length > 0;
   const labelFor = useFallbackProfileLabels(
     client,
-    props.visible && hasFallback,
+    props.visible && announcing,
   );
   // The harnesses this announcer may have to name, subscribed rather than
   // assembled from props: its subjects are read inside an effect event off live
@@ -1590,14 +1597,18 @@ function ChatFallbackAnnouncementSource(
     handle.store,
     useShallow(announcedHarnessIdsOf),
   );
+  // The live state's subjects plus every queued frame's. The hook keys its
+  // requests on the distinct ids, so a harness named by both is one request,
+  // and a warm catalogue answers at this render without a fetch.
+  const catalogueSubjects = [...announcedHarnessIds, ...deferredWake.subjects];
   // `settledFor` beside the resolver, because this surface is the one that
   // cannot take back a name it has already spoken - see its use in
   // `observeState` below.
   const { labelFor: modelLabelFor, settledFor: modelCatalogueSettledFor } =
     useFallbackModelCatalogues(
       client,
-      announcedHarnessIds,
-      props.visible && hasFallback,
+      catalogueSubjects,
+      props.visible && announcing,
     );
   const observerRef = useRef<FallbackAnnouncementObserver | null>(null);
   const lastManualSequence = useRef(0);
@@ -1625,10 +1636,11 @@ function ChatFallbackAnnouncementSource(
             labelFor,
             modelLabelFor,
           );
-    const plan = fallbackPlanForAnnouncement(
-      pending?.impendingAction ?? null,
-      targetIdentity,
-    );
+    // The card's plan for this frame, never a second reading of it.
+    const plan =
+      pending === undefined
+        ? null
+        : fallbackAnnouncementPlan(pending, targetIdentity);
     const returning = state.pendingReturn;
     const preferredIdentity =
       returning === undefined
@@ -1746,8 +1758,39 @@ function ChatFallbackAnnouncementSource(
     enqueue(next.map((entry) => entry.text));
   });
 
+  // The label resolvers are built at render, for the harnesses the RENDERED
+  // state names, and the store subscription below runs before React renders
+  // the state it reports. A countdown whose first frame already names its
+  // destination was therefore observed against resolvers asked about no
+  // harness, spoke the raw slug ("sonnet · low on Surya"), and the render a
+  // moment later said it again by name: two plans in one live region on every
+  // such fallback (seen live). An event naming a harness the resolvers were
+  // not built for waits for that render instead, and so does everything
+  // behind it, so the batching this subscription exists to keep is replayed
+  // in order rather than lost. Its harnesses ride the wake into that render's
+  // catalogue request, because the state that render reads may no longer
+  // name them.
+  const observeFromStore = useEffectEvent((state: ChatSessionState) => {
+    const named = announcedHarnessIdsOf(state).flatMap((id) =>
+      id === null ? [] : [id],
+    );
+    if (
+      deferredStates.current.length === 0 &&
+      named.every((id) => catalogueSubjects.includes(id))
+    ) {
+      observeState(state);
+      return;
+    }
+    deferredStates.current.push(state);
+    setDeferredWake((prior) => ({
+      tick: prior.tick + 1,
+      subjects: [...new Set([...prior.subjects, ...named])],
+    }));
+  });
+
   useLayoutEffect(() => {
     observerRef.current = createFallbackAnnouncementObserver();
+    deferredStates.current = [];
     lastManualSequence.current = 0;
     lastUnattendedSequence.current = 0;
     manualHold.current = null;
@@ -1768,11 +1811,12 @@ function ChatFallbackAnnouncementSource(
         state.snapshotLoaded !== prior.snapshotLoaded ||
         state.transcriptBaselineEpoch !== prior.transcriptBaselineEpoch
       ) {
-        observeState(state);
+        observeFromStore(state);
       }
     });
     return () => {
       unsubscribe();
+      deferredStates.current = [];
       // The hold timer calls back into `observeState`, which reads the store
       // and the observer this effect owns, so it must not outlive them.
       if (manualHoldTimer.current !== null) {
@@ -1784,7 +1828,30 @@ function ChatFallbackAnnouncementSource(
   }, [handle, reset]);
 
   useLayoutEffect(() => {
+    const deferred = deferredStates.current;
+    deferredStates.current = [];
+    // Spoken with whatever this render's resolvers hold. A catalogue this
+    // render is the first to ask about is not waited for: a countdown
+    // announcement is time-critical and a live region is not held for a
+    // network read, so a cold catalogue names the slug - as the first frame
+    // of a live traversal does before its catalogue lands. What a live frame
+    // gets and a drained one does not is the correction when the label
+    // arrives, because the state that would re-announce it has moved on.
+    for (const state of deferred) observeState(state);
     observeState(handle.store.getState());
+    // Every queued frame is spoken, so their harnesses stop being asked
+    // about. Off the layout pass, and only for the wake that was drained: a
+    // frame deferred in between keeps its own.
+    if (deferredWake.subjects.length > 0) {
+      const drained = deferredWake.tick;
+      queueMicrotask(() => {
+        setDeferredWake((current) =>
+          current.tick === drained && current.subjects.length > 0
+            ? { tick: current.tick, subjects: [] }
+            : current,
+        );
+      });
+    }
   }, [
     handle,
     notices,
@@ -1813,6 +1880,9 @@ function ChatFallbackAnnouncementSource(
     // this counter instead and the re-observation arrives the ordinary way,
     // through this effect, with every other dependency freshly read.
     manualHoldTick,
+    // The render a deferred store event was waiting for; see
+    // `observeFromStore`.
+    deferredWake,
   ]);
   return null;
 }

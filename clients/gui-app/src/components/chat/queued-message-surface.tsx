@@ -796,13 +796,32 @@ function QueuedMessageRowContent(props: {
           <span className="text-muted-foreground">{item.description}</span>
         )}
       </div>
-      <QueuedMessageFallbackReason item={item} />
+      <QueuedMessageFallbackReason
+        item={item}
+        pillSaysPausedAfterError={
+          props.statusLabel === QUEUE_PAUSED_AFTER_ERROR_LABEL
+        }
+      />
     </div>
   );
 }
 
-function QueuedMessageFallbackReason(props: { readonly item: ChatQueuedItem }) {
-  if (props.item.kind !== "prompt") return null;
+/**
+ * The host's per-row note on why the row is held (`item.fallbackReason`).
+ *
+ * Not drawn under a "Paused after an error" pill (clutter cuts, 2026-09-27):
+ * the pill and its tooltip already say the queue is held because the last turn
+ * failed, and "Queue paused because the previous turn ended with an error"
+ * beneath it was the same fact a second time. Under any other pill the line
+ * is the only place the reason is said, so it stays.
+ */
+function QueuedMessageFallbackReason(props: {
+  readonly item: ChatQueuedItem;
+  readonly pillSaysPausedAfterError: boolean;
+}) {
+  if (props.item.kind !== "prompt" || props.pillSaysPausedAfterError) {
+    return null;
+  }
   const reason = props.item.fallbackReason?.trim();
   if (!reason) return null;
   return (

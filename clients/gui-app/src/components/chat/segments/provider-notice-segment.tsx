@@ -11,8 +11,6 @@ import type {
   ProviderNoticeKind,
   ProviderNoticeTone,
 } from "@traycer/protocol/persistence/epic/content-blocks";
-import { FallbackNoticeSettingsLink } from "@/components/chat/fallback/fallback-notice-attribution";
-import { isFallbackNoticeKind } from "@/components/chat/fallback/fallback-notice-kinds";
 import { Button } from "@/components/ui/button";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { cn } from "@/lib/utils";
@@ -21,10 +19,10 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ProviderNoticeSegmentProps {
   status: "streaming" | "completed" | "errored";
   /**
-   * Which notice this is. Only the provider-fallback arms read it, and only to
-   * add the settings link below their details - the rest of this component is
-   * kind-blind on purpose, because a harness notice and a fallback notice are
-   * the same shape of row.
+   * Which notice this is. Only `fallback_applied` reads it, and only to leave
+   * its message off the rule (see `inlineMessageFor`) - the rest of this
+   * component is kind-blind on purpose, because a harness notice and a
+   * fallback notice are the same shape of row.
    */
   noticeKind: ProviderNoticeKind;
   /** Compact Codex status, matching the native app's transient retry row. */
@@ -48,6 +46,23 @@ const TONE_TEXT_CLASS: Record<ProviderNoticeTone, string> = {
   info: "text-muted-foreground",
   warning: "text-warning-foreground",
 };
+
+/**
+ * The message the collapsed rule prints after the title, or `null`.
+ *
+ * `fallback_applied` prints its title alone (clutter cuts, 2026-09-27): the
+ * title already says what happened ("Switched to Sonnet 5 · Low on Surya
+ * after a rate limit"), and the message beside it was the raw route that
+ * belongs among the details under the chevron. Every other kind keeps its
+ * message inline, as harness notices always have.
+ */
+function inlineMessageFor(
+  noticeKind: ProviderNoticeKind,
+  message: string | null,
+): string | null {
+  if (noticeKind === "fallback_applied") return null;
+  return message === null || message.length === 0 ? null : message;
+}
 
 export function ProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
   return props.presentation === "retry" ? (
@@ -121,15 +136,16 @@ function StandardProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
   const Icon = TONE_ICON[tone];
   const toneClass = TONE_TEXT_CLASS[tone];
   const ExpandIcon = expanded ? ChevronDown : ChevronRight;
+  const inlineMessage = inlineMessageFor(noticeKind, message);
 
   const labelInner = (
     <div className={cn("flex items-center gap-2 text-ui-xs", toneClass)}>
       <Icon className="size-3.5 shrink-0" aria-hidden />
       <span>
         {title}
-        {message !== null && message.length > 0 ? (
-          <span className="text-muted-foreground/80"> · {message}</span>
-        ) : null}
+        {inlineMessage === null ? null : (
+          <span className="text-muted-foreground/80"> · {inlineMessage}</span>
+        )}
       </span>
       {isStreaming ? (
         <LivePulse
@@ -190,16 +206,12 @@ function StandardProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
             ))}
           </dl>
           {/*
-           * Inside the expanded details, never on the collapsed rule: this is
-           * the one place a historical fallback row offers an action, and it
-           * is the only KIND of action it may offer - a link to the policy
-           * that produced it. Nothing here re-dispatches.
+           * No action in here, for a fallback notice either (clutter cuts,
+           * 2026-09-27): the "Model routing" settings button that sat below
+           * the details was a text-styled action on a historical row. The
+           * row describes something that already happened; the gear on the
+           * live routing cards is the way to settings.
            */}
-          {isFallbackNoticeKind(noticeKind) ? (
-            <div className="mt-2 flex">
-              <FallbackNoticeSettingsLink />
-            </div>
-          ) : null}
         </div>
       ) : null}
     </div>

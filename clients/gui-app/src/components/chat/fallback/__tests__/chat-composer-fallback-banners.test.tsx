@@ -18,13 +18,11 @@ import {
   returnBannerLowUsage,
   type ComposerRateLimitAdvisory,
 } from "@/components/chat/fallback/fallback-return-low-usage";
-import { useDismissedRoutingCardsStore } from "@/components/chat/fallback/use-dismissed-routing-cards";
 import {
   FAILED_CLAUDE_TUPLE,
   PREFERRED_CLAUDE_TUPLE,
   TARGET_CODEX_TUPLE,
   chatRunSettings,
-  fallbackImpendingAction,
   pendingFallback,
   pendingReturn,
   providerProfile,
@@ -57,7 +55,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 
 // `useFallbackModelLabels` alone, as a slug passthrough - the degradation the
 // resolver falls back to with no catalogue. This suite pins which card state
-// renders and the hide behaviour, not model naming (`routing-card.test.tsx`
+// renders and that nothing hides it, not model naming (`routing-card.test.tsx`
 // and `fallback-model-labels.test.tsx` own that).
 vi.mock(
   "@/components/chat/fallback/fallback-identity",
@@ -108,13 +106,13 @@ function pendingAt(
   });
 }
 
-function renderBanners(input: {
+function bannersTree(input: {
   readonly topBannerKind: "fallback" | "fallback-return" | "none";
   readonly pending: PendingFallback | undefined;
   readonly pendingReturn: PendingReturn | undefined;
   readonly rateLimitAdvisory: ComposerRateLimitAdvisory | null;
 }) {
-  return render(
+  return (
     <TooltipProvider>
       <ChatComposerBannerPortalProvider>
         <ChatComposerFallbackBanners
@@ -131,8 +129,17 @@ function renderBanners(input: {
           canAct
         />
       </ChatComposerBannerPortalProvider>
-    </TooltipProvider>,
+    </TooltipProvider>
   );
+}
+
+function renderBanners(input: {
+  readonly topBannerKind: "fallback" | "fallback-return" | "none";
+  readonly pending: PendingFallback | undefined;
+  readonly pendingReturn: PendingReturn | undefined;
+  readonly rateLimitAdvisory: ComposerRateLimitAdvisory | null;
+}) {
+  return render(bannersTree(input));
 }
 
 function cardState(): string | null {
@@ -166,12 +173,6 @@ describe("ChatComposerFallbackBanners", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     chooser.props = [];
-    // Session-scoped, module-level state - see the store's own doc for why
-    // it is deliberately NOT persisted. A dismissal from one test would
-    // otherwise hide every later test's card for the same
-    // `(chatId, traversalId, card)` triple, since every case here reuses
-    // "chat-composer" / "traversal-composer".
-    useDismissedRoutingCardsStore.setState({ dismissed: new Set() });
   });
 
   afterEach(() => {
@@ -253,34 +254,20 @@ describe("ChatComposerFallbackBanners", () => {
     expect(screen.queryByTestId("routing-card")).toBeNull();
   });
 
-  // A dismissal hides the card WITHOUT cancelling the traversal - see
-  // `use-dismissed-routing-cards.ts`'s own doc for why the hide control is
-  // deliberately not wired to `useFallbackCancel`. `mutate` (the shared stub
-  // every fallback mutation in this suite resolves through) staying uncalled is
-  // the falsification that a regression here would actually catch: a card that
-  // silently cancelled instead of hiding would still make the removal
-  // assertion pass.
-  it("hides the countdown card after Hide, without cancelling the traversal", () => {
-    renderBanners({
+  // There is no hide control and so no hidden state (clutter cuts,
+  // 2026-09-27): the card is on screen for exactly as long as `pending` is a
+  // countdown or waiting state.
+  it("draws no Hide button on either card", () => {
+    const { unmount } = renderBanners({
       topBannerKind: "fallback",
       pending: pendingAt("hold"),
       pendingReturn: undefined,
       rateLimitAdvisory: null,
     });
     expect(cardState()).toBe("countdown");
-    fireEvent.click(screen.getByRole("button", { name: "Hide" }));
-    // Falsification: drop the `useRoutingCardDismissed` gate from
-    // `FallbackPendingBanner` - this assertion goes red, the card stays.
-    expect(screen.queryByTestId("routing-card")).toBeNull();
-    // Falsification (the other half): wire the hide control to
-    // `useFallbackCancel` instead of `useDismissRoutingCard` - the card above
-    // still disappears (cancelling ALSO removes it, once the store update this
-    // double doesn't model settles), so this is the assertion that tells the
-    // two apart.
-    expect(harness.mutate).not.toHaveBeenCalled();
-  });
+    expect(screen.queryAllByRole("button", { name: /hide/i })).toEqual([]);
+    unmount();
 
-  it("hides the waiting card after Hide, without cancelling the traversal", () => {
     renderBanners({
       topBannerKind: "fallback",
       pending: pendingAt("waiting"),
@@ -288,149 +275,58 @@ describe("ChatComposerFallbackBanners", () => {
       rateLimitAdvisory: null,
     });
     expect(cardState()).toBe("waiting");
-    fireEvent.click(screen.getByRole("button", { name: "Hide" }));
-    expect(screen.queryByTestId("routing-card")).toBeNull();
-    expect(harness.mutate).not.toHaveBeenCalled();
+    expect(screen.queryAllByRole("button", { name: /hide/i })).toEqual([]);
   });
 
-  it("scopes a dismissal to its own traversal - a new traversal on the same chat still shows its card", () => {
-    const { unmount } = renderBanners({
+  it("keeps the card up through every countdown and waiting state of one traversal", () => {
+    const view = renderBanners({
       topBannerKind: "fallback",
       pending: pendingAt("hold"),
       pendingReturn: undefined,
       rateLimitAdvisory: null,
     });
-    fireEvent.click(screen.getByRole("button", { name: "Hide" }));
-    expect(screen.queryByTestId("routing-card")).toBeNull();
-    unmount();
-
-    // A later failure opens a NEW traversal id - `use-dismissed-routing-cards`
-    // keys by `(chatId, traversalId, card, action)` precisely so waving away
-    // one episode does not mute the feature for every later one on this chat.
-    renderBanners({
-      topBannerKind: "fallback",
-      pending: pendingFallback({
-        state: "hold",
-        reason: "rate_limit",
-        failedTuple: FAILED_CLAUDE_TUPLE,
-        targetTuple: TARGET_CODEX_TUPLE,
-        impendingAction: null,
-        deadline: Date.now() + 30_000,
-        attempt: 1,
-        maxAttempts: 3,
-        queuedItemsMoving: 0,
-        siblingSwitching: 0,
-        traversalId: "traversal-composer-2",
-        revision: 1,
-      }),
-      pendingReturn: undefined,
-      rateLimitAdvisory: null,
-    });
-    // Falsification: key the dismissal store by `chatId` alone - this must
-    // go red, since it is the same chat as the hidden card above.
-    expect(cardState()).toBe("countdown");
-  });
-
-  // One traversal walks a whole ladder under a single id: a switch whose
-  // replacement fails advances to a wait on the SAME traversalId. Keyed by
-  // `(chatId, traversalId)` alone, dismissing the countdown would also
-  // swallow the wait card the next rung raises - the one surface telling the
-  // user their chat is parked until a provider limit resets, about a state
-  // they had never been shown. `use-dismissed-routing-cards.ts` fixes this by
-  // adding the card kind to the key; see that file's own doc.
-  //
-  // Falsification: revert `cardKey` to `` `${chatId}:${traversalId}` `` (drop
-  // the `card` segment) and both assertions below go red - the countdown
-  // dismissal now also hides the waiting card for the same traversal.
-  it("scopes a dismissal to its own CARD - hiding the countdown still shows the waiting card the same traversal raises next", () => {
-    const { unmount } = renderBanners({
-      topBannerKind: "fallback",
-      pending: pendingAt("hold"),
-      pendingReturn: undefined,
-      rateLimitAdvisory: null,
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Hide" }));
-    expect(screen.queryByTestId("routing-card")).toBeNull();
-    unmount();
-
-    // Same traversalId, advanced to the next rung of the ladder.
-    renderBanners({
-      topBannerKind: "fallback",
-      pending: pendingAt("waiting"),
-      pendingReturn: undefined,
-      rateLimitAdvisory: null,
-    });
-    expect(cardState()).toBe("waiting");
-  });
-
-  it("mirror: scopes a dismissal to its own CARD - hiding the waiting card still shows the countdown card the same traversal raises next", () => {
-    const { unmount } = renderBanners({
-      topBannerKind: "fallback",
-      pending: pendingAt("waiting"),
-      pendingReturn: undefined,
-      rateLimitAdvisory: null,
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Hide" }));
-    expect(screen.queryByTestId("routing-card")).toBeNull();
-    unmount();
-
-    renderBanners({
-      topBannerKind: "fallback",
-      pending: pendingAt("hold"),
-      pendingReturn: undefined,
-      rateLimitAdvisory: null,
-    });
-    expect(cardState()).toBe("countdown");
-  });
-
-  it("a re-planned destination inside one traversal is a card the user has not hidden", () => {
-    const planned = (planId: string, target: ChatRunSettings) =>
-      pendingFallback({
-        state: "hold",
-        reason: "rate_limit",
-        failedTuple: FAILED_CLAUDE_TUPLE,
-        targetTuple: null,
-        impendingAction: fallbackImpendingAction({
-          planId,
-          rung: "profile",
-          target,
-          targetModelFamily: null,
-          resumesAt: null,
-          pending: null,
+    // One traversal id throughout: a stale "hidden" record keyed by it would
+    // drop the card at some step below. Falsification: reintroduce a
+    // dismissal gate in `FallbackPendingBanner` and any pressed button (next
+    // test) or step here can leave the slot empty.
+    const steps: ReadonlyArray<{
+      readonly state: "hold" | "choosing" | "switching" | "waiting";
+      readonly card: "countdown" | "waiting";
+    }> = [
+      { state: "hold", card: "countdown" },
+      { state: "choosing", card: "countdown" },
+      { state: "switching", card: "countdown" },
+      { state: "waiting", card: "waiting" },
+      { state: "hold", card: "countdown" },
+    ];
+    for (const step of steps) {
+      view.rerender(
+        bannersTree({
+          topBannerKind: "fallback",
+          pending: pendingAt(step.state),
+          pendingReturn: undefined,
+          rateLimitAdvisory: null,
         }),
-        deadline: Date.now() + 30_000,
-        attempt: 1,
-        maxAttempts: 3,
-        queuedItemsMoving: 0,
-        siblingSwitching: 0,
-        traversalId: "traversal-composer",
-        revision: 1,
-      });
-    const first = renderBanners({
-      topBannerKind: "fallback",
-      pending: planned("plan-a", TARGET_CODEX_TUPLE),
-      pendingReturn: undefined,
-      rateLimitAdvisory: null,
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Hide" }));
-    expect(screen.queryByTestId("routing-card")).toBeNull();
-    first.unmount();
+      );
+      expect(cardState()).toBe(step.card);
+    }
+  });
 
-    // Falsification: drop the action segment from the dismissal key and the
-    // user loses the window for a destination they were never shown.
+  it("no button on the card can hide it: pressing every one leaves the card in place", () => {
     renderBanners({
       topBannerKind: "fallback",
-      pending: planned(
-        "plan-b",
-        chatRunSettings({
-          harnessId: "codex",
-          model: "gpt-5-mini",
-          profileId: "target02-profile",
-        }),
-      ),
+      pending: pendingAt("hold"),
       pendingReturn: undefined,
       rateLimitAdvisory: null,
     });
+    for (const button of screen
+      .getByTestId("routing-action-row")
+      .querySelectorAll("button")) {
+      fireEvent.click(button);
+    }
+    // The fallback mutations are stubs here, so only a client-side hidden
+    // state could have removed the card - and there is none.
+    expect(screen.queryByTestId("routing-card")).not.toBeNull();
     expect(cardState()).toBe("countdown");
   });
 
@@ -469,8 +365,8 @@ describe("composerRateLimitAdvisory", () => {
     authenticated: true,
   });
 
-  it("is null when signed out, even for a visible prompt", () => {
-    // Falsification: drop the signedOut check from composerRateLimitAdvisory and THIS assertion must go red.
+  it("is null when withheld, even for a visible prompt", () => {
+    // Falsification: drop the withheld check from composerRateLimitAdvisory and THIS assertion must go red.
     const prompt = visiblePrompt({
       providerId: "codex",
       severity: "near_limit",

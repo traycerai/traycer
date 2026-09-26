@@ -1,10 +1,5 @@
-import { useState, type ReactNode } from "react";
-import {
-  AlertTriangle,
-  ChevronDown,
-  ChevronRight,
-  Settings,
-} from "lucide-react";
+import type { ReactNode } from "react";
+import { AlertTriangle, Settings } from "lucide-react";
 import type {
   ProviderNoticeDetail,
   ProviderNoticeReceipt,
@@ -17,7 +12,6 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useSampledNow } from "@/lib/relative-time";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import {
-  BUG_REPORT_DETAILS_LABEL,
   NOTHING_COULD_BE_TRIED_LABEL,
   ROUTING_SETTINGS_LABEL,
 } from "./fallback-copy";
@@ -26,7 +20,6 @@ import {
   useFallbackModelLabels,
   type FallbackModelLabelResolver,
 } from "./fallback-identity";
-import { FallbackNoticeDetailList } from "./fallback-notice-attribution";
 import { useOpenFallbackSettings } from "./open-fallback-settings";
 import { receiptCrossesProviders, receiptStepText } from "./routing-receipt";
 
@@ -51,8 +44,12 @@ export interface RoutingSettledNotice {
  * ended, a gear (routing is this card's subject, and settings is where the
  * receipt's "why" gets fixed), and the failed-turn card's own actions, so the
  * user continues from here rather than hunting for the original error further
- * up. The raw error and the notice's hop rows move under "Details for a bug
- * report", beside the debug icon that files one.
+ * up.
+ *
+ * The raw error and the notice's hop rows are not drawn at all (clutter cuts,
+ * 2026-09-27): they travel inside the Report issue payload the debug icon
+ * sends (`routingSettledReportRows`), so the icon is the one bug-report
+ * affordance on the card.
  *
  * Warning-toned, never the red error treatment: nothing is broken, an account
  * or a provider said no and routing ran out of places to go.
@@ -60,17 +57,16 @@ export interface RoutingSettledNotice {
 export function RoutingSettledCard({
   notice,
   noticeFindUnitId,
-  errorMessage,
-  errorCode,
   reportAction,
   actions,
 }: {
   readonly notice: RoutingSettledNotice;
   /** The notice's own find unit: its headline and message are painted here. */
   readonly noticeFindUnitId: string | null;
-  readonly errorMessage: string;
-  readonly errorCode: string | null;
-  /** The debug icon, built by the error row that owns the report context. */
+  /**
+   * The debug icon, built by the error row that owns the report context - and
+   * which puts the error and the routing rows in that context.
+   */
   readonly reportAction: ReactNode;
   /** The failed-turn card's action row, or `null` where it has none. */
   readonly actions: ReactNode;
@@ -123,11 +119,6 @@ export function RoutingSettledCard({
       </div>
       <div className="flex flex-col gap-2 pl-5.5">
         <SettledReceipt steps={notice.receipt.steps} />
-        <BugReportDetails
-          errorMessage={errorMessage}
-          errorCode={errorCode}
-          details={notice.details}
-        />
         {actions}
       </div>
     </div>
@@ -238,54 +229,5 @@ function ReceiptList({
         </li>
       ))}
     </ol>
-  );
-}
-
-/**
- * The raw record, collapsed: the error the turn ended with and the notice's
- * own detail rows. For whoever files the bug report, not for the decision in
- * front of the user, which is why it sits closed below the receipt.
- */
-function BugReportDetails({
-  errorMessage,
-  errorCode,
-  details,
-}: {
-  readonly errorMessage: string;
-  readonly errorCode: string | null;
-  readonly details: ReadonlyArray<ProviderNoticeDetail>;
-}) {
-  const [open, setOpen] = useState(false);
-  const Chevron = open ? ChevronDown : ChevronRight;
-  const rows: ReadonlyArray<ProviderNoticeDetail> = [
-    { label: "Error", value: errorMessage },
-    ...(errorCode === null || errorCode.length === 0
-      ? []
-      : [{ label: "Code", value: errorCode }]),
-    ...details,
-  ];
-  return (
-    <div className="flex flex-col gap-1.5">
-      <Button
-        size="inline-xs"
-        variant="muted"
-        className="self-start"
-        aria-expanded={open}
-        onClick={() => {
-          setOpen((current) => !current);
-        }}
-      >
-        <Chevron aria-hidden />
-        {BUG_REPORT_DETAILS_LABEL}
-      </Button>
-      {open ? (
-        <div
-          data-find-skip="true"
-          className="rounded-md border border-border/60 bg-foreground/3 p-2.5"
-        >
-          <FallbackNoticeDetailList details={rows} />
-        </div>
-      ) : null}
-    </div>
   );
 }

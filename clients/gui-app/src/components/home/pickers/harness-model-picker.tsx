@@ -12,7 +12,6 @@ import {
   type HarnessOption,
   type ModelOption,
   type ProviderId,
-  type ReasoningFallback,
   type ReasoningLevel,
   type ReasoningLevelOption,
 } from "@/components/home/data/landing-options";
@@ -39,12 +38,7 @@ import {
   flattenModelRowSections,
   sectionModelRowsByProviderRank,
   selectedModelRowId,
-  suggestionIsPick,
-  toModelListRows,
-  type HarnessModelListRow,
-  type HarnessModelPickerRow,
   type HarnessModelRow,
-  type SuggestionRow,
 } from "@/components/home/data/harness-model-search";
 import type { VirtuosoHandle } from "react-virtuoso";
 import {
@@ -79,11 +73,7 @@ import {
   profileDisplayLabel,
 } from "@/components/providers/provider-profile-model";
 import { usePickerLeaderScope } from "@/components/home/pickers/use-picker-leader-scope";
-import {
-  handleHarnessModelPickerKeyDown,
-  isNavigableRow,
-  modelRowElementId,
-} from "@/components/home/pickers/harness-model-picker-keyboard";
+import { handleHarnessModelPickerKeyDown } from "@/components/home/pickers/harness-model-picker-keyboard";
 import {
   deriveHarnessModelPickerPresentation,
   formatReasoningPosition,
@@ -198,49 +188,11 @@ export interface HarnessModelPickerEmbedding {
    * close. `null` when nothing listens.
    */
   readonly onOpenChange: ((open: boolean) => void) | null;
-  /** Rows injected above the browsed provider's models, or `null` for none. */
-  readonly suggestions: HarnessModelPickerSuggestions | null;
-  /** Rendered under the effort footer, inside the popover; `null` for none. */
+  /**
+   * Rendered at the foot of the popover, under the effort footer; `null` for
+   * none. The popover grows by its height rather than taking it from the list.
+   */
   readonly footer: ReactNode | null;
-}
-
-/**
- * A section of rows an embedding puts at the top of the model list - the
- * routing chooser's "Suggested" destinations.
- *
- * Shown only while the search is EMPTY, and regardless of which provider the
- * rail is browsing: they are the surface's own picks, not a provider's models.
- * A query hides them - search is scoped to the rail's provider, as it always
- * has been - and tells the surface through {@link onHiddenByQuery}.
- */
-export interface HarnessModelPickerSuggestions {
-  /**
-   * What the section's heading item renders: its title and state, or a single
-   * line when there is nothing to list. A label, never an option - the arrows
-   * step over it.
-   */
-  readonly heading: ReactNode;
-  readonly rows: ReadonlyArray<SuggestionRow>;
-  /**
-   * The row the surface has STAGED - a `retry` or `wait` suggestion, which
-   * moves no store selection and so cannot be found by matching it. It is the
-   * row the list checks; `null` when nothing is staged.
-   */
-  readonly stagedRowId: string | null;
-  /**
-   * A selectable `retry` / `wait` row was chosen (the row), or any other row
-   * was (`null`): a store selection replaces whatever was staged, even one
-   * that moves nothing because it is already selected.
-   */
-  readonly onStageAction: (row: SuggestionRow | null) => void;
-  /** The search went from empty to non-empty, hiding the section. */
-  readonly onHiddenByQuery: () => void;
-  /**
-   * The fallback the surface created its store with. A row whose target names
-   * no effort runs at the model's default, and the check mark resolves that
-   * default the way this store resolves an unset effort (`suggestionIsPick`).
-   */
-  readonly reasoningFallback: ReasoningFallback;
 }
 
 interface HarnessModelPickerProps {
@@ -439,7 +391,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   useEmbeddingCloseHandle(embedding, closeOnly);
   const seams = embeddingSeams(embedding);
   useReportedOpenState(visibleOpen, seams.onOpenChange);
-  const suggestions = seams.suggestions;
   const reasoningFooter = useMemo<ReasoningFooterConfig | null>(
     () =>
       buildReasoningFooter({
@@ -931,42 +882,21 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () => createModelRowSearchIndex(providerRows),
     [providerRows],
   );
-  const providerListRows = useMemo(
-    () => toModelListRows(providerRows),
-    [providerRows],
-  );
-  const visibleRows = useMemo<ReadonlyArray<HarnessModelPickerRow>>(() => {
-    if (!hasQuery) return withSuggestionRows(suggestions, providerListRows);
-    return toModelListRows(
-      flattenModelRowSections(
-        sectionModelRowsByProviderRank(
-          filterModelRows(providerRows, providerSearchIndex, query),
-        ),
+  const visibleRows = useMemo(() => {
+    if (!hasQuery) return providerRows;
+    return flattenModelRowSections(
+      sectionModelRowsByProviderRank(
+        filterModelRows(providerRows, providerSearchIndex, query),
       ),
     );
-  }, [
-    hasQuery,
-    providerListRows,
-    providerRows,
-    providerSearchIndex,
-    query,
-    suggestions,
-  ]);
+  }, [hasQuery, providerRows, providerSearchIndex, query]);
   const visibleRowsById = useMemo(
     () => new Map(visibleRows.map((row) => [row.id, row])),
     [visibleRows],
   );
   const selectedRowId = useMemo(
-    () =>
-      markedRowId({
-        embedding,
-        selection,
-        reasoning,
-        selectedModel,
-        rows,
-        hasQuery,
-      }),
-    [embedding, hasQuery, reasoning, rows, selectedModel, selection],
+    () => markedModelRowId(embedding, selection, rows),
+    [embedding, rows, selection],
   );
   const { effectiveActiveRowId, initialTopMostItemIndex } = resolveRowAnchors({
     visibleRows,
@@ -983,58 +913,18 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     activeProviderId: resolvedActiveProviderId,
   });
   const selectRow = useCallback(
-    (row: HarnessModelPickerRow) => {
+    (row: HarnessModelRow) => {
       if (disabled) {
         closeOnly();
         return;
       }
-      switch (row.kind) {
-        case "suggestion-heading":
-          return;
-        case "suggestion":
-          if (suggestions === null) return;
-          selectSuggestionRow({
-            row,
-            store,
-            suggestions,
-            onRailEntry: setActiveRailEntry,
-          });
-          return;
-        case "model":
-          // Commit the picked model through the memory-aware funnel (restores
-          // that (provider, model)'s remembered effort/tier, or the model's
-          // defaults). Selecting a model keeps the picker open; it only closes
-          // on an outside click / escape (Popover's onOpenChange -> closeOnly).
-          commitSelection(
-            store,
-            row.harnessId,
-            row.value,
-            activePanelProfileId,
-          );
-          suggestions?.onStageAction(null);
-          return;
-      }
+      // Commit the picked model through the memory-aware funnel (restores that
+      // (provider, model)'s remembered effort/tier, or the model's defaults).
+      // Selecting a model keeps the picker open; it only closes on an outside
+      // click / escape (handled by Popover's onOpenChange -> closeOnly).
+      commitSelection(store, row.harnessId, row.value, activePanelProfileId);
     },
-    [
-      activePanelProfileId,
-      closeOnly,
-      disabled,
-      setActiveRailEntry,
-      store,
-      suggestions,
-    ],
-  );
-  // The search box's writer. Tells an embedding when its injected section is
-  // about to be hidden - the empty -> non-empty edge only, which is the moment
-  // the section leaves the list.
-  const handleSearchQueryChange = useCallback(
-    (next: string) => {
-      if (suggestions !== null && !hasQuery && next.trim().length > 0) {
-        suggestions.onHiddenByQuery();
-      }
-      handleQueryChange(next);
-    },
-    [handleQueryChange, hasQuery, suggestions],
+    [activePanelProfileId, closeOnly, disabled, store],
   );
   const handleRailEntryChange = useCallback(
     (providerId: ProviderId) => {
@@ -1119,7 +1009,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         listRef,
         onActiveRowId: setActiveRowId,
         onSelectRow: selectRow,
-        onQueryChange: handleSearchQueryChange,
+        onQueryChange: handleQueryChange,
         onClose: closeOnly,
       });
     },
@@ -1127,7 +1017,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       activeRow,
       closeOnly,
       effectiveActiveRowId,
-      handleSearchQueryChange,
+      handleQueryChange,
       selectRow,
       setActiveRowId,
       trimmedQuery,
@@ -1264,7 +1154,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         idPrefix={idPrefix}
         inputRef={inputRef}
         query={query}
-        onQueryChange={handleSearchQueryChange}
+        onQueryChange={handleQueryChange}
         activeProviderLabel={activePanelLabel}
         activeDescendant={modelRowActiveDescendant(idPrefix, activeRow)}
         onKeyDown={handleKeyDown}
@@ -1291,7 +1181,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         listRef={listRef}
         listKey={listKey}
         visibleRows={visibleRows}
-        suggestionHeading={seams.suggestionHeading}
         selectedRowId={selectedRowId}
         effectiveActiveRowId={effectiveActiveRowId}
         hoveredRowId={hoveredRowId}
@@ -1319,29 +1208,14 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
 
 /**
  * The embedding's optional seams, each `null` for a composer. Read in one
- * place so the component body carries one branch for them, not four.
+ * place so the component body carries one branch for them, not two.
  */
 function embeddingSeams(embedding: HarnessModelPickerEmbedding | null): {
   readonly onOpenChange: ((open: boolean) => void) | null;
-  readonly suggestions: HarnessModelPickerSuggestions | null;
-  readonly suggestionHeading: ReactNode | null;
   readonly footer: ReactNode | null;
 } {
-  if (embedding === null) {
-    return {
-      onOpenChange: null,
-      suggestions: null,
-      suggestionHeading: null,
-      footer: null,
-    };
-  }
-  const { suggestions } = embedding;
-  return {
-    onOpenChange: embedding.onOpenChange,
-    suggestions,
-    suggestionHeading: suggestions === null ? null : suggestions.heading,
-    footer: embedding.footer,
-  };
+  if (embedding === null) return { onOpenChange: null, footer: null };
+  return { onOpenChange: embedding.onOpenChange, footer: embedding.footer };
 }
 
 /**
@@ -1370,94 +1244,32 @@ function providerSwitchSlug(
 /**
  * The row the list checks as chosen. `""` is `selectedModelRowId`'s own "no
  * row" answer, which an embedding asks for until it has a selection to mark.
- *
- * With injected rows on screen, a staged row is the choice outright (it moved
- * no selection to match), and otherwise the suggestion that IS the pick -
- * `suggestionIsPick`, the same test the surface's confirm applies, effective
- * effort included - is checked rather than the catalog row for the same
- * model. A query hides the section, and with it the staged row's check -
- * nothing in the results is the pick then.
  */
-function markedRowId(input: {
-  readonly embedding: HarnessModelPickerEmbedding | null;
-  readonly selection: HarnessModelSelection;
-  /** The store's DERIVED effort, as `suggestionIsPick` compares it. */
-  readonly reasoning: ReasoningLevel;
-  readonly selectedModel: ModelOption | null;
-  readonly rows: ReadonlyArray<HarnessModelRow>;
-  readonly hasQuery: boolean;
-}): string {
-  const { embedding, selection, reasoning, selectedModel, rows, hasQuery } =
-    input;
-  const suggestions = embedding === null ? null : embedding.suggestions;
-  if (suggestions !== null && suggestions.stagedRowId !== null) {
-    return hasQuery ? "" : suggestions.stagedRowId;
-  }
+function markedModelRowId(
+  embedding: HarnessModelPickerEmbedding | null,
+  selection: HarnessModelSelection,
+  rows: ReadonlyArray<HarnessModelRow>,
+): string {
   if (embedding !== null && !embedding.selectionMarked) return "";
-  if (suggestions !== null && !hasQuery) {
-    const pick = {
-      selection,
-      reasoning,
-      selectedModel,
-      reasoningFallback: suggestions.reasoningFallback,
-    };
-    const matching = suggestions.rows.find((row) =>
-      suggestionIsPick(row, pick),
-    );
-    if (matching !== undefined) return matching.id;
-  }
   return selectedModelRowId(selection, rows);
 }
 
-/** The heading item's id - outside the `<harness>:<slug>` shape model rows take. */
-const SUGGESTION_HEADING_ROW_ID = "suggestion-heading";
-
-/** The injected section (heading, then its rows) above the provider's rows. */
-function withSuggestionRows(
-  suggestions: HarnessModelPickerSuggestions | null,
-  modelRows: ReadonlyArray<HarnessModelListRow>,
-): ReadonlyArray<HarnessModelPickerRow> {
-  if (suggestions === null) return modelRows;
-  return [
-    { kind: "suggestion-heading", id: SUGGESTION_HEADING_ROW_ID },
-    ...suggestions.rows,
-    ...modelRows,
-  ];
-}
-
 /**
- * A suggestion chosen in the list. A dimmed row does nothing. A `retry` /
- * `wait` row moves no selection and is handed to the surface to stage. A
- * `switch` row commits its (harness, model, account) through the same funnel
- * a model row takes, then its effort, and moves the rail to its provider - so
- * a cross-provider suggestion leaves the rail, the model list and the effort
- * footer all showing what was picked.
+ * Fills an embedding's `openRef` with the same open a trigger click performs,
+ * and clears it on unmount (React's imperative-handle contract). A composer
+ * has no ref to fill.
  */
-function selectSuggestionRow(input: {
-  readonly row: SuggestionRow;
-  readonly store: ComposerToolbarStore;
-  readonly suggestions: HarnessModelPickerSuggestions;
-  readonly onRailEntry: (
-    providerId: ProviderId,
-    profileId: string | null,
-  ) => void;
-}): void {
-  const { row, store, suggestions } = input;
-  if (!row.selectable) return;
-  const action = row.action;
-  if (action.kind !== "switch") {
-    suggestions.onStageAction(row);
-    return;
-  }
-  // A row with no tuple is never selectable; the guard is the type's half.
-  if (action.target === null) return;
-  commitSelection(store, row.harnessId, row.modelId, row.profileId);
-  // Always written, `""` for a row with no effort of its own: a setting store
-  // keeps its current effort on a same-model commit, and a row that asks for
-  // the model's default must not inherit an effort picked before it.
-  store.getState().setReasoning(action.target.reasoningEffort ?? "");
-  input.onRailEntry(row.harnessId, row.profileId);
-  suggestions.onStageAction(null);
+function useEmbeddingOpenHandle(
+  embedding: HarnessModelPickerEmbedding | null,
+  handleOpenChange: (next: boolean) => void,
+): void {
+  useImperativeHandle(
+    embedding === null ? null : embedding.openRef,
+    () => () => {
+      handleOpenChange(true);
+    },
+    [handleOpenChange],
+  );
 }
 
 /** Fills an embedding's `closeRef` with the reducer's close; see its doc. */
@@ -1507,24 +1319,6 @@ function useReportedOpenState(
       onOpenChangeRef.current?.(false);
     },
     [],
-  );
-}
-
-/**
- * Fills an embedding's `openRef` with the same open a trigger click performs,
- * and clears it on unmount (React's imperative-handle contract). A composer
- * has no ref to fill.
- */
-function useEmbeddingOpenHandle(
-  embedding: HarnessModelPickerEmbedding | null,
-  handleOpenChange: (next: boolean) => void,
-): void {
-  useImperativeHandle(
-    embedding === null ? null : embedding.openRef,
-    () => () => {
-      handleOpenChange(true);
-    },
-    [handleOpenChange],
   );
 }
 
@@ -1861,8 +1655,8 @@ function resolveActiveProviderId(input: {
 }
 
 interface ResolveRowAnchorsInput {
-  readonly visibleRows: ReadonlyArray<HarnessModelPickerRow>;
-  readonly visibleRowsById: ReadonlyMap<string, HarnessModelPickerRow>;
+  readonly visibleRows: ReadonlyArray<HarnessModelRow>;
+  readonly visibleRowsById: ReadonlyMap<string, HarnessModelRow>;
   readonly selectedRowId: string;
   readonly activeRowId: string;
   readonly hasQuery: boolean;
@@ -1899,11 +1693,8 @@ function resolveRowAnchors(
   const selectedRowIndex = selectedRowVisible
     ? visibleRows.findIndex((row) => row.id === selectedRowId)
     : -1;
-  // The first row the arrows could land on, never the injected heading.
   const fallbackActiveRowId =
-    (selectedRowVisible
-      ? selectedRowId
-      : visibleRows.find(isNavigableRow)?.id) ?? "";
+    (selectedRowVisible ? selectedRowId : visibleRows.at(0)?.id) ?? "";
   const effectiveActiveRowId = visibleRowsById.has(activeRowId)
     ? activeRowId
     : fallbackActiveRowId;
@@ -1919,10 +1710,10 @@ function resolveRowAnchors(
 
 function modelRowActiveDescendant(
   idPrefix: string,
-  row: HarnessModelPickerRow | null,
+  row: HarnessModelRow | null,
 ): string | undefined {
   if (row === null) return undefined;
-  return modelRowElementId(idPrefix, row.id);
+  return `${idPrefix}-row-${row.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 }
 
 interface ModelRowsListKeyInput {

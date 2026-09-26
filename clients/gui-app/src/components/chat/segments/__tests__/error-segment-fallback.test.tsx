@@ -10,6 +10,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { AgentFailure } from "@traycer/protocol/persistence/epic/content-blocks";
 import { QUEUE_PAUSED_AFTER_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type { FallbackRungRefusalDetail } from "@traycer/protocol/host/chat-fallback";
+import type { RoutingSettledNotice } from "@/components/chat/fallback/routing-settled-card";
 import { ErrorSegment } from "../error-segment";
 import {
   FAILED_CLAUDE_TUPLE,
@@ -67,24 +68,46 @@ const rungAnswer = vi.hoisted(() => ({
 
 vi.mock("sonner", () => ({ toast: rungAnswer.toast }));
 
+// TanStack runs the hook-level `onSuccess(data, variables)` on every answer,
+// then the per-call one. The card records its refusal from the hook level, so
+// the double must call both, in that order, each with the variables.
 vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
-  useHostScopedMutationForClient: () => ({
+  useHostScopedMutationForClient: (
+    _client: unknown,
+    args: {
+      readonly onSuccess:
+        | ((
+            response: {
+              readonly outcome: string;
+              readonly detail: FallbackRungRefusalDetail | null;
+            },
+            variables: unknown,
+          ) => void)
+        | undefined;
+    },
+  ) => ({
     mutate: (
-      _variables: unknown,
+      variables: unknown,
       options:
         | {
             readonly onSuccess:
-              | ((response: {
-                  readonly outcome: string;
-                  readonly detail: FallbackRungRefusalDetail | null;
-                }) => void)
+              | ((
+                  response: {
+                    readonly outcome: string;
+                    readonly detail: FallbackRungRefusalDetail | null;
+                  },
+                  variables: unknown,
+                ) => void)
               | undefined;
           }
         | undefined,
     ) => {
       const response = rungAnswer.response;
-      if (response === null || options === undefined) return;
-      if (options.onSuccess !== undefined) options.onSuccess(response);
+      if (response === null) return;
+      if (args.onSuccess !== undefined) args.onSuccess(response, variables);
+      if (options !== undefined && options.onSuccess !== undefined) {
+        options.onSuccess(response, variables);
+      }
     },
     isPending: false,
     variables: undefined,
@@ -575,11 +598,13 @@ describe("ErrorSegment failed-turn card, through the transcript row", () => {
     seedRetryableAttempt();
     rungAnswer.response = { outcome: "rung_unavailable", detail: null };
     renderErrorRowWithFallbackAttempt(RATE_LIMIT_ROW);
+    // The one live region is mounted before the press, and empty.
+    const region = screen.getByRole("status");
+    expect(region.textContent).toBe("");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(rungAnswer.toast).not.toHaveBeenCalled();
-    expect(screen.getByRole("status").textContent).toBe(
-      "Couldn't retry just now.",
-    );
+    expect(screen.getByRole("status")).toBe(region);
+    expect(region.textContent).toBe("Couldn't retry just now.");
     // Retry stays enabled: the neutral sentence claims no cause.
     const retry = screen.getByRole("button", { name: "Retry" });
     if (!(retry instanceof HTMLButtonElement)) throw new Error("no Retry");
@@ -719,5 +744,77 @@ describe("ErrorSegment failed-turn card, through the transcript row", () => {
       .closest("[data-failure-presentation]");
     expect(root?.getAttribute("data-failure-presentation")).toBe("error");
     expect(screen.queryByText("Session ended")).toBeNull();
+  });
+
+  // Clutter cuts, 2026-09-27: the settled card's receipt says "Waited until
+  // ... for Surya 2" and the standing "The provider hasn't said when this limit
+  // resets" line used to sit right under it, contradicting it. That sentence
+  // answers a pressed Wait only, so the settled card never carries it.
+  it("keeps the no-verified-reset sentence off a settled card whose receipt has a wait step", () => {
+    fallbackSessionHarness.store.setState({
+      lastFailedAttempt: lastFailedAttempt({
+        userMessageId: "user-msg-fallback-live-gate",
+        turnId: FALLBACK_LIVE_GATE_TURN_ID,
+        failure: { reason: "rate_limit" },
+        eligibleRungs: ["retry", "switch"],
+        waitDisposition: "no_verified_reset",
+        switchDisposition: "eligible",
+        failedTuple: FAILED_CLAUDE_TUPLE,
+      }),
+      pendingFallback: undefined,
+    });
+    const notice: RoutingSettledNotice = {
+      title: "Couldn't continue after the rate limit",
+      message: "Every account and model that could take this turn said no.",
+      details: [],
+      receipt: {
+        causeLabel: "Rate limit reached",
+        steps: [
+          {
+            kind: "wait",
+            providerLabel: "Claude Code",
+            modelLabel: "claude-sonnet-4",
+            profileLabel: "Surya 2",
+            resumedAt: new Date(2026, 5, 15, 3, 45, 0).getTime(),
+            endedLabel: "rate limited",
+          },
+        ],
+      },
+    };
+    render(
+      <TooltipProvider>
+        <TabHostProvider hostId={FALLBACK_LIVE_GATE_HOST_ID}>
+          <ChatTranscriptProvider
+            value={{
+              chatId: FALLBACK_LIVE_GATE_CHAT_ID,
+              hostId: FALLBACK_LIVE_GATE_HOST_ID,
+            }}
+          >
+            <ErrorSegment
+              turnId={FALLBACK_LIVE_GATE_TURN_ID}
+              message="Hit a rate limit."
+              code="rate_limit"
+              recoverable
+              findUnitId={null}
+              harnessId="claude"
+              failure={RATE_LIMIT_ROW.failure}
+              settledNotice={notice}
+              settledNoticeFindUnitId={null}
+            />
+          </ChatTranscriptProvider>
+        </TabHostProvider>
+      </TooltipProvider>,
+    );
+
+    const card = screen.getByTestId("routing-settled-card");
+    // The receipt's wait step is on the card...
+    expect(card.textContent).toMatch(/Waited until .* for Surya 2/);
+    // ...and the sentence that used to contradict it is not.
+    expect(card.textContent).not.toContain(
+      "The provider hasn't said when this limit resets",
+    );
+    expect(card.textContent).not.toContain("nothing to wait for");
+    // The card's actions are still drawn, so the absence is not a bare card.
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
   });
 });

@@ -334,15 +334,11 @@ function positiveAttempt(input: {
           },
     eligibleRungs: input.eligibleRungs,
     waitDisposition: input.waitDisposition,
-    // Derived, and ONLY across the two values that explain nothing.
-    //
-    // Every call site of this helper predates the switch verdict and none of
-    // them is about it, so the two "there is a button, or there is no claim"
-    // values keep their rendered output exactly what those assertions were
-    // written against. `no_destination` - the value under test, and the only
-    // one that renders a sentence - is never produced here: a test that wants
-    // it uses {@link withheldSwitchAttempt} and says so. A fixture that could
-    // derive the value under test would pass with the rule deleted.
+    // Derived from `eligibleRungs`, the way the host emits it now: "eligible"
+    // exactly when `switch` is on offer, "unknown" otherwise. The host never
+    // emits `no_destination` any more and no disposition renders a switch
+    // sentence (clutter cuts, 2026-09-27); a test that wants the legacy value
+    // an older host could still send uses {@link withheldSwitchAttempt}.
     switchDisposition: input.eligibleRungs.includes("switch")
       ? "eligible"
       : "unknown",
@@ -351,12 +347,15 @@ function positiveAttempt(input: {
 }
 
 /**
- * The attempt shape this lane is about: a chat the host found no destination
- * for, so `switch` is absent from `eligibleRungs` AND the disposition says why.
+ * The attempt shape an older host could still send: `switch` absent from
+ * `eligibleRungs` AND the legacy `no_destination` verdict on the wire.
  *
- * Separate from {@link positiveAttempt} rather than a parameter on it, so the
- * pairing of those two facts is written out at the one place it is asserted
- * instead of computed by a builder the assertions would then be testing.
+ * Nothing on the card renders for it (the switch button follows
+ * `eligibleRungs` only, and no sentence explains a missing switch), which is
+ * what the tests using it pin. Separate from {@link positiveAttempt} rather
+ * than a parameter on it, so the pairing of those two facts is written out at
+ * the one place it is asserted instead of computed by a builder the
+ * assertions would then be testing.
  */
 function withheldSwitchAttempt(
   failedTuple: ChatRunSettings | null,
@@ -632,45 +631,42 @@ describe("FallbackManualRungActions", () => {
     expect(harness.mutate).not.toHaveBeenCalled();
   });
 
-  // F6: `describeWaitDisposition`'s sentence is shared by the card (`Body`'s
-  // full-width line) AND the Switch… menu's empty state - one source, two
-  // renderers - and nothing pinned either half.
-  //
-  // Uses `no_verified_reset` rather than `attempt_unavailable`: the latter
-  // now returns `null` from `describeWaitDisposition` (the "Model routing"
-  // rename also dropped the sentence itself - see that module) and so is no
-  // longer a fixture that demonstrates two renderers sharing one source. The
-  // null-sentence behaviour has its own pin below.
-  it("states the wait disposition on the card", () => {
-    seedAttempt(
-      positiveAttempt({
-        userMessageId: USER_MESSAGE_ID,
-        turnId: TURN_ID,
-        reason: "rate_limit",
-        // No "wait_once": the disposition explains its own absence, and no
-        // "retry" either, to keep this fixture minimal - only "switch" is
-        // needed to reach the menu's empty-state branch below.
-        eligibleRungs: ["switch"],
-        resetsAt: undefined,
-        waitDisposition: "no_verified_reset",
-      }),
-    );
-    renderActions(TURN_ID);
-    // Falsification: change `no_verified_reset`'s copy in
-    // `describeWaitDisposition` and both assertions below go red - they are
-    // pinned to the FIXED wording.
-    expect(
-      screen.getByText(
-        "The provider hasn't said when this limit resets, so there's nothing to wait for.",
-      ),
-    ).toBeDefined();
-  });
+  // Clutter cuts, 2026-09-27: the card's explanation block renders ONLY the
+  // beyond-cap sentence. Every other disposition leaves the whole card's text
+  // free of any sentence about resets or waiting.
+  it.each([
+    { waitDisposition: "eligible", resetsAt: RESETS_AT },
+    { waitDisposition: "checking", resetsAt: undefined },
+    { waitDisposition: "no_verified_reset", resetsAt: undefined },
+    { waitDisposition: "attempt_unavailable", resetsAt: undefined },
+  ] as const)(
+    "renders no explanation sentence for $waitDisposition",
+    ({ waitDisposition, resetsAt }) => {
+      seedAttempt(
+        positiveAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          reason: "rate_limit",
+          eligibleRungs: ["retry", "switch"],
+          resetsAt,
+          waitDisposition,
+        }),
+      );
+      const { container } = renderActions(TURN_ID);
+      const text = container.textContent;
+      // The card is its buttons and the empty refusal region, nothing else.
+      expect(text).toBe("Switch to…Retry");
+      expect(text).not.toContain("resets");
+      expect(text).not.toContain("nothing to wait for");
+      expect(text).not.toContain("Checking");
+      expect(text).not.toContain("hasn't said");
+    },
+  );
 
-  // Cold-review re-review, F6 gap 1: `checking` and `beyond_cap` had NO render
-  // fixture anywhere - only `no_verified_reset` and `attempt_unavailable` were
-  // ever seeded. Two literal sentences, neither derived from
-  // `describeWaitDisposition`.
-  it("renders the checking sentence while a reset probe is in flight", () => {
+  // `checking` renders nothing (clutter cuts, 2026-09-27); `beyond_cap` is the
+  // one disposition with a standing sentence, pinned below. Both are literal,
+  // neither derived from `describeWaitDisposition`.
+  it("renders no sentence while a reset probe is in flight", () => {
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -682,9 +678,13 @@ describe("FallbackManualRungActions", () => {
       }),
     );
     renderActions(TURN_ID);
-    // Falsification: change the `checking` arm of `describeWaitDisposition`
-    // to any other wording - this literal goes red.
-    expect(screen.getByText("Checking when this limit resets…")).toBeDefined();
+    // Falsification: make the `checking` arm of `describeWaitDisposition`
+    // return any sentence and the card text below picks it up.
+    const retry = screen.getByRole("button", { name: "Retry" });
+    const text = retry.parentElement?.parentElement?.textContent ?? "";
+    expect(text).not.toContain("Checking when this limit resets");
+    // The card's only content is its buttons and the empty refusal region.
+    expect(text).toBe("Retry");
   });
 
   it("renders the beyond-cap sentence, with and without a named reset time", () => {
@@ -698,13 +698,17 @@ describe("FallbackManualRungActions", () => {
         waitDisposition: "beyond_cap",
       }),
     );
-    const { unmount } = renderActions(TURN_ID);
+    const { unmount, container } = renderActions(TURN_ID);
     // Falsification: swap the `resetsAtLabel === null` branches in
     // `describeWaitDisposition`'s `beyond_cap` arm - this goes red for a
     // failure with no verified reset time in hand.
     expect(
       screen.getByText("This limit resets later than Traycer is set to wait."),
     ).toBeDefined();
+    // Exactly that one sentence: nothing else about resets or waiting.
+    expect(container.textContent).toBe(
+      "This limit resets later than Traycer is set to wait.Retry",
+    );
     unmount();
 
     seedAttempt(
@@ -751,29 +755,45 @@ describe("FallbackManualRungActions", () => {
     ).toBeDefined();
   });
 
-  // Cold-review re-review, F6 gap 2: the no-reset sentence had a fixture
-  // (`no_verified_reset` is used elsewhere in this file to keep the Wait
-  // button off) but no assertion on its actual TEXT anywhere.
-  it("renders the no-confirmed-reset sentence independently of the Wait button's absence", () => {
+  // The no-reset sentence is the answer to a pressed Wait and appears nowhere
+  // else: pressing Wait and being refused with `no_verified_reset` writes it
+  // into the refusal note, exactly once, and the rest of the card stays free
+  // of it.
+  it("writes the provider sentence only into the refusal note when Wait is refused with no_verified_reset", () => {
+    const sentence =
+      "The provider hasn't said when this limit resets, so there's nothing to wait for.";
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
         turnId: TURN_ID,
         reason: "rate_limit",
-        eligibleRungs: ["retry"],
-        resetsAt: undefined,
-        waitDisposition: "no_verified_reset",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
       }),
     );
-    renderActions(TURN_ID);
-    expect(screen.queryByRole("button", { name: /Wait until/ })).toBeNull();
-    // Falsification: change `no_verified_reset`'s copy to any other wording -
-    // this literal goes red independently of the button-absence check above.
-    expect(
-      screen.getByText(
-        "The provider hasn't said when this limit resets, so there's nothing to wait for.",
-      ),
-    ).toBeDefined();
+    harness.mutationResult = {
+      outcome: "rung_unavailable",
+      detail: { kind: "no_verified_reset", label: "x", retryable: false },
+    };
+    const { container } = renderActions(TURN_ID);
+    // Before the press: nowhere on the card.
+    expect(container.textContent).not.toContain("hasn't said");
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Wait until ${formatClockTime(RESETS_AT)}`,
+      }),
+    );
+    const note = screen.getByTestId("failed-turn-refusal");
+    expect(note.getAttribute("role")).toBe("status");
+    expect(note.textContent).toBe(sentence);
+    const whole = container.textContent;
+    expect(whole.split(sentence).length - 1).toBe(1);
+    expect(whole.replace(note.textContent, "")).not.toContain("hasn't said");
+    expect(whole.replace(note.textContent, "")).not.toContain(
+      "nothing to wait for",
+    );
+    expect(harness.toast).not.toHaveBeenCalled();
   });
 
   // `attempt_unavailable` now returns `null` from `describeWaitDisposition`
@@ -1206,7 +1226,8 @@ describe("FallbackManualRungActions", () => {
     );
     harness.mutationResult = { outcome: "rung_unavailable", detail: null };
     renderActions(TURN_ID);
-    expect(screen.queryByTestId("failed-turn-refusal")).toBeNull();
+    // The live region is mounted before any refusal, and empty.
+    expect(screen.getByTestId("failed-turn-refusal").textContent).toBe("");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     // Falsification: put the `toast(message)` line back in
     // `useFallbackRunManualRung`'s hook-level onSuccess and this goes red.
@@ -1265,10 +1286,51 @@ describe("FallbackManualRungActions", () => {
     harness.mutationResult = { outcome: "rung_unavailable", detail: null };
     renderActions(TURN_ID);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(screen.getByTestId("failed-turn-refusal")).toBeDefined();
+    expect(screen.getByTestId("failed-turn-refusal").textContent).not.toBe("");
     harness.deferResponses = true;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(screen.queryByTestId("failed-turn-refusal")).toBeNull();
+    // The text goes; the live region stays mounted.
+    expect(screen.getByTestId("failed-turn-refusal").textContent).toBe("");
+  });
+
+  it("keeps one refusal live region mounted from the start, and fills and clears that same node", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderActions(TURN_ID);
+    const region = screen.getByTestId("failed-turn-refusal");
+    expect(region.getAttribute("role")).toBe("status");
+    expect(region.textContent).toBe("");
+
+    harness.mutationResult = {
+      outcome: "rung_unavailable",
+      detail: { kind: "storage_failed", retryable: false, label: "" },
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(screen.getByTestId("failed-turn-refusal")).toBe(region);
+    const first = region.textContent;
+    expect(first).not.toBe("");
+    // Retry survives this refusal, so it can be pressed again.
+    harness.deferResponses = true;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(screen.getByTestId("failed-turn-refusal")).toBe(region);
+    expect(region.textContent).toBe("");
+
+    act(() => {
+      harness.pendingResponses[0]({
+        outcome: "rung_unavailable",
+        detail: null,
+      });
+    });
+    expect(screen.getByTestId("failed-turn-refusal")).toBe(region);
+    expect(region.textContent).toBe("Couldn't retry just now.");
   });
 
   it("says the chat moved on, with the next step, and draws no buttons, for attempt_not_latest", () => {
@@ -1408,7 +1470,9 @@ describe("FallbackManualRungActions", () => {
         if (text === null) {
           // The routing card on screen is the explanation; a second line here
           // would be the same fact twice.
-          expect(screen.queryByTestId("failed-turn-refusal")).toBeNull();
+          expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+            "",
+          );
         } else {
           expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
             text,
@@ -1548,7 +1612,7 @@ describe("FallbackManualRungActions", () => {
     renderActions(TURN_ID);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(harness.toast).not.toHaveBeenCalled();
-    expect(screen.queryByTestId("failed-turn-refusal")).toBeNull();
+    expect(screen.getByTestId("failed-turn-refusal").textContent).toBe("");
     expect(harness.publishedUnattended).toEqual([]);
     expect(harness.publishedActions).toHaveLength(1);
   });
@@ -1676,114 +1740,12 @@ describe("FallbackManualRungActions", () => {
   });
 
   /**
-   * The switch verdict: a control withheld must be a control EXPLAINED.
-   *
-   * The three cases are a matrix over one host field, not three spot checks,
-   * and the middle one is the control that makes the other two mean something:
-   * the same component, the same row, the same everything except
-   * `switchDisposition`, so neither the presence nor the absence of the button
-   * can be explained by anything else on the frame.
-   *
-   * Every assertion is on the RULE - "a chat with no destination offers no
-   * switch and says why" - rather than on this quarter's wording, except the
-   * one that has to be literal: the sentence must name the chat, and only a
-   * substring check can prove a generic line did not creep back in.
+   * The Switch to… button follows `eligibleRungs` and nothing else (clutter
+   * cuts, 2026-09-27). The card never explains a missing switch: the picker
+   * opens the full composer picker, so there is no sentence to print.
    */
-  describe("the switch verdict", () => {
-    it("offers no Switch… and names the chat when the host found no destination", () => {
-      seedAttempt(withheldSwitchAttempt(DEFAULT_SHAPED_TUPLE));
-      renderActions(TURN_ID);
-
-      expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
-      // The row is not merely bare - `retry` survives. A card that lost every
-      // control would satisfy the line above with the whole DTO withheld.
-      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
-
-      // Two levels up: the explanation now renders in its own band
-      // (`ManualRungExplanations`) above the button row, a sibling of the
-      // buttons' own row rather than a peer inside it - see that component's
-      // doc. `retry`'s immediate parent is only the button row; the card-level
-      // container is the grandparent both bands share.
-      const root = screen.getByRole("button", { name: "Retry" }).parentElement
-        ?.parentElement;
-      const text = root?.textContent ?? "";
-      // The chat's own identity, resolved the way every other fallback surface
-      // resolves one: the PROVIDER DISPLAY NAME, never the harness id that the
-      // host's own transcript copy uses. A sentence reading "claude/default"
-      // would pass a looser check and be the wrong voice entirely.
-      expect(text).toContain("Claude Code · default");
-      expect(text).not.toContain("claude/default");
-      // Engine words, "group" included - the reason this sentence could not be
-      // the host's own `no-group` label.
-      expect(text).not.toMatch(BANNED_VOCABULARY);
-    });
-
-    /**
-     * The same sentence with a SLUG-shaped model, which `DEFAULT_SHAPED_TUPLE`
-     * cannot show: "default" is already a word a user reads.
-     *
-     * This card's own destination menu resolves its rows, and the grace card
-     * one state earlier resolves its tuples - so an unresolved subject here was
-     * the one surface in the chat still printing a provider's internal
-     * identifier at a user being asked to decide something.
-     */
-    it("names the chat by its catalogue model label, not the raw slug", () => {
-      modelLabelOverride.value = new Map([
-        ["claude:claude-fable-5-1[1m]", "Claude Fable"],
-      ]);
-      seedAttempt(
-        withheldSwitchAttempt(
-          chatRunSettings({
-            harnessId: "claude",
-            model: "claude-fable-5-1[1m]",
-            profileId: null,
-          }),
-        ),
-      );
-      renderActions(TURN_ID);
-
-      const root = screen.getByRole("button", { name: "Retry" }).parentElement
-        ?.parentElement;
-      const text = root?.textContent ?? "";
-      // Falsification: drop `modelLabelFor` from this card's
-      // `fallbackProviderModelLabel` call and this goes red - the sentence
-      // reads "…for Claude Code · claude-fable-5-1[1m]".
-      expect(text).toContain(
-        "No other model is set up for Claude Code · Claude Fable",
-      );
-      expect(text).not.toContain("claude-fable-5-1[1m]");
-    });
-
-    it("still offers Switch… when the host named a destination", () => {
-      seedAttempt(
-        positiveAttempt({
-          userMessageId: USER_MESSAGE_ID,
-          turnId: TURN_ID,
-          reason: "rate_limit",
-          eligibleRungs: ["retry", "switch"],
-          resetsAt: undefined,
-          waitDisposition: "no_verified_reset",
-        }),
-      );
-      renderActions(TURN_ID);
-
-      expect(screen.getByRole("button", { name: "Switch to…" })).toBeDefined();
-      const root = screen.getByRole("button", { name: "Retry" }).parentElement;
-      // No explanation beside a working button. The sentence exists to explain
-      // an ABSENCE, and one printed next to the control it describes would be
-      // the card contradicting itself.
-      expect(root?.textContent ?? "").not.toContain("No other model is set up");
-    });
-
-    it("offers Switch… and claims nothing when the host could not check", () => {
-      // The unreadable-policy / never-recorded arm, and the one that would be
-      // a lie in the other direction: telling a user their setup is empty when
-      // the truth is we could not look. `unknown` OFFERS, and stays silent.
-      //
-      // Built literally rather than through `positiveAttempt`, whose derivation
-      // cannot reach this pairing: a failed tuple IS in hand here - the envelope
-      // survived and only the verdict is missing - so a sentence would have had
-      // every ingredient it needed and must still not be printed.
+  describe("the switch button follows eligibleRungs only", () => {
+    it("offers Switch to… when eligible, even with switchDisposition no_destination", () => {
       seedAttempt(
         lastFailedAttempt({
           userMessageId: USER_MESSAGE_ID,
@@ -1791,27 +1753,39 @@ describe("FallbackManualRungActions", () => {
           failure: { reason: "rate_limit" },
           eligibleRungs: ["retry", "switch"],
           waitDisposition: "no_verified_reset",
-          switchDisposition: "unknown",
+          switchDisposition: "no_destination",
           failedTuple: DEFAULT_SHAPED_TUPLE,
         }),
       );
       renderActions(TURN_ID);
 
       expect(screen.getByRole("button", { name: "Switch to…" })).toBeDefined();
-      const root = screen.getByRole("button", { name: "Retry" }).parentElement;
+      const root = screen.getByRole("button", { name: "Retry" }).parentElement
+        ?.parentElement;
       expect(root?.textContent ?? "").not.toContain("No other model is set up");
     });
 
-    it("says nothing rather than a subject-less sentence with no failed tuple", () => {
-      // `failedTuple: null` travels with a missing replay envelope. There is
-      // nothing to name, and "No other model is set up for" trailing into
-      // nothing is worse than silence - so the control is still withheld (the
-      // host said so) and the sentence is dropped.
+    it("draws no Switch to… when eligibleRungs omits it, and says nothing about it", () => {
+      seedAttempt(withheldSwitchAttempt(DEFAULT_SHAPED_TUPLE));
+      renderActions(TURN_ID);
+
+      expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+      // `retry` survives, so the row is not merely bare.
+      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+      const root = screen.getByRole("button", { name: "Retry" }).parentElement
+        ?.parentElement;
+      const text = root?.textContent ?? "";
+      expect(text).not.toContain("No other model is set up");
+      expect(text).not.toContain("Claude Code · default");
+    });
+
+    it("draws no Switch to… without a failed tuple, and prints no subject-less sentence", () => {
       seedAttempt(withheldSwitchAttempt(null));
       renderActions(TURN_ID);
 
       expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
-      const root = screen.getByRole("button", { name: "Retry" }).parentElement;
+      const root = screen.getByRole("button", { name: "Retry" }).parentElement
+        ?.parentElement;
       expect(root?.textContent ?? "").not.toContain("No other model is set up");
     });
   });

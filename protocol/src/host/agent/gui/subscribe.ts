@@ -1639,55 +1639,54 @@ export type FallbackWaitDisposition = z.infer<
 >;
 
 /**
- * Whether this chat has anywhere to switch TO (`chat.subscribe@1.10`).
+ * Whether this chat's failed attempt may be switched (`chat.subscribe@1.10`).
  *
- * HOST-AUTHORED and, unlike {@link fallbackWaitDispositionSchema}, decided ONCE
- * when the failure was recorded rather than per frame. It has to be: answering
- * it means walking the user's equivalence groups against live provider
- * catalogs, which is async, and the DTO is derived synchronously per frame.
- * The verdict is stored on the failed attempt's durable envelope beside the
- * rest of its replay facts, so a chat that was idle-evicted and reopened still
- * carries it.
+ * HOST-AUTHORED, and it once carried a verdict a renderer could not derive:
+ * whether the user's setup named any other destination for the model that
+ * failed, decided ONCE when the failure was recorded (walking the user's
+ * equivalence groups against live provider catalogs is async, and the DTO is
+ * derived synchronously per frame) and stored on the attempt's durable
+ * envelope. That verdict existed because the failed-turn card's "Switch…"
+ * opened a menu of routing destinations, which could list nothing.
  *
- * ## Why a client must not derive this
+ * It no longer does. "Switch to…" opens the full model picker, and
+ * `chat.fallback.runManualRung` validates the target it is handed, so a
+ * current host emits only `eligible` (the chat has settings) and `unknown`
+ * (it has none) - never `no_destination`. That member stays in the enum
+ * because attempts recorded, and hosts built, before the change still carry
+ * and send it, and older GUIs still read it.
  *
- * The question is "does this user's setup name any other destination for the
- * model that just failed" - the answer lives in the fallback policy's model
- * groups and in the set of enabled accounts on the failed provider, neither of
- * which a renderer holds. The shipped default makes it matter: Claude Code's
- * `default` row is a real, extremely common chat tuple whose model FAMILY lives
- * only in its catalog label (`Default (Sonnet 4.5)`), while group membership is
- * matched on the slug alone - so `default` belongs to no group, and a chat on
- * it has no equivalent-model destination at all. Without this field the error
- * card offered "Switch…" onto a menu that could list nothing, and said nothing
- * about why.
+ * No current GUI reads this value: `eligibleRungs` is the only source of the
+ * Switch control (see `lastFailedAttemptSchema.switchDisposition`).
  */
 export const fallbackSwitchDispositionSchema = lazySchema(() =>
   z.enum([
-    /** A destination exists - `switch` is in `eligibleRungs`. */
+    /**
+     * The chat can be switched - `switch` is in `eligibleRungs`. A current host
+     * emits this whenever the chat has settings to switch from.
+     */
     "eligible",
     /**
-     * This chat's own setup names NO destination: no other enabled account on
-     * the failed provider, and the failed model belongs to no equivalence group.
-     * `switch` is withheld and the surface says so in the user's own terms.
+     * LEGACY - written only by hosts before the full-picker change, and still
+     * found on attempts they recorded. It meant this chat's own setup named NO
+     * routing destination: no other enabled account on the failed provider,
+     * and the failed model in no equivalence group. `switch` was withheld.
      *
-     * A statement about CONFIGURATION, never about the world - deliberately, and
-     * it is what makes a verdict frozen at failure time sound. "Signed out",
-     * "rate limited" and "provider not runnable" can all become false while the
-     * card is on screen, so none of them reaches this value; a destination that
-     * merely cannot be used right now still counts as a destination, and its
-     * menu row carries the host's own reason.
+     * It was a statement about CONFIGURATION, never about the world, which is
+     * what made a verdict frozen at failure time sound: "signed out", "rate
+     * limited" and "provider not runnable" can all become false while the card
+     * is on screen, so none of them ever produced it.
      */
     "no_destination",
     /**
-     * No verdict is available for this attempt: it was recorded by a build that
-     * predates the field, the envelope is missing, a catalog or account registry
-     * could not be read, or the chat carries no settings to switch from.
+     * From a current host: the chat carries no settings to switch from, so
+     * `switch` is not in `eligibleRungs` (and neither is `retry`).
      *
-     * `switch` is still OFFERED here (where the chat has settings at all).
-     * "We could not check" is not "you have nothing set up", and a card that
-     * withheld the control on doubt would tell a user their setup is incomplete
-     * on no evidence.
+     * From an older host it could also mean no verdict was available - the
+     * attempt predates the field, the envelope was missing, or a catalog or
+     * account registry could not be read - and `switch` was still OFFERED
+     * wherever the chat had settings: "we could not check" is not "you have
+     * nothing set up".
      */
     "unknown",
   ]),
@@ -1785,11 +1784,19 @@ export const lastFailedAttemptSchema = lazySchema(() =>
      * Why `switch` is absent from {@link eligibleRungs}, or `eligible` when it is
      * present - {@link fallbackSwitchDispositionSchema}.
      *
-     * The same shape as {@link waitDisposition} and the same invariant: `switch`
-     * is in the array iff this is not `no_destination` (and the chat has settings
-     * to switch from, which is also what removes `retry`). `unknown` OFFERS the
-     * control, because a check the host could not complete is not evidence about
-     * the user's setup.
+     * A current host emits `eligible` when the chat has settings and `unknown`
+     * when it has none - never `no_destination`: the chooser is the full model
+     * picker, and `chat.fallback.runManualRung` validates the target it is
+     * named. `no_destination` is kept for attempts recorded, and hosts built,
+     * before that change.
+     *
+     * The same shape as {@link waitDisposition} and the same invariant, true of
+     * old hosts and new: `switch` is in the array iff this is not
+     * `no_destination` and the chat has settings to switch from (which is also
+     * what removes `retry`).
+     *
+     * No current GUI reads this field. {@link eligibleRungs} is the only source
+     * of the Switch control.
      */
     switchDisposition: fallbackSwitchDispositionSchema,
     /**
@@ -1797,12 +1804,13 @@ export const lastFailedAttemptSchema = lazySchema(() =>
      * gone (the same absence {@link waitDisposition}'s `attempt_unavailable`
      * reports).
      *
-     * Carried so a surface explaining a withheld `switch` can NAME the chat's
-     * provider and model - "No other model is set up for Claude Code · default" -
-     * instead of a subject-less sentence. Resolved client-side through
-     * `fallback-identity.ts`, which is where every other fallback surface turns a
-     * tuple into words, so the card and the destination menu cannot end up
-     * calling one chat two things.
+     * Two readers in the GUI. The failed-turn card seeds the routing picker
+     * with it (the chat's persisted settings stand in when it is `null`): the
+     * picker seeds its store from that tuple until the host's target listing
+     * names the failed tuple itself, and opens on the failed tuple whenever the
+     * listing recommends no other account. And the composer's rate-limit
+     * banner compares it with the composer's own selection, to decide whether
+     * a settled routing card already covers the limit the banner would name.
      *
      * The FAILED tuple specifically, never the chat's current settings: the card
      * is bound to an attempt, and a chat reconfigured since the failure would

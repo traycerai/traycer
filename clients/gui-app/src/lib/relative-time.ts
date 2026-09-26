@@ -1,4 +1,4 @@
-import { useLayoutEffect, useSyncExternalStore } from "react";
+import { useLayoutEffect, useState, useSyncExternalStore } from "react";
 
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60_000;
@@ -681,11 +681,20 @@ export interface GraceCountdownState {
 export function useGraceCountdownState(
   deadline: number | null,
 ): GraceCountdownState | null {
-  const now = useSyncExternalStore(
+  const sampled = useSyncExternalStore(
     secondClock.subscribe,
     secondClock.sampledNow,
     secondClock.sampledNow,
   );
+  // The second clock is idle whenever no countdown is mounted, so a card's
+  // FIRST render reads the sample the last countdown (or module load) left
+  // behind - minutes old. `subscribe` corrects the label a render later, but
+  // the drain bar latches the largest remainder it sees as the window's
+  // length, so that one stale render sized a 15 s window at 377 s and the bar
+  // opened 4% full (seen live on every first countdown). No sample older than
+  // this hook's mount can be the present.
+  const [mountedAt] = useState(() => Date.now());
+  const now = Math.max(sampled, mountedAt);
   // A new deadline on a mounted card - the destination menu closing, a
   // re-armed window - would render against the last fire's sample, up to a
   // second old, until the next fire. Re-sampling in a LAYOUT effect wakes

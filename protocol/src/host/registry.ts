@@ -6288,10 +6288,13 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // "Switch now" / "Wait now" / "Retry now": end the hold through the expiry
-  // path so the planned step runs and the ladder continues. `unsupported` like
-  // its siblings: a client meeting a host without it draws no "now" button,
-  // which is the card that host already renders.
+  // End the hold through the expiry path so the planned step runs and the
+  // ladder continues. The countdown card sends it from "Switch now", on a
+  // switch plan only: a wait plan draws no "now" button (the countdown flows
+  // into waiting by itself; its buttons are "Choose another model…" and "Don't
+  // wait"), and a countdown never plans a retry. `unsupported` like its
+  // siblings: a client meeting a host without it draws no "Switch now", which
+  // is the card that host already renders.
   "chat.fallback.proceed": {
     degrade: { kind: "unsupported" },
     1: {

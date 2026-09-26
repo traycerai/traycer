@@ -1083,6 +1083,47 @@ describe("chat find projection", () => {
     expect(noticeUnit?.owningChain).toEqual([]);
   });
 
+  it("indexes a fallback_applied notice's title and detail rows but not its message, and keeps another kind's message", () => {
+    const APPLIED_MESSAGE = "zqroute claude/sonnet to claude/opus";
+    const noticeSegment = (
+      id: string,
+      noticeKind: "fallback_applied" | "fallback_settled" | "model_rerouted",
+    ): MessageSegment => ({
+      id,
+      kind: "provider_notice",
+      receipt: null,
+      status: "completed",
+      noticeKind,
+      tone: "info",
+      title: `Title of ${id}`,
+      message: APPLIED_MESSAGE,
+      details: [{ label: "From", value: `zqdetail-${id}` }],
+      parentId: null,
+    });
+    const assistant: ChatMessageModel = {
+      ...makeMessage(25, "assistant"),
+      segments: [
+        noticeSegment("applied-notice", "fallback_applied"),
+        noticeSegment("settled-notice-null-receipt", "fallback_settled"),
+        noticeSegment("harness-notice", "model_rerouted"),
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+    const textOf = (id: string): string | undefined =>
+      row.units.find((unit) => unit.unitId === chatFindSegmentUnitId(id))?.text;
+
+    const applied = textOf("applied-notice");
+    expect(applied).toContain("Title of applied-notice");
+    expect(applied).toContain("From");
+    expect(applied).toContain("zqdetail-applied-notice");
+    expect(applied).not.toContain("zqroute");
+    // Controls: every other kind still indexes its message, so the negative
+    // above can fail.
+    expect(textOf("settled-notice-null-receipt")).toContain(APPLIED_MESSAGE);
+    expect(textOf("harness-notice")).toContain(APPLIED_MESSAGE);
+  });
+
   it("indexes only the visible title for a retry provider notice", () => {
     const assistant: ChatMessageModel = {
       ...makeMessage(24, "assistant"),
@@ -1388,7 +1429,8 @@ describe("chat find projection", () => {
               steps: [],
             },
             status: "completed",
-            noticeKind: "fallback_applied",
+            // The kind a receipt rides on: the settlement notice.
+            noticeKind: "fallback_settled",
             tone: "warning",
             title: NOTICE_TITLE,
             message: NOTICE_MESSAGE,
@@ -1476,8 +1518,10 @@ describe("chat find projection", () => {
         expect(text).toContain("zqerror");
         expect(text).toContain(ERROR_CODE);
         expect(text).toContain(NOTICE_TITLE);
-        expect(text).toContain(NOTICE_MESSAGE);
         expect(text).toContain(DETAIL_VALUE);
+        // A settlement divider prints its message inline, so it is indexed;
+        // only `fallback_applied` drops it (its own test above).
+        expect(text).toContain(NOTICE_MESSAGE);
       },
     );
   });

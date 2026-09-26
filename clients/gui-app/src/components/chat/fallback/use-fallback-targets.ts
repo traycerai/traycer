@@ -28,22 +28,20 @@ export type FallbackTargetsResult = UseQueryResult<
  *
  * Three things are deliberate here.
  *
- * **`enabled` is the menu's open state.** The list is a snapshot of a world
- * that moves (a gauge refreshes, a sibling chat takes the account), so it is
- * fetched when the menu opens rather than held warm behind every card. That is
- * also why `staleTime` is zero: every open re-asks, rather than reusing the
- * last open's answer as fresh.
+ * **`enabled` is whether the chooser can act.** `RoutingDestinationPicker`
+ * opens on the listing's recommended account, so the answer has to be there
+ * before the popover is: it is read while the chooser is mounted for a reader
+ * who can steer, not only while it is open. The list is still a snapshot of a
+ * world that moves (a gauge refreshes, a sibling chat takes the account), so
+ * the chooser asks again on every open, and `staleTime` is zero so nothing
+ * treats the last answer as fresh.
  *
- * What `staleTime: 0` does NOT do - and this doc used to say it did - is keep
- * the previous open's rows off the screen. A stale entry is refetched AND
- * returned: within `gcTime` a reopen resolves `status: "success"` with the old
- * `data` on the very first render, and only `isFetching` says a newer answer is
- * on its way. So telling a settled answer from last open's is a RENDER gate,
- * not a cache setting, and it lives at the consumer -
- * `RoutingDestinationPicker` in `routing-destination-picker.tsx`, whose
- * heading marks the kept rows as refreshing while `isFetching`, and whose
- * preselect waits for a fetch that has settled. `isPending` alone is false in
- * exactly that state.
+ * What `staleTime: 0` does NOT do is keep the previous answer off the screen.
+ * A stale entry is refetched AND returned: within `gcTime` it resolves
+ * `status: "success"` with the old `data` on the very first render, and only
+ * `isFetching` says a newer answer is on its way. The chooser is built for
+ * that: its store follows each answer until the user edits it, so a newer
+ * answer moves an untouched pick and never an edited one.
  *
  * `gcTime: 0` is not the alternative and is deliberately not set here: under
  * StrictMode's double mount a zero-`gcTime` query is evicted between the paired

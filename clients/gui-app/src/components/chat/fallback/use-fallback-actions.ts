@@ -299,6 +299,16 @@ export function useFallbackChooseTarget(
   });
 }
 
+/**
+ * Hands a refused manual rung to the failed-turn cards' shared refusal record
+ * (`failed-turn-actions.ts`), answering whether a card still on screen took
+ * it. `false` means none is left, and the announcer speaks it instead.
+ */
+export type ManualRungRefusalRecorder = (
+  response: ResponseOfMethod<HostRpcRegistry, "chat.fallback.runManualRung">,
+  variables: RequestOfMethod<HostRpcRegistry, "chat.fallback.runManualRung">,
+) => boolean;
+
 export function useFallbackRunManualRung(
   client: HostClient<HostRpcRegistry> | null,
   chatId: string,
@@ -320,7 +330,60 @@ export function useFallbackRunManualRung(
    */
   reporting: FallbackOutcomeReporting,
 ): FallbackActionResult<"chat.fallback.runManualRung"> {
-  const reportingRef = useFallbackOutcomeReporting(reporting);
+  return useManualRungMutation(client, chatId, onConfirmed, {
+    ...reporting,
+    recordRefusal: null,
+  });
+}
+
+/**
+ * The failed-turn card's reporting: the shared contract, plus where its
+ * refusals are recorded.
+ */
+export interface FailedTurnRungReporting extends FallbackOutcomeReporting {
+  readonly recordRefusal: ManualRungRefusalRecorder;
+}
+
+/**
+ * {@link useFallbackRunManualRung} for the failed-turn card's bare Retry and
+ * Wait, whose refusals are STATE as well as a sentence: they take buttons away
+ * from every card of that attempt, in every tile of the chat, and bring the
+ * composer's banner back.
+ *
+ * So the answer is recorded from HERE, the Mutation's own callback, and not
+ * from a per-call handler: TanStack skips a per-call handler once the pressing
+ * card has unmounted, and another tile's card of the same attempt may still be
+ * on screen, drawing the buttons the host just refused (review F7).
+ */
+export function useFailedTurnRunManualRung(
+  client: HostClient<HostRpcRegistry> | null,
+  chatId: string,
+  onConfirmed: ConfirmedManualActionPublisher,
+  reporting: FailedTurnRungReporting,
+): FallbackActionResult<"chat.fallback.runManualRung"> {
+  return useManualRungMutation(client, chatId, onConfirmed, reporting);
+}
+
+function useManualRungMutation(
+  client: HostClient<HostRpcRegistry> | null,
+  chatId: string,
+  onConfirmed: ConfirmedManualActionPublisher,
+  reporting: FallbackOutcomeReporting & {
+    readonly recordRefusal: ManualRungRefusalRecorder | null;
+  },
+): FallbackActionResult<"chat.fallback.runManualRung"> {
+  const { inlineMenuOpen, publishUnattended, recordRefusal } = reporting;
+  const reportingRef = useFallbackOutcomeReporting({
+    inlineMenuOpen,
+    publishUnattended,
+  });
+  // Latest value, and KEPT after unmount - unlike `inlineMenuOpen`, this is
+  // not a claim about the calling surface: the record itself knows whether any
+  // card is left to show the answer.
+  const recordRefusalRef = useRef(recordRefusal);
+  useLayoutEffect(() => {
+    recordRefusalRef.current = recordRefusal;
+  });
   return useHostScopedMutationForClient(client, {
     method: "chat.fallback.runManualRung",
     mutationKey: chatFallbackMutationKeys.runManualRung(chatId),
@@ -336,10 +399,9 @@ export function useFallbackRunManualRung(
     // `attempt_not_latest` MEANS.
     //
     // The report used to be a per-call handler at the two call sites, which
-    // made both channels die with the row (MF11's class). The per-call
-    // handlers that remain are the on-screen surfaces' - the open chooser's
-    // footer and the failed-turn card's refusal note - and only for the case
-    // this arm hands back to them.
+    // made both channels die with the row (MF11's class). The per-call handler
+    // that remains is the open chooser's footer, and only for the case this
+    // arm hands back to it; the failed-turn card's note is fed from here.
     onSuccess: (data, variables) => {
       if (data.outcome === "applied") {
         onConfirmed({
@@ -350,6 +412,11 @@ export function useFallbackRunManualRung(
         });
         return;
       }
+      // A failed-turn card of this attempt is still on screen - the one
+      // pressed, or the same chat's card in another tile - and its note says
+      // it, so the announcer does not say it twice.
+      const record = recordRefusalRef.current;
+      if (record !== null && record(data, variables)) return;
       // An inline surface answers every rung itself while it is on screen - a
       // Retry or Wait staged in the chooser, or pressed on the failed-turn
       // card, as much as a switch.
@@ -371,8 +438,10 @@ export function useFallbackRunManualRung(
 }
 
 /**
- * "Switch now", "Wait now" and "Retry now" - end the countdown and let the
- * step the host already planned run (`chat.fallback.proceed`).
+ * "Switch now" - end the countdown and let the switch the host already
+ * planned run (`chat.fallback.proceed`). The verb takes any planned step; the
+ * card offers it on a switch plan only, since a wait plan flows into the wait
+ * on its own (clutter cuts, 2026-09-27).
  *
  * The card that sends it is the countdown card, which the applied answer
  * removes (the traversal leaves `hold`), so a refusal is TOASTED from here,

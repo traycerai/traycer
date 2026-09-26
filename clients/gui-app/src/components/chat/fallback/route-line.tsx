@@ -74,41 +74,19 @@ export function RouteTupleTriggerContent({
   );
 }
 
-/** A label chip's content - "Choose another model…" and its chevron. */
-export function RouteLabelTriggerContent({
-  label,
-}: {
-  readonly label: string;
-}) {
-  return (
-    <>
-      <span>{label}</span>
-      <ChevronDown
-        data-icon="inline-end"
-        aria-hidden
-        className="text-muted-foreground"
-      />
-    </>
-  );
-}
-
 /** A tuple that is not a control: the "from" end, a wait's lone tuple. */
 export function RouteTupleChip({
   tuple,
   peer,
   end,
-  trailing,
 }: {
   readonly tuple: RouteTuple;
   readonly peer: RouteTuple | null;
   readonly end: "from" | "to" | "single";
-  /** A trailing badge inside the chip (the wait's clock), or `null`. */
-  readonly trailing: ReactNode | null;
 }) {
   return (
     <RouteChip data-testid={`route-chip-${end}`}>
       <RouteTupleContent tuple={tuple} peer={peer} end={end} />
-      {trailing}
     </RouteChip>
   );
 }

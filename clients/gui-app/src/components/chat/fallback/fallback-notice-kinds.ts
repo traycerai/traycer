@@ -3,9 +3,9 @@ import type { ProviderNoticeKind } from "@traycer/protocol/persistence/epic/cont
 /**
  * The notice kinds the provider-fallback engine writes.
  *
- * A set rather than a per-kind check at each call site: three arms already
- * share the settings link, and the next one added to the enum should join them
- * by being listed here once rather than by someone remembering four `||`s.
+ * A set rather than a per-kind check at each call site: the next kind added to
+ * the enum should join by being listed here once rather than by someone
+ * remembering four `||`s.
  *
  * **Membership IS the `fallback_` prefix.** Every kind the engine writes is
  * named `fallback_*` and every `fallback_*` kind belongs here, so a new one
@@ -18,9 +18,11 @@ import type { ProviderNoticeKind } from "@traycer/protocol/persistence/epic/cont
  * In its own module rather than beside the components that read it, because a
  * `.tsx` exporting a non-component both breaks fast refresh and hides a
  * testable rule inside a render file. The rule is worth a unit test on its own:
- * it decides which transcript rows carry a settings link, and getting it wrong
- * in the permissive direction puts a fallback affordance on a Codex reroute
- * notice.
+ * it decides which transcript notices the chat's live announcer speaks
+ * (`chat-announcements.ts`), and getting it wrong in the permissive direction
+ * announces a Codex reroute notice as a routing move. No notice row carries a
+ * settings link any more (clutter cuts, 2026-09-27), so the announcer is its
+ * one reader.
  */
 const FALLBACK_NOTICE_KINDS: ReadonlySet<ProviderNoticeKind> = new Set([
   // The FORWARD hop only, since the producers were split (row #4). It used to
@@ -30,9 +32,9 @@ const FALLBACK_NOTICE_KINDS: ReadonlySet<ProviderNoticeKind> = new Set([
   "fallback_applied",
   "fallback_wait_resumed",
   "fallback_settled",
-  // The return, both ways it can end. Both belong to the same engine and carry
-  // the same affordance: the settings link is what lets a user who has just
-  // been moved (or NOT moved) reach the policy that decided it.
+  // The return, both ways it can end. Both belong to the same engine and are
+  // news the same way: a chat that did NOT move when it offered to is as much
+  // an event as one that did.
   "fallback_returned",
   "fallback_return_blocked",
 ]);

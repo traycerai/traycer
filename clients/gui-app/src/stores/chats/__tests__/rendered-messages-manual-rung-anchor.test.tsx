@@ -1,10 +1,4 @@
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -925,21 +919,20 @@ describe("the settled routing card, mounted", () => {
     expect(container.querySelector("[data-failure-presentation]")).toBeNull();
   });
 
-  it("keeps the raw error and the notice's own rows behind 'Details for a bug report'", () => {
+  it("draws no 'Details for a bug report' disclosure, and paints neither the raw error nor the notice's detail rows", () => {
     mountTurn("turn-details", RECEIPT);
     const card = screen.getByTestId("routing-settled-card");
+
+    expect(
+      within(card).queryByRole("button", { name: "Details for a bug report" }),
+    ).toBeNull();
     expect(within(card).queryByText("Rate limited.")).toBeNull();
-
-    const toggle = within(card).getByRole("button", {
-      name: "Details for a bug report",
-    });
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(toggle);
-
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(within(card).getByText("Rate limited.")).toBeTruthy();
-    expect(within(card).getByText("Tried")).toBeTruthy();
-    expect(within(card).getByText("2 accounts")).toBeTruthy();
+    expect(within(card).queryByText("Tried")).toBeNull();
+    expect(within(card).queryByText("2 accounts")).toBeNull();
+    // The card still paints the notice's own headline and message, so the
+    // absences above are not an empty card.
+    expect(within(card).getByText(SETTLED_TITLE)).toBeTruthy();
+    expect(within(card).getByText(SETTLED_MESSAGE)).toBeTruthy();
   });
 
   it("says 'Nothing could be tried' for a receipt with no steps", () => {

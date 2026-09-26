@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RoutingCard } from "@/components/chat/fallback/routing-card";
-import { FallbackWaitResumedMarker } from "@/components/chat/fallback/fallback-notice-attribution";
 import { ProviderNoticeSegment } from "@/components/chat/segments/provider-notice-segment";
 import { FALLBACK_SETTINGS_SECTION_ID } from "@/lib/settings-sections";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
@@ -165,38 +164,34 @@ describe("fallback settings links carry the tab host", () => {
     assertSettingsLandedOnTabHost();
   });
 
-  it("opens Fallback settings on the tab host from an expanded fallback_applied notice", () => {
-    render(
-      <TabHostProvider hostId={TAB_HOST}>
-        <ProviderNoticeSegment
-          status="completed"
-          noticeKind="fallback_applied"
-          tone="info"
-          title="Switched providers"
-          message="Moved to Codex."
-          details={DETAILS}
-          findUnitId={null}
-        />
-      </TabHostProvider>,
-    );
-    fireEvent.click(screen.getByRole("button"));
-    fireEvent.click(screen.getByRole("button", { name: "Model routing" }));
-    assertSettingsLandedOnTabHost();
-  });
-
-  it("opens Fallback settings on the tab host from the resumed-turn marker", () => {
-    render(
-      <TabHostProvider hostId={TAB_HOST}>
-        <FallbackWaitResumedMarker
-          title="Resumed after waiting"
-          message="The limit reset."
-          details={DETAILS}
-          findUnitId={null}
-        />
-      </TabHostProvider>,
-    );
-    fireEvent.click(screen.getByText("Resumed after waiting"));
-    fireEvent.click(screen.getByRole("button", { name: "Model routing" }));
-    assertSettingsLandedOnTabHost();
-  });
+  // Clutter cuts (2026-09-27): the notice and the resumed marker no longer
+  // carry a "Model routing" text action; the gear on the live cards above is
+  // the one way to settings, and neither notice opens settings on its own.
+  it.each(["fallback_applied", "fallback_wait_resumed"] as const)(
+    "offers no settings action from an expanded %s notice",
+    (noticeKind) => {
+      render(
+        <TabHostProvider hostId={TAB_HOST}>
+          <ProviderNoticeSegment
+            status="completed"
+            noticeKind={noticeKind}
+            tone="info"
+            title="Switched providers"
+            message="Moved to Codex."
+            details={DETAILS}
+            findUnitId={null}
+          />
+        </TabHostProvider>,
+      );
+      fireEvent.click(screen.getByRole("button"));
+      // The details did open, so the absence below is not an unopened box.
+      expect(screen.getByText("Claude Code → Codex")).toBeDefined();
+      expect(
+        screen.queryByRole("button", { name: "Model routing" }),
+      ).toBeNull();
+      expect(screen.queryByText("Model routing")).toBeNull();
+      expect(screen.getAllByRole("button")).toHaveLength(1);
+      expect(mocks.openSettings).not.toHaveBeenCalled();
+    },
+  );
 });

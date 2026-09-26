@@ -7,22 +7,18 @@ import {
 import * as copy from "@/components/chat/fallback/fallback-copy";
 import {
   describeFallbackOutcome,
-  describeListTargetsOutcome,
   describeManualRungRefusal,
   describeRefusalDetail,
-  describeSwitchDisposition,
   describeWaitDisposition,
   fallbackLowUsageClause,
   fallbackReasonLabelFor,
   joinCostClauses,
-  queuedMessagesMovingText,
-  queuedMessagesReturningText,
+  noSwitchDestinationText,
   queuedMovingClause,
   queuedReturningClause,
   queuedWaitingClause,
   siblingSwitchingClause,
-  switchConsequencesText,
-  switchDestinationConsequence,
+  routingSwitchLine,
   type ManualRungKind,
   type RefusalRemainingActions,
 } from "@/components/chat/fallback/fallback-copy";
@@ -56,25 +52,6 @@ describe("fallbackReasonLabelFor", () => {
 });
 
 describe("queued message copy family", () => {
-  it("hides the sentence helpers at zero and uses singular vs plural above it", () => {
-    expect(queuedMessagesMovingText(0)).toBeNull();
-    expect(queuedMessagesReturningText(0)).toBeNull();
-
-    expect(queuedMessagesMovingText(1)).toBe(
-      "1 queued message will run on the new settings too.",
-    );
-    expect(queuedMessagesReturningText(1)).toBe(
-      " and moves 1 queued message back",
-    );
-
-    expect(queuedMessagesMovingText(3)).toBe(
-      "3 queued messages will run on the new settings too.",
-    );
-    expect(queuedMessagesReturningText(3)).toBe(
-      " and moves 3 queued messages back",
-    );
-  });
-
   it("hides the card clauses at zero and uses singular vs plural above it", () => {
     for (const clause of [
       queuedMovingClause,
@@ -187,9 +164,68 @@ describe("removed exports", () => {
       "KEEPS_THE_ERROR_HELPER",
       "queuedMessagesWaitingText",
       "siblingSwitchingText",
+      "describeSwitchDisposition",
+      "WAIT_NOW_LABEL",
+      "DONT_ASK_FOR_CHAT_LABEL",
+      "HIDE_ROUTING_CARD_LABEL",
+      "SAME_SESSION_LABEL",
+      "FALLBACK_SETTINGS_LABEL",
+      "BUG_REPORT_DETAILS_LABEL",
+      "NEW_SESSION_CLAUSE",
+      "CHANGE_DESTINATION_CLAUSE",
+      "APPLIES_TO_NEXT_MESSAGE_CLAUSE",
+      // The announcer's own sentence forms of the queue counts; it speaks
+      // the cards' clauses now.
+      "queuedMessagesMovingText",
+      "queuedMessagesReturningText",
     ]) {
       expect(exported.has(removed)).toBe(false);
     }
+  });
+});
+
+describe("describeWaitDisposition", () => {
+  it("is silent for checking, eligible, no_verified_reset and attempt_unavailable", () => {
+    for (const disposition of [
+      "checking",
+      "eligible",
+      "no_verified_reset",
+      "attempt_unavailable",
+    ] as const) {
+      expect(describeWaitDisposition(disposition, null)).toBeNull();
+      expect(describeWaitDisposition(disposition, "3:00 PM")).toBeNull();
+    }
+  });
+
+  it("still explains a wait blocked by the cap, with and without a reset label", () => {
+    expect(describeWaitDisposition("beyond_cap", "Mon 4:30 am")).toBe(
+      "This limit resets at Mon 4:30 am — longer than Traycer is set to wait.",
+    );
+    expect(describeWaitDisposition("beyond_cap", null)).toBe(
+      "This limit resets later than Traycer is set to wait.",
+    );
+  });
+
+  it("keeps the provider sentence for a refused Wait, and only there", () => {
+    expect(
+      describeManualRungRefusal({
+        outcome: "rung_unavailable",
+        detail: { kind: "no_verified_reset", label: "x", retryable: false },
+        rung: "wait_once",
+        hostLabel: null,
+      }),
+    ).toEqual({
+      text: "The provider hasn't said when this limit resets, so there's nothing to wait for.",
+      remaining: "retry_and_switch",
+    });
+  });
+});
+
+describe("noSwitchDestinationText", () => {
+  it("names the provider and model and takes no trailing stop", () => {
+    expect(noSwitchDestinationText("Claude Code · default")).toBe(
+      "No other model is set up for Claude Code · default",
+    );
   });
 });
 
@@ -521,15 +557,6 @@ function everyUserFacingString(): ReadonlyArray<string> {
   for (const outcome of FALLBACK_ACTION_OUTCOMES) {
     collect(describeFallbackOutcome(outcome));
   }
-  for (const outcome of [
-    "listed",
-    "no_active_traversal",
-    "traversal_advanced",
-    "attempt_not_latest",
-    "state_unreadable",
-  ] as const) {
-    collect(describeListTargetsOutcome(outcome));
-  }
   for (const disposition of [
     "eligible",
     "checking",
@@ -540,28 +567,25 @@ function everyUserFacingString(): ReadonlyArray<string> {
     collect(describeWaitDisposition(disposition, null));
     collect(describeWaitDisposition(disposition, "3:00 PM"));
   }
-  for (const disposition of [
-    "eligible",
-    "unknown",
-    "no_destination",
-  ] as const) {
-    collect(describeSwitchDisposition(disposition, "Claude Code · default"));
-  }
+  collect(noSwitchDestinationText("Claude Code · default"));
   for (const count of [0, 1, 3]) {
-    collect(queuedMessagesMovingText(count));
-    collect(queuedMessagesReturningText(count));
     collect(queuedMovingClause(count));
     collect(queuedWaitingClause(count));
     collect(queuedReturningClause(count));
     collect(siblingSwitchingClause(count));
-    strings.push(switchConsequencesText(count));
-    const consequence = switchDestinationConsequence("Fable · high", count);
-    strings.push(consequence.lead, consequence.destination, consequence.trail);
   }
-  strings.push(switchConsequencesText(null));
+  strings.push(routingSwitchLine("Sonnet 5", "Surya"));
   strings.push(...everyRefusalString());
   return strings;
 }
+
+describe("routingSwitchLine", () => {
+  it("names the picked model and account, and where the replay runs", () => {
+    expect(routingSwitchLine("Sonnet 5", "Surya")).toBe(
+      "Replays on Sonnet 5 · Surya in a new session",
+    );
+  });
+});
 
 describe("user-facing vocabulary", () => {
   it("gathers a meaningful set of strings, so the sweep cannot pass over nothing", () => {

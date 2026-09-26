@@ -459,7 +459,9 @@ export type ChatFallbackRunManualRungResponse = z.infer<
  *   - `stay` - keep the fallback tuple. The offer is answered and does not
  *     return.
  *   - `dismiss_for_chat` - close the banner without answering. Recorded
- *     durably, so it does not come back after a restart.
+ *     durably, so it does not come back after a restart. No current GUI sends
+ *     it - the return card answers with `switch_back` or `stay` only - and it
+ *     is served for older clients that still do.
  *
  * All three END the traversal. A dismissal that left the record live would
  * leave an index row with no deadline, which nothing ever prunes.
@@ -479,9 +481,15 @@ export type ChatFallbackReturnToPreferredResponse = z.infer<
 >;
 
 /**
- * "Switch now", "Wait now" and "Retry now" - `chat.fallback.proceed`. One verb
- * for all three, because all three mean the same thing: end the countdown NOW
- * and let the step the host already planned run.
+ * `chat.fallback.proceed` - end the countdown NOW and let the step the host
+ * already planned run, whatever that step is.
+ *
+ * The GUI sends it from one button: the countdown card's "Switch now", drawn on
+ * a switch plan only. A wait plan draws no "now" button - the countdown flows
+ * into waiting by itself, and its buttons are "Choose another model…" and
+ * "Don't wait" - and a countdown never plans a retry (a transient series arms
+ * straight into `retrying`, with no window to end early). The verb stays
+ * step-agnostic regardless: it names no step, so any plan it meets runs.
  *
  * It ends the hold through the EXPIRY path - the same transition the grace
  * timer takes when it runs out - so the traversal carries on exactly as if the

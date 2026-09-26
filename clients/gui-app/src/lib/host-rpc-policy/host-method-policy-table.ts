@@ -667,8 +667,9 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // "Switch now" / "Wait now" / "Retry now", on the same terms as `cancel`: it
-  // names the revision it expects, so two rapid presses are two requests.
+  // The countdown card's "Switch now" (the verb runs whatever step the host
+  // planned), on the same terms as `cancel`: it names the revision it expects,
+  // so two rapid presses are two requests.
   "chat.fallback.proceed": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

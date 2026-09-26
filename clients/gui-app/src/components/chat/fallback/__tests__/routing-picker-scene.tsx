@@ -278,14 +278,14 @@ export function confirmButton(label: string): HTMLButtonElement {
   return button;
 }
 
-/** The chooser's confirm, whatever it currently says. */
+/** The chooser's one confirm. */
 export function footerConfirm(): HTMLButtonElement {
   const dialog = screen.getByRole("dialog", { name: "Select model" });
-  for (const label of ["Switch", "Retry", "Wait"]) {
-    const found = within(dialog).queryByRole("button", { name: label });
-    if (found instanceof HTMLButtonElement) return found;
+  const found = within(dialog).getByRole("button", { name: "Switch" });
+  if (!(found instanceof HTMLButtonElement)) {
+    throw new Error("the chooser's Switch is not a button");
   }
-  throw new Error("the chooser has no confirm button");
+  return found;
 }
 
 export function statusLines(): string[] {

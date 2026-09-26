@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   Clock,
   Settings,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -14,7 +13,6 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { FallbackActionOutcome } from "@traycer/protocol/host/chat-fallback";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
@@ -31,30 +29,18 @@ import { cn } from "@/lib/utils";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import {
-  APPLIES_TO_NEXT_MESSAGE_CLAUSE,
-  CHANGE_DESTINATION_CLAUSE,
   CHOOSE_ANOTHER_MODEL_LABEL,
   DECIDING_LABEL,
-  DONT_ASK_FOR_CHAT_LABEL,
-  DONT_SWITCH_LABEL,
-  DONT_WAIT_LABEL,
-  HIDE_ROUTING_CARD_LABEL,
-  NEW_SESSION_CLAUSE,
   RECONNECTING_LABEL,
   ROUTING_SETTINGS_LABEL,
-  SAME_SESSION_LABEL,
-  SIGN_IN_INSTEAD_LABEL,
   STOP_WAITING_LABEL,
   SWITCH_BACK_LABEL,
   SWITCH_NOW_LABEL,
-  WAIT_NOW_LABEL,
   fallbackLowUsageClause,
   fallbackReasonLabelFor,
   joinCostClauses,
-  queuedMovingClause,
   queuedReturningClause,
   queuedWaitingClause,
-  siblingSwitchingClause,
 } from "./fallback-copy";
 import {
   TERMINAL_ACCOUNT_LABEL,
@@ -68,13 +54,14 @@ import {
 } from "./fallback-identity";
 import type { FallbackReturnLowUsage } from "./fallback-return-low-usage";
 import {
+  countdownRefusalLabel,
+  routingCountdownCountClauses,
   routingCountdownPlan,
   type RoutingCountdownPlan,
 } from "./fallback-state";
 import { useOpenFallbackSettings } from "./open-fallback-settings";
 import {
   RouteArrow,
-  RouteLabelTriggerContent,
   RouteLine,
   RouteTupleChip,
   RouteTupleTriggerContent,
@@ -87,10 +74,6 @@ import {
   useFallbackProceed,
   useFallbackReturnToPreferred,
 } from "./use-fallback-actions";
-import {
-  routingCardActionKey,
-  useDismissRoutingCard,
-} from "./use-dismissed-routing-cards";
 
 /**
  * The composer's routing card, in whichever state the chat is in.
@@ -108,11 +91,14 @@ import {
  * - `return`: the preferred account's limit reset and routing offers to go
  *   back.
  *
- * The action row is exactly two `Button`s on the countdown and waiting states
- * - the productive action filled, the refusal outlined - and no text links.
- * The picker has no button of its own on the countdown: it opens from the
- * destination chip on the route line (options Q1 B), or from the "Choose
- * another model…" chip where the plan names no destination.
+ * Every state's action row is exactly two `Button`s - the productive action
+ * filled, the refusal outlined - and no text links. On a countdown that names
+ * a destination the picker opens from that destination's chip on the route
+ * line (options Q1 B); where nothing is named (a wait, and the waiting card)
+ * the picker IS the filled button, "Choose another model…".
+ *
+ * There is no hide control (clutter cuts, 2026-09-27): the card leaves when
+ * the countdown ends, the user answers, or routing settles.
  */
 export type RoutingCardState =
   | { readonly kind: "countdown"; readonly pending: PendingFallback }
@@ -150,7 +136,7 @@ export function RoutingCard({
   readonly hostId: string;
   /**
    * Whether this reader may steer the chat right now. `false` disables every
-   * action and says "Reconnecting…" beside them; the hide control stays.
+   * action and says "Reconnecting…" beside them; the settings gear stays.
    */
   readonly canAct: boolean;
 }) {
@@ -240,7 +226,6 @@ function CountdownRoutingCard({
   const proceed = useFallbackProceed(client, chatId);
   const proceedSupported = useHostSupportsMethod(hostId, PROCEED_METHOD);
   const openSettings = useOpenFallbackSettings(hostId);
-  const onHide = useHideRoutingCard(chatId, pending, "countdown");
 
   const onProceed = useCallback(() => {
     proceed.mutate({
@@ -259,6 +244,32 @@ function CountdownRoutingCard({
   const disabled = busy || !canAct || committed || plan.kind === "deciding";
   const primaryLabel = countdownPrimaryLabel(plan);
   const note = countdownActionNote({ canAct, committed, plan });
+  let primary: ReactNode = null;
+  if (plan.kind === "wait") {
+    // A wait names no destination, so the one productive thing to do is
+    // choose one: the picker is the filled button, as on the waiting card,
+    // and the countdown flows into the wait on its own.
+    primary = (
+      <RoutingDestinationPicker
+        entry={{ kind: "countdown", pending }}
+        triggerLabel={CHOOSE_ANOTHER_MODEL_LABEL}
+        triggerAriaLabel={null}
+        triggerVariant="default"
+        triggerDisabled={committed || busy}
+        canAct={canAct}
+        epicId={epicId}
+        chatId={chatId}
+        hostId={hostId}
+      />
+    );
+  } else if (primaryLabel !== null && proceedSupported) {
+    primary = (
+      <Button size="sm" disabled={disabled} onClick={onProceed}>
+        {primaryLabel}
+        {proceed.isPending ? <PendingDots /> : null}
+      </Button>
+    );
+  }
 
   return (
     <RoutingCardFrame state="countdown">
@@ -267,14 +278,15 @@ function CountdownRoutingCard({
         cause={fallbackReasonLabelFor(pending.reason)}
         subject={`${failed.providerLabel} · ${failed.profileLabel}`}
         onOpenSettings={openSettings}
-        onHide={onHide}
       />
       <CountdownHeadline
         state={pending.state}
         plan={plan}
         deadline={pending.deadline}
         graceRemainingMs={pending.graceRemainingMs}
-        windowKey={`${pending.traversalId}:${routingCardActionKey(pending)}`}
+        // Which countdown this is: the host's plan id changes exactly when
+        // the planned step does, and `"none"` is its own window.
+        windowKey={`${pending.traversalId}:${pending.impendingAction?.planId ?? "none"}`}
       />
       <CountdownRouteLine
         pending={pending}
@@ -286,20 +298,9 @@ function CountdownRoutingCard({
         epicId={epicId}
         hostId={hostId}
       />
-      <RoutingCostLine
-        text={countdownCostLine({
-          pending,
-          plan,
-          pickerCanOpen: canAct && pending.state === "hold",
-        })}
-      />
+      <RoutingCostLine text={countdownCostLine(pending, plan)} />
       <RoutingActionRow note={note}>
-        {primaryLabel !== null && proceedSupported ? (
-          <Button size="sm" disabled={disabled} onClick={onProceed}>
-            {primaryLabel}
-            {proceed.isPending ? <PendingDots /> : null}
-          </Button>
-        ) : null}
+        {primary}
         {signedOut ? (
           <Button
             size="sm"
@@ -307,7 +308,7 @@ function CountdownRoutingCard({
             disabled={disabled}
             onClick={signIn.onSignInInstead}
           >
-            {SIGN_IN_INSTEAD_LABEL}
+            {countdownRefusalLabel(pending, plan)}
             {signIn.signInPending ? <PendingDots /> : null}
           </Button>
         ) : (
@@ -317,7 +318,7 @@ function CountdownRoutingCard({
             disabled={disabled}
             onClick={signIn.onCancel}
           >
-            {countdownRefusalLabel(plan)}
+            {countdownRefusalLabel(pending, plan)}
             {signIn.cancelPending && !signIn.signInPending ? (
               <PendingDots />
             ) : null}
@@ -329,9 +330,11 @@ function CountdownRoutingCard({
 }
 
 /**
- * The productive action per plan, or `null` where there is none to press: a
- * resume is the wait finishing, and a plan the host has not resolved has no
- * step to run early.
+ * The "now" button per plan, or `null` where there is none to press: a wait's
+ * productive action is the picker instead (the countdown flows into the wait
+ * on its own, so starting it early is not worth a button), a resume is the
+ * wait finishing, and a plan the host has not resolved has no step to run
+ * early.
  *
  * "Switch now" ends the window, not the probe behind it: the host may spend up
  * to 30 seconds confirming the account before it commits, so the card keeps
@@ -343,27 +346,10 @@ function countdownPrimaryLabel(plan: RoutingCountdownPlan): string | null {
     case "switch":
       return SWITCH_NOW_LABEL;
     case "wait":
-      return WAIT_NOW_LABEL;
     case "resume":
     case "deciding":
     case "nothing":
       return null;
-  }
-}
-
-/**
- * The refusal per plan. What it refuses is named - "Don't wait" over a wait -
- * and it is never "Cancel": each keeps the error and leaves the queue paused.
- */
-function countdownRefusalLabel(plan: RoutingCountdownPlan): string {
-  switch (plan.kind) {
-    case "wait":
-      return DONT_WAIT_LABEL;
-    case "switch":
-    case "resume":
-    case "deciding":
-    case "nothing":
-      return DONT_SWITCH_LABEL;
   }
 }
 
@@ -384,42 +370,26 @@ function countdownActionNote(input: {
 }
 
 /**
- * The cost line: only what is TRUE for this plan. A switch starts a new
- * session and carries the queue; a wait moves nothing; an undecided plan has
- * no cost of its own to state.
+ * The cost line: COUNT clauses only, and only when true - "2 queued messages
+ * move with it", "1 other chat in this task is also switching". What a switch
+ * does to the session is the picker footer's sentence, and that the
+ * destination can be changed is the chip's own affordance, so neither is
+ * repeated here (clutter cuts, 2026-09-27). With no count to state the line is
+ * not drawn at all. The clauses are the announcer's too
+ * (`routingCountdownCountClauses`).
  */
-function countdownCostLine(input: {
-  readonly pending: PendingFallback;
-  readonly plan: RoutingCountdownPlan;
-  readonly pickerCanOpen: boolean;
-}): string | null {
-  const { pending, plan, pickerCanOpen } = input;
-  const siblings = siblingSwitchingClause(pending.siblingSwitching);
-  switch (plan.kind) {
-    case "switch":
-      return joinCostClauses([
-        NEW_SESSION_CLAUSE,
-        queuedMovingClause(pending.queuedItemsMoving),
-        pickerCanOpen ? CHANGE_DESTINATION_CLAUSE : null,
-        siblings,
-      ]);
-    case "wait":
-      return joinCostClauses([
-        queuedWaitingClause(pending.queuedItemsMoving),
-        siblings,
-      ]);
-    case "resume":
-    case "deciding":
-    case "nothing":
-      return joinCostClauses([siblings]);
-  }
+function countdownCostLine(
+  pending: PendingFallback,
+  plan: RoutingCountdownPlan,
+): string | null {
+  return joinCostClauses(routingCountdownCountClauses(pending, plan));
 }
 
 /**
- * From → to. The "to" end is the picker's trigger; where the plan names no
- * destination (a wait) the failed tuple stands alone and a "Choose another
- * model…" chip beside it opens the same picker. A plan the host is still
- * deciding shows the one tuple and nothing to click.
+ * From → to. The "to" end is the picker's trigger. Where the plan names no
+ * destination - a wait, or a plan the host is still deciding - the failed
+ * tuple stands alone and nothing on the line is clickable: a wait's picker is
+ * the action row's filled button, and its time is in the headline.
  */
 function CountdownRouteLine({
   pending,
@@ -445,7 +415,7 @@ function CountdownRouteLine({
     const to = routeTupleOf(plan.destination, resolvers);
     return (
       <RouteLine>
-        <RouteTupleChip tuple={from} peer={to} end="from" trailing={null} />
+        <RouteTupleChip tuple={from} peer={to} end="from" />
         <RouteArrow />
         <RoutingDestinationPicker
           entry={{ kind: "countdown", pending }}
@@ -463,41 +433,8 @@ function CountdownRouteLine({
   }
   return (
     <RouteLine>
-      <RouteTupleChip tuple={from} peer={null} end="single" trailing={null} />
-      {plan.kind === "wait" && plan.resumesAt !== null ? (
-        <WaitUntilBadge resumesAt={plan.resumesAt} />
-      ) : null}
-      {plan.kind === "wait" ? (
-        <RoutingDestinationPicker
-          entry={{ kind: "countdown", pending }}
-          triggerLabel={
-            <RouteLabelTriggerContent label={CHOOSE_ANOTHER_MODEL_LABEL} />
-          }
-          triggerAriaLabel={null}
-          triggerVariant="route-chip"
-          triggerDisabled={committed}
-          canAct={canAct}
-          epicId={epicId}
-          chatId={chatId}
-          hostId={hostId}
-        />
-      ) : null}
+      <RouteTupleChip tuple={from} peer={null} end="single" />
     </RouteLine>
-  );
-}
-
-/**
- * The wait plan's clock badge, "until 1:02 am". Its own component so the
- * minute clock it needs (for the weekday on a wait past a day) repaints this
- * badge and not the card.
- */
-function WaitUntilBadge({ resumesAt }: { readonly resumesAt: number }) {
-  const now = useSampledNow();
-  return (
-    <Badge variant="muted" className="rounded-full">
-      <Clock aria-hidden />
-      until {formatWaitTime(resumesAt, now)}
-    </Badge>
   );
 }
 
@@ -529,6 +466,13 @@ function CountdownHeadline({
   const countdown = useGraceCountdownState(state === "hold" ? deadline : null);
   const remainingMs = drainRemainingMs(state, countdown, graceRemainingMs);
   const fraction = useDrainFraction(remainingMs, windowKey);
+  // The shared minute clock, for one decision: whether the wait's end is far
+  // enough out to need its weekday (`formatWaitTime`).
+  const now = useSampledNow();
+  const waitUntil =
+    plan.kind === "wait" && plan.resumesAt !== null
+      ? formatWaitTime(plan.resumesAt, now)
+      : null;
   return (
     <>
       {fraction === null ? null : <DrainBar fraction={fraction} />}
@@ -536,11 +480,12 @@ function CountdownHeadline({
         data-testid="routing-card-headline"
         className="text-ui-md font-semibold text-foreground"
       >
-        {countdownHeadlineText(
+        {countdownHeadlineText({
           state,
           plan,
-          countdown === null ? null : countdown.label,
-        )}
+          countdownLabel: countdown === null ? null : countdown.label,
+          waitUntil,
+        })}
       </div>
     </>
   );
@@ -613,17 +558,21 @@ function DrainBar({ fraction }: { readonly fraction: number }) {
 }
 
 /**
- * One short sentence: what happens and when.
+ * One short sentence: what happens and when - for a wait, until when too
+ * ("Waiting until 3:21 am starts in 14s"), which is where the wait's clock
+ * badge used to sit.
  *
  * `choosing` says "paused" only because the HOST granted it - the frame says
- * `choosing` - never on the click; the picker's own footer says "Pausing the
- * countdown…" until then.
+ * `choosing` - never on the click.
  */
-function countdownHeadlineText(
-  state: PendingFallback["state"],
-  plan: RoutingCountdownPlan,
-  countdownLabel: string | null,
-): string {
+function countdownHeadlineText(input: {
+  readonly state: PendingFallback["state"];
+  readonly plan: RoutingCountdownPlan;
+  readonly countdownLabel: string | null;
+  /** The wait's end, formatted, or `null` with no wait or no known end. */
+  readonly waitUntil: string | null;
+}): string {
+  const { state, plan, countdownLabel, waitUntil } = input;
   if (state === "switching") return committedHeadline(plan);
   if (state === "choosing") return "Paused while you choose";
   const when = countdownPhrase(countdownLabel ?? GRACE_COUNTDOWN_IMMINENT);
@@ -631,7 +580,9 @@ function countdownHeadlineText(
     case "switch":
       return `Switching ${when}`;
     case "wait":
-      return `Waiting starts ${when}`;
+      return waitUntil === null
+        ? `Waiting starts ${when}`
+        : `Waiting until ${waitUntil} starts ${when}`;
     case "resume":
       return `Resuming ${when}`;
     case "deciding":
@@ -804,7 +755,6 @@ function WaitingRoutingCard({
   // navigation, and the shared toast already reports a refusal.
   const cancel = useFallbackCancel(client, chatId, IGNORE_FALLBACK_OUTCOME);
   const openSettings = useOpenFallbackSettings(hostId);
-  const onHide = useHideRoutingCard(chatId, pending, "waiting");
   const waiting = fallbackTupleIdentity(
     pending.failedTuple,
     labelFor,
@@ -828,19 +778,11 @@ function WaitingRoutingCard({
         cause={fallbackReasonLabelFor(pending.reason)}
         subject={`${waiting.providerLabel} · ${waiting.profileLabel}`}
         onOpenSettings={openSettings}
-        onHide={onHide}
       />
       <WaitingHeadline deadline={pending.deadline} />
+      {/* The tuple alone says what resumes. */}
       <RouteLine>
-        <RouteTupleChip
-          tuple={tuple}
-          peer={null}
-          end="single"
-          trailing={null}
-        />
-        <Badge variant="muted" className="rounded-full">
-          {SAME_SESSION_LABEL}
-        </Badge>
+        <RouteTupleChip tuple={tuple} peer={null} end="single" />
       </RouteLine>
       <RoutingCostLine
         text={joinCostClauses([queuedWaitingClause(pending.queuedItemsMoving)])}
@@ -924,10 +866,14 @@ function WaitingHeadline({ deadline }: { readonly deadline: number | null }) {
 /**
  * The offer to move this chat back to the account it started on. Unchanged in
  * behaviour: surfaced only once the host says so, and every answer ends the
- * traversal, so it carries no hide control and no settings gear - it
- * describes a chat that is working. The route runs the other way, from where
- * the chat is now back to where it started, and switching back moves the
- * queued messages too, which the cost line says.
+ * traversal, so it carries no settings gear - it describes a chat that is
+ * working. The route runs the other way, from where the chat is now back to
+ * where it started, and switching back moves the queued messages too, which
+ * the cost line counts when there are any.
+ *
+ * Two answers (clutter cuts, 2026-09-27): "Switch back", and "Stay on …",
+ * which dismisses this offer. The per-chat "Don't ask for this chat" is gone
+ * from this card; its host action stays for older clients.
  */
 function ReturnRoutingCard({
   offer,
@@ -965,7 +911,7 @@ function ReturnRoutingCard({
   const from = routeTupleOf(offer.fallbackTuple, resolvers);
   const to = routeTupleOf(offer.preferredTuple, resolvers);
   const answer = useCallback(
-    (action: "switch_back" | "stay" | "dismiss_for_chat") => {
+    (action: "switch_back" | "stay") => {
       returnToPreferred.mutate({
         epicId,
         chatId,
@@ -990,7 +936,6 @@ function ReturnRoutingCard({
           lowUsage,
         )}
         onOpenSettings={null}
-        onHide={null}
       />
       <div
         data-testid="routing-card-headline"
@@ -999,16 +944,12 @@ function ReturnRoutingCard({
         Switch back to {accountName(preferred, current)}?
       </div>
       <RouteLine>
-        <RouteTupleChip tuple={from} peer={to} end="from" trailing={null} />
+        <RouteTupleChip tuple={from} peer={to} end="from" />
         <RouteArrow />
-        <RouteTupleChip tuple={to} peer={from} end="to" trailing={null} />
+        <RouteTupleChip tuple={to} peer={from} end="to" />
       </RouteLine>
       <RoutingCostLine
-        text={joinCostClauses([
-          APPLIES_TO_NEXT_MESSAGE_CLAUSE,
-          queuedReturningClause(offer.queuedItemsMoving),
-          NEW_SESSION_CLAUSE,
-        ])}
+        text={joinCostClauses([queuedReturningClause(offer.queuedItemsMoving)])}
       />
       <RoutingActionRow note={canAct ? null : RECONNECTING_LABEL}>
         <Button
@@ -1029,16 +970,6 @@ function ReturnRoutingCard({
           }}
         >
           Stay on {currentName}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={disabled}
-          onClick={() => {
-            answer("dismiss_for_chat");
-          }}
-        >
-          {DONT_ASK_FOR_CHAT_LABEL}
         </Button>
       </RoutingActionRow>
     </RoutingCardFrame>
@@ -1135,27 +1066,23 @@ const TONE_TEXT: Readonly<Record<RoutingTone, string>> = {
 };
 
 /**
- * Cause · the account that failed · gear · hide. Nothing else lives up here.
+ * Cause · the account that failed · gear. Nothing else lives up here.
  *
  * The gear opens this chat's host's routing settings, once, where the card
- * used to carry a "Model routing" link twice. The hide control puts the card
- * away and cancels nothing - the refusal button is the answer, this only stops
- * the card occupying the composer - so it is never disabled, not even for a
- * reader who cannot steer the chat.
+ * used to carry a "Model routing" link twice. It is never disabled, not even
+ * for a reader who cannot steer the chat: reading the settings steers nothing.
  */
 function RoutingStatusLine({
   tone,
   cause,
   subject,
   onOpenSettings,
-  onHide,
 }: {
   readonly tone: RoutingTone;
   /** The failure's label, or `null` for a reason this build does not know. */
   readonly cause: string | null;
   readonly subject: string;
   readonly onOpenSettings: (() => void) | null;
-  readonly onHide: (() => void) | null;
 }) {
   const Icon = TONE_ICON[tone];
   return (
@@ -1185,43 +1112,22 @@ function RoutingStatusLine({
           {subject}
         </span>
       </div>
-      {onOpenSettings === null && onHide === null ? null : (
-        <div className="flex shrink-0 items-center gap-0.5">
-          {onOpenSettings === null ? null : (
-            <TooltipWrapper
-              label={ROUTING_SETTINGS_LABEL}
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Button
-                size="icon-xs"
-                variant="muted"
-                aria-label={ROUTING_SETTINGS_LABEL}
-                onClick={onOpenSettings}
-              >
-                <Settings aria-hidden />
-              </Button>
-            </TooltipWrapper>
-          )}
-          {onHide === null ? null : (
-            <TooltipWrapper
-              label={HIDE_ROUTING_CARD_LABEL}
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Button
-                size="icon-xs"
-                variant="muted"
-                aria-label="Hide"
-                onClick={onHide}
-              >
-                <X aria-hidden />
-              </Button>
-            </TooltipWrapper>
-          )}
-        </div>
+      {onOpenSettings === null ? null : (
+        <TooltipWrapper
+          label={ROUTING_SETTINGS_LABEL}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <Button
+            size="icon-xs"
+            variant="muted"
+            aria-label={ROUTING_SETTINGS_LABEL}
+            onClick={onOpenSettings}
+          >
+            <Settings aria-hidden />
+          </Button>
+        </TooltipWrapper>
       )}
     </div>
   );
@@ -1278,26 +1184,4 @@ function PendingDots() {
       variant={undefined}
     />
   );
-}
-
-/**
- * The hide control's handler. Keyed by chat, traversal, card and plan, so a
- * re-planned destination inside one traversal is a card the user has not
- * hidden. `pending` whole, not its id: the plan key is derived from this frame,
- * and a narrower dependency would write the dismissal under the OLD plan's key.
- */
-function useHideRoutingCard(
-  chatId: string,
-  pending: PendingFallback,
-  card: "countdown" | "waiting",
-): () => void {
-  const dismissCard = useDismissRoutingCard();
-  return useCallback(() => {
-    dismissCard(
-      chatId,
-      pending.traversalId,
-      card,
-      routingCardActionKey(pending),
-    );
-  }, [card, chatId, dismissCard, pending]);
 }

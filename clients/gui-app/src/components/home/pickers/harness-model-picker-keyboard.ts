@@ -1,32 +1,17 @@
-import type { HarnessModelPickerRow } from "@/components/home/data/harness-model-search";
+import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { KeyboardEvent, RefObject } from "react";
 
 interface HarnessModelPickerKeyboardInput {
-  readonly visibleRows: ReadonlyArray<HarnessModelPickerRow>;
+  readonly visibleRows: ReadonlyArray<HarnessModelRow>;
   readonly effectiveActiveRowId: string;
-  readonly activeRow: HarnessModelPickerRow | null;
+  readonly activeRow: HarnessModelRow | null;
   readonly trimmedQuery: string;
   readonly listRef: RefObject<VirtuosoHandle | null>;
   readonly onActiveRowId: (rowId: string) => void;
-  readonly onSelectRow: (row: HarnessModelPickerRow) => void;
+  readonly onSelectRow: (row: HarnessModelRow) => void;
   readonly onQueryChange: (next: string) => void;
   readonly onClose: () => void;
-}
-
-/** The option element's id, which the search input names as its active descendant. */
-export function modelRowElementId(idPrefix: string, rowId: string): string {
-  return `${idPrefix}-row-${rowId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-}
-
-/**
- * Whether the arrows, Home/End and Enter can land on a row. The injected
- * section's heading is a label, not an option, so navigation steps over it; a
- * dimmed suggestion stays reachable (its reason is worth reading), and Enter on
- * it is the select handler's no-op.
- */
-export function isNavigableRow(row: HarnessModelPickerRow): boolean {
-  return row.kind !== "suggestion-heading";
 }
 
 export function handleHarnessModelPickerKeyDown(
@@ -66,11 +51,7 @@ export function handleHarnessModelPickerKeyDown(
 
   if (event.key === "Home") {
     event.preventDefault();
-    activateRowIndex({
-      ...navigation,
-      index: visibleRows.findIndex(isNavigableRow),
-      align: "start",
-    });
+    activateRowIndex({ ...navigation, index: 0, align: "start" });
     return;
   }
 
@@ -78,14 +59,14 @@ export function handleHarnessModelPickerKeyDown(
     event.preventDefault();
     activateRowIndex({
       ...navigation,
-      index: visibleRows.findLastIndex(isNavigableRow),
+      index: visibleRows.length - 1,
       align: "end",
     });
     return;
   }
 
   if (event.key === "Enter") {
-    if (activeRow === null || !isNavigableRow(activeRow)) return;
+    if (activeRow === null) return;
     event.preventDefault();
     onSelectRow(activeRow);
     return;
@@ -102,7 +83,7 @@ export function handleHarnessModelPickerKeyDown(
 }
 
 interface RowNavigationInput {
-  readonly visibleRows: ReadonlyArray<HarnessModelPickerRow>;
+  readonly visibleRows: ReadonlyArray<HarnessModelRow>;
   readonly effectiveActiveRowId: string;
   readonly listRef: RefObject<VirtuosoHandle | null>;
   readonly onActiveRowId: (rowId: string) => void;
@@ -118,42 +99,20 @@ function moveActiveRow(
     onActiveRowId,
     direction,
   } = input;
-  if (!visibleRows.some(isNavigableRow)) return;
+  if (visibleRows.length === 0) return;
   const currentIndex = visibleRows.findIndex(
     (row) => row.id === effectiveActiveRowId,
   );
   const fallbackIndex = direction > 0 ? -1 : visibleRows.length;
-  const nextIndex = nextNavigableIndex(
-    visibleRows,
-    currentIndex === -1 ? fallbackIndex : currentIndex,
-    direction,
+  const nextIndex = clampIndex(
+    (currentIndex === -1 ? fallbackIndex : currentIndex) + direction,
+    visibleRows.length,
   );
   onActiveRowId(visibleRows.at(nextIndex)?.id ?? "");
   listRef.current?.scrollIntoView({
     index: nextIndex,
     behavior: "auto",
   });
-}
-
-/**
- * The next navigable index from `from` in `direction`, clamped at the ends -
- * where there is no navigable row further along, the arrow stays on the
- * current one, as it always has at the top and bottom of the list.
- */
-function nextNavigableIndex(
-  rows: ReadonlyArray<HarnessModelPickerRow>,
-  from: number,
-  direction: 1 | -1,
-): number {
-  for (
-    let index = from + direction;
-    index >= 0 && index < rows.length;
-    index += direction
-  ) {
-    const row = rows.at(index);
-    if (row !== undefined && isNavigableRow(row)) return index;
-  }
-  return clampIndex(from, rows.length);
 }
 
 function activateRowIndex(
@@ -164,7 +123,7 @@ function activateRowIndex(
 ): void {
   const { visibleRows, listRef, onActiveRowId, index, align } = input;
   const row = visibleRows.at(index);
-  if (index < 0 || row === undefined) return;
+  if (row === undefined) return;
   onActiveRowId(row.id);
   listRef.current?.scrollToIndex({
     index,

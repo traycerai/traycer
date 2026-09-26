@@ -13,32 +13,6 @@ import {
   type ChatProviderFallbackState,
 } from "./fallback-state";
 import { RoutingCard } from "./routing-card";
-import {
-  routingCardActionKey,
-  useRoutingCardDismissed,
-  type RoutingCardKind,
-} from "./use-dismissed-routing-cards";
-
-/**
- * Which dismissible card this frame would put in the composer.
- *
- * TOTAL rather than nullable, and read off `fallbackWaitingCardVisible` - the
- * same predicate the render branches use - so the kind a dismissal is looked up
- * under and the card actually drawn are decided by one function on one frame.
- *
- * Everything that is not the wait card answers `countdown`, `undefined` and
- * `retrying` included. Neither draws a dismissible card here (the retry row is
- * an inline transcript row with no hide control), so the value is never read
- * for them; a nullable return would only have pushed a `?? "countdown"` into
- * the hook call, where it would look like a decision rather than the dead
- * branch it is.
- */
-function dismissibleCardKind(
-  pending: ChatProviderFallbackState["pending"],
-): RoutingCardKind {
-  if (pending === undefined) return "countdown";
-  return fallbackWaitingCardVisible(pending) ? "waiting" : "countdown";
-}
 
 /**
  * The composer's two routing-card slots: the live traversal's card (countdown
@@ -141,32 +115,13 @@ function FallbackPendingBanner({
   readonly hostId: string;
   readonly canAct: boolean;
 }) {
-  // Unconditional, and above the gates below it for that reason. The empty
-  // traversal id is a key no dismissal can ever hold, so a chat with no
-  // traversal reads `false` without the hook order depending on the frame.
-  //
-  // The card kind is asked for the SAME frame the branches below decide on, so
-  // the two cannot disagree about which card is on screen - which is the whole
-  // reason a dismissal is keyed by card at all.
-  const dismissed = useRoutingCardDismissed(
-    chatId,
-    pending?.traversalId ?? "",
-    dismissibleCardKind(pending),
-    // Same frame, same derivation as the card's hide handler, so a re-planned
-    // destination inside one traversal is a card the user has not hidden
-    // rather than one silently inheriting the last plan's answer.
-    routingCardActionKey(pending),
-  );
   // BY VALUE, never by key presence: on a live `chat.subscribe@1.10` frame the
   // host sets the key unconditionally and `undefined` is what CLEARS the card,
   // so a `"pending" in ...` test would pin it open for the life of the chat.
+  //
+  // Nothing else gates it: the card has no hide control (clutter cuts,
+  // 2026-09-27), so it is on screen for exactly as long as the traversal is.
   if (!visible || pending === undefined) return null;
-  // Hidden for THIS episode, and for this card of it. The traversal is
-  // untouched and still holds dispatch - see `use-dismissed-routing-cards.ts`
-  // for why hiding is deliberately not an answer to the card's question, and
-  // why hiding the countdown must not also swallow the waiting state a later
-  // rung of the same traversal raises.
-  if (dismissed) return null;
   if (fallbackWaitingCardVisible(pending)) {
     return (
       <FallbackBannerSlot>

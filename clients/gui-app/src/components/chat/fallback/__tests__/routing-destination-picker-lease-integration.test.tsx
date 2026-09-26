@@ -52,8 +52,6 @@ const EPIC_ID = "epic-lease-integration";
 const CHAT_ID = "chat-lease-integration";
 const HOST_ID = "host-lease-integration";
 const TRAVERSAL_ID = "traversal-lease-integration";
-const PAUSING = "Pausing the countdown…";
-const PAUSED = "Countdown paused while you choose.";
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", async () =>
   (await import("./routing-picker-kit")).hostClientModule(),
@@ -340,14 +338,25 @@ function toggleChooser(): void {
   fireEvent.click(screen.getByRole("button", { name: "Choose differently…" }));
 }
 
+/**
+ * The chooser opens on the recommended sibling, so its Switch is waiting on
+ * nothing but the hold: disabled while the countdown is still being spent,
+ * enabled once the host minted the token AND the frame says `choosing`.
+ */
+function switchButton(): HTMLButtonElement {
+  const button = screen.getByRole("button", { name: "Switch" });
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("expected a Switch button");
+  }
+  return button;
+}
+
 function expectPausing(): void {
-  expect(screen.getByText(PAUSING)).toBeDefined();
-  expect(screen.queryByText(PAUSED)).toBeNull();
+  expect(switchButton().disabled).toBe(true);
 }
 
 function expectPaused(): void {
-  expect(screen.queryByText(PAUSING)).toBeNull();
-  expect(screen.getByText(PAUSED)).toBeDefined();
+  expect(switchButton().disabled).toBe(false);
 }
 
 function setUp() {
@@ -361,7 +370,7 @@ function setUp() {
         label: "sibling-account",
         severity: "ok",
         usedPercent: 10,
-        recommended: false,
+        recommended: true,
         selectable: true,
         skip: null,
       }),
@@ -419,9 +428,8 @@ describe("B1: the routing chooser over the real lease, five ticket cases", () =>
     });
 
     // Falsification: revert `fallbackHoldForChoice`'s `choosing` admission and
-    // this reopen returns `null` - the chooser is stuck on "Pausing" forever.
+    // this reopen returns `null` - the chooser is stuck waiting on the hold forever.
     expectPaused();
-    expect(screen.getByText("sibling-account")).toBeDefined();
   });
 
   it("snapshot-before-ack: a same-connection resnapshot to `choosing` while the ack is outstanding does not disturb the pending lease", () => {
@@ -572,7 +580,6 @@ describe("B1: the routing chooser over the real lease, five ticket cases", () =>
     // Falsification: delete the reacquire effect in the chooser entirely - it
     // sits on "Pausing" forever from the first reconnecting status onward.
     expectPaused();
-    expect(screen.getByText("sibling-account")).toBeDefined();
   });
 
   it("the confirm goes out with the token the real store minted, and only once both halves are true", () => {
@@ -580,12 +587,8 @@ describe("B1: the routing chooser over the real lease, five ticket cases", () =>
     renderChooser(harness.handle);
 
     toggleChooser();
-    fireEvent.click(screen.getByRole("option", { name: /sibling-account/ }));
-    const switchButton = screen.getByRole("button", { name: "Switch" });
-    if (!(switchButton instanceof HTMLButtonElement)) {
-      throw new Error("expected a Switch button");
-    }
-    expect(switchButton.disabled).toBe(true);
+    const confirm = switchButton();
+    expect(confirm.disabled).toBe(true);
 
     act(() => {
       emitActionAck(callbacks, {
@@ -594,12 +597,12 @@ describe("B1: the routing chooser over the real lease, five ticket cases", () =>
         token: "tok-confirm",
       });
     });
-    expect(switchButton.disabled).toBe(true);
+    expect(confirm.disabled).toBe(true);
     act(() => {
       emitSnapshot(callbacks, CHOOSING);
     });
-    expect(switchButton.disabled).toBe(false);
-    fireEvent.click(switchButton);
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
 
     expect(kit.mutations).toHaveLength(1);
     expect(kit.mutations[0].variables).toMatchObject({
@@ -779,7 +782,13 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
       "refused",
     );
     expect(spy.calls()).toBe(1);
-    expect(screen.getByText("Couldn't pause the countdown.")).toBeDefined();
+    // In the footer's live region, and in its visible line beside Switch.
+    expect(screen.getByRole("status").textContent).toBe(
+      "Couldn't pause the countdown.",
+    );
+    expect(screen.getAllByText("Couldn't pause the countdown.")).toHaveLength(
+      2,
+    );
 
     // Several further frames on the SAME (non-retired) connection: a refused
     // lease is not `null`, so the effect's own guard excludes it every time.

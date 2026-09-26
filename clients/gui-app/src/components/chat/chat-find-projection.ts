@@ -240,11 +240,10 @@ function settledCardSegmentIds(
  * Find units for a row whose settled card absorbs its notice and anchor error.
  *
  * The card paints the notice's title and message in the notice's own unit,
- * and nothing of the error outside its closed "Details for a bug report"
- * disclosure - so the notice indexes exactly those two strings (its details
- * rows sit in that disclosure too), and the error indexes nothing. Indexing
- * either the way their standalone rows do would count matches the highlighter
- * has no text to paint.
+ * and nothing of the error or the notice's detail rows - those travel only in
+ * the Report issue payload - so the notice indexes exactly those two strings
+ * and the error indexes nothing. Indexing either the way their standalone rows
+ * do would count matches the highlighter has no text to paint.
  */
 function settledCardSearchUnits(
   segment: MessageSegment,
@@ -688,7 +687,13 @@ function providerNoticeSegmentSearchText(
     normalizeSearchableText(
       [
         segment.title,
-        segment.message ?? "",
+        // `fallback_applied` paints its title alone (`ProviderNoticeSegment`'s
+        // `inlineMessageFor`): its message is the raw route, which its From
+        // and To detail rows already carry. Indexing it would count matches
+        // the highlighter has no text to paint.
+        segment.noticeKind === "fallback_applied"
+          ? ""
+          : (segment.message ?? ""),
         ...segment.details.flatMap((detail) => [detail.label, detail.value]),
       ].join(" "),
     ),

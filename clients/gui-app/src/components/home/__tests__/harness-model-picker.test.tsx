@@ -8,8 +8,6 @@ import {
   type Mock,
 } from "vitest";
 import { userEvent } from "@testing-library/user-event";
-import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { SuggestionRow } from "@/components/home/data/harness-model-search";
 import { resetPaneActivationFocusIntentsForTests } from "@/components/epic-canvas/pane-activation";
 
 // The picker's provider-settings gear opens the settings modal through router
@@ -905,6 +903,10 @@ function providerCliStateWithProfiles(input: {
     profiles: input.profiles,
   };
 }
+
+const PICKER_BODY_HEIGHT =
+  "h-[min(var(--radix-popover-content-available-height),23rem)]";
+const WIDTH_CLASS = /w-\[min\(86vw,30rem\)\]/;
 
 function codexModels(): ReadonlyArray<ModelOption> {
   return [
@@ -4909,7 +4911,6 @@ describe("<HarnessModelPicker />", () => {
         openRef: input.openRef,
         closeRef: null,
         onOpenChange: null,
-        suggestions: null,
         footer: null,
       };
     }
@@ -5170,126 +5171,34 @@ describe("<HarnessModelPicker />", () => {
       ).toBe("true");
     });
 
-    describe("with injected suggestions, a footer and open/close hooks", () => {
-      const CLAUDE_TARGET: ChatRunSettings = {
-        harnessId: "claude",
-        model: "claude-sonnet-4-6",
-        permissionMode: "supervised",
-        reasoningEffort: "high",
-        serviceTier: null,
-        agentMode: "regular",
-        profileId: "work-profile",
-      };
-
-      function suggestion(
-        overrides: Partial<SuggestionRow> & { readonly id: string },
-      ): SuggestionRow {
-        return {
-          kind: "suggestion",
-          harnessId: "codex",
-          modelId: "gpt-5.5",
-          profileId: null,
-          title: overrides.id,
-          subtitle: null,
-          note: null,
-          usage: { kind: "none" },
-          selectable: true,
-          recommended: false,
-          action: { kind: "retry" },
-          ...overrides,
-        };
-      }
-
-      const CLAUDE_ROW = suggestion({
-        id: "model:claude",
-        title: "Sonnet suggestion",
-        harnessId: "claude",
-        modelId: "claude-sonnet-4-6",
-        profileId: "work-profile",
-        recommended: true,
-        action: { kind: "switch", target: CLAUDE_TARGET },
-      });
-      const RETRY_ROW = suggestion({
-        id: "action:retry",
-        title: "Retry suggestion",
-        action: { kind: "retry" },
-      });
-      const WAIT_ROW = suggestion({
-        id: "action:wait",
-        title: "Wait suggestion",
-        action: { kind: "wait", resetsAt: 1_900_000_000_000 },
-      });
-      const DIMMED_ROW = suggestion({
-        id: "model:dimmed",
-        title: "Dimmed suggestion",
-        harnessId: "claude",
-        modelId: "claude-opus-4-7",
-        selectable: false,
-        note: "Rate limited",
-        action: { kind: "switch", target: CLAUDE_TARGET },
-      });
-      const NO_TARGET_ROW = suggestion({
-        id: "model:no-target",
-        title: "No tuple suggestion",
-        harnessId: "claude",
-        modelId: "claude-opus-4-7",
-        selectable: false,
-        action: { kind: "switch", target: null },
-      });
-
-      interface SuggestionSpies {
-        readonly onStageAction: Mock<(row: SuggestionRow | null) => void>;
-        readonly onHiddenByQuery: Mock<() => void>;
+    describe("with a footer and open/close hooks", () => {
+      interface FooterSpies {
         readonly onOpenChange: Mock<(open: boolean) => void>;
       }
 
-      function spies(): SuggestionSpies {
-        return {
-          onStageAction: vi.fn(),
-          onHiddenByQuery: vi.fn(),
-          onOpenChange: vi.fn(),
-        };
-      }
-
-      function suggestionEmbedding(input: {
-        readonly rows: ReadonlyArray<SuggestionRow>;
-        readonly spies: SuggestionSpies;
-        readonly stagedRowId: string | null;
+      function footerEmbedding(input: {
+        readonly spies: FooterSpies;
         readonly closeRef: RefObject<(() => void) | null> | null;
         readonly footer: ReactNode | null;
-        readonly selectionMarked: boolean;
       }): HarnessModelPickerEmbedding {
         return {
           trigger: <button type="button">Routing face</button>,
           providerSwitchModel: embeddingSwitchModel,
-          selectionMarked: input.selectionMarked,
+          selectionMarked: true,
           openRef: { current: null },
           closeRef: input.closeRef,
           onOpenChange: input.spies.onOpenChange,
-          suggestions: {
-            heading: <div>Suggested heading</div>,
-            rows: input.rows,
-            stagedRowId: input.stagedRowId,
-            onStageAction: input.spies.onStageAction,
-            onHiddenByQuery: input.spies.onHiddenByQuery,
-            reasoningFallback: "model-default",
-          },
           footer: input.footer,
         };
       }
 
-      function renderSuggested(input: {
-        readonly rows: ReadonlyArray<SuggestionRow>;
-        readonly stagedRowId: string | null;
+      function renderFooter(input: {
         readonly closeRef: RefObject<(() => void) | null> | null;
         readonly footer: ReactNode | null;
-        // `false` leaves no row checked, so the first navigable row - the
-        // first suggestion - is where the arrows start.
-        readonly selectionMarked: boolean;
-      }): PickerHarness & { readonly spies: SuggestionSpies } {
-        const spy = spies();
+      }): PickerHarness & { readonly spies: FooterSpies } {
+        const spies: FooterSpies = { onOpenChange: vi.fn() };
         const harness = renderPicker({
-          embedding: suggestionEmbedding({ ...input, spies: spy }),
+          embedding: footerEmbedding({ ...input, spies }),
           storeModels: codexModels(),
           selection: {
             harnessId: "codex",
@@ -5297,7 +5206,7 @@ describe("<HarnessModelPicker />", () => {
             profileId: null,
           },
         });
-        return { ...harness, spies: spy };
+        return { ...harness, spies };
       }
 
       function activeOptionText(input: HTMLInputElement): string {
@@ -5308,320 +5217,47 @@ describe("<HarnessModelPicker />", () => {
         return element.textContent;
       }
 
-      function optionNames(): string[] {
-        return screen
-          .getAllByRole("option")
-          .map((option) => option.textContent);
-      }
-
-      it("puts the heading and the suggestions above the provider's models, and the heading is not an option", async () => {
-        renderSuggested({
-          rows: [CLAUDE_ROW, RETRY_ROW],
-          stagedRowId: null,
-          closeRef: null,
-          footer: null,
-          selectionMarked: true,
-        });
-        await openPickerByTriggerName("Routing face");
-
-        expect(screen.getByText("Suggested heading")).not.toBeNull();
-        const names = optionNames();
-        expect(names[0]).toContain("Sonnet suggestion");
-        expect(names[1]).toContain("Retry suggestion");
-        expect(names[2]).toContain("GPT-5.5");
-        expect(
-          screen
-            .getAllByRole("option")
-            .some((option) => option.textContent === "Suggested heading"),
-        ).toBe(false);
-      });
-
-      it("keeps the suggestions on screen when the rail browses another provider", async () => {
-        renderSuggested({
-          rows: [CLAUDE_ROW, RETRY_ROW],
-          stagedRowId: null,
-          closeRef: null,
-          footer: null,
-          selectionMarked: true,
-        });
-        await openPickerByTriggerName("Routing face");
-        fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
-
-        const names = optionNames();
-        expect(names[0]).toContain("Sonnet suggestion");
-        expect(names[1]).toContain("Retry suggestion");
-        expect(names.some((name) => name.includes("Claude Opus 4.7"))).toBe(
-          true,
-        );
-      });
-
-      it("reaches every suggestion with the arrows, never lands on the heading, and Enter picks the active one", async () => {
-        const { store, spies: spy } = renderSuggested({
-          rows: [CLAUDE_ROW, RETRY_ROW, WAIT_ROW],
-          stagedRowId: null,
-          closeRef: null,
-          footer: null,
-          selectionMarked: false,
-        });
-        const input = await openPickerByTriggerName("Routing face");
-
-        expect(activeOptionText(input)).toContain("Sonnet suggestion");
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-        expect(activeOptionText(input)).toContain("Retry suggestion");
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-        expect(activeOptionText(input)).toContain("Wait suggestion");
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-        expect(activeOptionText(input)).toContain("GPT-5.5");
-        // Back up through the section and stop at its first row: the arrow
-        // never lands on the heading above it.
-        fireEvent.keyDown(input, { key: "ArrowUp" });
-        fireEvent.keyDown(input, { key: "ArrowUp" });
-        fireEvent.keyDown(input, { key: "ArrowUp" });
-        expect(activeOptionText(input)).toContain("Sonnet suggestion");
-        fireEvent.keyDown(input, { key: "ArrowUp" });
-        expect(activeOptionText(input)).toContain("Sonnet suggestion");
-
-        fireEvent.keyDown(input, { key: "End" });
-        expect(activeOptionText(input)).toContain("GPT-4.1");
-        fireEvent.keyDown(input, { key: "Home" });
-        expect(activeOptionText(input)).toContain("Sonnet suggestion");
-
-        fireEvent.keyDown(input, { key: "Enter" });
-        expect(store.getState().selection).toEqual({
-          harnessId: "claude",
-          modelSlug: "claude-sonnet-4-6",
-          profileId: "work-profile",
-        });
-        expect(spy.onStageAction).toHaveBeenLastCalledWith(null);
-      });
-
-      it("Enter on a staged-kind suggestion hands it to the surface and moves no selection", async () => {
-        const { selections, spies: spy } = renderSuggested({
-          rows: [RETRY_ROW, WAIT_ROW],
-          stagedRowId: null,
-          closeRef: null,
-          footer: null,
-          selectionMarked: false,
-        });
-        const input = await openPickerByTriggerName("Routing face");
-        selections.length = 0;
-
-        fireEvent.keyDown(input, { key: "Enter" });
-        expect(spy.onStageAction).toHaveBeenCalledTimes(1);
-        expect(spy.onStageAction).toHaveBeenCalledWith(RETRY_ROW);
-        expect(selections).toEqual([]);
-      });
-
-      it("a cross-provider switch suggestion moves the store's harness, model, account and effort, and the rail follows", async () => {
-        const { store, spies: spy } = renderSuggested({
-          rows: [CLAUDE_ROW, RETRY_ROW],
-          stagedRowId: null,
-          closeRef: null,
-          footer: null,
-          selectionMarked: true,
-        });
-        await openPickerByTriggerName("Routing face");
-        expect(
-          screen
-            .getByRole("tab", { name: "Codex" })
-            .getAttribute("aria-selected"),
-        ).toBe("true");
-
-        fireEvent.click(
-          screen.getByRole("option", { name: /Sonnet suggestion/ }),
-        );
-
-        expect(store.getState().selection).toEqual({
-          harnessId: "claude",
-          modelSlug: "claude-sonnet-4-6",
-          profileId: "work-profile",
-        });
-        expect(store.getState().values.reasoning).toBe("high");
-        expect(
-          screen
-            .getByRole("tab", { name: "Claude" })
-            .getAttribute("aria-selected"),
-        ).toBe("true");
-        expect(spy.onStageAction).toHaveBeenLastCalledWith(null);
-        // The suggestion is the row that reads as chosen, not the catalog row
-        // for the same model.
-        expect(
-          screen
-            .getByRole("option", { name: /Sonnet suggestion/ })
-            .getAttribute("aria-selected"),
-        ).toBe("true");
-      });
-
-      it("a retry or wait suggestion is handed to the surface and touches neither the selection nor the effort", async () => {
-        const {
-          store,
-          selections,
-          reasoningChanges,
-          spies: spy,
-        } = renderSuggested({
-          rows: [CLAUDE_ROW, RETRY_ROW, WAIT_ROW],
-          stagedRowId: null,
-          closeRef: null,
-          footer: null,
-          selectionMarked: true,
-        });
-        await openPickerByTriggerName("Routing face");
-        const before = store.getState().selection;
-        selections.length = 0;
-        reasoningChanges.length = 0;
-
-        fireEvent.click(
-          screen.getByRole("option", { name: /Retry suggestion/ }),
-        );
-        expect(spy.onStageAction).toHaveBeenLastCalledWith(RETRY_ROW);
-        fireEvent.click(
-          screen.getByRole("option", { name: /Wait suggestion/ }),
-        );
-        expect(spy.onStageAction).toHaveBeenLastCalledWith(WAIT_ROW);
-
-        expect(spy.onStageAction).toHaveBeenCalledTimes(2);
-        expect(store.getState().selection).toBe(before);
-        expect(selections).toEqual([]);
-        expect(reasoningChanges).toEqual([]);
-      });
-
-      it("a model row commits and tells the surface nothing is staged any more", async () => {
-        const { store, spies: spy } = renderSuggested({
-          rows: [RETRY_ROW],
-          stagedRowId: RETRY_ROW.id,
-          closeRef: null,
-          footer: null,
-          selectionMarked: true,
-        });
-        await openPickerByTriggerName("Routing face");
-
-        fireEvent.click(screen.getByRole("option", { name: /GPT-4\.1/ }));
-
-        expect(store.getState().selection.modelSlug).toBe("gpt-4.1");
-        expect(spy.onStageAction).toHaveBeenCalledTimes(1);
-        expect(spy.onStageAction).toHaveBeenCalledWith(null);
-      });
-
-      it("a non-selectable suggestion does nothing on click or Enter - no selection, no stage", async () => {
-        const { selections, spies: spy } = renderSuggested({
-          rows: [DIMMED_ROW, NO_TARGET_ROW],
-          stagedRowId: null,
-          closeRef: null,
-          footer: null,
-          selectionMarked: false,
-        });
-        const input = await openPickerByTriggerName("Routing face");
-        selections.length = 0;
-
-        const dimmed = screen.getByRole("option", {
-          name: /Dimmed suggestion/,
-        });
-        expect(dimmed.getAttribute("aria-disabled")).toBe("true");
-        expect(dimmed.textContent).toContain("Rate limited");
-        fireEvent.click(dimmed);
-        fireEvent.click(
-          screen.getByRole("option", { name: /No tuple suggestion/ }),
-        );
-        // The dimmed row is still reachable, and Enter on it is the no-op.
-        expect(activeOptionText(input)).toContain("Dimmed suggestion");
-        fireEvent.keyDown(input, { key: "Enter" });
-
-        expect(selections).toEqual([]);
-        expect(spy.onStageAction).not.toHaveBeenCalled();
-      });
-
-      it("a query hides the section, tells the surface once on the empty-to-non-empty edge, and nothing is checked from it", async () => {
-        const { spies: spy } = renderSuggested({
-          rows: [CLAUDE_ROW, RETRY_ROW],
-          stagedRowId: RETRY_ROW.id,
-          closeRef: null,
-          footer: null,
-          selectionMarked: true,
-        });
-        const input = await openPickerByTriggerName("Routing face");
-        expect(
-          screen
-            .getByRole("option", { name: /Retry suggestion/ })
-            .getAttribute("aria-selected"),
-        ).toBe("true");
-        expect(spy.onHiddenByQuery).not.toHaveBeenCalled();
-
-        fireEvent.change(input, { target: { value: "g" } });
-        expect(spy.onHiddenByQuery).toHaveBeenCalledTimes(1);
-        expect(screen.queryByText("Suggested heading")).toBeNull();
-        expect(
-          screen.queryByRole("option", { name: /Retry suggestion/ }),
-        ).toBeNull();
-        expect(
-          screen.queryByRole("option", { name: /Sonnet suggestion/ }),
-        ).toBeNull();
-        // The staged row's check went with the section: no result is the pick.
-        expect(
-          screen
-            .getAllByRole("option")
-            .filter(
-              (option) => option.getAttribute("aria-selected") === "true",
-            ),
-        ).toEqual([]);
-
-        // Only the edge reports: typing on does not.
-        fireEvent.change(input, { target: { value: "gp" } });
-        expect(spy.onHiddenByQuery).toHaveBeenCalledTimes(1);
-
-        // Clearing brings the section back; the next query is a new edge.
-        fireEvent.change(input, { target: { value: "" } });
-        expect(screen.getByText("Suggested heading")).not.toBeNull();
-        fireEvent.change(input, { target: { value: "gp" } });
-        expect(spy.onHiddenByQuery).toHaveBeenCalledTimes(2);
-      });
-
-      it("renders the footer inside the popover, under the list", async () => {
-        renderSuggested({
-          rows: [RETRY_ROW],
-          stagedRowId: null,
-          closeRef: null,
-          footer: <div>Routing footer</div>,
-          selectionMarked: true,
-        });
+      it("renders the footer inside the popover, under the list, and outside the body that carries the list's height", async () => {
+        renderFooter({ closeRef: null, footer: <div>Routing footer</div> });
         expect(screen.queryByText("Routing footer")).toBeNull();
         await openPickerByTriggerName("Routing face");
 
         const dialog = screen.getByRole("dialog", { name: "Select model" });
-        expect(within(dialog).getByText("Routing footer")).not.toBeNull();
+        const footer = within(dialog).getByText("Routing footer");
+        const slot = footer.closest("[data-picker-embedding-footer]");
+        expect(slot).not.toBeNull();
+        const body = dialog.querySelector(`[class*="${PICKER_BODY_HEIGHT}"]`);
+        expect(body).not.toBeNull();
+        expect(body?.contains(footer)).toBe(false);
+        expect(body?.contains(screen.getByRole("listbox"))).toBe(true);
       });
 
       it("reports every visible open and close - trigger, Escape, an outside press and closeRef - and nothing on mount", async () => {
         const closeRef: RefObject<(() => void) | null> = { current: null };
-        const { spies: spy } = renderSuggested({
-          rows: [RETRY_ROW],
-          stagedRowId: null,
-          closeRef,
-          footer: null,
-          selectionMarked: true,
-        });
-        expect(spy.onOpenChange).not.toHaveBeenCalled();
+        const { spies } = renderFooter({ closeRef, footer: null });
+        expect(spies.onOpenChange).not.toHaveBeenCalled();
         expect(closeRef.current).not.toBeNull();
 
         const input = await openPickerByTriggerName("Routing face");
-        expect(spy.onOpenChange.mock.calls).toEqual([[true]]);
+        expect(spies.onOpenChange.mock.calls).toEqual([[true]]);
 
         fireEvent.keyDown(input, { key: "Escape" });
         await waitFor(() => {
-          expect(spy.onOpenChange.mock.calls).toEqual([[true], [false]]);
+          expect(spies.onOpenChange.mock.calls).toEqual([[true], [false]]);
         });
 
         await openPickerByTriggerName("Routing face");
-        expect(spy.onOpenChange).toHaveBeenLastCalledWith(true);
+        expect(spies.onOpenChange).toHaveBeenLastCalledWith(true);
         act(() => {
           closeRef.current?.();
         });
         await waitFor(() => {
-          expect(spy.onOpenChange).toHaveBeenLastCalledWith(false);
+          expect(spies.onOpenChange).toHaveBeenLastCalledWith(false);
         });
-        expect(spy.onOpenChange).toHaveBeenCalledTimes(4);
+        expect(spies.onOpenChange).toHaveBeenCalledTimes(4);
 
         await openPickerByTriggerName("Routing face");
-        expect(spy.onOpenChange).toHaveBeenCalledTimes(5);
+        expect(spies.onOpenChange).toHaveBeenCalledTimes(5);
         // Radix arms its outside-press listener a tick after mounting.
         await act(async () => {
           await new Promise((resolve) => setTimeout(resolve, 20));
@@ -5632,20 +5268,14 @@ describe("<HarnessModelPicker />", () => {
         fireEvent.mouseDown(outside);
         fireEvent.click(outside);
         await waitFor(() => {
-          expect(spy.onOpenChange).toHaveBeenCalledTimes(6);
+          expect(spies.onOpenChange).toHaveBeenCalledTimes(6);
         });
-        expect(spy.onOpenChange).toHaveBeenLastCalledWith(false);
+        expect(spies.onOpenChange).toHaveBeenLastCalledWith(false);
         outside.remove();
       });
 
       it("reports a close once when it unmounts while open, and nothing when it unmounts closed", async () => {
-        const opened = renderSuggested({
-          rows: [CLAUDE_ROW],
-          stagedRowId: null,
-          closeRef: null,
-          footer: null,
-          selectionMarked: true,
-        });
+        const opened = renderFooter({ closeRef: null, footer: null });
         await openPickerByTriggerName("Routing face");
         expect(opened.spies.onOpenChange.mock.calls).toEqual([[true]]);
         opened.spies.onOpenChange.mockClear();
@@ -5654,13 +5284,7 @@ describe("<HarnessModelPicker />", () => {
 
         expect(opened.spies.onOpenChange.mock.calls).toEqual([[false]]);
 
-        const closed = renderSuggested({
-          rows: [CLAUDE_ROW],
-          stagedRowId: null,
-          closeRef: null,
-          footer: null,
-          selectionMarked: true,
-        });
+        const closed = renderFooter({ closeRef: null, footer: null });
         cleanup();
 
         expect(closed.spies.onOpenChange).not.toHaveBeenCalled();
@@ -5668,16 +5292,9 @@ describe("<HarnessModelPicker />", () => {
 
       it("clears closeRef on unmount", () => {
         const closeRef: RefObject<(() => void) | null> = { current: null };
-        const spy = spies();
+        const spies: FooterSpies = { onOpenChange: vi.fn() };
         const harness = pickerHarness({
-          embedding: suggestionEmbedding({
-            rows: [],
-            spies: spy,
-            stagedRowId: null,
-            closeRef,
-            footer: null,
-            selectionMarked: true,
-          }),
+          embedding: footerEmbedding({ spies, closeRef, footer: null }),
         });
         const { unmount } = render(harness.element(false, undefined));
         expect(closeRef.current).not.toBeNull();
@@ -5685,29 +5302,22 @@ describe("<HarnessModelPicker />", () => {
         expect(closeRef.current).toBeNull();
       });
 
-      it("Enter on a focused footer button is the button's own activation: the spy fires once, and the list's active row is neither picked nor staged", async () => {
+      it("Enter on a focused footer button is the button's own activation: the spy fires once, and the list's active row is not picked", async () => {
         const onFooterAction = vi.fn();
-        const {
-          store,
-          selections,
-          spies: spy,
-        } = renderSuggested({
-          rows: [CLAUDE_ROW, RETRY_ROW],
-          stagedRowId: null,
+        const { store, selections } = renderFooter({
           closeRef: null,
           footer: (
             <button type="button" onClick={onFooterAction}>
               Footer action
             </button>
           ),
-          selectionMarked: false,
         });
         const input = await openPickerByTriggerName("Routing face");
         const before = store.getState().selection;
-        // The active row is the Retry suggestion, so a list handler that saw
-        // this Enter would stage it.
+        // Walk the active row off the marked one, so a list handler that saw
+        // this Enter would pick something visible.
         fireEvent.keyDown(input, { key: "ArrowDown" });
-        expect(activeOptionText(input)).toContain("Retry suggestion");
+        expect(activeOptionText(input)).toContain("GPT-4.1");
 
         act(() => {
           screen.getByRole("button", { name: "Footer action" }).focus();
@@ -5715,141 +5325,69 @@ describe("<HarnessModelPicker />", () => {
         await userEvent.keyboard("{Enter}");
 
         expect(onFooterAction).toHaveBeenCalledTimes(1);
-        expect(spy.onStageAction).not.toHaveBeenCalled();
         expect(selections).toEqual([]);
         expect(store.getState().selection).toEqual(before);
       });
 
-      describe("the check mark follows the effort", () => {
-        function codexTarget(effort: string): ChatRunSettings {
-          return {
-            harnessId: "codex",
-            model: "gpt-5.5",
-            permissionMode: "supervised",
-            reasoningEffort: effort,
-            serviceTier: null,
-            agentMode: "regular",
-            profileId: null,
-          };
+      // jsdom does no layout and Virtuoso is mocked, so the height tests below
+      // are STRUCTURAL proofs: which element carries the height class, and what
+      // sits inside it. Whether the box then measures 23rem is the browser's.
+      describe("the popover's height", () => {
+        /** The element that carries the list's height: the popover itself in the composer, the body wrapper in an embedding. */
+        function heightBox(dialog: HTMLElement): HTMLElement {
+          if (dialog.className.includes(PICKER_BODY_HEIGHT)) return dialog;
+          const box = dialog.querySelector(`[class*="${PICKER_BODY_HEIGHT}"]`);
+          if (!(box instanceof HTMLElement)) {
+            throw new Error("no element carries the picker's height class");
+          }
+          return box;
         }
-        const HIGH_ROW = suggestion({
-          id: "model:high",
-          title: "High effort row",
-          action: { kind: "switch", target: codexTarget("high") },
+
+        it("the composer's popover carries the height class itself and has no embedding footer", async () => {
+          renderPicker({});
+          await openPicker();
+
+          const dialog = screen.getByRole("dialog", { name: "Select model" });
+          expect(dialog.className).toContain(PICKER_BODY_HEIGHT);
+          expect(
+            dialog.querySelector("[data-picker-embedding-footer]"),
+          ).toBeNull();
         });
-        const LOW_ROW = suggestion({
-          id: "model:low",
-          title: "Low effort row",
-          action: { kind: "switch", target: codexTarget("low") },
-        });
 
-        function renderEfforts() {
-          const spy = spies();
-          const harness = renderPicker({
-            embedding: suggestionEmbedding({
-              rows: [HIGH_ROW, LOW_ROW],
-              spies: spy,
-              stagedRowId: null,
-              closeRef: null,
-              footer: null,
-              selectionMarked: true,
-            }),
-            storeModels: [
-              model({
-                slug: "gpt-5.5",
-                label: "GPT-5.5",
-                supportedReasoningEfforts: [
-                  { id: "low", label: "Low", description: null },
-                  { id: "medium", label: "Medium", description: null },
-                  { id: "high", label: "High", description: null },
-                ],
-              }),
-            ],
-            selection: {
-              harnessId: "codex",
-              modelSlug: "gpt-5.5",
-              profileId: null,
-            },
-          });
-          return harness;
-        }
+        it("an embedding with a footer keeps the composer's list box: same option count, same height class on the list's ancestor, same width, and the popover itself only capped", async () => {
+          renderPicker({});
+          await openPicker();
+          const composer = screen.getByRole("dialog", { name: "Select model" });
+          const composerOptions = screen.getAllByRole("option").length;
+          const composerBox = heightBox(composer);
+          expect(composerBox.contains(screen.getByRole("listbox"))).toBe(true);
+          const composerWidth = WIDTH_CLASS.exec(composer.className)?.[0];
+          const composerHeightClass = composerBox.className
+            .split(" ")
+            .find((token) => token.startsWith("h-[min("));
+          cleanup();
 
-        function checked(title: string): string | null {
-          return screen
-            .getByRole("option", { name: new RegExp(title) })
-            .getAttribute("aria-selected");
-        }
-
-        it("checks a row whose target effort is the catalog model's DEFAULT when a plain click on that model resolves to it, reached by clicks only", async () => {
-          const spy = spies();
-          const row = suggestion({
-            id: "model:default-effort",
-            title: "Default effort row",
-            action: { kind: "switch", target: codexTarget("medium") },
-          });
-          renderPicker({
-            embedding: suggestionEmbedding({
-              rows: [row],
-              spies: spy,
-              stagedRowId: null,
-              closeRef: null,
-              footer: null,
-              selectionMarked: true,
-            }),
-            storeModels: [
-              model({
-                slug: "gpt-5.5",
-                label: "GPT-5.5",
-                defaultReasoningEffort: "medium",
-                supportedReasoningEfforts: [
-                  { id: "low", label: "Low", description: null },
-                  { id: "medium", label: "Medium", description: null },
-                  { id: "high", label: "High", description: null },
-                ],
-              }),
-              model({ slug: "gpt-4.1", label: "GPT-4.1" }),
-            ],
-            selection: {
-              harnessId: "codex",
-              modelSlug: "gpt-4.1",
-              profileId: null,
-            },
-          });
+          renderFooter({ closeRef: null, footer: <div>Routing footer</div> });
           await openPickerByTriggerName("Routing face");
-          expect(checked("Default effort row")).toBe("false");
+          const embedded = screen.getByRole("dialog", { name: "Select model" });
+          const embeddedBox = heightBox(embedded);
 
-          // A PLAIN catalog click: no effort of its own, so the store resolves
-          // the model's default - the row's explicit effort.
-          const plain = screen
-            .getAllByRole("option", { name: /GPT-5\.5/ })
-            .filter((option) => !option.hasAttribute("data-suggestion-action"));
-          expect(plain).toHaveLength(1);
-          fireEvent.click(plain[0]);
-
-          expect(checked("Default effort row")).toBe("true");
-        });
-
-        it("checks only the row whose target effort is the store's, and no row once the effort is a third level", async () => {
-          const { store } = renderEfforts();
-          act(() => {
-            store.getState().setReasoning("low");
-          });
-          await openPickerByTriggerName("Routing face");
-
-          expect(checked("Low effort row")).toBe("true");
-          expect(checked("High effort row")).toBe("false");
-
-          act(() => {
-            store.getState().setReasoning("high");
-          });
-          expect(checked("High effort row")).toBe("true");
-          expect(checked("Low effort row")).toBe("false");
-
-          act(() => {
-            store.getState().setReasoning("medium");
-          });
-          expect(checked("High effort row")).toBe("false");
-          expect(checked("Low effort row")).toBe("false");
+          expect(screen.getAllByRole("option")).toHaveLength(composerOptions);
+          expect(embeddedBox.contains(screen.getByRole("listbox"))).toBe(true);
+          expect(
+            embeddedBox.className
+              .split(" ")
+              .find((t) => t.startsWith("h-[min(")),
+          ).toBe(composerHeightClass);
+          expect(WIDTH_CLASS.exec(embedded.className)?.[0]).toBe(composerWidth);
+          // The popover carries only the cap, never the body's fixed height.
+          expect(embedded.className).not.toContain(PICKER_BODY_HEIGHT);
+          expect(embedded.className).toContain(
+            "max-h-[var(--radix-popover-content-available-height)]",
+          );
+          expect(
+            embeddedBox.contains(within(embedded).getByText("Routing footer")),
+          ).toBe(false);
         });
       });
     });

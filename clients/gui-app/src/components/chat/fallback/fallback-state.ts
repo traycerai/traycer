@@ -3,7 +3,19 @@ import type {
   PendingFallback,
   PendingReturn,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import { pendingFallbackResumesFailedTuple } from "./fallback-identity";
+import {
+  DONT_SWITCH_LABEL,
+  DONT_WAIT_LABEL,
+  SIGN_IN_INSTEAD_LABEL,
+  STOP_WAITING_LABEL,
+  queuedMovingClause,
+  queuedWaitingClause,
+  siblingSwitchingClause,
+} from "./fallback-copy";
+import {
+  pendingFallbackOffersSignIn,
+  pendingFallbackResumesFailedTuple,
+} from "./fallback-identity";
 
 /**
  * A chat's provider-fallback surface state, as the tile hands it down.
@@ -114,6 +126,68 @@ export function routingCountdownPlan(
       return destination === null
         ? { kind: "deciding" }
         : { kind: "switch", destination };
+  }
+}
+
+/**
+ * The countdown's COUNT clauses that are true for this plan - "2 queued
+ * messages move with it", "1 other chat in this task is also switching" - and
+ * nothing else. The card joins them into its cost line and the announcer speaks
+ * them as sentences, from this one list, so neither can state a count the other
+ * does not.
+ *
+ * A wait's queue waits rather than moves, and a resume, a plan still being
+ * decided and a plan with nothing to take move no queue at all.
+ */
+export function routingCountdownCountClauses(
+  pending: PendingFallback,
+  plan: RoutingCountdownPlan,
+): ReadonlyArray<string> {
+  let queued: string | null;
+  switch (plan.kind) {
+    case "switch":
+      queued = queuedMovingClause(pending.queuedItemsMoving);
+      break;
+    case "wait":
+      queued = queuedWaitingClause(pending.queuedItemsMoving);
+      break;
+    case "resume":
+    case "deciding":
+    case "nothing":
+      queued = null;
+      break;
+  }
+  return [queued, siblingSwitchingClause(pending.siblingSwitching)].filter(
+    (clause): clause is string => clause !== null,
+  );
+}
+
+/**
+ * The countdown's refusal, as its button is labelled - for the card that draws
+ * it and the announcer that names it, so the name a screen reader is told to
+ * select is the button that is there.
+ *
+ * A signed-out traversal with somewhere to sign in refuses by signing in.
+ * Otherwise the refusal names what it refuses - "Don't wait" over a wait - and
+ * it is never "Cancel": each keeps the error and leaves the queue paused.
+ */
+export function countdownRefusalLabel(
+  pending: PendingFallback,
+  plan: RoutingCountdownPlan,
+): string {
+  if (pendingFallbackOffersSignIn(pending)) return SIGN_IN_INSTEAD_LABEL;
+  switch (plan.kind) {
+    case "wait":
+      return DONT_WAIT_LABEL;
+    // A resume is the wait finishing onto the tuple that failed: nothing is
+    // switched, and refusing it stops the wait. "Don't switch" here sat under
+    // "Resuming now…" (seen live).
+    case "resume":
+      return STOP_WAITING_LABEL;
+    case "switch":
+    case "deciding":
+    case "nothing":
+      return DONT_SWITCH_LABEL;
   }
 }
 

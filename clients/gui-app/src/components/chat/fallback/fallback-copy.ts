@@ -1,14 +1,10 @@
 import {
   fallbackRungRefusalKindSchema,
-  type ChatFallbackListTargetsResponse,
   type FallbackActionOutcome,
   type FallbackRungRefusalDetail,
   type FallbackRungRefusalKind,
 } from "@traycer/protocol/host/chat-fallback";
-import type {
-  FallbackSwitchDisposition,
-  FallbackWaitDisposition,
-} from "@traycer/protocol/host/agent/gui/subscribe";
+import type { FallbackWaitDisposition } from "@traycer/protocol/host/agent/gui/subscribe";
 import { FALLBACK_REASON_LABELS } from "@traycer/protocol/host/notifications/presentation";
 import { limitedFamilyQualifier } from "@/lib/rate-limits/rate-limit-copy";
 import type { ProfileRateLimitSeverity } from "@/lib/rate-limits/rate-limit-scope-match";
@@ -65,16 +61,15 @@ export const DONT_WAIT_LABEL = "Don't wait";
 /** "Stop waiting" - the waiting card's and the background row's refusal. */
 export const STOP_WAITING_LABEL = "Stop waiting";
 /**
- * The countdown card's productive action, one per plan: end the countdown now
- * and let the step the host planned run (`chat.fallback.proceed`). Two, not
- * three: a countdown never plans a retry (the transient series arms straight
- * into `retrying`, with no window to end early).
+ * The countdown card's productive action on a switch plan: end the countdown
+ * now and let the switch run (`chat.fallback.proceed`). A wait plan has no such
+ * button - the countdown flows into waiting on its own - and a countdown never
+ * plans a retry (the transient series arms straight into `retrying`).
  */
 export const SWITCH_NOW_LABEL = "Switch now";
-export const WAIT_NOW_LABEL = "Wait now";
 /**
- * The picker's entry where there is no destination chip to click: beside the
- * tuple on a wait plan, and as the waiting card's filled button.
+ * The picker's entry where there is no destination chip to click: the filled
+ * button on a wait-plan countdown and on the waiting card.
  */
 export const CHOOSE_ANOTHER_MODEL_LABEL = "Choose another model…";
 /**
@@ -86,9 +81,11 @@ export const CHOOSE_ANOTHER_MODEL_LABEL = "Choose another model…";
  */
 export const SWITCH_LABEL = "Switch to…";
 export const SIGN_IN_INSTEAD_LABEL = "Sign in instead";
-/** The return card's three answers, in the order the card draws them. */
+/**
+ * The return card's filled answer. Its other answer is "Stay on {account}",
+ * built where the account name is known.
+ */
 export const SWITCH_BACK_LABEL = "Switch back";
-export const DONT_ASK_FOR_CHAT_LABEL = "Don't ask for this chat";
 /**
  * Beside a disabled action row while the chat stream is down (or this reader
  * cannot steer the chat). Without it the greyed buttons read as broken.
@@ -96,29 +93,10 @@ export const DONT_ASK_FOR_CHAT_LABEL = "Don't ask for this chat";
 export const RECONNECTING_LABEL = "Reconnecting…";
 /** Beside the countdown card's disabled row while the host resolves its plan. */
 export const DECIDING_LABEL = "Deciding…";
-/**
- * The routing card's hide control, as its tooltip says it. Hiding cancels
- * nothing - the countdown or the wait runs on - which is the one thing a user
- * might fear a × does here.
- */
-export const HIDE_ROUTING_CARD_LABEL = "Hide. Routing continues.";
 /** The gear's accessible name: what the icon opens. */
 export const ROUTING_SETTINGS_LABEL = "Model routing settings";
-/** The waiting card's pill: a wait moves nothing. */
-export const SAME_SESSION_LABEL = "same settings, same session";
-/**
- * The settings entry on surfaces that still carry one as a labelled button -
- * the divider notices' expanded details and the resumed-turn marker. Routing
- * cards carry a gear instead ({@link ROUTING_SETTINGS_LABEL}).
- *
- * "Model routing", not "Fallback settings": "fallback" named a mechanism, and
- * the feature is a routing table the user authors.
- */
-export const FALLBACK_SETTINGS_LABEL = "Model routing";
 /** The settled card's receipt when routing ran no step at all. */
 export const NOTHING_COULD_BE_TRIED_LABEL = "Nothing could be tried";
-/** The settled card's disclosure over the host's raw detail rows. */
-export const BUG_REPORT_DETAILS_LABEL = "Details for a bug report";
 /**
  * The Message Queue panel's paused pill when the host paused it because a turn
  * failed (`queue.pausedReason` `turn_error` / `routing`), and its tooltip.
@@ -126,13 +104,6 @@ export const BUG_REPORT_DETAILS_LABEL = "Details for a bug report";
 export const QUEUE_PAUSED_AFTER_ERROR_LABEL = "Paused after an error";
 export const QUEUE_PAUSED_AFTER_ERROR_TOOLTIP =
   "Held because the last turn failed. Retry or switch sends it after; Resume sends it now.";
-
-/**
- * "New session from this transcript" - the cost line's own form of
- * {@link FRESH_SESSION_HELPER}, one clause among others on a line joined with
- * " · " rather than a sentence of its own.
- */
-export const NEW_SESSION_CLAUSE = "New session from this transcript";
 
 /**
  * What a switch costs, stated on every surface that offers one.
@@ -143,70 +114,6 @@ export const NEW_SESSION_CLAUSE = "New session from this transcript";
  */
 export const FRESH_SESSION_HELPER =
   "Starts a fresh session from this transcript.";
-
-/**
- * "N queued messages will run on the new settings too."
- *
- * Hidden at zero rather than rendered as "0 queued messages", which reads as a
- * problem. The count is the DTO's `queuedItemsMoving`, which is the same
- * derivation the settle's own notice uses - so the card cannot promise to move
- * a different number than the host reports afterwards.
- */
-export function queuedMessagesMovingText(count: number): string | null {
-  if (count <= 0) return null;
-  return count === 1
-    ? "1 queued message will run on the new settings too."
-    : `${count} queued messages will run on the new settings too.`;
-}
-
-/**
- * What picking a destination actually DOES, said before any row is clicked.
- *
- * The grace card states this above its menu because the card itself carries
- * {@link FRESH_SESSION_HELPER}; the error card and the waiting card had no
- * equivalent anywhere, and their trigger is a bare "Switch…" / "Switch
- * instead…" - which reads perfectly well as changing a setting for the NEXT
- * message. It is not: the pick replays the failed message immediately, in a
- * new provider session, and takes the queue with it. Three consequences the
- * user was finding out about afterwards.
- *
- * `queuedItemsMoving` is `null` where no count exists - the error card acts on
- * a failed ATTEMPT and its DTO carries no queue figure - and the copy then
- * says the true thing without a number rather than guessing one or staying
- * silent about the queue entirely.
- */
-export function switchConsequencesText(
-  queuedItemsMoving: number | null,
-): string {
-  const queued =
-    queuedItemsMoving === null
-      ? "Any queued messages move with it."
-      : queuedMessagesMovingText(queuedItemsMoving);
-  const replay = `Replays this message on the destination you pick. ${FRESH_SESSION_HELPER}`;
-  return queued === null ? replay : `${replay} ${queued}`;
-}
-
-/**
- * "and moves N queued messages back".
- *
- * A clause rather than a sentence: the announcer states the return's whole
- * consequence in one line ("Applies to your next message and moves 2 queued
- * messages back"), because switching back moving the queue too is the one
- * rule that copy has to carry. Leaving the queue on the previous account while
- * the next fresh send routes to the preferred one would interleave two
- * providers in one chat with nobody told.
- *
- * The queue helpers say deliberately DIFFERENT things and must not converge: a
- * wait moves nothing, a switch moves messages forward onto new settings, and a
- * return moves them back (see {@link queuedWaitingClause} and its siblings for
- * the cards' forms). Hidden at zero.
- */
-export function queuedMessagesReturningText(count: number): string | null {
-  if (count <= 0) return null;
-  return count === 1
-    ? " and moves 1 queued message back"
-    : ` and moves ${count} queued messages back`;
-}
 
 /**
  * "work-account is running low on Fable usage" - the advisory clause the return
@@ -262,10 +169,16 @@ export function siblingSwitchingClause(count: number): string | null {
  * others by " · " on one line that appears only when one of them is true -
  * never a row of sentences stacked under the buttons.
  *
- * The three queue clauses say deliberately different things, for the reason
- * {@link queuedMessagesReturningText} gives: a switch moves the queue forward
- * onto new settings, a wait moves nothing, a return moves it back. Hidden at
- * zero, like their sentence siblings.
+ * The three queue clauses say deliberately different things and must not
+ * converge: a switch moves the queue forward onto new settings, a wait moves
+ * nothing, a return moves it back - and switching back moving the queue too is
+ * the one rule that copy has to carry, since a queue left on the previous
+ * account while the next send routes to the preferred one would interleave two
+ * providers in one chat with nobody told. Hidden at zero rather than "0 queued
+ * messages", which reads as a problem. The count is the DTO's
+ * `queuedItemsMoving`, the settle notice's own derivation, so a card cannot
+ * promise to move a different number than the host reports afterwards. The
+ * announcer speaks these same clauses as sentences.
  */
 export function queuedMovingClause(count: number): string | null {
   if (count <= 0) return null;
@@ -288,11 +201,6 @@ export function queuedReturningClause(count: number): string | null {
     : `moves ${count} queued messages back`;
 }
 
-/** The countdown card's pointer at its picker, while the picker can open. */
-export const CHANGE_DESTINATION_CLAUSE = "click the destination to change it";
-/** The return card's timing: a switch-back takes effect on the next send. */
-export const APPLIES_TO_NEXT_MESSAGE_CLAUSE = "Applies to your next message";
-
 /** The clauses that are true, as one line - or `null` when none is. */
 export function joinCostClauses(
   clauses: ReadonlyArray<string | null>,
@@ -301,16 +209,6 @@ export function joinCostClauses(
   return present.length === 0 ? null : present.join(" · ");
 }
 
-/**
- * The countdown chooser between the click and the host's answer.
- *
- * Said while `fallback.holdForChoice` is in flight, and it is deliberately in
- * the PRESENT progressive: the countdown is still running until the host says
- * otherwise. Claiming "countdown paused" here would be the client asserting a
- * hold the engine has not granted - the same optimism the card's `choosing`
- * headline already refuses.
- */
-export const PAUSING_COUNTDOWN_LABEL = "Pausing the countdown…";
 /**
  * The hold the host declined - the chooser says so.
  *
@@ -348,20 +246,33 @@ export const HOST_UNREACHABLE_LABEL =
 const CHAT_MOVED_ON_LABEL = "This chat has moved on since that message.";
 
 /**
- * Why the failed attempt is offering no wait, or `null` when it is.
+ * The answer to a pressed Wait the host refused because the provider never
+ * reported a reset (`no_verified_reset`). The answer to a press ONLY - never a
+ * standing line on the card; see {@link describeWaitDisposition}.
+ */
+const NO_VERIFIED_RESET_TEXT =
+  "The provider hasn't said when this limit resets, so there's nothing to wait for.";
+
+/**
+ * The failed-turn card's standing line about the missing Wait button, or
+ * `null` - which is every disposition but `beyond_cap` (clutter cuts,
+ * 2026-09-27).
  *
- * Every branch renders a HOST-ESTABLISHED fact. This is the whole point of the
- * disposition existing: before it, the only thing a card could reason from was
- * `failure.resetsAt`, which is PRESENT for a boundary beyond the user's cap and
- * ABSENT for one the host never verified - so the two states a user can
- * actually act on (raise the cap; wait for the provider to report a boundary)
- * looked identical, and the state where a wait is impossible looked like the
- * state where it is merely far away.
+ * `beyond_cap` is the one line worth standing: the boundary is KNOWN, the
+ * user set the cap that excludes it, and the sentence says so. Every other
+ * disposition is silent here. `no_verified_reset` in particular used to stand
+ * under the settled card's receipt, where a step reading "Waited until 3:45 am
+ * for Surya 2" sat directly above "The provider hasn't said when this limit
+ * resets" - the card contradicting itself. That sentence now answers a pressed
+ * Wait the host refused (`refusalKindText`), and nothing else.
  *
- * `resetsAt` is the failure payload's, read WITHOUT a cap, and it is named only
- * under `beyond_cap` - the one disposition where the boundary is known. The cap
- * itself never reaches the client, so the copy points at Settings instead of
- * quoting a number it does not have.
+ * Every branch still reads a HOST-ESTABLISHED disposition, never the failure
+ * payload: `failure.resetsAt` is PRESENT for a boundary beyond the user's cap
+ * and ABSENT for one the host never verified, so it cannot tell the two
+ * apart. `resetsAt` is named only under `beyond_cap` - the one disposition
+ * where the boundary is known - read WITHOUT a cap. The cap itself never
+ * reaches the client, so the copy names the setting instead of quoting a
+ * number it does not have.
  *
  * Exhaustive with no `default`, so a new disposition is a compile error rather
  * than a silently unexplained card.
@@ -377,9 +288,15 @@ export function describeWaitDisposition(
       // own controls.
       return null;
     case "checking":
-      return "Checking when this limit resets…";
+      // SILENT (clutter cuts, 2026-09-27): nothing is said until the reset is
+      // known, and then the Wait button itself appears. A line announcing a
+      // check the user cannot act on was a sentence about the card's own
+      // plumbing.
+      return null;
     case "no_verified_reset":
-      return "The provider hasn't said when this limit resets, so there's nothing to wait for.";
+      // SILENT as a standing line: see the doc above. The sentence is
+      // `NO_VERIFIED_RESET_TEXT`, said only when a Wait press is refused.
+      return null;
     case "beyond_cap":
       // Names the SETTING, not just the verdict. "Later than your longest wait
       // allows" states a fact about a number the user cannot see from here and
@@ -399,14 +316,9 @@ export function describeWaitDisposition(
       // no eulogy; what they have is Retry and Switch, and the card now leads
       // with those.
       //
-      // This does NOT weaken F6's rule that a vanished control must be
-      // explained. F6 is about a control the user could reasonably expect: the
-      // three dispositions above all describe a wait that is genuinely on the
-      // table and merely blocked - by a check still running, by a provider that
-      // has not published a boundary, or by a cap the user themselves set and
-      // can raise. Each of those names something to do or something to wait
-      // for. This one names neither, and is the only arm where the honest copy
-      // is none.
+      // `beyond_cap` is the one standing line left: it describes a wait that
+      // is genuinely on the table and blocked only by a cap the user set and
+      // can raise. This one names nothing to do and nothing to wait for.
       return null;
   }
 }
@@ -414,12 +326,10 @@ export function describeWaitDisposition(
 /**
  * "No other model is set up for Claude Code · default".
  *
- * The ONE sentence for "this chat has nowhere to switch to", rendered on both
- * surfaces that have to say it: the error card, where it explains a missing
- * "Switch…" button, and the destination menu's empty state, where it explains
- * an empty list. One function because they are explaining one host verdict, and
- * a card and the menu it opens disagreeing about why would be worse than either
- * of them saying nothing.
+ * The Model routing settings page's note under a model with no routing
+ * destination. The failed-turn card no longer says it (clutter cuts,
+ * 2026-09-27): "Switch to…" opens the full composer picker, which always has
+ * somewhere to go, so there is no missing button left to explain there.
  *
  * NAMES THE CHAT, which is the whole difference from a generic line. "No
  * destinations available" tells a user nothing they cannot already see; naming
@@ -435,78 +345,6 @@ export function describeWaitDisposition(
  */
 export function noSwitchDestinationText(providerModelLabel: string): string {
   return `No other model is set up for ${providerModelLabel}`;
-}
-
-/**
- * Why the failed attempt is offering no switch, or `null` when it is.
- *
- * The counterpart to {@link describeWaitDisposition} and held to the same rule:
- * every branch renders a HOST-ESTABLISHED fact, and the client infers none of
- * them. It cannot - the question is whether this user's fallback policy and
- * accounts name any other destination for the model that failed, and a renderer
- * holds neither.
- *
- * `null` under `unknown` as well as under `eligible`, and the two share it for
- * one reason: the button is present in both. `unknown` means the host could not
- * check, so the control is offered and nothing is claimed - a sentence there
- * would be the card narrating a doubt at a user who has a working button in
- * front of them.
- *
- * `providerModelLabel` is `null` when the failed attempt's tuple did not reach
- * this client, and the sentence is then omitted rather than rendered
- * subject-less. That absence travels WITH `unknown` on the same frame (both
- * come from a missing replay envelope), so the null arm is belt-and-braces
- * rather than a state the card meets.
- *
- * Exhaustive with no `default`, so a new disposition is a compile error here
- * rather than a silently unexplained card.
- */
-export function describeSwitchDisposition(
-  disposition: FallbackSwitchDisposition,
-  providerModelLabel: string | null,
-): string | null {
-  switch (disposition) {
-    case "eligible":
-    case "unknown":
-      return null;
-    case "no_destination":
-      return providerModelLabel === null
-        ? null
-        : noSwitchDestinationText(providerModelLabel);
-  }
-}
-
-/**
- * What to say when `chat.fallback.listTargets` answered anything but `listed`.
- *
- * Every arm is a NORMAL outcome in a successful response with empty lists -
- * the method never throws on a moved-on world - so these are facts about the
- * chat rather than failures of the menu. `null` for `listed`: the rows are the
- * answer.
- *
- * Exhaustive with no `default`, so a new outcome is a compile error here rather
- * than an empty popover.
- */
-export function describeListTargetsOutcome(
-  outcome: ChatFallbackListTargetsResponse["outcome"],
-): string | null {
-  switch (outcome) {
-    case "listed":
-      return null;
-    case "no_active_traversal":
-      return "That's already been decided for this chat.";
-    case "traversal_advanced":
-      return "This chat already resumed.";
-    case "attempt_not_latest":
-      // The transcript moved under an open menu - a later turn ran, so the
-      // failure this menu was opened from is no longer the one to act on.
-      return CHAT_MOVED_ON_LABEL;
-    case "state_unreadable":
-      // Deliberately does not speculate. The host could not read the state it
-      // would have listed from, and naming a cause would be a guess presented
-      // as a reason.
-      return "Couldn't read this chat's state just now.";
-  }
 }
 
 /**
@@ -553,9 +391,7 @@ export function describeFallbackOutcome(
       return "That action isn't available right now.";
     case "attempt_not_latest":
       // The ONE outcome that proves the chat advanced, and the only one
-      // allowed to say so. Deliberately the same sentence
-      // `describeListTargetsOutcome` gives the identically-named outcome: one
-      // fact, one wording, across the two switches this file holds.
+      // allowed to say so.
       return CHAT_MOVED_ON_LABEL;
     case "rung_target_unavailable":
       // "right now", never "any more". The chat did NOT move and the attempt
@@ -659,7 +495,7 @@ function refusalKindText(
     case "reset_passed":
       return "That limit has reset. Retry instead.";
     case "no_verified_reset":
-      return describeWaitDisposition("no_verified_reset", null);
+      return NO_VERIFIED_RESET_TEXT;
     case "host_unavailable":
       return "This chat's host is restarting. Try again in a moment.";
     case "settings_missing":
@@ -771,43 +607,14 @@ export function describeManualRungRefusal(input: {
 }
 
 /**
- * The routing chooser's switch consequence, split around the destination so
- * the footer can set it apart. Read in order and joined with single spaces:
- * "Replays this message on | Fable · high on Surya | in a new session from
- * this transcript. 1 queued message moves with it."
+ * The routing chooser's one footer line, beside its Switch: where Switch
+ * replays the message, as the picked model and account and nothing more -
+ * "Replays on Sonnet 5 · Surya in a new session". The picker above it already
+ * shows the provider and the effort.
  */
-export interface SwitchDestinationConsequenceCopy {
-  readonly lead: string;
-  readonly destination: string;
-  readonly trail: string;
-}
-
-/**
- * What a switch to one named destination does - Flow 3's footer.
- *
- * {@link switchConsequencesText} names no destination ("the destination you
- * pick"); the chooser rewrites this one with every selection change, so it is
- * the confirm's own tuple read back. The queue clause says the same thing that
- * one does: "Any queued messages" where the host gives no count, nothing at
- * zero.
- */
-export function switchDestinationConsequence(
-  destination: string,
-  queuedItemsMoving: number | null,
-): SwitchDestinationConsequenceCopy {
-  const replay = "in a new session from this transcript.";
-  const queued = queuedMovesWithItText(queuedItemsMoving);
-  return {
-    lead: "Replays this message on",
-    destination,
-    trail: queued === null ? replay : `${replay} ${queued}`,
-  };
-}
-
-function queuedMovesWithItText(count: number | null): string | null {
-  if (count === null) return "Any queued messages move with it.";
-  if (count <= 0) return null;
-  return count === 1
-    ? "1 queued message moves with it."
-    : `${count} queued messages move with it.`;
+export function routingSwitchLine(
+  modelLabel: string,
+  accountLabel: string,
+): string {
+  return `Replays on ${modelLabel} · ${accountLabel} in a new session`;
 }

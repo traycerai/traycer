@@ -206,10 +206,11 @@ export interface ProviderNoticeSegment {
   kind: "provider_notice";
   status: "streaming" | "completed" | "errored";
   // WHICH notice this is, carried straight off the block's `providerNotice`.
-  // Dropped here until the provider-fallback surfaces needed it: the three
-  // fallback arms render differently from the harness ones - a settings link in
-  // their details, and the resumed-turn marker for `fallback_wait_resumed` -
-  // and none of that can be inferred from a tone and a title.
+  // Dropped here until the provider-fallback surfaces needed it: the fallback
+  // arms render differently from the harness ones - `fallback_applied` prints
+  // its title without its message, a receipt-carrying `fallback_settled` is
+  // absorbed into the settled card, and the live announcer speaks only the
+  // fallback kinds - and none of that can be inferred from a tone and a title.
   noticeKind: ProviderNoticeKind;
   /** Local display choice for a transient Codex retry; never persisted. */
   presentation?: "retry";

@@ -14,6 +14,7 @@ import {
   RoutingSettledCard,
   type RoutingSettledNotice,
 } from "@/components/chat/fallback/routing-settled-card";
+import { routingSettledReportText } from "@/components/chat/fallback/routing-receipt";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { Button } from "@/components/ui/button";
 import {
@@ -224,6 +225,12 @@ function ErrorSegmentCard({
   // public prefill stays null-bodied because both fields are host/harness-
   // supplied free text and the public context does no redaction (see the
   // hostile transcript-code test).
+  //
+  // On a settled row the routing record rides the same private message: the
+  // settled card draws none of it, so the report is the only place the raw
+  // hops and detail rows still go. Appended to the message rather than given
+  // a field of its own because `PrivateErrorCause` is the fixed shape desktop
+  // main forwards.
   const buildReportContext = useCallback(
     () =>
       buildReportIssueDraftContext(
@@ -233,9 +240,16 @@ function ErrorSegmentCard({
           code: null,
           source: "Chat",
         }),
-        capturePersistedAgentError({ message, code, recoverable }),
+        capturePersistedAgentError({
+          message:
+            settledNotice === null
+              ? message
+              : `${message}\n\n${routingSettledReportText(settledNotice)}`,
+          code,
+          recoverable,
+        }),
       ),
-    [code, message, recoverable],
+    [code, message, recoverable, settledNotice],
   );
   const reportAction = (
     <ReportIssueAction
@@ -254,8 +268,6 @@ function ErrorSegmentCard({
       <RoutingSettledCard
         notice={settledNotice}
         noticeFindUnitId={settledNoticeFindUnitId}
-        errorMessage={message}
-        errorCode={code}
         reportAction={reportAction}
         actions={actions}
       />

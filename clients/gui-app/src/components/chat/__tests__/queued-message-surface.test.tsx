@@ -1285,6 +1285,87 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
     expect(badge().textContent).toBe("Paused after an error");
   });
 
+  // Clutter cuts, 2026-09-27: the row's own reason line is the same fact a
+  // second time under a "Paused after an error" pill (and its tooltip), so it
+  // is not drawn there. Under any other pill it is the only place the reason
+  // is said.
+  describe("the row's fallbackReason line", () => {
+    const REASON =
+      "Queue paused because the previous turn ended with an error.";
+
+    function renderReasonRow(
+      queue: ChatSessionState["queue"],
+      item: ChatQueuedItem,
+    ): HTMLElement {
+      renderPanel({
+        queue: { ...queue, items: [item] },
+        readOnly: false,
+        canAct: true,
+        onReorder: null,
+      });
+      return screen.getByTestId("queued-message-row");
+    }
+
+    function promptWithReason(
+      status: ChatQueuedPromptItem["status"],
+      reason: string | null,
+    ): ChatQueuedPromptItem {
+      return {
+        ...queuedItem("queue-reason", "Held prompt", status),
+        fallbackReason: reason,
+      };
+    }
+
+    it("is absent under a 'Paused after an error' pill, which keeps its tooltip", () => {
+      const row = renderReasonRow(
+        pausedQueue("turn_error"),
+        promptWithReason("paused", REASON),
+      );
+
+      expect(badge().textContent).toBe("Paused after an error");
+      expect(tooltipTextNear(badge())).toBe(TOOLTIP);
+      expect(within(row).queryByText(REASON)).toBeNull();
+      expect(row.textContent).not.toContain("Queue paused because");
+    });
+
+    it("is drawn under a plain 'Paused' pill", () => {
+      const row = renderReasonRow(
+        pausedQueue("user"),
+        promptWithReason("paused", REASON),
+      );
+
+      expect(badge().textContent).toBe("Paused");
+      expect(within(row).getByText(REASON)).not.toBeNull();
+    });
+
+    it("is drawn under a non-paused pill such as 'After turn'", () => {
+      const row = renderReasonRow(
+        queueState([]),
+        promptWithReason("fallback", REASON),
+      );
+
+      expect(badge().textContent).toBe("After turn");
+      expect(within(row).getByText(REASON)).not.toBeNull();
+    });
+
+    it("draws no line for a row with no fallbackReason", () => {
+      const row = renderReasonRow(
+        pausedQueue("user"),
+        promptWithReason("paused", null),
+      );
+      const withoutReason = row.textContent;
+      cleanup();
+      const rowWithReason = renderReasonRow(
+        pausedQueue("user"),
+        promptWithReason("paused", REASON),
+      );
+
+      // The reason line is the only thing the second row adds.
+      expect(withoutReason).not.toContain(REASON);
+      expect(rowWithReason.textContent).toContain(REASON);
+    });
+  });
+
   it("leaves a row that is not paused alone, whatever the queue's reason", () => {
     renderPanel({
       queue: {

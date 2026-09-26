@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   ChatRunSettings,
+  FallbackImpendingAction,
   LastFallbackOutcome,
   PendingFallback,
   PendingReturn,
@@ -20,9 +21,16 @@ import {
   SIGN_IN_INSTEAD_LABEL,
   STOP_WAITING_LABEL,
 } from "@/components/chat/fallback/fallback-copy";
+import {
+  countdownRefusalLabel,
+  routingCountdownCountClauses,
+  routingCountdownPlan,
+  type RoutingCountdownPlan,
+} from "@/components/chat/fallback/fallback-state";
 import { formatClockTime, formatResetDateTime } from "@/lib/relative-time";
 import {
   createFallbackAnnouncementObserver,
+  fallbackAnnouncementPlan,
   fallbackNoticeAnnouncements,
   fallbackOutcomeAnnouncement,
   fallbackReturnAnnouncement,
@@ -89,17 +97,41 @@ const FAILED_IDENTITY = "Astra Codex (acct-north)";
 const TARGET_IDENTITY = "Astra Mini Codex (acct-south)";
 const PREFERRED_IDENTITY = "Opus Claude (acct-north)";
 
+/**
+ * The pure-deriver tests' plan vocabulary, onto the card's plan. Production
+ * builds plans with `fallbackAnnouncementPlan` from a frame (pinned in its own
+ * block below); these tests hand one in to reach every sentence directly.
+ */
+type TestPlanAction = "switch" | "resume" | "wait" | "notify" | "checking";
+
+function testCountdown(
+  action: TestPlanAction,
+  resumesAt: number | null,
+): RoutingCountdownPlan {
+  switch (action) {
+    case "switch":
+      return { kind: "switch", destination: TARGET_TUPLE };
+    case "resume":
+      return { kind: "resume" };
+    case "wait":
+      return { kind: "wait", resumesAt };
+    case "notify":
+      return { kind: "nothing" };
+    case "checking":
+      return { kind: "deciding" };
+  }
+}
+
 function plan(input: {
   readonly planId: string;
-  readonly action: FallbackAnnouncementPlan["action"];
+  readonly action: TestPlanAction;
   readonly destination: string | null;
   readonly resumesAt: number | null;
 }): FallbackAnnouncementPlan {
   return {
     planId: input.planId,
-    action: input.action,
+    countdown: testCountdown(input.action, input.resumesAt),
     destination: input.destination,
-    resumesAt: input.resumesAt,
   };
 }
 
@@ -251,10 +283,10 @@ describe("fallbackTraversalAnnouncement", () => {
     expect(result).not.toBeNull();
     const text = result?.text ?? "";
     expect(text).toContain(`The chat will switch to ${TARGET_IDENTITY}.`);
-    expect(text).toContain(FRESH_SESSION_HELPER);
-    expect(text).toContain(
-      "2 queued messages will run on the new settings too.",
-    );
+    // The card's count clause, as a sentence - and not the fresh-session
+    // helper, which the card no longer shows (clutter cuts).
+    expect(text).toContain("2 queued messages move with it.");
+    expect(text).not.toContain(FRESH_SESSION_HELPER);
     expect(text).toContain("You have 12 seconds to cancel.");
     // The REAL button label, imported from the copy module - never a
     // hand-typed "Cancel" or "Don't Switch" that could silently drift from it.
@@ -264,8 +296,8 @@ describe("fallbackTraversalAnnouncement", () => {
     expect(text).not.toMatch(/\b(tier|ladder|rung|grace|inherit)\b/i);
   });
 
-  it("hold: a retry/wait/notify plan omits the fresh-session helper - only a switch destination carries that consequence", () => {
-    const retryText = fallbackTraversalAnnouncement({
+  it("hold: a resume or a wait names the failed tuple and speaks no fresh-session helper", () => {
+    const resumeText = fallbackTraversalAnnouncement({
       pending: pendingFallback({
         state: "hold",
         traversalId: "t1",
@@ -274,8 +306,8 @@ describe("fallbackTraversalAnnouncement", () => {
         queuedItemsMoving: 0,
       }),
       plan: plan({
-        planId: "plan-retry-1",
-        action: "retry",
+        planId: "plan-resume-1",
+        action: "resume",
         destination: null,
         resumesAt: null,
       }),
@@ -283,10 +315,8 @@ describe("fallbackTraversalAnnouncement", () => {
       targetIdentity: null,
       now: NOW,
     })?.text;
-    expect(retryText).toContain(`The chat will retry on ${FAILED_IDENTITY}.`);
-    // Falsification: drop the `plan?.action === "switch"` guard around the
-    // fresh-session clause and this goes red for every action, not only switch.
-    expect(retryText).not.toContain(FRESH_SESSION_HELPER);
+    expect(resumeText).toContain(`The chat will resume on ${FAILED_IDENTITY}.`);
+    expect(resumeText).not.toContain(FRESH_SESSION_HELPER);
 
     const waitText = fallbackTraversalAnnouncement({
       pending: pendingFallback({
@@ -445,21 +475,19 @@ describe("fallbackTraversalAnnouncement", () => {
             resumesAt: action === "wait" ? NOW + 3_600_000 : null,
           }),
         );
-        expect(text).toContain(
-          `Select ${SIGN_IN_INSTEAD_LABEL} to cancel and sign in.`,
-        );
+        expect(text).toContain(`Select ${SIGN_IN_INSTEAD_LABEL} to cancel.`);
         expect(text).not.toContain(`Select ${DONT_WAIT_LABEL}`);
         expect(text).not.toContain(`Select ${DONT_SWITCH_LABEL}`);
       }
     });
   });
 
-  it("hold: a due-now deadline names no switch on retry or wait either - the class is every non-switch rung, not just notify", () => {
-    // CodeRabbit flagged `notify`. The predicate is wider: `retry` attempts
-    // the same tuple and `wait` parks until a reset, so neither has a switch
+  it("hold: a due-now deadline names no switch on a resume or a wait either - the class is every non-switch plan, not just notify", () => {
+    // CodeRabbit flagged `notify`. The predicate is wider: a resume attempts
+    // the same tuple and a wait parks until a reset, so neither has a switch
     // to be due, and both read the same false sentence before this fix.
     const dueNowFor = (
-      action: "retry" | "wait",
+      action: "resume" | "wait",
       resumesAt: number | null,
     ): string | undefined =>
       fallbackTraversalAnnouncement({
@@ -482,9 +510,9 @@ describe("fallbackTraversalAnnouncement", () => {
       })?.text;
 
     // The refusal named is the one the card draws for THAT plan: a wait plan's
-    // card refuses with "Don't wait", every other plan's with "Don't switch".
+    // card refuses with "Don't wait", a resume's with "Stop waiting".
     const refusals: ReadonlyArray<readonly [string | undefined, string]> = [
-      [dueNowFor("retry", null), DONT_SWITCH_LABEL],
+      [dueNowFor("resume", null), STOP_WAITING_LABEL],
       [dueNowFor("wait", NOW + 3_600_000), DONT_WAIT_LABEL],
     ];
     for (const [text, refusal] of refusals) {
@@ -493,8 +521,8 @@ describe("fallbackTraversalAnnouncement", () => {
       expect(text).toContain(`Select ${refusal} to cancel.`);
     }
     // And each still names its own rung's subject, unchanged by this fix.
-    expect(dueNowFor("retry", null)).toContain(
-      `The chat will retry on ${FAILED_IDENTITY}.`,
+    expect(dueNowFor("resume", null)).toContain(
+      `The chat will resume on ${FAILED_IDENTITY}.`,
     );
     expect(dueNowFor("wait", NOW + 3_600_000)).toContain(
       `The chat will wait for ${FAILED_IDENTITY}`,
@@ -660,12 +688,13 @@ describe("fallbackTraversalAnnouncement", () => {
   // so there is nowhere to switch TO: "Switching this chat to Astra Codex
   // (acct-north)" announced a move that never happened.
   it("switching: announces a resume, not a switch, when the destination is the tuple that failed", () => {
+    const pending = pendingFallbackWithTarget({
+      state: "switching",
+      targetTuple: FAILED_TUPLE,
+    });
     const text = fallbackTraversalAnnouncement({
-      pending: pendingFallbackWithTarget({
-        state: "switching",
-        targetTuple: FAILED_TUPLE,
-      }),
-      plan: null,
+      pending,
+      plan: fallbackAnnouncementPlan(pending, FAILED_IDENTITY),
       failedIdentity: FAILED_IDENTITY,
       targetIdentity: FAILED_IDENTITY,
       now: NOW,
@@ -872,6 +901,52 @@ describe("fallbackTraversalAnnouncement", () => {
     expect(differentState?.semanticKey).not.toBe(first?.semanticKey);
   });
 
+  it("semanticKey: a resume's sentence does not move when only the plan under it moves", () => {
+    const resuming = {
+      ...pendingFallback({
+        state: "switching",
+        traversalId: "t1",
+        revision: 2,
+        deadline: null,
+        queuedItemsMoving: 0,
+      }),
+      targetTuple: FAILED_TUPLE,
+    };
+    const first = fallbackTraversalAnnouncement({
+      pending: resuming,
+      plan: fallbackAnnouncementPlan(resuming, FAILED_IDENTITY),
+      failedIdentity: FAILED_IDENTITY,
+      targetIdentity: FAILED_IDENTITY,
+      now: NOW,
+    });
+    // The resumed attempt failed and the host entered its next rung while
+    // still `switching` onto the resumed tuple (seen live).
+    const nextRungFrame: PendingFallback = {
+      ...resuming,
+      revision: 3,
+      impendingAction: {
+        planId: "plan-next-rung",
+        rung: "profile",
+        target: TARGET_TUPLE,
+        targetModelFamily: null,
+        resumesAt: null,
+        pending: null,
+      },
+    };
+    const nextRung = fallbackTraversalAnnouncement({
+      pending: nextRungFrame,
+      plan: fallbackAnnouncementPlan(nextRungFrame, FAILED_IDENTITY),
+      failedIdentity: FAILED_IDENTITY,
+      targetIdentity: FAILED_IDENTITY,
+      now: NOW,
+    });
+    expect(first?.text).toBe(`Resuming this chat on ${FAILED_IDENTITY}.`);
+    expect(nextRung?.text).toBe(first?.text);
+    // Falsification: key `switching` on the plan id and the unchanged
+    // sentence is said a second time, after "Resumed on …".
+    expect(nextRung?.semanticKey).toBe(first?.semanticKey);
+  });
+
   /**
    * `semanticKey` carries the identities the branch actually SPOKE, not both
    * of `failedIdentity` and `targetIdentity`. Keying on an identity the text
@@ -879,8 +954,8 @@ describe("fallbackTraversalAnnouncement", () => {
    *
    * Per (state, plan.action), not per state: `hold`/`choosing` take their
    * spoken set from `fallbackPlanText`, which names the destination on a
-   * switch, the failed tuple on retry/wait, and nothing on checking/notify
-   * or a null plan.
+   * switch, the failed tuple on a resume or a wait, and nothing on
+   * deciding/nothing or a null plan.
    */
   describe("semanticKey speaks only the identities the sentence named", () => {
     const OTHER_FAILED = "Opus Claude (acct-west)";
@@ -957,9 +1032,9 @@ describe("fallbackTraversalAnnouncement", () => {
       }
     });
 
-    it("hold/choosing + retry or wait: failedIdentity moves the key, targetIdentity does not", () => {
+    it("hold/choosing + resume or wait: failedIdentity moves the key, targetIdentity does not", () => {
       for (const state of ["hold", "choosing"] as const) {
-        for (const action of ["retry", "wait"] as const) {
+        for (const action of ["resume", "wait"] as const) {
           const namedPlan = plan({
             planId: `plan-${action}-1`,
             action,
@@ -1112,9 +1187,15 @@ describe("fallbackTraversalAnnouncement", () => {
     });
 
     it("switching (resume on the failed tuple): failedIdentity moves the key, targetIdentity does not", () => {
+      const RESUME_PLAN = plan({
+        planId: "plan-resume-1",
+        action: "resume",
+        destination: null,
+        resumesAt: null,
+      });
       const base = announce({
         state: "switching",
-        plan: null,
+        plan: RESUME_PLAN,
         failedIdentity: FAILED_IDENTITY,
         targetIdentity: FAILED_IDENTITY,
         targetTuple: FAILED_TUPLE,
@@ -1122,7 +1203,7 @@ describe("fallbackTraversalAnnouncement", () => {
       });
       const failedMoved = announce({
         state: "switching",
-        plan: null,
+        plan: RESUME_PLAN,
         failedIdentity: OTHER_FAILED,
         targetIdentity: FAILED_IDENTITY,
         targetTuple: FAILED_TUPLE,
@@ -1130,7 +1211,7 @@ describe("fallbackTraversalAnnouncement", () => {
       });
       const targetMoved = announce({
         state: "switching",
-        plan: null,
+        plan: RESUME_PLAN,
         failedIdentity: FAILED_IDENTITY,
         targetIdentity: OTHER_TARGET,
         targetTuple: FAILED_TUPLE,
@@ -1143,6 +1224,340 @@ describe("fallbackTraversalAnnouncement", () => {
   });
 });
 
+/**
+ * The announcer reads a frame the way the countdown card does - through
+ * `routingCountdownPlan`, `routingCountdownCountClauses` and
+ * `countdownRefusalLabel` - so it can never name a plan, a count or a button
+ * the card is not showing. Every case here starts from a real frame and goes
+ * through `fallbackAnnouncementPlan`, the one builder production uses.
+ */
+describe("fallbackAnnouncementPlan: the announcer reads the frame the card reads", () => {
+  function impending(input: {
+    readonly planId: string;
+    readonly rung: FallbackImpendingAction["rung"];
+    readonly target: ChatRunSettings | null;
+    readonly resumesAt: number | null;
+  }): FallbackImpendingAction {
+    return {
+      planId: input.planId,
+      rung: input.rung,
+      target: input.target,
+      targetModelFamily: null,
+      resumesAt: input.resumesAt,
+      pending: null,
+    };
+  }
+
+  function frame(input: {
+    readonly state: PendingFallback["state"];
+    readonly targetTuple: ChatRunSettings | null;
+    readonly impendingAction: FallbackImpendingAction | null;
+    readonly deadline: number | null;
+    readonly queuedItemsMoving: number;
+    readonly siblingSwitching: number;
+  }): PendingFallback {
+    return {
+      ...pendingFallback({
+        state: input.state,
+        traversalId: "t-frame",
+        revision: 9,
+        deadline: input.deadline,
+        queuedItemsMoving: input.queuedItemsMoving,
+      }),
+      targetTuple: input.targetTuple,
+      impendingAction: input.impendingAction,
+      siblingSwitching: input.siblingSwitching,
+    };
+  }
+
+  function announceFrame(
+    pending: PendingFallback,
+    destination: string | null,
+    now: number,
+  ): FallbackTraversalAnnouncement | null {
+    return fallbackTraversalAnnouncement({
+      pending,
+      plan: fallbackAnnouncementPlan(pending, destination),
+      failedIdentity: FAILED_IDENTITY,
+      targetIdentity: destination,
+      now,
+    });
+  }
+
+  const RESUME_SENTENCE = `The chat will resume on ${FAILED_IDENTITY}.`;
+
+  // The live D8 frame: a profile rung whose target is the account that
+  // failed. The card said "Resuming in 12s"; the announcer said "The chat will
+  // switch to" that same account.
+  it("a profile rung whose target is the failed tuple announces a resume, never a switch - hold and switching", () => {
+    const resumeAction = impending({
+      planId: "plan-profile-onto-failed",
+      rung: "profile",
+      target: FAILED_TUPLE,
+      resumesAt: null,
+    });
+    const hold = announceFrame(
+      frame({
+        state: "hold",
+        targetTuple: null,
+        impendingAction: resumeAction,
+        deadline: NOW + 12_000,
+        queuedItemsMoving: 2,
+        siblingSwitching: 0,
+      }),
+      FAILED_IDENTITY,
+      NOW,
+    )?.text;
+    // No queue clause: a resume moves no queue, and the card's cost line says
+    // none either.
+    expect(hold).toBe(
+      `${RESUME_SENTENCE} You have 12 seconds to cancel. Select ${STOP_WAITING_LABEL} to cancel.`,
+    );
+    const switching = announceFrame(
+      frame({
+        state: "switching",
+        targetTuple: FAILED_TUPLE,
+        impendingAction: resumeAction,
+        deadline: null,
+        queuedItemsMoving: 2,
+        siblingSwitching: 0,
+      }),
+      FAILED_IDENTITY,
+      NOW,
+    )?.text;
+    expect(switching).toBe(`Resuming this chat on ${FAILED_IDENTITY}.`);
+    for (const text of [hold, switching]) {
+      expect(text).not.toMatch(/switch(ing)?( this chat)? to/i);
+    }
+  });
+
+  it("a frame with no impending step and the failed tuple as its target announces the same resume", () => {
+    const hold = announceFrame(
+      frame({
+        state: "hold",
+        targetTuple: FAILED_TUPLE,
+        impendingAction: null,
+        deadline: NOW + 12_000,
+        queuedItemsMoving: 0,
+        siblingSwitching: 0,
+      }),
+      FAILED_IDENTITY,
+      NOW,
+    )?.text;
+    expect(hold).toBe(
+      `${RESUME_SENTENCE} You have 12 seconds to cancel. Select ${STOP_WAITING_LABEL} to cancel.`,
+    );
+    const switching = announceFrame(
+      frame({
+        state: "switching",
+        targetTuple: FAILED_TUPLE,
+        impendingAction: null,
+        deadline: null,
+        queuedItemsMoving: 0,
+        siblingSwitching: 0,
+      }),
+      FAILED_IDENTITY,
+      NOW,
+    )?.text;
+    expect(switching).toBe(`Resuming this chat on ${FAILED_IDENTITY}.`);
+  });
+
+  it("a real profile switch still announces a switch, with the card's count clauses as sentences", () => {
+    const switchAction = impending({
+      planId: "plan-profile-switch",
+      rung: "profile",
+      target: TARGET_TUPLE,
+      resumesAt: null,
+    });
+    const holdFrame = frame({
+      state: "hold",
+      targetTuple: null,
+      impendingAction: switchAction,
+      deadline: NOW + 12_000,
+      queuedItemsMoving: 2,
+      siblingSwitching: 1,
+    });
+    const hold = announceFrame(holdFrame, TARGET_IDENTITY, NOW)?.text;
+    expect(hold).toBe(
+      `The chat will switch to ${TARGET_IDENTITY}. ` +
+        "2 queued messages move with it. " +
+        "1 other chat in this task is also switching. " +
+        `You have 12 seconds to cancel. Select ${DONT_SWITCH_LABEL} to cancel.`,
+    );
+    // The same clauses the card joins into its cost line - one list.
+    for (const clause of routingCountdownCountClauses(
+      holdFrame,
+      routingCountdownPlan(holdFrame),
+    )) {
+      expect(hold?.toLowerCase()).toContain(clause.toLowerCase());
+    }
+    expect(hold).not.toContain(FRESH_SESSION_HELPER);
+    expect(hold).not.toMatch(/next message/i);
+    const switching = announceFrame(
+      frame({
+        state: "switching",
+        targetTuple: TARGET_TUPLE,
+        impendingAction: switchAction,
+        deadline: null,
+        queuedItemsMoving: 2,
+        siblingSwitching: 1,
+      }),
+      TARGET_IDENTITY,
+      NOW,
+    )?.text;
+    expect(switching).toBe(`Switching this chat to ${TARGET_IDENTITY}.`);
+  });
+
+  it("a wait's queue waits with it rather than moving", () => {
+    const text = announceFrame(
+      frame({
+        state: "hold",
+        targetTuple: null,
+        impendingAction: impending({
+          planId: "plan-wait",
+          rung: "wait",
+          target: null,
+          resumesAt: NOW + 3_600_000,
+        }),
+        deadline: NOW + 12_000,
+        queuedItemsMoving: 1,
+        siblingSwitching: 0,
+      }),
+      null,
+      NOW,
+    )?.text;
+    expect(text).toContain("1 queued message waits with it.");
+    expect(text).not.toContain("move with it");
+  });
+
+  // One case per label the card can draw, each asserted against the literal
+  // AND the card's own function over the same frame.
+  describe("the refusal named is the card's countdownRefusalLabel", () => {
+    const cases: ReadonlyArray<{
+      readonly name: string;
+      readonly pending: PendingFallback;
+      readonly destination: string | null;
+      readonly label: string;
+    }> = [
+      {
+        name: "a switch: Don't switch",
+        pending: frame({
+          state: "hold",
+          targetTuple: null,
+          impendingAction: impending({
+            planId: "plan-label-switch",
+            rung: "profile",
+            target: TARGET_TUPLE,
+            resumesAt: null,
+          }),
+          deadline: NOW + 10_000,
+          queuedItemsMoving: 0,
+          siblingSwitching: 0,
+        }),
+        destination: TARGET_IDENTITY,
+        label: DONT_SWITCH_LABEL,
+      },
+      {
+        name: "a wait: Don't wait",
+        pending: frame({
+          state: "hold",
+          targetTuple: null,
+          impendingAction: impending({
+            planId: "plan-label-wait",
+            rung: "wait",
+            target: null,
+            resumesAt: NOW + 3_600_000,
+          }),
+          deadline: NOW + 10_000,
+          queuedItemsMoving: 0,
+          siblingSwitching: 0,
+        }),
+        destination: null,
+        label: DONT_WAIT_LABEL,
+      },
+      {
+        name: "a resume: Stop waiting",
+        pending: frame({
+          state: "hold",
+          targetTuple: FAILED_TUPLE,
+          impendingAction: null,
+          deadline: NOW + 10_000,
+          queuedItemsMoving: 0,
+          siblingSwitching: 0,
+        }),
+        destination: FAILED_IDENTITY,
+        label: STOP_WAITING_LABEL,
+      },
+      {
+        name: "a sign-out: Sign in instead",
+        pending: {
+          ...frame({
+            state: "hold",
+            targetTuple: null,
+            impendingAction: impending({
+              planId: "plan-label-auth",
+              rung: "profile",
+              target: TARGET_TUPLE,
+              resumesAt: null,
+            }),
+            deadline: NOW + 10_000,
+            queuedItemsMoving: 0,
+            siblingSwitching: 0,
+          }),
+          reason: "auth",
+        },
+        destination: TARGET_IDENTITY,
+        label: SIGN_IN_INSTEAD_LABEL,
+      },
+    ];
+    for (const testCase of cases) {
+      it(testCase.name, () => {
+        const text = announceFrame(
+          testCase.pending,
+          testCase.destination,
+          NOW,
+        )?.text;
+        expect(
+          countdownRefusalLabel(
+            testCase.pending,
+            routingCountdownPlan(testCase.pending),
+          ),
+        ).toBe(testCase.label);
+        expect(text).toContain(`Select ${testCase.label} to cancel.`);
+        // Exactly one "Select … to cancel." - no second, stale literal.
+        expect(text?.match(/Select .+? to cancel\./g)).toHaveLength(1);
+      });
+    }
+  });
+
+  it("speaks the seconds to the card's deadline once per plan, not on every tick", () => {
+    for (const impendingAction of [
+      impending({
+        planId: "plan-ticks",
+        rung: "profile",
+        target: TARGET_TUPLE,
+        resumesAt: null,
+      }),
+      // A frame with no host plan id is keyed by what the card reads.
+      null,
+    ]) {
+      const pending = frame({
+        state: "hold",
+        targetTuple: impendingAction === null ? TARGET_TUPLE : null,
+        impendingAction,
+        deadline: NOW + 12_000,
+        queuedItemsMoving: 0,
+        siblingSwitching: 0,
+      });
+      const first = announceFrame(pending, TARGET_IDENTITY, NOW);
+      const tick = announceFrame(pending, TARGET_IDENTITY, NOW + 3_000);
+      expect(first?.text).toContain("You have 12 seconds to cancel.");
+      expect(tick?.text).toContain("You have 9 seconds to cancel.");
+      expect(tick?.semanticKey).toBe(first?.semanticKey);
+    }
+  });
+});
+
 describe("fallbackReturnAnnouncement", () => {
   it("is null with no pending offer", () => {
     expect(
@@ -1150,44 +1565,29 @@ describe("fallbackReturnAnnouncement", () => {
     ).toBeNull();
   });
 
-  it("names the preferred identity, states the switch-back consequence, the queue clause, and the fresh-session helper - in that order", () => {
+  it("speaks the card's headline and its queue clause - nothing the card no longer shows", () => {
     const announcement = fallbackReturnAnnouncement(
       pendingReturn({ traversalId: "t1", revision: 1, queuedItemsMoving: 3 }),
       PREFERRED_IDENTITY,
     );
-    // The queue clause is folded INTO the "Switching back applies..."
-    // sentence (no leading-space artifact, no double space): composed here
-    // from the same three copy pieces the source joins, not read back from
-    // the source's own output.
     expect(announcement?.text).toBe(
-      `${PREFERRED_IDENTITY} is available again. You can switch back or stay on the current provider. ` +
-        `Switching back applies to your next message and moves 3 queued messages back. ` +
-        FRESH_SESSION_HELPER,
+      `Switch back to ${PREFERRED_IDENTITY}? Switching back moves 3 queued messages back.`,
     );
-    // Falsification: swap `parts.join(" ")`'s clause composition back to a
-    // bare `queuedMessagesReturningText(count)` appended as its own part
-    // (its leading space stacks with the join separator) - this exact string
-    // goes red with a double space before "and moves".
-    expect(announcement?.text).toContain(PREFERRED_IDENTITY);
-    expect(announcement?.text).toContain("3 queued messages");
-    expect(announcement?.text).not.toContain("  "); // no double space anywhere
+    // The cut sentences: the fresh-session helper is the picker footer's, and
+    // "applies to your next message" is gone from every card.
+    expect(announcement?.text).not.toContain(FRESH_SESSION_HELPER);
+    expect(announcement?.text).not.toMatch(/next message/i);
+    expect(announcement?.text).not.toContain("  ");
     expectUnprefixed(announcement?.text ?? "");
   });
 
-  it("omits the queued-messages clause entirely at zero, rather than rendering a zero count, but still states the switch-back consequence and fresh-session helper", () => {
+  it("omits the queue sentence entirely at zero, rather than stating a zero count", () => {
     const announcement = fallbackReturnAnnouncement(
       pendingReturn({ traversalId: "t1", revision: 1, queuedItemsMoving: 0 }),
       PREFERRED_IDENTITY,
     );
-    expect(announcement?.text).toBe(
-      `${PREFERRED_IDENTITY} is available again. You can switch back or stay on the current provider. ` +
-        `Switching back applies to your next message. ` +
-        FRESH_SESSION_HELPER,
-    );
-    // Falsification: drop the `returning ?? ""` fallback in
-    // `fallbackReturnAnnouncement` and this contains "moves 0 queued messages".
+    expect(announcement?.text).toBe(`Switch back to ${PREFERRED_IDENTITY}?`);
     expect(announcement?.text).not.toContain("0 queued");
-    expect(announcement?.text).not.toContain("  ");
   });
 });
 
@@ -1242,10 +1642,54 @@ describe("fallbackNoticeAnnouncements", () => {
     const notices = fallbackNoticeAnnouncements(messages);
     expect(notices).toHaveLength(1);
     expect(notices[0]?.key).toBe("notice:seg-fallback");
-    expect(notices[0]?.text).toContain(`To: ${TARGET_IDENTITY}`);
+    expect(notices[0]?.text).toBe("Switched providers");
   });
 
-  it("a switched-provider notice and a staying-put notice of the SAME kind must never be confused - only one ever says 'To'", () => {
+  it("speaks a routing notice by its title alone - never the raw route message or a detail row (seen live after every hop)", () => {
+    // The shapes the host wrote in the live drive: a divider whose message is
+    // the raw route, and detail rows naming slugs.
+    const messages: ReadonlyArray<ChatMessage> = [
+      assistantMessage({
+        id: "m1",
+        segments: [
+          providerNoticeSegment({
+            id: "seg-applied",
+            noticeKind: "fallback_applied",
+            status: "completed",
+            parentId: null,
+            title: "Switched to Sonnet 5 · Low on Surya after a rate limit",
+            message: "claude/sonnet (Surya 2) → claude/sonnet (Surya)",
+            details: [
+              { label: "To", value: "claude/sonnet (Surya)" },
+              { label: "Failed on", value: "claude/sonnet (Surya 2)" },
+              { label: "Tried", value: "none" },
+            ],
+          }),
+          providerNoticeSegment({
+            id: "seg-wait-resumed",
+            noticeKind: "fallback_wait_resumed",
+            status: "completed",
+            parentId: null,
+            title: "Resumed on Surya 2 after the limit reset",
+            message: null,
+            details: [{ label: "Provider", value: "claude/sonnet (Surya 2)" }],
+          }),
+        ],
+      }),
+    ];
+    const notices = fallbackNoticeAnnouncements(messages);
+    expect(notices.map((notice) => notice.text)).toEqual([
+      "Switched to Sonnet 5 · Low on Surya after a rate limit",
+      "Resumed on Surya 2 after the limit reset",
+    ]);
+    for (const notice of notices) {
+      expect(notice.text).not.toContain("claude/");
+      expect(notice.text).not.toContain("→");
+      expect(notice.text).not.toMatch(/\b(To|Failed on|Tried|Provider):/);
+    }
+  });
+
+  it("a switched notice and a staying-put notice of the SAME kind are told apart by their titles - no detail row decides it", () => {
     const messages: ReadonlyArray<ChatMessage> = [
       assistantMessage({
         id: "m1",
@@ -1277,59 +1721,8 @@ describe("fallbackNoticeAnnouncements", () => {
     // lines down.
     expect(notices).toHaveLength(2);
     const [switched, stayed] = notices;
-    expect(switched.text).toBe(`Switched providers. To: ${TARGET_IDENTITY}`);
-    expect(stayed.text).toBe(
-      `Staying on the current provider. Staying on: ${FAILED_IDENTITY}`,
-    );
-    // Falsification: fabricate a "To" clause on the staying-put row (e.g. by
-    // always rendering `plan.destination` instead of only the details the
-    // host actually sent) - this must never claim a switch happened.
-    expect(stayed.text).not.toContain("To:");
-    expect(switched.text).not.toContain("Staying on:");
-  });
-
-  it("includes the host's 'Provider' and 'Now on' detail labels - fallback_wait_resumed's only identity, and a configured-superseded settle's destination", () => {
-    const messages: ReadonlyArray<ChatMessage> = [
-      assistantMessage({
-        id: "m1",
-        segments: [
-          providerNoticeSegment({
-            id: "seg-wait-resumed",
-            noticeKind: "fallback_wait_resumed",
-            status: "completed",
-            parentId: null,
-            title: "Resumed on the original provider",
-            message: null,
-            // "Provider" is `fallback_wait_resumed`'s ONLY identity detail -
-            // it never carries a "To"/"Staying on" destination.
-            details: [{ label: "Provider", value: FAILED_IDENTITY }],
-          }),
-          providerNoticeSegment({
-            id: "seg-settled",
-            noticeKind: "fallback_settled",
-            status: "completed",
-            parentId: null,
-            title: "Fallback settled",
-            message: null,
-            // A configured-superseded settle names where the chat ended up
-            // via "Now on" - a label distinct from the applied notice's "To".
-            details: [{ label: "Now on", value: TARGET_IDENTITY }],
-          }),
-        ],
-      }),
-    ];
-    const notices = fallbackNoticeAnnouncements(messages);
-    expect(notices).toHaveLength(2);
-    const [waitResumed, settled] = notices;
-    expect(waitResumed.text).toBe(
-      `Resumed on the original provider. Provider: ${FAILED_IDENTITY}`,
-    );
-    expect(settled.text).toBe(`Fallback settled. Now on: ${TARGET_IDENTITY}`);
-    // Falsification: revert the label switch to the OLD allowlist (drop
-    // "Provider"/"Now on") - both texts collapse to their bare titles with no
-    // destination at all, exactly the regression this pin catches.
-    expect(waitResumed.text).toContain(FAILED_IDENTITY);
-    expect(settled.text).toContain(TARGET_IDENTITY);
+    expect(switched.text).toBe("Switched providers");
+    expect(stayed.text).toBe("Staying on the current provider");
   });
 
   it("speaks a fallback_returned and a fallback_return_blocked notice - the return's two endings - while a model_rerouted notice of the same shape stays silent", () => {
@@ -1374,10 +1767,8 @@ describe("fallbackNoticeAnnouncements", () => {
     const notices = fallbackNoticeAnnouncements(messages);
     expect(notices).toHaveLength(2);
     const [returned, returnBlocked] = notices;
-    expect(returned.text).toBe(`Switched back. To: ${PREFERRED_IDENTITY}`);
-    expect(returnBlocked.text).toBe(
-      `Stayed on the current provider. Staying on: ${TARGET_IDENTITY}`,
-    );
+    expect(returned.text).toBe("Switched back");
+    expect(returnBlocked.text).toBe("Stayed on the current provider");
     // Falsification: remove the `fallback_returned`/`fallback_return_blocked`
     // arms from the allowlist switch and THIS assertion must go red.
     expect(notices.some((notice) => notice.key === "notice:seg-reroute")).toBe(
@@ -1388,9 +1779,9 @@ describe("fallbackNoticeAnnouncements", () => {
 
 // D215: confirmed host outcome metadata reaches the announcer independent of
 // transcript row hydration. `fallbackOutcomeAnnouncement` is the pure adapter
-// for that path; it is asserted to reuse the SAME title/message/detail-label
-// formatter as `fallbackNoticeAnnouncements` (`fallbackNoticeText`), not a
-// parallel one that could drift out of sync with it.
+// for that path; it speaks the same TITLE-only sentence as
+// `fallbackNoticeAnnouncements` (`fallbackNoticeText`), not a parallel
+// formatter that could drift out of sync with it.
 //
 // Fixtures are typed as the REAL wire DTO (`LastFallbackOutcome`, protocol's
 // `subscribe.ts`), which `fallbackOutcomeAnnouncement` takes directly.
@@ -1419,79 +1810,44 @@ describe("fallbackOutcomeAnnouncement", () => {
     expect(fallbackOutcomeAnnouncement(undefined)).toBeNull();
   });
 
-  it("keys by blockId (not assistantMessageId), maps assistantMessageId to messageId, and formats text with the shared title/message/allowlisted-detail formatter", () => {
+  it("keys by blockId (not assistantMessageId), maps assistantMessageId to messageId, and speaks the title alone", () => {
     const raw = outcomeFixture({
       blockId: "block-outcome-1",
       assistantMessageId: "m-assistant-1",
       kind: "applied",
       title: "Switched providers",
       message: "Your message will resend automatically.",
-      details: [
-        { label: "To", value: TARGET_IDENTITY },
-        // An unrecognized label must be dropped, exactly as the transcript
-        // notice formatter drops one - this is the shared-formatter claim;
-        // a parallel, less-strict formatter would let this through.
-        { label: "Internal-only", value: "should-not-appear" },
-      ],
+      details: [{ label: "To", value: TARGET_IDENTITY }],
       sequence: 1,
     });
     const outcome = fallbackOutcomeAnnouncement(raw);
     expect(outcome).not.toBeNull();
     expect(outcome?.key).toBe("notice:block-outcome-1");
     expect(outcome?.messageId).toBe("m-assistant-1");
-    expect(outcome?.text).toBe(
-      `Switched providers. Your message will resend automatically. To: ${TARGET_IDENTITY}`,
-    );
+    expect(outcome?.text).toBe("Switched providers");
     // Falsification: key by assistantMessageId instead of blockId - two
     // outcomes on the SAME message (e.g. a retry replacing the first) would
     // collide into one consumedNotices entry instead of being independently
     // dedupable.
     expect(outcome?.key).not.toBe("notice:m-assistant-1");
-    expect(outcome?.text).not.toContain("should-not-appear");
   });
 
-  it("omits the message clause entirely when message is null, rather than leaving an empty clause/extra separator in its place", () => {
+  it("an exhausted outcome is spoken as its title - not its message or the 'Failed on' / 'Tried' rows the live drive heard", () => {
     const raw = outcomeFixture({
       blockId: "block-outcome-2",
       assistantMessageId: "m-assistant-2",
       kind: "settled",
-      title: "Fallback settled",
-      message: null,
-      details: [{ label: "Now on", value: TARGET_IDENTITY }],
+      title: "Routing couldn't recover this turn",
+      message: "The rate limit on Claude Code · Surya 2 stands.",
+      details: [
+        { label: "Failed on", value: "claude/sonnet (Surya 2)" },
+        { label: "Tried", value: "none" },
+      ],
       sequence: 1,
     });
-    const outcome = fallbackOutcomeAnnouncement(raw);
-    // The EXACT string is the falsifier here, deliberately, not a substring
-    // check: dropping the `message !== null` guard and pushing `null`
-    // straight into `parts` (joined with ". ") does not render the literal
-    // text "null" - it renders an extra ". " separator around an empty
-    // clause ("Fallback settled. . Now on: ..."), which only an exact-match
-    // assertion catches.
-    expect(outcome?.text).toBe(`Fallback settled. Now on: ${TARGET_IDENTITY}`);
-  });
-
-  it("joins consecutive already-punctuated parts with a single space, never doubling the punctuation (title AND message both end in '.')", () => {
-    const raw = outcomeFixture({
-      blockId: "block-outcome-3",
-      assistantMessageId: "m-assistant-3",
-      kind: "applied",
-      title: "Provider unavailable.",
-      message: "Retrying now.",
-      details: [{ label: "Tried", value: TARGET_IDENTITY }],
-      sequence: 1,
-    });
-    const outcome = fallbackOutcomeAnnouncement(raw);
-    expect(outcome?.text).toBe(
-      `Provider unavailable. Retrying now. Tried: ${TARGET_IDENTITY}`,
+    expect(fallbackOutcomeAnnouncement(raw)?.text).toBe(
+      "Routing couldn't recover this turn",
     );
-    // Falsification: a formatter that always joins with ". " regardless of
-    // whether the accumulated text already ends in `.`/`!`/`?` would render
-    // "Provider unavailable.. Retrying now.. Tried: ..." here - the doubled
-    // period is exactly what this fixture (title AND message both
-    // pre-punctuated) is shaped to catch. A single already-punctuated part
-    // (as in the test above) cannot distinguish the two joiners; this one
-    // can, because it is IN one of these already-punctuated joins.
-    expect(outcome?.text).not.toContain("..");
   });
 });
 

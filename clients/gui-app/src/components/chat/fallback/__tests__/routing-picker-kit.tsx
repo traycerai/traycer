@@ -14,8 +14,6 @@ import type {
   HarnessOption,
   ModelOption,
 } from "@/components/home/data/landing-options";
-import { profileCommitId } from "@/components/providers/provider-profile-model";
-import type { ProfileUsageDetailState } from "@/lib/rate-limits/profile-usage-comparison-state";
 import type { FallbackChoiceLease } from "@/stores/chats/chat-session-store";
 import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundation";
 import {
@@ -32,7 +30,7 @@ import {
  * `vi.mock(path, async () => (await import("./routing-picker-kit")).xModule())`
  * and drives one `kit` object. The chooser mounts the real model picker, so
  * the doubles below stand in for exactly the host-backed reads that picker and
- * the chooser make - the catalog, the providers list, the usage comparison,
+ * the chooser make - the catalog, the providers list,
  * the listing, the hold and the two verbs - and nothing else.
  *
  * Every double records the CLIENT it was handed. The client here is a sentinel
@@ -61,12 +59,6 @@ interface MutationCall {
   readonly clientId: string | null;
   readonly method: string;
   readonly variables: Record<string, unknown>;
-}
-
-interface UsageConfig {
-  readonly detail: ProfileUsageDetailState;
-  readonly fetchEligible: boolean;
-  readonly refreshStatus: "idle" | "refreshing";
 }
 
 export interface SessionSlice {
@@ -238,27 +230,10 @@ export const kit = {
   confirmed: [] as unknown[],
   unattended: [] as unknown[],
   toast: vi.fn<(message: string) => void>(),
-  // The providers list and the per-account usage.
+  // The providers list.
   providers: [] as ProviderCliState[],
-  usage: new Map<string, UsageConfig>(),
-  usageProbeCalls: [] as Array<{
-    readonly runTargetHostId: string | null;
-    readonly providerId: string;
-  }>,
-  ensureFreshCalls: [] as Array<{
-    readonly providerId: string;
-    readonly profileId: string | null;
-  }>,
-  refreshCalls: [] as Array<{
-    readonly providerId: string;
-    readonly profileId: string | null;
-  }>,
-  // An `ensureFresh` that never answers: the check is still in flight.
-  ensureFreshHangs: false,
-  // An `ensureFresh` that fails: the host dropped mid-check.
-  ensureFreshRejects: false,
-  // A `refresh` that fails: the host dropped mid-retry.
-  refreshRejects: false,
+  // Every `refetch` the listing's query was asked for: one per open.
+  refetchCalls: 0,
   // Model labels: `harnessId:model` -> label; `null` passes the slug through.
   modelLabels: null as ReadonlyMap<string, string> | null,
   openSettings: vi.fn<() => void>(),
@@ -284,13 +259,7 @@ export function resetKit(): void {
   kit.unattended = [];
   kit.toast.mockReset();
   kit.providers = [];
-  kit.usage = new Map();
-  kit.usageProbeCalls = [];
-  kit.ensureFreshCalls = [];
-  kit.refreshCalls = [];
-  kit.ensureFreshHangs = false;
-  kit.ensureFreshRejects = false;
-  kit.refreshRejects = false;
+  kit.refetchCalls = 0;
   kit.modelLabels = null;
   kit.openSettings.mockReset();
   session.reset();
@@ -342,10 +311,6 @@ export function providerCliState(input: {
     advisory: null,
     profiles: input.profiles,
   };
-}
-
-export function usageKey(providerId: string, profileId: string | null): string {
-  return `${providerId}|${profileId ?? ""}`;
 }
 
 /** The pending traversal this suite's countdown entry is drawn from. */
@@ -600,56 +565,15 @@ export function hostDirectoryListModule() {
 }
 
 /**
- * `@/hooks/rate-limits/use-profile-usage-comparison`: one entry per profile
- * the caller passes, from `kit.usage` (default: never checked, eligible, idle).
- * `ensureFresh` and `refresh` are recorded and resolve at once - unless
- * `kit.ensureFreshHangs` keeps the first check in flight, or
- * `kit.ensureFreshRejects` / `kit.refreshRejects` make the call fail.
+ * `@/hooks/rate-limits/use-profile-usage-comparison`: the picker's OWN account
+ * dropdown reads it, and the chooser does not - so it stands in with no
+ * entries, the way the picker's suite stubs it, and nothing here asserts on it.
  */
 export function usageComparisonModule() {
   return {
     useProfileUsageComparison: (args: {
       readonly runTargetHostId: string | null;
-      readonly providerId: string;
-      readonly profiles: ReadonlyArray<ProviderProfile>;
-    }) => {
-      kit.usageProbeCalls.push({
-        runTargetHostId: args.runTargetHostId,
-        providerId: args.providerId,
-      });
-      const entries = new Map<string | null, unknown>();
-      for (const profile of args.profiles) {
-        const profileId = profileCommitId(profile);
-        const config = kit.usage.get(usageKey(args.providerId, profileId));
-        entries.set(profileId, {
-          profileId,
-          providerId: args.providerId,
-          detail:
-            config === undefined ? { kind: "never-checked" } : config.detail,
-          fetchEligible: config === undefined ? true : config.fetchEligible,
-          refreshStatus: config === undefined ? "idle" : config.refreshStatus,
-          refresh: () => {
-            kit.refreshCalls.push({ providerId: args.providerId, profileId });
-            return kit.refreshRejects
-              ? Promise.reject(new Error("host dropped"))
-              : Promise.resolve();
-          },
-          ensureFresh: () => {
-            kit.ensureFreshCalls.push({
-              providerId: args.providerId,
-              profileId,
-            });
-            if (kit.ensureFreshRejects) {
-              return Promise.reject(new Error("host dropped"));
-            }
-            return kit.ensureFreshHangs
-              ? new Promise<void>(() => undefined)
-              : Promise.resolve();
-          },
-        });
-      }
-      return { hostId: args.runTargetHostId, isReady: true, entries };
-    },
+    }) => ({ hostId: args.runTargetHostId, isReady: true, entries: new Map() }),
   };
 }
 
@@ -665,11 +589,18 @@ export function listTargetsModule() {
         enabled: input.enabled,
         selector: input.selector,
       });
+      // A disabled query has no data, as the real one: the listing is only
+      // there for a chooser that is allowed to ask.
+      const data = input.enabled ? kit.listData : undefined;
       return {
-        data: kit.listData,
-        isPending: kit.listData === undefined && !kit.listError,
+        data,
+        isPending: data === undefined && !kit.listError,
         isFetching: kit.listFetching,
         isError: kit.listError,
+        refetch: () => {
+          kit.refetchCalls += 1;
+          return Promise.resolve();
+        },
       };
     },
   };
