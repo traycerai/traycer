@@ -9,6 +9,7 @@ import {
   MAX_ACTIVE_CHAT_IDLE_DEFER_MS,
 } from "@/stores/chats/session-registry";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+import { DESKTOP_RETENTION_PROFILE } from "@/stores/replica-memory/retention-profile";
 
 const TTL_MS = 10 * 60 * 1_000;
 // High enough that existing TTL-focused tests (≤2 sessions) never hit the cap.
@@ -594,6 +595,42 @@ describe("ChatSessionRegistry", () => {
     expect(registry.peek("epic-1", "chat-active", HOST)).toBe(active.handle);
     expect(registry.peek("epic-1", "chat-b", HOST)).toBeNull();
     expect(registry.peek("epic-1", "chat-c", HOST)).toBe(c.handle);
+  });
+
+  it("keeps active chat work through the epic-only unknown-activity grace", () => {
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: 1,
+    });
+    const active = createHandle("epic-1", "chat-active-grace");
+    const clean = createHandle("epic-1", "chat-clean-grace");
+    registry.acquire(
+      {
+        epicId: "epic-1",
+        chatId: "chat-active-grace",
+        hostId: HOST,
+        scopeKey: SCOPE,
+      },
+      () => active.handle,
+    );
+    markRunning(active.handle);
+    registry.release("epic-1", "chat-active-grace", HOST);
+    vi.advanceTimersByTime(
+      DESKTOP_RETENTION_PROFILE.unknownActivityCapGraceMs + 1,
+    );
+    registry.acquire(
+      {
+        epicId: "epic-1",
+        chatId: "chat-clean-grace",
+        hostId: HOST,
+        scopeKey: SCOPE,
+      },
+      () => clean.handle,
+    );
+    registry.release("epic-1", "chat-clean-grace", HOST);
+
+    expect(active.closeCount()).toBe(0);
+    expect(clean.closeCount()).toBe(1);
   });
 
   it("never evicts leased sessions to satisfy the warm cap", () => {

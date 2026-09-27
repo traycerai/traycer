@@ -6,11 +6,14 @@ import {
   createSessionRegistry,
   type SessionRegistry,
   type SessionDisposeCause,
+  type RuntimeEnvironment,
+  type RuntimeTimer,
   type WarmCapBlocker,
   type WarmCapEvaluation,
 } from "@traycer-clients/shared/replica-runtime";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { appLogger } from "@/lib/logger";
+import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 import { epicHoldsUnsavedDraft } from "@/lib/epics/epic-draft-guard";
 import { useSyncExternalStore } from "react";
 import {
@@ -236,6 +239,8 @@ export interface OpenEpicSessionRegistryOptions {
 interface EpicRegistrySession {
   readonly epicId: string;
   readonly handle: OpenEpicStoreHandle;
+  /** Starts on the first unknown frame and survives repeated acquires. */
+  unknownActivitySinceMs: number | null;
   /**
    * Unsubscribe from the handle's unsynced-queue signal. Reaped on
    * release / disposeAll so we don't leak a zustand subscription after
@@ -301,13 +306,10 @@ function eligibilityKeyFor(
   // Every LIVE input of the two cap predicates is in the key, or a session
   // that just became evictable would not trigger a prune until an unrelated
   // field moved: `holdsNothingToLose` reads the three work fields below,
-  // `epicIsBusy` reads the activity plane's health and reach plus the epic's
-  // working set - all three keyed to the SUBSCRIPTION this session already
-  // holds (`unsubscribeActivity`), so no separate key term is needed for
-  // them. `handle.hostId` is fixed for the handle's whole life (see its own
-  // doc) and is not a live input, so it is not in the key either - it only
-  // needs to be read at the moment `epicIsBusy` runs, not watched.
-  return `${holdsNothingToLose(state) ? 1 : 0}:${epicIsBusy(epicId, handle.hostId) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${state.writeCommands.length}:${metaTitle}:${liveTitle}`;
+  // the activity plane's health, host reach and this epic's turn set are all
+  // separate terms. A blind -> known-working transition must re-evaluate the
+  // cap even though both states were busy to the old boolean key.
+  return `${holdsNothingToLose(state) ? 1 : 0}:${agentActivityPlaneAnswers() ? 1 : 0}:${agentActivityPlaneCoversHost(handle.hostId) ? 1 : 0}:${hasActiveAgentWork(epicId) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${state.writeCommands.length}:${metaTitle}:${liveTitle}`;
 }
 
 /**
@@ -334,7 +336,7 @@ function eligibilityKeyFor(
  * call for their own gates, with the same reasoning. A never-loaded session
  * has nothing to lose either, which is why `snapshotLoaded` is not read.
  */
-function holdsNothingToLose(state: OpenEpicState): boolean {
+export function holdsNothingToLose(state: OpenEpicState): boolean {
   return (
     !state.isDirty &&
     state.writeCommands.length === 0 &&
@@ -343,20 +345,18 @@ function holdsNothingToLose(state: OpenEpicState): boolean {
 }
 
 /**
- * The cap's "something is in progress" gate: an agent turn is running in the
- * epic, OR the activity plane cannot currently say that none is. Background-only
- * work does not count - see {@link hasActiveAgentWork}.
+ * The strict parking gate: an agent turn is running in the epic, OR the
+ * activity plane cannot currently say that none is. Background-only work does
+ * not count - see {@link hasActiveAgentWork}. The cap has its own bounded
+ * unknown-activity grace in {@link epicCapActivityBlocker}.
  *
  * The second arm is what the transport clause used to cover by accident: an
  * outage that closes the activity stream also puts every epic transport into
  * `reconnecting`, and `openAgentActivityStream` empties `byEpic` on close -
  * so during an outage every epic reads idle. With the transport no longer in
- * the gate, a blind plane must fail CLOSED: treat every epic as busy until the
- * stream is open again and has delivered a state frame. Under the epic
- * plane's `"all-entries"` cap scope a busy entry still counts toward the cap
- * but is never a candidate, so a blind window leaves the registry exactly
- * where it was - the pre-change behaviour - rather than evicting an epic
- * whose agent is mid-turn.
+ * the gate, an unknown plane must initially fail CLOSED. Parking keeps this
+ * strict verdict for its whole lifetime; cap eviction relaxes only the
+ * unknown arm after the profile's grace, with data-loss guards still in force.
  *
  * The third arm bounds WHICH epics an answering plane can speak for. The union
  * is built by the serving host, so it can prove an epic idle only for a
@@ -377,12 +377,8 @@ function holdsNothingToLose(state: OpenEpicState): boolean {
  * `OpenEpicStoreHandle.hostId` closes that - every session's own host is now
  * checked, open transport or not.
  */
-function epicIsBusy(epicId: string, hostId: string): boolean {
-  return epicIsBusyAcrossHosts(epicId, [hostId]);
-}
-
 /**
- * {@link epicIsBusy} over every host an Epic has live state on, not just the
+ * The strict park gate over every host an Epic has live state on, not just the
  * one its own session is bound to. A park disposes the chat plane too, and a
  * chat can be served from a different host - coverage is per host, so checking
  * only the epic's host can pass while the plane is blind to the host whose
@@ -397,8 +393,6 @@ function epicIsBusyAcrossHosts(
 
 /**
  * Which arm of {@link epicIsBusyAcrossHosts} holds, or `null` when none does.
- * The names are what the cap walk's debug line reports for an epic it could
- * not evict.
  */
 type EpicBusyReason =
   | "activity-plane-blind"
@@ -417,18 +411,59 @@ function epicBusyReason(
   return null;
 }
 
+type EpicCapUnknownReason = "activity-plane-blind" | "host-uncovered";
+
+export interface EpicCapActivityWindow {
+  readonly unknownSinceMs: number | null;
+  readonly nowMs: number;
+  readonly graceMs: number;
+}
+
+function epicCapUnknownReason(hostId: string): EpicCapUnknownReason | null {
+  if (!agentActivityPlaneAnswers()) return "activity-plane-blind";
+  return agentActivityPlaneCoversHost(hostId) ? null : "host-uncovered";
+}
+
+/**
+ * The epic cap's activity gate. The shared cap walk and byte-accounting caller
+ * use this verdict; parking deliberately uses the stricter gate above.
+ */
+export function epicCapActivityBlocker(
+  epicId: string,
+  hostId: string,
+  window: EpicCapActivityWindow,
+): "agent-working" | EpicCapUnknownReason | null {
+  if (hasActiveAgentWork(epicId)) return "agent-working";
+  const unknownReason = epicCapUnknownReason(hostId);
+  if (unknownReason === null) return null;
+  if (
+    window.unknownSinceMs === null ||
+    window.nowMs - window.unknownSinceMs < window.graceMs
+  ) {
+    return unknownReason;
+  }
+  return null;
+}
+
 function epicCapExemptionReason(
   session: EpicRegistrySession,
   blocker: WarmCapBlocker,
+  nowMs: number,
+  graceMs: number,
 ): EpicCapExemptionReason {
   if (blocker === "demand") return "demand";
   if (blocker === "eligible-after-walk") return "eligible-after-walk";
   if (blocker === "active-work") {
-    if (!agentActivityPlaneAnswers()) return "activity-plane-blind";
-    if (hasActiveAgentWork(session.epicId)) return "agent-working";
-    if (!agentActivityPlaneCoversHost(session.handle.hostId)) {
-      return "host-uncovered";
-    }
+    const reason = epicCapActivityBlocker(
+      session.epicId,
+      session.handle.hostId,
+      {
+        unknownSinceMs: session.unknownActivitySinceMs,
+        nowMs,
+        graceMs,
+      },
+    );
+    if (reason !== null) return reason;
     // A concurrent plane change may remove the reason between the cap's
     // first gate and this diagnostic read. Keep the conservative label.
     return "agent-working";
@@ -646,9 +681,13 @@ function findMergeTarget(
  *     active entries.
  */
 export class OpenEpicSessionRegistry {
+  private readonly environment: RuntimeEnvironment =
+    createRendererRuntimeEnvironment();
   private readonly sessions: SessionRegistry<EpicRegistrySession>;
   private capExemptionEpisodes = new Map<string, EpicCapExemptionReason>();
   private readonly capExemptionOccurrences = emptyCapExemptionCounts();
+  private capGraceTimer: RuntimeTimer | null = null;
+  private capGraceDeadlineMs: number | null = null;
   private releaseListener: ((epicId: string) => void) | null = null;
   /**
    * Cached snapshot of the last-computed `getUnsyncedEdits()` result. We
@@ -701,10 +740,9 @@ export class OpenEpicSessionRegistry {
 
   constructor(options: OpenEpicSessionRegistryOptions) {
     this.sessions = createSessionRegistry<EpicRegistrySession>({
-      environment: createRendererRuntimeEnvironment(),
+      environment: this.environment,
       policy: {
-        // No clock: this plane prunes on acquire and on an eligibility change,
-        // never on elapsed time.
+        // The cap grace is scheduled here; shared idle-TTL eviction stays off.
         idleTtlMs: null,
         // A getter, read on every cap walk - see `maxLive`.
         get maxWarm(): number {
@@ -727,14 +765,14 @@ export class OpenEpicSessionRegistry {
           this.recordCapEvaluation(evaluation);
         },
         retainWhenIdle: () => true,
-        // Agent working, plane blind, or a union that does not reach this
-        // session's host - see `epicIsBusy`.
+        // An agent turn always blocks. Unknown activity blocks for this
+        // profile's grace only, and only in the cap walk.
         hasActiveWork: (session) =>
-          epicIsBusy(session.epicId, session.handle.hostId),
+          this.epicCapActivityBlocker(session) !== null,
         // The same arms, named. `"none"` is unreachable: the walk reads this
         // only after `hasActiveWork` answered true.
         activeWorkReason: (session) =>
-          epicBusyReason(session.epicId, [session.handle.hostId]) ?? "none",
+          this.epicCapActivityBlocker(session) ?? "none",
         // Never evict a session holding unsynced edits or unflushed writes.
         // The transport is NOT consulted - see `holdsNothingToLose`.
         isEvictable: (session) =>
@@ -745,7 +783,10 @@ export class OpenEpicSessionRegistry {
             typeof options.maxLive === "function"
               ? options.maxLive()
               : options.maxLive;
-          if (this.sessions.size() <= cap) this.capExemptionEpisodes.clear();
+          if (this.sessions.size() <= cap) {
+            this.capExemptionEpisodes.clear();
+            this.scheduleCapGraceRecheck(null);
+          }
           // Attribute BEFORE either teardown arm. A dirty outgoing handle is
           // retained by calling detachTransport below rather than by the
           // registry's dispose callback, but both routes end the same durable
@@ -796,6 +837,27 @@ export class OpenEpicSessionRegistry {
     return this.sessions.size();
   }
 
+  private epicCapActivityBlocker(
+    session: EpicRegistrySession,
+  ): "agent-working" | EpicCapUnknownReason | null {
+    return epicCapActivityBlocker(session.epicId, session.handle.hostId, {
+      unknownSinceMs: session.unknownActivitySinceMs,
+      nowMs: this.environment.clock.now(),
+      graceMs: getRetentionProfile().unknownActivityCapGraceMs,
+    });
+  }
+
+  /** Reusable eligibility verdict for byte and count eviction callers. */
+  isEligibleForCapEviction(epicId: string): boolean {
+    const entry = this.sessions.peekEntry(epicId);
+    return (
+      entry !== null &&
+      entry.demand === 0 &&
+      this.epicCapActivityBlocker(entry.session) === null &&
+      holdsNothingToLose(entry.session.handle.store.getState())
+    );
+  }
+
   capExemptionTelemetry(): EpicCapExemptionTelemetry {
     const current = emptyCapExemptionCounts();
     for (const reason of this.capExemptionEpisodes.values()) {
@@ -811,9 +873,29 @@ export class OpenEpicSessionRegistry {
     evaluation: WarmCapEvaluation<EpicRegistrySession>,
   ): void {
     const next = new Map<string, EpicCapExemptionReason>();
+    const nowMs = this.environment.clock.now();
+    const graceMs = getRetentionProfile().unknownActivityCapGraceMs;
+    let nextDeadlineMs: number | null = null;
     for (const entry of evaluation.blocked) {
-      const reason = epicCapExemptionReason(entry.session, entry.blocker);
+      const reason = epicCapExemptionReason(
+        entry.session,
+        entry.blocker,
+        nowMs,
+        graceMs,
+      );
       next.set(entry.key, reason);
+      if (
+        (reason === "activity-plane-blind" || reason === "host-uncovered") &&
+        entry.session.unknownActivitySinceMs !== null
+      ) {
+        const deadlineMs = entry.session.unknownActivitySinceMs + graceMs;
+        if (
+          deadlineMs > nowMs &&
+          (nextDeadlineMs === null || deadlineMs < nextDeadlineMs)
+        ) {
+          nextDeadlineMs = deadlineMs;
+        }
+      }
       if (this.capExemptionEpisodes.get(entry.key) === reason) continue;
       this.capExemptionOccurrences[reason] += 1;
       appLogger.debug("[open-epic-session-registry] cap exemption", {
@@ -824,6 +906,25 @@ export class OpenEpicSessionRegistry {
       });
     }
     this.capExemptionEpisodes = next;
+    this.scheduleCapGraceRecheck(nextDeadlineMs);
+  }
+
+  private scheduleCapGraceRecheck(deadlineMs: number | null): void {
+    if (deadlineMs === this.capGraceDeadlineMs) return;
+    this.capGraceTimer?.cancel();
+    this.capGraceTimer = null;
+    this.capGraceDeadlineMs = deadlineMs;
+    if (deadlineMs === null) return;
+    this.capGraceTimer = this.environment.scheduler.schedule(
+      Math.max(0, deadlineMs - this.environment.clock.now()),
+      () => {
+        this.capGraceTimer = null;
+        this.capGraceDeadlineMs = null;
+        // Re-read the wall clock and every safety gate. Early timers or a
+        // backward clock step simply re-arm for the remaining grace.
+        this.sessions.pruneWarm();
+      },
+    );
   }
 
   /**
@@ -1363,6 +1464,10 @@ export class OpenEpicSessionRegistry {
     const session: EpicRegistrySession = {
       epicId,
       handle,
+      unknownActivitySinceMs:
+        epicCapUnknownReason(handle.hostId) === null
+          ? null
+          : this.environment.clock.now(),
       unsubscribe: null,
       unsubscribeActivity: null,
       lastEligibilityKey: eligibilityKeyFor(epicId, handle),
@@ -1370,8 +1475,20 @@ export class OpenEpicSessionRegistry {
       pendingPark: false,
     };
     const handleEligibilityChange = (): void => {
+      const previousUnknownSinceMs = session.unknownActivitySinceMs;
+      const unknownReason = epicCapUnknownReason(handle.hostId);
+      if (unknownReason === null) {
+        // A fresh covering answer ends the episode, even if it reports a turn.
+        session.unknownActivitySinceMs = null;
+      } else if (session.unknownActivitySinceMs === null) {
+        session.unknownActivitySinceMs = this.environment.clock.now();
+      }
       const nextKey = eligibilityKeyFor(epicId, handle);
-      if (nextKey === session.lastEligibilityKey) return;
+      if (
+        nextKey === session.lastEligibilityKey &&
+        previousUnknownSinceMs === session.unknownActivitySinceMs
+      )
+        return;
       session.lastEligibilityKey = nextKey;
       this.sessions.transact(() => {
         this.sessions.pruneWarm();
@@ -1398,7 +1515,7 @@ export class OpenEpicSessionRegistry {
       handleEligibilityChange,
     );
     // The plane's HEALTH moves on different fields than its working set (a
-    // re-open with an empty union keeps the same empty map), and `epicIsBusy`
+    // re-open with an empty union keeps the same empty map), and the cap
     // reads both, so both must wake the eligibility check.
     const unsubscribePlaneHealth = subscribeAgentActivityPlaneHealth(
       handleEligibilityChange,
@@ -1565,6 +1682,7 @@ export class OpenEpicSessionRegistry {
   }
 
   disposeAll(): void {
+    this.scheduleCapGraceRecheck(null);
     this.sessions.transact(() => {
       this.sessions.disposeAll();
       this.capExemptionEpisodes.clear();

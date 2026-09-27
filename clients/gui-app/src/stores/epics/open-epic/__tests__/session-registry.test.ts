@@ -31,6 +31,10 @@ import {
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
 import { appLogger } from "@/lib/logger";
+import {
+  DESKTOP_RETENTION_PROFILE,
+  setRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
 import { createArtifactInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
 import {
   openStoreForTest,
@@ -787,12 +791,14 @@ describe("cap walk names the exemption holding each entry over cap", () => {
   function capLines(
     debug: MockInstance,
     epicIds: readonly string[],
+    cap: number,
   ): unknown[] {
     return debug.mock.calls
       .filter(
         (call: unknown[]) =>
           call[0] === CAP_EXEMPTION_MESSAGE &&
-          epicIds.includes((call[1] as { epic: string }).epic),
+          epicIds.includes((call[1] as { epic: string }).epic) &&
+          (call[1] as { cap: number }).cap === cap,
       )
       .map((call: unknown[]) => call[1]);
   }
@@ -820,7 +826,9 @@ describe("cap walk names the exemption holding each entry over cap", () => {
     registry.acquire("e-bg", () => h(background));
 
     expect(background.disposed).toBe(true);
-    expect(capLines(debug, ["e-mounted", "e-dirty", "e-turn", "e-bg"])).toEqual(
+    expect(
+      capLines(debug, ["e-mounted", "e-dirty", "e-turn", "e-bg"], 1),
+    ).toEqual(
       expect.arrayContaining([
         { epic: "e-mounted", reason: "demand", resident: 2, cap: 1 },
         { epic: "e-dirty", reason: "unsynced-edits", resident: 2, cap: 1 },
@@ -842,7 +850,7 @@ describe("cap walk names the exemption holding each entry over cap", () => {
     registry.acquire("e0", () => h(buildTestHandle("e0", false)));
     registry.acquire("e1", () => h(buildTestHandle("e1", false)));
 
-    expect(capLines(debug, ["e0", "e1"])).toEqual([
+    expect(capLines(debug, ["e0", "e1"], 1)).toEqual([
       { epic: "e0", reason: "activity-plane-blind", resident: 2, cap: 1 },
       { epic: "e1", reason: "activity-plane-blind", resident: 2, cap: 1 },
     ]);
@@ -861,7 +869,7 @@ describe("cap walk names the exemption holding each entry over cap", () => {
       h(withHostId(buildTestHandle("e-elsewhere", false), "host-elsewhere")),
     );
 
-    expect(capLines(debug, ["e-elsewhere"])).toEqual([
+    expect(capLines(debug, ["e-elsewhere"], 0)).toEqual([
       { epic: "e-elsewhere", reason: "host-uncovered", resident: 1, cap: 0 },
     ]);
   });
@@ -875,7 +883,184 @@ describe("cap walk names the exemption holding each entry over cap", () => {
 
     expect(clean.disposed).toBe(true);
     expect(registry.size()).toBe(2);
-    expect(capLines(debug, ["e-dirty", "e-clean", "e-next"])).toEqual([]);
+    expect(capLines(debug, ["e-dirty", "e-clean", "e-next"], 2)).toEqual([]);
+  });
+});
+
+describe("unknown activity grace applies only to epic cap eviction", () => {
+  const graceMs = DESKTOP_RETENTION_PROFILE.unknownActivityCapGraceMs;
+
+  it("reads the grace duration from the active retention profile", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    setRetentionProfile({
+      ...DESKTOP_RETENTION_PROFILE,
+      unknownActivityCapGraceMs: 1_000,
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    try {
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+      });
+      const first = buildTestHandle("profile-first", false);
+      const second = buildTestHandle("profile-second", false);
+      registry.acquire("profile-first", () => h(first));
+      registry.acquire("profile-second", () => h(second));
+
+      vi.advanceTimersByTime(999);
+      expect(registry.size()).toBe(2);
+      vi.advanceTimersByTime(1);
+      expect(first.disposed).toBe(true);
+      expect(registry.size()).toBe(1);
+    } finally {
+      registry.disposeAll();
+      setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts at the unknown episode, survives an uncovered answer and repeated acquires, then prunes automatically", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    try {
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+      });
+      const first = buildTestHandle("grace-first", false);
+      const second = buildTestHandle("grace-second", false);
+      registry.acquire("grace-first", () => h(first));
+      vi.advanceTimersByTime(20_000);
+      registry.acquire("grace-second", () => h(second));
+      vi.advanceTimersByTime(10_000);
+
+      // An answering plane that cannot cover these sessions is still unknown.
+      __resetAgentActivityStoreForTests();
+      __setHostAgentActivityHealthForTests("host-serving", {
+        connectionStatus: "open",
+        servedBy: "local",
+        stateFrameSeenThisEpoch: true,
+        cloudSyncStatus: null,
+      });
+      expect(registry.capExemptionTelemetry().current["host-uncovered"]).toBe(
+        2,
+      );
+      vi.advanceTimersByTime(10_000);
+      registry.acquire("grace-first", () => h(first));
+      vi.advanceTimersByTime(graceMs - 40_000 - 1);
+      expect(registry.size()).toBe(2);
+      expect(first.disposed).toBe(false);
+
+      vi.advanceTimersByTime(1);
+      expect(first.disposed).toBe(true);
+      expect(second.disposed).toBe(false);
+      expect(registry.size()).toBe(1);
+    } finally {
+      registry.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets only after a fresh covering answer, even while mounted", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    try {
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+      });
+      const first = buildTestHandle("reset-first", false);
+      const second = buildTestHandle("reset-second", false);
+      registry.acquireMounted("reset-first", () => h(first));
+      registry.acquireMounted("reset-second", () => h(second));
+
+      vi.advanceTimersByTime(30_000);
+      __setAgentActivityPlaneAnsweringForTests();
+      vi.advanceTimersByTime(1_000);
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+      });
+      registry.releaseMounted("reset-first");
+      registry.releaseMounted("reset-second");
+      vi.advanceTimersByTime(graceMs - 1);
+      expect(registry.size()).toBe(2);
+
+      vi.advanceTimersByTime(1);
+      expect(registry.size()).toBe(1);
+      expect(first.disposed).toBe(true);
+      expect(second.disposed).toBe(false);
+    } finally {
+      registry.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains mounted, dirty, queued, unflushed and reported-turn sessions after grace", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    try {
+      const mounted = buildTestHandle("safe-mounted", false);
+      const dirty = buildTestHandle("safe-dirty", true);
+      const queued = buildTestHandle("safe-queued", false);
+      queued.handle.store.setState({ unsyncedQueueSize: 1 });
+      const pending = buildTestHandle("safe-pending", false);
+      const record: CommandRecord<EpicWriteCommandIntent> = {
+        commandId: "cmd-grace",
+        intent: { kind: "update-epic-title", title: "Draft", updatedAt: 0 },
+        state: "pending",
+        delivery: "queued",
+        issuedAtMs: 0,
+        attempts: 0,
+        expectedEntityVersion: null,
+        resolution: null,
+      };
+      pending.handle.store.setState({ writeCommands: [record] });
+      const working = buildTestHandle("safe-working", false);
+      markAgentWorking(working, "turn-grace");
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+      });
+      const clean = buildTestHandle("safe-clean", false);
+      registry.acquireMounted("safe-mounted", () => h(mounted));
+      registry.acquire("safe-dirty", () => h(dirty));
+      registry.acquire("safe-queued", () => h(queued));
+      registry.acquire("safe-pending", () => h(pending));
+      registry.acquire("safe-working", () => h(working));
+      registry.acquire("safe-clean", () => h(clean));
+
+      vi.advanceTimersByTime(graceMs);
+      expect(clean.disposed).toBe(true);
+      for (const held of [mounted, dirty, queued, pending, working]) {
+        expect(held.disposed).toBe(false);
+      }
+      expect(registry.size()).toBe(5);
+      expect(registry.isEligibleForCapEviction("safe-working")).toBe(false);
+    } finally {
+      registry.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps canPark strict after the cap grace expires", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    try {
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+      });
+      const clean = buildTestHandle("park-strict", false);
+      registry.acquire("park-strict", () => h(clean));
+      vi.advanceTimersByTime(graceMs);
+
+      expect(registry.isEligibleForCapEviction("park-strict")).toBe(true);
+      expect(registry.canPark("park-strict")).toBe(false);
+      expect(clean.disposed).toBe(false);
+    } finally {
+      registry.disposeAll();
+      vi.useRealTimers();
+    }
   });
 });
 
