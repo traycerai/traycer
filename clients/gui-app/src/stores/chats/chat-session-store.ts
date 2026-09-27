@@ -12102,9 +12102,10 @@ function refusalCauseOf(
  *
  * `status: "rejected"` becomes `refused` rather than `null`, deliberately. The
  * menu has to tell "the host declined this hold" from "no hold was ever asked
- * for": the first closes the menu and says the chat has moved on, the second is
- * the ordinary closed state, and collapsing them would make a refusal look like
- * a menu that simply never opened.
+ * for": the first puts "Couldn't pause the countdown." on the chooser's footer
+ * - no cause, since a refusal proves no advancement (D220) - the second is the
+ * ordinary closed state, and collapsing them would make a refusal look like a
+ * menu that simply never opened.
  */
 function reconcileFallbackChoiceAck(
   lease: ChatSessionState["fallbackChoiceLease"],

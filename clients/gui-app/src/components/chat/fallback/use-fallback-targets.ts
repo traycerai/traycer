@@ -58,8 +58,9 @@ export type FallbackTargetsResult = UseQueryResult<
  * **A refusal is not an error.** `outcome` is `no_active_traversal`,
  * `traversal_advanced`, `attempt_not_latest` or `state_unreadable` in a
  * SUCCESSFUL response with empty lists, exactly as the action verbs answer a
- * lost race rather than failing the call. The caller renders those; only a
- * transport failure reaches `isError`.
+ * lost race rather than failing the call. No surface draws copy for them: the
+ * chooser reads only `listed` rows and otherwise opens on the tuple it was
+ * entered from, and only a transport failure reaches `isError`.
  */
 export function useFallbackListTargets(
   client: HostClient<HostRpcRegistry> | null,

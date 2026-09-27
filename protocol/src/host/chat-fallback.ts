@@ -737,9 +737,10 @@ export type FallbackModelTarget = z.infer<typeof fallbackModelTargetSchema>;
  * error card has no live record and names the work by the failed attempt, the
  * same `{ userMessageId, turnId }` pair `runManualRung` already takes.
  *
- * Never throws: an unreadable or moved-on world is a normal response carrying
- * an `outcome` and empty lists, exactly as the action verbs answer
- * `traversal_advanced` rather than failing the call.
+ * Never throws: an unreadable record, a stale revision or an attempt that is no
+ * longer the chat's latest is a normal response carrying an `outcome` and
+ * empty lists, exactly as the action verbs answer `traversal_advanced` rather
+ * than failing the call.
  */
 export const chatFallbackListTargetsRequestSchema = lazySchema(() =>
   z.object({
@@ -765,6 +766,23 @@ export type ChatFallbackListTargetsRequest = z.infer<
 
 export const chatFallbackListTargetsResponseSchema = lazySchema(() =>
   z.object({
+    /**
+     * By cause, as the host answers it:
+     *
+     * - `listed` - the rows. For an `attempt` selector, whenever it names the
+     *   chat's latest attempt: routed from that attempt's own tuple, with or
+     *   without a routing record for it (none, or one for another message).
+     *   An attempt whose tuple the host never recorded lists nothing, still as
+     *   `listed`: an empty menu, not a claim about the chat.
+     * - `attempt_not_latest` - ONLY an `attempt` selector whose ids are not the
+     *   chat's latest attempt, the same comparison `runManualRung` makes. The
+     *   one answer here that says the chat has advanced past the named turn.
+     * - `no_active_traversal` - ONLY a `traversal` selector with no record, or
+     *   a record for another traversal. An attempt selector never gets it.
+     * - `traversal_advanced` - a `traversal` selector whose revision is stale.
+     * - `state_unreadable` - a record this build cannot parse, which is not the
+     *   same world as no record.
+     */
     outcome: z.enum([
       "listed",
       "no_active_traversal",
@@ -772,7 +790,19 @@ export const chatFallbackListTargetsResponseSchema = lazySchema(() =>
       "attempt_not_latest",
       "state_unreadable",
     ]),
-    /** The tuple that failed, so a surface can assert it is never offered. */
+    /**
+     * The LISTING's source: the tuple the rows were routed from, and the one
+     * the chooser opens on when no usable row is recommended.
+     *
+     * Not the failed-turn card's `lastFailedAttempt.failedTuple`, and it may
+     * be non-null while that one is null. The card's is the step's move-from
+     * tuple, paired with the wait facts, and an unclassified failure's card
+     * carries neither; its attempt still ran on a known tuple, and that is the
+     * one the listing routes from. The two agree for a classified failure.
+     *
+     * `null` on every answer but `listed`, and on a `listed` answer with no
+     * rows because the host never recorded the attempt's tuple.
+     */
     failedTuple: chatRunSettingsSchema.nullable(),
     profileTargets: z.array(fallbackProfileTargetSchema),
     modelTargets: z.array(fallbackModelTargetSchema),
