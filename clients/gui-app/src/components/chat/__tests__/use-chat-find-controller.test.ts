@@ -149,6 +149,7 @@ describe("useChatFindController - chain-open on reveal", () => {
           getScroller: () => scroller,
           scrollToLocation,
           cancelManualNavigation,
+          getNavigationGeneration: () => 0,
           setScrolledActiveUserMessageIdIfChanged,
         });
         return controller;

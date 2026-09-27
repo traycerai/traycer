@@ -199,6 +199,12 @@ export interface ChatFindTranscriptPlacement {
    * next.
    */
   readonly epoch: number | null;
+  /**
+   * Whether the skeleton names every row. Only then does `loaded` mean a
+   * record is held whole: over a partial skeleton a turn can have slices no
+   * one has named yet, and a match in one of them is still out of reach.
+   */
+  readonly complete: boolean;
   placeHit(hit: ChatFindIndexHit): ChatFindIndexHitPlacement;
   /** A rendered row's skeleton ordinal; `null` for a row not placed yet. */
   rowSortKey(rowId: string): number | null;
@@ -210,6 +216,7 @@ export interface ChatFindTranscriptPlacement {
  */
 export const FULLY_LOADED_TRANSCRIPT: ChatFindTranscriptPlacement = {
   epoch: null,
+  complete: true,
   placeHit: () => ({ kind: "loaded" }),
   rowSortKey: () => null,
 };
@@ -312,6 +319,7 @@ export function chatFindTranscriptPlacement(
   let index: WindowPlacementIndex | null = null;
   const placement: ChatFindTranscriptPlacement = {
     epoch: window.epoch,
+    complete: window.skeletonComplete,
     placeHit: (hit) => {
       index ??= buildWindowPlacementIndex(window);
       return placeHitInWindow(window, index, hit);

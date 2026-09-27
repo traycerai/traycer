@@ -75,13 +75,15 @@ export function useChatFindIndexRead(args: ChatFindIndexReadArgs): void {
   const locateMissing =
     skeletonOrdinal === null && located.status === "missing";
 
-  // Released when the read ends or changes, and on unmount - a separate effect
-  // from the one below so a new ordinal for the SAME read replaces the old one
-  // without a release in between.
+  // The hold follows the ORDINAL, not the target string. Released only when the
+  // read ends or moves to another message, and on unmount - a separate effect
+  // from the one below, so a new ordinal for the same read replaces the old one
+  // without a release in between, and a re-target that lands on the SAME row
+  // (a located record whose row id the skeleton now names) keeps it.
   useEffect(() => {
     if (messageId === null) return;
     return () => requestFindReadOrdinal(null);
-  }, [messageId, target, requestFindReadOrdinal]);
+  }, [messageId, requestFindReadOrdinal]);
 
   useEffect(() => {
     if (messageId === null || ordinal === null) return;

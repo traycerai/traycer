@@ -422,18 +422,27 @@ function renderFind(input: {
   readonly requestIndexRead: Mock<(read: ChatFindIndexRead | null) => void>;
   /**
    * `ChatSessionState.queuePauseReasonProtocolSupported` as
-   * `TranscriptQueuePauseReasonSupportContext` carries it. `null` renders
-   * with no Provider at all - the context's own default.
+   * `TranscriptQueuePauseReasonSupportContext` carries it; `null` is the
+   * context's own default.
    */
   readonly support: boolean | null;
 }): {
   readonly getAdapter: () => ChatFindAdapter;
   readonly getController: () => ControllerHandle;
   readonly setTranscript: (next: TranscriptState) => void;
+  /** The session's answer changes, as a re-open after a reconnect makes it. */
+  readonly setSupport: (next: boolean | null) => void;
+  /** The reader navigates elsewhere: a minimap pick, a gesture. */
+  readonly navigateAway: () => void;
   readonly scrollToLocation: Mock;
 } {
   let registered: ChatFindAdapter | null = null;
   let controller: ControllerHandle | null = null;
+  let transcriptNow = input.initial;
+  let support = input.support;
+  // `ChatMessages`' reader-navigation generation: a gesture or a navigation
+  // bumps it, and so does find's own scroll, which cancels manual navigation.
+  let navigationGeneration = 0;
   const tileFindContext = {
     tileInstanceId: TILE_INSTANCE_ID,
     registerAdapter: (adapter: TileFindAdapter) => {
@@ -446,10 +455,13 @@ function renderFind(input: {
   const forceStore = createChatFindForceStore();
   const callbacks = {
     scrollToLocation: vi.fn(),
-    cancelManualNavigation: vi.fn(),
+    cancelManualNavigation: vi.fn(() => {
+      navigationGeneration += 1;
+    }),
     setScrolledActiveUserMessageIdIfChanged: vi.fn(),
   };
   const getScroller = (): HTMLElement => input.scroller;
+  const getNavigationGeneration = (): number => navigationGeneration;
 
   function Harness(props: { readonly transcript: TranscriptState }) {
     const { transcript } = props;
@@ -487,6 +499,7 @@ function renderFind(input: {
       getScroller,
       scrollToLocation: callbacks.scrollToLocation,
       cancelManualNavigation: callbacks.cancelManualNavigation,
+      getNavigationGeneration,
       setScrolledActiveUserMessageIdIfChanged:
         callbacks.setScrolledActiveUserMessageIdIfChanged,
     });
@@ -505,22 +518,20 @@ function renderFind(input: {
     return null;
   }
 
+  // Always the Provider, so a change of answer re-renders the tile rather
+  // than remounting it (a `null` value is the context's default).
   function Wrapper(props: { readonly children: ReactNode }) {
-    const body = (
-      <QueryClientProvider client={input.queryClient}>
-        <ChatFindForceTileInstanceIdContext.Provider value={TILE_INSTANCE_ID}>
-          <ChatFindForceStoreContext.Provider value={forceStore}>
-            <TileFindContext.Provider value={tileFindContext}>
-              {props.children}
-            </TileFindContext.Provider>
-          </ChatFindForceStoreContext.Provider>
-        </ChatFindForceTileInstanceIdContext.Provider>
-      </QueryClientProvider>
-    );
-    if (input.support === null) return body;
     return (
-      <TranscriptQueuePauseReasonSupportContext value={input.support}>
-        {body}
+      <TranscriptQueuePauseReasonSupportContext value={support}>
+        <QueryClientProvider client={input.queryClient}>
+          <ChatFindForceTileInstanceIdContext.Provider value={TILE_INSTANCE_ID}>
+            <ChatFindForceStoreContext.Provider value={forceStore}>
+              <TileFindContext.Provider value={tileFindContext}>
+                {props.children}
+              </TileFindContext.Provider>
+            </ChatFindForceStoreContext.Provider>
+          </ChatFindForceTileInstanceIdContext.Provider>
+        </QueryClientProvider>
       </TranscriptQueuePauseReasonSupportContext>
     );
   }
@@ -538,7 +549,15 @@ function renderFind(input: {
       return controller;
     },
     setTranscript: (next) => {
+      transcriptNow = next;
       rendered.rerender(<Harness transcript={next} />);
+    },
+    setSupport: (next) => {
+      support = next;
+      rendered.rerender(<Harness transcript={transcriptNow} />);
+    },
+    navigateAway: () => {
+      navigationGeneration += 1;
     },
     scrollToLocation: callbacks.scrollToLocation,
   };
@@ -1631,6 +1650,357 @@ describe("chat find: an older index hit is a candidate until confirmed (F14)", (
       void adapter.next();
     });
     expect(requestIndexRead).not.toHaveBeenCalled();
+  });
+
+  // A verdict is about what the rows PAINT, and the session's queue-notice
+  // answer decides that. A re-open after a reconnect can move the answer
+  // either way (`chat-session-store-queue-pause-reason-support.test.ts`), so
+  // a change re-judges every hit, even one whose rows are evicted.
+  function queueRowSpec(hydrated: boolean): RowSpec {
+    return {
+      rowId: "assistant:t-queue",
+      createdAt: 20,
+      role: "assistant",
+      records: [assistantRecord("a-queue", "t-queue", 20)],
+      model: hydrated
+        ? assistantSegmentsRow({
+            rowId: "assistant:t-queue",
+            persistentMessageId: "a-queue",
+            createdAt: 20,
+            segments: [queuePausedNotice("a-queue", QUEUE_MESSAGE)],
+          })
+        : null,
+    };
+  }
+
+  function queueTranscript(hydrated: boolean): TranscriptState {
+    return transcriptOf(
+      [
+        // Keeps the transcript partial once the queue row is hydrated.
+        userSpec("u-old", 5, "an unrelated older note", false),
+        queueRowSpec(hydrated),
+        userSpec("u-new", 100, NEW_TEXT, true),
+      ],
+      null,
+    );
+  }
+
+  function queueHost() {
+    return hostFixture(
+      fakeIndex([
+        {
+          messageId: "a-queue",
+          tier: "notice",
+          createdAt: 20,
+          text: QUEUE_MESSAGE,
+        },
+        { messageId: "u-new", tier: "user", createdAt: 100, text: NEW_TEXT },
+      ]),
+    );
+  }
+
+  it.each([{ from: null }, { from: true }])(
+    "re-judges a dropped queue notice when the answer turns from $from to false: a candidate again, read and confirmed",
+    async ({ from }) => {
+      const host = queueHost();
+      const find = renderFind({
+        initial: queueTranscript(false),
+        client: host.client,
+        queryClient: host.queryClient,
+        scroller,
+        requestIndexJump,
+        requestIndexRead,
+        support: from,
+      });
+      const adapter = find.getAdapter();
+
+      act(() => {
+        void adapter.search({
+          requestId: 1,
+          query: "needle",
+          matchCase: false,
+        });
+      });
+      await waitFor(() => {
+        expect(adapter.getSnapshot().coverageMessage).toBe(
+          CAVEAT_MAY_MATCH_ONE,
+        );
+      });
+      // Hydrated by a scroll under `from`: the notice is hidden, so dropped.
+      act(() => {
+        find.setTranscript(queueTranscript(true));
+      });
+      expect(adapter.getSnapshot().coverageMessage).not.toContain("may match");
+      // Evicted: the dropped verdict holds.
+      act(() => {
+        find.setTranscript(queueTranscript(false));
+      });
+      expect(adapter.getSnapshot().coverageMessage).not.toContain("may match");
+      expect(adapter.getSnapshot().total).toBe(1);
+
+      // The session re-opens against a host that draws the notice.
+      act(() => {
+        find.setSupport(false);
+      });
+      expect(adapter.getSnapshot()).toMatchObject({
+        total: 1,
+        coverageMessage: CAVEAT_MAY_MATCH_ONE,
+      });
+
+      act(() => {
+        void adapter.previous();
+      });
+      expect(requestIndexRead).toHaveBeenLastCalledWith({
+        messageId: "a-queue",
+        target: "a-queue",
+      });
+      act(() => {
+        find.setTranscript(queueTranscript(true));
+      });
+      expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+      expect(adapter.getSnapshot()).toMatchObject({ total: 2, current: 1 });
+    },
+  );
+
+  it("re-judges a confirmed queue notice when the answer turns true: no longer counted, read and dropped", async () => {
+    const host = queueHost();
+    const find = renderFind({
+      initial: queueTranscript(false),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+      requestIndexRead,
+      support: false,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
+    });
+    // Hydrated by a scroll under `false`: the notice paints, so confirmed.
+    act(() => {
+      find.setTranscript(queueTranscript(true));
+    });
+    expect(adapter.getSnapshot().total).toBe(2);
+    // Evicted: still counted, as an older message.
+    act(() => {
+      find.setTranscript(queueTranscript(false));
+    });
+    expect(adapter.getSnapshot().total).toBe(2);
+    expect(adapter.getSnapshot().coverageMessage).not.toContain("may match");
+
+    // The session re-opens against a host that hides the notice.
+    act(() => {
+      find.setSupport(true);
+    });
+    expect(adapter.getSnapshot()).toMatchObject({
+      total: 1,
+      coverageMessage: CAVEAT_MAY_MATCH_ONE,
+    });
+
+    act(() => {
+      void adapter.previous();
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "a-queue",
+      target: "a-queue",
+    });
+    act(() => {
+      find.setTranscript(queueTranscript(true));
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    expect(adapter.getSnapshot().total).toBe(1);
+    expect(adapter.getSnapshot().coverageMessage).not.toContain("may match");
+  });
+
+  // A read is slow; the reader may be somewhere else by the time it lands.
+  // What it learned still holds, but it no longer owns the viewport.
+  function realOldTranscript(hydrated: boolean): TranscriptState {
+    return transcriptOf(
+      [
+        userSpec("u-real", 10, "an old needle that paints", hydrated),
+        userSpec("u-new", 100, NEW_TEXT, true),
+      ],
+      null,
+    );
+  }
+
+  function realOldHost() {
+    return hostFixture(
+      fakeIndex([
+        {
+          messageId: "u-real",
+          tier: "user",
+          createdAt: 10,
+          text: "an old needle that paints",
+        },
+        { messageId: "u-new", tier: "user", createdAt: 100, text: NEW_TEXT },
+      ]),
+    );
+  }
+
+  it("keeps what a read learned after the reader navigated away, and does not take the viewport back", async () => {
+    const host = realOldHost();
+    const find = renderFind({
+      initial: realOldTranscript(false),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+      requestIndexRead,
+      support: null,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
+    });
+    // The search's own reveal of the loaded match runs first.
+    flushFrames();
+
+    act(() => {
+      void adapter.previous();
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "u-real",
+      target: "u-real",
+    });
+    // A minimap pick while the read is out.
+    find.navigateAway();
+    find.scrollToLocation.mockClear();
+
+    act(() => {
+      find.setTranscript(realOldTranscript(true));
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    // Confirmed and counted; the active match is still the one it was.
+    expect(adapter.getSnapshot()).toMatchObject({ total: 2, current: 2 });
+    flushFrames();
+    expect(find.scrollToLocation).not.toHaveBeenCalled();
+  });
+
+  it("does not carry a step on past a dropped read once the reader navigated away", async () => {
+    const host = hostFixture(
+      fakeIndex([
+        {
+          messageId: "u-real",
+          tier: "user",
+          createdAt: 10,
+          text: "an old needle that paints",
+        },
+        // The index holds the query; the row paints something else.
+        {
+          messageId: "u-phantom",
+          tier: "user",
+          createdAt: 20,
+          text: "/needle as the index holds it",
+        },
+        { messageId: "u-new", tier: "user", createdAt: 100, text: NEW_TEXT },
+      ]),
+    );
+    const transcript = (phantomHydrated: boolean): TranscriptState =>
+      transcriptOf(
+        [
+          userSpec("u-real", 10, "an old needle that paints", false),
+          userSpec(
+            "u-phantom",
+            20,
+            "$other as the row paints it",
+            phantomHydrated,
+          ),
+          userSpec("u-new", 100, NEW_TEXT, true),
+        ],
+        null,
+      );
+    const find = renderFind({
+      initial: transcript(false),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+      requestIndexRead,
+      support: null,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(adapter.getSnapshot().coverageMessage).toBe(
+        CAVEAT_MAY_MATCH_MANY(2),
+      );
+    });
+    flushFrames();
+
+    act(() => {
+      void adapter.previous();
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "u-phantom",
+      target: "u-phantom",
+    });
+    find.navigateAway();
+    find.scrollToLocation.mockClear();
+
+    act(() => {
+      find.setTranscript(transcript(true));
+    });
+    // Dropped, and the step is over: u-real is not read on the reader's
+    // behalf, and stays a candidate.
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    expect(adapter.getSnapshot()).toMatchObject({
+      total: 1,
+      current: 1,
+      coverageMessage: CAVEAT_MAY_MATCH_ONE,
+    });
+    flushFrames();
+    expect(find.scrollToLocation).not.toHaveBeenCalled();
+  });
+
+  it("still lands a confirmed read when only find's own reveal ran while it was out", async () => {
+    const host = realOldHost();
+    const find = renderFind({
+      initial: realOldTranscript(false),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+      requestIndexRead,
+      support: null,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
+    });
+    // The search's reveal of the loaded match is still queued when the step
+    // starts the read.
+    act(() => {
+      void adapter.previous();
+    });
+    find.scrollToLocation.mockClear();
+    flushFrames();
+    // Precondition: find's own scroll ran after the read began.
+    expect(find.scrollToLocation).toHaveBeenCalled();
+    find.scrollToLocation.mockClear();
+
+    act(() => {
+      find.setTranscript(realOldTranscript(true));
+    });
+    expect(adapter.getSnapshot()).toMatchObject({ total: 2, current: 1 });
+    flushFrames();
+    expect(find.scrollToLocation).toHaveBeenCalled();
   });
 });
 

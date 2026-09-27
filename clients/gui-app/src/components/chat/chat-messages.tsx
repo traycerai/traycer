@@ -3821,6 +3821,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const [findIndexRead, setFindIndexRead] = useState<ChatFindIndexRead | null>(
     null,
   );
+  // A read that lands after the reader moved on must not take them back.
+  const getReaderNavigationGeneration = useCallback(
+    (): number => anchorUserScrollGenerationRef.current,
+    [],
+  );
 
   const {
     onRenderedDataChange: onChatFindRenderedDataChange,
@@ -3843,6 +3848,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     getScroller,
     scrollToLocation: scrollToTimelineLocationSuppressingFollowRestore,
     cancelManualNavigation: cancelManualNavigationForFind,
+    getNavigationGeneration: getReaderNavigationGeneration,
     setScrolledActiveUserMessageIdIfChanged,
   });
   useLayoutEffect(() => {

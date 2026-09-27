@@ -488,9 +488,14 @@ function renderFind(input: {
     },
   };
   const forceStore = createChatFindForceStore();
+  // `ChatMessages`' reader-navigation generation: find's own scroll bumps it
+  // too, as in the app.
+  let navigationGeneration = 0;
   const callbacks = {
     scrollToLocation: vi.fn(),
-    cancelManualNavigation: vi.fn(),
+    cancelManualNavigation: vi.fn(() => {
+      navigationGeneration += 1;
+    }),
     setScrolledActiveUserMessageIdIfChanged: vi.fn(),
   };
   const getScroller = (): HTMLElement => input.scroller;
@@ -533,6 +538,7 @@ function renderFind(input: {
       getScroller,
       scrollToLocation: callbacks.scrollToLocation,
       cancelManualNavigation: callbacks.cancelManualNavigation,
+      getNavigationGeneration: () => navigationGeneration,
       setScrolledActiveUserMessageIdIfChanged:
         callbacks.setScrolledActiveUserMessageIdIfChanged,
     });
@@ -1783,5 +1789,494 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       target: "s-steer",
     });
     expect(requestIndexJump).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // Reviewer item 1: with NO loaded match, running out of page 1 must still
+  // read page 2 - whether page 1 ran out through failed reads or was dropped
+  // whole by the scan.
+
+  const REAL_OLD_TEXT = "an old needle that is real";
+
+  /** Page 1: u-99..u-0 (createdAt 101..2). Page 2: the one real hit, u-real. */
+  function pageTwoRealDocs(): FakeDoc[] {
+    return [
+      { messageId: "u-real", tier: "user", createdAt: 1, text: REAL_OLD_TEXT },
+      ...Array.from({ length: 100 }, (_unused, index) => ({
+        messageId: `u-${index}`,
+        tier: "user" as const,
+        createdAt: index + 2,
+        text: `needle ${index}`,
+      })),
+    ];
+  }
+
+  /**
+   * u-real above u-0..u-99. A hydrated phantom row paints text WITHOUT the
+   * needle its index document claims.
+   */
+  function pageTwoRealTranscript(input: {
+    readonly realHydrated: boolean;
+    readonly phantomsHydrated: boolean;
+  }): TranscriptState {
+    return transcriptOf(
+      [
+        userSpec("u-real", 1, REAL_OLD_TEXT, input.realHydrated),
+        ...Array.from({ length: 100 }, (_unused, index) =>
+          userSpec(
+            `u-${index}`,
+            index + 2,
+            `a phantom ${index}`,
+            input.phantomsHydrated,
+          ),
+        ),
+      ],
+      null,
+    );
+  }
+
+  it("item 1a: reads page 2 once every page-1 candidate fails and nothing is loaded", async () => {
+    const host = hostFixture(fakeIndex(pageTwoRealDocs()));
+    const find = renderFind({
+      initial: pageTwoRealTranscript({
+        realHydrated: false,
+        phantomsHydrated: false,
+      }),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+      requestIndexRead,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(adapter.getSnapshot().coverageMessage).toBe(
+        CAVEAT_MAY_MATCH_AT_LEAST(100),
+      );
+    });
+    expect(adapter.getSnapshot().total).toBe(0);
+
+    act(() => {
+      void adapter.previous();
+    });
+    for (let index = 99; index >= 0; index -= 1) {
+      const messageId = `u-${index}`;
+      expect(requestIndexRead).toHaveBeenLastCalledWith({
+        messageId,
+        target: messageId,
+      });
+      act(() => {
+        find.getController().onIndexReadFailed(messageId);
+      });
+    }
+
+    // Nothing older on page 1 and no loaded match to wrap to: the walk must
+    // read page 2 rather than stall.
+    await waitFor(() => {
+      expect(searchCalls(host.messenger)).toHaveLength(2);
+    });
+    await waitFor(() => {
+      expect(requestIndexRead).toHaveBeenLastCalledWith({
+        messageId: "u-real",
+        target: "u-real",
+      });
+    });
+
+    act(() => {
+      find.setTranscript(
+        pageTwoRealTranscript({ realHydrated: true, phantomsHydrated: false }),
+      );
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    expect(adapter.getSnapshot()).toMatchObject({ total: 1, current: 1 });
+  });
+
+  it("item 1b: reads page 2 when the scan drops all of page 1 and nothing is loaded", async () => {
+    const host = hostFixture(fakeIndex(pageTwoRealDocs()));
+    const find = renderFind({
+      initial: pageTwoRealTranscript({
+        realHydrated: false,
+        phantomsHydrated: true,
+      }),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+      requestIndexRead,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(searchCalls(host.messenger)).toHaveLength(1);
+    });
+    await settle();
+    // Every page-1 hit is a hydrated row that paints no needle: dropped on
+    // arrival, so there is no candidate and nothing counted.
+    expect(adapter.getSnapshot()).toMatchObject({
+      total: 0,
+      coverageMessage: "Partial results: 1 older message is not loaded.",
+    });
+
+    act(() => {
+      void adapter.previous();
+    });
+    await waitFor(() => {
+      expect(searchCalls(host.messenger)).toHaveLength(2);
+    });
+    await waitFor(() => {
+      expect(requestIndexRead).toHaveBeenLastCalledWith({
+        messageId: "u-real",
+        target: "u-real",
+      });
+    });
+
+    act(() => {
+      find.setTranscript(
+        pageTwoRealTranscript({ realHydrated: true, phantomsHydrated: true }),
+      );
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    expect(adapter.getSnapshot()).toMatchObject({ total: 1, current: 1 });
+  });
+
+  // -------------------------------------------------------------------------
+  // Reviewer item 5: a `loaded` placement over a PARTIAL skeleton is not a
+  // complete negative - the rows the skeleton has not named yet can hold the
+  // match.
+
+  /**
+   * `transcriptOf`, but the skeleton names only the first `known` rows, in
+   * one chunk that is final only when `isFinal`. Epoch 1 always, so two
+   * windows built here are the SAME coordinate space.
+   */
+  function transcriptWithSkeleton(
+    rows: ReadonlyArray<RowSpec>,
+    known: number,
+    isFinal: boolean,
+  ): TranscriptState {
+    return transcriptWithSkeletonFrom(rows, 0, known, isFinal);
+  }
+
+  /**
+   * The same, but the one skeleton chunk names rows `[namedFrom, namedTo)` -
+   * so a chunk can leave an EARLIER row unnamed.
+   */
+  function transcriptWithSkeletonFrom(
+    rows: ReadonlyArray<RowSpec>,
+    namedFrom: number,
+    namedTo: number,
+    isFinal: boolean,
+  ): TranscriptState {
+    let window = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: rows.length,
+        indexRevision: null,
+        tail: { fromOrdinal: rows.length, messages: [], events: [] },
+      },
+      null,
+      null,
+    );
+    window = applySkeletonChunk(window, {
+      epoch: 1,
+      fromOrdinal: namedFrom,
+      entries: rows.slice(namedFrom, namedTo).map((row) => ({
+        rowId: row.rowId,
+        createdAt: row.createdAt,
+        role: row.role,
+        byteLength: 128,
+        bodyDigest: `d-${row.rowId}`,
+      })),
+      isFinal,
+    });
+    let ordinal = 0;
+    while (ordinal < rows.length) {
+      if (rows[ordinal].model === null) {
+        ordinal += 1;
+        continue;
+      }
+      const from = ordinal;
+      while (ordinal < rows.length && rows[ordinal].model !== null)
+        ordinal += 1;
+      const run = rows.slice(from, ordinal);
+      const records = new Map<string, Message>();
+      for (const row of run) {
+        for (const record of row.records) records.set(record.messageId, record);
+      }
+      window = applyRangeResponse(
+        window,
+        {
+          requestId: `req-${from}`,
+          epoch: 1,
+          fromOrdinal: from,
+          rowIds: run.map((row) => row.rowId),
+          incompleteRowIds: [],
+          messages: [...records.values()],
+          events: [],
+          rowContext: {},
+          reachedStart: from === 0,
+          reachedEnd: ordinal === rows.length,
+        },
+        null,
+        null,
+      );
+    }
+    return {
+      window,
+      messages: rows.flatMap((row) => (row.model === null ? [] : [row.model])),
+    };
+  }
+
+  const LATER_SLICE_TEXT = "the later slice has the needle";
+
+  function turnPart(
+    part: number,
+    hydrated: boolean,
+    markdown: string,
+  ): RowSpec {
+    const rowId = `assistant:T:part:${part}`;
+    return {
+      rowId,
+      createdAt: 20,
+      role: "assistant",
+      records: [assistantRecord("a-T", "T", 21)],
+      model: hydrated
+        ? assistantRow({
+            rowId,
+            persistentMessageId: "a-T",
+            turnMessageIds: null,
+            markdown,
+            createdAt: 20,
+            streaming: false,
+          })
+        : null,
+    };
+  }
+
+  /** Turn T in two slices: part:0 paints "slice 0", part:1 the needle. */
+  function laterSliceTurn(input: {
+    readonly complete: boolean;
+    readonly hydratedParts: ReadonlySet<number>;
+  }): TranscriptState {
+    return transcriptWithSkeleton(
+      [
+        turnPart(0, input.hydratedParts.has(0), "slice 0"),
+        turnPart(1, input.hydratedParts.has(1), LATER_SLICE_TEXT),
+      ],
+      input.complete ? 2 : 1,
+      input.complete,
+    );
+  }
+
+  it("item 5a: a hit dropped over a PARTIAL skeleton revives when the skeleton completes", async () => {
+    const host = hostFixture(
+      fakeIndex([
+        {
+          messageId: "a-T",
+          tier: "assistant",
+          createdAt: 21,
+          text: LATER_SLICE_TEXT,
+        },
+      ]),
+    );
+    const find = renderFind({
+      initial: laterSliceTurn({ complete: false, hydratedParts: new Set([0]) }),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+      requestIndexRead,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(searchCalls(host.messenger)).toHaveLength(1);
+    });
+    await settle();
+    // The skeleton names only part:0, which is hydrated without the needle,
+    // so the hit places `loaded` - but part:1 is simply not named yet.
+    expect(adapter.getSnapshot()).toMatchObject({
+      total: 0,
+      coverageMessage: "Partial results: 1 older message is not loaded.",
+    });
+
+    // The rest of the skeleton lands in the SAME epoch, naming part:1 as an
+    // unhydrated slice of the held turn.
+    act(() => {
+      find.setTranscript(
+        laterSliceTurn({ complete: true, hydratedParts: new Set([0]) }),
+      );
+    });
+    expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
+
+    act(() => {
+      void adapter.next();
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "a-T",
+      target: "assistant:T:part:1",
+    });
+
+    act(() => {
+      find.setTranscript(
+        laterSliceTurn({ complete: true, hydratedParts: new Set([0, 1]) }),
+      );
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    expect(adapter.getSnapshot().total).toBe(1);
+  });
+
+  it("item 5b (control): a hit dropped over a COMPLETE skeleton stays dropped after eviction", async () => {
+    const host = hostFixture(
+      fakeIndex([
+        {
+          messageId: "a-T",
+          tier: "assistant",
+          createdAt: 21,
+          text: "the only slice has the needle",
+        },
+      ]),
+    );
+    // One slice of T, named by a complete skeleton, then an unhydrated user
+    // row with no index document - there only so a row is unhydrated and the
+    // index is asked at all.
+    const singleSlice = (hydrated: boolean): TranscriptState =>
+      transcriptWithSkeleton(
+        [
+          turnPart(0, hydrated, "slice 0"),
+          userSpec("u-other", 100, "a recent note", false),
+        ],
+        2,
+        true,
+      );
+    const find = renderFind({
+      initial: singleSlice(true),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+      requestIndexRead,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(searchCalls(host.messenger)).toHaveLength(1);
+    });
+    await settle();
+    // Every slice of T is named and hydrated, and none paints the needle: a
+    // true negative, dropped on the answer.
+    expect(adapter.getSnapshot()).toMatchObject({
+      total: 0,
+      coverageMessage: "Partial results: 1 older message is not loaded.",
+    });
+
+    // Evicted: the drop is remembered, so the hit is not a candidate again.
+    act(() => {
+      find.setTranscript(singleSlice(false));
+    });
+    expect(adapter.getSnapshot().total).toBe(0);
+    expect(adapter.getSnapshot().coverageMessage ?? "").not.toContain(
+      "may match",
+    );
+    act(() => {
+      void adapter.next();
+    });
+    expect(requestIndexRead).not.toHaveBeenCalled();
+  });
+
+  it("item 5c (F19): the unnamed slice is EARLIER than the held tail - revives when the skeleton completes", async () => {
+    const EARLIER_SLICE_TEXT = "the earlier slice has the needle";
+    const host = hostFixture(
+      fakeIndex([
+        {
+          messageId: "a-T",
+          tier: "assistant",
+          createdAt: 21,
+          text: EARLIER_SLICE_TEXT,
+        },
+      ]),
+    );
+    // T in three slices. part:1 and part:2 are hydrated without the needle,
+    // so the window holds a-T through its TAIL; part:0 carries the needle and
+    // stays unhydrated. `u-other` (no index document) keeps a row unhydrated
+    // once the turn is whole.
+    const earlierSliceTurn = (input: {
+      readonly complete: boolean;
+      readonly part0Hydrated: boolean;
+    }): TranscriptState =>
+      transcriptWithSkeletonFrom(
+        [
+          turnPart(0, input.part0Hydrated, EARLIER_SLICE_TEXT),
+          turnPart(1, true, "slice 1"),
+          turnPart(2, true, "slice 2"),
+          userSpec("u-other", 100, "a recent note", false),
+        ],
+        // Partial: part:1 onward, leaving part:0 unnamed. Complete: all of it.
+        input.complete ? 0 : 1,
+        4,
+        input.complete,
+      );
+    const find = renderFind({
+      initial: earlierSliceTurn({ complete: false, part0Hydrated: false }),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+      requestIndexRead,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(searchCalls(host.messenger)).toHaveLength(1);
+    });
+    await settle();
+    // No KNOWN slice of T is unhydrated, so the hit places `loaded` - and
+    // part:0 is simply not named yet.
+    expect(adapter.getSnapshot().total).toBe(0);
+    expect(adapter.getSnapshot().coverageMessage ?? "").not.toContain(
+      "may match",
+    );
+
+    // The skeleton completes from ordinal 0 in the SAME epoch, naming part:0
+    // as an unhydrated slice of the held turn.
+    act(() => {
+      find.setTranscript(
+        earlierSliceTurn({ complete: true, part0Hydrated: false }),
+      );
+    });
+    expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
+
+    act(() => {
+      void adapter.next();
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "a-T",
+      target: "assistant:T:part:0",
+    });
+
+    act(() => {
+      find.setTranscript(
+        earlierSliceTurn({ complete: true, part0Hydrated: true }),
+      );
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    expect(adapter.getSnapshot().total).toBe(1);
   });
 });

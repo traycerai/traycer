@@ -221,6 +221,45 @@ describe("useChatFindIndexRead (F14-9)", () => {
     expect(onReadFailed).not.toHaveBeenCalled();
   });
 
+  it("keeps the hold when a located record's target becomes its row id at the same ordinal", () => {
+    // The cold record is placed by the host at 6. Another slice then makes it
+    // held, so the adapter re-targets the SAME read at the row id the skeleton
+    // names at 6. The row is still outstanding: the hold must survive.
+    host.answer = { found: true, ordinal: 6, epoch: EPOCH };
+    const transcript = windowAt(EPOCH);
+    const { log, requestFindReadOrdinal, rerender } = mountRead({
+      read: { messageId: COLD_ASSISTANT_ID, target: COLD_ASSISTANT_ID },
+      transcriptWindow: transcript,
+    });
+    expect(requestFindReadOrdinal).toHaveBeenLastCalledWith(6);
+
+    rerender({
+      read: { messageId: COLD_ASSISTANT_ID, target: HELD_ROW_ID },
+      transcriptWindow: transcript,
+    });
+
+    expect(requestFindReadOrdinal).toHaveBeenLastCalledWith(6);
+    expect(log).not.toContain("ordinal:null");
+  });
+
+  it("replaces the hold with no gap when the same read moves to another ordinal", () => {
+    host.answer = { found: true, ordinal: 8, epoch: EPOCH };
+    const transcript = windowAt(EPOCH);
+    const { log, rerender } = mountRead({
+      read: { messageId: COLD_ASSISTANT_ID, target: COLD_ASSISTANT_ID },
+      transcriptWindow: transcript,
+    });
+    expect(log).toEqual(["ordinal:8"]);
+
+    rerender({
+      read: { messageId: COLD_ASSISTANT_ID, target: HELD_ROW_ID },
+      transcriptWindow: transcript,
+    });
+
+    // 8 is replaced by 6 directly - never released in between.
+    expect(log).toEqual(["ordinal:8", "ordinal:6"]);
+  });
+
   it("releases the ordinal on unmount", () => {
     const { requestFindReadOrdinal, unmount } = mountRead({
       read: { messageId: USER_ROW_ID, target: USER_ROW_ID },

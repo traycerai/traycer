@@ -93,6 +93,12 @@ interface ChatFindControllerArgs {
   readonly scrollToLocation: (location: ChatTimelineNavigationLocation) => void;
   /** Manual-navigation cancel (decision #21: find performs it first). */
   readonly cancelManualNavigation: () => void;
+  /**
+   * `ChatMessages`' reader-navigation generation: a reader gesture or a
+   * navigation bumps it - find's own scroll too, through
+   * `cancelManualNavigation`.
+   */
+  readonly getNavigationGeneration: () => number;
   readonly setScrolledActiveUserMessageIdIfChanged: (
     next: string | null,
   ) => void;
@@ -140,6 +146,7 @@ export function useChatFindController(
     getScroller,
     scrollToLocation,
     cancelManualNavigation,
+    getNavigationGeneration,
     setScrolledActiveUserMessageIdIfChanged,
   } = args;
 
@@ -151,6 +158,10 @@ export function useChatFindController(
   const getFindPlacementRef = useRef(getFindPlacement);
   const requestIndexJumpRef = useRef(requestIndexJump);
   const requestIndexReadRef = useRef(requestIndexRead);
+  const getNavigationGenerationRef = useRef(getNavigationGeneration);
+  // How much of that generation find's own scrolls account for: the rest is
+  // the reader moving, which a read in flight has to yield to.
+  const findNavigationBumpsRef = useRef(0);
   // The last answer, so an adapter created later (a re-registration) starts
   // from it rather than waiting for the index to answer again.
   const indexAnswerRef = useRef<ChatFindIndexAnswer>(CHAT_FIND_INDEX_ABSENT);
@@ -158,7 +169,13 @@ export function useChatFindController(
     getFindPlacementRef.current = getFindPlacement;
     requestIndexJumpRef.current = requestIndexJump;
     requestIndexReadRef.current = requestIndexRead;
-  }, [getFindPlacement, requestIndexJump, requestIndexRead]);
+    getNavigationGenerationRef.current = getNavigationGeneration;
+  }, [
+    getFindPlacement,
+    getNavigationGeneration,
+    requestIndexJump,
+    requestIndexRead,
+  ]);
 
   const setFindForcedOpen = useSetChatFindForcedOpen();
   const setFindActiveTarget = useSetChatFindActiveTarget();
@@ -236,7 +253,11 @@ export function useChatFindController(
 
   const scrollToMessageForFind = useCallback(
     (messageId: string): void => {
+      const generationBefore = getNavigationGenerationRef.current();
       cancelManualNavigation();
+      // Find's own scroll is not the reader moving.
+      findNavigationBumpsRef.current +=
+        getNavigationGenerationRef.current() - generationBefore;
       setScrolledActiveUserMessageIdIfChanged(
         selectActiveUserMessageId(messagesRef.current, messageId, false),
       );
@@ -496,6 +517,9 @@ export function useChatFindController(
         ),
       getCoverageMessage: getFindCoverageMessage,
       getPlacement: () => getFindPlacementRef.current(),
+      getQueuePauseReasonSupport: () => queuePauseReasonSupportRef.current,
+      getReaderNavigationGeneration: () =>
+        getNavigationGenerationRef.current() - findNavigationBumpsRef.current,
       indexDemand,
       jumpToIndexHit: (target) => requestIndexJumpRef.current(target),
       readIndexHit: (read) => requestIndexReadRef.current(read),

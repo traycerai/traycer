@@ -1150,6 +1150,8 @@ function createChatFindTestAdapter(
     getMountedUnitRoot: callbacks.getMountedUnitRoot,
     // Every row here is loaded: the index never has anything to add.
     getPlacement: () => FULLY_LOADED_TRANSCRIPT,
+    getQueuePauseReasonSupport: () => null,
+    getReaderNavigationGeneration: () => 0,
     indexDemand: new ChatFindIndexDemandSource(),
     jumpToIndexHit: () => undefined,
     readIndexHit: () => undefined,
