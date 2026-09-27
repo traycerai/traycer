@@ -263,6 +263,11 @@ const REFUSAL_TABLE: ReadonlyArray<{
     remaining: "none",
   },
   {
+    kind: "message_unreplayable",
+    text: "Something this message refers to is no longer available, so it can't be replayed. Send it again from the composer.",
+    remaining: "none",
+  },
+  {
     kind: "prelaunch_failed",
     text: "Couldn't start the replacement turn. Try again, or switch.",
     remaining: "retry_and_switch",

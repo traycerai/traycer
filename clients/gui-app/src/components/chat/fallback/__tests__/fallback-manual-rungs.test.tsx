@@ -1509,6 +1509,11 @@ describe("FallbackManualRungActions", () => {
         left: [],
       },
       {
+        kind: "message_unreplayable",
+        text: "Something this message refers to is no longer available, so it can't be replayed. Send it again from the composer.",
+        left: [],
+      },
+      {
         kind: "prelaunch_failed",
         text: "Couldn't start the replacement turn. Try again, or switch.",
         left: ["Switch to…", "Retry"],

@@ -447,6 +447,7 @@ describe("the settled card's Switch and the composer's advisory over one session
         "worktree_missing",
         "no_workspace",
         "message_changed",
+        "message_unreplayable",
         "settings_missing",
       ].map((kind): RefusalCase => ({
         name: `${kind} (not retryable) leaves no Switch`,

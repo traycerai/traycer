@@ -471,6 +471,7 @@ const REFUSAL_REMAINING_BY_KIND: Readonly<
   worktree_missing: "none",
   no_workspace: "none",
   message_changed: "none",
+  message_unreplayable: "none",
   prelaunch_failed: "retry_and_switch",
   reset_passed: "retry_and_switch",
   no_verified_reset: "retry_and_switch",
@@ -513,6 +514,8 @@ function refusalKindText(
       return "This chat has no folder to run in any more. Start a new chat from this task.";
     case "message_changed":
       return "The original message changed, so it can't be replayed. Send it again from the composer.";
+    case "message_unreplayable":
+      return "Something this message refers to is no longer available, so it can't be replayed. Send it again from the composer.";
     case "prelaunch_failed":
       return "Couldn't start the replacement turn. Try again, or switch.";
     case "reset_passed":

@@ -325,7 +325,18 @@ export const FALLBACK_RUNG_REFUSAL_KINDS = [
   "no_workspace",
   /** Replacement preparation: the user message was trimmed or edited. */
   "message_changed",
-  /** Replacement preparation: a permanent pre-launch error. */
+  /**
+   * Replacement preparation: something the message refers to no longer
+   * resolves - a dangling attachment, an artifact mention whose artifact is
+   * gone. It does not depend on the target, so a retry and every switch fail
+   * the same way; only sending the message again can help.
+   */
+  "message_unreplayable",
+  /**
+   * Replacement preparation: a permanent pre-launch error that depends on the
+   * target - a command the target refuses, a fresh context it cannot be given.
+   * Another retry or a switch can still start.
+   */
   "prelaunch_failed",
   /** `wait_once`: the verified boundary is already in the past. */
   "reset_passed",

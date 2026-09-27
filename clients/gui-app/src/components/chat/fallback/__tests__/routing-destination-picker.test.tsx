@@ -2,6 +2,7 @@ import {
   act,
   cleanup,
   fireEvent,
+  render,
   screen,
   waitFor,
   within,
@@ -16,6 +17,18 @@ import {
   type Mock,
 } from "vitest";
 import { userEvent } from "@testing-library/user-event";
+import { createRef } from "react";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  RoutingDestinationPicker,
+  type RoutingDestinationEntry,
+} from "@/components/chat/fallback/routing-destination-picker";
+import {
+  HarnessModelPicker,
+  type HarnessModelPickerEmbedding,
+} from "@/components/home/pickers/harness-model-picker";
+import { DEFAULT_PERMISSION } from "@/components/home/data/landing-options";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
   FallbackModelTarget,
@@ -30,12 +43,17 @@ import {
   useLayoutStore,
 } from "@/stores/settings/layout-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
-import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import {
+  createComposerToolbarStore,
+  type ComposerToolbarStore,
+} from "@/stores/composer/composer-toolbar-store";
 import {
   APP_WIDE_CLIENT_ID,
   CHAT_ID,
   EPIC_ID,
+  SESSION_HOST_ID,
   TAB_CLIENT_ID,
+  TAB_HOST_ID,
   TRAVERSAL_ID,
   heldLease,
   kit,
@@ -1444,6 +1462,382 @@ describe("RoutingDestinationPicker", () => {
       });
       button = screen.getByRole("button", { name: "Route" });
       expect(button.getAttribute("data-size")).toBe("sm");
+    });
+  });
+
+  describe("the browsed account on a countdown's route chip", () => {
+    function chip(entry: RoutingDestinationEntry) {
+      return (
+        <TooltipProvider>
+          <TabHostProvider hostId={TAB_HOST_ID}>
+            <RoutingDestinationPicker
+              entry={entry}
+              triggerLabel="Route"
+              triggerVariant="route-chip"
+              triggerAriaLabel={null}
+              triggerDisabled={false}
+              canAct
+              epicId={EPIC_ID}
+              chatId={CHAT_ID}
+              hostId={SESSION_HOST_ID}
+            />
+          </TabHostProvider>
+        </TooltipProvider>
+      );
+    }
+
+    function mountChip(entry: RoutingDestinationEntry) {
+      const result = render(chip(entry));
+      return {
+        rerenderWith: (next: RoutingDestinationEntry) => {
+          result.rerender(chip(next));
+        },
+      };
+    }
+
+    async function openChip(): Promise<void> {
+      fireEvent.click(screen.getByRole("button", { name: "Route" }));
+      await screen.findByRole("dialog", { name: "Select model" });
+    }
+
+    /** The profile dropdown's trigger: its aria-label names the account shown. */
+    function dropdownName(): string | null {
+      return screen
+        .getByRole("button", { name: /^Claude profile: / })
+        .getAttribute("aria-label");
+    }
+
+    /** The chooser's search box, narrowed so `.value` reads with no cast. */
+    function searchBox(dialog: HTMLElement): HTMLInputElement {
+      const input = within(dialog).getByRole("textbox");
+      if (!(input instanceof HTMLInputElement)) {
+        throw new Error("expected the chooser's search to be an input");
+      }
+      return input;
+    }
+
+    /** The search box's active-descendant id, thrown if there is none. */
+    function activeOptionId(input: HTMLInputElement): string {
+      const id = input.getAttribute("aria-activedescendant");
+      if (id === null) throw new Error("no active descendant");
+      return id;
+    }
+
+    it("a listing that recommends another account after the open moves the dropdown and the footer together", async () => {
+      kit.listData = undefined;
+      const view = mountChip(countdown());
+      await openChip();
+      expect(dropdownName()).toBe("Claude profile: Personal");
+
+      kit.listData = listing({ recommendedWork: true });
+      view.rerenderWith(countdown());
+
+      expect(footerLine()).toBe(
+        "Replays on Claude Sonnet 4 · Work in a new session",
+      );
+      expect(dropdownName()).toBe("Claude profile: Work");
+      await act(async () => {});
+      expect(footerLine()).toBe(
+        "Replays on Claude Sonnet 4 · Work in a new session",
+      );
+      expect(dropdownName()).toBe("Claude profile: Work");
+    });
+
+    it("a listing that named no recommendation at the open, then recommends one, moves the dropdown too", async () => {
+      kit.listData = listing({ recommendedWork: false });
+      const view = mountChip(countdown());
+      await openChip();
+      expect(dropdownName()).toBe("Claude profile: Personal");
+
+      kit.listData = listing({ recommendedWork: true });
+      view.rerenderWith(countdown());
+
+      expect(footerLine()).toBe(
+        "Replays on Claude Sonnet 4 · Work in a new session",
+      );
+      expect(dropdownName()).toBe("Claude profile: Work");
+    });
+
+    it("a listing answered before the open opens the dropdown and the footer on the recommendation", async () => {
+      kit.listData = listing({ recommendedWork: true });
+      mountChip(countdown());
+      await openChip();
+
+      expect(dropdownName()).toBe("Claude profile: Work");
+      expect(footerLine()).toBe(
+        "Replays on Claude Sonnet 4 · Work in a new session",
+      );
+    });
+
+    it("an account the user picked in the dropdown survives a later listing that recommends another", async () => {
+      kit.listData = undefined;
+      const view = mountChip(countdown());
+      await openChip();
+      await userEvent.click(
+        screen.getByRole("button", { name: /^Claude profile: / }),
+      );
+      await userEvent.click(
+        await screen.findByRole("menuitem", { name: "Personal" }),
+      );
+      expect(dropdownName()).toBe("Claude profile: Personal");
+
+      kit.listData = listing({ recommendedWork: true });
+      view.rerenderWith(countdown());
+      await act(async () => {});
+
+      expect(dropdownName()).toBe("Claude profile: Personal");
+      expect(footerLine()).toMatch(/· Personal in a new session$/);
+    });
+
+    it("(A) a typed search survives a late seed: the query and its filtered rows outlast the account move", async () => {
+      kit.listData = undefined;
+      const view = mountChip(countdown());
+      await openChip();
+      const dialog = screen.getByRole("dialog", { name: "Select model" });
+      const search = searchBox(dialog);
+
+      const allNames = screen
+        .getAllByRole("option")
+        .map((row) => row.textContent);
+
+      fireEvent.change(search, { target: { value: "opus" } });
+      const filteredNames = screen
+        .getAllByRole("option")
+        .map((row) => row.textContent);
+      // Not vacuous: the query actually narrowed the visible set.
+      expect(filteredNames.length).toBeGreaterThan(0);
+      expect(filteredNames.length).toBeLessThan(allNames.length);
+      for (const name of filteredNames) expect(allNames).toContain(name);
+
+      kit.listData = listing({ recommendedWork: true });
+      view.rerenderWith(countdown());
+
+      const assertSurvived = (): void => {
+        expect(dropdownName()).toBe("Claude profile: Work");
+        expect(footerLine()).toBe(
+          "Replays on Claude Sonnet 4 · Work in a new session",
+        );
+        expect(search.value).toBe("opus");
+        expect(
+          screen.getAllByRole("option").map((row) => row.textContent),
+        ).toEqual(filteredNames);
+      };
+      assertSurvived();
+      await act(async () => {});
+      assertSurvived();
+    });
+
+    it("(B) a keyboard-active row survives a late seed: the arrowed row stays active through the account move", async () => {
+      kit.listData = undefined;
+      const view = mountChip(countdown());
+      await openChip();
+      const dialog = screen.getByRole("dialog", { name: "Select model" });
+      const search = searchBox(dialog);
+
+      // The default active row (no query) is the currently-selected one,
+      // Claude Sonnet 4 - the seed's own model, and also the model the
+      // recommendation keeps (only the account moves). One ArrowDown lands on
+      // Claude Opus 4, which is neither the current selection nor the row the
+      // recommendation will select.
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+      const activeId = activeOptionId(search);
+      const activeElement = document.getElementById(activeId);
+      if (activeElement === null) throw new Error("active row not found");
+      expect(activeElement.textContent).toContain("Opus");
+
+      kit.listData = listing({ recommendedWork: true });
+      view.rerenderWith(countdown());
+
+      const assertSurvived = (): void => {
+        expect(dropdownName()).toBe("Claude profile: Work");
+        expect(activeOptionId(search)).toBe(activeId);
+        const stillActive = document.getElementById(activeId);
+        expect(stillActive?.textContent).toContain("Opus");
+      };
+      assertSurvived();
+      await act(async () => {});
+      assertSurvived();
+    });
+
+    it("(C1, pin) a recommendation that moves to another provider re-anchors the active row on its own selection", async () => {
+      kit.listData = undefined;
+      const view = mountChip(countdown());
+      await openChip();
+      const dialog = screen.getByRole("dialog", { name: "Select model" });
+      const search = searchBox(dialog);
+
+      // Walk the active row onto a specific Claude row - it cannot possibly
+      // survive a move to Codex, so the fallback anchor is exercised
+      // deliberately rather than by accident.
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+      const beforeId = activeOptionId(search);
+      const beforeElement = document.getElementById(beforeId);
+      if (beforeElement === null) throw new Error("active row not found");
+      expect(beforeElement.textContent).not.toContain("GPT");
+
+      kit.listData = listingOf({
+        failedTuple: TARGET,
+        profileTargets: [],
+        modelTargets: [modelTargetOf({ groupId: "grp-c1", target: TARGET })],
+      });
+      view.rerenderWith(countdown());
+      await act(async () => {});
+
+      const recommendedRow = screen.getByRole("option", { name: /GPT-5/ });
+      expect(activeOptionId(search)).toBe(recommendedRow.id);
+    });
+
+    it("(C2) a recommendation that moves to another provider keeps the query and re-anchors on the first visible match", async () => {
+      kit.listData = undefined;
+      const view = mountChip(countdown());
+      await openChip();
+      const dialog = screen.getByRole("dialog", { name: "Select model" });
+      const search = searchBox(dialog);
+
+      fireEvent.change(search, { target: { value: "4" } });
+      expect(screen.getAllByRole("option").length).toBeGreaterThan(0);
+
+      kit.listData = listingOf({
+        failedTuple: TARGET,
+        profileTargets: [],
+        modelTargets: [modelTargetOf({ groupId: "grp-c2", target: TARGET })],
+      });
+      view.rerenderWith(countdown());
+      await act(async () => {});
+
+      expect(search.value).toBe("4");
+      const options = screen.getAllByRole("option");
+      expect(options).toHaveLength(1);
+      const onlyOption = options.at(0);
+      if (onlyOption === undefined) {
+        throw new Error("expected exactly one visible option");
+      }
+      expect(onlyOption.textContent).toContain("GPT-4.1");
+      expect(activeOptionId(search)).toBe(onlyOption.id);
+    });
+
+    it("(D) nothing remounts with a query typed: the same list node, query, and active row survive a same-provider seed", async () => {
+      kit.listData = undefined;
+      const view = mountChip(countdown());
+      await openChip();
+      const dialog = screen.getByRole("dialog", { name: "Select model" });
+      const search = searchBox(dialog);
+
+      fireEvent.change(search, { target: { value: "opus" } });
+      const filteredNames = screen
+        .getAllByRole("option")
+        .map((row) => row.textContent);
+      expect(filteredNames.length).toBeGreaterThan(0);
+
+      const listboxBefore = within(dialog).getByRole("listbox");
+      const activeId = activeOptionId(search);
+
+      kit.listData = listing({ recommendedWork: true });
+      view.rerenderWith(countdown());
+      await act(async () => {});
+
+      expect(within(dialog).getByRole("listbox")).toBe(listboxBefore);
+      expect(search.value).toBe("opus");
+      expect(activeOptionId(search)).toBe(activeId);
+      expect(
+        screen.getAllByRole("option").map((row) => row.textContent),
+      ).toEqual(filteredNames);
+    });
+
+    it("(D2) nothing remounts with no query: the same list node survives a same-provider seed", async () => {
+      kit.listData = undefined;
+      const view = mountChip(countdown());
+      await openChip();
+      const dialog = screen.getByRole("dialog", { name: "Select model" });
+
+      const listboxBefore = within(dialog).getByRole("listbox");
+
+      kit.listData = listing({ recommendedWork: true });
+      view.rerenderWith(countdown());
+      await act(async () => {});
+
+      expect(within(dialog).getByRole("listbox")).toBe(listboxBefore);
+    });
+
+    it("(E, pin) followSelectionRef moves only the rail: no seed-caused open, and a later real open shows the moved selection", async () => {
+      const followSelectionRef = createRef<(() => void) | null>();
+      const openRef = createRef<(() => void) | null>();
+      const store = createComposerToolbarStore({
+        purpose: "setting",
+        seedKey: "direct-picker-seed",
+        values: {
+          permission: DEFAULT_PERMISSION,
+          selection: {
+            harnessId: "claude",
+            modelSlug: "claude-sonnet-4",
+            profileId: FAILED_PROFILE,
+          },
+          reasoning: "",
+          serviceTier: "",
+        },
+        onSettingsChange: null,
+        tuiOnly: false,
+        chatLineCarriesAutoMode: null,
+        hostId: null,
+        reasoningFallback: "model-default",
+      });
+
+      const embedding: HarnessModelPickerEmbedding = {
+        trigger: <button type="button">Open test picker</button>,
+        providerSwitchModel: () => "",
+        selectionMarked: true,
+        openRef,
+        closeRef: null,
+        followSelectionRef,
+        onOpenChange: null,
+        footer: null,
+      };
+
+      render(
+        <TooltipProvider>
+          <TabHostProvider hostId={TAB_HOST_ID}>
+            <HarnessModelPicker
+              store={store}
+              withServiceTier={false}
+              withReasoning
+              tuiOnly={false}
+              lockedHarnessId={null}
+              disabled={false}
+              registerActivation={false}
+              createProfileHostId={TAB_HOST_ID}
+              runTargetHostId={TAB_HOST_ID}
+              terminalLoginSurface={null}
+              labelDisplay="model-only"
+              profileAdmission={null}
+              embedding={embedding}
+            />
+          </TabHostProvider>
+        </TooltipProvider>,
+      );
+
+      // The store moves to another account on the SAME provider while the
+      // popover is closed, then the embedding's own rail-follow handle runs -
+      // exactly what the routing chooser's layout effect does for a late
+      // seed. `followSelectionRef` is documented to move only the browsed
+      // rail, never the popover's visible open state.
+      expect(followSelectionRef.current).not.toBeNull();
+      const follow = followSelectionRef.current;
+      if (follow === null) throw new Error("followSelectionRef was not filled");
+      act(() => {
+        store.getState().setSelection({
+          harnessId: "claude",
+          modelSlug: "claude-sonnet-4",
+          profileId: WORK_PROFILE,
+        });
+        follow();
+      });
+
+      expect(screen.queryByRole("dialog", { name: "Select model" })).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Open test picker" }));
+      await screen.findByRole("dialog", { name: "Select model" });
+
+      expect(dropdownName()).toBe("Claude profile: Work");
     });
   });
 });

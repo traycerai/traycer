@@ -810,6 +810,7 @@ function useJudgePicker(props: JudgeTilesProps): JudgePicker {
       selectionMarked,
       openRef,
       closeRef: null,
+      followSelectionRef: null,
       onOpenChange: null,
       footer: null,
     }),

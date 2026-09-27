@@ -4910,6 +4910,7 @@ describe("<HarnessModelPicker />", () => {
         selectionMarked: input.selectionMarked,
         openRef: input.openRef,
         closeRef: null,
+        followSelectionRef: null,
         onOpenChange: null,
         footer: null,
       };
@@ -5187,6 +5188,7 @@ describe("<HarnessModelPicker />", () => {
           selectionMarked: true,
           openRef: { current: null },
           closeRef: input.closeRef,
+          followSelectionRef: null,
           onOpenChange: input.spies.onOpenChange,
           footer: input.footer,
         };

@@ -72,6 +72,7 @@ describe("runManualRung@1.1 response: detail is one-directional", () => {
       "worktree_missing",
       "no_workspace",
       "message_changed",
+      "message_unreplayable",
       "prelaunch_failed",
       "reset_passed",
       "no_verified_reset",

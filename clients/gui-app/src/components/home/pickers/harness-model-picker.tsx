@@ -180,6 +180,21 @@ export interface HarnessModelPickerEmbedding {
    */
   readonly closeRef: RefObject<(() => void) | null> | null;
   /**
+   * The picker fills this with a function that moves its browsed rail - the
+   * provider and the account its profile dropdown names - to the store's
+   * current selection, and clears it on unmount. It touches nothing else: the
+   * search, the keyboard-active row and the list stay as they are, where
+   * `openRef` would start the popover over. For a surface whose store moves
+   * under an OPEN picker by something other than the picker's own clicks (the
+   * routing chooser following a late listing answer); a call while closed
+   * only sets what the next open copies from the selection anyway.
+   *
+   * `null` for a surface whose store only the picker moves while it is open;
+   * the picker then fills nothing. A composer passes no embedding at all, so
+   * it never reaches this.
+   */
+  readonly followSelectionRef: RefObject<(() => void) | null> | null;
+  /**
    * Called with every change of the popover's VISIBLE open state - a trigger
    * click, `openRef`, an outside click, Escape, the jump to provider settings,
    * the surface going inactive. Not only the popover's own `onOpenChange`:
@@ -389,6 +404,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   );
   useEmbeddingOpenHandle(embedding, handleOpenChange);
   useEmbeddingCloseHandle(embedding, closeOnly);
+  useEmbeddingFollowSelectionHandle(embedding, store, setActiveRailEntry);
   const seams = embeddingSeams(embedding);
   useReportedOpenState(visibleOpen, seams.onOpenChange);
   const reasoningFooter = useMemo<ReasoningFooterConfig | null>(
@@ -1281,6 +1297,30 @@ function useEmbeddingCloseHandle(
     embedding === null ? null : embedding.closeRef,
     () => closeOnly,
     [closeOnly],
+  );
+}
+
+/**
+ * Fills an embedding's `followSelectionRef` with the rail move its doc
+ * describes. The selection is read from the store when called, not from this
+ * render, so a caller that runs after the store moved - the routing chooser's
+ * layout effect - gets the selection it just saw.
+ */
+function useEmbeddingFollowSelectionHandle(
+  embedding: HarnessModelPickerEmbedding | null,
+  store: ComposerToolbarStore,
+  setActiveRailEntry: (
+    providerId: ProviderId,
+    profileId: string | null,
+  ) => void,
+): void {
+  useImperativeHandle(
+    embedding === null ? null : embedding.followSelectionRef,
+    () => () => {
+      const { selection } = store.getState();
+      setActiveRailEntry(selection.harnessId, selection.profileId);
+    },
+    [setActiveRailEntry, store],
   );
 }
 

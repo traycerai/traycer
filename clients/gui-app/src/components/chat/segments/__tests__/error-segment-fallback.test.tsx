@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   LastFailedAttempt,
@@ -816,5 +822,89 @@ describe("ErrorSegment failed-turn card, through the transcript row", () => {
     expect(card.textContent).not.toContain("nothing to wait for");
     // The card's actions are still drawn, so the absence is not a bare card.
     expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+  });
+});
+
+/**
+ * The plain failed-turn card and the settled card are the SAME `ErrorSegment`
+ * with and without `settledNotice`. When the settled notice reaches the row the
+ * settled card takes the row's actions over from the plain card, so across the
+ * two commits the transcript must never hold two sets of them.
+ */
+describe("ErrorSegment across the settle: the settled card takes the row's actions over", () => {
+  afterEach(() => {
+    fallbackSessionHarness.reset();
+    cleanup();
+  });
+
+  const NOTICE: RoutingSettledNotice = {
+    title: "Routing stopped",
+    message: null,
+    details: [],
+    receipt: { causeLabel: "Rate limit reached", steps: [] },
+  };
+
+  function tree(settledNotice: RoutingSettledNotice | null) {
+    return (
+      <TooltipProvider>
+        <TabHostProvider hostId={FALLBACK_LIVE_GATE_HOST_ID}>
+          <ChatTranscriptProvider
+            value={{
+              chatId: FALLBACK_LIVE_GATE_CHAT_ID,
+              hostId: FALLBACK_LIVE_GATE_HOST_ID,
+            }}
+          >
+            <ErrorSegment
+              turnId={FALLBACK_LIVE_GATE_TURN_ID}
+              message="Hit a rate limit."
+              code="rate_limit"
+              recoverable
+              findUnitId={null}
+              harnessId="claude"
+              failure={RATE_LIMIT_ROW.failure}
+              settledNotice={settledNotice}
+              settledNoticeFindUnitId={null}
+            />
+          </ChatTranscriptProvider>
+        </TabHostProvider>
+      </TooltipProvider>
+    );
+  }
+
+  it("the settled card takes the row's actions over: one set at every commit", () => {
+    fallbackSessionHarness.store.setState({
+      lastFailedAttempt: lastFailedAttempt({
+        userMessageId: "user-msg-fallback-live-gate",
+        turnId: FALLBACK_LIVE_GATE_TURN_ID,
+        failure: { reason: "rate_limit" },
+        eligibleRungs: ["retry", "switch"],
+        waitDisposition: "no_verified_reset",
+        switchDisposition: "eligible",
+        failedTuple: FAILED_CLAUDE_TUPLE,
+      }),
+      pendingFallback: undefined,
+    });
+
+    // Commit 1: the plain failed-turn card holds the only set.
+    const { rerender } = render(tree(null));
+    expect(screen.queryByTestId("routing-settled-card")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Switch to…" })).toHaveLength(
+      1,
+    );
+    expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1);
+
+    // Commit 2: the settled card takes the row, and holds the only set.
+    rerender(tree(NOTICE));
+    const card = screen.getByTestId("routing-settled-card");
+    expect(screen.getAllByRole("button", { name: "Switch to…" })).toHaveLength(
+      1,
+    );
+    expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1);
+    expect(
+      within(card).getAllByRole("button", { name: "Switch to…" }),
+    ).toHaveLength(1);
+    expect(within(card).getAllByRole("button", { name: "Retry" })).toHaveLength(
+      1,
+    );
   });
 });

@@ -1,10 +1,12 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { useStore } from "zustand";
 import type {
@@ -140,7 +142,10 @@ function routingProviderSwitchModel(): string {
  * listing is read whenever the chooser can act, not only while it is open, and
  * asked again on every open. Until the user edits the store it follows each
  * new answer; once they have, the pick is theirs and no later listing moves
- * it. Closing drops the edit (`useRoutingStore`).
+ * it. Closing drops the edit (`useRoutingStore`). An answer that lands with
+ * the popover already open moves the picker's profile dropdown with the store
+ * (`useRailFollowsSeed`), so the dropdown, the footer and what Switch sends
+ * name one account.
  *
  * ## The machine
  *
@@ -200,16 +205,25 @@ export function RoutingDestinationPicker(props: {
     recommendedTuple(data, failedTuple),
     sameRunSettings,
   );
-  const { store, dropEdits } = useRoutingStore(seed);
+  const { store, dropEdits, isSeeded } = useRoutingStore(seed);
   const countdown = entry.kind === "countdown" ? entry.pending : null;
   const lease = useRoutingLease({ epicId, chatId, hostId, countdown, open });
   const [refusal, setRefusal] = useState<string | null>(null);
+  const closeRef = useRef<(() => void) | null>(null);
+  const openRef = useRef<(() => void) | null>(null);
+  const followSelectionRef = useRef<(() => void) | null>(null);
+  const noteRailOpen = useRailFollowsSeed({
+    store,
+    followSelectionRef,
+    isSeeded,
+  });
 
   const { onOpened, onClosed, skipNextRelease } = lease;
   const onOpenChange = useCallback(
     (next: boolean) => {
       setOpen(next);
       setRefusal(null);
+      noteRailOpen(next);
       if (next) {
         onOpened();
         return;
@@ -218,11 +232,9 @@ export function RoutingDestinationPicker(props: {
       // A pick abandoned by closing is not where the next open starts.
       dropEdits();
     },
-    [dropEdits, onClosed, onOpened],
+    [dropEdits, noteRailOpen, onClosed, onOpened],
   );
 
-  const closeRef = useRef<(() => void) | null>(null);
-  const openRef = useRef<(() => void) | null>(null);
   const hostLabel = useHostDirectoryEntry(hostId)?.label ?? null;
   const onAnswer = useCallback(
     (answer: RoutingAnswer) => {
@@ -324,6 +336,7 @@ export function RoutingDestinationPicker(props: {
       selectionMarked: true,
       openRef,
       closeRef,
+      followSelectionRef,
       onOpenChange,
       footer,
     }),
@@ -674,6 +687,11 @@ function useRoutingStore(seed: ChatRunSettings): {
   readonly store: ComposerToolbarStore;
   /** Put the store back on the current seed, following it again. */
   readonly dropEdits: () => void;
+  /**
+   * Whether `values` are the ones the last seeding wrote - the store has not
+   * been edited since, so a move to them was a seed's, not the user's.
+   */
+  readonly isSeeded: (values: ComposerToolbarValues) => boolean;
 } {
   const generationRef = useRef(0);
   const [store] = useState(() =>
@@ -712,7 +730,68 @@ function useRoutingStore(seed: ChatRunSettings): {
     }
     applySeed(seed);
   }, [applySeed, seed, store]);
-  return useMemo(() => ({ store, dropEdits }), [dropEdits, store]);
+  const isSeeded = useCallback(
+    (values: ComposerToolbarValues) => values === seededRef.current.values,
+    [],
+  );
+  return useMemo(
+    () => ({ store, dropEdits, isSeeded }),
+    [dropEdits, isSeeded, store],
+  );
+}
+
+/**
+ * Keeps the open picker's browsed account on the store's selection when a
+ * SEED moves it, and returns the note of the open state that arms it.
+ *
+ * The picker takes its rail - the provider and the account its profile
+ * dropdown names - from the store's selection when it opens, and afterwards
+ * only from its own clicks. That is right for the composer, where nothing else
+ * moves the store. Here the store follows the listing until the user edits it
+ * ({@link useRoutingStore}), and on a first open the listing can answer AFTER
+ * the popover opened: the footer and the payload moved to the recommended
+ * account while the dropdown went on naming the one the chooser opened on.
+ *
+ * `followSelectionRef` moves the picker's rail to the store's selection and
+ * nothing else. A search the user typed, the row they reached with the arrow
+ * keys and the list's scroll all stay, and no open is reported, so nothing
+ * that listens for opens - the lease, the refusal line - hears it. A move to
+ * another provider re-anchors the list by the picker's own rule, exactly as a
+ * click on that provider would.
+ *
+ * Only a seed's move. An edit is the user's: a pick in the picker moved its
+ * rail already, and an edit elsewhere - the effort footer - must not pull the
+ * rail off a provider the user is browsing. The rail's values are noted when
+ * the picker reports the open, which runs before any seed applied in the same
+ * commit, so a listing that answers right after the click is still a move away
+ * from them.
+ *
+ * A LAYOUT effect, so no frame is painted between the store's move and the
+ * rail's: the handle reads the selection from the store when called, and the
+ * rail move it dispatches renders before the browser paints. That move is the
+ * picker's own state, never the store's values, so it cannot run this effect
+ * again.
+ */
+function useRailFollowsSeed(input: {
+  readonly store: ComposerToolbarStore;
+  readonly followSelectionRef: RefObject<(() => void) | null>;
+  readonly isSeeded: (values: ComposerToolbarValues) => boolean;
+}): (open: boolean) => void {
+  const { store, followSelectionRef, isSeeded } = input;
+  const railRef = useRef<ComposerToolbarValues | null>(null);
+  const values = useStore(store, (state) => state.values);
+  useLayoutEffect(() => {
+    const rail = railRef.current;
+    if (rail === null || rail === values) return;
+    railRef.current = values;
+    if (isSeeded(values)) followSelectionRef.current?.();
+  }, [followSelectionRef, isSeeded, values]);
+  return useCallback(
+    (open: boolean) => {
+      railRef.current = open ? store.getState().values : null;
+    },
+    [store],
+  );
 }
 
 function seedKeyFor(seed: ChatRunSettings, generation: number): string {
