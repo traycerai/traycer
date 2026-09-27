@@ -222,7 +222,6 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               canAct
               readOnly={false}
               editingQueueItemId={null}
-              fallbackTraversalLive={false}
               topSpacing="normal"
               scrollRegionMaxHeightClass="max-h-96"
               onQueuePause={() => null}
@@ -294,7 +293,6 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               canAct
               readOnly={false}
               editingQueueItemId={null}
-              fallbackTraversalLive={false}
               topSpacing="compact"
               scrollRegionMaxHeightClass="max-h-96"
               onQueuePause={() => null}

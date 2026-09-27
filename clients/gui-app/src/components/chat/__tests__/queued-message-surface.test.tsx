@@ -18,11 +18,8 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { buildQueuedMessageOrderKey } from "@/components/chat/queued-message-reorder-dnd";
 import { QueuedMessagePanel } from "@/components/chat/queued-message-surface";
-import {
-  QUEUE_PAUSED_AFTER_ERROR_TOOLTIP,
-  QUEUE_PAUSED_AFTER_ROUTING_TOOLTIP,
-  QUEUE_PAUSED_FOR_ROUTING_TOOLTIP,
-} from "@/components/chat/fallback/fallback-copy";
+import * as copy from "@/components/chat/fallback/fallback-copy";
+import { QUEUE_PAUSED_AFTER_ERROR_TOOLTIP } from "@/components/chat/fallback/fallback-copy";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { optimisticQueuedItemId } from "@/stores/chats/optimistic-queue";
@@ -166,7 +163,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("renders drag handles for movable queued rows and removes arrow actions", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem("queue-1", "First queued prompt", "pending"),
         queuedItem("queue-2", "Second queued prompt", "pending"),
@@ -188,7 +184,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("renders the drag handle disabled when only one queued row is visible", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([queuedItem("queue-1", "Only prompt", "pending")]),
       readOnly: false,
       canAct: true,
@@ -206,7 +201,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("AX7: the drag handle is hidden from assistive technology and out of the tab order, for EVERY row - enabled ones included", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem("queue-1", "First queued prompt", "pending"),
         queuedItem("queue-2", "Second queued prompt", "pending"),
@@ -263,7 +257,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("collapses and expands queued rows from the header", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem("queue-1", "First queued prompt", "pending"),
         queuedItem("queue-2", "Second queued prompt", "pending"),
@@ -284,7 +277,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("matches pinned section card chrome and header ordering", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: runningQueueState([
         queuedItem("queue-1", "First queued prompt", "pending"),
         queuedItem("queue-2", "Second queued prompt", "pending"),
@@ -330,7 +322,6 @@ describe("<QueuedMessagePanel />", () => {
     const onPause = vi.fn(() => null);
     const onResume = vi.fn(() => null);
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem("queue-1", "First queued prompt", "paused"),
       ]),
@@ -362,7 +353,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("confirms that the pending resume is being kept paused", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem("queue-1", "First queued prompt", "paused"),
       ]),
@@ -385,7 +375,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("keeps row actions in a sticky corner", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem("queue-1", "First queued prompt", "pending"),
         queuedItem("queue-2", "Second queued prompt", "pending"),
@@ -430,7 +419,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("places locked row status in the sticky row chrome", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem("queue-1", "Frozen steering prompt", "steer_requested"),
       ]),
@@ -464,7 +452,6 @@ describe("<QueuedMessagePanel />", () => {
       },
     };
     renderPanel({
-      fallbackTraversalLive: false,
       queue: runningQueueState([waiting]),
       readOnly: false,
       canAct: true,
@@ -496,7 +483,6 @@ describe("<QueuedMessagePanel />", () => {
       },
     };
     renderPanel({
-      fallbackTraversalLive: false,
       queue: runningQueueState([restarting]),
       readOnly: false,
       canAct: true,
@@ -513,7 +499,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("caps each queued prompt preview at three text lines", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem(
           "queue-1",
@@ -535,7 +520,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("preserves ordered-list structure in queued prompt previews", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         {
           ...queuedItem("queue-1", "ignored", "pending"),
@@ -561,7 +545,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("keeps steer-locked rows visible but frozen", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem("queue-1", "First queued prompt", "pending"),
         queuedItem("queue-2", "Frozen steering prompt", "steer_requested"),
@@ -587,7 +570,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("renders optimistic queued sends as locked queuing rows", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem(
           optimisticQueuedItemId("action-1"),
@@ -615,7 +597,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("does not render drag handles or owner actions in read-only mode", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem("queue-1", "First queued prompt", "pending"),
         queuedItem("queue-2", "Second queued prompt", "pending"),
@@ -639,7 +620,6 @@ describe("<QueuedMessagePanel />", () => {
     const second = queuedItem("queue-2", "Second queued prompt", "pending");
     const onReorder = vi.fn();
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([first, second]),
       readOnly: false,
       canAct: true,
@@ -680,7 +660,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("contains queue drags inside the queue scroll region without edge auto-scroll", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem("queue-1", "First queued prompt", "pending"),
         queuedItem("queue-2", "Second queued prompt", "pending"),
@@ -734,7 +713,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("renders received A2A items as read-only rows with a sender badge", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem("queue-user", "User prompt", "pending"),
         agentQueuedItem("queue-agent", "Agent response"),
@@ -774,7 +752,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("renders received A2A items even when the queue holds only A2A items", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([agentQueuedItem("queue-agent", "Agent response")]),
       readOnly: false,
       canAct: true,
@@ -787,7 +764,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("renders a managed-command item as a describable, cancellable chip", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem("queue-user", "User prompt", "pending"),
         managedCommandQueuedItem("queue-managed", "bun test --watch"),
@@ -830,7 +806,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("lets a managed-command item be reordered like any other row", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem("queue-user", "User prompt", "pending"),
         managedCommandQueuedItem("queue-managed", "tail -f server.log"),
@@ -847,7 +822,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("labels a paused managed-command item", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         {
           ...managedCommandQueuedItem("queue-managed", "bun test"),
@@ -865,7 +839,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("labels a pending same-turn delivery as aimed at the running turn", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         {
           ...managedCommandQueuedItem("queue-managed", "bun test"),
@@ -888,7 +861,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("labels a steering managed-command item and closes its cancel lever", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         {
           ...managedCommandQueuedItem("queue-managed", "bun test"),
@@ -916,7 +888,6 @@ describe("<QueuedMessagePanel />", () => {
   // value would still pass with either check regressed.
   it("hides the managed-command cancel action in read-only mode", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         managedCommandQueuedItem("queue-managed", "bun test"),
       ]),
@@ -935,7 +906,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("hides the managed-command cancel action when the viewer cannot act", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         managedCommandQueuedItem("queue-managed", "bun test"),
       ]),
@@ -954,7 +924,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("renders a port-forward item as a describable, cancellable chip whose status uses the delivery vocabulary", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         queuedItem("queue-user", "User prompt", "pending"),
         portForwardQueuedItem("queue-forward", "dev server was interrupted"),
@@ -1000,7 +969,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("labels a paused port-forward item with the same status vocabulary a managed-command item uses", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         {
           ...portForwardQueuedItem("queue-forward", "interrupted"),
@@ -1020,7 +988,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("labels a steering port-forward item Delivering and closes its cancel lever, matching the managed-command item", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         {
           ...portForwardQueuedItem("queue-forward", "interrupted"),
@@ -1042,7 +1009,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("keeps the managed-command row's own cancel aria-label distinct from the port-forward one", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         managedCommandQueuedItem("queue-managed", "bun test --watch"),
       ]),
@@ -1066,7 +1032,6 @@ describe("<QueuedMessagePanel />", () => {
 
   it("does not label a received A2A response with the user steer affordance", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: queueState([
         {
           ...queuedItem("queue-user", "User follow-up", "pending"),
@@ -1116,7 +1081,6 @@ describe("<QueuedMessagePanel />", () => {
 
     it("keeps Steer now available on another row while a safe_point steer is requested", () => {
       renderPanel({
-        fallbackTraversalLive: false,
         queue: runningQueueState([
           steerRequestedItem("queue-waiting", "safe_point"),
           queuedItem("queue-other", "Other queued prompt", "pending"),
@@ -1131,7 +1095,6 @@ describe("<QueuedMessagePanel />", () => {
 
     it("keeps Steer now available on another row while a safe_point steer is already handed off (steering)", () => {
       renderPanel({
-        fallbackTraversalLive: false,
         queue: runningQueueState([
           {
             ...steerRequestedItem("queue-handed-off", "safe_point"),
@@ -1149,7 +1112,6 @@ describe("<QueuedMessagePanel />", () => {
 
     it("disables Steer now on another row while an interrupt_restart steer is staged", () => {
       renderPanel({
-        fallbackTraversalLive: false,
         queue: runningQueueState([
           steerRequestedItem("queue-restarting", "interrupt_restart"),
           queuedItem("queue-other", "Other queued prompt", "pending"),
@@ -1166,7 +1128,6 @@ describe("<QueuedMessagePanel />", () => {
       const reason =
         "A steer is already in flight; this message will run next.";
       renderPanel({
-        fallbackTraversalLive: false,
         queue: queueState([
           {
             ...queuedItem("queue-fallback", "Fallback prompt", "fallback"),
@@ -1186,7 +1147,6 @@ describe("<QueuedMessagePanel />", () => {
     it("renders a paused item's retained reason inline in its row", () => {
       const reason = "Paused after you pressed Stop.";
       renderPanel({
-        fallbackTraversalLive: false,
         queue: queueState([
           {
             ...queuedItem("queue-paused", "Paused prompt", "paused"),
@@ -1205,7 +1165,6 @@ describe("<QueuedMessagePanel />", () => {
     it("renders a received A2A item's retained pending reason inline in its row", () => {
       const reason = "Retained after the turn ended before it could steer.";
       renderPanel({
-        fallbackTraversalLive: false,
         queue: queueState([
           {
             ...agentQueuedItem("queue-agent", "Agent response"),
@@ -1224,7 +1183,6 @@ describe("<QueuedMessagePanel />", () => {
 
     it("renders nothing extra for a null or whitespace-only fallbackReason", () => {
       renderPanel({
-        fallbackTraversalLive: false,
         queue: queueState([
           queuedItem("queue-plain", "Same preview", "pending"),
           {
@@ -1257,8 +1215,7 @@ describe("<QueuedMessagePanel />", () => {
 describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
   afterEach(cleanup);
 
-  const TOOLTIP =
-    "Held because the last turn failed. Retry or switch sends it after; Resume sends it now.";
+  const TOOLTIP = "Held because the last turn failed. Resume to send it.";
 
   function pausedQueue(pausedReason: string | null | undefined) {
     const queue: ChatSessionState["queue"] = {
@@ -1277,45 +1234,35 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
 
   function heldInput(
     pausedReason: string | null | undefined,
-    fallbackTraversalLive: boolean,
     viewer: boolean,
   ): PanelInput {
     return {
       queue: pausedQueue(pausedReason),
-      fallbackTraversalLive,
       readOnly: viewer,
       canAct: !viewer,
       onReorder: null,
     };
   }
 
-  function renderHeld(
-    pausedReason: string | null | undefined,
-    fallbackTraversalLive: boolean,
-  ) {
-    return renderPanel(heldInput(pausedReason, fallbackTraversalLive, false));
+  function renderHeld(pausedReason: string | null | undefined) {
+    return renderPanel(heldInput(pausedReason, false));
   }
 
-  const ERROR_LITERAL =
-    "Held because the last turn failed. Retry or switch sends it after; Resume sends it now.";
-  const FOR_ROUTING_LITERAL =
-    "Held while routing recovers the failed turn. It runs when routing finishes.";
-  const AFTER_ROUTING_LITERAL =
-    "Held after routing moved the chat. Resume sends it now.";
+  const ERROR_LITERAL = "Held because the last turn failed. Resume to send it.";
+  const ROUTING_LITERAL = "Held by routing after the last turn failed.";
   const LEGACY_HOLD =
     "Queue paused while the host tries a fallback for the failed turn.";
 
-  it("exports the ruled tooltip sentences", () => {
+  it("exports the ruled tooltip sentences and no routing-liveness variants", () => {
     expect(QUEUE_PAUSED_AFTER_ERROR_TOOLTIP).toBe(ERROR_LITERAL);
-    expect(QUEUE_PAUSED_FOR_ROUTING_TOOLTIP).toBe(FOR_ROUTING_LITERAL);
-    expect(QUEUE_PAUSED_AFTER_ROUTING_TOOLTIP).toBe(AFTER_ROUTING_LITERAL);
+    // A namespace read: a type error until production adds the export.
+    expect(copy.QUEUE_PAUSED_BY_ROUTING_TOOLTIP).toBe(ROUTING_LITERAL);
+    expect("QUEUE_PAUSED_FOR_ROUTING_TOOLTIP" in copy).toBe(false);
+    expect("QUEUE_PAUSED_AFTER_ROUTING_TOOLTIP" in copy).toBe(false);
   });
 
-  it.each([
-    ["traversal live", true],
-    ["traversal over", false],
-  ])("turn_error says the failed-turn sentence with %s", (_name, live) => {
-    renderHeld("turn_error", live);
+  it("turn_error says the failed-turn sentence", () => {
+    renderHeld("turn_error");
 
     expect(badge().textContent).toBe("Paused after an error");
     expect(tooltipTextNear(badge())).toBe(QUEUE_PAUSED_AFTER_ERROR_TOOLTIP);
@@ -1323,81 +1270,30 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
     expect(badge().tabIndex).toBe(0);
   });
 
-  it("routing with the traversal live says it runs when routing finishes", () => {
-    renderHeld("routing", true);
+  it("routing says it is held by routing, whatever state the traversal is in", () => {
+    renderHeld("routing");
 
     expect(badge().textContent).toBe("Paused after an error");
-    expect(tooltipTextNear(badge())).toBe(QUEUE_PAUSED_FOR_ROUTING_TOOLTIP);
-    expect(tooltipTextNear(badge())).toBe(FOR_ROUTING_LITERAL);
+    expect(tooltipTextNear(badge())).toBe(copy.QUEUE_PAUSED_BY_ROUTING_TOOLTIP);
+    expect(tooltipTextNear(badge())).toBe(ROUTING_LITERAL);
     expect(badge().tabIndex).toBe(0);
   });
 
-  it("routing with the traversal over says Resume sends it now", () => {
-    renderHeld("routing", false);
+  it("an older host (no pausedReason key) keeps a plain 'Paused' with no tooltip", () => {
+    renderHeld(undefined);
 
-    expect(badge().textContent).toBe("Paused after an error");
-    expect(tooltipTextNear(badge())).toBe(QUEUE_PAUSED_AFTER_ROUTING_TOOLTIP);
-    expect(tooltipTextNear(badge())).toBe(AFTER_ROUTING_LITERAL);
-    expect(badge().tabIndex).toBe(0);
-  });
-
-  it("changes the tooltip on the same badge node when the traversal ends, keeping a parked row's reason", () => {
-    const restampReason =
-      "Queue paused: this message's settings are not supported on the provider the chat switched to, so it was left on the previous one. Resume it to run it anyway.";
-    const queue: ChatSessionState["queue"] = {
-      status: "paused",
-      pausedReason: "routing",
-      items: [
-        {
-          ...queuedItem("queue-held", "Held prompt", "paused"),
-          fallbackReason: restampReason,
-        },
-      ],
-    };
-    const base = {
-      queue,
-      readOnly: false,
-      canAct: true,
-      onReorder: null,
-    };
-    const view = renderPanel({ ...base, fallbackTraversalLive: true });
-    const before = badge();
-
-    expect(before.textContent).toBe("Paused after an error");
-    expect(tooltipTextNear(before)).toBe(FOR_ROUTING_LITERAL);
-    expect(screen.getByText(restampReason)).not.toBeNull();
-
-    view.rerender(panelElement({ ...base, fallbackTraversalLive: false }));
-
-    expect(badge()).toBe(before);
-    expect(before.textContent).toBe("Paused after an error");
-    expect(tooltipTextNear(before)).toBe(AFTER_ROUTING_LITERAL);
-    expect(screen.getByText(restampReason)).not.toBeNull();
+    expect(badge().textContent).toBe("Paused");
+    expect(tooltipTextNear(badge())).toBeNull();
+    expect(badge().hasAttribute("tabindex")).toBe(false);
   });
 
   it.each([
-    ["traversal live", true],
-    ["traversal over", false],
-  ])(
-    "an older host (no pausedReason key) keeps a plain 'Paused' with no tooltip, %s",
-    (_name, live) => {
-      renderHeld(undefined, live);
-
-      expect(badge().textContent).toBe("Paused");
-      expect(tooltipTextNear(badge())).toBeNull();
-      expect(badge().hasAttribute("tabindex")).toBe(false);
-    },
-  );
-
-  it.each([
-    ["routing, traversal live", "routing", true, FOR_ROUTING_LITERAL],
-    ["routing, traversal over", "routing", false, AFTER_ROUTING_LITERAL],
-    ["turn_error, traversal live", "turn_error", true, ERROR_LITERAL],
-    ["turn_error, traversal over", "turn_error", false, ERROR_LITERAL],
+    ["routing", "routing", ROUTING_LITERAL],
+    ["turn_error", "turn_error", ERROR_LITERAL],
   ])(
     "a read-only viewer sees the owner's pill and tooltip for %s",
-    (_name, reason, live, tooltip) => {
-      renderPanel(heldInput(reason, live, true));
+    (_name, reason, tooltip) => {
+      renderPanel(heldInput(reason, true));
 
       expect(badge().textContent).toBe("Paused after an error");
       expect(tooltipTextNear(badge())).toBe(tooltip);
@@ -1411,7 +1307,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
     "the legacy routing-hold sentence (%s) is absent under a routing pill",
     (_name, reason) => {
       renderPanel({
-        ...heldInput("routing", false, false),
+        ...heldInput("routing", false),
         queue: {
           ...pausedQueue("routing"),
           items: [
@@ -1432,7 +1328,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
 
   it("draws the legacy routing-hold sentence under a plain 'Paused' pill", () => {
     renderPanel({
-      ...heldInput("user", false, false),
+      ...heldInput("user", false),
       queue: {
         ...pausedQueue("user"),
         items: [
@@ -1456,7 +1352,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
     ["a null reason", null],
     ["an absent reason (an older host)", undefined],
   ])("keeps a plain 'Paused' with no tooltip for %s", (_name, reason) => {
-    renderHeld(reason, false);
+    renderHeld(reason);
 
     expect(badge().textContent).toBe("Paused");
     expect(tooltipTextNear(badge())).toBeNull();
@@ -1465,7 +1361,6 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
 
   it("gives a paused managed-command row the same pill", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: {
         status: "paused",
         pausedReason: "turn_error",
@@ -1502,7 +1397,6 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
       item: ChatQueuedItem,
     ): HTMLElement {
       renderPanel({
-        fallbackTraversalLive: false,
         queue: { ...queue, items: [item] },
         readOnly: false,
         canAct: true,
@@ -1640,7 +1534,6 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
 
   it("leaves a row that is not paused alone, whatever the queue's reason", () => {
     renderPanel({
-      fallbackTraversalLive: false,
       queue: {
         status: "paused",
         pausedReason: "turn_error",
@@ -1657,13 +1550,8 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
   });
 });
 
-function renderPanel(input: PanelInput) {
-  return render(panelElement(input));
-}
-
 interface PanelInput {
   readonly queue: ChatSessionState["queue"];
-  readonly fallbackTraversalLive: boolean;
   readonly readOnly: boolean;
   readonly canAct: boolean;
   readonly resumeRequested?: boolean;
@@ -1675,12 +1563,11 @@ interface PanelInput {
     | null;
 }
 
-function panelElement(input: PanelInput) {
-  return (
+function renderPanel(input: PanelInput) {
+  return render(
     <TooltipProvider delayDuration={0}>
       <QueuedMessagePanel
         queue={input.queue}
-        fallbackTraversalLive={input.fallbackTraversalLive}
         activeTurnStatus="running"
         canAct={input.canAct}
         resumeRequested={input.resumeRequested ?? false}
@@ -1696,7 +1583,7 @@ function panelElement(input: PanelInput) {
         onReorder={input.onReorder ?? vi.fn()}
         onSteerNow={vi.fn()}
       />
-    </TooltipProvider>
+    </TooltipProvider>,
   );
 }
 

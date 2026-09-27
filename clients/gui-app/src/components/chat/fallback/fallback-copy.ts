@@ -99,21 +99,34 @@ export const ROUTING_SETTINGS_LABEL = "Model routing settings";
 export const NOTHING_COULD_BE_TRIED_LABEL = "Nothing could be tried";
 /**
  * The Message Queue panel's paused pill when the host paused it because a turn
- * failed (`queue.pausedReason` `turn_error` / `routing`), and its tooltip.
+ * failed (`queue.pausedReason` `turn_error` / `routing`), and its tooltip for
+ * `turn_error`.
+ *
+ * The tooltip says why the row is held and how to send it, and promises no
+ * more (review sweep, 2026-09-27, replacing the spec's "Retry or switch sends
+ * it after; Resume sends it now"): a successful manual Retry or Switch leaves
+ * the held rows paused - the host's own notice says "still paused - resume the
+ * queue to send them" - and while one is in flight Resume is gated rather than
+ * immediate.
  */
 export const QUEUE_PAUSED_AFTER_ERROR_LABEL = "Paused after an error";
 export const QUEUE_PAUSED_AFTER_ERROR_TOOLTIP =
-  "Held because the last turn failed. Retry or switch sends it after; Resume sends it now.";
+  "Held because the last turn failed. Resume to send it.";
 /**
- * The pill's tooltip under a routing pause (`pausedReason` `routing`), which
- * the host writes in two states: while a traversal holds the queue - the held
- * rows are released when it succeeds - and after one succeeded, for the rows
- * whose settings the new provider rejected, which wait for Resume.
+ * The pill's tooltip under a routing pause (`pausedReason` `routing`): one
+ * sentence for every state that pause spans, because it promises nothing about
+ * when the row runs or what Resume does.
+ *
+ * The host writes `routing` while a traversal holds the queue (a countdown, a
+ * choice, a wait, a retry, a switch - and on past the frame being withdrawn
+ * while the replacement runs) and after one succeeded, for rows whose settings
+ * the new provider rejected, which its release skips. What happens next differs
+ * across those, and even per row, and the client cannot tell them apart from
+ * what it receives - so it says what is true in all of them, and a row's own
+ * reason line says what is specific to it.
  */
-export const QUEUE_PAUSED_FOR_ROUTING_TOOLTIP =
-  "Held while routing recovers the failed turn. It runs when routing finishes.";
-export const QUEUE_PAUSED_AFTER_ROUTING_TOOLTIP =
-  "Held after routing moved the chat. Resume sends it now.";
+export const QUEUE_PAUSED_BY_ROUTING_TOOLTIP =
+  "Held by routing after the last turn failed.";
 
 /**
  * What a switch costs, stated on every surface that offers one.

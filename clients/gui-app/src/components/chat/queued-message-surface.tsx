@@ -60,8 +60,7 @@ import {
 import {
   QUEUE_PAUSED_AFTER_ERROR_LABEL,
   QUEUE_PAUSED_AFTER_ERROR_TOOLTIP,
-  QUEUE_PAUSED_AFTER_ROUTING_TOOLTIP,
-  QUEUE_PAUSED_FOR_ROUTING_TOOLTIP,
+  QUEUE_PAUSED_BY_ROUTING_TOOLTIP,
 } from "@/components/chat/fallback/fallback-copy";
 import {
   QUEUED_MESSAGE_DND_MODIFIERS,
@@ -132,13 +131,6 @@ export interface QueuedMessagePanelProps {
   readonly keepPausedRequested: boolean;
   readonly readOnly: boolean;
   readonly editingQueueItemId: string | null;
-  /**
-   * Whether a routing traversal is live on this chat
-   * (`useChatFallbackTraversalIsLive`). A routing pause outlives its traversal
-   * for the rows whose restamp was rejected, so this is what tells the pill's
-   * tooltip whether routing will release the row or the user has to.
-   */
-  readonly fallbackTraversalLive: boolean;
   readonly scrollRegionMaxHeightClass: string;
   readonly separated?: boolean;
   readonly onPause: () => string | null;
@@ -173,10 +165,7 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
     [items],
   );
   const queueStatus = props.queue.status;
-  const pausedAfterErrorTooltip = queuePausedAfterErrorTooltip(
-    props.queue,
-    props.fallbackTraversalLive,
-  );
+  const pausedAfterErrorTooltip = queuePausedAfterErrorTooltip(props.queue);
   const hasSteerRestartPending = useMemo(
     () =>
       items.some(
@@ -311,21 +300,20 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
  * held after a failed turn (`queuePausedAfterError`) and the pill says plain
  * "Paused".
  *
- * A routing pause says who releases the row, because that differs by whether
- * the traversal is still live. While it is, the held rows go out when routing
- * succeeds. After it, the only rows left paused under `routing` are the ones
- * whose settings the new provider rejected, which the success release skips on
- * purpose - they wait for Resume.
+ * Read off the queue alone, like the pill. A routing pause gets one sentence
+ * for all of its states (`QUEUE_PAUSED_BY_ROUTING_TOOLTIP`): whether routing
+ * is still holding the queue is not something the absence of a routing card
+ * can prove - a retry draws no card, and the frame is withdrawn while the
+ * replacement runs - and even within one traversal a rejected row is not
+ * released with the rest (review F9/F10, 2026-09-27).
  */
 function queuePausedAfterErrorTooltip(
   queue: ChatSessionState["queue"],
-  fallbackTraversalLive: boolean,
 ): string | null {
   if (!queuePausedAfterError(queue)) return null;
-  if (queue.pausedReason !== "routing") return QUEUE_PAUSED_AFTER_ERROR_TOOLTIP;
-  return fallbackTraversalLive
-    ? QUEUE_PAUSED_FOR_ROUTING_TOOLTIP
-    : QUEUE_PAUSED_AFTER_ROUTING_TOOLTIP;
+  return queue.pausedReason === "routing"
+    ? QUEUE_PAUSED_BY_ROUTING_TOOLTIP
+    : QUEUE_PAUSED_AFTER_ERROR_TOOLTIP;
 }
 
 function queueHeaderTooltip(input: {

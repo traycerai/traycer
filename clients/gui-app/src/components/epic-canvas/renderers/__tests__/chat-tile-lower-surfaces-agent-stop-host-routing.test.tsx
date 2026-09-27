@@ -1,5 +1,4 @@
 import {
-  act,
   cleanup,
   fireEvent,
   render,
@@ -36,14 +35,8 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamMethodSchemaVersion: () => null,
 }));
 
-const dockPropsRef = vi.hoisted(() => ({
-  fallbackTraversalLive: [] as boolean[],
-}));
 vi.mock("@/components/chat/chat-lower-dock", () => ({
-  ChatLowerDock: (props: { readonly fallbackTraversalLive: boolean }) => {
-    dockPropsRef.fallbackTraversalLive.push(props.fallbackTraversalLive);
-    return null;
-  },
+  ChatLowerDock: () => null,
 }));
 
 vi.mock("@/hooks/drafts/use-tab-draft-mirror", () => ({
@@ -137,11 +130,6 @@ import {
   disposeManagedCommandChatSessions,
   installManagedCommandChatSession,
 } from "@/stores/managed-commands/test-support/managed-command-chat-session";
-import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
-import type {
-  ChatRunSettings,
-  PendingFallback,
-} from "@traycer/protocol/host/agent/gui/subscribe";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
@@ -398,69 +386,6 @@ afterEach(() => {
   globalClientRef.value = null;
   messengerRef.value = null;
   bindingRef.value = null;
-});
-
-describe("dock routing-liveness forwarding", () => {
-  const FAILED_TUPLE: ChatRunSettings = {
-    harnessId: "codex",
-    model: "codex-test",
-    permissionMode: "supervised",
-    reasoningEffort: "medium",
-    serviceTier: null,
-    agentMode: "epic",
-    profileId: null,
-  };
-
-  function waitingFallback(): PendingFallback {
-    return {
-      traversalId: "t1",
-      revision: 1,
-      state: "waiting",
-      reason: "rate_limit",
-      failedTuple: FAILED_TUPLE,
-      targetTuple: null,
-      impendingAction: null,
-      deadline: null,
-      graceRemainingMs: null,
-      attempt: 1,
-      maxAttempts: 3,
-      queuedItemsMoving: 0,
-      siblingSwitching: 0,
-    };
-  }
-
-  function sessionStore() {
-    const handle = __getChatSessionRegistryForTests().peek(
-      EPIC_ID,
-      CHAT_ID,
-      TAB_HOST.hostId,
-    );
-    if (handle === null) throw new Error("chat session was not registered");
-    return handle.store;
-  }
-
-  it("passes the dock false with no traversal, true while a routing card is up, and false once the frame clears", () => {
-    dockPropsRef.fallbackTraversalLive.length = 0;
-    const queryClient = new QueryClient();
-    render(
-      tile(
-        surfacesProps(() => null),
-        queryClient,
-      ),
-    );
-    const latest = () => dockPropsRef.fallbackTraversalLive.at(-1);
-    expect(latest()).toBe(false);
-
-    act(() => {
-      sessionStore().setState({ pendingFallback: waitingFallback() });
-    });
-    expect(latest()).toBe(true);
-
-    act(() => {
-      sessionStore().setState({ pendingFallback: undefined });
-    });
-    expect(latest()).toBe(false);
-  });
 });
 
 describe("composer cascade-stop dialog host routing", () => {
