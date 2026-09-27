@@ -2927,7 +2927,8 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     rather than after CLI & Args so it cannot become a provider's default tab:
     amp and cursor advertise `env` without `general`, and a tab every provider
     gets must not displace the one the provider asked for.
-    The body is one card: the heading "Who reviews {provider}'s commands", then
+    The body is one card: the heading "Who reviews {provider}'s commands"
+    with Auto mode's muted xs **Experimental** badge, then
     `ProviderJudgeSwitch` (`panels/permissions/provider-judge-switch.tsx`),
     then an "All permission settings" link to Permissions ▸ Judge. The link
     passes `hostId: null` because Settings is already scoped to the machine
@@ -3918,13 +3919,25 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       `sessionImport.run`'s own negotiated line.
     - Below the row, one card per mode lists what it runs without asking, from
       `PERMISSION_MODE_DETAILS`, the same data as the picker's descriptions.
+    - **Auto is experimental.** Its picker option, expanded selected control,
+      and mode card carry a muted xs **Experimental** badge. A compact picker
+      includes the status in its tooltip and accessible name. The mode card
+      adds: "Auto mode is experimental. We’re still improving its reliability
+      and speed."
+    - Desktop and mobile pickers show **Supervised**, **Auto-accept edits**,
+      **Full access**, then **Auto**, using `PERMISSION_PICKER_OPTIONS`. The
+      safety order in `PERMISSION_OPTIONS` stays separate and unchanged, as do
+      compatibility fallbacks. The Auto row has the same label-and-description
+      shape as its peers; reviewer/model/billing metadata is shown in Judge
+      settings, not the picker. Availability reasons and mid-turn notices stay.
   - **Judge** (`judge-tab.tsx`, with `judge-tile-state.ts`,
     `use-judge-toolbar-store.ts`, `judge-model-face.tsx` and
     `judge-status-lines.tsx`) - **Auto mode judge**: which model checks each
     command in Auto mode on this machine, over `autoJudge.get` /
     `autoJudge.set` (`~/.traycer/host/config/auto-judge.json`,
-    `selection: null` = Automatic). Two readers share one cache entry with the
-    composer's meta line, and the harness catalog invalidates it when the
+    `selection: null` = Automatic). The heading carries an **Experimental**
+    badge. Two readers share one cache entry with the composer's mid-turn
+    availability check, and the harness catalog invalidates it when the
     Traycer row's enabled / available / auth facts change (see
     `auto-judge-billing.ts`). The save invalidates it too, after writing its
     echo.
@@ -3953,7 +3966,8 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     - **The card** opens with one lead line, the group's description
       ("Checks each command before it runs in Auto mode."), and a muted xs
       "This machine" `Badge`, the one the Modes tab uses for "All machines".
-      `SettingsGroup` has no title slot, so the badge sits on the lead line.
+      The scope badge stays on the lead line; the **Experimental** badge sits
+      beside the group's heading through `SettingsGroup.titleStatus`.
     - **Two tiles, one radio group**: "✦ Automatic" (with an outline
       "Recommended" badge) and "◎ A model you pick". They sit side by side
       while the card is at least `@lg` wide (a container query on the card)
@@ -4252,7 +4266,9 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         Providers page consumes both once on mount, and has the Permissions
         tab whenever this line can render.
   - **Rules** (`rules-tab.tsx`) edits the ACCOUNT's Auto mode policy in place,
-    over `autoPolicy.get` / `autoPolicy.set`. It shows four sections in
+    over `autoPolicy.get` / `autoPolicy.set`. Its **Auto mode rules** heading
+    carries the muted xs **Experimental** badge, including on direct navigation.
+    It shows four sections in
     Traycer's order (Environment, Always allow, Ask first, Never allow), plus
     **Notes** for text under none of them. Each section has its tagline,
     description, a monospace textarea, and the built-in rules it extends.
@@ -4739,7 +4755,9 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     error> …", with the account (that provider's last-used, checked against its
     live accounts, else the first account listed - never a disabled Terminal
     account; no control for a provider with none) and the permission mode (the
-    user's default, clamped to what the provider honours) beneath; agent mode
+    user's default, clamped to what the provider honours) beneath. This picker
+    uses the shared presentation order, with Auto last and its **Experimental**
+    badge on both the option and selected value. Agent mode
     and fast mode are carried from the defaults, as the new-conversation modal
     seeds them. A model catalog that fails to load says so in the Model picker
     and offers "Try again". It answers for the DRAFT, blank rows and an unsaved
