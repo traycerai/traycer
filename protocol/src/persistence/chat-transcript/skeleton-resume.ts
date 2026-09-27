@@ -239,8 +239,10 @@ export type SkeletonResumeSettlement = {
 
 /**
  * Compares a skeleton against a claim as the skeleton is read, in order, one
- * slice at a time - so the host never holds more of it than one block past what
- * it has already verified.
+ * slice at a time. Between pushes it holds only the unverified tail: less than
+ * one block, or everything from the first differing block once it settles.
+ * Within a push it also holds the whole incoming slice, so the caller's slice
+ * size bounds its peak.
  *
  * {@link push} withholds entries while every whole block so far matches, and
  * settles at the first block that differs, once the claim runs out, or at the
