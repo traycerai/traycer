@@ -374,6 +374,7 @@ import * as Y from "yjs";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
+import * as chatPrewarmHandoff from "@/components/epic-canvas/chat-prewarm-handoff";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -1279,10 +1280,20 @@ function approvalState(
 }
 
 function renderChatTile() {
+  return renderChatTileWithNode(CHAT_ARTIFACT);
+}
+
+function renderChatTileWithNode(node: {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: "chat";
+  readonly name: string;
+  readonly hostId: string;
+}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(chatTileTestTree(queryClient, true, CHAT_ARTIFACT));
+  return render(chatTileTestTree(queryClient, true, node));
 }
 
 function renderSwitchableChatTile() {
@@ -1301,7 +1312,13 @@ function renderSwitchableChatTile() {
 function chatTileTestTree(
   queryClient: QueryClient,
   chatVisible: boolean,
-  node: typeof CHAT_ARTIFACT,
+  node: {
+    readonly id: string;
+    readonly instanceId: string;
+    readonly type: "chat";
+    readonly name: string;
+    readonly hostId: string;
+  },
 ) {
   return (
     <TestRouterProvider>
@@ -1575,6 +1592,33 @@ describe("<ChatTile />", () => {
     });
     await waitForChatTileLoaded();
     expect(screen.getByText("Host chat content")).not.toBeNull();
+  });
+
+  it("signals the hosted tile's instance ID, not the view tab ID, after acquiring its chat handle", async () => {
+    const handoffSpy = vi.spyOn(
+      chatPrewarmHandoff,
+      "notifyChatTileSessionAcquired",
+    );
+
+    renderChatTileWithNode({
+      ...CHAT_ARTIFACT,
+      instanceId: "actual-tile-instance",
+    });
+
+    await waitFor(() => {
+      expect(handoffSpy).toHaveBeenCalledWith(
+        EPIC_ID,
+        HOST_ID,
+        CHAT_ARTIFACT.id,
+        "actual-tile-instance",
+      );
+    });
+    expect(handoffSpy).not.toHaveBeenCalledWith(
+      EPIC_ID,
+      HOST_ID,
+      CHAT_ARTIFACT.id,
+      "tab-test",
+    );
   });
 
   it("stays gated for a record-less chat when the cloud row belongs to someone else", async () => {
