@@ -608,7 +608,11 @@ describe("buildHostRestartCommand", () => {
     });
 
     it.each([
-      { phase: "applying" as const, execution: "active" as const, continuation: null },
+      {
+        phase: "applying" as const,
+        execution: "active" as const,
+        continuation: null,
+      },
       {
         phase: "preparing" as const,
         execution: "active" as const,

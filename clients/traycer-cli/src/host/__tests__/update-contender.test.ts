@@ -17,7 +17,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@traycer-clients/shared/host-update", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("@traycer-clients/shared/host-update")>();
+    await importOriginal<
+      typeof import("@traycer-clients/shared/host-update")
+    >();
   return { ...actual, withUpdateContender: mocks.withUpdateContenderMock };
 });
 
@@ -99,9 +101,7 @@ describe("withCliUpdateContenderContext — nonterminal-attempt message", () => 
       ),
     ).rejects.toMatchObject({
       code: "E_HOST_UPDATE_ATTEMPT_ACTIVE",
-      message: expect.stringContaining(
-        "wait for the running update to finish",
-      ),
+      message: expect.stringContaining("wait for the running update to finish"),
       details: { attemptId: rec.attemptId, phase: rec.phase },
     });
   });

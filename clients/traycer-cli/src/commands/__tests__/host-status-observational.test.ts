@@ -77,8 +77,13 @@ vi.mock("../../service", () => ({
 // `importOriginal`, matching this file's pattern for `store/cli-lock` above.
 vi.mock("@traycer-clients/shared/host-update", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("@traycer-clients/shared/host-update")>();
-  return { ...actual, readUpdateAttemptRecord: mocks.readUpdateAttemptRecordMock };
+    await importOriginal<
+      typeof import("@traycer-clients/shared/host-update")
+    >();
+  return {
+    ...actual,
+    readUpdateAttemptRecord: mocks.readUpdateAttemptRecordMock,
+  };
 });
 
 import { hostStatusCommand } from "../host-status";
@@ -150,7 +155,9 @@ function attemptRecord(
   };
 }
 
-function validRead(overrides: Partial<HostUpdateAttemptRecord>): HostUpdateAttemptRead {
+function validRead(
+  overrides: Partial<HostUpdateAttemptRecord>,
+): HostUpdateAttemptRead {
   return { kind: "valid", value: attemptRecord(overrides), version: 2 };
 }
 

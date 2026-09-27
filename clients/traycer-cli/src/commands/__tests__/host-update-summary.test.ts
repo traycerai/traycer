@@ -23,8 +23,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../host/update-run", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../host/update-run")>();
+  const actual = await importOriginal<typeof import("../../host/update-run")>();
   return { ...actual, runHostUpdate: mocks.runHostUpdateMock };
 });
 
