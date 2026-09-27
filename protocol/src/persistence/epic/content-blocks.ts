@@ -268,9 +268,12 @@ export type ProviderNoticeNormalizedMetadata = z.infer<
 /**
  * One hop of a settled fallback traversal, as the settled card lists it.
  *
- * Every string is host-RENDERED, never an id: the card prints them verbatim,
- * and a raw profile id or error message would put an account identifier on a
- * card and into the bug reports it is copied into. `endedLabel` is an open
+ * Every string is host-RENDERED: the card prints them verbatim, so none is a
+ * raw error message and none is a full id. `profileLabel` is the profile's
+ * name, or the Terminal account's; an account that cannot be named is shown by
+ * a short prefix of its profile id (a host-minted local key, not an account
+ * identifier), and two accounts with the same name are told apart by the same
+ * prefix. `endedLabel` is an open
  * string for the reason `fallbackTargetSkipSchema.reason` is one - a strict
  * enum is strict on the CLIENT, and a reason a released build has never heard
  * of would fail the whole row over a field that is only rendered.

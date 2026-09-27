@@ -342,6 +342,8 @@ export function useChatSessionHandle(
           result.client.interviewSettlementActionsProtocolSupported(),
         autoPermissionModeProtocolSupported: () =>
           result.client.autoPermissionModeProtocolSupported(),
+        queuePauseReasonProtocolSupported: () =>
+          result.client.queuePauseReasonProtocolSupported(),
       };
     };
 

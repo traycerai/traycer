@@ -18,6 +18,10 @@ import {
 } from "@/components/chat/fallback/fallback-state";
 import { isFallbackNoticeKind } from "@/components/chat/fallback/fallback-notice-kinds";
 import { formatWaitTime } from "@/lib/relative-time";
+import {
+  isRoutingCancellationNotice,
+  isRoutingCancellationOutcome,
+} from "@/stores/chats/hidden-transcript-notices";
 
 /**
  * Polite announcements for transcript completions and fallback lifecycle.
@@ -676,6 +680,10 @@ export function fallbackOutcomeAnnouncement(
   outcome: LastFallbackOutcome | undefined,
 ): FallbackNoticeAnnouncement | null {
   if (outcome === undefined) return null;
+  // The slot carries the transcript's refusal notice too, and what the
+  // transcript hides is not spoken. Silence is the answer after a refusal: an
+  // earlier hop's outcome in the slot was spoken when it landed.
+  if (isRoutingCancellationOutcome(outcome)) return null;
   return {
     key: `notice:${outcome.blockId}`,
     messageId: outcome.assistantMessageId,
@@ -714,6 +722,9 @@ export function fallbackNoticeAnnouncements(
       if (!isFallbackNoticeKind(segment.noticeKind)) {
         continue;
       }
+      // Hidden in the transcript on every host, so never spoken either
+      // (`hidden-transcript-notices.ts`).
+      if (isRoutingCancellationNotice(segment)) continue;
       notices.push({
         key: `notice:${segment.id}`,
         messageId: message.id,

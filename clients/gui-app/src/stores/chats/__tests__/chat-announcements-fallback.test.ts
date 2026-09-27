@@ -1776,6 +1776,87 @@ describe("fallbackNoticeAnnouncements", () => {
       false,
     );
   });
+
+  const CANCEL_TITLE =
+    "Fallback ended - no further providers will be tried for this turn";
+
+  function cancellationNoticeSegment(input: {
+    readonly id: string;
+    readonly codeValue: string;
+  }): ProviderNoticeSegment {
+    return providerNoticeSegment({
+      id: input.id,
+      noticeKind: "fallback_settled",
+      status: "completed",
+      parentId: null,
+      title: CANCEL_TITLE,
+      message: "What was tried is recorded below.",
+      details: [
+        { label: "Code", value: input.codeValue },
+        { label: "Cause", value: "You chose not to switch" },
+      ],
+    });
+  }
+
+  // A1: the cancellation notice produces no announcement.
+  it("A1: produces no entry for the cancellation notice", () => {
+    const messages: ReadonlyArray<ChatMessage> = [
+      assistantMessage({
+        id: "m1",
+        segments: [
+          cancellationNoticeSegment({
+            id: "seg-cancelled",
+            codeValue: "FALLBACK_CANCELLED",
+          }),
+        ],
+      }),
+    ];
+    const notices = fallbackNoticeAnnouncements(messages);
+    expect(notices).toHaveLength(0);
+  });
+
+  // A2: the FALLBACK_EXHAUSTED variant IS announced, with its title present.
+  it("A2: announces the FALLBACK_EXHAUSTED variant, title present", () => {
+    const messages: ReadonlyArray<ChatMessage> = [
+      assistantMessage({
+        id: "m1",
+        segments: [
+          cancellationNoticeSegment({
+            id: "seg-exhausted",
+            codeValue: "FALLBACK_EXHAUSTED",
+          }),
+        ],
+      }),
+    ];
+    const notices = fallbackNoticeAnnouncements(messages);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.text).toBe(CANCEL_TITLE);
+  });
+
+  // A5: a message holding only the queue notice (no cancellation notice)
+  // produces no announcement for it - the queue notice is a plain `error`
+  // segment, and this announcer is scoped to `provider_notice` fallback
+  // notices, so no `error` segment was ever in scope for it.
+  it("A5: produces no announcement for a message holding only the queue notice", () => {
+    const messages: ReadonlyArray<ChatMessage> = [
+      {
+        ...assistantMessage({ id: "m1", segments: [] }),
+        segments: [
+          {
+            id: "queue-paused:a5",
+            kind: "error",
+            message:
+              "1 queued message was held because this turn ended with an error, and it was not sent. Resume the queue to send it.",
+            recoverable: true,
+            code: "QUEUE_PAUSED_AFTER_ERROR",
+            failure: null,
+          },
+        ],
+      },
+    ];
+    const notices = fallbackNoticeAnnouncements(messages);
+    expect(notices).toHaveLength(0);
+  });
 });
 
 // D215: confirmed host outcome metadata reaches the announcer independent of
@@ -1849,6 +1930,43 @@ describe("fallbackOutcomeAnnouncement", () => {
     expect(fallbackOutcomeAnnouncement(raw)?.text).toBe(
       "Routing couldn't recover this turn",
     );
+  });
+
+  // A3: a settled outcome carrying the Code/FALLBACK_CANCELLED detail row
+  // returns null - the cancellation is never announced.
+  it("A3: returns null for a settled outcome carrying Code=FALLBACK_CANCELLED", () => {
+    const raw = outcomeFixture({
+      blockId: "block-outcome-cancelled",
+      assistantMessageId: "m-assistant-cancelled",
+      kind: "settled",
+      title:
+        "Fallback ended - no further providers will be tried for this turn",
+      message: "What was tried is recorded below.",
+      details: [
+        { label: "Code", value: "FALLBACK_CANCELLED" },
+        { label: "Cause", value: "You chose not to switch" },
+      ],
+      sequence: 1,
+    });
+    expect(fallbackOutcomeAnnouncement(raw)).toBeNull();
+  });
+
+  // A4: the same shape with Code=FALLBACK_EXHAUSTED IS announced.
+  it("A4: announces a settled outcome carrying Code=FALLBACK_EXHAUSTED", () => {
+    const raw = outcomeFixture({
+      blockId: "block-outcome-exhausted",
+      assistantMessageId: "m-assistant-exhausted",
+      kind: "settled",
+      title:
+        "Fallback ended - no further providers will be tried for this turn",
+      message: "What was tried is recorded below.",
+      details: [
+        { label: "Code", value: "FALLBACK_EXHAUSTED" },
+        { label: "Cause", value: "Every step was tried" },
+      ],
+      sequence: 1,
+    });
+    expect(fallbackOutcomeAnnouncement(raw)).not.toBeNull();
   });
 });
 

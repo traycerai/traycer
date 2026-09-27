@@ -696,20 +696,42 @@ describe("ErrorSegment failed-turn card, through the transcript row", () => {
     expect(screen.queryByText("Model routing")).toBeNull();
   });
 
-  // The queue-pause notice is an error block by type only, and the Message
-  // Queue panel's paused pill already says it. Even with a live attempt on the
-  // same turn - the row every other error block would decorate with actions -
-  // it draws nothing at all.
-  it("renders nothing for a QUEUE_PAUSED_AFTER_ERROR block, even beside a live failed attempt", () => {
-    seedRetryableAttempt();
-    const { container } = renderErrorRowWithFallbackAttempt({
-      code: QUEUE_PAUSED_AFTER_ERROR_CODE,
-      failure: null,
-    });
-    expect(container.textContent).toBe("");
-    expect(screen.queryByText("Hit a rate limit.")).toBeNull();
-    expect(screen.queryByRole("button")).toBeNull();
-    expect(container.querySelector("[data-failure-presentation]")).toBeNull();
+  // ErrorSegment no longer hides the queue-pause notice itself: that hide
+  // moved to the transcript level (`AssistantMessageBody`), which is the only
+  // place that can tell whether this session's host protocol can even carry a
+  // pause reason. A block with no matching turn id is not the manual-rung
+  // anchor for any live attempt, so this pins the row in isolation - drawing
+  // its message like any other error block.
+  it("draws its message for a QUEUE_PAUSED_AFTER_ERROR block that is not the manual-rung anchor", () => {
+    render(
+      <TooltipProvider>
+        <TabHostProvider hostId={FALLBACK_LIVE_GATE_HOST_ID}>
+          <ChatTranscriptProvider
+            value={{
+              chatId: FALLBACK_LIVE_GATE_CHAT_ID,
+              hostId: FALLBACK_LIVE_GATE_HOST_ID,
+            }}
+          >
+            <ErrorSegment
+              turnId={null}
+              message="1 queued message was held because this turn ended with an error, and it was not sent. Resume the queue to send it."
+              code={QUEUE_PAUSED_AFTER_ERROR_CODE}
+              recoverable
+              findUnitId={null}
+              harnessId="claude"
+              failure={null}
+              settledNotice={null}
+              settledNoticeFindUnitId={null}
+            />
+          </ChatTranscriptProvider>
+        </TabHostProvider>
+      </TooltipProvider>,
+    );
+    expect(
+      screen.getByText(
+        "1 queued message was held because this turn ended with an error, and it was not sent. Resume the queue to send it.",
+      ),
+    ).toBeDefined();
   });
 
   it("renders a CLAUDE_RUNTIME_DISPOSED block with no typed failure as an interruption headlined Session ended", () => {

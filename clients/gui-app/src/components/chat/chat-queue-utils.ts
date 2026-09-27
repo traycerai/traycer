@@ -114,8 +114,8 @@ const PAUSED_AFTER_ERROR_REASONS: ReadonlySet<string> = new Set([
 
 /**
  * Whether the queue is held because a turn failed - the paused pill then says
- * so ("Paused after an error"), since the transcript no longer carries a
- * separate card for it.
+ * so ("Paused after an error"), since the transcript draws no separate card
+ * for it on a line that sends the reason (`queuePausedNoticeHidden`).
  *
  * Read off the queue alone. The reason survives a host restart, so this never
  * consults a live session or a failed attempt to confirm it. It does consult

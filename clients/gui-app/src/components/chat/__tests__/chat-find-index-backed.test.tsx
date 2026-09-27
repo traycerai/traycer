@@ -22,7 +22,7 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { useCallback, useRef, type ReactNode } from "react";
+import { useCallback, useLayoutEffect, useRef, type ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
@@ -49,6 +49,7 @@ import {
   type ChatFindAdapter,
 } from "@/components/chat/chat-find";
 import { chatFindTranscriptPlacement } from "@/components/chat/chat-find-index";
+import type { ChatFindIndexRead } from "@/components/chat/chat-find-index";
 import { useChatFindIndexFeed } from "@/hooks/chats/use-chat-find-index-feed";
 import { useChatFindController } from "@/components/chat/use-chat-find-controller";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
@@ -91,6 +92,16 @@ const CHAT_ID = "chat-1";
 const EMPTY_PROMOTED: ReadonlySet<string> = new Set<string>();
 const EXCLUSION_TAIL =
   "older reasoning, subagent and tool output are not indexed.";
+
+// An older index hit is a CANDIDATE, never counted, until stepping onto it
+// reads the row and the client scan confirms or drops it. Same constants as
+// chat-find-index-confirm.test.tsx (read there for the exact copy).
+const CAVEAT_MAY_MATCH_ONE = `1 older message may match; ${EXCLUSION_TAIL}`;
+const CAVEAT_MAY_MATCH_MANY = (count: number): string =>
+  `${count} older messages may match; ${EXCLUSION_TAIL}`;
+const CAVEAT_MAY_MATCH_AT_LEAST = (count: number): string =>
+  `At least ${count} older messages may match; ${EXCLUSION_TAIL}`;
+const CAVEAT_CHECKING = "Checking an older message…";
 
 // ---------------------------------------------------------------------------
 // Records, rendered rows and the window that holds them.
@@ -447,6 +458,7 @@ interface ControllerHandle {
     rowMessageId: string,
     outcome: "landed" | "exhausted" | "cancelled",
   ) => void;
+  readonly onIndexReadFailed: (messageId: string) => void;
 }
 
 function renderFind(input: {
@@ -455,6 +467,7 @@ function renderFind(input: {
   readonly queryClient: QueryClient;
   readonly scroller: HTMLElement;
   readonly requestIndexJump: Mock<(messageId: string) => void>;
+  readonly requestIndexRead: Mock<(read: ChatFindIndexRead | null) => void>;
 }): {
   readonly getAdapter: () => ChatFindAdapter;
   readonly getController: () => ControllerHandle;
@@ -485,13 +498,16 @@ function renderFind(input: {
   function Harness(props: { readonly transcript: TranscriptState }) {
     const { transcript } = props;
     const messagesRef = useRef(transcript.messages);
-    messagesRef.current = transcript.messages;
     const windowRef = useRef(transcript.window);
-    windowRef.current = transcript.window;
     const rowIndexByKeyRef = useRef<ReadonlyMap<string, number>>(new Map());
-    rowIndexByKeyRef.current = new Map(
-      transcript.messages.map((message, index) => [message.id, index]),
-    );
+    // Declared before the controller, so its own layout effects read these.
+    useLayoutEffect(() => {
+      messagesRef.current = transcript.messages;
+      windowRef.current = transcript.window;
+      rowIndexByKeyRef.current = new Map(
+        transcript.messages.map((message, index) => [message.id, index]),
+      );
+    }, [transcript]);
     const backgroundToolBlockIdsRef = useRef(EMPTY_PROMOTED);
     // Stable identities, as `ChatMessages` passes them: the controller
     // registers its adapter against these.
@@ -512,6 +528,7 @@ function renderFind(input: {
       getFindCoverageMessage,
       getFindPlacement,
       requestIndexJump: input.requestIndexJump,
+      requestIndexRead: input.requestIndexRead,
       rowIndexByKeyRef,
       getScroller,
       scrollToLocation: callbacks.scrollToLocation,
@@ -528,7 +545,9 @@ function renderFind(input: {
       hasUnhydratedRows: unhydratedRowCount(transcript.window) > 0,
       onAnswer: find.setIndexAnswer,
     });
-    controller = find;
+    useLayoutEffect(() => {
+      controller = find;
+    });
     return null;
   }
 
@@ -570,7 +589,12 @@ function renderFind(input: {
 
 /** Mounts `message` the way the list renders it: a row with its find units. */
 function mountRow(scroller: HTMLElement, message: ChatMessageModel): string {
-  const [row] = buildChatFindRows([message], TILE_INSTANCE_ID, EMPTY_PROMOTED);
+  const [row] = buildChatFindRows(
+    [message],
+    TILE_INSTANCE_ID,
+    EMPTY_PROMOTED,
+    null,
+  );
   const element = document.createElement("div");
   element.dataset.messageId = message.id;
   for (const unit of row.units) {
@@ -680,12 +704,14 @@ describe("chat find over a windowed transcript: older rows from the index", () =
   let scroller: HTMLElement;
   let restoreFrames: () => void;
   let requestIndexJump: Mock<(messageId: string) => void>;
+  let requestIndexRead: Mock<(read: ChatFindIndexRead | null) => void>;
 
   beforeEach(() => {
     scroller = document.createElement("div");
     document.body.append(scroller);
     restoreFrames = installFrameQueue();
     requestIndexJump = vi.fn<(messageId: string) => void>();
+    requestIndexRead = vi.fn<(read: ChatFindIndexRead | null) => void>();
   });
 
   afterEach(() => {
@@ -723,6 +749,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       queryClient: host.queryClient,
       scroller,
       requestIndexJump,
+      requestIndexRead,
     });
     const adapter = find.getAdapter();
 
@@ -736,14 +763,15 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       coverageMessage: "Partial results: 1 older message is not loaded.",
     });
     await waitFor(() => {
-      expect(adapter.getSnapshot().total).toBe(2);
+      // NEW CONTRACT: the older hit is a CANDIDATE - never in `total` - until
+      // stepping onto it reads the row.
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
     });
     // Transcript order: the older index hit precedes the loaded match, and
     // the active match stays on the loaded one it was revealing.
     expect(adapter.getSnapshot()).toMatchObject({
-      current: 2,
-      total: 2,
-      coverageMessage: `1 older message matches; ${EXCLUSION_TAIL}`,
+      current: 1,
+      total: 1,
     });
     // No date bound: none a client can derive is safe.
     expect(searchCalls(host.messenger).at(-1)?.dateRange).toBeNull();
@@ -751,35 +779,43 @@ describe("chat find over a windowed transcript: older rows from the index", () =
     act(() => {
       void adapter.previous();
     });
-    expect(requestIndexJump).toHaveBeenCalledWith("u-old");
+    expect(requestIndexRead).toHaveBeenCalledWith({
+      messageId: "u-old",
+      target: "u-old",
+    });
+    expect(requestIndexJump).not.toHaveBeenCalled();
     expect(adapter.getSnapshot()).toMatchObject({
       current: 1,
-      total: 2,
-      activeUnitId: null,
-      exactHighlight: "pending",
+      total: 1,
+      coverageMessage: CAVEAT_CHECKING,
     });
 
-    // The jump hydrates the row: it is now held and rendered, so the client
-    // scan owns it and the index stop is gone.
+    // The read hydrates the row: it is now held and rendered, so the client
+    // scan owns it and the candidate is CONFIRMED into a real, counted stop.
+    // Mounted BEFORE `setTranscript` - unlike the old jump flow, a read's
+    // confirmation reveals the match the INSTANT hydration lands, with no
+    // landing signal to delay it until the row is on screen, so the row must
+    // already be there for the reveal to find it.
     const hydrated = oldAndNew(true);
+    const unitId = mountRow(scroller, hydrated.messages[0]);
     act(() => {
       find.setTranscript(hydrated);
     });
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
     expect(adapter.getSnapshot()).toMatchObject({
       current: 1,
       total: 2,
       coverageMessage: null,
     });
-
-    const unitId = mountRow(scroller, hydrated.messages[0]);
     flushFrames();
-    // The landing reveals the exact match: the scroll is its mechanism.
-    find.scrollToLocation.mockClear();
+    expect(find.scrollToLocation).toHaveBeenCalled();
+    // A landing signal after the fact (as a real transcript still sends one)
+    // is a safe no-op for a read-confirmed match: there is no pending jump
+    // for it to answer.
     act(() => {
       find.getController().onTranscriptLandingSettled("u-old", "landed");
     });
     flushFrames();
-    expect(find.scrollToLocation).toHaveBeenCalled();
 
     expect(adapter.getSnapshot()).toMatchObject({
       current: 1,
@@ -829,6 +865,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       queryClient: host.queryClient,
       scroller,
       requestIndexJump,
+      requestIndexRead,
     });
     const adapter = find.getAdapter();
 
@@ -836,12 +873,11 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       void adapter.search({ requestId: 1, query: "needle", matchCase: false });
     });
     await waitFor(() => {
-      expect(adapter.getSnapshot().coverageMessage).toBe(
-        `1 older message matches; ${EXCLUSION_TAIL}`,
-      );
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
     });
-    // One loaded match plus ONE older message, not three documents.
-    expect(adapter.getSnapshot()).toMatchObject({ total: 2 });
+    // ONE older candidate message across its three documents, not three -
+    // still uncounted (never loaded/read), so total is just the loaded match.
+    expect(adapter.getSnapshot()).toMatchObject({ total: 1 });
   });
 
   it("keeps today's caveat and count when the index refuses", async () => {
@@ -860,6 +896,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       queryClient: host.queryClient,
       scroller,
       requestIndexJump,
+      requestIndexRead,
     });
     const adapter = find.getAdapter();
 
@@ -911,6 +948,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       queryClient: host.queryClient,
       scroller,
       requestIndexJump,
+      requestIndexRead,
     });
     const adapter = find.getAdapter();
 
@@ -919,11 +957,11 @@ describe("chat find over a windowed transcript: older rows from the index", () =
     });
     expect(adapter.getSnapshot().total).toBe(2);
     await waitFor(() => {
-      expect(adapter.getSnapshot().total).toBe(3);
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
     });
-    expect(adapter.getSnapshot()).toMatchObject({
-      coverageMessage: `1 older message matches; ${EXCLUSION_TAIL}`,
-    });
+    // The older hit is still an uncounted candidate: the two LOADED matches
+    // (the live streaming row and "u-new") are the whole count.
+    expect(adapter.getSnapshot().total).toBe(2);
   });
 
   it("does not claim a match in older tool output, and the caveat names the exclusion", async () => {
@@ -966,6 +1004,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       queryClient: host.queryClient,
       scroller,
       requestIndexJump,
+      requestIndexRead,
     });
     const adapter = find.getAdapter();
 
@@ -973,11 +1012,11 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       void adapter.search({ requestId: 1, query: "needle", matchCase: false });
     });
     await waitFor(() => {
-      expect(adapter.getSnapshot().total).toBe(2);
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
     });
-    expect(adapter.getSnapshot().coverageMessage).toBe(
-      `1 older message matches; ${EXCLUSION_TAIL}`,
-    );
+    // The tool-output-only row never became a candidate at all (never
+    // indexed); the OTHER older row ("u-old") is a candidate, uncounted.
+    expect(adapter.getSnapshot().total).toBe(1);
   });
 
   /** `count` older user rows, unhydrated, under one hydrated recent row. */
@@ -1004,7 +1043,12 @@ describe("chat find over a windowed transcript: older rows from the index", () =
 
   it("asks for page 1 per query and a further page only on navigating past the oldest loaded hit", async () => {
     // Three pages of older hits, newest first: u-249..u-150, u-149..u-50,
-    // u-49..u-0.
+    // u-49..u-0. Under the NEW contract every one of them is an uncounted
+    // CANDIDATE until read - this cell adapts by reading (and failing) each
+    // one in turn, the same mechanism F14-12 in chat-find-index-confirm.test.tsx
+    // proves: a failed read hands the step to the NEXT older candidate
+    // automatically, so walking off the end of a page is still what triggers
+    // the next page fetch, unchanged from the original intent.
     const host = hostFixture(fakeIndex(pagedDocs(250)));
     const find = renderFind({
       initial: pagedTranscript(250),
@@ -1012,6 +1056,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       queryClient: host.queryClient,
       scroller,
       requestIndexJump,
+      requestIndexRead,
     });
     const adapter = find.getAdapter();
 
@@ -1019,51 +1064,60 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       void adapter.search({ requestId: 1, query: "needle", matchCase: false });
     });
     await waitFor(() => {
-      expect(adapter.getSnapshot().total).toBe(1 + 100);
+      expect(adapter.getSnapshot().coverageMessage).toBe(
+        CAVEAT_MAY_MATCH_AT_LEAST(100),
+      );
     });
     await settle();
     expect(searchCalls(host.messenger)).toHaveLength(1);
-    expect(adapter.getSnapshot()).toMatchObject({
-      current: 101,
-      coverageMessage: `At least 100 older messages match; ${EXCLUSION_TAIL}`,
-    });
+    // NEW CONTRACT: page 1's 100 hits are uncounted candidates - only the
+    // loaded match counts.
+    expect(adapter.getSnapshot().total).toBe(1);
 
-    // Backward within the loaded hits: into the newest older hit and back to
-    // the loaded match. Nothing is fetched.
+    // Step onto the newest older candidate: read, not jumped to.
     act(() => {
       void adapter.previous();
     });
-    expect(requestIndexJump).toHaveBeenLastCalledWith("u-249");
-    act(() => {
-      void adapter.next();
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "u-249",
+      target: "u-249",
     });
-    // Wrapping forward lands on the oldest LOADED hit, still without a fetch.
-    act(() => {
-      void adapter.next();
-    });
-    expect(adapter.getSnapshot().current).toBe(1);
-    expect(requestIndexJump).toHaveBeenLastCalledWith("u-150");
-    await settle();
-    expect(searchCalls(host.messenger)).toHaveLength(1);
+    expect(requestIndexJump).not.toHaveBeenCalled();
 
-    // Past the oldest loaded hit: the next page, and the walk continues into
-    // it rather than wrapping.
-    act(() => {
-      void adapter.previous();
-    });
+    // Fail every page-1 candidate in turn, oldest-ward: each failure hands
+    // the step to the next one automatically.
+    for (let index = 249; index >= 150; index -= 1) {
+      const messageId = `u-${index}`;
+      expect(requestIndexRead).toHaveBeenLastCalledWith({
+        messageId,
+        target: messageId,
+      });
+      act(() => {
+        find.getController().onIndexReadFailed(messageId);
+      });
+    }
+
+    // Past the oldest hit of page 1: the next page is fetched, and the walk
+    // continues into it rather than wrapping to the loaded match.
     await waitFor(() => {
-      expect(adapter.getSnapshot().total).toBe(1 + 200);
+      expect(searchCalls(host.messenger)).toHaveLength(2);
     });
     expect(
       searchCalls(host.messenger).map((call) => call.messageCursor),
     ).toEqual([null, "100"]);
-    expect(adapter.getSnapshot()).toMatchObject({
-      current: 100,
-      coverageMessage: `At least 200 older messages match; ${EXCLUSION_TAIL}`,
+    // The walk continues straight into the new page's newest candidate - it
+    // is now being read (checking), not yet counted or wrapped past.
+    await waitFor(() => {
+      expect(requestIndexRead).toHaveBeenLastCalledWith({
+        messageId: "u-149",
+        target: "u-149",
+      });
     });
-    expect(requestIndexJump).toHaveBeenLastCalledWith("u-149");
+    expect(requestIndexJump).not.toHaveBeenCalled();
+    expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_CHECKING);
 
-    // Backward navigation inside what is loaded never asks again.
+    // Cancelling the in-flight read (the opposite direction) and stepping
+    // forward again never asks for another page.
     act(() => {
       void adapter.next();
     });
@@ -1072,6 +1126,9 @@ describe("chat find over a windowed transcript: older rows from the index", () =
   });
 
   it("drops 'At least' once the last page is seen", async () => {
+    // 150 across exactly two pages (100 + 50): once page 2 lands there is no
+    // `more` cursor left, so the caveat drops "At least" - a pagination fact,
+    // independent of whether any candidate has been read/confirmed yet.
     const host = hostFixture(fakeIndex(pagedDocs(150)));
     const find = renderFind({
       initial: pagedTranscript(150),
@@ -1079,6 +1136,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       queryClient: host.queryClient,
       scroller,
       requestIndexJump,
+      requestIndexRead,
     });
     const adapter = find.getAdapter();
 
@@ -1086,28 +1144,63 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       void adapter.search({ requestId: 1, query: "needle", matchCase: false });
     });
     await waitFor(() => {
-      expect(adapter.getSnapshot().total).toBe(1 + 100);
+      expect(adapter.getSnapshot().coverageMessage).toBe(
+        CAVEAT_MAY_MATCH_AT_LEAST(100),
+      );
     });
-    // To the oldest loaded hit, then past it.
-    act(() => {
-      void adapter.next();
-    });
+    expect(adapter.getSnapshot().total).toBe(1);
+
+    // Read (and fail) every page-1 candidate, oldest-ward, to walk off the
+    // end of page 1 - same mechanism as the sibling pagination cell above.
     act(() => {
       void adapter.previous();
     });
+    for (let index = 149; index >= 50; index -= 1) {
+      const messageId = `u-${index}`;
+      expect(requestIndexRead).toHaveBeenLastCalledWith({
+        messageId,
+        target: messageId,
+      });
+      act(() => {
+        find.getController().onIndexReadFailed(messageId);
+      });
+    }
+
     await waitFor(() => {
-      expect(adapter.getSnapshot().total).toBe(1 + 150);
+      expect(searchCalls(host.messenger)).toHaveLength(2);
     });
+    // The walk carries straight on into page 2's newest candidate - fail
+    // every one of ITS hits too, oldest-ward, until nothing remains to read.
+    await waitFor(() => {
+      expect(requestIndexRead).toHaveBeenLastCalledWith({
+        messageId: "u-49",
+        target: "u-49",
+      });
+    });
+    for (let index = 49; index >= 0; index -= 1) {
+      const messageId = `u-${index}`;
+      expect(requestIndexRead).toHaveBeenLastCalledWith({
+        messageId,
+        target: messageId,
+      });
+      act(() => {
+        find.getController().onIndexReadFailed(messageId);
+      });
+    }
+
+    // Every one of the 150 hits failed to confirm, and there is nowhere
+    // older left to read: the walk wraps to the one loaded match, and the
+    // read ends.
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    expect(adapter.getSnapshot()).toMatchObject({ current: 1, total: 1 });
+    // Page 2 was the LAST page (150 total, no cursor left): "At least" drops
+    // from the caveat even though every hit only FAILED - none is confirmed,
+    // so `total` still names just the one loaded match.
     expect(adapter.getSnapshot().coverageMessage).toBe(
-      `150 older messages match; ${EXCLUSION_TAIL}`,
+      CAVEAT_MAY_MATCH_MANY(150),
     );
-    // At the end of the walk, past the oldest hit wraps like any find.
-    act(() => {
-      void adapter.previous();
-    });
-    act(() => {
-      for (let step = 0; step < 50; step += 1) void adapter.previous();
-    });
+
+    // No further page is ever asked for.
     await settle();
     expect(searchCalls(host.messenger)).toHaveLength(2);
   });
@@ -1135,6 +1228,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       queryClient: host.queryClient,
       scroller,
       requestIndexJump,
+      requestIndexRead,
     });
     const adapter = find.getAdapter();
 
@@ -1156,11 +1250,12 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       expect(abortedSearchQueries(host.messenger)).toEqual(["needle"]);
     });
     await waitFor(() => {
-      expect(adapter.getSnapshot().total).toBe(1);
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
     });
-    expect(adapter.getSnapshot().coverageMessage).toBe(
-      `1 older message matches; ${EXCLUSION_TAIL}`,
-    );
+    // "needle haystack" matches nothing loaded ("u-new" only has "a recent
+    // needle"), and the one hit is an uncounted candidate: no counted stop
+    // at all yet.
+    expect(adapter.getSnapshot()).toMatchObject({ total: 0, current: 0 });
 
     // Closing the bar ends an in-flight request the same way.
     act(() => {
@@ -1225,6 +1320,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       queryClient: host.queryClient,
       scroller,
       requestIndexJump,
+      requestIndexRead,
     });
     const adapter = find.getAdapter();
 
@@ -1232,11 +1328,10 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       void adapter.search({ requestId: 1, query: "needle", matchCase: false });
     });
     await waitFor(() => {
-      expect(adapter.getSnapshot().total).toBe(2);
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
     });
-    expect(adapter.getSnapshot().coverageMessage).toBe(
-      `1 older message matches; ${EXCLUSION_TAIL}`,
-    );
+    // The adopted turn is still an uncounted candidate; only "u-new" counts.
+    expect(adapter.getSnapshot().total).toBe(1);
   });
 
   it("reads past a page of loaded matches when the reader steps back from the oldest one", async () => {
@@ -1265,6 +1360,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       queryClient: host.queryClient,
       scroller,
       requestIndexJump,
+      requestIndexRead,
     });
     const adapter = find.getAdapter();
 
@@ -1285,14 +1381,21 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       void adapter.previous();
     });
     await waitFor(() => {
-      expect(adapter.getSnapshot().total).toBe(101);
+      expect(searchCalls(host.messenger)).toHaveLength(2);
     });
-    expect(searchCalls(host.messenger)).toHaveLength(2);
+    // The new page's one hit is read, not jumped to - and still uncounted
+    // while the read is outstanding.
+    await waitFor(() => {
+      expect(requestIndexRead).toHaveBeenLastCalledWith({
+        messageId: "u-old",
+        target: "u-old",
+      });
+    });
+    expect(requestIndexJump).not.toHaveBeenCalled();
     expect(adapter.getSnapshot()).toMatchObject({
-      current: 1,
-      coverageMessage: `1 older message matches; ${EXCLUSION_TAIL}`,
+      total: 100,
+      coverageMessage: CAVEAT_CHECKING,
     });
-    expect(requestIndexJump).toHaveBeenLastCalledWith("u-old");
   });
 
   /**
@@ -1350,18 +1453,26 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       queryClient: host.queryClient,
       scroller,
       requestIndexJump,
+      requestIndexRead,
     });
     const adapter = find.getAdapter();
     act(() => {
       void adapter.search({ requestId: 1, query: "needle", matchCase: false });
     });
     await waitFor(() => {
-      expect(adapter.getSnapshot()).toMatchObject({ total: 1 });
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
     });
+    expect(adapter.getSnapshot().total).toBe(0);
     act(() => {
       void adapter.next();
     });
-    expect(requestIndexJump).toHaveBeenLastCalledWith("assistant:T:part:1");
+    // Reads the nearest unhydrated slice first, by its row id - same target a
+    // jump used to use, now as a `requestIndexRead`.
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "a-T",
+      target: "assistant:T:part:1",
+    });
+    expect(requestIndexJump).not.toHaveBeenCalled();
   });
 
   it("counts a held message whose match is in its unhydrated rows, and walks to it by row", async () => {
@@ -1384,6 +1495,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       queryClient: host.queryClient,
       scroller,
       requestIndexJump,
+      requestIndexRead,
     });
     const adapter = find.getAdapter();
 
@@ -1391,17 +1503,19 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       void adapter.search({ requestId: 1, query: "needle", matchCase: false });
     });
     await waitFor(() => {
-      expect(adapter.getSnapshot()).toMatchObject({
-        total: 1,
-        coverageMessage: `1 older message matches; ${EXCLUSION_TAIL}`,
-      });
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
     });
+    expect(adapter.getSnapshot().total).toBe(0);
 
-    // The nearest unhydrated slice first, by its row id.
+    // The nearest unhydrated slice first, by its row id - read, not jumped to.
     act(() => {
       void adapter.next();
     });
-    expect(requestIndexJump).toHaveBeenLastCalledWith("assistant:T:part:1");
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "a-T",
+      target: "assistant:T:part:1",
+    });
+    expect(requestIndexJump).not.toHaveBeenCalled();
 
     const hydrated = straddledTurn({
       hydratedParts: new Set([1, 2]),
@@ -1410,6 +1524,12 @@ describe("chat find over a windowed transcript: older rows from the index", () =
     act(() => {
       find.setTranscript(hydrated);
     });
+    // The hydrated slice confirms the candidate into a real, counted stop -
+    // the same hydration alone drives the confirmation, without waiting on a
+    // landing signal.
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    expect(adapter.getSnapshot().total).toBe(1);
+
     const unitId = mountRow(scroller, hydrated.messages[0]);
     act(() => {
       find
@@ -1446,6 +1566,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       queryClient: host.queryClient,
       scroller,
       requestIndexJump,
+      requestIndexRead,
     });
     const adapter = find.getAdapter();
 
@@ -1453,25 +1574,30 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       void adapter.search({ requestId: 1, query: "needle", matchCase: false });
     });
     await waitFor(() => {
-      expect(adapter.getSnapshot().total).toBe(1);
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
     });
+    expect(adapter.getSnapshot().total).toBe(0);
     act(() => {
       void adapter.next();
     });
-    expect(requestIndexJump).toHaveBeenLastCalledWith("assistant:T:part:1");
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "a-T",
+      target: "assistant:T:part:1",
+    });
+    expect(requestIndexJump).not.toHaveBeenCalled();
 
-    // Slice 1 lands without the text: on to slice 0.
+    // Slice 1 lands without the text: the hydration alone hands the read on
+    // to slice 0, with no landing signal needed at all - reading reacts to
+    // hydration directly.
     act(() => {
       find.setTranscript(
         straddledTurn({ hydratedParts: new Set([1, 2]), partText }),
       );
     });
-    act(() => {
-      find
-        .getController()
-        .onTranscriptLandingSettled("assistant:T:part:1", "landed");
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "a-T",
+      target: "assistant:T:part:0",
     });
-    expect(requestIndexJump).toHaveBeenLastCalledWith("assistant:T:part:0");
 
     const hydrated = straddledTurn({
       hydratedParts: new Set([0, 1, 2]),
@@ -1480,6 +1606,8 @@ describe("chat find over a windowed transcript: older rows from the index", () =
     act(() => {
       find.setTranscript(hydrated);
     });
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    expect(adapter.getSnapshot().total).toBe(1);
     const unitId = mountRow(scroller, hydrated.messages[0]);
     act(() => {
       find
@@ -1540,6 +1668,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       queryClient: host.queryClient,
       scroller,
       requestIndexJump,
+      requestIndexRead,
     });
     const adapter = find.getAdapter();
 
@@ -1547,27 +1676,37 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       void adapter.search({ requestId: 1, query: "needle", matchCase: false });
     });
     await waitFor(() => {
-      expect(adapter.getSnapshot().total).toBe(1);
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
     });
+    expect(adapter.getSnapshot().total).toBe(0);
     act(() => {
       void adapter.next();
     });
-    expect(requestIndexJump).toHaveBeenLastCalledWith("a-first");
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "a-first",
+      target: "a-first",
+    });
+    expect(requestIndexJump).not.toHaveBeenCalled();
 
+    // Mounted BEFORE `setTranscript`: the confirmation reveals the exact
+    // match - the row renders under the turn's LAST record, and the hit
+    // named the first - the instant hydration lands, so the row must
+    // already be there for the reveal to find it.
     const hydrated = foldedTurn(true);
+    const unitId = mountRow(scroller, hydrated.messages[0]);
     act(() => {
       find.setTranscript(hydrated);
     });
-    const unitId = mountRow(scroller, hydrated.messages[0]);
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    expect(adapter.getSnapshot().total).toBe(1);
     flushFrames();
-    // The landing is what reveals the exact match: the row renders under the
-    // turn's last record, and the hit named the first.
-    find.scrollToLocation.mockClear();
+    expect(find.scrollToLocation).toHaveBeenCalled();
+    // A landing signal after the fact is a safe no-op: there is no pending
+    // jump for it to answer.
     act(() => {
       find.getController().onTranscriptLandingSettled("assistant:T2", "landed");
     });
     flushFrames();
-    expect(find.scrollToLocation).toHaveBeenCalled();
     expect(adapter.getSnapshot()).toMatchObject({
       current: 1,
       total: 1,
@@ -1620,6 +1759,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       queryClient: host.queryClient,
       scroller,
       requestIndexJump,
+      requestIndexRead,
     });
     const adapter = find.getAdapter();
 
@@ -1627,14 +1767,21 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       void adapter.search({ requestId: 1, query: "needle", matchCase: false });
     });
     await waitFor(() => {
-      expect(adapter.getSnapshot().total).toBe(3);
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
     });
-    expect(adapter.getSnapshot().current).toBe(1);
-    // From "needle one" the next stop is the steer, before "needle three".
+    // The steer hit is still an uncounted candidate: only the two LOADED
+    // matches ("needle one", "needle three") count.
+    expect(adapter.getSnapshot()).toMatchObject({ total: 2, current: 1 });
+    // From "needle one" the next stop is the steer, before "needle three" -
+    // read (by its row id, which is its own messageId), not jumped to.
     act(() => {
       void adapter.next();
     });
-    expect(adapter.getSnapshot().current).toBe(2);
-    expect(requestIndexJump).toHaveBeenLastCalledWith("s-steer");
+    expect(adapter.getSnapshot().current).toBe(1);
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "s-steer",
+      target: "s-steer",
+    });
+    expect(requestIndexJump).not.toHaveBeenCalled();
   });
 });

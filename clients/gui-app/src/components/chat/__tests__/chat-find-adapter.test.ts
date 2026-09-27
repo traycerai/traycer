@@ -1152,6 +1152,7 @@ function createChatFindTestAdapter(
     getPlacement: () => FULLY_LOADED_TRANSCRIPT,
     indexDemand: new ChatFindIndexDemandSource(),
     jumpToIndexHit: () => undefined,
+    readIndexHit: () => undefined,
   });
   return {
     adapter,

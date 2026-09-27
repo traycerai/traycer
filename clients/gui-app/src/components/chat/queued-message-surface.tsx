@@ -1097,9 +1097,10 @@ function queuedMessageRowActionState(
 
 /**
  * The row's status pill. A paused row says WHY when the queue is held after a
- * failed turn ("Paused after an error") - the transcript no longer carries a
- * separate card for the held queue, so this pill is where it is said (user
- * ruling, 2026-09-26). Any other pause keeps today's "Paused".
+ * failed turn ("Paused after an error") - the transcript draws no separate
+ * card for the held queue on a line that sends the reason
+ * (`queuePausedNoticeHidden`), so this pill is where it is said (user ruling,
+ * 2026-09-26). Any other pause keeps today's "Paused".
  */
 function queuedMessageStatusLabel(
   item: ChatQueuedItem,

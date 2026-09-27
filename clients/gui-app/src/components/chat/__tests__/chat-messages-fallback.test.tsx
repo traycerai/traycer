@@ -1058,6 +1058,7 @@ function chatScene(
           messages={state.messages}
           transcriptWindow={state.transcriptWindow}
           onVisibleOrdinalRangeChange={() => undefined}
+          onFindReadOrdinalChange={() => undefined}
           baselineEpoch={state.baselineEpoch}
           hydrationSequence={state.hydrationSequence}
           coldRewrittenMessageIds={state.coldRewrittenMessageIds}

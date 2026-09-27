@@ -79,7 +79,11 @@ const emptySlice = create<SettledCardSlice>()(() => ({
  *   settled card's own predicate (`routingSettledNoticeSegmentId`). Without
  *   one routing never ran on that turn (routing off, or nothing to try), the
  *   row is the plain failed-turn card, and the banner stays: it is the one
- *   surface for a limit routing did not handle.
+ *   surface for a limit routing did not handle. A user's own refusal writes
+ *   no receipt either (a host that writes its notice writes `receipt: null`,
+ *   and the transcript hides it), so the banner stays after a refusal too, by
+ *   ruling (2026-09-27): the account is still limited, and a failed-turn card
+ *   beside it is the case this keeps.
  *
  * Asked of the TURN, where the card's pairing is asked of one rendered row. A
  * steer that splits the notice from the error leaves a divider above and the

@@ -38,9 +38,11 @@ import { chatFindCoverageMessage } from "@/components/chat/chat-find";
 import {
   FULLY_LOADED_TRANSCRIPT,
   chatFindTranscriptPlacement,
+  type ChatFindIndexRead,
   type ChatFindTranscriptPlacement,
 } from "@/components/chat/chat-find-index";
 import { ChatFindIndexSource } from "@/components/chat/chat-find-index-source";
+import { ChatFindIndexReadSource } from "@/components/chat/chat-find-index-read-source";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import {
   CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS,
@@ -208,6 +210,12 @@ interface ChatMessagesProps {
    * that as "no viewport obligation", never as a request.
    */
   onVisibleOrdinalRangeChange: (range: OrdinalRange | null) => void;
+  /**
+   * `ChatSessionState.requestFindReadOrdinal` - names (or clears, with `null`)
+   * the one row chat find needs hydrated to confirm an index hit. Required
+   * hydration, never a viewport move.
+   */
+  onFindReadOrdinalChange: (ordinal: number | null) => void;
   /**
    * `ChatSessionState.transcriptBaselineEpoch` - which connection's snapshot
    * established these rows. The polite-announcement deriver needs it to tell
@@ -1957,6 +1965,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     instanceId,
     messages,
     nextStepActions,
+    onFindReadOrdinalChange,
     onVisibleOrdinalRangeChange,
     onScrollRequestSettled,
     scrollRequest,
@@ -3807,6 +3816,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     },
     [hostId, instanceId, taskId],
   );
+  // The index hit find is confirming: its row is hydrated where it stands, and
+  // the client scan then keeps or drops the hit. See `ChatFindIndexReadSource`.
+  const [findIndexRead, setFindIndexRead] = useState<ChatFindIndexRead | null>(
+    null,
+  );
 
   const {
     onRenderedDataChange: onChatFindRenderedDataChange,
@@ -3814,6 +3828,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     indexDemand: chatFindIndexDemand,
     setIndexAnswer: setChatFindIndexAnswer,
     onTranscriptLandingSettled: onChatFindTranscriptLandingSettled,
+    onIndexReadFailed: onChatFindIndexReadFailed,
   } = useChatFindController({
     instanceId,
     messages,
@@ -3823,6 +3838,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     getFindCoverageMessage,
     getFindPlacement,
     requestIndexJump: requestFindIndexJump,
+    requestIndexRead: setFindIndexRead,
     rowIndexByKeyRef,
     getScroller,
     scrollToLocation: scrollToTimelineLocationSuppressingFollowRestore,
@@ -4091,14 +4107,25 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           ) : null}
         </div>
         {hostId !== null && transcriptWindow !== null ? (
-          <ChatFindIndexSource
-            hostId={hostId}
-            epicId={epicId}
-            chatId={taskId}
-            demandSource={chatFindIndexDemand}
-            hasUnhydratedRows={chatFindIndexHasUnhydratedRows}
-            onAnswer={setChatFindIndexAnswer}
-          />
+          <>
+            <ChatFindIndexSource
+              hostId={hostId}
+              epicId={epicId}
+              chatId={taskId}
+              demandSource={chatFindIndexDemand}
+              hasUnhydratedRows={chatFindIndexHasUnhydratedRows}
+              onAnswer={setChatFindIndexAnswer}
+            />
+            <ChatFindIndexReadSource
+              hostId={hostId}
+              epicId={epicId}
+              chatId={taskId}
+              transcriptWindow={transcriptWindow}
+              read={findIndexRead}
+              requestFindReadOrdinal={onFindReadOrdinalChange}
+              onReadFailed={onChatFindIndexReadFailed}
+            />
+          </>
         ) : null}
         <ChatLiveAnnouncements
           epicId={epicId}

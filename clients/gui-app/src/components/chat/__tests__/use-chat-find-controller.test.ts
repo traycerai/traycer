@@ -144,6 +144,7 @@ describe("useChatFindController - chain-open on reveal", () => {
           getFindCoverageMessage: () => null,
           getFindPlacement: () => FULLY_LOADED_TRANSCRIPT,
           requestIndexJump: () => undefined,
+          requestIndexRead: () => undefined,
           rowIndexByKeyRef,
           getScroller: () => scroller,
           scrollToLocation,

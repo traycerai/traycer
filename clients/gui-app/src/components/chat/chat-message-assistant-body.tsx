@@ -2,6 +2,8 @@ import { buildChatActivityTimeline } from "@/components/chat/chat-activity-group
 import { BrowserSessionRow } from "./segments/browser-session-row";
 import { chatFindSegmentUnitId } from "@/components/chat/chat-find";
 import { ChatBlockNavigationAnchor } from "@/components/chat/chat-navigation-highlight";
+import { useTranscriptQueuePauseReasonSupport } from "@/components/chat/use-transcript-queue-pause-reason-support";
+import { segmentsShownInTranscript } from "@/stores/chats/hidden-transcript-notices";
 import {
   WorkingVerbContext,
   pickWorkingVerb,
@@ -241,6 +243,13 @@ export function AssistantMessageBody({
   interviewDeliveryRetry,
 }: AssistantBodyProps) {
   const activityTimelineTurnState = runState === null ? "complete" : "active";
+  const queuePauseReasonSupport = useTranscriptQueuePauseReasonSupport();
+  // What this row draws: the host's notices this client keeps off screen are
+  // gone before anything is built from the list (`hidden-transcript-notices`).
+  const shownSegments = useMemo(
+    () => segmentsShownInTranscript(segments, queuePauseReasonSupport),
+    [queuePauseReasonSupport, segments],
+  );
   const settled = useMemo(
     () =>
       settledNoticeOnRow(segments, routingSettledNoticeId, manualRungAnchorId),
@@ -248,11 +257,11 @@ export function AssistantMessageBody({
   );
   const timeline = useMemo(
     () =>
-      buildChatActivityTimeline(segments, {
+      buildChatActivityTimeline(shownSegments, {
         turnState: activityTimelineTurnState,
         promotedToolBlockIds: backgroundToolBlockIds,
       }),
-    [activityTimelineTurnState, backgroundToolBlockIds, segments],
+    [activityTimelineTurnState, backgroundToolBlockIds, shownSegments],
   );
   const timelineKeys = useMemo(
     () =>
@@ -288,7 +297,15 @@ export function AssistantMessageBody({
   const showElapsedFooter =
     !stoppedBeforeResponding &&
     showCompletionFooter &&
-    shouldShowElapsedFooter(runState, completedAt, segments, stopped);
+    shouldShowElapsedFooter(
+      runState,
+      completedAt,
+      lastSegmentDrawnOnItsOwn(
+        shownSegments,
+        settled === null ? null : settled.id,
+      ),
+      stopped,
+    );
   // No content yet. While the turn is live (`runState` non-null) show the
   // in-progress indicator for the pre-first-token gap. Once the turn has
   // ended (`runState === null`), a genuinely empty stopped turn (no output
@@ -299,8 +316,9 @@ export function AssistantMessageBody({
   // render below instead: an empty `segments` there renders an empty
   // timeline plus just the elapsed footer, which is exactly the "Stopped ·
   // Nm Xs" the turn's true end needs. Any other ended, empty turn renders
-  // nothing, NEVER a "Working…" indicator that would stick.
-  if (segments.length === 0) {
+  // nothing, NEVER a "Working…" indicator that would stick. A row holding
+  // only hidden notices is empty here too.
+  if (shownSegments.length === 0) {
     if (runState !== null) {
       return (
         <AssistantRunIndicator
@@ -441,15 +459,31 @@ export function AssistantMessageBody({
 function shouldShowElapsedFooter(
   runState: ChatMessageRunState | null,
   completedAt: number | null,
-  segments: ReadonlyArray<MessageSegment>,
+  last: MessageSegment | undefined,
   stopped: ChatMessageStoppedInfo | null,
 ): boolean {
   if (runState !== null) return false;
   if (completedAt === null) return false;
   if (stopped !== null) return true;
-  const last = segments.at(-1);
   if (last !== undefined && last.kind === "error") return false;
   return true;
+}
+
+/**
+ * The last segment the row DRAWS on its own - the one the footer asks about.
+ *
+ * `segments` is the list the row renders (the notices this client hides
+ * already left out), and `absorbedNoticeId` - the settled notice the anchor
+ * error's card paints - is skipped too. A routing settlement appends its
+ * notice AFTER the failed turn's error block, so the raw last block gave a
+ * failed turn a success footer: under the settled card, and under the
+ * failed-turn card once the user's own refusal wrote its (hidden) notice.
+ */
+function lastSegmentDrawnOnItsOwn(
+  segments: ReadonlyArray<MessageSegment>,
+  absorbedNoticeId: string | null,
+): MessageSegment | undefined {
+  return segments.findLast((segment) => segment.id !== absorbedNoticeId);
 }
 
 /**

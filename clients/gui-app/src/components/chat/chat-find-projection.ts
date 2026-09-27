@@ -1,5 +1,5 @@
 import { lexer, type MarkedToken, type Token, type Tokens } from "marked";
-import { QUEUE_PAUSED_AFTER_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
+import { segmentsShownInTranscript } from "@/stores/chats/hidden-transcript-notices";
 import {
   buildChatActivityTimeline,
   hidesSoleReasoningHeader,
@@ -105,12 +105,20 @@ export function buildChatFindRows(
    * wrong disclosure - matches counted but impossible to paint or navigate to.
    */
   promotedToolBlockIds: ReadonlySet<string>,
+  /**
+   * The chat's `ChatSessionState.queuePauseReasonProtocolSupported`, for the
+   * renderer's own hide (`hidden-transcript-notices.ts`): a row the timeline
+   * does not draw has no painted text, and a hit on it is one the user cannot
+   * find.
+   */
+  queuePauseReasonProtocolSupported: boolean | null,
 ): ReadonlyArray<ChatFindRow> {
   return messages.map((message) => {
     const units = chatFindUnitsForMessage(
       message,
       tileInstanceId,
       promotedToolBlockIds,
+      queuePauseReasonProtocolSupported,
     );
     return {
       messageId: message.id,
@@ -165,11 +173,18 @@ function chatFindUnitsForMessage(
   message: ChatMessageModel,
   tileInstanceId: string,
   promotedToolBlockIds: ReadonlySet<string>,
+  queuePauseReasonProtocolSupported: boolean | null,
 ): ReadonlyArray<ChatFindUnit> {
   if (message.role === "assistant") {
     const turnState = message.runState === null ? "complete" : "active";
     const settled = settledCardSegmentIds(message);
-    return buildChatActivityTimeline(message.segments, {
+    // The renderer's own list: the hidden notices go before grouping, exactly
+    // as `AssistantMessageBody` drops them.
+    const shown = segmentsShownInTranscript(
+      message.segments,
+      queuePauseReasonProtocolSupported,
+    );
+    return buildChatActivityTimeline(shown, {
       turnState,
       promotedToolBlockIds,
     }).flatMap((item) =>
@@ -491,10 +506,6 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
     case "todo":
       return todoSegmentSearchText(segment);
     case "error":
-      // The queue-pause notice renders nothing (`ErrorSegment`; the Message
-      // Queue panel's paused pill says it), so it indexes nothing: a match
-      // with no painted text to highlight is a hit the user cannot find.
-      if (segment.code === QUEUE_PAUSED_AFTER_ERROR_CODE) return [];
       return [
         normalizeSearchableText([segment.message, segment.code].join(" ")),
       ];

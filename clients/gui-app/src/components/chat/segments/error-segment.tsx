@@ -1,9 +1,6 @@
 import { useCallback } from "react";
 import { AlertTriangle } from "lucide-react";
-import {
-  ENV_CREDENTIAL_AUTH_ERROR_CODE,
-  QUEUE_PAUSED_AFTER_ERROR_CODE,
-} from "@traycer/protocol/host/agent/gui/agent-runtime";
+import { ENV_CREDENTIAL_AUTH_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type {
   AgentFailure,
@@ -184,20 +181,11 @@ function ErrorSegmentHeading({
 // error - the durable transcript row is what keeps a headless (A2A-triggered)
 // auth failure visible after the composer's re-auth banner clears.
 //
-// The queue-pause notice renders NOTHING. It is an error block by type only -
-// "N queued messages were held" - and the Message Queue panel's paused pill
-// already says it, with the Resume button beside it (user ruling, 2026-09-26:
-// the panel is the one surface for a held queue). A second red card saying
-// the same thing in the transcript was the other half of the "two errors for
-// one failure" report. Checked before any hook, and a component rather than a
-// caller's filter, so every transcript that still carries one - persisted rows
-// included - renders it the same way.
-export function ErrorSegment(props: ErrorSegmentProps) {
-  if (props.code === QUEUE_PAUSED_AFTER_ERROR_CODE) return null;
-  return <ErrorSegmentCard {...props} />;
-}
-
-function ErrorSegmentCard({
+// Draws whatever error it is handed, the queue-pause notice included. Whether
+// the transcript hands that notice over is the transcript's call
+// (`hidden-transcript-notices.ts`): only the chat's session knows whether its
+// host publishes the pause reason the notice would repeat.
+export function ErrorSegment({
   code,
   findUnitId,
   message,
