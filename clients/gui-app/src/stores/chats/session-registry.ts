@@ -132,8 +132,7 @@ export class ChatSessionRegistry {
         // Every chat session is worth keeping warm; this plane has no
         // unreattachable state.
         retainWhenIdle: () => true,
-        hasActiveWork: (handle) =>
-          hasActiveChatWork(handle) || holdsUnrecordedPrompt(handle),
+        hasActiveWork: chatCapHasActiveWork,
         activeWorkReason: (handle) =>
           hasActiveChatWork(handle) ? "chat-work" : "unrecorded-prompt",
         // NOTHING is gated here, and that is the correction rather than an
@@ -513,6 +512,11 @@ function holdsUnrecordedPrompt(handle: ChatSessionStoreHandle): boolean {
       notice.clientActionId !== null &&
       !state.deliveredLastCopyActionIds.has(notice.clientActionId),
   );
+}
+
+/** Shared warm-cap hold for chat count and byte eviction callers. */
+export function chatCapHasActiveWork(handle: ChatSessionStoreHandle): boolean {
+  return hasActiveChatWork(handle) || holdsUnrecordedPrompt(handle);
 }
 
 function hasActiveChatWork(handle: ChatSessionStoreHandle): boolean {
