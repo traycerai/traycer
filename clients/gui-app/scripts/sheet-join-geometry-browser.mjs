@@ -50,6 +50,11 @@ const EPSILON = 0.025;
  * moves none of its offsets (no preset carries a radius or border token).
  */
 const DPRS = [1, 1.5, 2];
+/**
+ * The first boot's ceiling (`warmUp`): about ten times a laptop's cold boot,
+ * so a slow runner still fits and a reload loop still ends.
+ */
+const WARM_UP_CAP_MS = 180_000;
 
 /**
  * The join variants to cover. `kind` picks which pair of invariants applies
@@ -452,6 +457,7 @@ try {
     "Chrome DevTools",
   );
   client = await openTabSession(launched.devtoolsHttpUrl);
+  await warmUp(client, `${baseUrl}?${VARIANTS[0].query}`);
 
   // Every selected suite runs even after one fails, so one run reports both.
   const failures = [];
@@ -1287,6 +1293,62 @@ async function loadFixtureInFreshTab(client, url, label) {
   await client.send("Page.enable", undefined);
   await client.send("Network.enable", undefined);
   await loadFixture(client, url, label);
+}
+
+/**
+ * Boots the fixture once before any suite. A `--force` Vite compiles the
+ * fixture's whole module graph and optimizes its dependencies on the first
+ * boot: about 12s on a laptop, and past the 30s every later load is allowed
+ * on a CI runner, where it failed the first variant before this existed. So
+ * this one boot waits while the dev server keeps answering (compiling is
+ * progress) and fails once 30s pass with no response, or once
+ * `WARM_UP_CAP_MS` has passed in all: a reload loop answers forever and must
+ * still end the run. It is not a stall retry and does not count as one.
+ */
+async function warmUp(client, url) {
+  const idleMs = 30_000;
+  await client.freshTab();
+  await client.send("Runtime.enable", undefined);
+  await client.send("Page.enable", undefined);
+  await client.send("Network.enable", undefined);
+  const started = Date.now();
+  let lastResponse = started;
+  const heard = () => {
+    lastResponse = Date.now();
+  };
+  const stops = [
+    client.on("Network.responseReceived", heard),
+    client.on("Network.loadingFinished", heard),
+  ];
+  try {
+    await client.send("Page.navigate", { url });
+    while (Date.now() - started < WARM_UP_CAP_MS) {
+      if (client.crashed())
+        throw new Error("The renderer was killed while warming up the fixture");
+      if (Date.now() - lastResponse >= idleMs)
+        throw new Error(
+          `The fixture's first boot stalled: no response from Vite for ${String(idleMs / 1000)}s and no ready probe`,
+        );
+      try {
+        if (
+          await evaluate(client, `window.__layoutCanvasProbe?.ready === true`)
+        ) {
+          console.log(
+            `fixture warm-up boot: ${String(Date.now() - started)}ms`,
+          );
+          return;
+        }
+      } catch (error) {
+        if (!isNavigationContextError(error)) throw error;
+      }
+      await delay(250);
+    }
+    throw new Error(
+      `The fixture's first boot was not ready within ${String(WARM_UP_CAP_MS / 1000)}s although Vite kept answering (a reload loop?)`,
+    );
+  } finally {
+    for (const stop of stops) stop();
+  }
 }
 
 /** A CDP timeout, or a readiness timeout on a document whose module never ran. */

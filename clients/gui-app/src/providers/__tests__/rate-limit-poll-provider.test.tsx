@@ -238,11 +238,12 @@ describe("<RateLimitPollProvider />", () => {
     act(() => {
       changeVisibility("visible");
     });
+    // fireOnShow catches up immediately so a return does not wait 15 minutes.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
     act(() => {
       vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS);
     });
-    // Brought back: polling resumes.
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   it("keeps polling when the window loses focus but stays visible - never keys off blur", () => {
