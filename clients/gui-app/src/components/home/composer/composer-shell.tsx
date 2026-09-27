@@ -11,7 +11,6 @@ import { ComposerMenu } from "@/components/chat/composer/menu/composer-menu";
 import type { ComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { ComposerNarrowProvider } from "@/components/home/composer/composer-narrow-context";
 import { useComposerNarrowObserver } from "@/components/home/composer/composer-narrow-hooks";
-import { useComposerEditorOverflow } from "@/components/home/composer/use-composer-editor-overflow";
 import { useComposerSheetPin } from "@/components/home/composer/use-composer-sheet-pin";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
@@ -90,13 +89,15 @@ interface Pull {
 }
 
 /**
- * The grabber on the card's top edge. The sheet follows the pull: its top
- * stays under the finger, and on release it settles open or closed by how far
- * the pull went. A tap or a wobble does nothing, so a thumb landing on the
- * edge never opens anything. Pointer capture keeps the pull on this element
- * once it starts; `preventDefault` on the press keeps the editor focused so
- * the keyboard does not dip mid-gesture. The bar itself is hidden from
- * assistive technology; `ComposerExpandButton` is its accessible twin.
+ * The pull zone along the card's top edge, with nothing drawn in it. The
+ * sheet follows the pull: its top stays under the finger, and on release it
+ * settles open or closed by how far the pull went. A tap or a wobble does
+ * nothing, so a thumb landing on the edge never opens anything. The zone
+ * covers the card's top padding and a little above it, never the first line
+ * of the draft. Pointer capture keeps the pull on this element once it
+ * starts; `preventDefault` on the press keeps the editor focused so the
+ * keyboard does not dip mid-gesture. It is hidden from assistive technology;
+ * `ComposerExpandButton` is its accessible twin.
  */
 function ComposerGrabber({
   expanded,
@@ -152,23 +153,19 @@ function ComposerGrabber({
     <div
       aria-hidden
       data-composer-grabber=""
-      className="absolute inset-x-0 top-0 z-30 flex h-5 touch-none items-center justify-center"
+      className="absolute inset-x-0 -top-2 z-30 h-6 touch-none"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerEnd}
       onPointerCancel={onPointerEnd}
-    >
-      <span className="h-1 w-9 rounded-full bg-foreground/25" />
-    </div>
+    />
   );
 }
 
 /**
  * The same toggle for a keyboard, a screen reader or a switch, which cannot
  * pull. Visually hidden until it takes keyboard focus, then shown in the
- * card's corner so the focus has a visible owner. Mounted whenever the sheet
- * is available, not only while the grabber shows, so collapsing from it never
- * removes the element that holds focus.
+ * card's corner so the focus has a visible owner.
  */
 function ComposerExpandButton({
   expanded,
@@ -207,13 +204,6 @@ function ComposerAreaImpl({
   expansion,
 }: ComposerAreaProps): ReactNode {
   const expanded = expansion?.expanded === true;
-  // The grabber earns its place only once the draft has outgrown the capped
-  // box - a short draft shows no chrome at all - and stays while the sheet is
-  // open, since it is also the way back.
-  const { ref: frameRef, overflows } = useComposerEditorOverflow(
-    expansion !== null,
-  );
-  const showGrabber = expansion !== null && (expanded || overflows);
   // A BROWSER's keyboard (iOS Safari overlays it and leaves `--keyboard-inset`
   // at 0, so the surface still runs under it): the sheet's bottom is lifted
   // by the measured cover. The installed app measures the same cover but its
@@ -269,8 +259,12 @@ function ComposerAreaImpl({
         )}
       >
         {overlay}
-        {showGrabber ? <ComposerGrabber {...expansion} /> : null}
-        {expansion === null ? null : <ComposerExpandButton {...expansion} />}
+        {expansion === null ? null : (
+          <>
+            <ComposerGrabber {...expansion} />
+            <ComposerExpandButton {...expansion} />
+          </>
+        )}
         <div
           data-composer-utility-overlay=""
           className={cn(
@@ -281,7 +275,6 @@ function ComposerAreaImpl({
           {utilityRail}
         </div>
         <div
-          ref={frameRef}
           data-composer-editor-frame=""
           className={cn(
             "px-4 pt-4",
@@ -322,7 +315,7 @@ interface ComposerShellProps {
   readonly toolbar: ReactNode;
   /**
    * Lets the phone layout open the composer as a sheet over the surface (a
-   * pull on the grabber that appears once the draft outgrows the card).
+   * pull on the card's top edge).
    * Honoured only in the phone layout;
    * a desktop window has room for the card to grow in place. `null` for a
    * composer that already sits in an overlay of its own.
