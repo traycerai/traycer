@@ -1,9 +1,10 @@
 import "../../../../../__tests__/test-browser-apis";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposerOptionsSheet } from "@/components/home/mobile/composer-options-sheet";
 import {
+  AUTO_JUDGE_UNAVAILABLE_DESCRIPTION,
   AUTO_MID_TURN_NOTICE,
   type PermissionMode,
 } from "@/components/home/data/landing-options";
@@ -291,7 +292,6 @@ describe("ComposerOptionsSheet - mid-turn lock", () => {
     expect(auto.textContent).toContain(
       "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Providers ▸ Claude Code ▸ Permissions.",
     );
-    expect(screen.queryByTestId("composer-options-permission-meta")).toBeNull();
     expect(
       screen.queryByTestId("composer-options-permission-mid-turn-notice"),
     ).toBeNull();
@@ -327,5 +327,29 @@ describe("ComposerOptionsSheet - mid-turn lock", () => {
     expect(
       screen.queryByTestId("composer-options-permission-mid-turn-notice"),
     ).toBeNull();
+  });
+
+  it("shows the no-judge description in place of the ordinary one when billing is blocked, with no lock", () => {
+    renderSheet({
+      ...defaults(),
+      judgeBilling: { kind: "blocked" },
+      turnActive: false,
+      permission: "supervised",
+    });
+
+    const auto = screen.getByTestId("composer-options-permission-auto");
+    expect(auto.hasAttribute("disabled")).toBe(false);
+    expect(auto.textContent).toContain(AUTO_JUDGE_UNAVAILABLE_DESCRIPTION);
+  });
+});
+
+describe("ComposerOptionsSheet - Auto's Experimental badge", () => {
+  it("shows the Experimental badge on the Auto row only", () => {
+    renderSheet(defaults());
+
+    const auto = screen.getByTestId("composer-options-permission-auto");
+    expect(within(auto).getByText("Experimental")).toBeTruthy();
+    const supervised = screen.getByRole("radio", { name: /Supervised/ });
+    expect(within(supervised).queryByText("Experimental")).toBeNull();
   });
 });

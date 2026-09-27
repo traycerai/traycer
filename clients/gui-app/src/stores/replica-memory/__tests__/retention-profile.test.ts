@@ -69,6 +69,13 @@ describe("RetentionProfile", () => {
     );
   });
 
+  it("owns the unknown-activity cap grace in each shell profile", () => {
+    expect(DESKTOP_RETENTION_PROFILE.unknownActivityCapGraceMs).toBe(60_000);
+    expect(MOBILE_RETENTION_PROFILE.unknownActivityCapGraceMs).toBeGreaterThan(
+      0,
+    );
+  });
+
   it("getRetentionProfile reflects a profile switched at runtime", () => {
     expect(getRetentionProfile()).toBe(DESKTOP_RETENTION_PROFILE);
 

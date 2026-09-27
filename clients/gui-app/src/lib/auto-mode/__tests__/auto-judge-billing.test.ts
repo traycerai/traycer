@@ -21,7 +21,6 @@ import {
   autoJudgeBillingForRun,
   autoJudgeEffortLabel,
   autoJudgeGetKnowsReasoningEffort,
-  autoJudgeRowFace,
   autoJudgeSetStoresReasoningEffort,
   autoJudgeTarget,
   autoModeMidTurnLock,
@@ -468,7 +467,7 @@ describe("autoJudgeTarget", () => {
     ).toEqual({ kind: "none" });
   });
 
-  it("composes to 'blocked' billing and the no-judge meta line for a traycer-hosted run under fallback", () => {
+  it("composes to 'blocked' billing for a traycer-hosted run under fallback", () => {
     const target = autoJudgeTarget({
       ...BASE_INPUT,
       effective: { source: "fallback" },
@@ -485,20 +484,7 @@ describe("autoJudgeTarget", () => {
       judgeEffortLabel: null,
       judgeRecordUnrunnable: false,
     });
-    if (billing === null) {
-      throw new Error("expected a billing verdict, got null");
-    }
     expect(billing).toEqual({ kind: "blocked" });
-    expect(autoJudgeRowFace(billing)).toEqual({
-      judge: null,
-      tone: "warning",
-      pocket: {
-        before: "No judge available on this machine · asks you instead",
-        emphasis: null,
-        after: "",
-      },
-      detail: null,
-    });
   });
 
   // Provider-native precedence is unaffected by the fix above: a run whose
@@ -698,153 +684,6 @@ describe("autoJudgeBillingForRun", () => {
       harnessLabel: "Claude Code",
       modelLabel: "Sonnet",
       effortLabel: "Low",
-    });
-  });
-});
-
-describe("autoJudgeRowFace", () => {
-  it("names the model, success tone and Traycer credits for the traycer kind", () => {
-    expect(
-      autoJudgeRowFace({
-        kind: "traycer",
-        modelLabel: "Sonnet 5",
-        effortLabel: null,
-      }),
-    ).toEqual({
-      judge: { harnessId: "traycer", label: "Sonnet 5" },
-      tone: "success",
-      pocket: { before: "Uses ", emphasis: "Traycer", after: " credits" },
-      detail: null,
-    });
-  });
-
-  it("names the model and effort, and Traycer credits, for the traycer kind when an effort is named", () => {
-    expect(
-      autoJudgeRowFace({
-        kind: "traycer",
-        modelLabel: "Sonnet 5",
-        effortLabel: "Low",
-      }),
-    ).toEqual({
-      judge: { harnessId: "traycer", label: "Sonnet 5 · Low" },
-      tone: "success",
-      pocket: { before: "Uses ", emphasis: "Traycer", after: " credits" },
-      detail: null,
-    });
-  });
-
-  it("names the model and the provider's own account for the provider kind", () => {
-    expect(
-      autoJudgeRowFace({
-        kind: "provider",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
-        modelLabel: "Sonnet",
-        effortLabel: null,
-      }),
-    ).toEqual({
-      judge: { harnessId: "claude", label: "Sonnet" },
-      tone: "success",
-      pocket: {
-        before: "Billed to your ",
-        emphasis: "Claude Code",
-        after: " account",
-      },
-      detail: null,
-    });
-  });
-
-  it("names the model and effort for the provider kind when an effort is named", () => {
-    expect(
-      autoJudgeRowFace({
-        kind: "provider",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
-        modelLabel: "Sonnet",
-        effortLabel: "Low",
-      }),
-    ).toEqual({
-      judge: { harnessId: "claude", label: "Sonnet · Low" },
-      tone: "success",
-      pocket: {
-        before: "Billed to your ",
-        emphasis: "Claude Code",
-        after: " account",
-      },
-      detail: null,
-    });
-  });
-
-  it("names the premium-request range for the Copilot provider kind", () => {
-    expect(
-      autoJudgeRowFace({
-        kind: "provider",
-        harnessId: "copilot",
-        harnessLabel: "Copilot",
-        modelLabel: "GPT-5",
-        effortLabel: null,
-      }),
-    ).toEqual({
-      judge: { harnessId: "copilot", label: "GPT-5" },
-      tone: "success",
-      pocket: {
-        before: "Billed to your ",
-        emphasis: "Copilot",
-        after: " account",
-      },
-      detail: "Uses premium requests: 60–350 per hour",
-    });
-  });
-
-  it("names the model and effort for the Copilot provider kind when an effort is named", () => {
-    expect(
-      autoJudgeRowFace({
-        kind: "provider",
-        harnessId: "copilot",
-        harnessLabel: "Copilot",
-        modelLabel: "GPT-5",
-        effortLabel: "High",
-      }),
-    ).toEqual({
-      judge: { harnessId: "copilot", label: "GPT-5 · High" },
-      tone: "success",
-      pocket: {
-        before: "Billed to your ",
-        emphasis: "Copilot",
-        after: " account",
-      },
-      detail: "Uses premium requests: 60–350 per hour",
-    });
-  });
-
-  it("names the provider's own classifier, at no extra cost, for the provider-native kind", () => {
-    expect(
-      autoJudgeRowFace({
-        kind: "provider-native",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
-      }),
-    ).toEqual({
-      judge: {
-        harnessId: "claude",
-        label: "Claude Code's built-in classifier",
-      },
-      tone: "success",
-      pocket: { before: "No extra cost", emphasis: null, after: "" },
-      detail: null,
-    });
-  });
-
-  it("says no judge is available, with a warning tone, for the blocked kind", () => {
-    expect(autoJudgeRowFace({ kind: "blocked" })).toEqual({
-      judge: null,
-      tone: "warning",
-      pocket: {
-        before: "No judge available on this machine · asks you instead",
-        emphasis: null,
-        after: "",
-      },
-      detail: null,
     });
   });
 });

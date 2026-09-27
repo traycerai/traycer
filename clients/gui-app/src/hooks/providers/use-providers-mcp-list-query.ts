@@ -10,6 +10,7 @@ import {
   type McpListData,
 } from "@/hooks/providers/native-response-map";
 import { nativeMcpListParams } from "@/lib/query-keys/providers-native-query-keys";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 const MCP_LIST_PENDING_REFRESH_MS = 800;
 
@@ -62,12 +63,15 @@ export function useProvidersMcpList(args: {
       ));
   useEffect(() => {
     if (!needsPoll) return;
-    const timer = setInterval(() => {
-      // Join a pending read instead of restarting it every polling tick.
-      // In particular, a manual Retry must be allowed to finish.
-      void refetch({ cancelRefetch: false });
-    }, MCP_LIST_PENDING_REFRESH_MS);
-    return () => clearInterval(timer);
+    return startVisibleInterval({
+      tick: () => {
+        // Join a pending read instead of restarting it every polling tick.
+        // In particular, a manual Retry must be allowed to finish.
+        void refetch({ cancelRefetch: false });
+      },
+      intervalMs: MCP_LIST_PENDING_REFRESH_MS,
+      fireOnShow: true,
+    });
   }, [needsPoll, refetch]);
 
   return query;

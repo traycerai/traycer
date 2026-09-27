@@ -425,6 +425,58 @@ describe("home-page history helpers", () => {
     });
   });
 
+  it("labels a task updated under a minute ago as just now", () => {
+    const nowMs = Date.now();
+    const taskUpdatedAt = (
+      id: string,
+      updatedAt: number,
+    ): ListTaskLightPre15 => ({
+      epic: {
+        light: {
+          id,
+          title: id,
+          initialUserPrompt: "",
+          ticketCount: 0,
+          specCount: 0,
+          storyCount: 0,
+          reviewCount: 0,
+          status: "active",
+          createdAt: updatedAt,
+          updatedAt,
+          createdBy: "user-1",
+          version: "1",
+        },
+        permission: {
+          role: "owner" as const,
+          accessType: "direct" as const,
+          userId: "user-1",
+          grantedBy: "user-1",
+          grantedAt: 1,
+        },
+        repos: [],
+        workspaces: [],
+        roomInfo: null,
+      },
+      phase: null,
+      pinned: false,
+    });
+
+    const items = buildHistoryItemsFromTasks(
+      [
+        taskUpdatedAt("epic-fresh", nowMs - 5_000),
+        taskUpdatedAt("epic-older", nowMs - 5 * 60_000),
+      ],
+      nowMs,
+      "user-1",
+      EMPTY_LOCAL_HOMED_TASK_IDS,
+    );
+
+    expect(items.map((item) => item.updatedLabel)).toEqual([
+      "just now",
+      "5 minutes ago",
+    ]);
+  });
+
   describe("chat-host filter", () => {
     const hostItems: ReadonlyArray<HistoryItem> = [
       makeItem({ id: "a", title: "A", chatHostIds: ["host-1"] }),

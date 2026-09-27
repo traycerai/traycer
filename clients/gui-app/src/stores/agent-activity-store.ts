@@ -596,6 +596,19 @@ function hostSliceCoversItsOwnHost(host: HostAgentActivity): boolean {
   return host.servedBy === "local" || hostActivityAnswers(host);
 }
 
+/** A turn in a currently attested slice, excluding rows retained across reconnects. */
+export function agentActivityPlaneReportsEpicTurn(epicId: string): boolean {
+  for (const host of useAgentActivityStore.getState().byHost.values()) {
+    if (
+      hostSliceCoversItsOwnHost(host) &&
+      (host.byEpic.get(epicId)?.turn.size ?? 0) > 0
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function selectPlaneAnswers(
   byHost: ReadonlyMap<string, HostAgentActivity>,
 ): boolean {

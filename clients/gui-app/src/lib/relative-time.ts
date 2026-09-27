@@ -1,4 +1,5 @@
 import { useLayoutEffect, useSyncExternalStore } from "react";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60_000;
@@ -77,7 +78,7 @@ interface SharedClock {
  */
 export function createSharedClock(intervalMs: number): SharedClock {
   let tick = 0;
-  let intervalHandle: number | null = null;
+  let stopVisible: (() => void) | null = null;
   // Sampled at construction so the first render of a consumer has a valid
   // value before `useSyncExternalStore`'s subscribe effect runs. Re-sampled on
   // every interval fire and whenever the clock is (re)started.
@@ -111,13 +112,17 @@ export function createSharedClock(intervalMs: number): SharedClock {
   };
 
   const startIfNeeded = (): void => {
-    if (intervalHandle !== null) return;
+    if (stopVisible !== null) return;
     sampledNow = Date.now();
-    intervalHandle = window.setInterval(() => {
-      tick += 1;
-      sampledNow = Date.now();
-      notifyListeners();
-    }, intervalMs);
+    stopVisible = startVisibleInterval({
+      tick: () => {
+        tick += 1;
+        sampledNow = Date.now();
+        notifyListeners();
+      },
+      intervalMs,
+      fireOnShow: true,
+    });
   };
 
   const stopIfIdle = (): void => {
@@ -125,9 +130,9 @@ export function createSharedClock(intervalMs: number): SharedClock {
     // A queued microtask cannot be cancelled. Invalidate its generation so it
     // cannot notify a later batch after this clock has stopped and restarted.
     pendingRefreshGeneration = null;
-    if (intervalHandle === null) return;
-    window.clearInterval(intervalHandle);
-    intervalHandle = null;
+    if (stopVisible === null) return;
+    stopVisible();
+    stopVisible = null;
   };
 
   return {

@@ -12,6 +12,7 @@ import {
   useAuthLinkLoginStatus,
   type LinkLoginStatusDatum,
 } from "@/hooks/auth/use-link-login-status-query";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 /**
  * A live claim on this panel's code. The server enforces ONE live code per
@@ -221,12 +222,13 @@ export function useLinkLoginWatch(enabled: boolean): LinkLoginWatch {
     if (!claimOnScreen) {
       return;
     }
-    const timer = setInterval(() => {
-      setNowMs(Date.now());
-    }, 1_000);
-    return () => {
-      clearInterval(timer);
-    };
+    return startVisibleInterval({
+      tick: () => {
+        setNowMs(Date.now());
+      },
+      intervalMs: 1_000,
+      fireOnShow: true,
+    });
   }, [claimOnScreen]);
   const restartPending =
     restartedFrom !== null && restartedFrom === watchedCode;

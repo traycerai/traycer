@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 /**
  * Ticks once per second while mounted so a caller can show a constantly
@@ -15,8 +16,11 @@ export function useElapsedSeconds(
 ): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(intervalId);
+    return startVisibleInterval({
+      tick: () => setNowMs(Date.now()),
+      intervalMs: 1000,
+      fireOnShow: true,
+    });
   }, []);
   const activePausedMs =
     pausedSinceMs === null ? 0 : Math.max(0, nowMs - pausedSinceMs);
