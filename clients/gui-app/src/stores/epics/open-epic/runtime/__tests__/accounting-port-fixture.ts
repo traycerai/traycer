@@ -38,6 +38,14 @@ export function createRecordingAccountingPort(): RecordingAccountingPort {
     settleRootBytes(bytes): void {
       calls.push(`settleRootBytes:${String(bytes)}`);
     },
+    chargeRootProvisional(bytes): void {
+      calls.push(`chargeRootProvisional:${String(bytes)}`);
+    },
+    settleReplicaDataBytes(rawBytes, estimatedHeapBytes): void {
+      calls.push(
+        `settleReplicaDataBytes:${String(rawBytes)}:${String(estimatedHeapBytes)}`,
+      );
+    },
     settleColdRoomBytes(artifactRoomId, bytes): void {
       calls.push(`settleColdRoomBytes:${artifactRoomId}:${String(bytes)}`);
     },

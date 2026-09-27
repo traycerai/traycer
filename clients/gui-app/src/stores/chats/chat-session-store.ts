@@ -95,9 +95,12 @@ import {
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import { ensureProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
+import { createChatOwnedStateAccount } from "@/stores/replica-memory/chat-owned-state-account";
 import {
+  CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES,
+  CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
   chatHolderId,
-  chatSessionChargeBytes,
+  chatSessionEstimatedHeapBytes,
   chatWholeSetSliceBytes,
   evictChatWindowForAccountant,
   legacyTranscriptResidencyBytes,
@@ -3216,6 +3219,9 @@ export function createChatSessionStoreWithNotificationDependencies(
   const notificationUserId = options.userId;
   const memory = ensureProcessMemoryRuntime(options.environment);
   const holderId = chatHolderId(options.hostId, options.epicId, options.chatId);
+  const ownedStateAccount = createChatOwnedStateAccount();
+  let settleOwnedStateBudget = (): void => undefined;
+  let unsubscribeOwnedState = (): void => undefined;
   let recencyStamp = 0;
   let disposed = false;
   let streamClient: ChatStreamClientHandle | null = null;
@@ -5674,14 +5680,19 @@ export function createChatSessionStoreWithNotificationDependencies(
       memory.chatWindows.settle(
         memory.accountant,
         holderId,
-        chatSessionChargeBytes(window, chatSlicesOf(get())),
+        chatSessionEstimatedHeapBytes(window, chatSlicesOf(get())) +
+          ownedStateAccount.size().estimatedHeapBytes,
       );
       memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
     };
 
     const legacyTranscriptChargeBytes = (state: ChatSessionState): number =>
       legacyTranscriptResidencyBytes(state.messages, state.events) +
-      chatWholeSetSliceBytes(chatSlicesOf(state));
+      chatWholeSetSliceBytes(chatSlicesOf(state)) +
+      CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+      (state.messages.length + state.events.length) *
+        CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES +
+      ownedStateAccount.size().estimatedHeapBytes;
 
     const commitLegacyTranscriptBudget = (): void => {
       recencyStamp = memory.stampChatRecency();
@@ -5719,11 +5730,15 @@ export function createChatSessionStoreWithNotificationDependencies(
         memory.accountant,
         holderId,
         windowedLine
-          ? chatSessionChargeBytes(state.transcriptWindow, chatSlicesOf(state))
+          ? chatSessionEstimatedHeapBytes(
+              state.transcriptWindow,
+              chatSlicesOf(state),
+            ) + ownedStateAccount.size().estimatedHeapBytes
           : legacyTranscriptChargeBytes(state),
       );
       memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
     };
+    settleOwnedStateBudget = commitWholeSetSliceBudget;
 
     const publishWindowedTranscript = (
       window: TranscriptWindow,
@@ -5759,14 +5774,28 @@ export function createChatSessionStoreWithNotificationDependencies(
           memory.chatWindows.settle(
             memory.accountant,
             holderId,
-            transcriptBytes + chatWholeSetSliceBytes(chatSlicesOf(state)),
+            transcriptBytes +
+              chatWholeSetSliceBytes(chatSlicesOf(state)) +
+              CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+              (state.messages.length + state.events.length) *
+                CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES +
+              ownedStateAccount.size().estimatedHeapBytes,
           );
           return {
             reclaimedBytes: 0,
-            protectedBytesByKind:
-              transcriptBytes === 0
+            protectedBytesByKind: [
+              ...(transcriptBytes === 0
                 ? []
-                : [{ kind: "sole-copy", bytes: transcriptBytes }],
+                : [{ kind: "sole-copy" as const, bytes: transcriptBytes }]),
+              ...(ownedStateAccount.size().estimatedHeapBytes === 0
+                ? []
+                : [
+                    {
+                      kind: "required" as const,
+                      bytes: ownedStateAccount.size().estimatedHeapBytes,
+                    },
+                  ]),
+            ],
           };
         }
         const current = transcriptWindowChargedBytes(state.transcriptWindow);
@@ -5782,9 +5811,19 @@ export function createChatSessionStoreWithNotificationDependencies(
         memory.chatWindows.settle(
           memory.accountant,
           holderId,
-          chatSessionChargeBytes(window, chatSlicesOf(get())),
+          chatSessionEstimatedHeapBytes(window, chatSlicesOf(get())) +
+            ownedStateAccount.size().estimatedHeapBytes,
         );
-        return outcome;
+        const ownedBytes = ownedStateAccount.size().estimatedHeapBytes;
+        return ownedBytes === 0
+          ? outcome
+          : {
+              ...outcome,
+              protectedBytesByKind: [
+                ...outcome.protectedBytesByKind,
+                { kind: "required", bytes: ownedBytes },
+              ],
+            };
       },
     });
 
@@ -11013,6 +11052,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         clearResnapshotRequestTimer();
         clearStreamCompletionWatchdog();
         legacyTranscriptAdapter.detach("disposed");
+        unsubscribeOwnedState();
         memory.chatWindows.detach(holderId);
         memory.accountant.release(BUDGET_PLANE_IDS.chatWindows, holderId);
         closeStreamClient();
@@ -11045,6 +11085,18 @@ export function createChatSessionStoreWithNotificationDependencies(
   // here and the `create()` above is the window `storeReady` exists to name, and
   // anything inserted before this line silently joins it.
   storeReady = true;
+  const updateOwnedStateCharge = (state: ChatSessionState): void => {
+    if (disposed || !ownedStateAccount.update(state)) return;
+    const size = ownedStateAccount.size();
+    memory.chatWindows.recordOwnedStateSize(
+      holderId,
+      size.rawBytes,
+      size.estimatedHeapBytes,
+    );
+    settleOwnedStateBudget();
+  };
+  updateOwnedStateCharge(store.getState());
+  unsubscribeOwnedState = store.subscribe(updateOwnedStateCharge);
 
   if (notificationUserId !== null) {
     unsubscribeLiveCompletionAcknowledgements =

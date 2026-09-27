@@ -19,6 +19,11 @@ export interface ReplicaMemoryTelemetry {
   readonly accountant: AccountantSnapshot;
   readonly docsResident: number;
   readonly bytesDecoded: number;
+  /** UTF-8 JSON form and calibrated heap estimate are distinct measurements. */
+  readonly rawReplicaDataBytes: number;
+  readonly estimatedReplicaDataHeapBytes: number;
+  readonly rawChatOwnedStateBytes: number;
+  readonly estimatedChatOwnedStateHeapBytes: number;
   readonly projectionRowCounts: EpicReplicaProjectionCounts;
   readonly evictionEffectiveness: {
     readonly evictionsRequested: number;
@@ -65,6 +70,12 @@ export function collectReplicaMemoryTelemetry(
     accountant,
     docsResident: runtime.hotDocs.docsResident(),
     bytesDecoded: accountant.totalChargedBytes,
+    rawReplicaDataBytes: runtime.epicReplicas.rawReplicaDataBytes(),
+    estimatedReplicaDataHeapBytes:
+      runtime.epicReplicas.estimatedReplicaDataHeapBytes(),
+    rawChatOwnedStateBytes: runtime.chatWindows.rawOwnedStateBytes(),
+    estimatedChatOwnedStateHeapBytes:
+      runtime.chatWindows.estimatedOwnedStateHeapBytes(),
     projectionRowCounts: runtime.epicReplicas.projectionRowCounts(),
     evictionEffectiveness: {
       evictionsRequested,

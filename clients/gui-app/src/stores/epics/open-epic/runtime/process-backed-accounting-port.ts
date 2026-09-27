@@ -29,6 +29,7 @@ import {
   epicColdRoomHolderId,
   epicCommandOverlayHolderId,
   epicReplicaBookKey,
+  epicReplicaDataHolderId,
   epicRootHolderId,
 } from "@/stores/replica-memory/epic-replica-budget";
 import type {
@@ -89,7 +90,9 @@ export function createProcessBackedAccountingPort(
       });
       memory.epicReplicas.attach({
         key: bookKey,
-        measure: () => source?.measureRootBytes() ?? 0,
+        measure: () =>
+          (source?.measureRootBytes() ?? 0) +
+          (source?.measureReplicaDataBytes().estimatedHeapBytes ?? 0),
         projectionCounts: () =>
           source?.projectionCounts() ?? {
             artifacts: 0,
@@ -143,6 +146,24 @@ export function createProcessBackedAccountingPort(
         epicRootHolderId(hostId, epicId, runtimeToken),
         bytes,
       );
+      memory.accountant.reconcile(BUDGET_PLANE_IDS.epicReplicas);
+    },
+
+    chargeRootProvisional(bytes): void {
+      memory.accountant.chargeProvisional(
+        BUDGET_PLANE_IDS.epicReplicas,
+        epicRootHolderId(hostId, epicId, runtimeToken),
+        bytes,
+      );
+    },
+
+    settleReplicaDataBytes(rawBytes, estimatedHeapBytes): void {
+      memory.epicReplicas.settleReplicaData(memory.accountant, {
+        bookKey,
+        holderId: epicReplicaDataHolderId(hostId, epicId, runtimeToken),
+        rawBytes,
+        estimatedHeapBytes,
+      });
       memory.accountant.reconcile(BUDGET_PLANE_IDS.epicReplicas);
     },
 

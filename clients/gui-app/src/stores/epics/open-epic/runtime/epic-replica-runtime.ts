@@ -48,6 +48,7 @@ import type {
   ReplicaResetCause,
   ReplicaTransitionToken,
   RuntimeEnvironment,
+  RuntimeTimer,
   SendOutcome,
 } from "@traycer-clients/shared/replica-runtime";
 import {
@@ -55,6 +56,7 @@ import {
   createTransactionalProjectionSink,
 } from "@traycer-clients/shared/replica-runtime";
 import { jsonByteLength } from "@/stores/replica-memory/json-bytes";
+import type { RetainedValueSize } from "@/stores/replica-memory/retained-value-size";
 import type { HotDocBudgetSink } from "@/stores/replica-memory/hot-doc-budget";
 import type { EpicRuntimeAccountingPort } from "./epic-runtime-accounting-port";
 import { artifactBodyFragmentName } from "@traycer/protocol/persistence/epic/artifacts";
@@ -543,6 +545,33 @@ export function createEpicReplicaRuntime(
    * the snapshot is the figure we actually received.
    */
   let rootSettledBytes = 0;
+  let rootSettleTimer: RuntimeTimer | null = null;
+  const cancelRootSettle = (): void => {
+    rootSettleTimer?.cancel();
+    rootSettleTimer = null;
+  };
+  const resetRootCharge = (): void => {
+    cancelRootSettle();
+    rootSettledBytes = 0;
+    accounting.settleRootBytes(0);
+  };
+  let laneRowSize: RetainedValueSize = {
+    rawBytes: 0,
+    estimatedHeapBytes: 0,
+  };
+  let recordRowSize: RetainedValueSize = {
+    rawBytes: 0,
+    estimatedHeapBytes: 0,
+  };
+  const replicaDataSize = (): RetainedValueSize => ({
+    rawBytes: laneRowSize.rawBytes + recordRowSize.rawBytes,
+    estimatedHeapBytes:
+      laneRowSize.estimatedHeapBytes + recordRowSize.estimatedHeapBytes,
+  });
+  const settleReplicaData = (): void => {
+    const size = replicaDataSize();
+    accounting.settleReplicaDataBytes(size.rawBytes, size.estimatedHeapBytes);
+  };
   const budgetSink: HotDocBudgetSink = {
     settle: (artifactRoomId, bytes) =>
       accounting.settleHotDocBytes(artifactRoomId, bytes),
@@ -693,6 +722,22 @@ export function createEpicReplicaRuntime(
   });
 
   const records = createEpicRecordsReplica({
+    onRootDocChanged: (updateBytes) => {
+      accounting.chargeRootProvisional(updateBytes);
+      // Each edit adds only its received update. A whole-doc encode is paid
+      // once after an idle burst, never on the edit's synchronous path.
+      cancelRootSettle();
+      rootSettleTimer = environment.scheduler.schedule(250, () => {
+        rootSettleTimer = null;
+        rootSettledBytes = Y.encodeStateAsUpdate(records.doc).byteLength;
+        accounting.settleRootBytes(rootSettledBytes);
+      });
+    },
+    onRootDocReplaced: resetRootCharge,
+    onRetainedRowsChanged: (size) => {
+      recordRowSize = size;
+      settleReplicaData();
+    },
     // Published from HERE because the control slice is the runtime's; the
     // records replica owns the doc but its sink is typed to the records slice.
     onHeldAttachmentsChanged: (heldAttachmentHashes) => {
@@ -810,6 +855,7 @@ export function createEpicReplicaRuntime(
     materializedRoomIds: () => tier.materializedIds(),
     demoteColdestUnpinned: (overBytes) => tier.demoteColdestUnpinned(overBytes),
     measureRootBytes: () => rootSettledBytes,
+    measureReplicaDataBytes: replicaDataSize,
     projectionCounts: () => {
       const projection = records.sink.read();
       return {
@@ -840,6 +886,7 @@ export function createEpicReplicaRuntime(
    */
   function applyRootSnapshot(meta: SnapshotMetaEpic, update: Uint8Array): void {
     const divergence = records.ingestSnapshot(meta, update);
+    cancelRootSettle();
     rootSettledBytes = update.byteLength;
     accounting.settleRootBytes(update.byteLength);
     control.adoptSnapshotRole(meta.permissionRole);
@@ -893,6 +940,10 @@ export function createEpicReplicaRuntime(
     laneSelection === null
       ? null
       : createEpicLaneArm({
+          onRetainedRowsChanged: (size) => {
+            laneRowSize = size;
+            settleReplicaData();
+          },
           epicId,
           environment,
           stateStreamClientFactory: laneSelection.stateStreamClientFactory,
@@ -1809,6 +1860,7 @@ export function createEpicReplicaRuntime(
       control.dispose();
       rooms.dispose();
       accounting.unregisterBooks();
+      cancelRootSettle();
     },
 
     isDisposed,

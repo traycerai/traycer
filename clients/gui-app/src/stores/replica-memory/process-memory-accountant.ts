@@ -121,6 +121,11 @@ export function getProcessMemoryRuntime(): ProcessMemoryRuntime {
   return processRuntime;
 }
 
+/** Diagnostics can open before the first replica or chat has installed it. */
+export function readProcessMemoryRuntime(): ProcessMemoryRuntime | null {
+  return processRuntime;
+}
+
 export function resetProcessMemoryRuntimeForTests(): void {
   processRuntime = null;
 }

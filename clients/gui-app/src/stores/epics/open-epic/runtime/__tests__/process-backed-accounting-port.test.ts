@@ -48,6 +48,7 @@ function sourceWithRooms(
       protectedBytesByKind: [],
     }),
     measureRootBytes: () => 0,
+    measureReplicaDataBytes: () => ({ rawBytes: 0, estimatedHeapBytes: 0 }),
     projectionCounts: () => ({
       artifacts: 0,
       chats: 0,
@@ -121,6 +122,7 @@ function recordingSource(): {
         };
       },
       measureRootBytes: () => 0,
+      measureReplicaDataBytes: () => ({ rawBytes: 0, estimatedHeapBytes: 0 }),
       projectionCounts: () => ({
         artifacts: 0,
         chats: 0,

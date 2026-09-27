@@ -45,6 +45,32 @@ export function chatSessionChargeBytes(
   return transcriptWindowChargedBytes(window) + chatWholeSetSliceBytes(slices);
 }
 
+/**
+ * V8 calibration of an unmounted store after GC. The fixed term covers the
+ * store's subscriptions, closures, and empty state; each retained transcript
+ * record has ledger, span and derived-state overhead beyond its JSON body.
+ * These terms are not raw bytes and are kept out of the transcript's own
+ * eight-MiB eviction arithmetic.
+ */
+export const CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES = 48 * 1024;
+export const CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES = 600;
+
+export function chatSessionEstimatedHeapBytes(
+  window: TranscriptWindow,
+  slices: ChatWholeSetSlices,
+): number {
+  const retainedRecords =
+    window.records.messages.size +
+    window.records.events.size +
+    window.liveMessages.length +
+    window.liveEvents.length;
+  return (
+    chatSessionChargeBytes(window, slices) +
+    CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+    retainedRecords * CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES
+  );
+}
+
 export function chatWholeSetSliceBytes(slices: ChatWholeSetSlices): number {
   return (
     sliceBytes(slices.queue) +
@@ -119,6 +145,13 @@ export interface ChatWindowBudgetSession {
 export interface ChatWindowBudgetBook {
   attach(session: ChatWindowBudgetSession): void;
   detach(holderId: BudgetHolderId): void;
+  recordOwnedStateSize(
+    holderId: BudgetHolderId,
+    rawBytes: number,
+    estimatedHeapBytes: number,
+  ): void;
+  rawOwnedStateBytes(): number;
+  estimatedOwnedStateHeapBytes(): number;
   settle(
     accountant: MemoryAccountant,
     holderId: BudgetHolderId,
@@ -135,6 +168,10 @@ export interface ChatWindowBudgetBook {
 
 export function createChatWindowBudgetBook(): ChatWindowBudgetBook {
   const sessions = new Map<BudgetHolderId, ChatWindowBudgetSession>();
+  const ownedStateByHolder = new Map<
+    BudgetHolderId,
+    { readonly rawBytes: number; readonly estimatedHeapBytes: number }
+  >();
 
   return {
     attach(session: ChatWindowBudgetSession): void {
@@ -143,6 +180,25 @@ export function createChatWindowBudgetBook(): ChatWindowBudgetBook {
 
     detach(holderId: BudgetHolderId): void {
       sessions.delete(holderId);
+      ownedStateByHolder.delete(holderId);
+    },
+
+    recordOwnedStateSize(holderId, rawBytes, estimatedHeapBytes): void {
+      ownedStateByHolder.set(holderId, { rawBytes, estimatedHeapBytes });
+    },
+
+    rawOwnedStateBytes(): number {
+      let total = 0;
+      for (const size of ownedStateByHolder.values()) total += size.rawBytes;
+      return total;
+    },
+
+    estimatedOwnedStateHeapBytes(): number {
+      let total = 0;
+      for (const size of ownedStateByHolder.values()) {
+        total += size.estimatedHeapBytes;
+      }
+      return total;
     },
 
     settle(

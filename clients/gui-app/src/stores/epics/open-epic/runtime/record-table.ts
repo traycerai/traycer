@@ -192,6 +192,10 @@
 import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-records";
 import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
 import { sessionKeyOf } from "@traycer-clients/shared/replica-runtime";
+import {
+  retainedValueSize,
+  type RetainedValueSize,
+} from "@/stores/replica-memory/retained-value-size";
 
 /**
  * Whether an upsert leaves this table able to describe the row it wrote.
@@ -412,6 +416,8 @@ export interface RecordTableHooks<TRow> {
 }
 
 export interface RecordTable<TRow, TSlice> {
+  /** Incremental charge for the raw rows; excludes the derived projection. */
+  retainedRowSize(): RetainedValueSize;
   /** The slice as last published. The projector reads this as an input. */
   current(): TSlice;
   /**
@@ -556,6 +562,22 @@ export function createRecordTable<TRow, TSlice>(
    * it.
    */
   const rows = new Map<string, TRow>();
+  const rowSizes = new Map<string, RetainedValueSize>();
+  let rawBytes = 0;
+  let estimatedHeapBytes = 0;
+
+  function accountRow(key: string, row: TRow): void {
+    const next = retainedValueSize(row);
+    const previous = rowSizes.get(key);
+    if (previous !== undefined) {
+      rawBytes -= previous.rawBytes;
+      estimatedHeapBytes -= previous.estimatedHeapBytes + 64;
+    }
+    rowSizes.set(key, next);
+    rawBytes += next.rawBytes;
+    // A Map entry and its sequence book survive alongside each row.
+    estimatedHeapBytes += next.estimatedHeapBytes + 64;
+  }
 
   /**
    * Ids the plane RETRACTED while this session was open, and why - ABSORBING
@@ -591,6 +613,7 @@ export function createRecordTable<TRow, TSlice>(
    * its ingest order, and the patch revision this supersedes) cannot drift.
    */
   function setRow(key: string, row: TRow): void {
+    accountRow(key, row);
     rows.set(key, row);
     recencyRevision.delete(key);
     ingestSeq += 1;
@@ -599,6 +622,12 @@ export function createRecordTable<TRow, TSlice>(
 
   /** The counterpart: forget a row and everything keyed alongside it. */
   function dropRow(key: string): void {
+    const previous = rowSizes.get(key);
+    if (previous !== undefined) {
+      rawBytes -= previous.rawBytes;
+      estimatedHeapBytes -= previous.estimatedHeapBytes + 64;
+      rowSizes.delete(key);
+    }
     rows.delete(key);
     rowSeq.delete(key);
     recencyRevision.delete(key);
@@ -635,6 +664,13 @@ export function createRecordTable<TRow, TSlice>(
   }
 
   return {
+    retainedRowSize: () => ({
+      rawBytes,
+      // The first row also makes the table's projected slice, id list and
+      // metadata indexes live. Calibrated against after-GC V8 worker deltas;
+      // empty tables keep none of these allocations.
+      estimatedHeapBytes: estimatedHeapBytes + (rows.size === 0 ? 0 : 1_100),
+    }),
     current: () => slice,
     retainedRow: (rowKey: string) => rows.get(rowKey) ?? null,
     ingestSeq: () => ingestSeq,
@@ -722,7 +758,9 @@ export function createRecordTable<TRow, TSlice>(
         // comparing against one alone would let a replayed patch roll the
         // recency back to a version the other book has already passed.
         if (patch.revision <= heldRecencyRevision(key, held, recency)) continue;
-        rows.set(key, recency.withPatch(held, patch));
+        const patched = recency.withPatch(held, patch);
+        accountRow(key, patched);
+        rows.set(key, patched);
         // NOT `setRow`: this is the one write that leaves the row's content -
         // and so its `revision` - exactly where it was, which is why the
         // patch's own revision has to be remembered here instead.
