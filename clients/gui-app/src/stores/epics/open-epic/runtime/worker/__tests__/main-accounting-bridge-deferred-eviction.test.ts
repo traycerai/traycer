@@ -98,6 +98,9 @@ function createTestPort(
       book.detach("book-1");
     },
     settleRootBytes(): void {},
+    chargeRootProvisional(): void {},
+    settleReplicaDataBytes(): void {},
+    settleMainProjectionBytes(): void {},
     settleColdRoomBytes(): void {},
     settleCommandOverlayBytes(): void {},
     settleHotDocBytes(artifactRoomId, bytes): void {
@@ -144,6 +147,8 @@ describe("createMainAccountingBridge's demote proxy", () => {
       snapshot: {
         materializedRoomIds: [],
         rootBytes: 0,
+        replicaDataRawBytes: 0,
+        replicaDataEstimatedHeapBytes: 0,
         protectedBytesByKind: PROTECTED,
         projectionCounts: null,
       },
@@ -158,6 +163,8 @@ describe("createMainAccountingBridge's demote proxy", () => {
       snapshot: {
         materializedRoomIds: [],
         rootBytes: 0,
+        replicaDataRawBytes: 0,
+        replicaDataEstimatedHeapBytes: 0,
         protectedBytesByKind: PROTECTED,
         projectionCounts: null,
       },
@@ -257,6 +264,8 @@ describe("createMainAccountingBridge's demote proxy", () => {
     const snapshot = {
       materializedRoomIds: [],
       rootBytes: 0,
+      replicaDataRawBytes: 0,
+      replicaDataEstimatedHeapBytes: 0,
       protectedBytesByKind: PROTECTED,
       projectionCounts: null,
     };
@@ -347,6 +356,8 @@ describe("createMainAccountingBridge's demote proxy", () => {
     const snapshot = {
       materializedRoomIds: [],
       rootBytes: 0,
+      replicaDataRawBytes: 0,
+      replicaDataEstimatedHeapBytes: 0,
       protectedBytesByKind: PROTECTED,
       projectionCounts: null,
     };

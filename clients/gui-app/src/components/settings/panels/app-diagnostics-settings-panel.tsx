@@ -26,6 +26,11 @@ import {
   type DesktopJsHeapIsolate,
 } from "@/lib/resources/desktop-app-resource-usage";
 import { formatMemoryBytes } from "@/lib/resources/format-resource-usage";
+import {
+  collectReplicaMemoryTelemetry,
+  type ReplicaMemoryTelemetry,
+} from "@/stores/replica-memory/memory-telemetry";
+import { readProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
 import { getLogLevelsBridge } from "@/lib/desktop-log-levels";
 import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
@@ -313,6 +318,9 @@ function JsHeapReadout(): ReactNode {
   const [breakdown, setBreakdown] = useState<DesktopJsHeapBreakdown | null>(
     null,
   );
+  const [managedData, setManagedData] = useState<ReplicaMemoryTelemetry | null>(
+    null,
+  );
 
   const measureMutation = useMutation({
     mutationKey: runnerMutationKeys.measureJsHeaps(),
@@ -325,12 +333,17 @@ function JsHeapReadout(): ReactNode {
       bridge === null ? Promise.resolve(null) : bridge.measureJsHeaps(),
     onSuccess: (result) => {
       setBreakdown(result);
+      const runtime = readProcessMemoryRuntime();
+      setManagedData(
+        runtime === null ? null : collectReplicaMemoryTelemetry(runtime),
+      );
       if (result === null) {
         toast.error("Couldn't measure this window's JS heaps");
       }
     },
     onError: (error) => {
       setBreakdown(null);
+      setManagedData(null);
       toastFromRunnerError(error, "Couldn't measure this window's JS heaps");
     },
   });
@@ -444,6 +457,53 @@ function JsHeapReadout(): ReactNode {
               </tr>
             </tfoot>
           </table>
+        </div>
+      )}
+      {breakdown === null || managedData === null ? null : (
+        <div
+          className="border-t border-border/60 px-4 py-3 text-ui-xs"
+          data-testid="diagnostics-managed-data-accounting"
+        >
+          <div className="font-medium">Managed replica and chat data</div>
+          <p className="mt-1 text-muted-foreground">
+            Accounted data only, not renderer memory. Raw bytes are UTF-8
+            serialized data; estimated heap bytes model retained objects and
+            strings. This omits DOM, layout, compiled code and engine overhead.
+            Estimates were calibrated against after-GC Node V8 heap deltas; the
+            phone&apos;s WebKit engine has not been calibrated. A device
+            measurement is still needed for its 96 MiB allowance.
+          </p>
+          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono tabular-nums">
+            <span>Accounted managed data</span>
+            <span className="text-right">
+              {formatMemoryBytes(managedData.accountant.totalChargedBytes)} /{" "}
+              {formatMemoryBytes(managedData.maxManagedDataBytes)}
+            </span>
+            <span>Task rows, raw</span>
+            <span className="text-right">
+              {formatMemoryBytes(managedData.rawReplicaDataBytes)}
+            </span>
+            <span>Task rows, estimated heap</span>
+            <span className="text-right">
+              {formatMemoryBytes(managedData.estimatedReplicaDataHeapBytes)}
+            </span>
+            <span>Task projection copy, raw</span>
+            <span className="text-right">
+              {formatMemoryBytes(managedData.rawMainProjectionBytes)}
+            </span>
+            <span>Task projection copy, estimated heap</span>
+            <span className="text-right">
+              {formatMemoryBytes(managedData.estimatedMainProjectionHeapBytes)}
+            </span>
+            <span>Other chat state, raw</span>
+            <span className="text-right">
+              {formatMemoryBytes(managedData.rawChatOwnedStateBytes)}
+            </span>
+            <span>Other chat state, estimated heap</span>
+            <span className="text-right">
+              {formatMemoryBytes(managedData.estimatedChatOwnedStateHeapBytes)}
+            </span>
+          </div>
         </div>
       )}
     </>

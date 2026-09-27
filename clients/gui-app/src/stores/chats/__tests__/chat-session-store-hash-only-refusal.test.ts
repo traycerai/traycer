@@ -37,9 +37,12 @@ import { optimisticQueuedItemId } from "@/stores/chats/optimistic-queue";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import {
+  CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES,
+  CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
   chatWholeSetSliceBytes,
   legacyTranscriptResidencyBytes,
 } from "@/stores/replica-memory/chat-window-budget";
+import { createChatOwnedStateAccount } from "@/stores/replica-memory/chat-owned-state-account";
 import {
   getProcessMemoryAccountant,
   resetProcessMemoryRuntimeForTests,
@@ -1780,6 +1783,8 @@ describe("chat session store - hash-only refusal (T5)", () => {
   it("R9 (11): both queue mutations re-settle the whole-set budget against the LIVE queue, not a stale figure", async () => {
     resetProcessMemoryRuntimeForTests();
     function expectedChatWindowsPlaneBytes(state: ChatSessionState): number {
+      const ownedStateAccount = createChatOwnedStateAccount();
+      ownedStateAccount.update(state);
       return (
         legacyTranscriptResidencyBytes(state.messages, state.events) +
         chatWholeSetSliceBytes({
@@ -1789,7 +1794,11 @@ describe("chat session store - hash-only refusal (T5)", () => {
           pendingInterviews: state.pendingInterviews,
           backgroundItems: state.backgroundItems,
           managedCommands: state.managedCommands,
-        })
+        }) +
+        CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+        (state.messages.length + state.events.length) *
+          CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES +
+        ownedStateAccount.size().estimatedHeapBytes
       );
     }
     function chatWindowsPlaneSettledBytes(): number {

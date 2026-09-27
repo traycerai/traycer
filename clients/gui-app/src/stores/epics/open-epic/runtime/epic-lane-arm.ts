@@ -71,8 +71,10 @@ import {
   type EpicLaneStateReplica,
   type EpicLaneStateSlices,
 } from "./epic-lane-state-replica";
+import type { RetainedValueSize } from "@/stores/replica-memory/retained-value-size";
 
 export interface EpicLaneArmSources {
+  readonly onRetainedRowsChanged?: (size: RetainedValueSize) => void;
   readonly epicId: string;
   readonly environment: RuntimeEnvironment;
   readonly stateStreamClientFactory: EpicStateStreamClientFactory;
@@ -343,6 +345,7 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
   const stateReplica: EpicLaneStateReplica = createEpicLaneStateReplica({
     getCurrentUserId,
     isDisposed,
+    onRetainedRowsChanged: sources.onRetainedRowsChanged,
     // Republish only when the replica says something moved. The replica has
     // already run the change gate, so a frame that changed nothing costs no
     // projection - which is what keeps a quiet epic's deltas free.
