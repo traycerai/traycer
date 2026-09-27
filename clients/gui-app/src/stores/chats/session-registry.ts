@@ -141,8 +141,7 @@ export class ChatSessionRegistry {
         // unreattachable state.
         retainWhenIdle: () => true,
         hasActiveWork: (handle) =>
-          hasActiveChatWork(handle, this.hostIdByHandle.get(handle) ?? null) ||
-          holdsUnrecordedPrompt(handle),
+          chatCapHasActiveWork(handle, this.hostIdByHandle.get(handle) ?? null),
         activeWorkReason: (handle) =>
           hasActiveChatWork(handle, this.hostIdByHandle.get(handle) ?? null)
             ? "chat-work"
@@ -530,6 +529,14 @@ function holdsUnrecordedPrompt(handle: ChatSessionStoreHandle): boolean {
       notice.clientActionId !== null &&
       !state.deliveredLastCopyActionIds.has(notice.clientActionId),
   );
+}
+
+/** Shared warm-cap hold for chat count and byte eviction callers. */
+export function chatCapHasActiveWork(
+  handle: ChatSessionStoreHandle,
+  hostId: string | null,
+): boolean {
+  return hasActiveChatWork(handle, hostId) || holdsUnrecordedPrompt(handle);
 }
 
 function hasActiveChatWork(
