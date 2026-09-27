@@ -100,6 +100,21 @@ describe("transcript-image-bytes-store", () => {
     expect(transcriptImageBytesStats().residentBytes).toBe(80);
   });
 
+  it("does not persist a landing fallback with no host media type", async () => {
+    const fetch = vi.fn((_hash: string) =>
+      Promise.resolve({
+        bytes: new Uint8Array(8),
+        mediaType: null,
+      }),
+    );
+    const fetcher = persistTranscriptImageBytes(
+      scopedFetcher(fetch, "epic:chat"),
+    );
+    await fetcher.fetch("svg-hash", new AbortController().signal);
+    await fetcher.fetch("svg-hash", new AbortController().signal);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("clears on the identity-teardown path", async () => {
     await writeTranscriptImageBytes("k", resultOf(8));
     await clearTranscriptImageBytesFor(null);

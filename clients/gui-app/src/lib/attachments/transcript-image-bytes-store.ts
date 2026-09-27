@@ -139,7 +139,8 @@ function deleteDatabase(factory: IDBFactory, name: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const request = factory.deleteDatabase(name);
     request.onsuccess = () => resolve();
-    request.onblocked = () => resolve();
+    request.onblocked = () =>
+      reject(new Error(`Database deletion blocked: ${name}`));
     request.onerror = () =>
       reject(request.error ?? new Error(`deleteDatabase failed: ${name}`));
   });
@@ -215,29 +216,47 @@ class TranscriptImageBytesStore {
   private backend: TranscriptImageBytesBackend | null = null;
   private backendIdentity: string | null | undefined = undefined;
   private readonly index = new Map<string, IndexEntry>();
-  private indexHydrated = false;
   private injectedBackend: TranscriptImageBytesBackend | null = null;
+  private readonly generationByIdentity = new Map<string, number>();
+  private mutation: Promise<void> = Promise.resolve();
 
   installBackend(backend: TranscriptImageBytesBackend | null): void {
     this.injectedBackend = backend;
     this.backend = null;
     this.backendIdentity = undefined;
     this.index.clear();
-    this.indexHydrated = false;
   }
 
-  private identity(): string | null {
-    return useAuthStore.getState().contextMetadata?.userId ?? null;
+  private identityKey(identity: string | null): string {
+    return identity ?? "";
   }
 
-  private resolveBackend(): TranscriptImageBytesBackend {
+  generationOf(identity: string | null): number {
+    return this.generationByIdentity.get(this.identityKey(identity)) ?? 0;
+  }
+
+  private bumpGeneration(identity: string | null): void {
+    const key = this.identityKey(identity);
+    this.generationByIdentity.set(key, this.generationOf(identity) + 1);
+  }
+
+  private runExclusive<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.mutation.then(work, work);
+    this.mutation = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  private resolveBackendFor(
+    identity: string | null,
+  ): TranscriptImageBytesBackend {
     if (this.injectedBackend !== null) return this.injectedBackend;
-    const identity = this.identity();
     if (this.backend === null || this.backendIdentity !== identity) {
       this.backend = createIdbBackend(identity);
       this.backendIdentity = identity;
       this.index.clear();
-      this.indexHydrated = false;
     }
     return this.backend;
   }
@@ -245,15 +264,14 @@ class TranscriptImageBytesStore {
   private async hydrateIndex(
     backend: TranscriptImageBytesBackend,
   ): Promise<void> {
-    if (this.indexHydrated) return;
     const rows = await backend.listIndex();
+    this.index.clear();
     for (const row of rows) {
       this.index.set(row.key, {
         byteLength: row.byteLength,
         accessedAt: row.accessedAt,
       });
     }
-    this.indexHydrated = true;
   }
 
   private totalBytes(): number {
@@ -283,59 +301,74 @@ class TranscriptImageBytesStore {
     }
   }
 
-  async get(key: string): Promise<ImageBytesResult | null> {
-    const backend = this.resolveBackend();
-    await this.hydrateIndex(backend);
-    const stored = await backend.get(key);
-    if (stored === undefined) return null;
-    const accessedAt = Date.now();
-    this.index.set(key, {
-      byteLength: stored.bytes.byteLength,
-      accessedAt,
+  async get(
+    key: string,
+    identity: string | null,
+  ): Promise<ImageBytesResult | null> {
+    return this.runExclusive(async () => {
+      const backend = this.resolveBackendFor(identity);
+      await this.hydrateIndex(backend);
+      const stored = await backend.get(key);
+      if (stored === undefined) return null;
+      const accessedAt = Date.now();
+      this.index.set(key, {
+        byteLength: stored.bytes.byteLength,
+        accessedAt,
+      });
+      await backend.touch(key, accessedAt);
+      return {
+        bytes: copyBytes(stored.bytes),
+        mediaType: stored.mediaType,
+      };
     });
-    await backend.touch(key, accessedAt);
-    return {
-      bytes: copyBytes(stored.bytes),
-      mediaType: stored.mediaType,
-    };
   }
 
-  async put(key: string, result: ImageBytesResult): Promise<void> {
-    const backend = this.resolveBackend();
-    await this.hydrateIndex(backend);
-    const byteLength = result.bytes.byteLength;
-    const budget = getRetentionProfile().transcriptImageCacheBytes;
-    if (byteLength > budget) return;
-    this.index.delete(key);
-    await this.evictUntilFit(backend, byteLength);
-    const accessedAt = Date.now();
-    const stored: StoredTranscriptImage = {
-      bytes: copyBytes(result.bytes),
-      mediaType: result.mediaType,
-      accessedAt,
-    };
-    this.index.set(key, { byteLength, accessedAt });
-    await backend.set(key, stored);
+  async put(
+    key: string,
+    result: ImageBytesResult,
+    identity: string | null,
+    generation: number,
+  ): Promise<void> {
+    return this.runExclusive(async () => {
+      if (generation !== this.generationOf(identity)) return;
+      const backend = this.resolveBackendFor(identity);
+      await this.hydrateIndex(backend);
+      if (generation !== this.generationOf(identity)) return;
+      const byteLength = result.bytes.byteLength;
+      const budget = getRetentionProfile().transcriptImageCacheBytes;
+      if (byteLength > budget) return;
+      this.index.delete(key);
+      await this.evictUntilFit(backend, byteLength);
+      if (generation !== this.generationOf(identity)) return;
+      const accessedAt = Date.now();
+      const stored: StoredTranscriptImage = {
+        bytes: copyBytes(result.bytes),
+        mediaType: result.mediaType,
+        accessedAt,
+      };
+      this.index.set(key, { byteLength, accessedAt });
+      await backend.set(key, stored);
+    });
   }
 
   async clearPartition(identity: string | null): Promise<void> {
-    if (this.injectedBackend !== null) {
-      this.index.clear();
-      this.indexHydrated = true;
-      await this.injectedBackend.clear();
-      return;
-    }
-    if (this.backend !== null && this.backendIdentity === identity) {
-      this.index.clear();
-      this.indexHydrated = true;
-      await this.backend.clear();
-      this.backend = null;
-      this.backendIdentity = undefined;
-    }
-    const factory = indexedDBFactory();
-    if (factory === undefined) return;
-    await deleteDatabase(factory, transcriptImageDbName(identity));
-    await deleteDatabase(factory, transcriptImageMetaDbName(identity));
+    return this.runExclusive(async () => {
+      this.bumpGeneration(identity);
+      if (this.injectedBackend !== null) {
+        this.index.clear();
+        await this.injectedBackend.clear();
+        return;
+      }
+      if (this.backend !== null && this.backendIdentity === identity) {
+        this.index.clear();
+        this.backend = null;
+        this.backendIdentity = undefined;
+      }
+      const factory = indexedDBFactory();
+      if (factory === undefined) return;
+      await deleteDatabase(factory, transcriptImageDbName(identity));
+      await deleteDatabase(factory, transcriptImageMetaDbName(identity));
+    });
   }
 
   size(): number {
@@ -360,7 +393,7 @@ export async function readTranscriptImageBytes(
   key: string,
 ): Promise<ImageBytesResult | null> {
   try {
-    return await store.get(key);
+    return await store.get(key, storeIdentity());
   } catch {
     return null;
   }
@@ -371,10 +404,15 @@ export async function writeTranscriptImageBytes(
   result: ImageBytesResult,
 ): Promise<void> {
   try {
-    await store.put(key, result);
+    const identity = storeIdentity();
+    await store.put(key, result, identity, store.generationOf(identity));
   } catch {
     // Persistence is best-effort. A full disk must not fail the render.
   }
+}
+
+function storeIdentity(): string | null {
+  return useAuthStore.getState().contextMetadata?.userId ?? null;
 }
 
 /**
@@ -398,22 +436,67 @@ export function transcriptImageBytesStats(): {
   return { size: store.size(), residentBytes: store.residentBytes() };
 }
 
+function lookupUntilAborted(
+  signal: AbortSignal,
+  lookup: () => Promise<ImageBytesResult | null>,
+): Promise<ImageBytesResult | null | "aborted"> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value: ImageBytesResult | null | "aborted"): void => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      resolve(value);
+    };
+    const onAbort = (): void => {
+      finish("aborted");
+    };
+    if (signal.aborted) {
+      finish("aborted");
+      return;
+    }
+    signal.addEventListener("abort", onAbort);
+    lookup().then(
+      (value) => {
+        finish(value);
+      },
+      () => {
+        finish(null);
+      },
+    );
+  });
+}
+
 export function persistTranscriptImageBytes(
   fetcher: ScopedImageBytesFetcher,
 ): ScopedImageBytesFetcher {
   return {
     scopeKey: fetcher.scopeKey,
     fetch: async (hash, signal) => {
+      const identity = storeIdentity();
+      const generation = store.generationOf(identity);
       const key = buildScopedImageCacheKey(fetcher.scopeKey, hash);
-      if (!signal.aborted) {
-        const hit = await readTranscriptImageBytes(key);
-        if (hit !== null) return hit;
-      }
-      if (signal.aborted) {
+      const cached = await lookupUntilAborted(signal, () =>
+        store.get(key, identity),
+      );
+      if (cached === "aborted") {
         throw new Error("Image fetch was cancelled.");
       }
+      if (cached !== null && storeIdentity() === identity) return cached;
       const result = await fetcher.fetch(hash, signal);
-      await writeTranscriptImageBytes(key, result);
+      // Landing and doc-replica legs return `mediaType: null`. Persist only
+      // host-authoritative sniffs so an SVG cannot ride a declared PNG type.
+      if (
+        result.mediaType !== null &&
+        storeIdentity() === identity &&
+        store.generationOf(identity) === generation
+      ) {
+        try {
+          await store.put(key, result, identity, generation);
+        } catch {
+          // Quota or a closed partition: the live fetch still paints.
+        }
+      }
       return result;
     },
   };

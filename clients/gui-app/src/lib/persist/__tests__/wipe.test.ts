@@ -531,6 +531,12 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     // db on disk untouched while all of them still agreed with each other.
     expect(deleteDatabase).toHaveBeenCalledWith("traycer-gui-app:prompt-stash");
     expect(STASH_DB_NAME).toBe("traycer-gui-app:prompt-stash");
+    expect(deleteDatabase).toHaveBeenCalledWith(
+      "traycer-gui-app:anon:transcript-images",
+    );
+    expect(deleteDatabase).toHaveBeenCalledWith(
+      "traycer-gui-app:anon:transcript-image-meta",
+    );
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -554,6 +560,9 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     ).resolves.toBeUndefined();
 
     expect(deleteDatabase).toHaveBeenCalledWith(STASH_DB_NAME);
+    expect(deleteDatabase).toHaveBeenCalledWith(
+      "traycer-gui-app:anon:transcript-images",
+    );
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 

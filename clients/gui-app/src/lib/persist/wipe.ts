@@ -36,7 +36,10 @@ import { STASH_DB_NAME } from "@/lib/drafts/stash-migration";
 import {
   TRANSCRIPT_IMAGE_DB_SUFFIX,
   TRANSCRIPT_IMAGE_META_DB_SUFFIX,
+  transcriptImageDbName,
+  transcriptImageMetaDbName,
 } from "@/lib/attachments/transcript-image-bytes-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 // The `:` boundary is load-bearing: a bare `startsWith(PERSIST_PREFIX)` would
 // also sweep a hypothetical `traycer-gui-appX:foo` key. Anchoring on the colon
@@ -148,6 +151,11 @@ async function deleteRendererDatabases(): Promise<void> {
   names.add(STASH_DB_NAME);
   names.add(persistKey("tab-recovery"));
   names.add(APPEARANCE_DB_NAME);
+  const accountId = useAuthStore.getState().contextMetadata?.userId ?? null;
+  names.add(transcriptImageDbName(null));
+  names.add(transcriptImageMetaDbName(null));
+  names.add(transcriptImageDbName(accountId));
+  names.add(transcriptImageMetaDbName(accountId));
   // Recovery history must actually be deleted before reload. Other partitions
   // remain best-effort: a single db whose delete errors must not abort
   // the rest of the wipe or - critically - the reload (step 4), which is the

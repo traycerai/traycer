@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
@@ -201,12 +207,12 @@ export function useEpicImageFetcher(): ScopedImageBytesFetcher {
     () => ({ arm: installedArm, abort: new AbortController() }),
     [installedArm],
   );
-  useEffect(
-    () => () => {
-      armGeneration.abort.abort();
-    },
-    [armGeneration],
-  );
+  const previousArmGeneration = useRef(armGeneration);
+  useEffect(() => {
+    if (previousArmGeneration.current === armGeneration) return;
+    previousArmGeneration.current.abort.abort();
+    previousArmGeneration.current = armGeneration;
+  }, [armGeneration]);
   const fetch = useCallback<ImageBytesFetcher>(
     async (h, callerSignal) => {
       if (handle === null) {

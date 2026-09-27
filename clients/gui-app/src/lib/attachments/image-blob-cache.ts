@@ -27,10 +27,11 @@
  * reuses the live blob; a `"session"`-retention URL (an immutable git
  * object, per image-preview decision #11) is never revoked once created,
  * only ever dropped by a page reload. The same grace applies while a fetch
- * is still in flight: last-ref drop schedules abort instead of cancelling
- * immediately, so a remount (virtualization recycle, effect re-run) joins
- * the live request. `"session"` in-flight entries skip that timer too. A
- * failed fetch never poisons the entry - the next acquire retries.
+ * is still in flight, including `"session"`: last-ref drop schedules abort
+ * instead of cancelling immediately, so a remount joins the live request,
+ * and a transfer nobody re-acquires is cancelled. A resolved `"session"`
+ * blob still stays for the rest of the app session. A failed fetch never
+ * poisons the entry - the next acquire retries.
  *
  * `acquire()` returns a LEASE bound to the exact entry instance it was
  * issued against, not a hash string a caller separately remembers. This
@@ -237,12 +238,11 @@ export function createImageBlobCache(
   const entries = new Map<string, CacheEntry>();
 
   const scheduleRevoke = (identity: string, entry: CacheEntry): void => {
-    // Session retention (immutable git object bytes, decision #11): a
-    // zero-ref entry stays cached for the rest of the app session rather
-    // than being revoked after the grace window, so a remount later reuses
-    // it instead of re-transferring bytes that cannot have changed. In-flight
-    // session entries keep their fetch for the same reason.
-    if (entry.retention === "session") return;
+    // Session retention (immutable git object bytes, decision #11) keeps a
+    // RESOLVED blob for the rest of the app session. An in-flight session
+    // fetch still gets this grace: last-ref remount joins it, and if nothing
+    // re-acquires, the transfer is cancelled instead of pinning a stream.
+    if (entry.retention === "session" && entry.inFlight === null) return;
     if (entry.cancelRevoke !== null) return;
     const handle = setTimeout(() => {
       entry.cancelRevoke = null;
@@ -252,7 +252,10 @@ export function createImageBlobCache(
         entry.abort?.abort();
         entry.abort = null;
         entry.inFlight = null;
+        entries.delete(identity);
+        return;
       }
+      if (entry.retention === "session") return;
       if (entry.resolved !== null) ops.revoke(entry.resolved.url);
       entries.delete(identity);
     }, graceMs);

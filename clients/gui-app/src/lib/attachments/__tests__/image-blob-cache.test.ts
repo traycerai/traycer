@@ -424,7 +424,7 @@ describe("image-blob-cache", () => {
     replacement.release();
   });
 
-  it("does not abort a session-retained in-flight fetch on last-ref drop", async () => {
+  it("rejoins a session-retained in-flight fetch when remounted inside grace", async () => {
     const resolvers: Array<(result: ImageBytesResult) => void> = [];
     let abortCount = 0;
     const fetcher = vi.fn(
@@ -437,7 +437,7 @@ describe("image-blob-cache", () => {
           resolvers.push(resolve);
         }),
     );
-    const { ops, created, revoked } = makeOps();
+    const { ops, created } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
     const first = cache.acquire(
@@ -447,26 +447,46 @@ describe("image-blob-cache", () => {
       "session",
     );
     first.release();
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(abortCount).toBe(0);
-    expect(cache.size()).toBe(1);
-
-    resolvers[0]?.({ bytes: new Uint8Array([1]), mediaType: null });
-    const url = (await first.promise).url;
-    expect(created).toEqual([url]);
-    expect(revoked).toHaveLength(0);
-    expect(cache.size()).toBe(1);
-
-    const second = cache.acquire(
+    const remount = cache.acquire(
       "session-pending",
       "image/png",
       scoped(fetcher),
       "session",
     );
-    expect((await second.promise).url).toBe(url);
+    expect(abortCount).toBe(0);
     expect(fetcher).toHaveBeenCalledTimes(1);
-    second.release();
+    resolvers[0]?.({ bytes: new Uint8Array([1]), mediaType: null });
+    const url = (await remount.promise).url;
+    expect(created).toEqual([url]);
+    remount.release();
     cache.clear();
+  });
+
+  it("aborts a session-retained in-flight fetch after grace with no holders", async () => {
+    let abortCount = 0;
+    const fetcher = vi.fn(
+      (_hash: string, signal: AbortSignal) =>
+        new Promise<ImageBytesResult>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            abortCount += 1;
+            reject(new Error("aborted"));
+          });
+        }),
+    );
+    const { ops } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+    const lease = cache.acquire(
+      "session-pending",
+      "image/png",
+      scoped(fetcher),
+      "session",
+    );
+    const settled = expect(lease.promise).rejects.toThrow();
+    lease.release();
+    await vi.advanceTimersByTimeAsync(1000);
+    await settled;
+    expect(abortCount).toBe(1);
+    expect(cache.size()).toBe(0);
   });
 
   /**
