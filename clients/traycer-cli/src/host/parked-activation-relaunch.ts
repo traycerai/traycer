@@ -8,7 +8,7 @@ import {
   type HostInstallRecord,
 } from "../manifest/host-install";
 import type { Environment } from "../runner/environment";
-import { CLI_ERROR_CODES, CliError } from "../runner/errors";
+import { CLI_ERROR_CODES, CliError, isErrnoException } from "../runner/errors";
 
 /**
  * The one `stop-only` shape a generic restart may legally continue: a
@@ -116,10 +116,14 @@ export function describeNonterminalRecordRecovery(
  * park the install does not match. `null`: the install record is present but
  * unreadable, so the comparison could not run; callers that ACT treat it as
  * `false` (unverifiable is refused, never admitted), and callers that DESCRIBE
- * say so rather than calling the park stale (traycer#2208 review). Reading
- * the record throws `HOST_INSTALL_RECORD_INVALID` on a malformed file by
- * design (`manifest/host-install.ts`); an observational caller such as `host
- * status` must not die on it.
+ * say so rather than calling the park stale (traycer#2208 review). Two read
+ * failures are folded into `null`, both by the reader's design
+ * (`manifest/host-install.ts`, `@traycer/protocol/config/installation`): a
+ * malformed file throws `HOST_INSTALL_RECORD_INVALID`, and a present file the
+ * process cannot read (EACCES, EIO, EISDIR - anything but the ENOENT the
+ * reader already maps to "absent") rethrows the errno. An observational caller
+ * such as `host status` must not die on either; an acting caller refuses on
+ * either.
  */
 export async function parkedActivationRelaunchable(
   environment: Environment,
@@ -131,8 +135,9 @@ export async function parkedActivationRelaunchable(
     installed = await readHostInstallRecord(environment);
   } catch (err) {
     if (
-      err instanceof CliError &&
-      err.code === CLI_ERROR_CODES.HOST_INSTALL_RECORD_INVALID
+      (err instanceof CliError &&
+        err.code === CLI_ERROR_CODES.HOST_INSTALL_RECORD_INVALID) ||
+      isErrnoException(err)
     ) {
       return null;
     }

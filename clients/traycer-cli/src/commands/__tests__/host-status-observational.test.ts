@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -222,6 +222,20 @@ function pointInstallRecordAtTempFile(contents: string): void {
   );
   const path = join(installRecordTmpDir, "install.json");
   writeFileSync(path, contents, "utf8");
+  mocks.hostInstallRecordPathValue = path;
+}
+
+// Same cleanup discipline as `pointInstallRecordAtTempFile`, but the path
+// itself is a DIRECTORY rather than a file, so `readFile` throws a real
+// errno (EISDIR) instead of parsing JSON. No chmod - CI may run as root,
+// which ignores permission bits - so a directory is the reader's own
+// unprivileged errno rather than a simulated one.
+function pointInstallRecordAtTempDirectory(): void {
+  installRecordTmpDir = mkdtempSync(
+    join(tmpdir(), "traycer-host-status-install-"),
+  );
+  const path = join(installRecordTmpDir, "install.json");
+  mkdirSync(path, { recursive: true });
   mocks.hostInstallRecordPathValue = path;
 }
 
@@ -459,6 +473,45 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
       mocks.readUpdateAttemptRecordMock.mockResolvedValue(
         validRead({
           attemptId: "attempt-parked-unreadable-install",
+          targetVersion: "2.0.0",
+          phase: "waiting-to-activate",
+          execution: "parked",
+          continuation: "activate",
+          claim: {
+            installedVersion: "2.0.0",
+            installGeneration: "id:whatever-install",
+            stageFingerprint: null,
+            allowDowngrade: false,
+            acceptStoreFormatLoss: false,
+          },
+        }),
+      );
+
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+      expect(result.exitCode).toBe(0);
+      expect(result.data).toMatchObject({
+        running: false,
+        updateAttempt: { parkMatchesInstall: null },
+      });
+      expect(result.human).toContain("install record could not be read");
+      expect(result.human).toContain("'traycer host doctor'");
+    });
+
+    // A DIRECTORY at the install record's path makes `readHostInstallRecord`
+    // throw a real errno (EISDIR) rather than `HOST_INSTALL_RECORD_INVALID`;
+    // the reader maps only ENOENT to "absent" and rethrows every other
+    // errno, and `parkedActivationRelaunchable` folds that errno into `null`
+    // the same way it folds malformed JSON. This pins the observational
+    // path (`host status`) surviving it rather than dying (traycer#2208
+    // review, Codex P2).
+    it("a claimed waiting-to-activate park whose install record cannot be read (errno, not ENOENT): command resolves, parkMatchesInstall null, hint names 'traycer host doctor'", async () => {
+      mocks.readHostPidMetadataMock.mockResolvedValue(null);
+      mocks.isProcessAliveMock.mockReturnValue(false);
+      pointInstallRecordAtTempDirectory();
+      mocks.readUpdateAttemptRecordMock.mockResolvedValue(
+        validRead({
+          attemptId: "attempt-parked-unreadable-install-errno",
           targetVersion: "2.0.0",
           phase: "waiting-to-activate",
           execution: "parked",

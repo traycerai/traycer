@@ -233,6 +233,38 @@ describe("parkedActivationRelaunchable", () => {
       ),
     ).resolves.toBeNull();
   });
+
+  // A DIRECTORY at `hostInstallRecordPath("production")` makes `readFile`
+  // throw a real errno (EISDIR), not the ENOENT the reader already maps to
+  // "absent". `parkedActivationRelaunchable` must fold that into `null` the
+  // same way it folds malformed JSON, so an observational caller does not
+  // die on it (traycer#2208 review, Codex P2: only ENOENT was mapped to
+  // absent and every other errno used to rethrow).
+  it("null when the install record path exists but cannot be read as a file (errno, not ENOENT)", async () => {
+    // No `writeInstallRecord()` call - create a directory at the install
+    // record's own path instead of a file, so `readHostInstallRecord`'s
+    // `readFile` throws EISDIR rather than reading JSON.
+    const { hostInstallRecordPath } = await import("../../store/paths");
+    const path = hostInstallRecordPath("production");
+    mkdirSync(path, { recursive: true });
+    const { parkedActivationRelaunchable } =
+      await import("../parked-activation-relaunch");
+
+    await expect(
+      parkedActivationRelaunchable(
+        "production",
+        attemptRecord({
+          claim: {
+            installedVersion: "1.7.0",
+            installGeneration: "id:parked-relaunch-attestation-install",
+            stageFingerprint: null,
+            allowDowngrade: false,
+            acceptStoreFormatLoss: false,
+          },
+        }),
+      ),
+    ).resolves.toBeNull();
+  });
 });
 
 // `describeNonterminalRecordRecovery` is the ONE writer of the "what now"
