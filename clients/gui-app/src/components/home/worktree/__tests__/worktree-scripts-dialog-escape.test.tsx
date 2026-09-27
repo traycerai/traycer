@@ -5,14 +5,16 @@
  * (no dialog mock) so capture-phase Escape ordering matches production.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
   fireEvent,
-  render,
+  render as renderWithLibrary,
   screen,
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import type {
   WorktreeEntryScripts,
   WorktreeIntent,
@@ -143,6 +145,17 @@ const STAGING_KEY: WorktreeStagingKey = {
   hostId: "host-a",
   draftId: null,
 };
+
+function render(ui: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return renderWithLibrary(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
 
 function summaryWith(
   scripts: WorktreeWorkspaceSummaryV14["scripts"],

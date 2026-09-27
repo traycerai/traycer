@@ -19,7 +19,7 @@ class ReconnectingStreamClient extends FakeStreamClient {
   provider: ((onWireVersion: SchemaVersion | null) => unknown) | null = null;
   session: FakeStreamSession | null = null;
 
-  constructor() {
+  constructor(readonly negotiatedVersion: SchemaVersion | null) {
     super(true);
   }
 
@@ -29,6 +29,9 @@ class ReconnectingStreamClient extends FakeStreamClient {
   ): FakeStreamSession {
     this.provider = paramsProvider;
     const session = super.subscribeWithParamsProvider(method, paramsProvider);
+    if (this.negotiatedVersion !== null) {
+      session.negotiatedSchemaVersion = this.negotiatedVersion;
+    }
     this.session = session;
     return session;
   }
@@ -46,13 +49,16 @@ const V11: SchemaVersion = { major: 1, minor: 1 };
 function openWithAcceptance(
   cursor: WorktreeChangedCursorStore,
   accept: boolean,
+  negotiatedVersion: SchemaVersion | null,
 ): {
   readonly transport: ReconnectingStreamClient;
   readonly changed: WorktreeChangedScope[];
   readonly client: WorktreeChangedStreamClient;
+  readonly statusVersions: Array<SchemaVersion | null>;
 } {
-  const transport = new ReconnectingStreamClient();
+  const transport = new ReconnectingStreamClient(negotiatedVersion);
   const changed: WorktreeChangedScope[] = [];
+  const statusVersions: Array<SchemaVersion | null> = [];
   const client = new WorktreeChangedStreamClient({
     wsStreamClient: transport,
     cursor,
@@ -61,10 +67,12 @@ function openWithAcceptance(
         changed.push(scope);
         return accept;
       },
-      onConnectionStatus: () => {},
+      onConnectionStatus: (_status, _reason, version) => {
+        statusVersions.push(version);
+      },
     },
   });
-  return { transport, changed, client };
+  return { transport, changed, client, statusVersions };
 }
 
 function open(cursor: WorktreeChangedCursorStore): {
@@ -72,7 +80,7 @@ function open(cursor: WorktreeChangedCursorStore): {
   readonly changed: WorktreeChangedScope[];
   readonly client: WorktreeChangedStreamClient;
 } {
-  return openWithAcceptance(cursor, true);
+  return openWithAcceptance(cursor, true, null);
 }
 
 function session(transport: ReconnectingStreamClient): FakeStreamSession {
@@ -84,6 +92,11 @@ describe("WorktreeChangedStreamClient resume cursor", () => {
   it("offers no cursor before it has received a frame", () => {
     const { transport } = open({ current: null });
     expect(transport.paramsAt(V11)).toEqual({});
+  });
+
+  it("forwards the session's negotiated wire version on connection status", () => {
+    const { statusVersions } = openWithAcceptance({ current: null }, true, V10);
+    expect(statusVersions).toContainEqual(V10);
   });
 
   it("offers the last frame's cursor on the next subscribe", () => {
@@ -126,7 +139,7 @@ describe("WorktreeChangedStreamClient resume cursor", () => {
     const store: WorktreeChangedCursorStore = {
       current: { epoch: "e1", generation: 4 },
     };
-    const { transport } = openWithAcceptance(store, false);
+    const { transport } = openWithAcceptance(store, false, null);
     session(transport).emit(
       {
         kind: "changed",

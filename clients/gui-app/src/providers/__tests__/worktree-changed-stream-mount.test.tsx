@@ -14,6 +14,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { WorktreeHostEntryV16 } from "@traycer/protocol/host";
 import type { WorktreeChangedScope } from "@traycer/protocol/host/worktree-changed-stream";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { WorktreeChangedCursorStore } from "@traycer-clients/shared/host-transport/worktree-changed-stream-client";
 import type {
@@ -395,6 +396,7 @@ interface WorktreeMountStreamState {
   hostId: string | null;
   hasClient: boolean;
   schemaVersion: { readonly major: number; readonly minor: number } | null;
+  negotiatedVersion: SchemaVersion | null;
 }
 
 const worktreeMountStreamState = vi.hoisted((): WorktreeMountStreamState => ({
@@ -404,6 +406,7 @@ const worktreeMountStreamState = vi.hoisted((): WorktreeMountStreamState => ({
   hostId: "host-A",
   hasClient: true,
   schemaVersion: { major: 1, minor: 1 },
+  negotiatedVersion: { major: 1, minor: 1 },
 }));
 
 /**
@@ -426,12 +429,19 @@ vi.mock(
           readonly onConnectionStatus: (
             status: StreamConnectionStatus,
             reason: StreamCloseReason | null,
+            negotiatedVersion: SchemaVersion | null,
           ) => void;
         };
       }) {
+        const negotiatedVersion = worktreeMountStreamState.negotiatedVersion;
         worktreeMountStreamState.opened.push({
           emitChanged: options.callbacks.onChanged,
-          emitStatus: options.callbacks.onConnectionStatus,
+          emitStatus: (status, reason) =>
+            options.callbacks.onConnectionStatus(
+              status,
+              reason,
+              negotiatedVersion,
+            ),
           cursor: options.cursor,
         });
       }
@@ -495,6 +505,7 @@ describe("<WorktreeChangedStreamMount /> reopen lane", () => {
     worktreeMountStreamState.hostId = "host-A";
     worktreeMountStreamState.hasClient = true;
     worktreeMountStreamState.schemaVersion = { major: 1, minor: 1 };
+    worktreeMountStreamState.negotiatedVersion = { major: 1, minor: 1 };
   });
 
   it("counts its host as covered while the stream is open, and not after a terminal close or unmount", () => {
@@ -513,6 +524,26 @@ describe("<WorktreeChangedStreamMount /> reopen lane", () => {
     expect(isWorktreeChangedStreamOpen("host-A")).toBe(true);
     unmount();
     expect(isWorktreeChangedStreamOpen("host-A")).toBe(false);
+  });
+
+  it("uses the opened session's negotiated version for replay coverage, not the method manifest", () => {
+    const queryClient = createAppQueryClient();
+    worktreeMountStreamState.negotiatedVersion = { major: 1, minor: 0 };
+    const first = renderWorktreeChangedStreamMount(queryClient);
+    emitWorktreeMountStatus("open", null);
+    expect(worktreeMountStreamState.schemaVersion).toEqual({
+      major: 1,
+      minor: 1,
+    });
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(false);
+    expect(isWorktreeChangedStreamCovered("host-A")).toBe(false);
+    first.unmount();
+
+    worktreeMountStreamState.negotiatedVersion = { major: 1, minor: 1 };
+    const second = renderWorktreeChangedStreamMount(queryClient);
+    emitWorktreeMountStatus("open", null);
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(true);
+    second.unmount();
   });
 
   it("reactively downgrades coverage when the mounted stream closes", async () => {

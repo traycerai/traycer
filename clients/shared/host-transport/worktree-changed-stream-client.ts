@@ -21,6 +21,7 @@ export type WorktreeChangedStreamCallbacks = {
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
+    negotiatedVersion: SchemaVersion | null,
   ) => void;
 };
 
@@ -73,7 +74,11 @@ export class WorktreeChangedStreamClient {
       this.handleServerFrame(envelope, binaryPayload);
     });
     this.session.onStatusChange((status, reason) => {
-      this.callbacks.onConnectionStatus(status, reason);
+      this.callbacks.onConnectionStatus(
+        status,
+        reason,
+        this.session.getNegotiatedSchemaVersion(),
+      );
     });
   }
 

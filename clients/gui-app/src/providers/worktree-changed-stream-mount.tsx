@@ -33,6 +33,8 @@ const HEALTHY_SESSION_RESET_MS = 30_000;
 export function WorktreeChangedStreamMount(): ReactNode {
   const wsStreamClient = useWsStreamClient();
   const support = useStreamMethodSupport("worktree.changed");
+  // Rebuild when capabilities change; the session's negotiated version below
+  // is the authority for whether replay coverage is safe to claim.
   const schemaVersion = useStreamMethodSchemaVersion("worktree.changed");
   // Both the rebuild key AND the identity the reopen lane and the query
   // invalidations below are scoped to - so it must come off the same
@@ -90,14 +92,10 @@ export function WorktreeChangedStreamMount(): ReactNode {
     // it reconnects or closes. The coverage store holds a bounded grace for
     // replay to complete before mounted queries fall back to ordinary reads.
     const streamHostId = hostId;
-    const replayCapable =
-      schemaVersion !== null &&
-      (schemaVersion.major > 1 || schemaVersion.minor >= 1);
     let covering = false;
     const setCovering = (next: boolean): void => {
       if (next === covering) return;
       covering = next;
-      if (!replayCapable) return;
       if (next) markWorktreeChangedStreamOpen(streamHostId);
       else markWorktreeChangedStreamClosed(streamHostId);
     };
@@ -132,11 +130,14 @@ export function WorktreeChangedStreamMount(): ReactNode {
             scheduler.push(scope);
             return true;
           },
-          onConnectionStatus: (status, reason) => {
+          onConnectionStatus: (status, reason, negotiatedVersion) => {
             if (disposed || activeOpenToken !== openToken) return;
             if (status === "open") {
               openedAtMs = Date.now();
-              setCovering(true);
+              setCovering(
+                negotiatedVersion !== null &&
+                  (negotiatedVersion.major > 1 || negotiatedVersion.minor >= 1),
+              );
               return;
             }
             // A remote logical stream can retry while the shared transport

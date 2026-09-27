@@ -152,7 +152,12 @@ describe("worktree metadata from one paged read per host", () => {
     const { result } = renderHook(
       () => ({
         index: useWorktreeHostIndexForClient(fixture.client, true),
-        rows: useWorktreeEnrichmentForClient(fixture.client, paths, true),
+        rows: useWorktreeEnrichmentForClient(
+          fixture.client,
+          paths,
+          true,
+          false,
+        ),
       }),
       { wrapper: fixture.Wrapper },
     );
@@ -164,6 +169,30 @@ describe("worktree metadata from one paged read per host", () => {
     expect(fixture.selectionCalls).toEqual([]);
   });
 
+  it("requests activity for resolved rows in the PR-number History index even under replay coverage", async () => {
+    const fixture = createFixture([row("/wt/a", 10, "a")]);
+    fixture.host.selection.set("/wt/a", {
+      ...row("/wt/a", 20, "a"),
+      prState: "open" as const,
+      prNumber: 42,
+      prUrl: "https://example.test/pull/42",
+      branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
+    });
+    markWorktreeChangedStreamOpen(HOST_ID);
+
+    const { result } = renderHook(
+      () =>
+        useWorktreeEnrichmentForClient(fixture.client, ["/wt/a"], true, true),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => expect(result.current.worktrees[0]?.prNumber).toBe(42));
+    await settle();
+
+    expect(fixture.pagedCalls()).toBe(1);
+    expect(fixture.selectionCalls).toEqual([["/wt/a"]]);
+    expect(result.current.worktrees[0]?.prState).toBe("open");
+  });
+
   it("costs nothing on remount with the host stream open and performs no resolved-row enrichment reads", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const fixture = createFixture(RESOLVED);
@@ -171,7 +200,8 @@ describe("worktree metadata from one paged read per host", () => {
     const paths = ["/wt/a"];
     const mount = () =>
       renderHook(
-        () => useWorktreeEnrichmentForClient(fixture.client, paths, true),
+        () =>
+          useWorktreeEnrichmentForClient(fixture.client, paths, true, false),
         { wrapper: fixture.Wrapper },
       );
 
@@ -196,7 +226,8 @@ describe("worktree metadata from one paged read per host", () => {
     const paths = ["/wt/a"];
     const mount = () =>
       renderHook(
-        () => useWorktreeEnrichmentForClient(fixture.client, paths, true),
+        () =>
+          useWorktreeEnrichmentForClient(fixture.client, paths, true, false),
         { wrapper: fixture.Wrapper },
       );
 
@@ -242,7 +273,8 @@ describe("worktree metadata from one paged read per host", () => {
       { wrapper: fixture.Wrapper },
     );
     const rowConsumer = renderHook(
-      () => useWorktreeEnrichmentForClient(fixture.client, ["/wt/a"], true),
+      () =>
+        useWorktreeEnrichmentForClient(fixture.client, ["/wt/a"], true, false),
       { wrapper: fixture.Wrapper },
     );
     await waitFor(() => {
@@ -292,7 +324,13 @@ describe("worktree metadata from one paged read per host", () => {
     fixture.host.selection.set("/wt/a", open);
     const mount = () =>
       renderHook(
-        () => useWorktreeEnrichmentForClient(fixture.client, ["/wt/a"], true),
+        () =>
+          useWorktreeEnrichmentForClient(
+            fixture.client,
+            ["/wt/a"],
+            true,
+            false,
+          ),
         { wrapper: fixture.Wrapper },
       );
 
@@ -330,7 +368,7 @@ describe("worktree metadata from one paged read per host", () => {
     const paths = ["/wt/a", "/wt/cold"];
 
     const { result } = renderHook(
-      () => useWorktreeEnrichmentForClient(fixture.client, paths, true),
+      () => useWorktreeEnrichmentForClient(fixture.client, paths, true, false),
       { wrapper: fixture.Wrapper },
     );
 
@@ -350,7 +388,7 @@ describe("worktree metadata from one paged read per host", () => {
     const paths = ["/wt/a"];
 
     const { result } = renderHook(
-      () => useWorktreeEnrichmentForClient(fixture.client, paths, true),
+      () => useWorktreeEnrichmentForClient(fixture.client, paths, true, false),
       { wrapper: fixture.Wrapper },
     );
     await waitFor(() =>
@@ -377,6 +415,10 @@ describe("worktree metadata from one paged read per host", () => {
   it("prefers a later listing's owners, inUse and scripts when resolvedAt ties the selection answer", async () => {
     const oldSelection = {
       ...row("/wt/a", 10, "selection-answer"),
+      prState: "open" as const,
+      prNumber: 43,
+      prUrl: "https://example.test/pull/43",
+      branchStatus: { ahead: 3, behind: 1, mergedIntoDefault: false },
       owners: [
         {
           epicId: "old-epic",
@@ -406,7 +448,8 @@ describe("worktree metadata from one paged read per host", () => {
     fixture.host.selection.set("/wt/a", oldSelection);
     markWorktreeChangedStreamOpen(HOST_ID);
     const { result } = renderHook(
-      () => useWorktreeEnrichmentForClient(fixture.client, ["/wt/a"], true),
+      () =>
+        useWorktreeEnrichmentForClient(fixture.client, ["/wt/a"], true, false),
       { wrapper: fixture.Wrapper },
     );
     await waitFor(() =>
@@ -455,9 +498,14 @@ describe("worktree metadata from one paged read per host", () => {
     );
     expect(result.current.worktrees[0]).toMatchObject({
       resolvedAt: 10,
+      branch: "listing-answer",
       owners: laterListing.owners,
       inUse: false,
       scripts: laterListing.scripts,
+      prState: "open",
+      prNumber: 43,
+      prUrl: "https://example.test/pull/43",
+      branchStatus: { ahead: 3, behind: 1, mergedIntoDefault: false },
     });
     await settle();
     expect(fixture.selectionCalls).toEqual([["/wt/a"], ["/wt/a"]]);
@@ -469,7 +517,7 @@ describe("worktree metadata from one paged read per host", () => {
     const paths = ["/wt/a", "/wt/b"];
 
     const { result } = renderHook(
-      () => useWorktreeEnrichmentForClient(fixture.client, paths, true),
+      () => useWorktreeEnrichmentForClient(fixture.client, paths, true, false),
       { wrapper: fixture.Wrapper },
     );
     await waitFor(() => expect(result.current.worktrees).toHaveLength(2));

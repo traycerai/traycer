@@ -73,12 +73,52 @@ function newestResolvedAt(rows: readonly { resolvedAt: number | null }[]) {
 }
 
 /**
+ * A cached selection can know activity facts that a base listing omitted,
+ * while the later listing knows current owners, scripts and in-use state.
+ * The host leaves `resolvedAt` unchanged when only those base fields move.
+ */
+function mergeEqualTimestampRows(
+  listed: readonly WorktreeHostEntryV14[],
+  read: readonly WorktreeHostEntryV14[],
+): readonly WorktreeHostEntryV14[] {
+  const readByPath = rowsByRequestedPath(
+    listed.map((row) => row.worktreePath),
+    read,
+  );
+  return listed.map((listingRow) => {
+    const selectionRow = readByPath.get(listingRow.worktreePath)?.[0];
+    if (
+      selectionRow === undefined ||
+      selectionRow.resolvedAt !== listingRow.resolvedAt
+    ) {
+      return listingRow;
+    }
+    return {
+      ...listingRow,
+      lastActivityAt: listingRow.lastActivityAt ?? selectionRow.lastActivityAt,
+      branchStatus: listingRow.branchStatus ?? selectionRow.branchStatus,
+      ...(listingRow.prState === null
+        ? {
+            prState: selectionRow.prState,
+            prNumber: selectionRow.prNumber,
+            prUrl: selectionRow.prUrl,
+            mergedHeadShaMatches: selectionRow.mergedHeadShaMatches,
+            submodules: selectionRow.submodules,
+            atBaseCommit: selectionRow.atBaseCommit,
+          }
+        : {}),
+    };
+  });
+}
+
+/**
  * Activity-enriched rows for a set of worktree paths.
  *
  * Served from the ONE host-wide listing (`useWorktreeHostListingForClient`):
- * a row the listing has resolved costs no read of its own. Selection-mode
- * reads - cached per path, batched through the host's shared batcher - are
- * spent where the listing cannot answer or replay freshness is unavailable:
+ * a row the listing has resolved normally costs no read of its own.
+ * Selection-mode reads - cached per path, batched through the host's shared
+ * batcher - are spent where the listing cannot answer, the caller explicitly
+ * needs activity facts, or replay freshness is unavailable:
  *
  * - a row the listing reports UNRESOLVED (`resolvedAt: null`): the host
  *   derives on a selection read only (resolve-on-read), so without one it
@@ -87,10 +127,12 @@ function newestResolvedAt(rows: readonly { resolvedAt: number | null }[]) {
  *   managed walk): read exactly as before this listing existed;
  * - an older or unwatched host: a selection read still touches stale PR facts
  *   because that host has no subscriber-owned recurring probe.
+ * - a PR-number search: resolve every listed path's activity so a current
+ *   search does not mistake the base listing's unknown PR for no match.
  *
- * Per path, a strictly newer selection derive wins. A listing wins a tie,
- * because ownership, scripts and in-use fields can change without moving
- * resolvedAt and the prior selection response cannot prove those fields.
+ * Per path, a strictly newer selection derive wins. On a timestamp tie, the
+ * listing owns current base fields while an earlier selection may still carry
+ * activity facts the base listing omitted.
  *
  * Gated like `useHostQuery`: a null client, or a host that cannot execute
  * yet, leaves every read disabled.
@@ -99,6 +141,7 @@ export function useWorktreeEnrichmentForClient(
   client: HostClient<HostRpcRegistry> | null,
   paths: readonly string[],
   enabled: boolean,
+  requireActivity: boolean,
 ): WorktreeEnrichment {
   const readiness = useReactiveHostReadiness(client);
   const streamCovered = useWorktreeChangedStreamCovered(
@@ -132,8 +175,10 @@ export function useWorktreeEnrichmentForClient(
     queries: uniquePaths.map((path) => {
       const listed = listingRowsByPath.get(path) ?? [];
       // Read what the listing cannot answer, and preserve the old-host
-      // selection path when no replay stream owns PR freshness.
+      // selection path when no replay stream owns PR freshness. A deliberate
+      // PR-number search needs activity facts even for a resolved base row.
       const needsRead =
+        requireActivity ||
         !streamCovered ||
         listed.length === 0 ||
         listed.every((row) => row.resolvedAt === null);
@@ -163,7 +208,12 @@ export function useWorktreeEnrichmentForClient(
       const preferRead =
         listed.length === 0 ||
         (readAt !== null && (listedAt === null || readAt > listedAt));
-      worktrees.push(...(preferRead ? read : listed));
+      let chosen: readonly WorktreeHostEntryV14[] = listed;
+      if (preferRead) chosen = read;
+      else if (readAt !== null && readAt === listedAt) {
+        chosen = mergeEqualTimestampRows(listed, read);
+      }
+      worktrees.push(...chosen);
     });
     return {
       worktrees,

@@ -81,6 +81,7 @@ export function useWorktreeHostActivityIndex(
     client,
     activityPaths,
     enabled,
+    true,
   );
   return {
     worktrees: enrichment.worktrees,
@@ -123,7 +124,12 @@ export function useTaskWorktreeMetadataForClient(
       ),
     [baseQuery.worktrees, visibleEpicIds],
   );
-  const enrichment = useWorktreeEnrichmentForClient(client, ownedPaths, true);
+  const enrichment = useWorktreeEnrichmentForClient(
+    client,
+    ownedPaths,
+    true,
+    false,
+  );
 
   const worktreesByEpicId = useMemo(() => {
     const worktrees = enrichment.worktrees;
