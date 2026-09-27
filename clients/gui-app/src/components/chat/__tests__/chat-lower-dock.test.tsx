@@ -21,6 +21,11 @@ import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-con
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
+import {
+  QUEUE_PAUSED_AFTER_ROUTING_TOOLTIP,
+  QUEUE_PAUSED_FOR_ROUTING_TOOLTIP,
+} from "@/components/chat/fallback/fallback-copy";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import type { SegmentTodoItem } from "@/stores/composer/chat-store";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
@@ -109,11 +114,12 @@ describe("<ChatLowerDock />", () => {
   it("renders queue, todo, and file changes in a stable top-down order", () => {
     renderDock({
       folded: undefined,
-      queue: queueState([queuedItem("queue-1", "Queued prompt")]),
+      queue: queueState([queuedItem("queue-1", "Queued prompt", "pending")]),
       todo: todoSnapshot([todoItem("Current task")]),
       changes: [fileChange()],
       backgroundItems: undefined,
       heldManagedCommandCount: 0,
+      fallbackTraversalLive: false,
       selfAgent: null,
       activeAgents: [],
       onBackgroundItemClick: () => undefined,
@@ -145,6 +151,7 @@ describe("<ChatLowerDock />", () => {
       changes: [fileChange()],
       backgroundItems: undefined,
       heldManagedCommandCount: 0,
+      fallbackTraversalLive: false,
       selfAgent: null,
       activeAgents: [],
       onBackgroundItemClick: () => undefined,
@@ -181,6 +188,7 @@ describe("<ChatLowerDock />", () => {
       changes: [],
       backgroundItems: [item],
       heldManagedCommandCount: 0,
+      fallbackTraversalLive: false,
       selfAgent: null,
       activeAgents: [],
       onBackgroundItemClick,
@@ -221,6 +229,7 @@ describe("<ChatLowerDock />", () => {
       changes: [],
       backgroundItems: [],
       heldManagedCommandCount: 1,
+      fallbackTraversalLive: false,
       selfAgent: null,
       activeAgents: [],
       onBackgroundItemClick: () => undefined,
@@ -240,6 +249,7 @@ describe("<ChatLowerDock />", () => {
       changes: [],
       backgroundItems: [],
       heldManagedCommandCount: 0,
+      fallbackTraversalLive: false,
       selfAgent: null,
       activeAgents: [],
       onBackgroundItemClick: () => undefined,
@@ -258,6 +268,7 @@ describe("<ChatLowerDock />", () => {
       changes: [],
       backgroundItems: undefined,
       heldManagedCommandCount: 0,
+      fallbackTraversalLive: false,
       selfAgent: agentRow("parent", "Parent agent", false),
       activeAgents: [agentRow("child", "Unopened child", true)],
       onBackgroundItemClick: () => undefined,
@@ -283,6 +294,7 @@ describe("<ChatLowerDock />", () => {
         changes: [fileChange()],
         backgroundItems: undefined,
         heldManagedCommandCount: 0,
+        fallbackTraversalLive: false,
         selfAgent: null,
         activeAgents: [],
         onBackgroundItemClick: () => undefined,
@@ -312,6 +324,7 @@ describe("<ChatLowerDock />", () => {
         changes: [fileChange()],
         backgroundItems: [backgroundItem],
         heldManagedCommandCount: 0,
+        fallbackTraversalLive: false,
         selfAgent: agentRow("parent", "Parent agent", true),
         activeAgents: [agentRow("child", "Unopened child", true)],
         onBackgroundItemClick: () => undefined,
@@ -330,6 +343,7 @@ describe("<ChatLowerDock />", () => {
         changes: [],
         backgroundItems: undefined,
         heldManagedCommandCount: 0,
+        fallbackTraversalLive: false,
         selfAgent: agentRow("parent", "Parent agent", true),
         activeAgents: [agentRow("child", "Unopened child", true)],
         onBackgroundItemClick: () => undefined,
@@ -360,6 +374,7 @@ describe("<ChatLowerDock />", () => {
         changes: [],
         backgroundItems: [backgroundItem],
         heldManagedCommandCount: 0,
+        fallbackTraversalLive: false,
         selfAgent: null,
         activeAgents: [],
         onBackgroundItemClick: () => undefined,
@@ -385,7 +400,7 @@ describe("<ChatLowerDock />", () => {
       "received-1",
       "From another agent",
     );
-    const userSentItem = queuedItem("queue-1", "From me");
+    const userSentItem = queuedItem("queue-1", "From me", "pending");
 
     renderDock({
       folded: new Set(["activeAgents"]),
@@ -394,6 +409,7 @@ describe("<ChatLowerDock />", () => {
       changes: [],
       backgroundItems: undefined,
       heldManagedCommandCount: 0,
+      fallbackTraversalLive: false,
       selfAgent: null,
       activeAgents: [],
       onBackgroundItemClick: () => undefined,
@@ -410,6 +426,51 @@ describe("<ChatLowerDock />", () => {
     expect(text).toContain("From another agent");
     expect(text).toContain("From me");
   });
+
+  // The dock only forwards `fallbackTraversalLive`; the panel decides the
+  // sentence. A routing pause is written in two states, and the pill's
+  // tooltip tells them apart by whether a traversal is still live.
+  it.each([
+    [
+      true,
+      "Held while routing recovers the failed turn. It runs when routing finishes.",
+      QUEUE_PAUSED_FOR_ROUTING_TOOLTIP,
+    ],
+    [
+      false,
+      "Held after routing moved the chat. Resume sends it now.",
+      QUEUE_PAUSED_AFTER_ROUTING_TOOLTIP,
+    ],
+  ])(
+    "forwards fallbackTraversalLive=%s to the paused-for-routing pill tooltip",
+    (live, literal, constant) => {
+      renderDock({
+        folded: undefined,
+        queue: {
+          status: "paused",
+          pausedReason: "routing",
+          items: [queuedItem("queue-held", "Held prompt", "paused")],
+        },
+        todo: null,
+        changes: [],
+        backgroundItems: undefined,
+        heldManagedCommandCount: 0,
+        fallbackTraversalLive: live,
+        selfAgent: null,
+        activeAgents: [],
+        onBackgroundItemClick: () => undefined,
+        onBackgroundItemStop: () => null,
+        onBackgroundItemsStopAll: () => null,
+      });
+
+      const badge = within(
+        screen.getByTestId("queued-message-row"),
+      ).getByTestId("queued-message-status-badge");
+      expect(badge.textContent).toBe("Paused after an error");
+      expect(tooltipTextNear(badge)).toBe(literal);
+      expect(literal).toBe(constant);
+    },
+  );
 });
 
 interface DockInput {
@@ -418,6 +479,7 @@ interface DockInput {
   readonly changes: ReadonlyArray<AccumulatedChangeRow>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly heldManagedCommandCount: number;
+  readonly fallbackTraversalLive: boolean;
   readonly selfAgent: AgentRow | null;
   readonly activeAgents: ReadonlyArray<AgentRow>;
   readonly folded: ReadonlySet<ChatDockSection> | undefined;
@@ -456,6 +518,7 @@ function renderDock(input: DockInput) {
           canAct
           readOnly={false}
           editingQueueItemId={null}
+          fallbackTraversalLive={input.fallbackTraversalLive}
           topSpacing="normal"
           scrollRegionMaxHeightClass="max-h-96"
           onQueuePause={() => null}
@@ -510,7 +573,11 @@ function queueState(
   return { status: "idle", items: [...items] };
 }
 
-function queuedItem(queueItemId: string, text: string): ChatQueuedPromptItem {
+function queuedItem(
+  queueItemId: string,
+  text: string,
+  status: ChatQueuedItem["status"],
+): ChatQueuedPromptItem {
   return {
     kind: "prompt",
     queueItemId,
@@ -525,7 +592,7 @@ function queuedItem(queueItemId: string, text: string): ChatQueuedPromptItem {
     accountContext: { type: "PERSONAL" as const },
     sentFromHostId: null,
     delivery: "next_turn",
-    status: "pending",
+    status,
     targetTurnId: null,
     steerRequest: null,
     fallbackReason: null,
@@ -539,7 +606,7 @@ function receivedAgentQueueItem(
   text: string,
 ): ChatQueuedPromptItem {
   return {
-    ...queuedItem(queueItemId, text),
+    ...queuedItem(queueItemId, text, "pending"),
     sender: {
       type: "agent",
       harnessId: "codex",

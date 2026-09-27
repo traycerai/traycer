@@ -1418,7 +1418,22 @@ export const pendingFallbackSchema = lazySchema(() =>
      * released client has not heard of - for a field it only renders as a label.
      */
     reason: z.string(),
-    /** The tuple that failed. Never the chat's current settings, which a hop may already have moved. */
+    /**
+     * The tuple the step on screen is moving the chat FROM - never the chat's
+     * current settings, which a hop may already have moved.
+     *
+     * On a `switching` frame that is not a wait's resume (the host's
+     * `commit_settings`, `restamp_queue` and `redispatch` phases, none of which
+     * the wire names) it is the tuple the hop is LEAVING: on the first hop the
+     * tuple whose turn failed, on a later hop the previous destination - the one
+     * that failed last. After A -> B failed, the hop to C names B.
+     *
+     * `hold`, `choosing`, `waiting`, `retrying` and a wait's resume carry the
+     * traversal's original failed tuple - a wait waits for that tuple's reset
+     * and resumes onto it.
+     *
+     * An older host always sends the original failed tuple, on every frame.
+     */
     failedTuple: chatRunSettingsSchema,
     /**
      * The tuple a switch is heading for, once one is COMMITTED.

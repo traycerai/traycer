@@ -104,6 +104,16 @@ export const NOTHING_COULD_BE_TRIED_LABEL = "Nothing could be tried";
 export const QUEUE_PAUSED_AFTER_ERROR_LABEL = "Paused after an error";
 export const QUEUE_PAUSED_AFTER_ERROR_TOOLTIP =
   "Held because the last turn failed. Retry or switch sends it after; Resume sends it now.";
+/**
+ * The pill's tooltip under a routing pause (`pausedReason` `routing`), which
+ * the host writes in two states: while a traversal holds the queue - the held
+ * rows are released when it succeeds - and after one succeeded, for the rows
+ * whose settings the new provider rejected, which wait for Resume.
+ */
+export const QUEUE_PAUSED_FOR_ROUTING_TOOLTIP =
+  "Held while routing recovers the failed turn. It runs when routing finishes.";
+export const QUEUE_PAUSED_AFTER_ROUTING_TOOLTIP =
+  "Held after routing moved the chat. Resume sends it now.";
 
 /**
  * What a switch costs, stated on every surface that offers one.

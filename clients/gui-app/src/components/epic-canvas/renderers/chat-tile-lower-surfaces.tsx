@@ -22,6 +22,7 @@ import {
 } from "@/components/chat/composer/chat-composer";
 import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
 import type { ChatProviderFallbackState } from "@/components/chat/fallback/fallback-state";
+import { useChatFallbackTraversalIsLive } from "@/components/chat/fallback/use-last-failed-attempt";
 import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
 import {
   ChatDockCompactStrip,
@@ -471,6 +472,14 @@ export function ChatLowerInteractionSurfaces(
     hostId: props.hostId,
   });
   const portForwardCount = portForwards.length;
+  // The queue pill's routing tooltip says who releases a held row, which turns
+  // on whether routing is still live: the same predicate the transcript's error
+  // row stands down on, read off the same session.
+  const fallbackTraversalLive = useChatFallbackTraversalIsLive({
+    epicId: props.epicId,
+    chatId: props.chatId,
+    hostId: props.hostId,
+  });
   const backgroundVisible = chatBackgroundSectionVisible({
     backgroundItemCount: props.backgroundItems?.length ?? 0,
     runningManagedCommandCount,
@@ -616,6 +625,7 @@ export function ChatLowerInteractionSurfaces(
           queueKeepPausedRequested={props.queue.keepPausedRequested}
           readOnly={props.access.isViewer}
           editingQueueItemId={props.queue.editingItemId}
+          fallbackTraversalLive={fallbackTraversalLive}
           topSpacing={pinnedStackTopSpacing}
           scrollRegionMaxHeightClass={scrollRegionMaxHeightClass}
           onQueuePause={props.queue.onPause}

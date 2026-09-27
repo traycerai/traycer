@@ -60,6 +60,8 @@ import {
 import {
   QUEUE_PAUSED_AFTER_ERROR_LABEL,
   QUEUE_PAUSED_AFTER_ERROR_TOOLTIP,
+  QUEUE_PAUSED_AFTER_ROUTING_TOOLTIP,
+  QUEUE_PAUSED_FOR_ROUTING_TOOLTIP,
 } from "@/components/chat/fallback/fallback-copy";
 import {
   QUEUED_MESSAGE_DND_MODIFIERS,
@@ -130,6 +132,13 @@ export interface QueuedMessagePanelProps {
   readonly keepPausedRequested: boolean;
   readonly readOnly: boolean;
   readonly editingQueueItemId: string | null;
+  /**
+   * Whether a routing traversal is live on this chat
+   * (`useChatFallbackTraversalIsLive`). A routing pause outlives its traversal
+   * for the rows whose restamp was rejected, so this is what tells the pill's
+   * tooltip whether routing will release the row or the user has to.
+   */
+  readonly fallbackTraversalLive: boolean;
   readonly scrollRegionMaxHeightClass: string;
   readonly separated?: boolean;
   readonly onPause: () => string | null;
@@ -164,7 +173,10 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
     [items],
   );
   const queueStatus = props.queue.status;
-  const pausedAfterError = queuePausedAfterError(props.queue);
+  const pausedAfterErrorTooltip = queuePausedAfterErrorTooltip(
+    props.queue,
+    props.fallbackTraversalLive,
+  );
   const hasSteerRestartPending = useMemo(
     () =>
       items.some(
@@ -268,7 +280,7 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
                       index={index}
                       orderKey={reorderDnd.orderKey}
                       queueStatus={queueStatus}
-                      pausedAfterError={pausedAfterError}
+                      pausedAfterErrorTooltip={pausedAfterErrorTooltip}
                       canReorder={reorderableCount > 1}
                       canAct={props.canAct}
                       readOnly={props.readOnly}
@@ -292,6 +304,28 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
       </CollapsibleContent>
     </Collapsible>
   );
+}
+
+/**
+ * The "Paused after an error" pill's tooltip, or `null` when the queue is not
+ * held after a failed turn (`queuePausedAfterError`) and the pill says plain
+ * "Paused".
+ *
+ * A routing pause says who releases the row, because that differs by whether
+ * the traversal is still live. While it is, the held rows go out when routing
+ * succeeds. After it, the only rows left paused under `routing` are the ones
+ * whose settings the new provider rejected, which the success release skips on
+ * purpose - they wait for Resume.
+ */
+function queuePausedAfterErrorTooltip(
+  queue: ChatSessionState["queue"],
+  fallbackTraversalLive: boolean,
+): string | null {
+  if (!queuePausedAfterError(queue)) return null;
+  if (queue.pausedReason !== "routing") return QUEUE_PAUSED_AFTER_ERROR_TOOLTIP;
+  return fallbackTraversalLive
+    ? QUEUE_PAUSED_FOR_ROUTING_TOOLTIP
+    : QUEUE_PAUSED_AFTER_ROUTING_TOOLTIP;
 }
 
 function queueHeaderTooltip(input: {
@@ -548,8 +582,11 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   readonly index: number;
   readonly orderKey: string;
   readonly queueStatus: ChatSessionState["queue"]["status"];
-  /** The queue is held because the last turn failed (`queuePausedAfterError`). */
-  readonly pausedAfterError: boolean;
+  /**
+   * The "Paused after an error" pill's tooltip, or `null` when the queue is not
+   * held because the last turn failed (`queuePausedAfterErrorTooltip`).
+   */
+  readonly pausedAfterErrorTooltip: string | null;
   readonly canReorder: boolean;
   readonly canAct: boolean;
   readonly readOnly: boolean;
@@ -572,7 +609,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     index,
     orderKey,
     queueStatus,
-    pausedAfterError,
+    pausedAfterErrorTooltip,
     canReorder,
     canAct,
     readOnly,
@@ -633,11 +670,12 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     onAbortSteer(promptItem);
   }, [onAbortSteer, promptItem]);
   const editActionCopy = queuedMessageEditActionCopy(item);
-  const statusLabel = queuedMessageStatusLabel(item, pausedAfterError);
+  const statusLabel = queuedMessageStatusLabel(
+    item,
+    pausedAfterErrorTooltip !== null,
+  );
   const statusTooltip =
-    item.status === "paused" && pausedAfterError
-      ? QUEUE_PAUSED_AFTER_ERROR_TOOLTIP
-      : null;
+    item.status === "paused" ? pausedAfterErrorTooltip : null;
   const showDropIndicatorBefore = dropPreview?.index === index;
   const showDropIndicatorAfter = shouldShowDropIndicatorAfter({
     dropPreview,
@@ -807,23 +845,55 @@ function QueuedMessageRowContent(props: {
 }
 
 /**
+ * The host's queue-wide pause notes: the sentences a pause stamps on every held
+ * row that has no reason of its own, and that the "Paused after an error" pill
+ * or the routing card already say. The host's text, matched here to be LEFT
+ * OUT, never copy this client renders - which is why it lives beside the one
+ * comparison rather than in the fallback vocabulary module. The GUI's own
+ * copies, because the wire carries no kind for a row's `fallbackReason`: a
+ * sentence not listed here is drawn, never dropped.
+ *
+ * - The errored-turn pause: the host's `ERRORED_TURN_QUEUE_PAUSE_REASON`,
+ *   verbatim since #4505 (2026-07-18).
+ * - The routing hold: `FALLBACK_HOLD_QUEUE_PAUSE_REASON`, in this wording since
+ *   the routing rename (2026-09-27), the same host change that first publishes
+ *   `pausedReason`.
+ * - The routing hold as hosts from #5608 (2026-09-13) until that rename wrote
+ *   it (`LEGACY_FALLBACK_HOLD_QUEUE_PAUSE_REASON`), which a row held across an
+ *   upgrade in the middle of a traversal still carries.
+ */
+const QUEUE_WIDE_PAUSE_HOST_REASONS: ReadonlySet<string> = new Set([
+  "Queue paused because the previous turn ended with an error.",
+  "Queue paused while routing recovers the failed turn.",
+  "Queue paused while the host tries a fallback for the failed turn.",
+]);
+
+/**
  * The host's per-row note on why the row is held (`item.fallbackReason`).
  *
- * Not drawn under a "Paused after an error" pill (clutter cuts, 2026-09-27):
- * the pill and its tooltip already say the queue is held because the last turn
- * failed, and "Queue paused because the previous turn ended with an error"
- * beneath it was the same fact a second time. Under any other pill the line
- * is the only place the reason is said, so it stays.
+ * Omitted only when it says what the pill already says (clutter cuts,
+ * 2026-09-27): under a "Paused after an error" pill, a queue-wide pause note -
+ * the errored-turn sentence, or the routing hold's while the routing card is
+ * on screen saying the same - is stamped on every held row, the same fact once
+ * per row. Every other reason is drawn there too - a pause keeps a row's
+ * earlier reason (a leftover steer, a downgrade), and a restamp the new
+ * provider rejected is stamped under a routing pause - since each says
+ * something the pill does not. The wire gives the reason no kind, so the
+ * queue-wide notes are recognised by the GUI's own copies of them.
  */
 function QueuedMessageFallbackReason(props: {
   readonly item: ChatQueuedItem;
   readonly pillSaysPausedAfterError: boolean;
 }) {
-  if (props.item.kind !== "prompt" || props.pillSaysPausedAfterError) {
-    return null;
-  }
+  if (props.item.kind !== "prompt") return null;
   const reason = props.item.fallbackReason?.trim();
   if (!reason) return null;
+  if (
+    props.pillSaysPausedAfterError &&
+    QUEUE_WIDE_PAUSE_HOST_REASONS.has(reason)
+  ) {
+    return null;
+  }
   return (
     <p className="mt-1 text-ui-xs text-muted-foreground wrap-break-word">
       {reason}

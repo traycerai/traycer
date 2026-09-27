@@ -65,6 +65,8 @@ export interface ChatLowerDockProps {
   readonly queueKeepPausedRequested: boolean;
   readonly readOnly: boolean;
   readonly editingQueueItemId: string | null;
+  /** Whether a routing traversal is live on this chat - the queue pill's cue. */
+  readonly fallbackTraversalLive: boolean;
   readonly topSpacing: ChatPinnedStackTopSpacing;
   readonly scrollRegionMaxHeightClass: string;
   readonly onQueuePause: () => string | null;
@@ -164,6 +166,7 @@ function QueueSection(props: {
       keepPausedRequested={dock.queueKeepPausedRequested}
       readOnly={dock.readOnly}
       editingQueueItemId={dock.editingQueueItemId}
+      fallbackTraversalLive={dock.fallbackTraversalLive}
       scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
       separated={false}
       onPause={dock.onQueuePause}

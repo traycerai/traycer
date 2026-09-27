@@ -27,6 +27,7 @@ import {
   routingCountdownPlan,
   type RoutingCountdownPlan,
 } from "@/components/chat/fallback/fallback-state";
+import { fallbackResolvedIdentitySentence } from "@/components/chat/fallback/fallback-identity";
 import { formatClockTime, formatResetDateTime } from "@/lib/relative-time";
 import {
   createFallbackAnnouncementObserver,
@@ -3029,5 +3030,341 @@ describe("createFallbackAnnouncementObserver", () => {
         // re-announcing the identical body.
       });
     });
+  });
+});
+
+/**
+ * The host ruling on a hold's lifecycle, pinned at the seam the wire leaves us
+ * with: there is no `phase` field, so the phases are read off the DTO frames.
+ * Frames go through the real adapter (`fallbackAnnouncementPlan` +
+ * `fallbackTraversalAnnouncement`) and on into the real observer.
+ */
+describe("the fallback hold lifecycle across host frames", () => {
+  const TRAVERSAL = "t-lifecycle";
+
+  function action(input: {
+    readonly planId: string;
+    readonly rung: FallbackImpendingAction["rung"];
+    readonly target: ChatRunSettings | null;
+    readonly resumesAt: number | null;
+    readonly pending: FallbackImpendingAction["pending"];
+  }): FallbackImpendingAction {
+    return {
+      planId: input.planId,
+      rung: input.rung,
+      target: input.target,
+      targetModelFamily: null,
+      resumesAt: input.resumesAt,
+      pending: input.pending,
+    };
+  }
+
+  function frame(input: {
+    readonly state: PendingFallback["state"];
+    readonly revision: number;
+    readonly targetTuple: ChatRunSettings | null;
+    readonly impendingAction: FallbackImpendingAction | null;
+    readonly deadline: number | null;
+    readonly siblingSwitching: number;
+  }): PendingFallback {
+    return {
+      ...pendingFallback({
+        state: input.state,
+        traversalId: TRAVERSAL,
+        revision: input.revision,
+        deadline: input.deadline,
+        queuedItemsMoving: 0,
+      }),
+      targetTuple: input.targetTuple,
+      impendingAction: input.impendingAction,
+      siblingSwitching: input.siblingSwitching,
+    };
+  }
+
+  /**
+   * The ONE identity production computes per frame: the real
+   * `fallbackResolvedIdentitySentence`, which reads the destination through
+   * `pendingFallbackDestinationTuple` (targetTuple first, then the impending
+   * action's target). Not re-derived here.
+   */
+  function identityOfFrame(pending: PendingFallback): string | null {
+    return fallbackResolvedIdentitySentence(
+      { kind: "fallback", pending },
+      (profileId) => profileId ?? "Terminal account",
+      (_harnessId, model) => model,
+    );
+  }
+
+  /** The destination sentence a tuple renders as, via the same real function. */
+  function identityOfTuple(tuple: ChatRunSettings): string {
+    const sentence = identityOfFrame(
+      frame({
+        state: "switching",
+        revision: 1,
+        targetTuple: tuple,
+        impendingAction: null,
+        deadline: null,
+        siblingSwitching: 0,
+      }),
+    );
+    if (sentence === null) throw new Error("a committed tuple names itself");
+    return sentence;
+  }
+
+  const A_IDENTITY = identityOfTuple(TARGET_TUPLE);
+  const B_IDENTITY = identityOfTuple(PREFERRED_TUPLE);
+  const C_TUPLE: ChatRunSettings = {
+    ...TARGET_TUPLE,
+    model: "gpt-6-astra-nano",
+  };
+  const C_IDENTITY = identityOfTuple(C_TUPLE);
+
+  function announced(
+    pending: PendingFallback,
+    now: number,
+  ): FallbackTraversalAnnouncement | null {
+    const identity = identityOfFrame(pending);
+    return fallbackTraversalAnnouncement({
+      pending,
+      plan: fallbackAnnouncementPlan(pending, identity),
+      failedIdentity: FAILED_IDENTITY,
+      targetIdentity: identity,
+      now,
+    });
+  }
+
+  function observerInput(
+    traversal: FallbackTraversalAnnouncement | null,
+  ): FallbackAnnouncementsInput {
+    return {
+      ready: true,
+      baselineEpoch: 1,
+      hydrationSequence: 0,
+      coldRewrittenMessageIds: new Set(),
+      residentMessageIds: new Set(),
+      traversal,
+      returnOffer: null,
+      liveOutcome: null,
+      notices: [],
+      manualOutcome: null,
+      unattendedOutcome: null,
+    };
+  }
+
+  /** An observer already past its absorbing baseline, so every frame speaks. */
+  function primedObserver(): {
+    readonly feed: (pending: PendingFallback, now: number) => string[];
+  } {
+    const observer = createFallbackAnnouncementObserver();
+    observer.observe(observerInput(null));
+    observer.observe(observerInput(null));
+    return {
+      feed: (pending, now) =>
+        observer
+          .observe(observerInput(announced(pending, now)))
+          .map((entry) => entry.text),
+    };
+  }
+
+  const SWITCH_A = action({
+    planId: "plan-A",
+    rung: "profile",
+    target: TARGET_TUPLE,
+    resumesAt: null,
+    pending: null,
+  });
+
+  function holdA(deadline: number, revision: number): PendingFallback {
+    return frame({
+      state: "hold",
+      revision,
+      targetTuple: null,
+      impendingAction: SWITCH_A,
+      deadline,
+      siblingSwitching: 0,
+    });
+  }
+
+  it("a re-opened hold is announced once, as a new plan", () => {
+    const d1 = NOW + 12_000;
+    const d2 = NOW + 20_000;
+    const switchB = action({
+      planId: "plan-B",
+      rung: "profile",
+      target: PREFERRED_TUPLE,
+      resumesAt: null,
+      pending: null,
+    });
+    const reopened = (
+      revision: number,
+      siblingSwitching: number,
+    ): PendingFallback =>
+      frame({
+        state: "hold",
+        revision,
+        targetTuple: null,
+        impendingAction: switchB,
+        deadline: d2,
+        siblingSwitching,
+      });
+    const { feed } = primedObserver();
+    const spoken: string[] = [];
+    spoken.push(...feed(holdA(d1, 1), NOW));
+    spoken.push(...feed(reopened(2, 0), d2 - 5_000));
+    // Only a tick, a sibling count or a revision moved: nothing new.
+    spoken.push(...feed(reopened(2, 0), d2 - 4_000));
+    spoken.push(...feed(reopened(3, 0), d2 - 3_000));
+    spoken.push(...feed(reopened(4, 1), d2 - 2_000));
+
+    expect(spoken).toEqual([
+      `The chat will switch to ${A_IDENTITY}. You have 12 seconds to cancel. Select ${DONT_SWITCH_LABEL} to cancel.`,
+      `The chat will switch to ${B_IDENTITY}. You have 5 seconds to cancel. Select ${DONT_SWITCH_LABEL} to cancel.`,
+    ]);
+  });
+
+  it("the honoured switching frames do not re-announce the plan", () => {
+    const { feed } = primedObserver();
+    const switching = (
+      revision: number,
+      targetTuple: ChatRunSettings | null,
+    ): PendingFallback =>
+      frame({
+        state: "switching",
+        revision,
+        targetTuple,
+        impendingAction: SWITCH_A,
+        deadline: null,
+        siblingSwitching: 0,
+      });
+
+    expect(feed(holdA(NOW + 12_000, 1), NOW)).toEqual([
+      `The chat will switch to ${A_IDENTITY}. You have 12 seconds to cancel. Select ${DONT_SWITCH_LABEL} to cancel.`,
+    ]);
+    expect(feed(switching(2, null), NOW + 12_000)).toEqual([
+      `Switching this chat to ${A_IDENTITY}.`,
+    ]);
+    expect(feed(switching(3, TARGET_TUPLE), NOW + 12_500)).toEqual([]);
+  });
+
+  it("a hold re-opened as a wait is announced once", () => {
+    const resumesAt = NOW + 3_600_000;
+    const { feed } = primedObserver();
+    const first = feed(holdA(NOW + 12_000, 1), NOW);
+    expect(first).toHaveLength(1);
+    const reopened = frame({
+      state: "hold",
+      revision: 2,
+      targetTuple: null,
+      impendingAction: action({
+        planId: "plan-wait",
+        rung: "wait",
+        target: null,
+        resumesAt,
+        pending: null,
+      }),
+      deadline: NOW + 20_000,
+      siblingSwitching: 0,
+    });
+    const second = feed(reopened, NOW + 15_000);
+    expect(second).toHaveLength(1);
+    expect(second[0]).toContain(
+      `The chat will wait for ${FAILED_IDENTITY} and resume at ${formatClockTime(resumesAt)}.`,
+    );
+    expect(second[0]).toContain(`Select ${DONT_WAIT_LABEL} to cancel.`);
+  });
+
+  it("an older host's Deciding frame at expiry announces nothing until a target is named", () => {
+    const { feed } = primedObserver();
+    expect(feed(holdA(NOW + 12_000, 1), NOW)).toHaveLength(1);
+    const resolving = action({
+      planId: "plan-resolving",
+      rung: "profile",
+      target: null,
+      resumesAt: null,
+      pending: "resolving",
+    });
+    expect(
+      feed(
+        frame({
+          state: "switching",
+          revision: 2,
+          targetTuple: null,
+          impendingAction: resolving,
+          deadline: null,
+          siblingSwitching: 0,
+        }),
+        NOW + 12_000,
+      ),
+    ).toEqual([]);
+    expect(
+      feed(
+        frame({
+          state: "switching",
+          revision: 3,
+          targetTuple: PREFERRED_TUPLE,
+          impendingAction: null,
+          deadline: null,
+          siblingSwitching: 0,
+        }),
+        NOW + 12_500,
+      ),
+    ).toEqual([`Switching this chat to ${B_IDENTITY}.`]);
+  });
+
+  it("a second change commits with no hold frame", () => {
+    const switchB = action({
+      planId: "plan-B",
+      rung: "profile",
+      target: PREFERRED_TUPLE,
+      resumesAt: null,
+      pending: null,
+    });
+    const switchC = action({
+      planId: "plan-C",
+      rung: "profile",
+      target: C_TUPLE,
+      resumesAt: null,
+      pending: null,
+    });
+    const { feed } = primedObserver();
+    const spoken: string[] = [];
+    spoken.push(...feed(holdA(NOW + 12_000, 1), NOW));
+    spoken.push(
+      ...feed(
+        frame({
+          state: "hold",
+          revision: 2,
+          targetTuple: null,
+          impendingAction: switchB,
+          deadline: NOW + 20_000,
+          siblingSwitching: 0,
+        }),
+        NOW + 15_000,
+      ),
+    );
+    spoken.push(
+      ...feed(
+        frame({
+          state: "switching",
+          revision: 3,
+          targetTuple: null,
+          impendingAction: switchC,
+          deadline: null,
+          siblingSwitching: 0,
+        }),
+        NOW + 20_000,
+      ),
+    );
+
+    expect(spoken).toEqual([
+      `The chat will switch to ${A_IDENTITY}. You have 12 seconds to cancel. Select ${DONT_SWITCH_LABEL} to cancel.`,
+      `The chat will switch to ${B_IDENTITY}. You have 5 seconds to cancel. Select ${DONT_SWITCH_LABEL} to cancel.`,
+      `Switching this chat to ${C_IDENTITY}.`,
+    ]);
+    expect(
+      spoken.some(
+        (text) => text.includes("seconds") && text.includes(C_IDENTITY),
+      ),
+    ).toBe(false);
   });
 });

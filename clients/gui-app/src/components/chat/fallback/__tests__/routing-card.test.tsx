@@ -28,6 +28,7 @@ import {
   FAILED_CLAUDE_TUPLE,
   PREFERRED_CLAUDE_TUPLE,
   TARGET_CODEX_TUPLE,
+  chatRunSettings,
   fallbackImpendingAction,
   pendingFallback,
   pendingReturn,
@@ -943,6 +944,326 @@ describe("RoutingCard", () => {
         expect(cardText()).not.toMatch(/New session from this transcript/i);
         view.unmount();
       }
+    });
+  });
+
+  describe("the host's end-of-countdown branches", () => {
+    const DESTINATION_A = TARGET_CODEX_TUPLE;
+    const DESTINATION_B = chatRunSettings({
+      harnessId: TARGET_CODEX_TUPLE.harnessId,
+      model: "gpt-b-reopened",
+      profileId: TARGET_CODEX_TUPLE.profileId,
+    });
+
+    /** One frame of the traversal, carrying a plan naming `target`. */
+    function planFrame(input: {
+      readonly state: PendingFallback["state"];
+      readonly planId: string;
+      readonly target: ChatRunSettings;
+      readonly targetTuple: ChatRunSettings | null;
+      readonly deadline: number | null;
+      readonly revision: number;
+    }): PendingFallback {
+      return {
+        ...cardPending({
+          state: input.state,
+          reason: "rate_limit",
+          failedTuple: FAILED_CLAUDE_TUPLE,
+          targetTuple: input.targetTuple,
+          impendingAction: fallbackImpendingAction({
+            planId: input.planId,
+            rung: "profile",
+            target: input.target,
+            targetModelFamily: null,
+            resumesAt: null,
+            pending: null,
+          }),
+          deadline: input.deadline,
+        }),
+        revision: input.revision,
+      };
+    }
+
+    function countdownTree(pending: PendingFallback) {
+      return (
+        <TooltipProvider delayDuration={0}>
+          <RoutingCard
+            state={{ kind: "countdown", pending }}
+            client={null}
+            chatId={CHAT_ID}
+            epicId={EPIC_ID}
+            hostId={TAB_HOST}
+            canAct
+          />
+        </TooltipProvider>
+      );
+    }
+
+    function headline(): string {
+      return screen.getByTestId("routing-card-headline").textContent;
+    }
+
+    function toEnd(): string {
+      return within(screen.getByTestId("route-line")).getByTestId(
+        "picker-trigger",
+      ).textContent;
+    }
+
+    function expectCommitFrame() {
+      expect(headline()).toBe("Switching…");
+      expect(toEnd()).toContain(DESTINATION_A.model);
+      expect(cardText()).not.toContain("Deciding what to do…");
+      expect(cardText()).not.toContain("Deciding…");
+      expect(actionButton("Don't switch").disabled).toBe(true);
+      const switchNow = screen.queryByRole("button", { name: "Switch now" });
+      if (switchNow !== null) {
+        expect(switchNow).toHaveProperty("disabled", true);
+      }
+    }
+
+    it("honoured: the commit frame names the planned destination, never Deciding", () => {
+      const view = render(
+        countdownTree(
+          planFrame({
+            state: "switching",
+            planId: "plan-p",
+            target: DESTINATION_A,
+            targetTuple: null,
+            deadline: null,
+            revision: 2,
+          }),
+        ),
+      );
+      expectCommitFrame();
+      // The restamp frame: the same plan, the target now committed.
+      view.rerender(
+        countdownTree(
+          planFrame({
+            state: "switching",
+            planId: "plan-p",
+            target: DESTINATION_A,
+            targetTuple: DESTINATION_A,
+            deadline: null,
+            revision: 3,
+          }),
+        ),
+      );
+      expectCommitFrame();
+    });
+
+    it("honoured: hold, then switching with no target, then switching with the target - Deciding never appears", () => {
+      const frames: ReadonlyArray<PendingFallback> = [
+        planFrame({
+          state: "hold",
+          planId: "plan-p",
+          target: DESTINATION_A,
+          targetTuple: null,
+          deadline: Date.now() + 15_000,
+          revision: 1,
+        }),
+        planFrame({
+          state: "switching",
+          planId: "plan-p",
+          target: DESTINATION_A,
+          targetTuple: null,
+          deadline: null,
+          revision: 2,
+        }),
+        planFrame({
+          state: "switching",
+          planId: "plan-p",
+          target: DESTINATION_A,
+          targetTuple: DESTINATION_A,
+          deadline: null,
+          revision: 3,
+        }),
+      ];
+      const [first, ...rest] = frames;
+      const view = render(countdownTree(first));
+      expect(cardText()).not.toContain("Deciding");
+      for (const frame of rest) {
+        view.rerender(countdownTree(frame));
+        expect(cardText()).not.toContain("Deciding");
+      }
+      expect(headline()).toBe("Switching…");
+    });
+
+    it("re-opened: a new plan is a new window - it counts from its own deadline and drains full again", () => {
+      vi.useFakeTimers();
+      const view = render(
+        countdownTree(
+          planFrame({
+            state: "hold",
+            planId: "plan-p",
+            target: DESTINATION_A,
+            targetTuple: null,
+            deadline: Date.now() + 15_000,
+            revision: 1,
+          }),
+        ),
+      );
+      expect(headline()).toBe("Switching in 15s");
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(headline()).toBe("Switching in 5s");
+      expect(fillWidthPercent()).toBeCloseTo(33.3, 0);
+
+      view.rerender(
+        countdownTree(
+          planFrame({
+            state: "hold",
+            planId: "plan-p-prime",
+            target: DESTINATION_B,
+            targetTuple: null,
+            deadline: Date.now() + 5_000,
+            revision: 2,
+          }),
+        ),
+      );
+      expect(headline()).toBe("Switching in 5s");
+      expect(toEnd()).toContain(DESTINATION_B.model);
+      expect(toEnd()).not.toContain(DESTINATION_A.model);
+      // The second window opens FULL, not at the first window's leftover.
+      // (jsdom normalizes the inline "100.00%" to "100%".)
+      expect(fillWidthPercent()).toBe(100);
+      expect(actionButton("Switch now").disabled).toBe(false);
+      expect(actionButton("Don't switch").disabled).toBe(false);
+
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(headline()).toBe("Switching in 4s");
+      expect(fillWidthPercent()).toBeCloseTo(80, 0);
+    });
+
+    it("a second change commits with no hold frame: switching names the third destination, never Deciding", () => {
+      const DESTINATION_C = chatRunSettings({
+        harnessId: TARGET_CODEX_TUPLE.harnessId,
+        model: "gpt-c-second-change",
+        profileId: TARGET_CODEX_TUPLE.profileId,
+      });
+      vi.useFakeTimers();
+      const view = render(
+        countdownTree(
+          planFrame({
+            state: "hold",
+            planId: "plan-p",
+            target: DESTINATION_A,
+            targetTuple: null,
+            deadline: Date.now() + 15_000,
+            revision: 1,
+          }),
+        ),
+      );
+      view.rerender(
+        countdownTree(
+          planFrame({
+            state: "hold",
+            planId: "plan-p-prime",
+            target: DESTINATION_B,
+            targetTuple: null,
+            deadline: Date.now() + 15_000,
+            revision: 2,
+          }),
+        ),
+      );
+      view.rerender(
+        countdownTree(
+          planFrame({
+            state: "switching",
+            planId: "plan-p-double-prime",
+            target: DESTINATION_C,
+            targetTuple: null,
+            deadline: null,
+            revision: 3,
+          }),
+        ),
+      );
+      expect(headline()).toBe("Switching…");
+      expect(toEnd()).toContain(DESTINATION_C.model);
+      expect(toEnd()).not.toContain(DESTINATION_B.model);
+      expect(toEnd()).not.toContain(DESTINATION_A.model);
+      expect(cardText()).not.toContain("Deciding");
+      expect(actionButton("Don't switch").disabled).toBe(true);
+    });
+
+    it("re-opened as a wait: the wait's countdown form, the picker as the primary, and the failed tuple alone", () => {
+      vi.useFakeTimers();
+      const view = render(
+        countdownTree(
+          planFrame({
+            state: "hold",
+            planId: "plan-p",
+            target: DESTINATION_A,
+            targetTuple: null,
+            deadline: Date.now() + 15_000,
+            revision: 1,
+          }),
+        ),
+      );
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      const resumesAt = Date.now() + 3_600_000;
+      view.rerender(
+        countdownTree({
+          ...cardPending({
+            state: "hold",
+            reason: "rate_limit",
+            failedTuple: FAILED_CLAUDE_TUPLE,
+            targetTuple: null,
+            impendingAction: fallbackImpendingAction({
+              planId: "plan-p-prime",
+              rung: "wait",
+              target: null,
+              targetModelFamily: null,
+              resumesAt,
+              pending: null,
+            }),
+            deadline: Date.now() + 5_000,
+          }),
+          revision: 2,
+        }),
+      );
+      expect(headline()).toBe(
+        `Waiting until ${formatWaitTime(resumesAt, Date.now())} starts in 5s`,
+      );
+      expect(actionLabels()).toEqual(["Choose another model…", "Don't wait"]);
+      expect(
+        actionButton("Choose another model…").getAttribute("data-testid"),
+      ).toBe("picker-trigger");
+      const line = screen.getByTestId("route-line");
+      expect(within(line).getByTestId("route-chip-single")).toBeDefined();
+      expect(within(line).queryByTestId("picker-trigger")).toBeNull();
+      expect(line.textContent).not.toContain(DESTINATION_A.model);
+      expect(within(actionRow()).getAllByRole("button")).toHaveLength(2);
+    });
+
+    it("an older host's Deciding frame at expiry still renders as today: Deciding what to do…, row disabled", () => {
+      // The hold-with-a-resolving-plan case is pinned already by "a plan the
+      // host has not resolved" above; this is the switching frame.
+      renderCountdown(
+        cardPending({
+          state: "switching",
+          reason: "rate_limit",
+          failedTuple: FAILED_CLAUDE_TUPLE,
+          targetTuple: null,
+          impendingAction: fallbackImpendingAction({
+            planId: "plan-older-host",
+            rung: "profile",
+            target: null,
+            targetModelFamily: null,
+            resumesAt: null,
+            pending: "resolving",
+          }),
+          deadline: null,
+        }),
+        true,
+      );
+      expect(headline()).toBe("Deciding what to do…");
+      expect(actionLabels()).toEqual(["Don't switch"]);
+      expect(actionButton("Don't switch").disabled).toBe(true);
     });
   });
 });
