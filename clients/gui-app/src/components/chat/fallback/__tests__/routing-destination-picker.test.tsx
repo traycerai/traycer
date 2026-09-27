@@ -313,6 +313,28 @@ function catalogGpt5(): HTMLElement {
   return option(/GPT-5/);
 }
 
+/**
+ * Runs `fn` with React's act environment OFF, so an update is scheduled the way
+ * production schedules it - a sync lane in a microtask, a default lane in a
+ * later task - rather than drained before `act` returns. Testing Library's own
+ * helpers (`fireEvent`, `rerender`) open an `act` scope whatever this flag
+ * says, so `fn` must drive the DOM natively.
+ */
+async function withActEnvironmentDisabled(
+  fn: () => Promise<void>,
+): Promise<void> {
+  const globalWithActFlag = globalThis as typeof globalThis & {
+    IS_REACT_ACT_ENVIRONMENT?: boolean;
+  };
+  const previous = globalWithActFlag.IS_REACT_ACT_ENVIRONMENT;
+  globalWithActFlag.IS_REACT_ACT_ENVIRONMENT = false;
+  try {
+    await fn();
+  } finally {
+    globalWithActFlag.IS_REACT_ACT_ENVIRONMENT = previous;
+  }
+}
+
 describe("RoutingDestinationPicker", () => {
   beforeEach(() => {
     resetKit();
@@ -1391,6 +1413,75 @@ describe("RoutingDestinationPicker", () => {
       expect(
         screen.getByRole("dialog", { name: "Select model" }),
       ).toBeDefined();
+    });
+
+    /**
+     * The chooser's `open` - which the verbs read as `inlineMenuOpen` - hears
+     * the picker's visible close from a PASSIVE effect, and an update raised
+     * there is demoted to the default lane. Alone, that would leave the chooser
+     * rendering `open` for a task after the popover had gone, and an answer
+     * landing in that task would go to a footer nobody could see while the
+     * announcer stood aside for it.
+     *
+     * It does not, and this pins why. Every close unmounts the popover's
+     * content through Radix's `Presence`, whose layout effect dispatches the
+     * unmount on the sync lane. React flushes the close commit's passive
+     * effects - the report - before that sync work, and renders the default
+     * lane in the same batch, so the chooser's `open` goes false in the one
+     * synchronous run that removes the popover. No microtask, and so no answer,
+     * runs between them. A Radix or React upgrade that breaks either half
+     * turns this red.
+     *
+     * Testing Library's `fireEvent` is an `act` scope that would drain any gap
+     * before returning, so the dismiss is a native event with the act
+     * environment off, and the answer lands at the first microtask after the
+     * popover leaves the DOM. The Switch is on the untouched recommendation:
+     * after an edit the close also drops it, a store write that is a second
+     * sync carrier, and this should stand on `Presence` alone.
+     */
+    it("a refusal answered in the frame that dismissed the chooser is spoken on the announcer", async () => {
+      kit.listData = listing({ recommendedWork: true });
+      mount(failedTurn(["switch"]));
+      const dialog = await open();
+      kit.deferResponses = true;
+      kit.mutationResult = { outcome: "rung_unavailable", detail: null };
+      fireEvent.click(footerConfirm());
+      expect(kit.pendingResponses).toHaveLength(1);
+
+      await withActEnvironmentDisabled(async () => {
+        within(dialog)
+          .getByRole("textbox")
+          .dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "Escape",
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        for (let turn = 0; turn < 20 && dialog.isConnected; turn += 1) {
+          await Promise.resolve();
+        }
+        // The popover is gone, and no task has run since the dismiss.
+        expect(dialog.isConnected).toBe(false);
+        kit.pendingResponses[0]();
+      });
+
+      await waitFor(() => {
+        expect(kit.unattended).toEqual([
+          {
+            hostId: SESSION_HOST_ID,
+            epicId: EPIC_ID,
+            chatId: CHAT_ID,
+            text: describeManualRungRefusal({
+              outcome: "rung_unavailable",
+              detail: null,
+              rung: "switch",
+              hostLabel: null,
+            })?.text,
+          },
+        ]);
+      });
+      expect(kit.toast).not.toHaveBeenCalled();
     });
   });
 
