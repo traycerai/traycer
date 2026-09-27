@@ -142,7 +142,6 @@ async function settle(handle: OpenedStoreForTest): Promise<void> {
 
 function epicReplicaUsage(): {
   readonly settledBytes: number;
-  readonly holderCount: number;
 } {
   const plane = getProcessMemoryRuntime()
     .accountant.snapshot()
@@ -150,7 +149,7 @@ function epicReplicaUsage(): {
   if (plane === undefined) {
     throw new Error("epic-replicas plane was not registered");
   }
-  return { settledBytes: plane.settledBytes, holderCount: plane.holderCount };
+  return { settledBytes: plane.settledBytes };
 }
 
 describe("lane state replica memory accounting", () => {
@@ -158,6 +157,8 @@ describe("lane state replica memory accounting", () => {
     const rig = openLaneStore();
     try {
       const baseline = epicReplicaUsage();
+      const baselineMainProjection =
+        getProcessMemoryRuntime().epicReplicas.estimatedMainProjectionHeapBytes();
       rig.openSnapshot();
       await settle(rig.handle);
 
@@ -169,11 +170,12 @@ describe("lane state replica memory accounting", () => {
       ).toBeGreaterThan(0);
 
       const retained = epicReplicaUsage();
-      // A populated lane snapshot must have an accounted main-thread holder.
-      // On the broken path only the unrelated empty root Y.Doc is reported,
-      // leaving the plane's bytes and holder count unchanged.
+      // The main-thread holder exists before the snapshot; its charge must
+      // grow when the structured-cloned lane projection gains an artifact.
       expect(retained.settledBytes).toBeGreaterThan(baseline.settledBytes);
-      expect(retained.holderCount).toBeGreaterThan(baseline.holderCount);
+      expect(
+        getProcessMemoryRuntime().epicReplicas.estimatedMainProjectionHeapBytes(),
+      ).toBeGreaterThan(baselineMainProjection);
     } finally {
       rig.handle.dispose();
     }
