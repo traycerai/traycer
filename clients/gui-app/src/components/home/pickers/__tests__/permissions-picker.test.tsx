@@ -249,7 +249,7 @@ describe("<PermissionsPicker /> - Auto's Experimental badge and label", () => {
     ).toBeNull();
   });
 
-  it("renders no reviewer/model/billing meta line on the Auto row, whatever judgeBilling names", () => {
+  it("renders no reviewer/model/billing metadata on the Auto row, whatever judgeBilling names", () => {
     renderPicker({
       judgeBilling: {
         kind: "traycer",
@@ -259,7 +259,17 @@ describe("<PermissionsPicker /> - Auto's Experimental badge and label", () => {
     });
     openMenu();
 
-    expect(within(menuItemFor("Auto")).queryByText(/Reviewed by/)).toBeNull();
+    const autoItem = menuItemFor("Auto");
+    // Not just the old "Reviewed by ..." phrasing: the fixture's own model
+    // and billing words must be absent too, so a differently-worded successor
+    // disclosure (e.g. a later `AutoJudgeLine`-style component) still fails
+    // this test rather than slipping past a pattern pinned to retired copy.
+    expect(within(autoItem).queryByText(/Reviewed by/)).toBeNull();
+    expect(within(autoItem).queryByText(/Sonnet 5/)).toBeNull();
+    expect(within(autoItem).queryByText(/uses credits/)).toBeNull();
+    // The old component's own hook: this testid no longer exists anywhere in
+    // the tree, not just off the Auto row.
+    expect(screen.queryByTestId("permission-option-meta")).toBeNull();
   });
 
   it("names the trigger 'Auto — Experimental' for assistive tech and the tooltip when Auto is selected", () => {
