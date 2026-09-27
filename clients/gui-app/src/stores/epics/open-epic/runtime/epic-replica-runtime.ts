@@ -1190,21 +1190,30 @@ export function createEpicReplicaRuntime(
    * respects it: probing leaves whatever is installed serving, and only a
    * probe that succeeds moves anything.
    *
-   * With no arm installed there is nothing to hold and no guarantee that the
-   * verdict will decide: a remote session publishes support at `openAck`,
-   * but local negotiation or a worker's support copy can still be pending.
-   * So that case probes rather than waiting indefinitely - see
+   * With no arm installed there is nothing to hold and, worse, nothing that
+   * would ever make the verdict decide: the client learns a method's support
+   * from a subscribe completing, so a runtime that installs nothing while it
+   * waits opens no subscribe, receives no answer, and stalls on that
+   * connection permanently. So that case probes rather than waits - see
    * {@link EpicLaneArm.probe}.
    *
-   * An installed LEGACY arm is the same stall one step later if support is
-   * still unknown. Re-probing on that edge makes "a host that upgrades under
-   * this tab moves onto the lanes" true even when its support reader has not
-   * supplied a usable verdict. A current remote peer normally settles support
-   * at `openAck`, so this fallback adds no serial RTT on that path.
+   * An installed LEGACY arm is the same stall one step later, and it is the
+   * one a relay reaches every time. `RemoteStreamClient.getMethodSupport` is
+   * `"unknown"` forever and its support subscription is a no-op, so on a
+   * remote host the verdict is `"undecided"` for the life of the runtime: the
+   * first probe fails against an old host, legacy installs, and the tab is
+   * then pinned to `@1` no matter what the host becomes. Nothing short of
+   * recreating the runtime moved it - not the reconnect, not the re-handshake
+   * that a host upgraded in place performs, because neither produces a
+   * manifest verdict on that transport. Re-probing on the same edge is what
+   * makes "a host that upgrades under this tab moves onto the lanes" true on
+   * the transport where the manifest cannot say so.
    *
-   * When support stays unknown against a legacy host, the fallback costs one
-   * refused subscribe per reconnect. A decided `"unsupported"` verdict from
-   * either transport installs legacy directly and avoids the probe.
+   * The cost on a host that is genuinely legacy is one refused subscribe per
+   * reconnect - the same one the first open already pays. A LOCAL legacy host
+   * mostly avoids even that: its client learns `"unsupported"` from the failed
+   * subscribe, so its verdict is `"legacy"` rather than `"undecided"` until a
+   * reconnect wipes it.
    */
   /**
    * The key the body tier holds one artifact's live doc under, per arm.
@@ -1277,9 +1286,11 @@ export function createEpicReplicaRuntime(
    * The probe answered. Install on THAT, without consulting the manifest.
    *
    * This is the half that makes the probe a probe rather than a hopeful open.
-   * Reading support here could reintroduce the stall it exists to prevent:
-   * this arm was opened because support was still unknown. The subscribe's
-   * own outcome answers that connection even if its manifest was incomplete.
+   * Reading support here would reintroduce the stall it exists to prevent: a
+   * remote peer's `getMethodSupport` stays `"unknown"` forever, because the mux
+   * resolves an incompatible method as a fatal on the subscribe attempt and
+   * never as a queryable pre-check. The subscribe's own outcome is the only
+   * evidence both transports produce, so it is the only thing that can decide.
    *
    * Ignored once the LANES are installed: a manifest that resolved first has
    * already settled this, and the probe's stream was adopted by that install.

@@ -82,10 +82,11 @@
  * the policy at the read keeps the record honest for any future reader that
  * wants "what did we last observe" rather than "what may I assume".
  *
- * Only the LOCAL transport records here. Remote sessions publish support from
- * their own `openAck` manifest, including `unsupported` for omitted methods,
- * and notify their stream-client listeners, so they do not need this memo.
- * The adapter selector still probes a truly undecided support reader.
+ * Only the LOCAL transport records here. `RemoteStreamClient.getMethodSupport`
+ * is a hardcoded `return "unknown"` in a different class, so the mux keeps
+ * answering `unknown` forever by construction - which
+ * `epic-adapter-selection.ts` requires, since over the relay the probe is not
+ * the first signal but the ONLY one.
  */
 
 /** The two verdicts a completed handshake can produce. `unknown` is not one. */

@@ -12,7 +12,6 @@ import {
   decodeMuxFrame,
   encodeMuxFrame,
   MUX_FRAME_HEADER_LEN,
-  MAX_MUX_MESSAGE_BYTES,
   type MuxFrame,
   MuxFrameDecodeError,
   MuxFrameType,
@@ -27,7 +26,6 @@ import {
   CHUNK_PACE_BYTES_PER_SEC,
   CHUNK_PACE_FRAMES_PER_SEC,
   ChunkPacer,
-  ChunkInterleaveWindow,
   ChunkReassembler,
   MuxFrameOverExpansionError,
   ChunkReassemblyError,
@@ -36,8 +34,6 @@ import {
   encodeMuxMessageBody,
   type ReassembledMessage,
   OutboundChunkSource,
-  MAX_ACTIVE_CHUNKED_RESERVED_BYTES,
-  MAX_ACTIVE_CHUNKED_STREAMS,
   unchunkedStreamFrameViolation,
 } from "../chunking";
 import { runChunkReassemblerConformanceSpec } from "./chunk-reassembler-conformance";
@@ -58,45 +54,6 @@ function bodyJsonLen(body: Uint8Array): number {
   return new DataView(body.buffer, body.byteOffset, body.byteLength).getUint32(
     1,
   );
-}
-
-function chunkedSource(
-  streamId: number,
-  qos: (typeof QosClass)[keyof typeof QosClass],
-): OutboundChunkSource {
-  let seq = 0;
-  return new OutboundChunkSource(
-    {
-      type: MuxFrameType.STREAM_FRAME,
-      streamId,
-      qos,
-      json: null,
-      binary: new Uint8Array(BULK_CHUNK_SIZE_BYTES - BODY_HEADER_LEN + 1),
-    },
-    () => seq++,
-    false,
-  );
-}
-
-function sourceWithLogicalBodySize(
-  streamId: number,
-  qos: (typeof QosClass)[keyof typeof QosClass],
-  bodyBytes: number,
-): OutboundChunkSource {
-  const source = chunkedSource(streamId, qos);
-  // Capacity accounting depends on this source metadata, not on allocating
-  // the entire logical body. Keep the real chunk cursor small for the test.
-  Object.defineProperty(source, "totalBodyBytes", { value: bodyBytes });
-  return source;
-}
-
-function pullFirstChunk(
-  window: ChunkInterleaveWindow,
-  source: OutboundChunkSource,
-): void {
-  expect(window.canPull(source)).toBe(true);
-  source.nextFrame();
-  window.notePulled(source);
 }
 
 describe("encodeMuxMessageBody / decodeMuxMessageBody body codec edge cases", () => {
@@ -175,189 +132,6 @@ describe("OutboundChunkSource BULK QoS override at the exact body-size threshold
     const source = sourceWithBinaryBytes(binaryLen);
     expect(source.totalBodyBytes).toBe(BULK_QOS_BODY_THRESHOLD_BYTES + 1);
     expect(source.qos).toBe(QosClass.BULK);
-  });
-});
-
-describe("ChunkInterleaveWindow", () => {
-  it("caps active chunked streams at 16 and releases a slot on the final pull", () => {
-    const window = new ChunkInterleaveWindow();
-    const active = Array.from({ length: MAX_ACTIVE_CHUNKED_STREAMS }, (_, i) =>
-      chunkedSource(100 + i, QosClass.INTERACTIVE),
-    );
-    for (const source of active) pullFirstChunk(window, source);
-
-    const waiting = chunkedSource(200, QosClass.INTERACTIVE);
-    expect(window.canPull(waiting)).toBe(false);
-
-    const first = active[0];
-    expect(first).toBeDefined();
-    first.nextFrame();
-    expect(first.done).toBe(true);
-    window.notePulled(first);
-    expect(window.canPull(waiting)).toBe(true);
-  });
-
-  it("reserves one active slot and one interactive body of byte budget from BULK", () => {
-    const window = new ChunkInterleaveWindow();
-    const bulk = Array.from(
-      { length: MAX_ACTIVE_CHUNKED_STREAMS - 1 },
-      (_, i) => chunkedSource(300 + i, QosClass.BULK),
-    );
-    for (const source of bulk) pullFirstChunk(window, source);
-
-    expect(window.canPull(chunkedSource(400, QosClass.BULK))).toBe(false);
-    const interactive = chunkedSource(401, QosClass.INTERACTIVE);
-    expect(window.canPull(interactive)).toBe(true);
-    pullFirstChunk(window, interactive);
-    expect(window.canPull(chunkedSource(402, QosClass.INTERACTIVE))).toBe(
-      false,
-    );
-  });
-
-  it("reserves one interactive body's worth of bytes from BULK reservations", () => {
-    const window = new ChunkInterleaveWindow();
-    const bulkByteLimit =
-      MAX_ACTIVE_CHUNKED_RESERVED_BYTES - BULK_QOS_BODY_THRESHOLD_BYTES;
-    const bulkBodyBytes = bulkByteLimit / 2;
-    const bulk = [
-      sourceWithLogicalBodySize(450, QosClass.BULK, bulkBodyBytes),
-      sourceWithLogicalBodySize(451, QosClass.BULK, bulkBodyBytes),
-    ];
-    for (const source of bulk) pullFirstChunk(window, source);
-
-    expect(window.canPull(chunkedSource(452, QosClass.BULK))).toBe(false);
-    const interactive = sourceWithLogicalBodySize(
-      453,
-      QosClass.INTERACTIVE,
-      BULK_QOS_BODY_THRESHOLD_BYTES,
-    );
-    expect(window.canPull(interactive)).toBe(true);
-  });
-
-  it("reserves capacity after a source's first frame is pulled", () => {
-    const window = new ChunkInterleaveWindow();
-    const source = sourceWithLogicalBodySize(
-      470,
-      QosClass.INTERACTIVE,
-      MAX_ACTIVE_CHUNKED_RESERVED_BYTES,
-    );
-    const waiting = chunkedSource(471, QosClass.INTERACTIVE);
-
-    expect(window.canPull(source)).toBe(true);
-    expect(window.canPull(waiting)).toBe(true);
-    source.nextFrame();
-    // The scheduler records the reservation only after pulling a frame.
-    expect(window.canPull(waiting)).toBe(true);
-    window.notePulled(source);
-    expect(window.canPull(waiting)).toBe(false);
-  });
-
-  it("rejects a third active source when three near-limit bodies exceed the byte budget", () => {
-    const window = new ChunkInterleaveWindow();
-    const nearLimitBodyBytes =
-      Math.floor(MAX_ACTIVE_CHUNKED_RESERVED_BYTES / 3) + 1;
-    expect(nearLimitBodyBytes).toBeLessThanOrEqual(MAX_MUX_MESSAGE_BYTES);
-    const first = sourceWithLogicalBodySize(
-      500,
-      QosClass.INTERACTIVE,
-      nearLimitBodyBytes,
-    );
-    const second = sourceWithLogicalBodySize(
-      501,
-      QosClass.INTERACTIVE,
-      nearLimitBodyBytes,
-    );
-    const third = sourceWithLogicalBodySize(
-      502,
-      QosClass.INTERACTIVE,
-      nearLimitBodyBytes,
-    );
-
-    // Checking eligibility alone holds no capacity. The first pull followed
-    // by notePulled starts its whole-body reservation.
-    expect(window.canPull(first)).toBe(true);
-    expect(window.canPull(second)).toBe(true);
-    first.nextFrame();
-    window.notePulled(first);
-    expect(window.canPull(second)).toBe(true);
-    pullFirstChunk(window, second);
-    expect(window.canPull(third)).toBe(false);
-  });
-
-  it("releases a partial reservation when its stream is forgotten", () => {
-    const window = new ChunkInterleaveWindow();
-    const source = sourceWithLogicalBodySize(
-      600,
-      QosClass.INTERACTIVE,
-      MAX_ACTIVE_CHUNKED_RESERVED_BYTES,
-    );
-    const waiting = chunkedSource(601, QosClass.INTERACTIVE);
-
-    pullFirstChunk(window, source);
-    expect(window.canPull(waiting)).toBe(false);
-    window.forgetStream(source.streamId);
-    expect(window.canPull(waiting)).toBe(true);
-  });
-
-  it("keeps an aborted stream's reservation until its pulled CLOSE or FATAL", () => {
-    for (const terminalType of [MuxFrameType.CLOSE, MuxFrameType.FATAL]) {
-      const window = new ChunkInterleaveWindow();
-      const partial = sourceWithLogicalBodySize(
-        650,
-        QosClass.INTERACTIVE,
-        MAX_ACTIVE_CHUNKED_RESERVED_BYTES,
-      );
-      const waiting = chunkedSource(651, QosClass.INTERACTIVE);
-      pullFirstChunk(window, partial);
-
-      window.awaitLocalAbort(partial.streamId);
-      expect(window.canPull(waiting)).toBe(false);
-
-      let seq = 0;
-      const terminal = new OutboundChunkSource(
-        {
-          type: terminalType,
-          streamId: partial.streamId,
-          qos: QosClass.INTERACTIVE,
-          json: null,
-          binary: null,
-        },
-        () => seq++,
-        false,
-      );
-      terminal.nextFrame();
-      window.notePulled(terminal);
-      expect(window.canPull(waiting)).toBe(true);
-    }
-  });
-
-  it("lets single-frame messages bypass full count and byte reservations", () => {
-    const window = new ChunkInterleaveWindow();
-    const active = sourceWithLogicalBodySize(
-      700,
-      QosClass.INTERACTIVE,
-      MAX_ACTIVE_CHUNKED_RESERVED_BYTES,
-    );
-    pullFirstChunk(window, active);
-
-    const waitingChunk = chunkedSource(800, QosClass.INTERACTIVE);
-    expect(window.canPull(waitingChunk)).toBe(false);
-    const singleFrame = new OutboundChunkSource(
-      {
-        type: MuxFrameType.STREAM_FRAME,
-        streamId: 801,
-        qos: QosClass.INTERACTIVE,
-        json: { kind: "small" },
-        binary: null,
-      },
-      () => 0,
-      false,
-    );
-    expect(singleFrame.chunked).toBe(false);
-    expect(window.canPull(singleFrame)).toBe(true);
-    singleFrame.nextFrame();
-    window.notePulled(singleFrame);
-    expect(window.canPull(waitingChunk)).toBe(false);
   });
 });
 

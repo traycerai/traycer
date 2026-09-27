@@ -127,11 +127,12 @@ export interface EpicLaneArmSources {
    * What the capability probe learned, reported EXACTLY once per arm.
    *
    * This is the selection input, and it is deliberately not a manifest read.
-   * Remote sessions normally publish method support at `openAck`, including
-   * `unsupported` for omitted methods. A support reader can still be unknown
-   * before local negotiation or before a worker receives its support snapshot;
-   * waiting for another support edge could leave the epic without an arm. The
-   * status subscribe's own outcome settles that fallback on either transport.
+   * A remote peer's `getMethodSupport` answers `"unknown"` forever - the mux
+   * resolves an incompatible method as a fatal on the subscribe attempt rather
+   * than as a queryable pre-check - so a runtime that waits for support to
+   * resolve never installs an arm on a relay connection and the epic never
+   * renders. The subscribe's own outcome is the only evidence that exists on
+   * both transports.
    */
   readonly onProbeOutcome: (outcome: EpicLaneProbeOutcome) => void;
   /**
@@ -142,8 +143,8 @@ export interface EpicLaneArmSources {
    * asked at a different time. The probe answers "can this connection serve
    * lanes at all", once, before anything is installed. This answers "a lane
    * the installed arm depends on is not served", which can only be learned
-   * AFTER installation. A refused subscribe is authoritative even when a
-   * previous support verdict predicted that the lane would be served.
+   * AFTER installation - and on a forever-unknown remote connection it is the
+   * only way it can ever be learned, since the manifest never resolves.
    *
    * The arm is only an arm if every required lane is served. A host that
    * serves status but refuses state is a real class (a rolling upgrade, a lane
@@ -169,11 +170,12 @@ export interface EpicLaneArm {
    * Open ONLY the status lane, as the capability probe for a connection whose
    * manifest has not resolved.
    *
-   * This exists because "unknown support is not a selection" and a subscribe
-   * is the fallback that can settle it: remote sessions normally publish
-   * support at `openAck`, while local negotiation or a worker's support copy
-   * can still be pending. A runtime that installed no arm while waiting for
-   * an undecided reader could wait indefinitely.
+   * This exists because "unknown support is not a selection" and a subscribe is
+   * the only thing that can settle it: the client learns a method's support
+   * from a subscribe COMPLETING (`applyHostManifest` runs with the subscribed
+   * method's outcome), so a runtime that installs no arm while it waits for
+   * support to resolve waits forever - there is nothing else in the epic
+   * session that would ask.
    *
    * The probe is the status lane rather than a throwaway request because the
    * open is not wasted on the arm it is probing FOR: on a lane host this
@@ -420,9 +422,9 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
       // here, exactly as the `@1` arm routes it.
       reportStatus: (status) => {
         // The records lane is REQUIRED. A host that served status and refuses
-        // this one renders no records at all. A served status lane does not
-        // establish records-lane support; the refused subscribe must replace
-        // the lanes arm even if an earlier verdict predicted it would work.
+        // this one renders no records at all, and on a forever-unknown remote
+        // connection nothing else would ever say so - the manifest never
+        // resolves, and the status lane is already happily connected.
         if (isMethodIncompatibleClose(status.closeReason)) {
           reportRequiredLaneUnsupported();
         }
@@ -520,9 +522,10 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
       environment,
       emit: (event: ControlEvent) => {
         // ANY control frame proves the subscribe is being served, which is the
-        // whole capability question. The frame also settles a probe when its
-        // support reader was undecided - see `answerProbe`'s
-        // callers and `isMethodIncompatibleClose`.
+        // whole capability question. Read off the frame rather than off the
+        // manifest because the manifest is exactly what a remote peer never
+        // resolves - see `answerProbe`'s callers and
+        // `isMethodIncompatibleClose`.
         answerProbe("succeeded");
         // The LANE's event, before translation. The refetch obligation is
         // written against this vocabulary - the policy decides which frames
@@ -543,9 +546,10 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
       // to report - its whole state is one snapshot frame.
       reportResume: () => {},
       reportStatus: (status) => {
-        // An undecided support reader still needs a typed answer. The mux
-        // reports an incompatible method on the subscribe itself, so the
-        // probe need not wait for a later support update.
+        // The ONLY capability evidence a remote session produces: the mux
+        // resolves an incompatible method as a fatal on the subscribe attempt,
+        // never as a queryable pre-check. A client that waits for
+        // `getMethodSupport` to move waits forever.
         if (isMethodIncompatibleClose(status.closeReason)) {
           // Before the probe answers, this IS the answer. After it, the arm is
           // already installed and this is a required lane going away, which
@@ -567,9 +571,9 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
           // `snapshotFetchError` ("Host update needed", with the method named)
           // and cleared the write gate. On a cold open the legacy arm's own
           // root snapshot happened to clear the error a moment later; on a
-          // RE-probe while support was still unknown - legacy was already
-          // installed, the transition planned no steps, no snapshot was owed,
-          // and the error stayed up over a
+          // RE-probe - every reconnect on a relay, whose support is unknown
+          // forever - legacy was already installed, the transition planned no
+          // steps, no snapshot was owed, and the error stayed up over a
           // healthy `@1` session with the epic read-only until Retry. The two
           // legitimate responses to this close are the arm install above
           // (first probe) and the replacement `reportRequiredLaneUnsupported`

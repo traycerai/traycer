@@ -2730,7 +2730,7 @@ export class RemoteSession<
       // whatever this side still had queued for it (say, a partial upload)
       // is undeliverable by verdict, and the id is tombstoned so a
       // relay-delayed chunk can't reseed an accumulator.
-      connection.scheduler.dropStreamOutboundAfterPeerAbort(message.streamId);
+      connection.scheduler.dropStreamOutbound(message.streamId);
       connection.reassembler.forget(message.streamId);
       this.markStreamTerminal(message.streamId);
       const pending = this.pendingUnary.get(message.streamId);
@@ -2821,7 +2821,7 @@ export class RemoteSession<
       return;
     }
     if (message.type === MuxFrameType.CLOSE) {
-      connection.scheduler.dropStreamOutboundAfterPeerAbort(message.streamId);
+      connection.scheduler.dropStreamOutbound(message.streamId);
       connection.reassembler.forget(message.streamId);
       this.markStreamTerminal(message.streamId);
       const stream = this.subscriptions.get(message.streamId);

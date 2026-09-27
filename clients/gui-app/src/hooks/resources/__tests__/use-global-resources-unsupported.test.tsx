@@ -26,10 +26,11 @@ vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => {
 });
 
 /**
- * A synthetic undecided support reader: no method verdict or client-wide
- * schema version yet. The pre-check cannot answer in this state.
+ * Exactly what `RemoteStreamClient` reports for every method, by design:
+ * `"unknown"` support and no client-wide schema version. This is the shape that
+ * makes the pre-check unable to answer.
  */
-function pretendUndecidedSupport(): void {
+function pretendRemoteHost(): void {
   streamMock.support = "unknown";
   streamMock.version = null;
 }
@@ -63,10 +64,11 @@ describe("useGlobalResourcesUnsupported", () => {
     streamMock.version = null;
   });
 
-  // An undecided pre-check has no verdict; absence of evidence must not
-  // convict the host or prevent the live stream from settling support.
-  it("is not convicted by an undecided pre-check alone", () => {
-    pretendUndecidedSupport();
+  // The gap this hook's second source exists to close, stated as a fact about
+  // the first one: on a remote host the pre-check has nothing to convict with,
+  // so on its own it clears every host it can never actually see.
+  it("is not convicted by the pre-check alone on a remote host", () => {
+    pretendRemoteHost();
 
     const { result } = renderHook(() =>
       useGlobalResourcesUnsupported("host-a"),
@@ -75,8 +77,8 @@ describe("useGlobalResourcesUnsupported", () => {
     expect(result.current).toBe(false);
   });
 
-  it("convicts a host from the verdict its own stream produced", () => {
-    pretendUndecidedSupport();
+  it("convicts a remote host from the verdict its own stream produced", () => {
+    pretendRemoteHost();
     openGlobalStream("host-a", "unsupported");
 
     const { result } = renderHook(() =>
@@ -89,7 +91,7 @@ describe("useGlobalResourcesUnsupported", () => {
   // The verdict is about one machine. Reading it for another is how a swap
   // still in flight would print the notice under the wrong host's name.
   it("does not carry one host's verdict onto another", () => {
-    pretendUndecidedSupport();
+    pretendRemoteHost();
     openGlobalStream("host-a", "unsupported");
 
     const { result } = renderHook(() =>
@@ -99,8 +101,8 @@ describe("useGlobalResourcesUnsupported", () => {
     expect(result.current).toBe(false);
   });
 
-  it("leaves a host cleared when its stream negotiated a global-capable version", () => {
-    pretendUndecidedSupport();
+  it("leaves a remote host cleared when its stream negotiated a global-capable version", () => {
+    pretendRemoteHost();
     openGlobalStream("host-a", "supported");
 
     const { result } = renderHook(() =>

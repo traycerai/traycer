@@ -43,7 +43,7 @@ const ALL_UNSUPPORTED = supportOf({
   "artifact.subscribe": "unsupported",
 });
 
-/** A synthetic undecided support reader, before any verdict arrives. */
+/** A remote mux transport: `getMethodSupport` is a hardcoded `"unknown"`. */
 const MUX = supportOf({});
 
 describe("epic adapter verdict", () => {

@@ -215,11 +215,12 @@ export class ResourcesStreamClient {
    * Publishes the scope verdict when - and only when - this transition carried
    * evidence that changes it.
    *
-   * The client-wide pre-check can be undecided before negotiation, on either
-   * transport. Remote sessions normally publish method support and schema
-   * versions at `openAck`; the stream's own negotiated version or terminal
-   * incompatible close remains authoritative after it opens. Both local and
-   * remote streams use this same fallback rule.
+   * This exists because the pre-check it backs up cannot answer on a remote
+   * host: `RemoteStreamClient` reports `"unknown"` support and a `null`
+   * client-wide schema version for every method by design. What a remote
+   * session DOES produce is this session's own negotiated version and, for a
+   * method the host never advertises, a terminal incompatible close - and both
+   * are equally available on the local transport, so one rule covers both.
    *
    * Not folded into the version test: an `@1.0` host does NOT fail a global
    * subscribe. The `@1.1` request keeps `epicId` on the wire precisely so the

@@ -5,15 +5,9 @@ import {
   type EncodeMuxFrameInput,
 } from "@traycer/protocol/host-transport/mux";
 import {
-  ChunkInterleaveWindow,
   ChunkPacer,
   type OutboundChunkSource,
 } from "@traycer/protocol/host-transport/chunking";
-import {
-  removeIndexedItem,
-  StreamTurnIndex,
-  type IndexedStreamTurnItem,
-} from "./stream-turn-index";
 
 /**
  * Priority scheduler with per-session bulk credits (Architecture §3, audit C2).
@@ -45,7 +39,7 @@ import {
  * the async encode+encrypt.
  */
 
-interface QueuedSource extends IndexedStreamTurnItem {
+interface QueuedSource {
   readonly source: OutboundChunkSource;
   /** Enqueue order across both queues; the per-stream FIFO comparator. */
   readonly serial: number;
@@ -64,12 +58,9 @@ export interface PrioritySchedulerOptions {
 export class PriorityScheduler {
   private readonly interactive: QueuedSource[] = [];
   private readonly bulk: QueuedSource[] = [];
-  private readonly interactiveTurns = new StreamTurnIndex<QueuedSource>();
-  private readonly bulkTurns = new StreamTurnIndex<QueuedSource>();
   private readonly options: PrioritySchedulerOptions;
   private readonly now: () => number;
   private readonly pacer: ChunkPacer;
-  private readonly chunkWindow = new ChunkInterleaveWindow();
   private bulkCredits: number;
   private nextSerial = 0;
   private pumping = false;
@@ -100,20 +91,11 @@ export class PriorityScheduler {
     if (this.stopped) {
       return;
     }
-    const item: QueuedSource = {
-      source,
-      serial: this.nextSerial++,
-      queueIndex:
-        source.qos === QosClass.BULK
-          ? this.bulk.length
-          : this.interactive.length,
-    };
+    const item: QueuedSource = { source, serial: this.nextSerial++ };
     if (source.qos === QosClass.BULK) {
       this.bulk.push(item);
-      this.bulkTurns.enqueue(item);
     } else {
       this.interactive.push(item);
-      this.interactiveTurns.enqueue(item);
     }
     void this.pump();
   }
@@ -225,38 +207,12 @@ export class PriorityScheduler {
    * which the peer's reassembler accepts mid-sequence as a transfer abort.
    */
   dropStreamOutbound(streamId: number): void {
-    this.dropStreamOutboundInternal(streamId, true);
-  }
-
-  /** The peer's CLOSE/FATAL proves it has already discarded this partial. */
-  dropStreamOutboundAfterPeerAbort(streamId: number): void {
-    this.dropStreamOutboundInternal(streamId, false);
-  }
-
-  private dropStreamOutboundInternal(
-    streamId: number,
-    awaitLocalAbort: boolean,
-  ): void {
     for (const queue of [this.interactive, this.bulk]) {
       for (let index = queue.length - 1; index >= 0; index -= 1) {
         if (queue[index].source.streamId === streamId) {
-          removeIndexedItem(queue, queue[index]);
+          queue.splice(index, 1);
         }
       }
-    }
-    const releasedInteractiveHold = this.interactiveTurns.dropStream(streamId);
-    const releasedBulkHold = this.bulkTurns.dropStream(streamId);
-    if (awaitLocalAbort) {
-      this.chunkWindow.awaitLocalAbort(streamId);
-    } else {
-      this.chunkWindow.forgetStream(streamId);
-      // A freed partial-body reservation can make an already queued source
-      // eligible without a new enqueue or credit grant.
-    }
-    // A dropped oldest waiter can remove an admission hold without changing
-    // the window's numeric reservation. Local aborts retain that reservation.
-    if (!awaitLocalAbort || releasedInteractiveHold || releasedBulkHold) {
-      void this.pump();
     }
   }
 
@@ -269,9 +225,6 @@ export class PriorityScheduler {
     this.stopped = true;
     this.interactive.length = 0;
     this.bulk.length = 0;
-    this.interactiveTurns.clear();
-    this.bulkTurns.clear();
-    this.chunkWindow.clear();
     if (this.paceResumeTimer !== null) {
       clearTimeout(this.paceResumeTimer);
       this.paceResumeTimer = null;
@@ -279,47 +232,46 @@ export class PriorityScheduler {
   }
 
   private blockedByOtherQueue(
-    other: StreamTurnIndex<QueuedSource>,
+    other: readonly QueuedSource[],
     item: QueuedSource,
   ): boolean {
-    const blocking = other.headSerial(item.source.streamId);
-    return blocking !== undefined && blocking < item.serial;
+    for (const candidate of other) {
+      if (
+        candidate.source.streamId === item.source.streamId &&
+        candidate.serial < item.serial
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private pullFromQueue(
     queue: QueuedSource[],
-    turns: StreamTurnIndex<QueuedSource>,
-    other: StreamTurnIndex<QueuedSource>,
+    other: readonly QueuedSource[],
   ): EncodeMuxFrameInput | null {
-    turns.reconsiderWindow(this.chunkWindow);
-    for (const item of turns.heads()) {
+    // Streams already passed over in this scan: a later item for one of them
+    // must not overtake the earlier item that was skipped.
+    const blockedStreams = new Set<number>();
+    for (let index = 0; index < queue.length; index += 1) {
+      const item = queue[index];
       const streamId = item.source.streamId;
-      if (this.blockedByOtherQueue(other, item)) {
-        turns.deferForOtherQueue(item);
+      if (blockedStreams.has(streamId)) {
         continue;
       }
-      if (!turns.canPull(item, this.chunkWindow)) {
-        turns.deferForWindow(item);
+      if (this.blockedByOtherQueue(other, item)) {
+        blockedStreams.add(streamId);
         continue;
       }
       const frameBytes = item.source.nextFrameByteSize;
       if (!this.pacer.tryConsume(frameBytes)) {
         this.notePaceWait(this.pacer.msUntilAvailable(frameBytes));
+        blockedStreams.add(streamId);
         continue;
       }
-      const newChunkStart =
-        item.source.chunked &&
-        !this.chunkWindow.usesExistingReservation(item.source);
       const frame = item.source.nextFrame();
-      this.chunkWindow.notePulled(item.source);
-      if (newChunkStart) turns.noteChunkStarted(streamId);
       if (item.source.done) {
-        turns.complete(item);
-        other.unblockFromOtherQueue(streamId, turns.headSerial(streamId));
-        removeIndexedItem(queue, item);
-      } else {
-        // Move only the stream's turn, not its potentially large message tail.
-        turns.rotate(streamId);
+        queue.splice(index, 1);
       }
       return frame;
     }
@@ -327,20 +279,12 @@ export class PriorityScheduler {
   }
 
   private next(): EncodeMuxFrameInput | null {
-    const interactive = this.pullFromQueue(
-      this.interactive,
-      this.interactiveTurns,
-      this.bulkTurns,
-    );
+    const interactive = this.pullFromQueue(this.interactive, this.bulk);
     if (interactive !== null) {
       return interactive;
     }
     if (this.bulk.length > 0 && this.bulkCredits > 0) {
-      const bulk = this.pullFromQueue(
-        this.bulk,
-        this.bulkTurns,
-        this.interactiveTurns,
-      );
+      const bulk = this.pullFromQueue(this.bulk, this.interactive);
       if (bulk !== null) {
         this.bulkCredits -= 1;
         return bulk;

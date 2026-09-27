@@ -15,8 +15,8 @@
  * arm's own open + root snapshot, or whether `noteSnapshotLanded` clears it.
  *
  * Nothing here is a fixture shortcut: the runtime is the real
- * `createEpicReplicaRuntime`, support is held unknown by the fixture (so the
- * probe must decide), and every projection the
+ * `createEpicReplicaRuntime`, support is forever-unknown (the relay shape, so
+ * the probe is the only thing that can decide), and every projection the
  * delivery commits is recorded in order.
  */
 import { afterEach, describe, expect, it } from "vitest";
@@ -228,8 +228,9 @@ function buildRig(): Rig {
   let sentCommands = 0;
   let nextCommandId = 0;
   const laneSelection: EpicLaneSelectionSources = {
-    // An undecided-reader shape: support remains unknown. The probe must
-    // decide the arm here, with no way to resolve support by hand.
+    // The relay shape: forever unknown. The probe is the only thing that can
+    // decide the arm here, and there is deliberately no way to resolve support
+    // by hand - only the listener can fire.
     support: () => "unknown",
     subscribeSupport: (listener) => {
       supportListeners.add(listener);
