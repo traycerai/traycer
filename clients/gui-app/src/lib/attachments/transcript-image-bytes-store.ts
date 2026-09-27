@@ -5,21 +5,13 @@
  * the user's own paste bytes. This one is keyed by the scoped cache identity
  * (`buildScopedImageCacheKey`) so one chat or artifact's authorization never
  * serves another's. IndexedDB name:
- * `traycer-gui-app:<accountBucket>:transcript-images`.
+ * `traycer-gui-app:<accountBucket>:transcript-images`, one database with
+ * `bytes` and `meta` object stores. Writes land in a single transaction so a
+ * crash cannot leave bytes the LRU cannot see.
  *
  * The in-memory blob-URL cache (`imageBlobCache`) is gone on relaunch. Without
  * this store every visible transcript image re-enters as unary `bytesBase64`.
  */
-
-import {
-  clear as idbClear,
-  createStore,
-  del as idbDel,
-  get as idbGet,
-  keys as idbKeys,
-  set as idbSet,
-  type UseStore,
-} from "idb-keyval";
 
 import {
   buildScopedImageCacheKey,
@@ -31,7 +23,17 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 
 export const TRANSCRIPT_IMAGE_DB_SUFFIX = ":transcript-images";
+/**
+ * Retired second-database name from the first persist commit. Wipe and
+ * partition clear still delete it so a machine that opened that pair does
+ * not keep an orphan meta db.
+ */
 export const TRANSCRIPT_IMAGE_META_DB_SUFFIX = ":transcript-image-meta";
+
+const BYTES_STORE = "bytes";
+const META_STORE = "meta";
+/** Version 2 adds the `meta` store beside `bytes` (v1 was bytes-only). */
+const TRANSCRIPT_IMAGE_DB_VERSION = 2;
 
 export function transcriptImageDbName(identity: string | null): string {
   return `${PERSIST_PREFIX}:${scopeBucket(identity)}${TRANSCRIPT_IMAGE_DB_SUFFIX}`;
@@ -60,6 +62,8 @@ export interface TranscriptImageBytesBackend {
   del(key: string): Promise<void>;
   listIndex(): Promise<readonly TranscriptImageIndexRow[]>;
   clear(): Promise<void>;
+  /** Release any held IndexedDB connection so `deleteDatabase` can finish. */
+  close(): void;
 }
 
 interface IndexEntry {
@@ -73,22 +77,35 @@ function copyBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   return copy;
 }
 
-function isStoredTranscriptImage(
+function coerceStoredBytes(value: unknown): Uint8Array<ArrayBuffer> | null {
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  // `instanceof Uint8Array` fails across jsdom/Node realms after an IDB clone.
+  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
+    return copyBytes(
+      new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
+    );
+  }
+  return null;
+}
+
+function parseStoredTranscriptImage(
   value: unknown,
-): value is StoredTranscriptImage {
-  if (value === null || typeof value !== "object") return false;
+): StoredTranscriptImage | undefined {
+  if (value === null || typeof value !== "object") return undefined;
   if (
     !("bytes" in value) ||
     !("mediaType" in value) ||
     !("accessedAt" in value)
   ) {
-    return false;
+    return undefined;
   }
-  return (
-    value.bytes instanceof Uint8Array &&
-    (value.mediaType === null || typeof value.mediaType === "string") &&
-    typeof value.accessedAt === "number"
-  );
+  const bytes = coerceStoredBytes(value.bytes);
+  if (bytes === null) return undefined;
+  if (!(value.mediaType === null || typeof value.mediaType === "string")) {
+    return undefined;
+  }
+  if (typeof value.accessedAt !== "number") return undefined;
+  return { bytes, mediaType: value.mediaType, accessedAt: value.accessedAt };
 }
 
 export function createMemoryTranscriptImageBytesBackend(): TranscriptImageBytesBackend {
@@ -126,6 +143,7 @@ export function createMemoryTranscriptImageBytesBackend(): TranscriptImageBytesB
       data.clear();
       return Promise.resolve();
     },
+    close: () => undefined,
   };
 }
 
@@ -133,6 +151,48 @@ function indexedDBFactory(): IDBFactory | undefined {
   // Annotated return is load-bearing: the DOM lib types `indexedDB` as
   // present, but node tests and non-browser runtimes omit it.
   return globalThis.indexedDB;
+}
+
+function awaitRequest<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => {
+      resolve(request.result);
+    };
+    request.onerror = () => {
+      reject(request.error ?? new Error("IndexedDB request failed"));
+    };
+  });
+}
+
+function awaitTransaction(tx: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => {
+      resolve();
+    };
+    tx.onerror = () => {
+      reject(tx.error ?? new Error("IndexedDB transaction failed"));
+    };
+    tx.onabort = () => {
+      reject(tx.error ?? new Error("IndexedDB transaction aborted"));
+    };
+  });
+}
+
+function collectStoreRows<T>(
+  store: IDBObjectStore,
+): Promise<readonly { readonly key: string; readonly value: T }[]> {
+  return Promise.all([
+    awaitRequest(store.getAllKeys()),
+    awaitRequest(store.getAll()),
+  ]).then(([keys, values]) => {
+    const rows: { key: string; value: T }[] = [];
+    for (let i = 0; i < keys.length; i += 1) {
+      const key = keys[i];
+      if (typeof key !== "string") continue;
+      rows.push({ key, value: values[i] as T });
+    }
+    return rows;
+  });
 }
 
 function deleteDatabase(factory: IDBFactory, name: string): Promise<void> {
@@ -154,62 +214,181 @@ function isIndexEntry(value: unknown): value is IndexEntry {
   );
 }
 
+function openTranscriptImageDb(
+  factory: IDBFactory,
+  name: string,
+): Promise<IDBDatabase> {
+  const request = factory.open(name, TRANSCRIPT_IMAGE_DB_VERSION);
+  request.onupgradeneeded = () => {
+    const db = request.result;
+    if (!db.objectStoreNames.contains(BYTES_STORE)) {
+      db.createObjectStore(BYTES_STORE);
+    }
+    if (!db.objectStoreNames.contains(META_STORE)) {
+      db.createObjectStore(META_STORE);
+    }
+  };
+  return awaitRequest(request);
+}
+
+class HeldIdbBackend implements TranscriptImageBytesBackend {
+  private db: IDBDatabase | null = null;
+  private reconciled = false;
+
+  constructor(private readonly identity: string | null) {}
+
+  private async ensureOpen(): Promise<IDBDatabase> {
+    if (this.db !== null) return this.db;
+    const factory = indexedDBFactory();
+    if (factory === undefined) {
+      throw new Error("IndexedDB is not available");
+    }
+    const db = await openTranscriptImageDb(
+      factory,
+      transcriptImageDbName(this.identity),
+    );
+    db.onversionchange = () => {
+      db.close();
+      if (this.db === db) this.db = null;
+    };
+    this.db = db;
+    return db;
+  }
+
+  close(): void {
+    this.db?.close();
+    this.db = null;
+    this.reconciled = false;
+  }
+
+  private async reconcile(db: IDBDatabase): Promise<void> {
+    if (this.reconciled) return;
+    const readTxn = db.transaction([BYTES_STORE, META_STORE], "readonly");
+    const [byteRows, metaRows] = await Promise.all([
+      collectStoreRows<unknown>(readTxn.objectStore(BYTES_STORE)),
+      collectStoreRows<unknown>(readTxn.objectStore(META_STORE)),
+    ]);
+    const bytesByKey = new Map(byteRows.map((row) => [row.key, row.value]));
+    const metaKeys = new Set(metaRows.map((row) => row.key));
+    const metaPuts: { key: string; value: IndexEntry }[] = [];
+    const byteDeletes: string[] = [];
+    const metaDeletes: string[] = [];
+    for (const [key, stored] of bytesByKey) {
+      if (metaKeys.has(key)) continue;
+      const storedImage = parseStoredTranscriptImage(stored);
+      if (storedImage === undefined) {
+        byteDeletes.push(key);
+        continue;
+      }
+      metaPuts.push({
+        key,
+        value: {
+          byteLength: storedImage.bytes.byteLength,
+          accessedAt: storedImage.accessedAt,
+        },
+      });
+    }
+    for (const key of metaKeys) {
+      if (!bytesByKey.has(key)) metaDeletes.push(key);
+    }
+    if (
+      metaPuts.length === 0 &&
+      byteDeletes.length === 0 &&
+      metaDeletes.length === 0
+    ) {
+      this.reconciled = true;
+      return;
+    }
+    const writeTxn = db.transaction([BYTES_STORE, META_STORE], "readwrite");
+    const bytesStore = writeTxn.objectStore(BYTES_STORE);
+    const metaStore = writeTxn.objectStore(META_STORE);
+    for (const row of metaPuts) metaStore.put(row.value, row.key);
+    for (const key of byteDeletes) bytesStore.delete(key);
+    for (const key of metaDeletes) metaStore.delete(key);
+    await awaitTransaction(writeTxn);
+    this.reconciled = true;
+  }
+
+  async get(key: string): Promise<StoredTranscriptImage | undefined> {
+    const db = await this.ensureOpen();
+    await this.reconcile(db);
+    const txn = db.transaction([BYTES_STORE], "readonly");
+    const value: unknown = await awaitRequest(
+      txn.objectStore(BYTES_STORE).get(key),
+    );
+    return parseStoredTranscriptImage(value);
+  }
+
+  async set(key: string, value: StoredTranscriptImage): Promise<void> {
+    const db = await this.ensureOpen();
+    await this.reconcile(db);
+    const txn = db.transaction([BYTES_STORE, META_STORE], "readwrite");
+    txn.objectStore(BYTES_STORE).put(value, key);
+    txn.objectStore(META_STORE).put(
+      {
+        byteLength: value.bytes.byteLength,
+        accessedAt: value.accessedAt,
+      },
+      key,
+    );
+    await awaitTransaction(txn);
+  }
+
+  async touch(key: string, accessedAt: number): Promise<void> {
+    const db = await this.ensureOpen();
+    await this.reconcile(db);
+    const readTxn = db.transaction([META_STORE], "readonly");
+    const meta: unknown = await awaitRequest(
+      readTxn.objectStore(META_STORE).get(key),
+    );
+    if (!isIndexEntry(meta)) return;
+    const writeTxn = db.transaction([META_STORE], "readwrite");
+    writeTxn
+      .objectStore(META_STORE)
+      .put({ byteLength: meta.byteLength, accessedAt }, key);
+    await awaitTransaction(writeTxn);
+  }
+
+  async del(key: string): Promise<void> {
+    const db = await this.ensureOpen();
+    await this.reconcile(db);
+    const txn = db.transaction([BYTES_STORE, META_STORE], "readwrite");
+    txn.objectStore(BYTES_STORE).delete(key);
+    txn.objectStore(META_STORE).delete(key);
+    await awaitTransaction(txn);
+  }
+
+  async listIndex(): Promise<readonly TranscriptImageIndexRow[]> {
+    const db = await this.ensureOpen();
+    await this.reconcile(db);
+    const txn = db.transaction([META_STORE], "readonly");
+    const rows = await collectStoreRows<unknown>(txn.objectStore(META_STORE));
+    const index: TranscriptImageIndexRow[] = [];
+    for (const row of rows) {
+      if (!isIndexEntry(row.value)) continue;
+      index.push({
+        key: row.key,
+        byteLength: row.value.byteLength,
+        accessedAt: row.value.accessedAt,
+      });
+    }
+    return index;
+  }
+
+  async clear(): Promise<void> {
+    const db = await this.ensureOpen();
+    const txn = db.transaction([BYTES_STORE, META_STORE], "readwrite");
+    txn.objectStore(BYTES_STORE).clear();
+    txn.objectStore(META_STORE).clear();
+    await awaitTransaction(txn);
+    this.reconciled = true;
+  }
+}
+
 function createIdbBackend(
   identity: string | null,
 ): TranscriptImageBytesBackend {
-  const bytesStore: UseStore = createStore(
-    transcriptImageDbName(identity),
-    "bytes",
-  );
-  const metaStore: UseStore = createStore(
-    transcriptImageMetaDbName(identity),
-    "meta",
-  );
-  return {
-    get: async (key) => {
-      const value: unknown = await idbGet<unknown>(key, bytesStore);
-      return isStoredTranscriptImage(value) ? value : undefined;
-    },
-    set: async (key, value) => {
-      await idbSet(key, value, bytesStore);
-      await idbSet(
-        key,
-        {
-          byteLength: value.bytes.byteLength,
-          accessedAt: value.accessedAt,
-        },
-        metaStore,
-      );
-    },
-    touch: async (key, accessedAt) => {
-      const meta: unknown = await idbGet<unknown>(key, metaStore);
-      if (!isIndexEntry(meta)) return;
-      await idbSet(key, { byteLength: meta.byteLength, accessedAt }, metaStore);
-    },
-    del: async (key) => {
-      await idbDel(key, bytesStore);
-      await idbDel(key, metaStore);
-    },
-    listIndex: async () => {
-      const found = await idbKeys(metaStore);
-      const rows: TranscriptImageIndexRow[] = [];
-      for (const key of found) {
-        if (typeof key !== "string") continue;
-        const meta: unknown = await idbGet<unknown>(key, metaStore);
-        if (!isIndexEntry(meta)) continue;
-        rows.push({
-          key,
-          byteLength: meta.byteLength,
-          accessedAt: meta.accessedAt,
-        });
-      }
-      return rows;
-    },
-    clear: async () => {
-      await idbClear(bytesStore);
-      await idbClear(metaStore);
-    },
-  };
+  return new HeldIdbBackend(identity);
 }
 
 class TranscriptImageBytesStore {
@@ -221,6 +400,7 @@ class TranscriptImageBytesStore {
   private mutation: Promise<void> = Promise.resolve();
 
   installBackend(backend: TranscriptImageBytesBackend | null): void {
+    this.backend?.close();
     this.injectedBackend = backend;
     this.backend = null;
     this.backendIdentity = undefined;
@@ -254,6 +434,7 @@ class TranscriptImageBytesStore {
   ): TranscriptImageBytesBackend {
     if (this.injectedBackend !== null) return this.injectedBackend;
     if (this.backend === null || this.backendIdentity !== identity) {
+      this.backend?.close();
       this.backend = createIdbBackend(identity);
       this.backendIdentity = identity;
       this.index.clear();
@@ -361,6 +542,7 @@ class TranscriptImageBytesStore {
       }
       if (this.backend !== null && this.backendIdentity === identity) {
         this.index.clear();
+        this.backend.close();
         this.backend = null;
         this.backendIdentity = undefined;
       }
@@ -491,11 +673,11 @@ export function persistTranscriptImageBytes(
         storeIdentity() === identity &&
         store.generationOf(identity) === generation
       ) {
-        try {
-          await store.put(key, result, identity, generation);
-        } catch {
-          // Quota or a closed partition: the live fetch still paints.
-        }
+        // Paint with the live bytes; IndexedDB is best-effort and must not
+        // sit on the blob-cache promise.
+        void store.put(key, result, identity, generation).catch(() => {
+          // Quota or a closed partition: the live fetch already returned.
+        });
       }
       return result;
     },

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  buildScopedImageCacheKey,
   type ImageBytesResult,
   type ScopedImageBytesFetcher,
 } from "@/lib/attachments/image-blob-cache";
@@ -12,8 +13,11 @@ import {
   readTranscriptImageBytes,
   transcriptImageBytesStats,
   transcriptImageDbName,
+  transcriptImageMetaDbName,
   writeTranscriptImageBytes,
+  type TranscriptImageBytesBackend,
 } from "@/lib/attachments/transcript-image-bytes-store";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { PREPARED_IMAGE_MAX_BYTES } from "@/lib/composer/composer-image-preparation-session";
 import {
   DESKTOP_RETENTION_PROFILE,
@@ -39,6 +43,11 @@ function scopedFetcher(
   return { scopeKey, fetch };
 }
 
+/** Waits for any in-flight persist `put` chained on the exclusive queue. */
+async function drainTranscriptImageMutations(): Promise<void> {
+  await readTranscriptImageBytes("__drain__");
+}
+
 describe("transcript-image-bytes-store", () => {
   beforeEach(() => {
     installTranscriptImageBytesBackend(
@@ -47,8 +56,9 @@ describe("transcript-image-bytes-store", () => {
     setRetentionProfile(DESKTOP_RETENTION_PROFILE);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
+    await drainTranscriptImageMutations();
     installTranscriptImageBytesBackend(null);
     setRetentionProfile(DESKTOP_RETENTION_PROFILE);
   });
@@ -144,7 +154,8 @@ describe("transcript image relaunch cost", () => {
     );
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await drainTranscriptImageMutations();
     installTranscriptImageBytesBackend(null);
   });
 
@@ -211,5 +222,198 @@ describe("transcript image relaunch cost", () => {
     expect(PREPARED_IMAGE_MAX_BYTES).toBe(3_932_160);
     expect(wire).toBe(10_485_760);
     expect(wire).toBeGreaterThan(10 * 1024 * 1024 - 1);
+  });
+});
+
+describe("transcript-image-bytes-store mechanism", () => {
+  beforeEach(() => {
+    installTranscriptImageBytesBackend(
+      createMemoryTranscriptImageBytesBackend(),
+    );
+    setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+  });
+
+  afterEach(async () => {
+    await drainTranscriptImageMutations();
+    installTranscriptImageBytesBackend(null);
+    setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+  });
+
+  it("returns fetched bytes before the durable put finishes", async () => {
+    const inner = createMemoryTranscriptImageBytesBackend();
+    let releasePut: () => void = () => {};
+    let setStarted = false;
+    let setFinished = false;
+    const backend: TranscriptImageBytesBackend = {
+      get: (key) => inner.get(key),
+      set: async (key, value) => {
+        setStarted = true;
+        await new Promise<void>((resolve) => {
+          releasePut = resolve;
+        });
+        await inner.set(key, value);
+        setFinished = true;
+      },
+      touch: (key, accessedAt) => inner.touch(key, accessedAt),
+      del: (key) => inner.del(key),
+      listIndex: () => inner.listIndex(),
+      clear: () => inner.clear(),
+      close: () => inner.close(),
+    };
+    installTranscriptImageBytesBackend(backend);
+    const fetch = vi.fn(() => Promise.resolve(resultOf(8)));
+    const fetcher = persistTranscriptImageBytes(
+      scopedFetcher(fetch, "epic:chat"),
+    );
+
+    try {
+      const resolved = await fetcher.fetch(
+        "paint-first",
+        new AbortController().signal,
+      );
+      expect(resolved.bytes.byteLength).toBe(8);
+      await vi.waitFor(() => {
+        expect(setStarted).toBe(true);
+      });
+      expect(setFinished).toBe(false);
+    } finally {
+      releasePut();
+    }
+    await vi.waitFor(() => {
+      expect(setFinished).toBe(true);
+    });
+    fetch.mockClear();
+    await fetcher.fetch("paint-first", new AbortController().signal);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("skips persist after the outgoing partition is cleared mid-fetch", async () => {
+    let releaseFetch: (() => void) | undefined;
+    const fetch = vi.fn(
+      () =>
+        new Promise<ImageBytesResult>((resolve) => {
+          releaseFetch = () => resolve(resultOf(8));
+        }),
+    );
+    const fetcher = persistTranscriptImageBytes(
+      scopedFetcher(fetch, "epic:chat"),
+    );
+    const pending = fetcher.fetch("mid-clear", new AbortController().signal);
+    await vi.waitFor(() => {
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
+    await clearTranscriptImageBytesFor(null);
+    releaseFetch?.();
+    await pending;
+    expect(
+      await readTranscriptImageBytes(
+        buildScopedImageCacheKey("epic:chat", "mid-clear"),
+      ),
+    ).toBeNull();
+  });
+
+  it("still returns live bytes when the durable put is rejected", async () => {
+    const inner = createMemoryTranscriptImageBytesBackend();
+    installTranscriptImageBytesBackend({
+      get: (key) => inner.get(key),
+      set: () => Promise.reject(new Error("QuotaExceededError")),
+      touch: (key, accessedAt) => inner.touch(key, accessedAt),
+      del: (key) => inner.del(key),
+      listIndex: () => inner.listIndex(),
+      clear: () => inner.clear(),
+      close: () => inner.close(),
+    });
+    const fetcher = persistTranscriptImageBytes(
+      scopedFetcher(() => Promise.resolve(resultOf(8)), "epic:chat"),
+    );
+    const resolved = await fetcher.fetch("quota", new AbortController().signal);
+    expect(resolved.bytes.byteLength).toBe(8);
+  });
+
+  it("keeps concurrent puts inside the byte budget", async () => {
+    setRetentionProfile({
+      ...MOBILE_RETENTION_PROFILE,
+      transcriptImageCacheBytes: 100,
+    });
+    const fetch = vi.fn((_hash: string) => Promise.resolve(resultOf(60)));
+    const fetcher = persistTranscriptImageBytes(
+      scopedFetcher(fetch, "epic:chat"),
+    );
+    await Promise.all([
+      fetcher.fetch("a", new AbortController().signal),
+      fetcher.fetch("b", new AbortController().signal),
+    ]);
+    await vi.waitFor(() => {
+      expect(transcriptImageBytesStats().size).toBe(1);
+    });
+    expect(transcriptImageBytesStats().residentBytes).toBeLessThanOrEqual(100);
+  });
+
+  it("aborts a durable lookup from the caller signal without starting the fetch", async () => {
+    const inner = createMemoryTranscriptImageBytesBackend();
+    const lookupKey = buildScopedImageCacheKey("epic:chat", "aborted");
+    let releaseGet: () => void = () => {};
+    let getStarted = false;
+    installTranscriptImageBytesBackend({
+      get: (key) => {
+        if (key !== lookupKey) return inner.get(key);
+        getStarted = true;
+        return new Promise((resolve) => {
+          releaseGet = () => resolve(undefined);
+        });
+      },
+      set: (key, value) => inner.set(key, value),
+      touch: (key, accessedAt) => inner.touch(key, accessedAt),
+      del: (key) => inner.del(key),
+      listIndex: () => inner.listIndex(),
+      clear: () => inner.clear(),
+      close: () => inner.close(),
+    });
+    const fetch = vi.fn(() => Promise.resolve(resultOf(8)));
+    const fetcher = persistTranscriptImageBytes(
+      scopedFetcher(fetch, "epic:chat"),
+    );
+    const controller = new AbortController();
+    const pending = fetcher.fetch("aborted", controller.signal);
+    try {
+      await vi.waitFor(() => {
+        expect(getStarted).toBe(true);
+      });
+      controller.abort();
+      await expect(pending).rejects.toThrow(/cancelled/);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      releaseGet();
+    }
+  });
+});
+
+describe("transcript-image-bytes-store IndexedDB", () => {
+  beforeEach(() => {
+    installFreshIndexedDb();
+    installTranscriptImageBytesBackend(null);
+    setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+  });
+
+  afterEach(async () => {
+    await clearTranscriptImageBytesFor(null);
+    installTranscriptImageBytesBackend(null);
+    setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+  });
+
+  it("stores bytes and meta in one database and closes before delete", async () => {
+    await writeTranscriptImageBytes("k", resultOf(8));
+    expect(await readTranscriptImageBytes("k")).not.toBeNull();
+    const names = (await indexedDB.databases())
+      .map((info) => info.name)
+      .filter((name): name is string => typeof name === "string");
+    expect(names).toContain(transcriptImageDbName(null));
+    expect(names).not.toContain(transcriptImageMetaDbName(null));
+
+    await clearTranscriptImageBytesFor(null);
+    const after = (await indexedDB.databases())
+      .map((info) => info.name)
+      .filter((name): name is string => typeof name === "string");
+    expect(after).not.toContain(transcriptImageDbName(null));
   });
 });
