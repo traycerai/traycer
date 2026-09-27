@@ -1633,6 +1633,33 @@ describe("createSessionRegistry", () => {
   });
 });
 
+describe("createSessionRegistry.evictOldestEligible", () => {
+  it("preserves demanded entries and evicts the least-recent warm eligible entry", () => {
+    const environment = createFakeEnvironment();
+    const policy = createTrackedPolicy(defaultPolicyConfig());
+    const registry = createSessionRegistry({ environment, policy });
+    const demanded = makeSession("demanded");
+    const olderWarm = makeSession("older-warm");
+    const newerWarm = makeSession("newer-warm");
+
+    registry.acquire("demanded", "scope", () => demanded);
+    registry.acquire("older", "scope", () => olderWarm);
+    registry.release("older", "warm");
+    registry.acquire("newer", "scope", () => newerWarm);
+    registry.release("newer", "warm");
+
+    expect(registry.evictOldestEligible(() => true)).toBe(true);
+
+    expect(registry.peek("older")).toBeNull();
+    expect(registry.peek("newer")).toBe(newerWarm);
+    expect(registry.peek("demanded")).toBe(demanded);
+    expect(registry.peekEntry("demanded")?.demand).toBe(1);
+    expect(policy.disposeSpy).toHaveBeenCalledWith("older-warm");
+    expect(policy.disposeSpy).not.toHaveBeenCalledWith("demanded");
+    expect(policy.disposeSpy).not.toHaveBeenCalledWith("newer-warm");
+  });
+});
+
 // ─── LeaseMaterializer conformance ──────────────────────────────────────────
 
 function createFakeLeaseMaterializer(): LeaseMaterializer<{ bytes: number }> & {

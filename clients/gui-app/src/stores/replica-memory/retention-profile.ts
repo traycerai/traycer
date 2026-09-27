@@ -24,6 +24,8 @@ import { EPIC_REPLICAS_MAX_LIVE } from "./budget-limits";
  * evaluation of the registries.
  */
 export interface RetentionProfile {
+  /** Calibrated managed-data allowance; count caps remain a backstop. */
+  readonly maxManagedDataBytes: number;
   /** Live epic sessions, mounted ones included (`OpenEpicSessionRegistry`). */
   readonly maxLiveEpics: number;
   /** How long unknown agent activity may defer epic cap eviction. */
@@ -44,6 +46,7 @@ export interface RetentionProfile {
 
 /** Electron desktop and the browser: the numbers the app has always run. */
 export const DESKTOP_RETENTION_PROFILE: RetentionProfile = Object.freeze({
+  maxManagedDataBytes: 160 * 1024 * 1024,
   maxLiveEpics: EPIC_REPLICAS_MAX_LIVE,
   unknownActivityCapGraceMs: 60_000,
   retainedTopLevelSurfaces: 5,
@@ -54,6 +57,7 @@ export const DESKTOP_RETENTION_PROFILE: RetentionProfile = Object.freeze({
 
 /** The installed Capacitor app: a 2 GB process ceiling, one visible tab. */
 export const MOBILE_RETENTION_PROFILE: RetentionProfile = Object.freeze({
+  maxManagedDataBytes: 96 * 1024 * 1024,
   maxLiveEpics: 3,
   unknownActivityCapGraceMs: 60_000,
   retainedTopLevelSurfaces: 2,
