@@ -18,6 +18,7 @@ import {
 } from "@/__tests__/agent-activity-harness";
 import {
   __resetAgentActivityStoreForTests,
+  __setHostAgentActivityStateForTests,
   __setAgentActivityPlaneAnsweringForTests,
   __setHostAgentActivityHealthForTests,
   TEST_LOCAL_ACTIVITY_HOST_ID,
@@ -890,6 +891,50 @@ describe("cap walk names the exemption holding each entry over cap", () => {
 describe("unknown activity grace applies only to epic cap eviction", () => {
   const graceMs = DESKTOP_RETENTION_PROFILE.unknownActivityCapGraceMs;
 
+  function createCrossHostUnknownSessions(
+    disconnectHostAImmediately: boolean,
+  ): {
+    registry: OpenEpicSessionRegistry;
+    target: TestHandle;
+    next: TestHandle;
+    disconnectHostA: () => void;
+  } {
+    __resetAgentActivityStoreForTests();
+    __setHostAgentActivityStateForTests(
+      "host-A",
+      { "host-B-epic": { working: ["agent-A"], turn: ["agent-A"] } },
+      "local",
+      null,
+    );
+    __setHostAgentActivityHealthForTests("host-A", {
+      connectionStatus: "open",
+      stateFrameSeenThisEpoch: true,
+    });
+    const disconnectHostA = (): void => {
+      __setHostAgentActivityHealthForTests("host-A", {
+        connectionStatus: "closed",
+      });
+      __setHostAgentActivityHealthForTests("host-A", {
+        connectionStatus: "open",
+        stateFrameSeenThisEpoch: false,
+      });
+    };
+    if (disconnectHostAImmediately) disconnectHostA();
+    __setHostAgentActivityHealthForTests("host-B", {
+      connectionStatus: "open",
+      servedBy: "local",
+      stateFrameSeenThisEpoch: true,
+      cloudSyncStatus: null,
+    });
+
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const target = withHostId(buildTestHandle("host-B-epic", false), "host-B");
+    const next = withHostId(buildTestHandle("host-B-next", true), "host-B");
+    registry.acquire("host-B-epic", () => h(target));
+    registry.acquire("host-B-next", () => h(next));
+    return { registry, target, next, disconnectHostA };
+  }
+
   it("reads the grace duration from the active retention profile", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -1092,6 +1137,114 @@ describe("unknown activity grace applies only to epic cap eviction", () => {
       expect(staleTurn.disposed).toBe(false);
       vi.advanceTimersByTime(1);
       expect(staleTurn.disposed).toBe(true);
+      expect(registry.size()).toBe(1);
+    } finally {
+      registry.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives a host-B epic grace when host A's stale turn is not attested after reconnect", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { registry, target, next } = createCrossHostUnknownSessions(true);
+    try {
+      expect(registry.size()).toBe(2);
+      expect(target.disposed).toBe(false);
+      expect(registry.capExemptionTelemetry().current).toMatchObject({
+        "host-uncovered": 1,
+        "unsynced-edits": 1,
+      });
+      vi.advanceTimersByTime(graceMs);
+      expect(registry.size()).toBe(1);
+      expect(target.disposed).toBe(true);
+      expect(next.disposed).toBe(false);
+    } finally {
+      registry.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not restart host-B grace on fresh narrow frames or repeated acquires", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { registry, target, next } = createCrossHostUnknownSessions(true);
+    try {
+      expect(registry.capExemptionTelemetry().current["host-uncovered"]).toBe(
+        1,
+      );
+      vi.advanceTimersByTime(20_000);
+      __setHostAgentActivityStateForTests("host-B", {}, "local", null);
+      registry.acquire("host-B-epic", () => h(target));
+      vi.advanceTimersByTime(20_000);
+      __setHostAgentActivityStateForTests("host-B", {}, "local", null);
+      registry.acquire("host-B-epic", () => h(target));
+      vi.advanceTimersByTime(20_000);
+
+      expect(registry.size()).toBe(1);
+      expect(target.disposed).toBe(true);
+      expect(next.disposed).toBe(false);
+    } finally {
+      registry.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears host-B grace when host A reattests with no current turns", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { registry, target, next } = createCrossHostUnknownSessions(true);
+    try {
+      vi.advanceTimersByTime(10_000);
+      __setHostAgentActivityStateForTests("host-A", {}, "local", null);
+      __setHostAgentActivityHealthForTests("host-A", {
+        connectionStatus: "open",
+        stateFrameSeenThisEpoch: true,
+      });
+
+      expect(target.disposed).toBe(true);
+      expect(next.disposed).toBe(false);
+      expect(registry.size()).toBe(1);
+    } finally {
+      registry.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears host-B grace when host B receives a fresh fleet-spanning answer", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { registry, target, next } = createCrossHostUnknownSessions(true);
+    try {
+      vi.advanceTimersByTime(10_000);
+      __setHostAgentActivityStateForTests("host-B", {}, "cloud", "connected");
+
+      expect(target.disposed).toBe(true);
+      expect(next.disposed).toBe(false);
+      expect(registry.size()).toBe(1);
+    } finally {
+      registry.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts host-B grace when host A stops attesting its still-listed turn", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { registry, target, next, disconnectHostA } =
+      createCrossHostUnknownSessions(false);
+    try {
+      vi.advanceTimersByTime(graceMs * 2);
+      expect(target.disposed).toBe(false);
+
+      disconnectHostA();
+      vi.advanceTimersByTime(graceMs - 1);
+      expect(target.disposed).toBe(false);
+      expect(registry.size()).toBe(2);
+
+      vi.advanceTimersByTime(1);
+      expect(target.disposed).toBe(true);
+      expect(next.disposed).toBe(false);
       expect(registry.size()).toBe(1);
     } finally {
       registry.disposeAll();

@@ -22,6 +22,7 @@ import {
   agentActivityPlaneAnswers,
   agentActivityPlaneCoversHost,
   agentActivityPlaneReportsEpicTurn,
+  agentActivityPlaneSpansFleet,
   getEpicAgentActivity,
   subscribeAgentActivity,
   subscribeAgentActivityPlaneHealth,
@@ -306,12 +307,10 @@ function eligibilityKeyFor(
   // bare epicId while an imperative `getUnsyncedEdits()` call already sees
   // the real title. Reading it here too keeps the two in lockstep.
   const liveTitle = readLiveTitle(handle);
-  // Every LIVE input of the two cap predicates is in the key, or a session
-  // that just became evictable would not trigger a prune until an unrelated
-  // field moved: `holdsNothingToLose` reads the three work fields below,
-  // the activity plane's health, host reach and this epic's turn set are all
-  // separate terms. A blind -> freshly reported turn transition must
-  // re-evaluate the cap even though both states were busy to the old key.
+  // The data-loss guards and directly reported turn are in the key, or a
+  // session that just became evictable would wait for an unrelated write.
+  // The separate unknown-episode timestamp detects changes in fleet reach
+  // and stale turn evidence even when the terms below stay unchanged.
   return `${holdsNothingToLose(state) ? 1 : 0}:${agentActivityPlaneAnswers() ? 1 : 0}:${agentActivityPlaneCoversHost(handle.hostId) ? 1 : 0}:${agentActivityPlaneReportsEpicTurn(epicId) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${state.writeCommands.length}:${metaTitle}:${liveTitle}`;
 }
 
@@ -423,9 +422,23 @@ export interface EpicCapActivityWindow {
   readonly graceMs: number;
 }
 
-function epicCapUnknownReason(hostId: string): EpicCapUnknownReason | null {
+function epicCapUnknownReason(
+  epicId: string,
+  hostId: string,
+): EpicCapUnknownReason | null {
   if (!agentActivityPlaneAnswers()) return "activity-plane-blind";
-  return agentActivityPlaneCoversHost(hostId) ? null : "host-uncovered";
+  if (!agentActivityPlaneCoversHost(hostId)) return "host-uncovered";
+  // A narrow answer from the session's host does not settle a turn last
+  // reported by another host whose slice has since lost attestation. A fresh
+  // fleet answer or that host's own new frame ends this unknown episode.
+  if (
+    !agentActivityPlaneSpansFleet() &&
+    hasActiveAgentWork(epicId) &&
+    !agentActivityPlaneReportsEpicTurn(epicId)
+  ) {
+    return "host-uncovered";
+  }
+  return null;
 }
 
 /**
@@ -438,7 +451,7 @@ export function epicCapActivityBlocker(
   window: EpicCapActivityWindow,
 ): "agent-working" | EpicCapUnknownReason | null {
   if (agentActivityPlaneReportsEpicTurn(epicId)) return "agent-working";
-  const unknownReason = epicCapUnknownReason(hostId);
+  const unknownReason = epicCapUnknownReason(epicId, hostId);
   if (unknownReason === null) return null;
   if (
     window.unknownSinceMs === null ||
@@ -1530,7 +1543,7 @@ export class OpenEpicSessionRegistry {
       epicId,
       handle,
       unknownActivitySinceMs:
-        epicCapUnknownReason(handle.hostId) === null
+        epicCapUnknownReason(epicId, handle.hostId) === null
           ? null
           : this.environment.clock.monotonicNow(),
       unsubscribe: null,
@@ -1541,7 +1554,7 @@ export class OpenEpicSessionRegistry {
     };
     const handleEligibilityChange = (): void => {
       const previousUnknownSinceMs = session.unknownActivitySinceMs;
-      const unknownReason = epicCapUnknownReason(handle.hostId);
+      const unknownReason = epicCapUnknownReason(epicId, handle.hostId);
       if (unknownReason === null) {
         // A fresh covering answer ends the episode, even if it reports a turn.
         session.unknownActivitySinceMs = null;
