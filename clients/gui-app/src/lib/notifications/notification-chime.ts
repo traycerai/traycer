@@ -639,59 +639,86 @@ export function playNotificationChimeSound(
         );
         const chimeStartsAt = context.currentTime + SCHEDULE_AHEAD_SECONDS;
         const master = context.createGain();
+        const started: OscillatorNode[] = [];
         master.gain.setValueAtTime(CHIME_MASTER_GAIN, chimeStartsAt);
         master.connect(context.destination);
 
-        voices.forEach((voice) => {
-          const startsAt = chimeStartsAt + voice.delay;
-          const endsAt = startsAt + voice.duration;
-          const oscillator = context.createOscillator();
-          const gain = context.createGain();
-          oscillator.type = voice.type;
-          oscillator.frequency.setValueAtTime(voice.startFrequency, startsAt);
-          voice.frequencyWaypoints?.forEach((waypoint) => {
+        try {
+          voices.forEach((voice) => {
+            const startsAt = chimeStartsAt + voice.delay;
+            const endsAt = startsAt + voice.duration;
+            const oscillator = context.createOscillator();
+            const gain = context.createGain();
+            oscillator.type = voice.type;
+            oscillator.frequency.setValueAtTime(voice.startFrequency, startsAt);
+            voice.frequencyWaypoints?.forEach((waypoint) => {
+              oscillator.frequency.exponentialRampToValueAtTime(
+                waypoint.frequency,
+                startsAt + waypoint.time,
+              );
+            });
             oscillator.frequency.exponentialRampToValueAtTime(
-              waypoint.frequency,
-              startsAt + waypoint.time,
+              voice.endFrequency,
+              startsAt + voice.frequencyRampDuration,
             );
+            gain.gain.setValueAtTime(SILENCE_GAIN, startsAt);
+            if (
+              voice.decayStart !== undefined &&
+              voice.decayTimeConstant !== undefined
+            ) {
+              gain.gain.linearRampToValueAtTime(
+                voice.gain,
+                startsAt + voice.attack,
+              );
+              gain.gain.setTargetAtTime(
+                SILENCE_GAIN,
+                startsAt + voice.decayStart,
+                voice.decayTimeConstant,
+              );
+              gain.gain.exponentialRampToValueAtTime(SILENCE_GAIN, endsAt);
+            } else {
+              gain.gain.exponentialRampToValueAtTime(
+                voice.gain,
+                startsAt + voice.attack,
+              );
+              gain.gain.exponentialRampToValueAtTime(SILENCE_GAIN, endsAt);
+            }
+            oscillator.connect(gain);
+            gain.connect(master);
+            oscillator.start(startsAt);
+            oscillator.stop(endsAt + 0.02);
+            started.push(oscillator);
+            if (voice === lastVoice) {
+              oscillator.onended = () => {
+                master.disconnect();
+                releaseChimeReservation();
+              };
+            }
           });
-          oscillator.frequency.exponentialRampToValueAtTime(
-            voice.endFrequency,
-            startsAt + voice.frequencyRampDuration,
-          );
-          gain.gain.setValueAtTime(SILENCE_GAIN, startsAt);
-          if (
-            voice.decayStart !== undefined &&
-            voice.decayTimeConstant !== undefined
-          ) {
-            gain.gain.linearRampToValueAtTime(
-              voice.gain,
-              startsAt + voice.attack,
-            );
-            gain.gain.setTargetAtTime(
-              SILENCE_GAIN,
-              startsAt + voice.decayStart,
-              voice.decayTimeConstant,
-            );
-            gain.gain.exponentialRampToValueAtTime(SILENCE_GAIN, endsAt);
-          } else {
-            gain.gain.exponentialRampToValueAtTime(
-              voice.gain,
-              startsAt + voice.attack,
-            );
-            gain.gain.exponentialRampToValueAtTime(SILENCE_GAIN, endsAt);
+        } catch {
+          // A later voice can throw after an earlier one is already playing.
+          // Tear those down and release once so their onended cannot underflow
+          // activeChimes and leave a later chime suspended while it is audible.
+          for (const oscillator of started) {
+            oscillator.onended = null;
+            try {
+              oscillator.stop();
+            } catch {
+              // Already stopped.
+            }
+            try {
+              oscillator.disconnect();
+            } catch {
+              // Already disconnected.
+            }
           }
-          oscillator.connect(gain);
-          gain.connect(master);
-          oscillator.start(startsAt);
-          oscillator.stop(endsAt + 0.02);
-          if (voice === lastVoice) {
-            oscillator.onended = () => {
-              master.disconnect();
-              releaseChimeReservation();
-            };
+          try {
+            master.disconnect();
+          } catch {
+            // Never connected, or already disconnected.
           }
-        });
+          releaseChimeReservation();
+        }
       } catch {
         releaseChimeReservation();
       }

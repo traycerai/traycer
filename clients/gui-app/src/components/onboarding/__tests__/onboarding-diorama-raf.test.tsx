@@ -57,7 +57,7 @@ describe("onboarding diorama rAF while the window is off screen", () => {
     vi.restoreAllMocks();
   });
 
-  it("does not schedule another frame after the document is hidden", () => {
+  it("stops and resumes scheduling across document visibility changes", () => {
     // Desktop diorama and PhoneWalkthrough share useDioramaPlayback. iOS
     // WKWebView already pauses rAF when hidden; this is the Electron and
     // Android path, where rAF keeps firing.
@@ -72,5 +72,10 @@ describe("onboarding diorama rAF while the window is off screen", () => {
     expect(frames.scheduled()).toBe(0);
     frames.flushOne();
     expect(frames.scheduled()).toBe(0);
+
+    __setBrowserDocumentHiddenForTests(false);
+    expect(frames.scheduled()).toBeGreaterThan(0);
+    frames.flushOne();
+    expect(frames.scheduled()).toBeGreaterThan(0);
   });
 });

@@ -217,6 +217,64 @@ describe("playNotificationChimeSound", () => {
     }
   });
 
+  it("tears down already-started voices if a later voice throws, without a second release on onended", () => {
+    const contexts: FakeAudioContext[] = [];
+    class TrackingAudioContext extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+    }
+    const original = Object.getOwnPropertyDescriptor(
+      FakeAudioContext.prototype,
+      "createOscillator",
+    );
+    let remaining = 1;
+    Object.defineProperty(FakeAudioContext.prototype, "createOscillator", {
+      configurable: true,
+      writable: true,
+      value: () => {
+        if (remaining === 0) {
+          throw new Error("second voice unavailable");
+        }
+        remaining -= 1;
+        const oscillator = {
+          type: "sine" as OscillatorType,
+          frequency: {
+            setValueAtTime: vi.fn<(value: number, atTime: number) => void>(),
+            exponentialRampToValueAtTime:
+              vi.fn<(value: number, atTime: number) => void>(),
+          },
+          connect: vi.fn(),
+          disconnect: vi.fn(),
+          start: vi.fn<(atTime: number) => void>(),
+          stop: vi.fn<(atTime: number) => void>(),
+          onended: null as (() => void) | null,
+        };
+        oscillators.push(oscillator);
+        return oscillator;
+      },
+    });
+    try {
+      vi.stubGlobal("AudioContext", TrackingAudioContext);
+      playNotificationChimeSound("classic");
+      expect(oscillators).toHaveLength(1);
+      expect(contexts[0].suspend).toHaveBeenCalledOnce();
+      oscillators[0].onended?.();
+      expect(contexts[0].suspend).toHaveBeenCalledOnce();
+    } finally {
+      if (original === undefined) {
+        Reflect.deleteProperty(FakeAudioContext.prototype, "createOscillator");
+      } else {
+        Object.defineProperty(
+          FakeAudioContext.prototype,
+          "createOscillator",
+          original,
+        );
+      }
+    }
+  });
+
   it("does not create an audio context when chimes are disabled", () => {
     const AudioContext = vi.fn(FakeAudioContext);
     vi.stubGlobal("AudioContext", AudioContext);
