@@ -1,3 +1,4 @@
+import { SendTimings } from "@traycer/protocol/host/agent/gui/send-timing";
 import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
 import {
   addAcceptedAction,
@@ -3213,6 +3214,53 @@ export function createChatSessionStoreWithNotificationDependencies(
   options: ChatSessionStoreOptions,
   notificationDependencies: ChatSessionNotificationDependencies,
 ): ChatSessionStoreHandle {
+  let sendTimingEnabled = false;
+  try {
+    sendTimingEnabled = localStorage.getItem("traycer:send-timing") === "1";
+  } catch {
+    // Diagnostics must not make storage access a prerequisite for sending.
+  }
+  const sendTimings = new SendTimings(
+    { side: "gui", epicId: options.epicId, chatId: options.chatId },
+    (batch) => {
+      // appLogger retains at most 20 array items. Chunk before sanitization so
+      // a batch of concurrent sends cannot silently lose its last phases.
+      for (let offset = 0; offset < batch.entries.length; offset += 20) {
+        appLogger.info("ChatSendTiming", {
+          entries: batch.entries
+            .slice(offset, offset + 20)
+            .map((entry) => ({ ...entry })),
+          droppedEntries: offset === 0 ? batch.droppedEntries : 0,
+        });
+      }
+    },
+    sendTimingEnabled,
+  );
+  const noteSendAck = (
+    action: PendingChatAction | null,
+    status: "accepted" | "rejected",
+  ): void => {
+    if (action?.action !== "send") return;
+    const messageId = action.messageId;
+    if (messageId === null) return;
+    sendTimings.mark(
+      messageId,
+      status === "accepted" ? "ack_accepted" : "ack_rejected",
+    );
+  };
+  const noteSendSnapshot = (
+    messages: readonly { readonly messageId: string }[],
+    queue: ChatQueueState,
+  ): void => {
+    if (!sendTimings.enabled) return;
+    for (const message of messages)
+      sendTimings.mark(message.messageId, "transcript_received");
+    for (const item of queue.items) {
+      if (item.kind === "prompt")
+        sendTimings.mark(item.messageId, "queue_received");
+    }
+  };
+  let unsubscribeSendTimings: (() => void) | null = null;
   const notificationUserId = options.userId;
   const memory = ensureProcessMemoryRuntime(options.environment);
   const holderId = chatHolderId(options.hostId, options.epicId, options.chatId);
@@ -3374,6 +3422,13 @@ export function createChatSessionStoreWithNotificationDependencies(
     if (!canSendAction(input.get)) return null;
     const client = streamClient;
     if (client === null) return null;
+    if (input.frame.kind === "send") {
+      sendTimings.begin(
+        input.frame.messageId,
+        input.frame.clientActionId,
+        null,
+      );
+    }
     const nextPendingUser = input.pendingUserMessage;
     const pending: PendingChatAction = { ...input.pending, connectionEpoch };
     input.set((state) => ({
@@ -3393,7 +3448,13 @@ export function createChatSessionStoreWithNotificationDependencies(
               nextPendingUser,
             ],
     }));
+    if (input.frame.kind === "send" && nextPendingUser !== null) {
+      sendTimings.mark(input.frame.messageId, "optimistic_pending_published");
+    }
     client.sendAction(input.frame);
+    if (input.frame.kind === "send") {
+      sendTimings.mark(input.frame.messageId, "dispatched");
+    }
     return input.pending.clientActionId;
   };
 
@@ -7192,6 +7253,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        noteSendSnapshot(frame.snapshot.tail.messages, frame.snapshot.queue);
         windowedLine = true;
         // NEITHER the dedup slot nor the ledger is cleared here, and both
         // decisions are deferred to below for the same reason. A snapshot is
@@ -7816,6 +7878,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        noteSendAck(
+          pendingActionForId(get().pendingActions, frame.clientActionId),
+          frame.status,
+        );
         retireSweptEvidenceOnAck(frame);
         const rejectedPending =
           frame.status === "rejected"
@@ -8094,6 +8160,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        sendTimings.mark(frame.message.messageId, "acceptance_received");
         flushBlockDeltas();
         set((state) => {
           const pendingUserMessages = state.pendingUserMessages.filter(
@@ -8143,6 +8210,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         });
         if (windowedLine) {
           takeLiveRecords({ messages: [frame.message], events: [] });
+          sendTimings.mark(frame.message.messageId, "acceptance_applied");
           return;
         }
         // THE LEGACY ARM'S SETTLE. `takeLiveRecords` re-settles through
@@ -8153,6 +8221,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // handler agree about recency: the windowed arm stamps it, and a
         // message landing means the same thing on either line.
         commitLegacyTranscriptBudget();
+        sendTimings.mark(frame.message.messageId, "acceptance_applied");
       },
       onMessageDeliveryChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId))
@@ -8172,6 +8241,12 @@ export function createChatSessionStoreWithNotificationDependencies(
       onQueueChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
+        }
+        if (sendTimings.enabled) {
+          for (const item of frame.queue.items) {
+            if (item.kind === "prompt")
+              sendTimings.mark(item.messageId, "queue_received");
+          }
         }
         set((state) => {
           const now = Date.now();
@@ -8944,6 +9019,12 @@ export function createChatSessionStoreWithNotificationDependencies(
       onConnectionStatus: (status, reason, retryCause) => {
         if (disposed) return;
         if (status === "reconnecting" || status === "closed") {
+          if (sendTimings.enabled) {
+            for (const action of Object.values(get().pendingActions)) {
+              if (action.action === "send" && action.messageId !== null)
+                sendTimings.mark(action.messageId, "transport_closed");
+            }
+          }
           // Frames dispatched on the lost connection can no longer be
           // answered. Only stamps get older here - nothing is cancelled
           // until an authoritative post-reconnect snapshot arrives.
@@ -9120,6 +9201,12 @@ export function createChatSessionStoreWithNotificationDependencies(
       return {
         onSnapshot: (frame) => {
           if (!streamGuard.isCurrent(streamGeneration)) return;
+          if (matchesChat(options, frame.epicId, frame.chatId)) {
+            noteSendSnapshot(
+              frame.snapshot.chat.messages,
+              frame.snapshot.queue,
+            );
+          }
           callbacks.onSnapshot(frame);
           const activeTurnId = get().activeTurn?.turnId ?? null;
           if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
@@ -9573,6 +9660,9 @@ export function createChatSessionStoreWithNotificationDependencies(
             ),
           }));
           commitWholeSetSliceBudget();
+          sendTimings.mark(messageId, "optimistic_queue_published");
+        } else if (!rendersAsPendingUserMessage) {
+          sendTimings.mark(messageId, "optimistic_not_published");
         }
         // Consume the staged worktree once it's on the wire so a later send
         // doesn't re-create it (the frame carries it across transport retries).
@@ -10964,6 +11054,8 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       dispose: () => {
         if (disposed) return;
+        unsubscribeSendTimings?.();
+        sendTimings.clear();
         // BEFORE `disposed = true` and before the store leaves
         // `liveChatSessionStores`, because abandonment has to actually land:
         // it writes the prompt into `failedSendRestoration` (or states it),
@@ -11079,6 +11171,59 @@ export function createChatSessionStoreWithNotificationDependencies(
         },
       );
   }
+
+  // Observe the same three reconciliation doors that hide an optimistic row.
+  // A transport receipt is earlier than this state publication, and neither
+  // is a browser paint. Do no transcript scans when no send is pending.
+  unsubscribeSendTimings = store.subscribe((state, previous) => {
+    if (
+      !sendTimings.enabled ||
+      disposed ||
+      previous.pendingUserMessages.length === 0
+    )
+      return;
+    if (
+      state.pendingUserMessages === previous.pendingUserMessages &&
+      state.messages === previous.messages &&
+      state.queue === previous.queue
+    )
+      return;
+    for (const pending of previous.pendingUserMessages) {
+      if (!sendTimings.pendingIsUnreconciled(pending.messageId)) continue;
+      if (
+        sendTimings.hasPhase(pending.messageId, "acceptance_received") &&
+        !state.pendingUserMessages.some(
+          (message) => message.messageId === pending.messageId,
+        )
+      ) {
+        sendTimings.reconcilePending(
+          pending.messageId,
+          "pending_replaced_by_acceptance",
+        );
+      } else if (messageExists(state.messages, pending.messageId)) {
+        sendTimings.reconcilePending(
+          pending.messageId,
+          "pending_replaced_by_transcript",
+        );
+      } else if (
+        state.queue.items.some(
+          (item) =>
+            item.kind === "prompt" && item.messageId === pending.messageId,
+        )
+      ) {
+        sendTimings.reconcilePending(
+          pending.messageId,
+          "pending_replaced_by_queue",
+        );
+      } else if (
+        !state.pendingUserMessages.some(
+          (message) => message.messageId === pending.messageId,
+        )
+      ) {
+        sendTimings.reconcilePending(pending.messageId, "pending_removed");
+      }
+    }
+  });
 
   liveChatSessionStores.add(store);
 
