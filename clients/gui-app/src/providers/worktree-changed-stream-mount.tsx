@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   WorktreeChangedStreamClient,
@@ -8,6 +8,7 @@ import { acquireHostConnection } from "@traycer-clients/shared/host-client/host-
 import { isReopenableHostStreamClose } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import {
   useStreamHostId,
+  useStreamMethodSchemaVersion,
   useStreamMethodSupport,
   useWsStreamClient,
 } from "@/lib/host/stream-runtime-context";
@@ -32,6 +33,7 @@ const HEALTHY_SESSION_RESET_MS = 30_000;
 export function WorktreeChangedStreamMount(): ReactNode {
   const wsStreamClient = useWsStreamClient();
   const support = useStreamMethodSupport("worktree.changed");
+  const schemaVersion = useStreamMethodSchemaVersion("worktree.changed");
   // Both the rebuild key AND the identity the reopen lane and the query
   // invalidations below are scoped to - so it must come off the same
   // `StreamRuntimeBinding` as `wsStreamClient` (one binding, one answer),
@@ -39,6 +41,12 @@ export function WorktreeChangedStreamMount(): ReactNode {
   // can name a different machine mid-swap.
   const hostId = useStreamHostId();
   const queryClient = useQueryClient();
+  // Capability resets on an ordinary transport reconnect re-run the effect
+  // below. Keep the last accepted cursor across that rebuild for this host.
+  const cursorRef = useRef<{
+    readonly hostId: string;
+    readonly store: WorktreeChangedCursorStore;
+  } | null>(null);
 
   useEffect(() => {
     if (
@@ -71,25 +79,36 @@ export function WorktreeChangedStreamMount(): ReactNode {
     // builds: the rebuilt client's first subscribe is a reconnect too, and the
     // host skips its catch-up (and so this client's full refetch) when the
     // last frame received is still current.
-    const cursor: WorktreeChangedCursorStore = { current: null };
+    const cursor =
+      cursorRef.current?.hostId === hostId
+        ? cursorRef.current.store
+        : { current: null };
+    cursorRef.current = { hostId, store: cursor };
     const hostConnection = acquireHostConnection(hostId);
     // Whether this mount currently counts as covering its host (see
-    // `worktree-changed-coverage.ts`): set on an open stream, cleared on a
-    // terminal close and on unmount. A reconnect keeps it - the catch-up frame
-    // on resubscribe refetches everything the gap could have missed.
+    // `worktree-changed-coverage.ts`): set on an open stream, cleared whenever
+    // it reconnects or closes. The coverage store holds a bounded grace for
+    // replay to complete before mounted queries fall back to ordinary reads.
     const streamHostId = hostId;
+    const replayCapable =
+      schemaVersion !== null &&
+      (schemaVersion.major > 1 || schemaVersion.minor >= 1);
     let covering = false;
     const setCovering = (next: boolean): void => {
       if (next === covering) return;
       covering = next;
+      if (!replayCapable) return;
       if (next) markWorktreeChangedStreamOpen(streamHostId);
       else markWorktreeChangedStreamClosed(streamHostId);
     };
     let disposed = false;
     let currentClient: WorktreeChangedStreamClient | null = null;
+    let nextOpenToken = 0;
+    let activeOpenToken = 0;
     const reopenScheduler = hostConnection.reconnect.openReopenLane(() => {
       const client = currentClient;
       currentClient = null;
+      activeOpenToken = 0;
       client?.close();
       openClient();
     }, isReopenableHostStreamClose);
@@ -98,26 +117,33 @@ export function WorktreeChangedStreamMount(): ReactNode {
       if (disposed) return;
       let client: WorktreeChangedStreamClient | null = null;
       let openedAtMs = 0;
+      nextOpenToken = nextOpenToken + 1;
+      const openToken = nextOpenToken;
+      activeOpenToken = openToken;
       client = new WorktreeChangedStreamClient({
         wsStreamClient: streamClient,
         cursor,
         callbacks: {
           onChanged: (scope) => {
-            if (currentClient !== client) return;
+            if (disposed || activeOpenToken !== openToken) return false;
             // A delivered event is the usable-session proof for this stream
             // (it has no initial state frame to reset on).
             reopenScheduler.resetBackoff();
             scheduler.push(scope);
+            return true;
           },
           onConnectionStatus: (status, reason) => {
-            if (currentClient !== client) return;
+            if (disposed || activeOpenToken !== openToken) return;
             if (status === "open") {
               openedAtMs = Date.now();
               setCovering(true);
               return;
             }
+            // A remote logical stream can retry while the shared transport
+            // and its capability manifest stay live. It has no resolver until
+            // it reopens, so it must not count as an open freshness stream.
+            setCovering(false);
             if (status === "closed") {
-              setCovering(false);
               // Events are the only frame this stream carries; a healthy but
               // quiet session must still reset the lane, or the backoff
               // ratchets one-way across the client's lifetime.
@@ -142,11 +168,12 @@ export function WorktreeChangedStreamMount(): ReactNode {
       reopenScheduler.dispose();
       const client = currentClient;
       currentClient = null;
+      activeOpenToken = 0;
       client?.close();
       scheduler.dispose();
       hostConnection.release();
     };
-  }, [hostId, queryClient, support, wsStreamClient]);
+  }, [hostId, queryClient, schemaVersion, support, wsStreamClient]);
 
   return null;
 }

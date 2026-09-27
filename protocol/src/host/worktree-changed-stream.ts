@@ -7,9 +7,10 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
  *
  * `epoch` names one run of the host's broadcaster and changes on every host
  * restart; `generation` counts every change that broadcaster was asked to
- * publish in that run - including one its same-scope window swallowed, so a
- * cursor that still equals the host's current one proves nothing changed.
- * Opaque to the client: it only ever hands back the last cursor it received.
+ * publish in that run, including one its same-scope window swallowed. The
+ * host can replay retained scopes after this cursor; a journal gap falls back
+ * to one root catch-up. Opaque to the client: it hands back only a cursor
+ * whose frame its active consumer accepted.
  */
 export const worktreeChangedCursorSchema = lazySchema(() =>
   z.object({
@@ -69,10 +70,9 @@ export type WorktreeChangedServerFrameV10 = z.infer<
 // ─── Live `worktree.changed@1.1` ────────────────────────────────────────────
 //
 // A (re)subscribe used to be answered with an unconditional root catch-up
-// frame, which makes the client refetch every worktree key - on every
-// reconnect of every client, whether or not anything had changed. `@1.1` lets
-// the client hand back the cursor of the last frame it received, and the host
-// skips the catch-up when that cursor is still current.
+// frame. `@1.1` lets the client hand back its last accepted cursor; the host
+// replays intervening path/root scopes from a bounded journal and sends one
+// root catch-up only when the cursor is absent or outside that journal.
 //
 // Both directions stay compatible: a `@1.0` peer on either side negotiates
 // `@1.0`, where there is no cursor and the catch-up is always sent.
@@ -80,7 +80,7 @@ export type WorktreeChangedServerFrameV10 = z.infer<
 export const worktreeChangedOpenRequestSchema = lazySchema(() =>
   worktreeChangedOpenRequestSchemaV10.extend({
     /**
-     * The cursor of the last `changed` frame this client received from this
+     * The cursor of the last `changed` frame this client accepted from this
      * host, if any. Absent on a first subscribe; absence (not `null`) is the
      * wire encoding of "no cursor", as with `epic.subscribe`'s `seedOffer`.
      */

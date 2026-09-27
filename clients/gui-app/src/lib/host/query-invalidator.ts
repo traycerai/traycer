@@ -4,6 +4,7 @@ import type { AvailabilityRecoveryKind } from "@traycer-clients/shared/host-tran
 import { appLogger } from "@/lib/logger";
 import { isCloudEpicTasksQueryKey, queryKeys } from "@/lib/query-keys";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
+import { isWorktreeChangedStreamCovered } from "@/lib/worktree/worktree-changed-coverage";
 
 /**
  * Harness-catalog methods are carved out of every ACTIVE host-scope refetch.
@@ -77,6 +78,38 @@ function isActiveRefetchExempt(query: Query): boolean {
 }
 
 /**
+ * The one shared, cheap worktree listing gets its reconnect answer from the
+ * replay-capable stream. A generic host recovery sweep can run before replay
+ * finishes; force-refetching here would erase the zero-read unchanged-resume
+ * case and fan out through every always-mounted consumer. Other worktree
+ * reads (including selection reads on older hosts) keep normal recovery.
+ */
+function isReplayCoveredWorktreeListing(query: Query): boolean {
+  if (query.queryKey[2] !== "worktree.listAllForHost") return false;
+  // Replay only replaces the uncertainty about a previously successful row.
+  // A failed listing still needs the recovery sweep to unstrand its reader.
+  if (query.state.status === "error" || query.state.fetchFailureCount > 0) {
+    return false;
+  }
+  const hostId = query.queryKey[1];
+  if (typeof hostId !== "string" || !isWorktreeChangedStreamCovered(hostId)) {
+    return false;
+  }
+  const params = query.queryKey[3];
+  if (params === null || typeof params !== "object") return false;
+  return (
+    "activityPaths" in params &&
+    params.activityPaths === null &&
+    "limit" in params &&
+    params.limit === null &&
+    "includeActivity" in params &&
+    params.includeActivity === false &&
+    "forceRefresh" in params &&
+    params.forceRefresh === false
+  );
+}
+
+/**
  * A read whose current attempt is still in flight and has not failed.
  * TanStack resets `fetchFailureCount` when a fetch starts and raises it when
  * an attempt fails, so a read parked in retry backoff - still `"fetching"` -
@@ -136,11 +169,11 @@ function recoverySweepReaches(
  * key-rotation sweep). Bind/unbind is not in that list any more - it went with
  * the active slot (P4.2). An identity transition marks stale WITHOUT
  * refetching, because the request context may already be gone; the two
- * host-named sweeps can refetch active observers - except the two carve-outs
- * in `isActiveRefetchExempt` (harness catalogs, cloud epic-tasks history),
- * which are skipped entirely, and whatever `recoverySweepReaches` leaves
- * alone: a read still on its first attempt, and after a stall, every read
- * that settled without failing.
+ * host-named sweeps can refetch active observers - except the cache-only
+ * carve-outs in `isActiveRefetchExempt` and the replay-covered base worktree
+ * listing, which are skipped entirely. `recoverySweepReaches` also leaves
+ * alone a read still on its first attempt and, after a stall, every read that
+ * settled without failing.
  */
 export function createHostQueryInvalidator(
   client: QueryClient,
@@ -159,7 +192,11 @@ export function createHostQueryInvalidator(
         const inScope = client
           .getQueryCache()
           .findAll({ queryKey })
-          .filter((query) => !isActiveRefetchExempt(query));
+          .filter(
+            (query) =>
+              !isActiveRefetchExempt(query) &&
+              !isReplayCoveredWorktreeListing(query),
+          );
         const affectedQueries = new Set(
           inScope.filter((query) =>
             recoverySweepReaches(query, options.recovery),

@@ -8,9 +8,26 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { appLogger } from "@/lib/logger";
-import { queryKeys } from "@/lib/query-keys";
+import { hostQueryKeys, queryKeys } from "@/lib/query-keys";
+import {
+  markWorktreeChangedStreamOpen,
+  resetWorktreeChangedCoverageForTests,
+} from "@/lib/worktree/worktree-changed-coverage";
 
 const HOST_ID = "h1";
+function worktreeListingKey(hostId: string, activityPaths: string[] | null) {
+  return hostQueryKeys.method<HostRpcRegistry, "worktree.listAllForHost">(
+    hostId,
+    "worktree.listAllForHost",
+    {
+      includeActivity: false,
+      activityPaths,
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    },
+  );
+}
 
 /** Same builder shape as `use-host-query.ts` (`queryKeys.hostMethod`). */
 const listModelsKey = queryKeys.hostMethod<
@@ -59,6 +76,107 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
     for (const stop of stops.splice(0)) {
       stop();
     }
+    resetWorktreeChangedCoverageForTests();
+  });
+
+  it("a reconnect sweep leaves a covered base listing intact while refetching other host keys and uncovered worktree reads", async () => {
+    const queryClient = createAppQueryClient();
+    const invalidator = createHostQueryInvalidator(queryClient);
+    const coveredListing = mountCountedQuery(
+      queryClient,
+      worktreeListingKey(HOST_ID, null),
+      {
+        staleTime: 0,
+        impl: () => Promise.resolve({ worktrees: [], nextCursor: null }),
+      },
+    );
+    const uncoveredListing = mountCountedQuery(
+      queryClient,
+      worktreeListingKey(HOST_ID, ["/wt/unmanaged"]),
+      {
+        staleTime: 0,
+        impl: () => Promise.resolve({ worktrees: [], nextCursor: null }),
+      },
+    );
+    const otherHostKey = mountCountedQuery(
+      queryClient,
+      queryKeys.hostMethod<HostRpcRegistry, "git.getCapabilities">(
+        HOST_ID,
+        "git.getCapabilities",
+        { hostId: HOST_ID, runningDir: "/repo", ignoreWhitespace: false },
+      ),
+      {
+        staleTime: 0,
+        impl: () => Promise.resolve({ capabilities: [] }),
+      },
+    );
+    stops.push(coveredListing.stop, uncoveredListing.stop, otherHostKey.stop);
+    await waitUntil(
+      () =>
+        coveredListing.fetches.count === 1 &&
+        queryClient.getQueryState(worktreeListingKey(HOST_ID, null))?.status ===
+          "success" &&
+        uncoveredListing.fetches.count === 1 &&
+        queryClient.getQueryState(
+          worktreeListingKey(HOST_ID, ["/wt/unmanaged"]),
+        )?.status === "success" &&
+        otherHostKey.fetches.count === 1 &&
+        queryClient.getQueryState(controlKey)?.status === "success",
+    );
+    markWorktreeChangedStreamOpen(HOST_ID);
+
+    invalidator.invalidateHostScope(HOST_ID, {
+      refetchActive: true,
+      recovery: "reconnect",
+    });
+
+    await waitUntil(
+      () =>
+        uncoveredListing.fetches.count === 2 &&
+        otherHostKey.fetches.count === 2,
+    );
+    await settle(20);
+    expect(coveredListing.fetches.count).toBe(1);
+    expect(
+      queryClient.getQueryState(worktreeListingKey(HOST_ID, null))
+        ?.isInvalidated,
+    ).toBe(false);
+    expect(uncoveredListing.fetches.count).toBe(2);
+    expect(otherHostKey.fetches.count).toBe(2);
+  });
+
+  it("a reconnect sweep retries a failed covered base listing", async () => {
+    const queryClient = createAppQueryClient();
+    const invalidator = createHostQueryInvalidator(queryClient);
+    const listing = mountCountedQuery(
+      queryClient,
+      worktreeListingKey(HOST_ID, null),
+      {
+        staleTime: 0,
+        impl: () => Promise.reject(new Error("listing unavailable")),
+      },
+    );
+    stops.push(listing.stop);
+    await waitUntil(
+      () =>
+        queryClient.getQueryState(worktreeListingKey(HOST_ID, null))?.status ===
+        "error",
+    );
+    markWorktreeChangedStreamOpen(HOST_ID);
+    listing.setImpl(() => Promise.resolve({ worktrees: [], nextCursor: null }));
+
+    invalidator.invalidateHostScope(HOST_ID, {
+      refetchActive: true,
+      recovery: "reconnect",
+    });
+
+    await waitUntil(() => listing.fetches.count === 2);
+    await waitUntil(
+      () =>
+        queryClient.getQueryState(worktreeListingKey(HOST_ID, null))?.status ===
+        "success",
+    );
+    expect(listing.fetches.count).toBe(2);
   });
 
   it("with refetchActive: true, refetches non-catalog host queries and leaves catalog methods entirely untouched", async () => {

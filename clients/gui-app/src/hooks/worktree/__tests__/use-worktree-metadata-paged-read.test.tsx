@@ -7,26 +7,23 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { WorktreeHostEntryV16 } from "@traycer/protocol/host/worktree-schemas";
-import {
-  markWorktreePullRequestTouchedForTests,
-  resetWorktreePullRequestTouchesForTests,
-  useWorktreeEnrichmentForClient,
-  WORKTREE_PR_TOUCH_INTERVAL_MS,
-} from "@/hooks/worktree/use-worktree-enrichment-query";
+import { useWorktreeEnrichmentForClient } from "@/hooks/worktree/use-worktree-enrichment-query";
 import { useWorktreeHostIndexForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createAppQueryClient } from "@/lib/query-client";
 import { invalidateWorktreeChangedCaches } from "@/lib/worktree/invalidate-worktree-changed-caches";
 import {
+  isWorktreeChangedStreamCovered,
   markWorktreeChangedStreamOpen,
+  markWorktreeChangedStreamClosed,
   resetWorktreeChangedCoverageForTests,
+  WORKTREE_CHANGED_RECOVERY_GRACE_MS,
 } from "@/lib/worktree/worktree-changed-coverage";
 
 /**
  * Every worktree surface outside Settings reads ONE host-wide paged listing;
- * selection-mode reads are spent only on rows the listing reports unresolved
- * and on a PR-freshness touch at most every five minutes per host. A
- * navigation or remount costs nothing while the host's `worktree.changed`
+ * selection-mode reads are spent only on rows the listing reports unresolved.
+ * A navigation or remount costs nothing while the host's `worktree.changed`
  * stream is open, and a frame costs one listing read.
  */
 
@@ -143,7 +140,6 @@ const RESOLVED = [row("/wt/a", 10, "a"), row("/wt/b", 10, "b")];
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
-  resetWorktreePullRequestTouchesForTests();
   resetWorktreeChangedCoverageForTests();
 });
 
@@ -151,7 +147,6 @@ describe("worktree metadata from one paged read per host", () => {
   it("serves the index and the enriched rows of resolved worktrees from one paged read", async () => {
     const fixture = createFixture(RESOLVED);
     markWorktreeChangedStreamOpen(HOST_ID);
-    markWorktreePullRequestTouchedForTests(HOST_ID, Date.now());
     const paths = ["/wt/a", "/wt/b"];
 
     const { result } = renderHook(
@@ -169,11 +164,10 @@ describe("worktree metadata from one paged read per host", () => {
     expect(fixture.selectionCalls).toEqual([]);
   });
 
-  it("costs nothing on a remount while the host's stream is open, however old the read", async () => {
+  it("costs nothing on remount with the host stream open and performs no resolved-row enrichment reads", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const fixture = createFixture(RESOLVED);
     markWorktreeChangedStreamOpen(HOST_ID);
-    markWorktreePullRequestTouchedForTests(HOST_ID, Date.now());
     const paths = ["/wt/a"];
     const mount = () =>
       renderHook(
@@ -186,7 +180,6 @@ describe("worktree metadata from one paged read per host", () => {
     first.unmount();
 
     vi.setSystemTime(Date.now() + 3 * 60_000);
-    markWorktreePullRequestTouchedForTests(HOST_ID, Date.now());
     const second = mount();
     await waitFor(() =>
       expect(second.result.current.worktrees).toHaveLength(1),
@@ -197,10 +190,9 @@ describe("worktree metadata from one paged read per host", () => {
     expect(fixture.selectionCalls).toEqual([]);
   });
 
-  it("re-reads the listing on a remount after a minute when no stream watches the host", async () => {
+  it("re-reads the listing on a remount when no stream watches the host", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const fixture = createFixture(RESOLVED);
-    markWorktreePullRequestTouchedForTests(HOST_ID, Date.now());
     const paths = ["/wt/a"];
     const mount = () =>
       renderHook(
@@ -213,9 +205,73 @@ describe("worktree metadata from one paged read per host", () => {
     first.unmount();
 
     vi.setSystemTime(Date.now() + 2 * 60_000);
-    markWorktreePullRequestTouchedForTests(HOST_ID, Date.now());
     mount();
     await waitFor(() => expect(fixture.pagedCalls()).toBe(2));
+  });
+
+  it("keeps a listing covered through reconnect grace, then returns to the 60-second freshness fallback", async () => {
+    const fixture = createFixture(RESOLVED);
+    markWorktreeChangedStreamOpen(HOST_ID);
+    const mount = () =>
+      renderHook(() => useWorktreeHostIndexForClient(fixture.client, true), {
+        wrapper: fixture.Wrapper,
+      });
+    const first = mount();
+    await waitFor(() => expect(first.result.current.worktrees).toHaveLength(2));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      markWorktreeChangedStreamClosed(HOST_ID);
+      expect(isWorktreeChangedStreamCovered(HOST_ID)).toBe(true);
+      expect(fixture.pagedCalls()).toBe(1);
+      vi.setSystemTime(Date.now() + WORKTREE_CHANGED_RECOVERY_GRACE_MS);
+      expect(isWorktreeChangedStreamCovered(HOST_ID)).toBe(false);
+      first.unmount();
+      const second = mount();
+      await waitFor(() => expect(fixture.pagedCalls()).toBe(2));
+      expect(second.result.current.worktrees).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps touching a resolved row on an unwatched host so an external PR merge appears after stale remount", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const open = {
+      ...row("/wt/a", 10, "a"),
+      prState: "open" as const,
+      prNumber: 41,
+      prUrl: "https://example.test/pull/41",
+    };
+    const fixture = createFixture([open]);
+    fixture.host.selection.set("/wt/a", open);
+    const mount = () =>
+      renderHook(
+        () => useWorktreeEnrichmentForClient(fixture.client, ["/wt/a"], true),
+        { wrapper: fixture.Wrapper },
+      );
+
+    const first = mount();
+    await waitFor(() =>
+      expect(first.result.current.worktrees[0]?.prState).toBe("open"),
+    );
+    await settle();
+    expect(fixture.selectionCalls).toEqual([["/wt/a"]]);
+    first.unmount();
+
+    fixture.host.selection.set("/wt/a", {
+      ...row("/wt/a", 20, "a"),
+      prState: "merged",
+      prNumber: 41,
+      prUrl: "https://example.test/pull/41",
+    });
+    vi.setSystemTime(Date.now() + 2 * 60_000);
+    const second = mount();
+    await waitFor(() =>
+      expect(second.result.current.worktrees[0]?.prState).toBe("merged"),
+    );
+    await settle();
+    expect(fixture.pagedCalls()).toBe(2);
+    expect(fixture.selectionCalls).toEqual([["/wt/a"], ["/wt/a"]]);
   });
 
   it("reads only the rows the listing reports unresolved, and shows what that read derived", async () => {
@@ -225,7 +281,6 @@ describe("worktree metadata from one paged read per host", () => {
     ]);
     fixture.host.selection.set("/wt/cold", row("/wt/cold", 20, "derived"));
     markWorktreeChangedStreamOpen(HOST_ID);
-    markWorktreePullRequestTouchedForTests(HOST_ID, Date.now());
     const paths = ["/wt/a", "/wt/cold"];
 
     const { result } = renderHook(
@@ -243,30 +298,6 @@ describe("worktree metadata from one paged read per host", () => {
     expect(fixture.selectionCalls).toEqual([["/wt/cold"]]);
   });
 
-  it("touches every requested row once when the PR touch is due, then not again within the interval", async () => {
-    const fixture = createFixture(RESOLVED);
-    markWorktreeChangedStreamOpen(HOST_ID);
-    const paths = ["/wt/a", "/wt/b"];
-    const mount = () =>
-      renderHook(
-        () => useWorktreeEnrichmentForClient(fixture.client, paths, true),
-        { wrapper: fixture.Wrapper },
-      );
-
-    const first = mount();
-    await waitFor(() => expect(fixture.selectionCalls).toHaveLength(1));
-    expect([...fixture.selectionCalls[0]].sort()).toEqual(["/wt/a", "/wt/b"]);
-    first.unmount();
-
-    const second = mount();
-    await waitFor(() =>
-      expect(second.result.current.worktrees).toHaveLength(2),
-    );
-    await settle();
-    expect(fixture.selectionCalls).toHaveLength(1);
-    expect(WORKTREE_PR_TOUCH_INTERVAL_MS).toBe(5 * 60_000);
-  });
-
   it("shows whichever copy resolved last: a newer listing over an older selection answer", async () => {
     const fixture = createFixture([row("/wt/a", 10, "old")]);
     markWorktreeChangedStreamOpen(HOST_ID);
@@ -276,8 +307,6 @@ describe("worktree metadata from one paged read per host", () => {
       () => useWorktreeEnrichmentForClient(fixture.client, paths, true),
       { wrapper: fixture.Wrapper },
     );
-    // The first mount's touch caches a selection answer at resolvedAt 10.
-    await waitFor(() => expect(fixture.selectionCalls).toHaveLength(1));
     await waitFor(() =>
       expect(result.current.worktrees[0]?.branch).toBe("old"),
     );
@@ -296,13 +325,101 @@ describe("worktree metadata from one paged read per host", () => {
     );
     await settle();
     expect(fixture.pagedCalls()).toBe(2);
-    expect(fixture.selectionCalls).toHaveLength(1);
+    expect(fixture.selectionCalls).toHaveLength(0);
+  });
+
+  it("prefers a later listing's owners, inUse and scripts when resolvedAt ties the selection answer", async () => {
+    const oldSelection = {
+      ...row("/wt/a", 10, "selection-answer"),
+      owners: [
+        {
+          epicId: "old-epic",
+          ownerKind: "chat" as const,
+          ownerId: "old-chat",
+          updatedAt: 1,
+        },
+      ],
+      inUse: true,
+      scripts: {
+        updatedAt: 1,
+        setup: {
+          default: "old setup",
+          macos: null,
+          windows: null,
+          linux: null,
+        },
+        teardown: {
+          default: "old teardown",
+          macos: null,
+          windows: null,
+          linux: null,
+        },
+      },
+    };
+    const fixture = createFixture([row("/wt/a", null, "(unresolved)")]);
+    fixture.host.selection.set("/wt/a", oldSelection);
+    markWorktreeChangedStreamOpen(HOST_ID);
+    const { result } = renderHook(
+      () => useWorktreeEnrichmentForClient(fixture.client, ["/wt/a"], true),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() =>
+      expect(result.current.worktrees[0]?.branch).toBe("selection-answer"),
+    );
+    await settle();
+    expect(fixture.selectionCalls).toEqual([["/wt/a"]]);
+
+    const laterListing = {
+      ...row("/wt/a", 10, "listing-answer"),
+      owners: [
+        {
+          epicId: "new-epic",
+          ownerKind: "chat" as const,
+          ownerId: "new-chat",
+          updatedAt: 2,
+        },
+      ],
+      inUse: false,
+      scripts: {
+        updatedAt: 2,
+        setup: {
+          default: "new setup",
+          macos: null,
+          windows: null,
+          linux: null,
+        },
+        teardown: {
+          default: "new teardown",
+          macos: null,
+          windows: null,
+          linux: null,
+        },
+      },
+    };
+    fixture.host.listing = [laterListing];
+    act(() => {
+      invalidateWorktreeChangedCaches(fixture.queryClient, HOST_ID, {
+        root: false,
+        worktreePaths: new Set(["/wt/a"]),
+      });
+    });
+
+    await waitFor(() =>
+      expect(result.current.worktrees[0]?.branch).toBe("listing-answer"),
+    );
+    expect(result.current.worktrees[0]).toMatchObject({
+      resolvedAt: 10,
+      owners: laterListing.owners,
+      inUse: false,
+      scripts: laterListing.scripts,
+    });
+    await settle();
+    expect(fixture.selectionCalls).toEqual([["/wt/a"], ["/wt/a"]]);
   });
 
   it("answers a root catch-up frame with one listing read and no per-row reads", async () => {
     const fixture = createFixture(RESOLVED);
     markWorktreeChangedStreamOpen(HOST_ID);
-    markWorktreePullRequestTouchedForTests(HOST_ID, Date.now());
     const paths = ["/wt/a", "/wt/b"];
 
     const { result } = renderHook(

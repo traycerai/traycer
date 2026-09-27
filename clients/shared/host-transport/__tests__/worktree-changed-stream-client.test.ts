@@ -43,7 +43,10 @@ class ReconnectingStreamClient extends FakeStreamClient {
 const V10: SchemaVersion = { major: 1, minor: 0 };
 const V11: SchemaVersion = { major: 1, minor: 1 };
 
-function open(cursor: WorktreeChangedCursorStore): {
+function openWithAcceptance(
+  cursor: WorktreeChangedCursorStore,
+  accept: boolean,
+): {
   readonly transport: ReconnectingStreamClient;
   readonly changed: WorktreeChangedScope[];
   readonly client: WorktreeChangedStreamClient;
@@ -56,11 +59,20 @@ function open(cursor: WorktreeChangedCursorStore): {
     callbacks: {
       onChanged: (scope) => {
         changed.push(scope);
+        return accept;
       },
       onConnectionStatus: () => {},
     },
   });
   return { transport, changed, client };
+}
+
+function open(cursor: WorktreeChangedCursorStore): {
+  readonly transport: ReconnectingStreamClient;
+  readonly changed: WorktreeChangedScope[];
+  readonly client: WorktreeChangedStreamClient;
+} {
+  return openWithAcceptance(cursor, true);
 }
 
 function session(transport: ReconnectingStreamClient): FakeStreamSession {
@@ -108,6 +120,45 @@ describe("WorktreeChangedStreamClient resume cursor", () => {
       resume: { epoch: "e1", generation: 5 },
     });
     expect(store.current).toEqual({ epoch: "e1", generation: 5 });
+  });
+
+  it("does not advance the cursor when the consumer rejects a frame", () => {
+    const store: WorktreeChangedCursorStore = {
+      current: { epoch: "e1", generation: 4 },
+    };
+    const { transport } = openWithAcceptance(store, false);
+    session(transport).emit(
+      {
+        kind: "changed",
+        scope: { kind: "root", root: "worktrees" },
+        cursor: { epoch: "e1", generation: 5 },
+        hasBinaryPayload: false,
+      },
+      null,
+    );
+    expect(store.current).toEqual({ epoch: "e1", generation: 4 });
+    expect(transport.paramsAt(V11)).toEqual({
+      resume: { epoch: "e1", generation: 4 },
+    });
+  });
+
+  it("ignores buffered frames after close without advancing the cursor", () => {
+    const store: WorktreeChangedCursorStore = {
+      current: { epoch: "e1", generation: 4 },
+    };
+    const { transport, client } = open(store);
+    const activeSession = session(transport);
+    client.close();
+    activeSession.emit(
+      {
+        kind: "changed",
+        scope: { kind: "root", root: "worktrees" },
+        cursor: { epoch: "e1", generation: 5 },
+        hasBinaryPayload: false,
+      },
+      null,
+    );
+    expect(store.current).toEqual({ epoch: "e1", generation: 4 });
   });
 
   it("offers nothing to a @1.0 host, which cannot read it", () => {

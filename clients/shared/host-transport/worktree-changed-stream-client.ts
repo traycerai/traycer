@@ -16,7 +16,8 @@ import type {
 import type { IHostStreamClient } from "./host-stream-client";
 
 export type WorktreeChangedStreamCallbacks = {
-  readonly onChanged: (scope: WorktreeChangedScope) => void;
+  /** True only after the active consumer has accepted the invalidation. */
+  readonly onChanged: (scope: WorktreeChangedScope) => boolean;
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
@@ -24,7 +25,8 @@ export type WorktreeChangedStreamCallbacks = {
 };
 
 /**
- * The cursor of the last `changed` frame received from one host, held by the
+ * The cursor of the last `changed` frame accepted by the active consumer,
+ * held for one host by the
  * caller so it outlives a rebuilt client: a terminal close replaces the client,
  * and the replacement's first subscribe is exactly the reconnect the cursor is
  * for. Scope it to ONE host - another host's cursor proves nothing here, and
@@ -85,14 +87,15 @@ export class WorktreeChangedStreamClient {
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
   ): void {
-    if (binaryPayload !== null) return;
+    if (this.closed || binaryPayload !== null) return;
     const parsed = worktreeChangedServerFrameSchema.safeParse(envelope);
     if (parsed.success) {
       if (parsed.data.kind !== "changed") return;
-      // Recorded before the callback: the frame is received, and whatever it
-      // invalidates is scheduled here, before any later drop can lose it.
-      this.cursor.current = parsed.data.cursor;
-      this.callbacks.onChanged(parsed.data.scope);
+      // A retired client can still hand over a buffered frame. Its callback
+      // must reject it, leaving the cursor behind so reconnect replays it.
+      if (this.callbacks.onChanged(parsed.data.scope)) {
+        this.cursor.current = parsed.data.cursor;
+      }
       return;
     }
     // A `@1.0` host sends no cursor, and always sends the catch-up.

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   QueryClientProvider,
   type QueryClient,
@@ -13,10 +13,14 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import type { WorktreeHostEntryV16 } from "@traycer/protocol/host/worktree-schemas";
 import { perPathEnrichmentQueryKey } from "@/components/settings/panels/worktrees-enrichment-batcher";
 import { useTaskWorktreeMetadataForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
-import { resetWorktreePullRequestTouchesForTests } from "@/hooks/worktree/use-worktree-enrichment-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { invalidateWorktreeChangedCaches } from "@/lib/worktree/invalidate-worktree-changed-caches";
+import {
+  markWorktreeChangedStreamOpen,
+  resetWorktreeChangedCoverageForTests,
+} from "@/lib/worktree/worktree-changed-coverage";
 import {
   createWorktreeChangedInvalidationScheduler,
   WORKTREE_CHANGED_INVALIDATION_DEBOUNCE_MS,
@@ -32,8 +36,7 @@ import {
  * listing call: the host re-derived the named rows before it published, and the
  * listing carries them. No frame costs a selection-mode read (the kind that
  * derives), which is what used to turn History's frames into per-row git work.
- * The only selection read on mount is the PR-freshness touch, once per host
- * per interval.
+ * Resolved listing rows require no selection reads.
  *
  * Every count is read only once NOTHING is fetching. A selection read waits in
  * the batcher's coalescing window before its RPC is sent, so asserting as soon
@@ -45,7 +48,8 @@ const EPIC_ID = "epic-1";
 const EPIC_OTHER = "epic-other";
 const OWNED_COUNT = 27;
 const OTHER_COUNT = 3;
-const BATCH_LIMIT = 8;
+/** Serialized fixture response, excluding RPC framing and compression. */
+const BASE_RESPONSE_BYTES = 15_289;
 
 const OWNED_PATHS: readonly string[] = Array.from(
   { length: OWNED_COUNT },
@@ -63,11 +67,13 @@ interface ListAllForHostCall {
   readonly cursor: string | null;
   readonly limit: number | null;
   readonly forceRefresh: boolean;
+  readonly responseBytes: number;
 }
 
 afterEach(() => {
   cleanup();
-  resetWorktreePullRequestTouchesForTests();
+  vi.useRealTimers();
+  resetWorktreeChangedCoverageForTests();
 });
 
 function perPathKey(path: string): QueryKey {
@@ -110,6 +116,7 @@ interface Fixture {
     predicate: (call: ListAllForHostCall) => boolean,
   ) => readonly ListAllForHostCall[];
   readonly clearCalls: () => void;
+  readonly notifyReconnect: () => void;
 }
 
 function createFixture(): Fixture {
@@ -126,24 +133,27 @@ function createFixture(): Fixture {
     requestId: () => `req-${String(recorded.length)}`,
     handlers: {
       "worktree.listAllForHost": (params) => {
-        recorded.push(params);
-        if (params.activityPaths === null) {
-          return Promise.resolve({
-            worktrees: [...baseRows],
-            nextCursor: null,
-          });
-        }
-        const worktrees = params.activityPaths.flatMap((path) => {
-          const row = rowsByPath.get(path);
-          return row === undefined ? [] : [row];
+        const response =
+          params.activityPaths === null
+            ? { worktrees: [...baseRows], nextCursor: null }
+            : {
+                worktrees: params.activityPaths.flatMap((path) => {
+                  const row = rowsByPath.get(path);
+                  return row === undefined ? [] : [row];
+                }),
+                nextCursor: null,
+              };
+        recorded.push({
+          ...params,
+          responseBytes: Buffer.byteLength(JSON.stringify(response)),
         });
-        return Promise.resolve({ worktrees, nextCursor: null });
+        return Promise.resolve(response);
       },
     },
   });
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
-    invalidator: { invalidateHostScope: () => undefined },
+    invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
       hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     messenger,
@@ -165,10 +175,13 @@ function createFixture(): Fixture {
     clearCalls: () => {
       recorded.length = 0;
     },
+    notifyReconnect: () =>
+      spine.notifyHostAvailabilityRecovered(HOST_ID, "reconnect"),
   };
 }
 
 async function mountAndSettle(fixture: Fixture) {
+  markWorktreeChangedStreamOpen(HOST_ID);
   const rendered = renderHook(
     () => useTaskWorktreeMetadataForClient(fixture.client, [EPIC_ID]),
     { wrapper: fixture.Wrapper },
@@ -198,24 +211,94 @@ function selectionCallsOf(fixture: Fixture): readonly ListAllForHostCall[] {
 }
 
 describe("useTaskWorktreeMetadataForClient - worktree.changed frame refetch cost", () => {
-  it("(mount) costs exactly one base call, and one PR-touch selection batch covering every owned path once", async () => {
+  it("(mount) costs one base call and no selection reads for resolved rows", async () => {
     const fixture = createFixture();
     await mountAndSettle(fixture);
 
     const base = baseCallsOf(fixture);
     const selection = selectionCallsOf(fixture);
 
-    // The rows themselves come from the one base listing; the only selection
-    // read is the PR-freshness touch, due on the host's first mount.
     expect(base).toHaveLength(1);
-    expect(selection).toHaveLength(Math.ceil(OWNED_COUNT / BATCH_LIMIT));
-    for (const call of selection) {
-      expect((call.activityPaths ?? []).length).toBeLessThanOrEqual(
-        BATCH_LIMIT,
-      );
-    }
-    const union = selection.flatMap((call) => call.activityPaths ?? []);
-    expect([...union].sort()).toEqual([...OWNED_PATHS].sort());
+    expect(selection).toHaveLength(0);
+  });
+
+  it("a mounted consumer stays quiet on an unchanged resume after five minutes; one changed path costs one shared paged read", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const fixture = createFixture();
+    const rendered = await mountAndSettle(fixture);
+    const coldCalls = fixture.calls(() => true);
+    const coldBytes = coldCalls.reduce(
+      (total, call) => total + call.responseBytes,
+      0,
+    );
+    expect(coldCalls).toHaveLength(1);
+    expect(coldBytes).toBe(BASE_RESPONSE_BYTES);
+
+    fixture.clearCalls();
+    vi.setSystemTime(Date.now() + 6 * 60_000);
+    fixture.notifyReconnect();
+    await settled(fixture);
+    const resumeCalls = fixture.calls(() => true);
+    expect(resumeCalls).toHaveLength(0);
+    expect(
+      resumeCalls.reduce((total, call) => total + call.responseBytes, 0),
+    ).toBe(0);
+    expect(
+      fixture
+        .calls(() => true)
+        .reduce((sum, call) => sum + call.responseBytes, 0),
+    ).toBe(0);
+
+    act(() => {
+      invalidateWorktreeChangedCaches(fixture.queryClient, HOST_ID, {
+        root: false,
+        worktreePaths: new Set([OWNED_PATHS[0]]),
+      });
+    });
+    await waitFor(() => expect(baseCallsOf(fixture)).toHaveLength(1));
+    await settled(fixture);
+    const changedCalls = fixture.calls(() => true);
+    const changedBytes = changedCalls.reduce(
+      (total, call) => total + call.responseBytes,
+      0,
+    );
+    expect(baseCallsOf(fixture)).toHaveLength(1);
+    expect(selectionCallsOf(fixture)).toHaveLength(0);
+    expect(changedCalls).toHaveLength(1);
+    expect(changedBytes).toBe(BASE_RESPONSE_BYTES);
+    expect(rendered.result.current.worktreesByEpicId.get(EPIC_ID)).toHaveLength(
+      OWNED_COUNT,
+    );
+  });
+
+  it("mounting a second consumer after six minutes reuses the covered listing without extra RPCs or response bytes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const fixture = createFixture();
+    await mountAndSettle(fixture);
+    expect(fixture.calls(() => true)).toHaveLength(1);
+
+    fixture.clearCalls();
+    vi.setSystemTime(Date.now() + 6 * 60_000);
+    const secondConsumer = renderHook(
+      () => useTaskWorktreeMetadataForClient(fixture.client, [EPIC_ID]),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(
+        secondConsumer.result.current.worktreesByEpicId.get(EPIC_ID),
+      ).toHaveLength(OWNED_COUNT);
+    });
+    await settled(fixture);
+
+    const navigationCalls = fixture.calls(() => true);
+    const navigationBytes = navigationCalls.reduce(
+      (total, call) => total + call.responseBytes,
+      0,
+    );
+    expect(navigationCalls).toHaveLength(0);
+    expect(navigationBytes).toBe(0);
+    expect(baseCallsOf(fixture)).toHaveLength(0);
+    expect(selectionCallsOf(fixture)).toHaveLength(0);
   });
 
   it("(a) a path frame for an on-screen path costs exactly one base call and no selection call", async () => {

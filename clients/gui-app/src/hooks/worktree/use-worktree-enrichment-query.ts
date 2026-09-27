@@ -1,9 +1,5 @@
-import { useEffect, useMemo } from "react";
-import {
-  useQueries,
-  useQueryClient,
-  type UseQueryResult,
-} from "@tanstack/react-query";
+import { useMemo } from "react";
+import { useQueries, type UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -20,6 +16,7 @@ import {
   type WorktreeHostListingRow,
 } from "@/hooks/worktree/use-worktree-host-listing";
 import { rowsByRequestedPath } from "@/lib/worktree/worktree-path-match";
+import { useWorktreeChangedStreamCovered } from "@/lib/worktree/worktree-changed-coverage";
 import type { HostRpcRegistry } from "@/lib/host";
 
 export interface WorktreeEnrichment {
@@ -62,30 +59,6 @@ function combinePerPathReads(
   }));
 }
 
-/**
- * How often, per host, the background surfaces touch their on-screen rows with
- * a selection-mode read. The host re-probes a PR fact only when such a read
- * touches it (paged reads serve the row cache), so this is what keeps merged
- * and closed PRs moving; the host announces a moved fact with a
- * `worktree.changed` frame, which refetches the listing.
- */
-export const WORKTREE_PR_TOUCH_INTERVAL_MS = 5 * 60_000;
-
-const lastPullRequestTouchAtByHost = new Map<string, number>();
-
-/** Test-only: forget every host's last touch. */
-export function resetWorktreePullRequestTouchesForTests(): void {
-  lastPullRequestTouchAtByHost.clear();
-}
-
-/** Test-only: record a touch for `hostId` at `at`, so it is not due. */
-export function markWorktreePullRequestTouchedForTests(
-  hostId: string,
-  at: number,
-): void {
-  lastPullRequestTouchAtByHost.set(hostId, at);
-}
-
 function newestResolvedAt(rows: readonly { resolvedAt: number | null }[]) {
   let newest: number | null = null;
   for (const row of rows) {
@@ -105,20 +78,19 @@ function newestResolvedAt(rows: readonly { resolvedAt: number | null }[]) {
  * Served from the ONE host-wide listing (`useWorktreeHostListingForClient`):
  * a row the listing has resolved costs no read of its own. Selection-mode
  * reads - cached per path, batched through the host's shared batcher - are
- * spent only where the listing cannot answer:
+ * spent where the listing cannot answer or replay freshness is unavailable:
  *
  * - a row the listing reports UNRESOLVED (`resolvedAt: null`): the host
  *   derives on a selection read only (resolve-on-read), so without one it
  *   would answer the sentinel row forever;
  * - a path the listing does not name (a binding-sourced path outside the
  *   managed walk): read exactly as before this listing existed;
- * - a PR-freshness touch over the requested rows, at most once per
- *   {@link WORKTREE_PR_TOUCH_INTERVAL_MS} per host.
+ * - an older or unwatched host: a selection read still touches stale PR facts
+ *   because that host has no subscriber-owned recurring probe.
  *
- * Per path, whichever copy - the listing's or a selection read's - resolved
- * more recently is the one shown, so a derive a selection read triggered is
- * not hidden by an older listing, and a frame-driven listing refetch is not
- * hidden by an older selection answer.
+ * Per path, a strictly newer selection derive wins. A listing wins a tie,
+ * because ownership, scripts and in-use fields can change without moving
+ * resolvedAt and the prior selection response cannot prove those fields.
  *
  * Gated like `useHostQuery`: a null client, or a host that cannot execute
  * yet, leaves every read disabled.
@@ -129,7 +101,9 @@ export function useWorktreeEnrichmentForClient(
   enabled: boolean,
 ): WorktreeEnrichment {
   const readiness = useReactiveHostReadiness(client);
-  const queryClient = useQueryClient();
+  const streamCovered = useWorktreeChangedStreamCovered(
+    enabled && paths.length > 0 ? readiness.hostId : null,
+  );
   const batcher = useMemo(
     () =>
       client === null ? null : createWorktreeEnrichmentBatcherForClient(client),
@@ -157,12 +131,12 @@ export function useWorktreeEnrichmentForClient(
   const perPath = useQueries({
     queries: uniquePaths.map((path) => {
       const listed = listingRowsByPath.get(path) ?? [];
-      // Read what the listing cannot answer: a row nobody has resolved yet
-      // (only a selection read derives it), or a path the listing does not
-      // name at all - a binding can name a worktree the managed walk does not
-      // enumerate, and a selection read resolves requested paths directly.
+      // Read what the listing cannot answer, and preserve the old-host
+      // selection path when no replay stream owns PR freshness.
       const needsRead =
-        listed.length === 0 || listed.every((row) => row.resolvedAt === null);
+        !streamCovered ||
+        listed.length === 0 ||
+        listed.every((row) => row.resolvedAt === null);
       return perPathEnrichmentQueryOptions({
         hostId: readiness.hostId,
         path,
@@ -173,47 +147,6 @@ export function useWorktreeEnrichmentForClient(
     }),
     combine: combinePerPathReads,
   });
-
-  // The PR-freshness touch. An effect because it is exactly an external
-  // sync: it asks the host to look again, and whatever it learns lands in the
-  // same per-path cache the observers above read.
-  const hostId = readiness.hostId;
-  useEffect(() => {
-    if (!queriesEnabled || !listingSettled || hostId === null) return;
-    if (batcher === null) return;
-    const listedPaths = uniquePaths.filter(
-      (path) => (listingRowsByPath.get(path) ?? []).length > 0,
-    );
-    if (listedPaths.length === 0) return;
-    const now = Date.now();
-    const last = lastPullRequestTouchAtByHost.get(hostId);
-    if (last !== undefined && now - last < WORKTREE_PR_TOUCH_INTERVAL_MS) {
-      return;
-    }
-    lastPullRequestTouchAtByHost.set(hostId, now);
-    for (const path of listedPaths) {
-      void queryClient
-        .fetchQuery({
-          ...perPathEnrichmentQueryOptions({
-            hostId,
-            path,
-            batcher,
-            enabled: true,
-            staleTime: null,
-          }),
-          staleTime: 0,
-        })
-        .catch(() => undefined);
-    }
-  }, [
-    batcher,
-    hostId,
-    listingRowsByPath,
-    listingSettled,
-    queriesEnabled,
-    queryClient,
-    uniquePaths,
-  ]);
 
   return useMemo<WorktreeEnrichment>(() => {
     if (uniquePaths.length === 0) return EMPTY_ENRICHMENT;
@@ -229,7 +162,7 @@ export function useWorktreeEnrichmentForClient(
       const listedAt = newestResolvedAt(listed);
       const preferRead =
         listed.length === 0 ||
-        (readAt !== null && (listedAt === null || readAt >= listedAt));
+        (readAt !== null && (listedAt === null || readAt > listedAt));
       worktrees.push(...(preferRead ? read : listed));
     });
     return {
