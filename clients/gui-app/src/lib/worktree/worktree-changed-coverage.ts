@@ -15,6 +15,12 @@ import { useCallback, useSyncExternalStore } from "react";
  */
 const openStreamsByHost = new Map<string, number>();
 const listenersByHost = new Map<string, Set<() => void>>();
+// One callback per query cache even when several mounted surfaces share the
+// host listing. An expired grace needs one active refetch, not one per surface.
+const expiryListenersByHost = new Map<
+  string,
+  Map<object, { count: number; listener: () => void }>
+>();
 // A transport recovery can notify the broad host-query sweep before this
 // stream's replay subscribe completes. Give that subscribe one ordinary
 // listing-staleness window to settle; if it cannot, the mounted listing
@@ -33,6 +39,15 @@ function clearRecoveryGraceTimer(hostId: string): void {
   recoveryGraceTimersByHost.delete(hostId);
 }
 
+function expireRecoveryGrace(hostId: string): void {
+  recoveryGraceUntilByHost.delete(hostId);
+  notify(hostId);
+  for (const { listener } of expiryListenersByHost.get(hostId)?.values() ??
+    []) {
+    listener();
+  }
+}
+
 function armRecoveryGraceTimer(hostId: string): void {
   clearRecoveryGraceTimer(hostId);
   const until = recoveryGraceUntilByHost.get(hostId);
@@ -40,8 +55,7 @@ function armRecoveryGraceTimer(hostId: string): void {
     return;
   }
   if (until <= Date.now()) {
-    recoveryGraceUntilByHost.delete(hostId);
-    notify(hostId);
+    expireRecoveryGrace(hostId);
     return;
   }
   recoveryGraceTimersByHost.set(
@@ -49,8 +63,7 @@ function armRecoveryGraceTimer(hostId: string): void {
     window.setTimeout(() => {
       recoveryGraceTimersByHost.delete(hostId);
       if (recoveryGraceUntilByHost.get(hostId) !== until) return;
-      recoveryGraceUntilByHost.delete(hostId);
-      notify(hostId);
+      expireRecoveryGrace(hostId);
     }, until - Date.now()),
   );
 }
@@ -79,6 +92,35 @@ export function markWorktreeChangedStreamClosed(hostId: string): void {
 
 export function isWorktreeChangedStreamOpen(hostId: string | null): boolean {
   return hostId !== null && (openStreamsByHost.get(hostId) ?? 0) > 0;
+}
+
+/**
+ * One expiry action per owner, shared by every mounted consumer of its cache.
+ * The owner is a QueryClient for the host listing; callers register only while
+ * their query is enabled. This stays registered across a host-binding change
+ * when a different surface still reads the old host.
+ */
+export function subscribeWorktreeChangedCoverageExpired(
+  hostId: string,
+  owner: object,
+  listener: () => void,
+): () => void {
+  let byOwner = expiryListenersByHost.get(hostId);
+  if (byOwner === undefined) {
+    byOwner = new Map();
+    expiryListenersByHost.set(hostId, byOwner);
+  }
+  const entry = byOwner.get(owner);
+  if (entry === undefined) byOwner.set(owner, { count: 1, listener });
+  else entry.count += 1;
+  return () => {
+    const listeners = expiryListenersByHost.get(hostId);
+    const current = listeners?.get(owner);
+    if (current === undefined) return;
+    current.count -= 1;
+    if (current.count === 0) listeners?.delete(owner);
+    if (listeners?.size === 0) expiryListenersByHost.delete(hostId);
+  };
 }
 
 /** The replay stream is live, or is still within its bounded reconnect gap. */
@@ -163,5 +205,6 @@ export function resetWorktreeChangedCoverageForTests(): void {
   }
   openStreamsByHost.clear();
   recoveryGraceUntilByHost.clear();
+  expiryListenersByHost.clear();
   for (const hostId of hosts) notify(hostId);
 }

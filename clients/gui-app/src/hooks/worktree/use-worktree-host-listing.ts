@@ -1,9 +1,15 @@
+import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
-import { useWorktreeChangedStreamCovered } from "@/lib/worktree/worktree-changed-coverage";
+import {
+  subscribeWorktreeChangedCoverageExpired,
+  useWorktreeChangedStreamCovered,
+} from "@/lib/worktree/worktree-changed-coverage";
 import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
 
 export type WorktreeHostListingResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -36,7 +42,8 @@ export const WORKTREE_HOST_LISTING_UNWATCHED_STALE_MS = 60_000;
  * rows change - a frame for a row or the whole root, and replay or a catch-up
  * frame on (re)subscribe - and every one refetches this key
  * (`invalidate-worktree-changed-caches.ts`). If reconnection cannot complete
- * within the grace window, mounted observers return to the 60-second fallback.
+ * within the grace window, mounted observers refetch once and return to the
+ * 60-second fallback.
  * A host with no such stream (an Epic bound to another machine) keeps
  * {@link WORKTREE_HOST_LISTING_UNWATCHED_STALE_MS}.
  *
@@ -74,10 +81,30 @@ export function useWorktreeHostListingForClient(
   client: HostClient<HostRpcRegistry> | null,
   enabled: boolean,
 ): WorktreeHostListing {
+  const queryClient = useQueryClient();
   const readiness = useReactiveHostReadiness(client);
   const streamCovered = useWorktreeChangedStreamCovered(
     enabled ? readiness.hostId : null,
   );
+  useEffect(() => {
+    const hostId = readiness.hostId;
+    if (!enabled || hostId === null) return;
+    // TanStack only changes a cached query's stale flag when its staleTime
+    // changes from Infinity to 60s. Focus/reconnect refetches are disabled in
+    // this app, so a permanently mounted drawer needs an explicit read when
+    // replay coverage actually expires. Register once per QueryClient/host:
+    // many mounted consumers share this exact base listing key.
+    return subscribeWorktreeChangedCoverageExpired(hostId, queryClient, () => {
+      void queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.method<
+          HostRpcRegistry,
+          "worktree.listAllForHost"
+        >(hostId, "worktree.listAllForHost", WORKTREE_HOST_LISTING_PARAMS),
+        exact: true,
+        refetchType: "active",
+      });
+    });
+  }, [enabled, queryClient, readiness.hostId]);
   const query = useHostQuery<HostRpcRegistry, "worktree.listAllForHost">({
     cacheKeyIdentity: undefined,
     client,

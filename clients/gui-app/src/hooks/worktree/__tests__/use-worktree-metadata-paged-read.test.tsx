@@ -234,6 +234,52 @@ describe("worktree metadata from one paged read per host", () => {
     }
   });
 
+  it("refetches one shared mounted listing after reconnect grace expires", async () => {
+    const fixture = createFixture([row("/wt/a", 10, "before reconnect")]);
+    markWorktreeChangedStreamOpen(HOST_ID);
+    const indexConsumer = renderHook(
+      () => useWorktreeHostIndexForClient(fixture.client, true),
+      { wrapper: fixture.Wrapper },
+    );
+    const rowConsumer = renderHook(
+      () => useWorktreeEnrichmentForClient(fixture.client, ["/wt/a"], true),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(indexConsumer.result.current.worktrees[0]?.branch).toBe(
+        "before reconnect",
+      );
+      expect(rowConsumer.result.current.worktrees[0]?.branch).toBe(
+        "before reconnect",
+      );
+    });
+    expect(fixture.pagedCalls()).toBe(1);
+
+    vi.useFakeTimers();
+    try {
+      markWorktreeChangedStreamClosed(HOST_ID);
+      fixture.host.listing = [row("/wt/a", 20, "after grace")];
+      expect(isWorktreeChangedStreamCovered(HOST_ID)).toBe(true);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WORKTREE_CHANGED_RECOVERY_GRACE_MS);
+        await vi.advanceTimersByTimeAsync(1);
+        await Promise.resolve();
+      });
+      expect(fixture.pagedCalls()).toBe(2);
+      expect(indexConsumer.result.current.worktrees[0]?.branch).toBe(
+        "after grace",
+      );
+      expect(rowConsumer.result.current.worktrees[0]?.branch).toBe(
+        "after grace",
+      );
+      expect(fixture.pagedCalls()).toBe(2);
+      expect(fixture.selectionCalls).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps touching a resolved row on an unwatched host so an external PR merge appears after stale remount", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const open = {
