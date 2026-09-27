@@ -2,6 +2,7 @@ import { rowSkeletonEntrySchema } from "@traycer/protocol/persistence/chat-trans
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import {
   buildSkeletonResumeOffer,
+  acceptsSkeletonResume,
   type ChatSkeletonResume,
 } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
 import type { TranscriptWindow } from "@/stores/chats/transcript-window";
@@ -202,10 +203,34 @@ export function readSkeletonForResume(
     claim: stored.claim,
     readEntries: () => {
       if (parsed === null) {
-        const raw: unknown = JSON.parse(stored.entriesJson);
-        parsed = Array.isArray(raw)
-          ? raw.map((entry) => rowSkeletonEntrySchema.parse(entry))
-          : [];
+        try {
+          const raw: unknown = JSON.parse(stored.entriesJson);
+          if (!Array.isArray(raw)) throw new Error("Invalid cache entries");
+          const entries: RowSkeletonEntry[] = raw.map((entry) =>
+            rowSkeletonEntrySchema.parse(entry),
+          );
+          const rebuilt = buildSkeletonResumeOffer(entries, entries.length);
+          if (
+            !acceptsSkeletonResume(stored.claim) ||
+            rebuilt === null ||
+            entries.length !==
+              stored.claim.blockDigests.length * stored.claim.blockSize ||
+            rebuilt.claim.blockDigests.length !==
+              stored.claim.blockDigests.length ||
+            rebuilt.claim.blockDigests.some(
+              (digest, index) => digest !== stored.claim.blockDigests[index],
+            )
+          ) {
+            throw new Error("Invalid cache claim");
+          }
+          parsed = entries;
+        } catch {
+          drop(cacheKey);
+          void removeDurableSkeleton(cacheKey).catch(() => undefined);
+          // Never include a stored key or row in an Error message: callers may
+          // surface it in logs after this boundary.
+          throw new Error("Skeleton resume cache entry is invalid.");
+        }
       }
       return parsed;
     },

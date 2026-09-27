@@ -1,7 +1,10 @@
 import { IDBFactory as FakeIDBFactory } from "fake-indexeddb";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
-import { SKELETON_RESUME_BLOCK_SIZE } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
+import {
+  buildSkeletonResumeOffer,
+  SKELETON_RESUME_BLOCK_SIZE,
+} from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
 import {
   clearAllSkeletonsForResume,
   dropMemorySkeletonsForTests,
@@ -88,9 +91,12 @@ describe("durable skeleton resume", () => {
       ...KEY,
       userId: "user-2",
     });
+    const skeleton = entries();
+    const offer = buildSkeletonResumeOffer(skeleton, skeleton.length);
+    if (offer === null) throw new Error("Expected one complete block");
     const durable = {
-      claim: { derivation: 1, blockSize: 256, blockDigests: ["digest"] },
-      entriesJson: JSON.stringify(entries()),
+      claim: offer.claim,
+      entriesJson: JSON.stringify(offer.entries),
     };
     await saveDurableSkeleton(skeletonResumeStorageKey(KEY), durable);
     await saveDurableSkeleton(otherAccountKey, durable);
@@ -103,6 +109,27 @@ describe("durable skeleton resume", () => {
       expect(readSkeletonForResume(KEY)?.readEntries()).toEqual(entries());
     });
     expect(readSkeletonForResume({ ...KEY, userId: "user-2" })).toBeNull();
+  });
+
+  it("rejects schema-valid cached rows that disagree with the claimed digests", async () => {
+    const skeleton = entries();
+    const offer = buildSkeletonResumeOffer(skeleton, skeleton.length);
+    if (offer === null) throw new Error("Expected one complete block");
+    const first = skeleton[0];
+    skeleton[0] = { ...first, preview: "tampered" };
+    const storageKey = skeletonResumeStorageKey(KEY);
+    await saveDurableSkeleton(storageKey, {
+      claim: offer.claim,
+      entriesJson: JSON.stringify(skeleton),
+    });
+    await hydrateSkeletonForResume(KEY);
+
+    expect(() => readSkeletonForResume(KEY)?.readEntries()).toThrow(
+      "Skeleton resume cache entry is invalid.",
+    );
+    expect(readSkeletonForResume(KEY)).toBeNull();
+    await drainDurableSkeletonWritesForTests();
+    expect(hasDurableSkeletonHint(storageKey)).toBe(false);
   });
 
   it("bounds the durable store to eight chats, evicting the oldest", async () => {
