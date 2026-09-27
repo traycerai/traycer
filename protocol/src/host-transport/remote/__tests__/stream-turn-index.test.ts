@@ -53,6 +53,23 @@ function queuedChunked(
   };
 }
 
+function startAndDrainChunked(
+  index: StreamTurnIndex<StreamTurnItem>,
+  window: ChunkInterleaveWindow,
+  item: StreamTurnItem,
+): void {
+  expect(item.source.chunked).toBe(true);
+  expect(index.canPull(item, window)).toBe(true);
+  item.source.nextFrame();
+  window.notePulled(item.source);
+  index.noteChunkStarted(item.source.streamId);
+  while (!item.source.done) {
+    item.source.nextFrame();
+    window.notePulled(item.source);
+  }
+  index.complete(item);
+}
+
 describe("StreamTurnIndex", () => {
   it("visits one head per stream regardless of a deep same-stream tail", () => {
     const index = new StreamTurnIndex<StreamTurnItem>();
@@ -332,5 +349,85 @@ describe("StreamTurnIndex", () => {
     expect(Array.from(index.heads())).toEqual([large]);
     expect(index.headSerial(small1.source.streamId)).toBe(small1.serial);
     expect(index.headSerial(small2.source.streamId)).toBe(small2.serial);
+  });
+
+  it("gives the oldest waiter exclusive admission after 16 actual younger starts", () => {
+    const index = new StreamTurnIndex<StreamTurnItem>();
+    const window = new ChunkInterleaveWindow();
+    vi.spyOn(window, "availableStartSlots").mockReturnValue(1);
+    const availableBytes = vi
+      .spyOn(window, "availableStartBytes")
+      .mockReturnValue(128 * 1024);
+    const oldest = queuedChunked(1200, 1200, 1024 * 1024, QosClass.INTERACTIVE);
+    index.enqueue(oldest);
+    index.deferForWindow(oldest);
+
+    for (let count = 0; count < MAX_ACTIVE_CHUNKED_STREAMS; count += 1) {
+      const small = queuedChunked(
+        1300 + count,
+        1300 + count,
+        128 * 1024,
+        QosClass.INTERACTIVE,
+      );
+      index.enqueue(small);
+      startAndDrainChunked(index, window, small);
+    }
+
+    const nextSmall = queuedChunked(
+      1400,
+      1400,
+      128 * 1024,
+      QosClass.INTERACTIVE,
+    );
+    index.enqueue(nextSmall);
+    expect(index.canPull(nextSmall, window)).toBe(false);
+    index.deferForWindow(nextSmall);
+    index.reconsiderWindow(window);
+    expect(Array.from(index.heads())).toEqual([]);
+
+    availableBytes.mockReturnValue(2 * 1024 * 1024);
+    index.reconsiderWindow(window);
+    expect(Array.from(index.heads())).toEqual([oldest]);
+    expect(index.canPull(oldest, window)).toBe(true);
+
+    oldest.source.nextFrame();
+    window.notePulled(oldest.source);
+    index.noteChunkStarted(oldest.source.streamId);
+    expect(index.canPull(nextSmall, window)).toBe(true);
+  });
+
+  it("resets the bypass barrier when its oldest waiter is dropped", () => {
+    const index = new StreamTurnIndex<StreamTurnItem>();
+    const window = new ChunkInterleaveWindow();
+    vi.spyOn(window, "availableStartSlots").mockReturnValue(1);
+    vi.spyOn(window, "availableStartBytes").mockReturnValue(128 * 1024);
+    const oldest = queuedChunked(1500, 1500, 1024 * 1024, QosClass.INTERACTIVE);
+    index.enqueue(oldest);
+    index.deferForWindow(oldest);
+    for (let count = 0; count < MAX_ACTIVE_CHUNKED_STREAMS; count += 1) {
+      const small = queuedChunked(
+        1600 + count,
+        1600 + count,
+        128 * 1024,
+        QosClass.INTERACTIVE,
+      );
+      index.enqueue(small);
+      startAndDrainChunked(index, window, small);
+    }
+    const nextSmall = queuedChunked(
+      1700,
+      1700,
+      128 * 1024,
+      QosClass.INTERACTIVE,
+    );
+    index.enqueue(nextSmall);
+    expect(index.canPull(nextSmall, window)).toBe(false);
+    index.deferForWindow(nextSmall);
+
+    expect(index.dropStream(oldest.source.streamId)).toBe(true);
+    index.reconsiderWindow(window);
+
+    expect(Array.from(index.heads())).toEqual([nextSmall]);
+    expect(index.canPull(nextSmall, window)).toBe(true);
   });
 });

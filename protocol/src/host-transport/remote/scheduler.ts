@@ -244,14 +244,18 @@ export class PriorityScheduler {
         }
       }
     }
-    this.interactiveTurns.dropStream(streamId);
-    this.bulkTurns.dropStream(streamId);
+    const releasedInteractiveHold = this.interactiveTurns.dropStream(streamId);
+    const releasedBulkHold = this.bulkTurns.dropStream(streamId);
     if (awaitLocalAbort) {
       this.chunkWindow.awaitLocalAbort(streamId);
     } else {
       this.chunkWindow.forgetStream(streamId);
       // A freed partial-body reservation can make an already queued source
       // eligible without a new enqueue or credit grant.
+    }
+    // A dropped oldest waiter can remove an admission hold without changing
+    // the window's numeric reservation. Local aborts retain that reservation.
+    if (!awaitLocalAbort || releasedInteractiveHold || releasedBulkHold) {
       void this.pump();
     }
   }
@@ -294,7 +298,7 @@ export class PriorityScheduler {
         turns.deferForOtherQueue(item);
         continue;
       }
-      if (!this.chunkWindow.canPull(item.source)) {
+      if (!turns.canPull(item, this.chunkWindow)) {
         turns.deferForWindow(item);
         continue;
       }
@@ -303,8 +307,12 @@ export class PriorityScheduler {
         this.notePaceWait(this.pacer.msUntilAvailable(frameBytes));
         continue;
       }
+      const newChunkStart =
+        item.source.chunked &&
+        !this.chunkWindow.usesExistingReservation(item.source);
       const frame = item.source.nextFrame();
       this.chunkWindow.notePulled(item.source);
+      if (newChunkStart) turns.noteChunkStarted(streamId);
       if (item.source.done) {
         turns.complete(item);
         other.unblockFromOtherQueue(streamId, turns.headSerial(streamId));

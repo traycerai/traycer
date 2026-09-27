@@ -1,4 +1,8 @@
-import type { ChunkInterleaveWindow, OutboundChunkSource } from "../chunking";
+import {
+  MAX_ACTIVE_CHUNKED_STREAMS,
+  type ChunkInterleaveWindow,
+  type OutboundChunkSource,
+} from "../chunking";
 
 /** One queued logical message, ordered against both QoS classes by `serial`. */
 export interface StreamTurnItem {
@@ -147,6 +151,14 @@ function firstFitting(
   return firstFitting(root.right, byteBudget);
 }
 
+function oldestDeferred(root: DeferredNode | null): DeferredNode | null {
+  let current = root;
+  while (current !== null && current.left !== null) {
+    current = current.left;
+  }
+  return current;
+}
+
 /**
  * A round-robin view of a class queue's per-stream FIFO heads.
  *
@@ -164,6 +176,12 @@ export class StreamTurnIndex<T extends StreamTurnItem> {
   private readonly fifoDeferred = new Map<number, StreamGroup<T>>();
   private deferredRoot: DeferredNode | null = null;
   private nextDeferredOrder = 0;
+  /** A waiting large body eventually owns the next new-body opening. */
+  private oldestWaiter: {
+    readonly streamId: number;
+    readonly order: number;
+  } | null = null;
+  private oldestWaiterBypasses = 0;
 
   enqueue(item: T): void {
     const streamId = item.source.streamId;
@@ -249,6 +267,10 @@ export class StreamTurnIndex<T extends StreamTurnItem> {
     this.promoted.delete(streamId);
     const order = group.deferredOrder ?? this.nextDeferredOrder++;
     group.deferredOrder = order;
+    if (this.oldestWaiter === null || order < this.oldestWaiter.order) {
+      this.oldestWaiter = { streamId, order };
+      this.oldestWaiterBypasses = 0;
+    }
     this.deferred.set(streamId, group);
     this.deferredRoot = insertDeferred(this.deferredRoot, {
       streamId,
@@ -278,9 +300,18 @@ export class StreamTurnIndex<T extends StreamTurnItem> {
         this.deferForWindow(head);
       }
     }
-    if (this.deferredRoot === null) return;
-    const firstGroup = this.deferred.get(this.deferredRoot.streamId);
-    // The tree root is priority-balanced, but identifies this class's QoS.
+    const oldest = oldestDeferred(this.deferredRoot);
+    if (oldest === null) {
+      this.oldestWaiter = null;
+      this.oldestWaiterBypasses = 0;
+      return;
+    }
+    if (this.oldestWaiter?.order !== oldest.order) {
+      this.oldestWaiter = { streamId: oldest.streamId, order: oldest.order };
+      this.oldestWaiterBypasses = 0;
+    }
+    const firstGroup = this.deferred.get(oldest.streamId);
+    // The oldest deferred head identifies this class's QoS.
     const firstSource = firstGroup?.entries[firstGroup.front]?.source;
     if (firstSource === undefined) {
       throw new Error("stream turn index lost its deferred head");
@@ -288,8 +319,11 @@ export class StreamTurnIndex<T extends StreamTurnItem> {
     let slots = window.availableStartSlots(firstSource.qos);
     let bytes = window.availableStartBytes(firstSource.qos);
     while (slots > 0) {
-      const candidate = firstFitting(this.deferredRoot, bytes);
-      if (candidate === null) break;
+      const exclusive = this.oldestWaiterBypasses >= MAX_ACTIVE_CHUNKED_STREAMS;
+      const candidate = exclusive
+        ? oldestDeferred(this.deferredRoot)
+        : firstFitting(this.deferredRoot, bytes);
+      if (candidate === null || candidate.bytes > bytes) break;
       const group = this.deferred.get(candidate.streamId);
       if (group === undefined) {
         throw new Error("stream turn index lost its deferred group");
@@ -299,7 +333,34 @@ export class StreamTurnIndex<T extends StreamTurnItem> {
       this.promoted.set(candidate.streamId, group);
       slots -= 1;
       bytes -= candidate.bytes;
+      if (exclusive) break;
     }
+  }
+
+  /** Keep a starved waiter exclusive without blocking continuations or controls. */
+  canPull(item: T, window: ChunkInterleaveWindow): boolean {
+    if (!window.canPull(item.source)) return false;
+    if (!item.source.chunked || window.usesExistingReservation(item.source)) {
+      return true;
+    }
+    return (
+      this.oldestWaiterBypasses < MAX_ACTIVE_CHUNKED_STREAMS ||
+      this.oldestWaiter?.streamId === item.source.streamId
+    );
+  }
+
+  /** Count an overtaking body only after its first frame is pulled. */
+  noteChunkStarted(streamId: number): void {
+    if (this.oldestWaiter === null) return;
+    if (streamId === this.oldestWaiter.streamId) {
+      this.oldestWaiter = null;
+      this.oldestWaiterBypasses = 0;
+      return;
+    }
+    this.oldestWaiterBypasses = Math.min(
+      MAX_ACTIVE_CHUNKED_STREAMS,
+      this.oldestWaiterBypasses + 1,
+    );
   }
 
   /** A partial message keeps its FIFO head but yields the next stream's turn. */
@@ -343,7 +404,11 @@ export class StreamTurnIndex<T extends StreamTurnItem> {
     }
   }
 
-  dropStream(streamId: number): void {
+  /** Returns whether dropping the oldest waiter removed an admission hold. */
+  dropStream(streamId: number): boolean {
+    const releasedAdmissionHold =
+      this.oldestWaiter?.streamId === streamId &&
+      this.oldestWaiterBypasses >= MAX_ACTIVE_CHUNKED_STREAMS;
     this.groups.delete(streamId);
     this.promoted.delete(streamId);
     const deferredGroup = this.deferred.get(streamId);
@@ -355,6 +420,11 @@ export class StreamTurnIndex<T extends StreamTurnItem> {
     }
     this.deferred.delete(streamId);
     this.fifoDeferred.delete(streamId);
+    if (this.oldestWaiter?.streamId === streamId) {
+      this.oldestWaiter = null;
+      this.oldestWaiterBypasses = 0;
+    }
+    return releasedAdmissionHold;
   }
 
   clear(): void {
@@ -364,5 +434,7 @@ export class StreamTurnIndex<T extends StreamTurnItem> {
     this.fifoDeferred.clear();
     this.deferredRoot = null;
     this.nextDeferredOrder = 0;
+    this.oldestWaiter = null;
+    this.oldestWaiterBypasses = 0;
   }
 }
