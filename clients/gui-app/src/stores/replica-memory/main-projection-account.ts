@@ -14,6 +14,8 @@ interface ObjectNode {
   // contribute once, even when distinct top-level slices share rows.
   readonly ownSize: RetainedValueSize;
   readonly children: readonly object[];
+  // JSON emits every reference, even when the heap shares its target.
+  serializedRawBytes: number;
   references: number;
 }
 
@@ -48,9 +50,11 @@ export function createMainProjectionAccount(): {
     ) {
       // Projections are JSON-shaped. Preserve the existing estimator for an
       // unexpected opaque object rather than treating it as an empty shell.
+      const size = retainedValueSize(value);
       const node = {
-        ownSize: retainedValueSize(value),
+        ownSize: size,
         children: [],
+        serializedRawBytes: size.rawBytes,
         references: 0,
       };
       nodes.set(value, node);
@@ -97,9 +101,15 @@ export function createMainProjectionAccount(): {
         estimatedHeapBytes: ownEstimatedHeapBytes,
       },
       children,
+      serializedRawBytes: ownRawBytes,
       references: 0,
     };
     nodes.set(value, node);
+    // Cache the raw size of this JSON subtree. A changed root can then count
+    // every serialized alias without re-encoding unchanged row text.
+    for (const child of children) {
+      node.serializedRawBytes += nodeFor(child).serializedRawBytes;
+    }
     return node;
   };
 
@@ -107,7 +117,6 @@ export function createMainProjectionAccount(): {
     const node = nodeFor(value);
     node.references += 1;
     if (node.references !== 1) return;
-    rawBytes += node.ownSize.rawBytes;
     estimatedHeapBytes += node.ownSize.estimatedHeapBytes;
     for (const child of node.children) attachObject(child);
   };
@@ -116,13 +125,13 @@ export function createMainProjectionAccount(): {
     const node = nodeFor(value);
     node.references -= 1;
     if (node.references !== 0) return;
-    rawBytes -= node.ownSize.rawBytes;
     estimatedHeapBytes -= node.ownSize.estimatedHeapBytes;
     for (const child of node.children) detachObject(child);
   };
 
   const attach = (tracked: TrackedValue): void => {
     if (typeof tracked.value === "object" && tracked.value !== null) {
+      rawBytes += nodeFor(tracked.value).serializedRawBytes;
       attachObject(tracked.value);
       return;
     }
@@ -133,6 +142,7 @@ export function createMainProjectionAccount(): {
 
   const detach = (tracked: TrackedValue): void => {
     if (typeof tracked.value === "object" && tracked.value !== null) {
+      rawBytes -= nodeFor(tracked.value).serializedRawBytes;
       detachObject(tracked.value);
       return;
     }

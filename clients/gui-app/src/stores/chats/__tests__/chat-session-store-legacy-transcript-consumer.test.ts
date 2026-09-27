@@ -833,6 +833,14 @@ describe("chat-session-store - real legacy snapshots settle the process-wide cha
       const ownedStateAccount = createChatOwnedStateAccount();
       ownedStateAccount.update(state);
       const ownedStateHeapBytes = ownedStateAccount.size().estimatedHeapBytes;
+      const expectedSoleCopyBytes =
+        transcriptBytes +
+        (state.messages.length + state.events.length) *
+          CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES;
+      const expectedRequiredBytes =
+        chatWholeSetSliceBytes(sixWholeSetSlicesOf(state)) +
+        CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+        ownedStateHeapBytes;
       // Deliberately falsify only this holder's ledger while leaving the
       // resident transcript untouched. The direct eviction probe must
       // remeasure and restore the whole legacy charge; without the legacy
@@ -846,8 +854,8 @@ describe("chat-session-store - real legacy snapshots settle the process-wide cha
       const outcome = memory.chatWindows.evict(1);
       expect(outcome.reclaimedBytes).toBe(0);
       expect(outcome.protectedBytesByKind).toEqual([
-        { kind: "sole-copy", bytes: transcriptBytes },
-        { kind: "required", bytes: ownedStateHeapBytes },
+        { kind: "sole-copy", bytes: expectedSoleCopyBytes },
+        { kind: "required", bytes: expectedRequiredBytes },
       ]);
       expect(
         chatWindowsUsage(memory).settledBytes - CHAT_WINDOWS_SOFT_LIMIT_BYTES,

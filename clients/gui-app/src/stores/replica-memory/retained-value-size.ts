@@ -5,7 +5,8 @@
  * Neither is a measurement of the renderer process or of a Y.Doc.
  *
  * Call this for a changed row or store slice, never for a whole replica on
- * every frame. A shared reference within one value is charged once.
+ * every frame. Shared objects are charged once in the heap estimate; their
+ * content appears at every reference in the serialized JSON size.
  */
 export interface RetainedValueSize {
   readonly rawBytes: number;

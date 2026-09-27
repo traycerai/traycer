@@ -5,13 +5,21 @@ import {
 } from "../main-projection-account";
 import { retainedValueSize } from "../retained-value-size";
 
+function rawJsonBytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+function rawRootBytes(...roots: readonly unknown[]): number {
+  return roots.reduce<number>((total, root) => total + rawJsonBytes(root), 0);
+}
+
 describe("main projection memory account", () => {
   it("tracks changed top-level patches and counts aliased values once", () => {
     const account = createMainProjectionAccount();
     const shared = { title: "retained title", rows: ["row-a", "row-b"] };
     const initial = account.recordPatch({ chats: shared, aliases: shared });
     expect(initial).toEqual({
-      rawBytes: retainedValueSize(shared).rawBytes,
+      rawBytes: rawRootBytes(shared, shared),
       estimatedHeapBytes:
         retainedValueSize(shared).estimatedHeapBytes +
         MAIN_PROJECTION_BOOKKEEPING_HEAP_BYTES,
@@ -22,7 +30,7 @@ describe("main projection memory account", () => {
     const expectedChat = retainedValueSize(next);
     const expectedAlias = retainedValueSize(shared);
     expect(updated).toEqual({
-      rawBytes: expectedChat.rawBytes + expectedAlias.rawBytes,
+      rawBytes: rawRootBytes(next, shared),
       estimatedHeapBytes:
         expectedChat.estimatedHeapBytes +
         expectedAlias.estimatedHeapBytes +
@@ -81,17 +89,13 @@ describe("main projection memory account", () => {
       retainedValueSize(chats),
       retainedValueSize(chatRecords),
     ];
-    const sharedSizes = rows.map((row) => retainedValueSize(row));
     const expected = {
-      rawBytes:
-        rootSizes[0].rawBytes +
-        rootSizes[1].rawBytes -
-        sharedSizes.reduce((total, size) => total + size.rawBytes, 0),
+      rawBytes: rawRootBytes(chats, chatRecords),
       estimatedHeapBytes:
         rootSizes[0].estimatedHeapBytes +
         rootSizes[1].estimatedHeapBytes -
-        sharedSizes.reduce(
-          (total, size) => total + size.estimatedHeapBytes,
+        rows.reduce(
+          (total, row) => total + retainedValueSize(row).estimatedHeapBytes,
           0,
         ) +
         MAIN_PROJECTION_BOOKKEEPING_HEAP_BYTES,
@@ -111,19 +115,17 @@ describe("main projection memory account", () => {
       retainedValueSize(nextChats),
       retainedValueSize(chatRecords),
     ];
-    const stillSharedSizes = rows.slice(1).map((row) => retainedValueSize(row));
     expect(account.recordPatch({ chats: nextChats })).toEqual({
-      rawBytes:
-        nextRootSizes[0].rawBytes +
-        nextRootSizes[1].rawBytes -
-        stillSharedSizes.reduce((total, size) => total + size.rawBytes, 0),
+      rawBytes: rawRootBytes(nextChats, chatRecords),
       estimatedHeapBytes:
         nextRootSizes[0].estimatedHeapBytes +
         nextRootSizes[1].estimatedHeapBytes -
-        stillSharedSizes.reduce(
-          (total, size) => total + size.estimatedHeapBytes,
-          0,
-        ) +
+        rows
+          .slice(1)
+          .reduce(
+            (total, row) => total + retainedValueSize(row).estimatedHeapBytes,
+            0,
+          ) +
         MAIN_PROJECTION_BOOKKEEPING_HEAP_BYTES,
     });
   });
