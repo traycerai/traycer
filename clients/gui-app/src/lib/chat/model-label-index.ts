@@ -66,10 +66,7 @@ function buildModelLabelIndex(
   harnesses: ReadonlyArray<GuiHarnessCatalogEntry>,
 ): ModelLabelIndex {
   const modelLabels = new Map<string, string>();
-  const modelReasoningLabels = new Map<
-    string,
-    ReadonlyMap<string, string>
-  >();
+  const modelReasoningLabels = new Map<string, ReadonlyMap<string, string>>();
 
   for (const harness of harnesses) {
     for (const model of harness.models) {
