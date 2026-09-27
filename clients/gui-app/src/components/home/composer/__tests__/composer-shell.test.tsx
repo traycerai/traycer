@@ -324,13 +324,36 @@ describe("ComposerShell phone expansion", () => {
 
   it("closes the sheet on a pull down past the threshold while expanded", () => {
     viewportMock.phone = true;
+    vi.useFakeTimers();
     const expansion = makeExpansion(true);
     renderShellWithEditor(expansion, FITTING_EDITOR);
 
     pull(grabberOrThrow(), 100, 130);
+    expect(expansion.onExpandedChange).not.toHaveBeenCalled();
 
+    vi.advanceTimersByTime(200);
     expect(expansion.onExpandedChange).toHaveBeenCalledTimes(1);
     expect(expansion.onExpandedChange).toHaveBeenCalledWith(false);
+    vi.useRealTimers();
+  });
+
+  it("holds the sheet's top under the finger while the pull lasts", () => {
+    viewportMock.phone = true;
+    const expansion = makeExpansion(true);
+    renderShellWithEditor(expansion, FITTING_EDITOR);
+    const zone = grabberOrThrow();
+    const sheet = zone.parentElement;
+    if (sheet === null) throw new Error("sheet missing");
+
+    fireEvent.pointerDown(zone, { clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(zone, { clientY: 60, pointerId: 1 });
+    expect(sheet.hasAttribute("data-composer-pulling")).toBe(true);
+    expect(sheet.style.getPropertyValue("--composer-sheet-top")).not.toBe("");
+
+    fireEvent.pointerUp(zone, { clientY: 60, pointerId: 1 });
+    expect(sheet.hasAttribute("data-composer-pulling")).toBe(false);
+    expect(sheet.style.getPropertyValue("--composer-sheet-top")).toBe("");
+    expect(expansion.onExpandedChange).not.toHaveBeenCalled();
   });
 
   it("does nothing on a tap or a short wobble", () => {

@@ -35,7 +35,7 @@ it("gives the open sheet its slot's box, and takes it back on collapse", () => {
   const view = render(<Sheet expanded />);
   const { style } = screen.getByTestId("sheet");
   expect(style.cssText).toBe(
-    "left: 4px; top: -550px; width: 370px; height: 700px;",
+    "left: 4px; top: max(-550px, var(--composer-sheet-top, -550px)); width: 370px; bottom: -150px;",
   );
 
   view.rerender(<Sheet expanded={false} />);

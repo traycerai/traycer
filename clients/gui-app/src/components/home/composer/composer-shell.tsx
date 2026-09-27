@@ -77,39 +77,75 @@ export function ComposerDropOverlay({
 
 /** Vertical travel that reads as a deliberate pull rather than a wobble. */
 const PULL_THRESHOLD_PX = 24;
+/** How long a released sheet takes to settle: the sheet's `duration-200`. */
+const SETTLE_MS = 200;
+/** Where a pull holds the sheet's top, measured from the card's place in flow. */
+const SHEET_TOP = "--composer-sheet-top";
+
+interface Pull {
+  readonly startY: number;
+  /** How far below the card's top edge the press landed. */
+  readonly grip: number;
+  readonly wasOpen: boolean;
+}
 
 /**
- * The grabber on the card's top edge: a pull UP opens the sheet, and on the
- * sheet's top edge a pull DOWN closes it. A tap does nothing, so a thumb
- * landing on the edge never opens anything. Pointer capture keeps the pull on
- * this element once it starts; `preventDefault` on the press keeps the editor
- * focused so the keyboard does not dip mid-gesture. The bar itself is hidden
- * from assistive technology; `ComposerExpandButton` is its accessible twin.
+ * The grabber on the card's top edge. The sheet follows the pull: its top
+ * stays under the finger, and on release it settles open or closed by how far
+ * the pull went. A tap or a wobble does nothing, so a thumb landing on the
+ * edge never opens anything. Pointer capture keeps the pull on this element
+ * once it starts; `preventDefault` on the press keeps the editor focused so
+ * the keyboard does not dip mid-gesture. The bar itself is hidden from
+ * assistive technology; `ComposerExpandButton` is its accessible twin.
  */
 function ComposerGrabber({
   expanded,
   onExpandedChange,
 }: ComposerExpansion): ReactNode {
-  const startY = useRef<number | null>(null);
+  const pull = useRef<Pull | null>(null);
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>): void => {
+    const sheet = event.currentTarget.parentElement;
+    if (sheet === null) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    startY.current = event.clientY;
+    pull.current = {
+      startY: event.clientY,
+      grip: event.clientY - sheet.getBoundingClientRect().top,
+      wasOpen: expanded,
+    };
   };
   const onPointerMove = (event: PointerEvent<HTMLDivElement>): void => {
-    if (startY.current === null) return;
-    const travel = event.clientY - startY.current;
-    if (!expanded && travel <= -PULL_THRESHOLD_PX) {
-      startY.current = null;
-      onExpandedChange(true);
-    } else if (expanded && travel >= PULL_THRESHOLD_PX) {
-      startY.current = null;
-      onExpandedChange(false);
+    const sheet = event.currentTarget.parentElement;
+    const origin = sheet?.parentElement;
+    if (pull.current === null || sheet === null || !origin) return;
+    const { startY, grip, wasOpen } = pull.current;
+    if (sheet.style.getPropertyValue(SHEET_TOP) === "") {
+      if (!wasOpen && event.clientY - startY > -PULL_THRESHOLD_PX) return;
+      sheet.dataset.composerPulling = "";
+      if (!wasOpen) onExpandedChange(true);
     }
+    const top = event.clientY - grip - origin.getBoundingClientRect().top;
+    sheet.style.setProperty(SHEET_TOP, `${Math.min(0, top)}px`);
   };
-  const onPointerEnd = (): void => {
-    startY.current = null;
+  const onPointerEnd = (event: PointerEvent<HTMLDivElement>): void => {
+    const sheet = event.currentTarget.parentElement;
+    if (pull.current === null || sheet === null) return;
+    const { startY, wasOpen } = pull.current;
+    pull.current = null;
+    if (sheet.style.getPropertyValue(SHEET_TOP) === "") return;
+    delete sheet.dataset.composerPulling;
+    const travel = event.clientY - startY;
+    if (wasOpen ? travel < PULL_THRESHOLD_PX : travel <= -PULL_THRESHOLD_PX) {
+      sheet.style.removeProperty(SHEET_TOP);
+      return;
+    }
+    // Closing: the sheet settles onto the card's place, then becomes the card.
+    sheet.style.setProperty(SHEET_TOP, "0px");
+    window.setTimeout(() => {
+      sheet.style.removeProperty(SHEET_TOP);
+      onExpandedChange(false);
+    }, SETTLE_MS);
   };
 
   return (
@@ -193,9 +229,8 @@ function ComposerAreaImpl({
       <ComposerMenu pickerStore={pickerStore} />
       {/* The dim behind the sheet. A sibling rather than the sheet's own
           pseudo-element: a negative-z child paints above its parent's
-          background, and the entrance animation's transform would make the
-          sheet the pseudo-element's containing block for its duration. Same
-          layer as the sheet, earlier in the DOM, so the sheet paints over it. */}
+          background. Same layer as the sheet, earlier in the DOM, so the
+          sheet paints over it. */}
       {expanded ? (
         <div
           aria-hidden
@@ -227,9 +262,10 @@ function ComposerAreaImpl({
           // the surface already ends at the keyboard (the shell's
           // safe-height tokens subtract it), and the inset dwarfs the
           // indicator's, so the max is 0. The frame takes the scroll so the
-          // toolbar stays put.
+          // toolbar stays put. The top eases to where a released pull sends
+          // it, and keeps up with the finger while the pull lasts.
           expanded &&
-            "absolute z-40 flex flex-col bg-card shadow-lg animate-in slide-in-from-bottom duration-300",
+            "absolute z-40 flex flex-col bg-card shadow-lg transition-[top] duration-200 data-composer-pulling:transition-none",
         )}
       >
         {overlay}

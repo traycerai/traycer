@@ -8,6 +8,9 @@ import { useLayoutEffect, useRef, type RefObject } from "react";
  * keyboard comes and goes; the sheet's ancestors are watched because a
  * reflow around the card moves the sheet's origin, and a move cannot be
  * observed but the ancestor resizing with it can.
+ *
+ * The bottom edge is pinned and the top is a floor, not a fixed value: a pull
+ * on the grabber holds the top lower through `--composer-sheet-top`.
  */
 export function useComposerSheetPin(expanded: boolean): {
   slotRef: RefObject<HTMLDivElement | null>;
@@ -24,11 +27,12 @@ export function useComposerSheetPin(expanded: boolean): {
       const origin = sheet.offsetParent?.getBoundingClientRect();
       if (origin === undefined) return;
       const box = slot.getBoundingClientRect();
+      const top = box.top - origin.top;
       Object.assign(sheet.style, {
         left: `${box.left - origin.left}px`,
-        top: `${box.top - origin.top}px`,
+        top: `max(${top}px, var(--composer-sheet-top, ${top}px))`,
         width: `${box.width}px`,
-        height: `${box.height}px`,
+        bottom: `${origin.bottom - box.bottom}px`,
       });
     };
     const observer = new ResizeObserver(pin);
@@ -39,7 +43,7 @@ export function useComposerSheetPin(expanded: boolean): {
     pin();
     return () => {
       observer.disconnect();
-      Object.assign(sheet.style, { left: "", top: "", width: "", height: "" });
+      Object.assign(sheet.style, { left: "", top: "", width: "", bottom: "" });
     };
   }, [expanded]);
 
