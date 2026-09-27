@@ -3918,13 +3918,25 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       `sessionImport.run`'s own negotiated line.
     - Below the row, one card per mode lists what it runs without asking, from
       `PERMISSION_MODE_DETAILS`, the same data as the picker's descriptions.
+    - **Auto is experimental.** Its picker option, expanded selected control,
+      and mode card carry a muted xs **Experimental** badge. A compact picker
+      includes the status in its tooltip and accessible name. The mode card
+      adds: "Auto mode is experimental. We’re still improving its reliability
+      and speed."
+    - Desktop and mobile pickers show **Supervised**, **Auto-accept edits**,
+      **Full access**, then **Auto**, using `PERMISSION_PICKER_OPTIONS`. The
+      safety order in `PERMISSION_OPTIONS` stays separate and unchanged, as do
+      compatibility fallbacks. The Auto row has the same label-and-description
+      shape as its peers; reviewer/model/billing metadata is shown in Judge
+      settings, not the picker. Availability reasons and mid-turn notices stay.
   - **Judge** (`judge-tab.tsx`, with `judge-tile-state.ts`,
     `use-judge-toolbar-store.ts`, `judge-model-face.tsx` and
     `judge-status-lines.tsx`) - **Auto mode judge**: which model checks each
     command in Auto mode on this machine, over `autoJudge.get` /
     `autoJudge.set` (`~/.traycer/host/config/auto-judge.json`,
-    `selection: null` = Automatic). Two readers share one cache entry with the
-    composer's meta line, and the harness catalog invalidates it when the
+    `selection: null` = Automatic). The heading carries an **Experimental**
+    badge. Two readers share one cache entry with the composer's mid-turn
+    availability check, and the harness catalog invalidates it when the
     Traycer row's enabled / available / auth facts change (see
     `auto-judge-billing.ts`). The save invalidates it too, after writing its
     echo.
@@ -3953,7 +3965,8 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     - **The card** opens with one lead line, the group's description
       ("Checks each command before it runs in Auto mode."), and a muted xs
       "This machine" `Badge`, the one the Modes tab uses for "All machines".
-      `SettingsGroup` has no title slot, so the badge sits on the lead line.
+      The scope badge stays on the lead line; the **Experimental** badge sits
+      beside the group's heading through `SettingsGroup.titleStatus`.
     - **Two tiles, one radio group**: "✦ Automatic" (with an outline
       "Recommended" badge) and "◎ A model you pick". They sit side by side
       while the card is at least `@lg` wide (a container query on the card)

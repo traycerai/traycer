@@ -373,6 +373,13 @@ async function flushTicks(): Promise<void> {
 }
 
 describe("JudgeTab", () => {
+  it("badges the 'Auto mode judge' heading as Experimental", () => {
+    renderTab();
+
+    const heading = screen.getByRole("heading", { name: /Auto mode judge/ });
+    expect(within(heading).getByText("Experimental")).not.toBeNull();
+  });
+
   describe("the tile-state table", () => {
     it("loading: neither tile is checked, both are inert, and no picker is drawn", () => {
       judgeRecord.current = undefined;
