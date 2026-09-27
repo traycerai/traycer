@@ -45,6 +45,7 @@ import {
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
   getChatRunSettingsResponseSchemaV20,
+  getChatRunSettingsBatchResponseSchema,
 } from "@traycer/protocol/host/epic/chat-records";
 import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lines";
 
@@ -247,6 +248,7 @@ const LIVE_FROZEN_EXPORTS = {
   // The head line: it names the LIVE response, so the next attempt to grow the
   // settings tuple fails here first.
   "epic.getChatRunSettings@3.0": getChatRunSettingsResponseSchema,
+  "epic.getChatRunSettingsBatch@1.0": getChatRunSettingsBatchResponseSchema,
   "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
   "providers.list@7.0 request": providersListRequestSchema,
 } as const;
