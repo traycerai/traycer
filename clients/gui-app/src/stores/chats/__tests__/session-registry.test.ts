@@ -10,6 +10,11 @@ import {
 } from "@/stores/chats/session-registry";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { DESKTOP_RETENTION_PROFILE } from "@/stores/replica-memory/retention-profile";
+import {
+  __resetAgentActivityStoreForTests,
+  __setHostAgentActivityHealthForTests,
+  __setHostAgentActivityStateForTests,
+} from "@/stores/agent-activity-store";
 
 const TTL_MS = 10 * 60 * 1_000;
 // High enough that existing TTL-focused tests (≤2 sessions) never hit the cap.
@@ -54,6 +59,7 @@ describe("ChatSessionRegistry", () => {
   });
 
   afterEach(() => {
+    __resetAgentActivityStoreForTests();
     vi.useRealTimers();
   });
 
@@ -347,6 +353,255 @@ describe("ChatSessionRegistry", () => {
     expect(registry.peek("epic-1", "chat-1", HOST)).toBeNull();
   });
 
+  it("keeps a slot-only stale-session retry while the host activity plane calls it a turn", () => {
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: WARM_CAP,
+    });
+    const owned = createHandle("epic-1", "chat-1");
+    const acquired = registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
+      () => owned.handle,
+    );
+    // The failed attempt has ended. The replacement is owed, but no turn,
+    // queue, or native background item exists in this chat snapshot.
+    setAccess(acquired, "owner");
+    markRunningOnBackgroundOnly(acquired);
+    setLocalActivity(HOST, "epic-1", "chat-1", true);
+
+    registry.release("epic-1", "chat-1", HOST);
+    vi.advanceTimersByTime(TTL_MS);
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBe(acquired);
+    expect(owned.closeCount()).toBe(0);
+
+    // Once the retry settles and the host removes the turn tier, the next
+    // bounded idle check can reclaim this warm stream.
+    setLocalActivity(HOST, "epic-1", "chat-1", false);
+    vi.advanceTimersByTime(TTL_MS);
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBeNull();
+    expect(owned.closeCount()).toBe(1);
+  });
+
+  it("uses the chat signal when an activity frame is stale or covers another host", () => {
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: WARM_CAP,
+    });
+    const onUncoveredHost = createHandle("epic-1", "chat-1");
+    const uncovered = registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST_B, scopeKey: SCOPE },
+      () => onUncoveredHost.handle,
+    );
+    setAccess(uncovered, "owner");
+    markRunningOnBackgroundOnly(uncovered);
+    setLocalActivity(HOST, "epic-1", "chat-1", true);
+    registry.release("epic-1", "chat-1", HOST_B);
+    vi.advanceTimersByTime(TTL_MS);
+    expect(onUncoveredHost.closeCount()).toBe(1);
+
+    const onStaleHost = createHandle("epic-1", "chat-2");
+    const stale = registry.acquire(
+      { epicId: "epic-1", chatId: "chat-2", hostId: HOST, scopeKey: SCOPE },
+      () => onStaleHost.handle,
+    );
+    setAccess(stale, "owner");
+    markRunningOnBackgroundOnly(stale);
+    setLocalActivity(HOST, "epic-1", "chat-2", true);
+    __setHostAgentActivityHealthForTests(HOST, {
+      connectionStatus: "reconnecting",
+      stateFrameSeenThisEpoch: false,
+    });
+    registry.release("epic-1", "chat-2", HOST);
+    vi.advanceTimersByTime(TTL_MS);
+    expect(onStaleHost.closeCount()).toBe(1);
+  });
+
+  it("prefers an attested local host slice over a colliding chat id in the fleet union", () => {
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: WARM_CAP,
+    });
+    const owned = createHandle("epic-1", "chat-1");
+    const acquired = registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST_B, scopeKey: SCOPE },
+      () => owned.handle,
+    );
+    setAccess(acquired, "owner");
+    markRunningOnBackgroundOnly(acquired);
+    setLocalActivity(HOST_B, "epic-1", "chat-1", false);
+    __setHostAgentActivityHealthForTests(HOST, {
+      connectionStatus: "open",
+      servedBy: "cloud",
+      cloudSyncStatus: "connected",
+      stateFrameSeenThisEpoch: true,
+    });
+    __setHostAgentActivityStateForTests(
+      HOST,
+      { "epic-1": { working: ["chat-1"], turn: ["chat-1"] } },
+      "cloud",
+      "connected",
+    );
+
+    registry.release("epic-1", "chat-1", HOST_B);
+    vi.advanceTimersByTime(TTL_MS);
+    expect(owned.closeCount()).toBe(1);
+  });
+
+  it("uses a fleet-spanning frame for a chat whose host has no direct slice", () => {
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: WARM_CAP,
+    });
+    const owned = createHandle("epic-1", "chat-1");
+    const acquired = registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST_B, scopeKey: SCOPE },
+      () => owned.handle,
+    );
+    setAccess(acquired, "owner");
+    markRunningOnBackgroundOnly(acquired);
+    __setHostAgentActivityHealthForTests(HOST, {
+      connectionStatus: "open",
+      servedBy: "cloud",
+      cloudSyncStatus: "connected",
+      stateFrameSeenThisEpoch: true,
+    });
+    __setHostAgentActivityStateForTests(
+      HOST,
+      { "epic-1": { working: ["chat-1"], turn: ["chat-1"] } },
+      "cloud",
+      "connected",
+    );
+
+    registry.release("epic-1", "chat-1", HOST_B);
+    vi.advanceTimersByTime(TTL_MS);
+    expect(registry.peek("epic-1", "chat-1", HOST_B)).toBe(acquired);
+    expect(owned.closeCount()).toBe(0);
+  });
+
+  it("keeps a newly visible native item while the activity stream has an older background frame", () => {
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: WARM_CAP,
+    });
+    const owned = createHandle("epic-1", "chat-1");
+    const acquired = registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
+      () => owned.handle,
+    );
+    setAccess(acquired, "owner");
+    markRunningOnBackgroundOnly(acquired);
+    acquired.store.setState({
+      backgroundItems: [
+        {
+          taskId: "native-1",
+          title: "new native item",
+          blockId: "block-1",
+          parentTaskId: null,
+          kind: "workflow",
+          phase: null,
+          activeLabel: null,
+          agentsStarted: null,
+          agentsFinished: null,
+        },
+      ],
+    });
+    setLocalActivity(HOST, "epic-1", "chat-1", false);
+
+    registry.release("epic-1", "chat-1", HOST);
+    vi.advanceTimersByTime(TTL_MS);
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBe(acquired);
+    expect(owned.closeCount()).toBe(0);
+  });
+
+  it("keeps an arriving runnable queue while its activity turn frame is coalescing", () => {
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: 1,
+    });
+    const owned = createHandle("epic-1", "chat-1");
+    const idle = createHandle("epic-1", "chat-2");
+    const acquired = registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
+      () => owned.handle,
+    );
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-2", hostId: HOST, scopeKey: SCOPE },
+      () => idle.handle,
+    );
+    setAccess(acquired, "owner");
+    markRunningOnBackgroundOnly(acquired);
+    setLocalActivity(HOST, "epic-1", "chat-1", false);
+    // The chat stream has published the queue, but the independently
+    // coalesced activity stream still shows background. Chat state cannot
+    // distinguish this from a queue under closed host admission, so a
+    // positive queue signal conservatively holds in both cases.
+    acquired.store.setState({
+      queue: {
+        status: "running",
+        items: [
+          {
+            kind: "managed-command",
+            queueItemId: "queue-1",
+            commandId: "command-1",
+            description: "new delivery",
+            monitoring: false,
+            hostId: null,
+            delivery: "next_turn",
+            targetTurnId: null,
+            status: "pending",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+      },
+    });
+
+    registry.release("epic-1", "chat-1", HOST);
+    // Overflow the warm pool before the activity stream publishes its next
+    // frame. The new idle chat should yield to the runnable queued chat.
+    registry.release("epic-1", "chat-2", HOST);
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBe(acquired);
+    expect(owned.closeCount()).toBe(0);
+    expect(idle.closeCount()).toBe(1);
+  });
+
+  it("keeps a shared viewer's native work when their activity plane cannot see the owner", () => {
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: WARM_CAP,
+    });
+    const owned = createHandle("epic-1", "chat-1");
+    const acquired = registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
+      () => owned.handle,
+    );
+    setAccess(acquired, "viewer");
+    markRunningOnBackgroundOnly(acquired);
+    acquired.store.setState({
+      backgroundItems: [
+        {
+          taskId: "native-1",
+          title: "owner workflow",
+          blockId: "block-1",
+          parentTaskId: null,
+          kind: "workflow",
+          phase: null,
+          activeLabel: null,
+          agentsStarted: null,
+          agentsFinished: null,
+        },
+      ],
+    });
+    // This stream belongs to the VIEWER. Its covering local frame cannot
+    // report the chat registered under the owner's user id.
+    setLocalActivity(HOST, "epic-1", "other-chat", false);
+
+    registry.release("epic-1", "chat-1", HOST);
+    vi.advanceTimersByTime(TTL_MS);
+    expect(registry.peek("epic-1", "chat-1", HOST)).toBe(acquired);
+    expect(owned.closeCount()).toBe(0);
+  });
+
   it("keeps a running session against a host that sends no turnInProgress, even with a background item visible", () => {
     const registry = new ChatSessionRegistry({
       idleTtlMs: TTL_MS,
@@ -357,6 +612,7 @@ describe("ChatSessionRegistry", () => {
       { epicId: "epic-1", chatId: "chat-1", hostId: HOST, scopeKey: SCOPE },
       () => owned.handle,
     );
+    setAccess(acquired, "owner");
     // An older host: no `turnInProgress`. A turn activating (running, no
     // `activeTurn` yet) beside a visible background item reads exactly like
     // background-only work, so the gate must keep the raw `runStatus`.
@@ -376,6 +632,9 @@ describe("ChatSessionRegistry", () => {
         },
       ],
     });
+    // The activity stream has its last background frame while the chat
+    // stream already reports a new activation. Their delivery is independent.
+    setLocalActivity(HOST, "epic-1", "chat-1", false);
 
     registry.release("epic-1", "chat-1", HOST);
     vi.advanceTimersByTime(TTL_MS);
@@ -787,6 +1046,35 @@ function markRunning(handle: ChatSessionStoreHandle): void {
       serviceTier: null,
     },
   });
+}
+
+function setAccess(
+  handle: ChatSessionStoreHandle,
+  role: "owner" | "viewer",
+): void {
+  handle.store.setState({
+    access: { role, ownerUserId: "owner-1", canAct: role === "owner" },
+  });
+}
+
+function setLocalActivity(
+  hostId: string,
+  epicId: string,
+  chatId: string,
+  turn: boolean,
+): void {
+  __setHostAgentActivityHealthForTests(hostId, {
+    connectionStatus: "open",
+    servedBy: "local",
+    cloudSyncStatus: null,
+    stateFrameSeenThisEpoch: true,
+  });
+  __setHostAgentActivityStateForTests(
+    hostId,
+    { [epicId]: { working: [chatId], turn: turn ? [chatId] : [] } },
+    "local",
+    null,
+  );
 }
 
 /**
