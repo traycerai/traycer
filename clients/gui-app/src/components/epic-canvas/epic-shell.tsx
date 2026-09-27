@@ -115,8 +115,13 @@ export function EpicShell(props: EpicShellProps) {
              * satisfies every assertion in the suite below. Recorded here
              * because the arms are green either way, and raise this if the
              * canvas ever grows a higher layer.
+             *
+             * `md:rounded-tr-xl`: at z-50 this paints over the content
+             * frame's z-30 corner mask (`task-surface-frame` in `index.css`),
+             * so it rounds the frame corner it shares itself. Only the top
+             * right: the top left meets the sidebar, never a frame corner.
              */
-            <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/70 p-6">
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/70 p-6 md:rounded-tr-xl">
               <EpicRepointFailureCard presentation={failure} />
             </div>
           )}

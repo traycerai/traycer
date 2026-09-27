@@ -108,10 +108,13 @@ export function EpicMigrationModal(props: EpicMigrationModalProps): ReactNode {
         data-testid="epic-migration-layer"
         className="absolute inset-0 isolate z-40"
       >
+        {/* `md:rounded-tr-xl`: this layer paints over the content frame's
+            z-30 corner mask, so it rounds the one frame corner it shares
+            (see `task-surface-frame` in `index.css`). */}
         <div
           data-slot="dialog-overlay"
           data-testid="epic-migration-overlay"
-          className="absolute inset-0 bg-black/40 transition-opacity duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0"
+          className="absolute inset-0 bg-black/40 transition-opacity duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 md:rounded-tr-xl"
         />
         <DialogPrimitive.Content
           data-slot="dialog-content"
