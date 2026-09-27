@@ -206,9 +206,11 @@ export interface ChatFindTranscriptPlacement {
    */
   readonly complete: boolean;
   /**
-   * Changes whenever the skeleton names more rows, completes, or the
-   * transcript gains rows - within an epoch. What could not be concluded
-   * over a partial skeleton holds only while this is unchanged.
+   * Changes whenever the skeleton names a row it did not name before
+   * (`TranscriptWindow.skeletonRevision` - a chunk beyond a dropped one
+   * included, which moves nothing else here), completes, or the transcript
+   * gains rows - within an epoch. What could not be concluded over a partial
+   * skeleton holds only while this is unchanged.
    */
   readonly skeletonState: string;
   placeHit(hit: ChatFindIndexHit): ChatFindIndexHitPlacement;
@@ -327,7 +329,7 @@ export function chatFindTranscriptPlacement(
   const placement: ChatFindTranscriptPlacement = {
     epoch: window.epoch,
     complete: window.skeletonComplete,
-    skeletonState: `${window.rowCount}:${window.skeletonStreamCoveredThrough}:${window.skeletonComplete}`,
+    skeletonState: `${window.skeletonRevision}:${window.rowCount}:${window.skeletonStreamCoveredThrough}:${window.skeletonComplete}`,
     placeHit: (hit) => {
       index ??= buildWindowPlacementIndex(window);
       return placeHitInWindow(window, index, hit);

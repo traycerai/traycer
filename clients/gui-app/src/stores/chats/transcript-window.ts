@@ -179,6 +179,14 @@ export interface TranscriptWindow {
    * than as the end of the transcript.
    */
   readonly skeleton: readonly (RowSkeletonEntry | undefined)[];
+  /**
+   * Moves whenever the skeleton names a row it did not name before - an
+   * ordinal that was a hole, or one that now holds a different row id - and
+   * never otherwise. A chunk beyond a dropped one moves it while
+   * `skeletonStreamCoveredThrough` stands still. Chat find keys what it could
+   * not conclude over a partial skeleton on it.
+   */
+  readonly skeletonRevision: number;
   /** Set by the chunk carrying `isFinal`, once its length agrees with `rowCount`. */
   readonly skeletonComplete: boolean;
   /**
@@ -530,6 +538,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     epoch: 0,
     rowCount: 0,
     skeleton: [],
+    skeletonRevision: 0,
     skeletonComplete: false,
     skeletonStreamCoveredThrough: 0,
     indexRevision: 0,
@@ -2979,6 +2988,45 @@ function tailRowIdsFor(
   return rowIds;
 }
 
+/** Whether seating `entry` over `previous` names a row not named there before. */
+function namesDifferentRow(
+  previous: RowSkeletonEntry | undefined,
+  entry: RowSkeletonEntry,
+): boolean {
+  return previous === undefined || previous.rowId !== entry.rowId;
+}
+
+/**
+ * Seats an index delta's entries into `skeleton` (see {@link applyIndexChange}
+ * for why appends begin at `appendBase`): where the appends stopped, and
+ * whether any entry named a row the skeleton did not name there before.
+ */
+function seatIndexChanges(
+  skeleton: (RowSkeletonEntry | undefined)[],
+  changes: readonly ChatIndexChange[],
+  appendBase: number,
+): { readonly appendCursor: number; readonly namesNewRow: boolean } {
+  let appendCursor = appendBase;
+  let namesNewRow = false;
+  for (const change of changes) {
+    if (change.type === "appended") {
+      for (const entry of change.entries) {
+        namesNewRow ||= namesDifferentRow(skeleton[appendCursor], entry);
+        skeleton[appendCursor] = entry;
+        appendCursor += 1;
+      }
+      continue;
+    }
+    if (change.type === "updated") {
+      for (const { ordinal, entry } of change.entries) {
+        namesNewRow ||= namesDifferentRow(skeleton[ordinal], entry);
+        skeleton[ordinal] = entry;
+      }
+    }
+  }
+  return { appendCursor, namesNewRow };
+}
+
 /**
  * Place one chunk of the skeleton.
  *
@@ -2995,8 +3043,11 @@ export function applySkeletonChunk(
 ): TranscriptWindow {
   if (chunk.epoch !== window.epoch) return window;
   const skeleton = [...window.skeleton];
+  let namesNewRow = false;
   for (let index = 0; index < chunk.entries.length; index += 1) {
-    skeleton[chunk.fromOrdinal + index] = chunk.entries[index];
+    const ordinal = chunk.fromOrdinal + index;
+    namesNewRow ||= namesDifferentRow(skeleton[ordinal], chunk.entries[index]);
+    skeleton[ordinal] = chunk.entries[index];
   }
   const complete = chunk.isFinal;
   // How far THIS stream has reached, contiguously from ordinal 0.
@@ -3033,6 +3084,7 @@ export function applySkeletonChunk(
   const next: TranscriptWindow = {
     ...window,
     skeleton,
+    skeletonRevision: window.skeletonRevision + (namesNewRow ? 1 : 0),
     skeletonComplete: complete && !lost,
     skeletonStreamCoveredThrough: coveredThrough,
     invalidated: window.invalidated || lost,
@@ -4219,21 +4271,11 @@ export function applyIndexChange(
   // reason: on the snapshot-ran-ahead interleave above it already counts the
   // rows this delta delivers, and seating from it would shift every entry one
   // past its real ordinal.
-  let appendCursor = appendBase;
-  for (const change of input.changes) {
-    if (change.type === "appended") {
-      for (const entry of change.entries) {
-        skeleton[appendCursor] = entry;
-        appendCursor += 1;
-      }
-      continue;
-    }
-    if (change.type === "updated") {
-      for (const { ordinal, entry } of change.entries) {
-        skeleton[ordinal] = entry;
-      }
-    }
-  }
+  const { appendCursor, namesNewRow } = seatIndexChanges(
+    skeleton,
+    input.changes,
+    appendBase,
+  );
   // How far the skeleton STREAM has contiguously reached once this frame is
   // folded in.
   //
@@ -4255,6 +4297,7 @@ export function applyIndexChange(
   const next: TranscriptWindow = {
     ...window,
     skeleton,
+    skeletonRevision: window.skeletonRevision + (namesNewRow ? 1 : 0),
     rowCount: input.rowCount,
     indexRevision: input.indexRevision,
     // Spent: this delta's revision is now the baseline the next one is

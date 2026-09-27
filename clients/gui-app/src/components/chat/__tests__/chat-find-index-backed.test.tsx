@@ -1974,6 +1974,22 @@ describe("chat find over a windowed transcript: older rows from the index", () =
     namedTo: number,
     isFinal: boolean,
   ): TranscriptState {
+    return transcriptWithSkeletonChunks(
+      rows,
+      [{ from: namedFrom, to: namedTo }],
+      isFinal,
+    );
+  }
+
+  /**
+   * The same over several chunks, applied in order - so a later chunk can
+   * land beyond a hole a dropped one left. Only the last may be final.
+   */
+  function transcriptWithSkeletonChunks(
+    rows: ReadonlyArray<RowSpec>,
+    chunks: ReadonlyArray<{ readonly from: number; readonly to: number }>,
+    isFinal: boolean,
+  ): TranscriptState {
     let window = applyWindowedSnapshot(
       emptyTranscriptWindow(),
       {
@@ -1985,17 +2001,19 @@ describe("chat find over a windowed transcript: older rows from the index", () =
       null,
       null,
     );
-    window = applySkeletonChunk(window, {
-      epoch: 1,
-      fromOrdinal: namedFrom,
-      entries: rows.slice(namedFrom, namedTo).map((row) => ({
-        rowId: row.rowId,
-        createdAt: row.createdAt,
-        role: row.role,
-        byteLength: 128,
-        bodyDigest: `d-${row.rowId}`,
-      })),
-      isFinal,
+    chunks.forEach((chunk, index) => {
+      window = applySkeletonChunk(window, {
+        epoch: 1,
+        fromOrdinal: chunk.from,
+        entries: rows.slice(chunk.from, chunk.to).map((row) => ({
+          rowId: row.rowId,
+          createdAt: row.createdAt,
+          role: row.role,
+          byteLength: 128,
+          bodyDigest: `d-${row.rowId}`,
+        })),
+        isFinal: isFinal && index === chunks.length - 1,
+      });
     });
     let ordinal = 0;
     while (ordinal < rows.length) {
@@ -2404,5 +2422,147 @@ describe("chat find over a windowed transcript: older rows from the index", () =
     });
     expect(requestIndexRead).toHaveBeenLastCalledWith(null);
     expect(adapter.getSnapshot().total).toBe(1);
+  });
+
+  // A dropped chunk leaves a hole the stream's prefix never gets past, so a
+  // later chunk can name new rows while `rowCount`, the prefix and completeness
+  // all stand still. A park is about the rows NAMED, so it has to see that.
+  const BEYOND_GAP_TEXT = "the slice beyond the gap has the needle";
+
+  /**
+   * T in slices part:0 and part:1 (cold), part:2 (hydrated) and part:4 (the
+   * needle), with `u-gap` at ordinal 3 - the ordinal a dropped chunk would have
+   * named - and `u-other` (no index document) last.
+   */
+  function gappedTurn(input: {
+    readonly chunks: ReadonlyArray<{
+      readonly from: number;
+      readonly to: number;
+    }>;
+    readonly hydratedParts: ReadonlySet<number>;
+  }): TranscriptState {
+    return transcriptWithSkeletonChunks(
+      [
+        turnPart(0, input.hydratedParts.has(0), "slice 0"),
+        turnPart(1, input.hydratedParts.has(1), "slice 1"),
+        turnPart(2, input.hydratedParts.has(2), "slice 2"),
+        userSpec("u-gap", 50, "a note in the gap", false),
+        turnPart(4, input.hydratedParts.has(4), BEYOND_GAP_TEXT),
+        userSpec("u-other", 100, "a recent note", false),
+      ],
+      input.chunks,
+      false,
+    );
+  }
+
+  /** Reads part:1, then part:0 with part:1 evicted: parked, two reads. */
+  async function parkedOverGap() {
+    const host = hostFixture(
+      fakeIndex([
+        {
+          messageId: "a-T",
+          tier: "assistant",
+          createdAt: 21,
+          text: BEYOND_GAP_TEXT,
+        },
+      ]),
+    );
+    const firstChunk = [{ from: 0, to: 3 }];
+    const find = renderFind({
+      initial: gappedTurn({ chunks: firstChunk, hydratedParts: new Set([2]) }),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+      requestIndexRead,
+    });
+    const adapter = find.getAdapter();
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
+    });
+    act(() => {
+      void adapter.next();
+    });
+    act(() => {
+      find.setTranscript(
+        gappedTurn({ chunks: firstChunk, hydratedParts: new Set([1, 2]) }),
+      );
+    });
+    act(() => {
+      find.setTranscript(
+        gappedTurn({ chunks: firstChunk, hydratedParts: new Set([0, 2]) }),
+      );
+    });
+    // Precondition: parked, as the pressured-turn cell above pins.
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    expect(readCount()).toBe(2);
+    return { adapter, find };
+  }
+
+  it("reads a parked hit again once a chunk beyond a dropped one names a new slice of it", async () => {
+    const { adapter, find } = await parkedOverGap();
+
+    // Beyond the hole at ordinal 3: the prefix, `rowCount` and completeness
+    // are all unchanged, but part:4 is named now.
+    const beyondGap = [
+      { from: 0, to: 3 },
+      { from: 4, to: 6 },
+    ];
+    act(() => {
+      find.setTranscript(
+        gappedTurn({ chunks: beyondGap, hydratedParts: new Set([0, 2]) }),
+      );
+    });
+    act(() => {
+      void adapter.next();
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "a-T",
+      target: "assistant:T:part:1",
+    });
+    act(() => {
+      find.setTranscript(
+        gappedTurn({ chunks: beyondGap, hydratedParts: new Set([0, 1, 2]) }),
+      );
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "a-T",
+      target: "assistant:T:part:4",
+    });
+    act(() => {
+      find.setTranscript(
+        gappedTurn({
+          chunks: beyondGap,
+          hydratedParts: new Set([0, 1, 2, 4]),
+        }),
+      );
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    expect(adapter.getSnapshot().total).toBe(1);
+  });
+
+  it("keeps the park through a chunk that names nothing new", async () => {
+    const { adapter, find } = await parkedOverGap();
+
+    // A chunk re-sending part:1 and part:2, off the prefix: no new name.
+    act(() => {
+      find.setTranscript(
+        gappedTurn({
+          chunks: [
+            { from: 0, to: 3 },
+            { from: 1, to: 3 },
+          ],
+          hydratedParts: new Set([0, 2]),
+        }),
+      );
+    });
+    act(() => {
+      void adapter.next();
+    });
+    expect(readCount()).toBe(2);
+    expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
   });
 });
