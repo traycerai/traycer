@@ -397,6 +397,35 @@ describe("transcript-image-bytes-store mechanism", () => {
     }
   });
 
+  it("releases the mutation queue when a never-settling lookup is aborted", async () => {
+    const inner = createMemoryTranscriptImageBytesBackend();
+    const hungKey = buildScopedImageCacheKey("epic:chat", "hung");
+    let getStarted = false;
+    installTranscriptImageBytesBackend(
+      wrapBackend(inner, {
+        get: (key) => {
+          if (key !== hungKey) return inner.get(key);
+          getStarted = true;
+          return new Promise(() => {
+            // Never settles: blocked open / hung transaction.
+          });
+        },
+      }),
+    );
+    const fetcher = persistTranscriptImageBytes(
+      scopedFetcher(() => Promise.resolve(resultOf(8)), "epic:chat"),
+    );
+    const controller = new AbortController();
+    const pending = fetcher.fetch("hung", controller.signal);
+    await vi.waitFor(() => {
+      expect(getStarted).toBe(true);
+    });
+    controller.abort();
+    await expect(pending).rejects.toThrow(/cancelled/);
+    await writeTranscriptImageBytes("other", resultOf(8));
+    expect(await readTranscriptImageBytes("other")).not.toBeNull();
+  });
+
   it("scans the durable index once, not on every get", async () => {
     const inner = createMemoryTranscriptImageBytesBackend();
     let listIndexCalls = 0;

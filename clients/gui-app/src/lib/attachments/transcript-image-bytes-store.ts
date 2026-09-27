@@ -481,8 +481,15 @@ class TranscriptImageBytesStore {
     this.generationByIdentity.set(key, this.generationOf(identity) + 1);
   }
 
-  private runExclusive<T>(work: () => Promise<T>): Promise<T> {
-    const next = this.mutation.then(work, work);
+  private runExclusive<T>(
+    work: () => Promise<T>,
+    signal: AbortSignal | undefined,
+  ): Promise<T | "aborted"> {
+    const wrapped = async (): Promise<T | "aborted"> => {
+      if (signal?.aborted) return "aborted";
+      return raceAbort(signal, work());
+    };
+    const next = this.mutation.then(wrapped, wrapped);
     this.mutation = next.then(
       () => undefined,
       () => undefined,
@@ -555,8 +562,9 @@ class TranscriptImageBytesStore {
   async get(
     key: string,
     identity: string | null,
+    signal: AbortSignal | undefined,
   ): Promise<ImageBytesResult | null> {
-    return this.runExclusive(async () => {
+    const result = await this.runExclusive(async () => {
       const backend = this.resolveBackendFor(identity);
       await this.hydrateIndex(backend);
       const stored = await backend.get(key);
@@ -576,7 +584,8 @@ class TranscriptImageBytesStore {
         bytes: copyBytes(stored.bytes),
         mediaType: stored.mediaType,
       };
-    });
+    }, signal);
+    return result === "aborted" ? null : result;
   }
 
   async put(
@@ -585,7 +594,7 @@ class TranscriptImageBytesStore {
     identity: string | null,
     generation: number,
   ): Promise<void> {
-    return this.runExclusive(async () => {
+    await this.runExclusive(async () => {
       if (generation !== this.generationOf(identity)) return;
       const backend = this.resolveBackendFor(identity);
       await this.hydrateIndex(backend);
@@ -607,11 +616,11 @@ class TranscriptImageBytesStore {
       });
       for (const evicted of evictKeys) this.index.delete(evicted);
       this.index.set(key, { byteLength, accessedAt });
-    });
+    }, undefined);
   }
 
   async clearPartition(identity: string | null): Promise<void> {
-    return this.runExclusive(async () => {
+    await this.runExclusive(async () => {
       this.bumpGeneration(identity);
       if (this.injectedBackend !== null) {
         this.index.clear();
@@ -630,7 +639,7 @@ class TranscriptImageBytesStore {
       if (factory === undefined) return;
       await deleteDatabase(factory, transcriptImageDbName(identity));
       await deleteDatabase(factory, transcriptImageMetaDbName(identity));
-    });
+    }, undefined);
   }
 
   size(): number {
@@ -655,7 +664,7 @@ export async function readTranscriptImageBytes(
   key: string,
 ): Promise<ImageBytesResult | null> {
   try {
-    return await store.get(key, storeIdentity());
+    return await store.get(key, storeIdentity(), undefined);
   } catch {
     return null;
   }
@@ -696,6 +705,30 @@ export function transcriptImageBytesStats(): {
   readonly residentBytes: number;
 } {
   return { size: store.size(), residentBytes: store.residentBytes() };
+}
+
+function raceAbort<T>(
+  signal: AbortSignal | undefined,
+  work: Promise<T>,
+): Promise<T | "aborted"> {
+  if (signal === undefined) return work;
+  if (signal.aborted) return Promise.resolve("aborted");
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => {
+      resolve("aborted");
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
 }
 
 function lookupUntilAborted(
@@ -739,7 +772,7 @@ export function persistTranscriptImageBytes(
       const generation = store.generationOf(identity);
       const key = buildScopedImageCacheKey(fetcher.scopeKey, hash);
       const cached = await lookupUntilAborted(signal, () =>
-        store.get(key, identity),
+        store.get(key, identity, signal),
       );
       if (cached === "aborted") {
         throw new Error("Image fetch was cancelled.");
