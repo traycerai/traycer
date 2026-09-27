@@ -171,14 +171,26 @@ function currentInstalledArm(handle: ArmAbortSource): string | null {
   return handle.store.getState().installedArm ?? null;
 }
 
-function acquireArmAbort(handle: ArmAbortSource): {
+function acquireArmAbort(
+  handle: ArmAbortSource,
+  expectedArm: string | null,
+): {
   readonly signal: AbortSignal;
   readonly release: () => void;
 } {
+  // Captured at render (`installedArm` on the fetch closure) vs read at
+  // call/effect time. If they disagree, this fetch selected a byte source
+  // the store no longer uses; abort so a later lanes fetch does not join
+  // a parked waiting-replica read.
+  if (currentInstalledArm(handle) !== expectedArm) {
+    const abort = new AbortController();
+    abort.abort();
+    return { signal: abort.signal, release: () => {} };
+  }
   let lease = armAbortLeases.get(handle);
   if (lease === undefined) {
     const created: ArmAbortLease = {
-      arm: currentInstalledArm(handle),
+      arm: expectedArm,
       abort: new AbortController(),
       inFlight: 0,
       unsubscribe: () => {},
@@ -307,7 +319,7 @@ export function useEpicImageFetcher(): ScopedImageBytesFetcher {
         // Subscribe on the handle store, not a mounted effect: last-ref
         // grace keeps the in-flight fetch after unmount, and an arm change
         // in that window must still drop the parked legacy read.
-        const armAbort = acquireArmAbort(handle);
+        const armAbort = acquireArmAbort(handle, installedArm);
         const composed = signalUntilArmChanges(callerSignal, armAbort.signal);
         try {
           return await persisted.fetch(hash, composed.signal);
@@ -317,7 +329,7 @@ export function useEpicImageFetcher(): ScopedImageBytesFetcher {
         }
       },
     };
-  }, [handle, scope, fetch]);
+  }, [handle, scope, fetch, installedArm]);
 }
 
 /**

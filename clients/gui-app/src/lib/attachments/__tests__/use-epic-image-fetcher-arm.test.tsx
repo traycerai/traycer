@@ -265,4 +265,18 @@ describe("useEpicImageFetcher - byte source per arm", () => {
     await expect(pending).rejects.toThrow(/abort|cancelled/i);
     expect(settled).toBe(true);
   });
+
+  it("rejects a fetch captured on the legacy arm if the store is lanes before it runs", async () => {
+    mocks.installedArm = "legacy";
+    mocks.readEpicAttachmentBytes.mockResolvedValue(new Uint8Array([7]));
+    const { result } = renderHook(() => useEpicImageFetcher(), {
+      wrapper: wrapperFor(null),
+    });
+    const captured = result.current.fetch;
+    notifyArmChange("lanes");
+    await expect(captured(HASH, new AbortController().signal)).rejects.toThrow(
+      /cancelled|abort/i,
+    );
+    expect(mocks.readEpicAttachmentBytes).not.toHaveBeenCalled();
+  });
 });
