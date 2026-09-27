@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -170,16 +171,34 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
   };
 }
 
+/** Select the card's heading independently of its status badge. */
+function headingParagraph(): HTMLElement {
+  return screen.getByText("Who reviews Claude Code's commands", {
+    selector: "p",
+    exact: false,
+  });
+}
+
 describe("<ProviderAutoJudgeSection />", () => {
   it("draws the card's heading and link, but no switch or line, while the catalog has not loaded", () => {
     guiHarnessesQueryMock.data = undefined;
 
     render(<ProviderAutoJudgeSection state={providerState({})} />);
 
-    expect(screen.getByText("Who reviews Claude Code's commands")).toBeTruthy();
+    expect(headingParagraph()).toBeTruthy();
     expect(screen.getByTestId("provider-auto-judge-all-settings")).toBeTruthy();
     expect(screen.queryByRole("combobox")).toBeNull();
     expect(screen.queryByTestId("provider-auto-judge-readonly")).toBeNull();
+  });
+
+  it("badges the heading as Experimental", () => {
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    render(<ProviderAutoJudgeSection state={providerState({})} />);
+
+    expect(within(headingParagraph()).getByText("Experimental")).toBeTruthy();
   });
 
   it("opens Permissions on its Judge tab from 'All permission settings'", () => {
@@ -210,7 +229,7 @@ describe("<ProviderAutoJudgeSection />", () => {
     // The tab is drawn for every provider, so "nothing to choose" is still
     // an answer: the question the card is headed with, and where the judge
     // that answers it is chosen. No switch with one option.
-    expect(screen.getByText("Who reviews Claude Code's commands")).toBeTruthy();
+    expect(headingParagraph()).toBeTruthy();
     const readonly = screen.getByTestId("provider-auto-judge-readonly");
     expect(readonly.textContent).toBe(
       "Reviewed by Traycer's judge. Change it under Permissions.",
@@ -230,7 +249,7 @@ describe("<ProviderAutoJudgeSection />", () => {
     // judge" any more - the row under Settings ▸ Permissions carries that name and
     // THIS is the one that wins. An assertion derived from the same constant
     // the component interpolates would follow a rename instead of catching it.
-    expect(screen.getByText("Who reviews Claude Code's commands")).toBeTruthy();
+    expect(headingParagraph()).toBeTruthy();
   });
 
   it("renders Traycer's judge selected when the stored state has no autoJudge key", () => {
@@ -474,7 +493,7 @@ describe("<ProviderAutoJudgeSection />", () => {
       />,
     );
 
-    expect(screen.getByText("Who reviews Claude Code's commands")).toBeTruthy();
+    expect(headingParagraph()).toBeTruthy();
     const unsupported = screen.getByTestId("provider-auto-judge-unsupported");
     expect(unsupported.textContent).toBe(
       "Traycer's judge. This machine's host can't change it; update it to choose.",
