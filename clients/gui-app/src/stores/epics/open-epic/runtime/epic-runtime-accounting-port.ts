@@ -88,6 +88,11 @@ export interface EpicRuntimeAccountingSource {
   demoteColdestUnpinned(overBytes: number): HotDocEvictionOutcome;
   /** The root replica's settled wire bytes. */
   measureRootBytes(): number;
+  /** Raw serialized rows and estimated live heap in this runtime. */
+  measureReplicaDataBytes(): {
+    readonly rawBytes: number;
+    readonly estimatedHeapBytes: number;
+  };
   /** Projection row counts, for the memory telemetry surface. */
   projectionCounts(): EpicReplicaProjectionCounts;
 }
@@ -123,6 +128,9 @@ export interface EpicRuntimeAccountingPort {
   unregisterBooks(): void;
 
   settleRootBytes(bytes: number): void;
+  chargeRootProvisional(bytes: number): void;
+  settleReplicaDataBytes(rawBytes: number, estimatedHeapBytes: number): void;
+  settleMainProjectionBytes(rawBytes: number, estimatedHeapBytes: number): void;
   settleColdRoomBytes(artifactRoomId: string, bytes: number): void;
   settleCommandOverlayBytes(bytes: number): void;
   settleHotDocBytes(artifactRoomId: string, bytes: number): void;

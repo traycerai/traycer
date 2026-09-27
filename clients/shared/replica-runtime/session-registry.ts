@@ -439,6 +439,11 @@ export interface SessionRegistry<TSession> {
   /** End a session now, naming why. {@link forceRelease} is `"released"`. */
   discard(key: SessionKey, cause: SessionDisposeCause): void;
 
+  /** Evict one oldest warm entry allowed by the caller's cap eligibility. */
+  evictOldestEligible(
+    isEligible: (entry: SessionEntryView<TSession>) => boolean,
+  ): boolean;
+
   /**
    * Move a demand-free session to a different key, re-parking it.
    *
@@ -1034,6 +1039,24 @@ export function createSessionRegistry<TSession>(
       transact(() => {
         teardown(entry, "released");
       });
+    },
+
+    evictOldestEligible(isEligible) {
+      const candidate = [...entries.values()]
+        .filter(
+          (entry) =>
+            entry.demand === 0 &&
+            isEligible({
+              key: entry.key,
+              scopeKey: entry.scopeKey,
+              session: entry.session,
+              demand: entry.demand,
+            }),
+        )
+        .sort((left, right) => left.order - right.order)[0];
+      if (candidate === undefined) return false;
+      transact(() => teardown(candidate, "warm-overflow"));
+      return true;
     },
 
     discard(key, cause) {
