@@ -4,7 +4,10 @@ import { BUDGET_PLANE_IDS } from "@traycer-clients/shared/replica-runtime";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
-import type { LiveAssistantMessage } from "@/stores/chats/chat-session-store";
+import type {
+  ChatSessionState,
+  LiveAssistantMessage,
+} from "@/stores/chats/chat-session-store";
 import { retainedValueSize } from "../retained-value-size";
 import {
   getProcessMemoryRuntime,
@@ -84,6 +87,60 @@ afterEach(() => {
 });
 
 describe("chat owned-state memory accounting", () => {
+  it("counts an unpublished summary generation without encoding its unchanged prefix", () => {
+    const handle = openStore();
+    const account = createChatOwnedStateAccount();
+    const initial = handle.store.getState();
+    const summary = (
+      filePath: string,
+    ): ChatSessionState["accumulatedFileChangeSummaries"][number] => ({
+      filePath,
+      operation: "edit",
+      diffSource: "snapshot",
+      reason: "snapshot",
+      undoable: true,
+      hasContents: true,
+      digest: `digest-${filePath}`,
+      counts: { additions: 1, deletions: 0 },
+    });
+    const first = summary(`first-${"x".repeat(100_000)}`);
+    const second = summary("second.ts");
+    const encode = vi.spyOn(TextEncoder.prototype, "encode");
+    try {
+      account.update(initial);
+      const baseline = account.size();
+      expect(account.updateSummaryAssembly([first], [])).toBe(true);
+      const firstSize = account.size();
+      expect(firstSize.estimatedHeapBytes).toBeGreaterThan(
+        baseline.estimatedHeapBytes,
+      );
+
+      encode.mockClear();
+      expect(account.updateSummaryAssembly([first, second], [])).toBe(true);
+      expect(account.size().estimatedHeapBytes).toBeGreaterThan(
+        firstSize.estimatedHeapBytes,
+      );
+      expect(
+        encode.mock.calls.some(
+          ([value]) =>
+            typeof value === "string" && value.includes(first.filePath),
+        ),
+      ).toBe(false);
+
+      expect(account.updateSummaryAssembly(null, [])).toBe(true);
+      expect(account.size()).toEqual(baseline);
+      account.update({ ...initial, accumulatedFileChangeSummaries: [first] });
+      const publishedSize = account.size();
+      account.updateSummaryAssembly([first, second], [first]);
+      expect(
+        account.size().estimatedHeapBytes - publishedSize.estimatedHeapBytes,
+      ).toBe(32 + 2 * 8 + retainedValueSize(second).estimatedHeapBytes);
+    } finally {
+      encode.mockRestore();
+      handle.dispose();
+    }
+  });
+
   it("measures changed non-transcript state and skips identical references", () => {
     const handle = openStore();
     const encode = vi.spyOn(TextEncoder.prototype, "encode");

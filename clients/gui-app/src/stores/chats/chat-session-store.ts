@@ -4614,6 +4614,26 @@ export function createChatSessionStoreWithNotificationDependencies(
     let assemblingSummaries:
       | readonly ChatAccumulatedFileChangeSummary[]
       | null = null;
+    const accountSummaryAssembly = (
+      assembly: readonly ChatAccumulatedFileChangeSummary[] | null,
+    ): void => {
+      if (
+        disposed ||
+        !ownedStateAccount.updateSummaryAssembly(
+          assembly,
+          get().accumulatedFileChangeSummaries,
+        )
+      ) {
+        return;
+      }
+      const size = ownedStateAccount.size();
+      memory.chatWindows.recordOwnedStateSize(
+        holderId,
+        size.rawBytes,
+        size.estimatedHeapBytes,
+      );
+      settleOwnedStateBudget();
+    };
 
     /**
      * The range request currently in flight, so a stream of identical
@@ -6142,6 +6162,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       // below and it disagree at the one site whose own comment demands a
       // blank slate for a later re-upgrade.
       assemblingSummaries = null;
+      accountSummaryAssembly(null);
       // The witness store's evidence orders copies within the windowed
       // coordinate space this line is abandoning; a later re-upgrade starts
       // a new lineage and must not inherit stamps from the old one.
@@ -7383,6 +7404,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (frame.snapshot.indexRevision === null) {
           accumulatedSummaryGeneration = -1;
           assemblingSummaries = null;
+          accountSummaryAssembly(null);
           recovery.resetSummaryStream();
           // The retained array is now the PREVIOUS generation's, so it vouches
           // for nothing until a replacement chunk lands - including when its
@@ -7754,6 +7776,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // the completion watchdog measures the ASSEMBLY, not the retained
           // array whose length may coincide with the count.
           assemblingSummaries = [];
+          accountSummaryAssembly(assemblingSummaries);
           set(summaryTrustState());
         }
         // A chunk starting PAST the end is a chunk whose predecessor was
@@ -7784,6 +7807,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           ...frame.chunk.summaries,
         ];
         assemblingSummaries = summaries;
+        // This array is retained privately until final. The published state
+        // still owns the previous generation, so a store subscriber alone
+        // cannot see these bytes. The account caches row sizes by identity.
+        accountSummaryAssembly(frame.chunk.isFinal ? null : summaries);
         // Published only once whole. Until then the previous set keeps the
         // panel honest, and the watchdog - armed below off the un-seated
         // flag - is what recovers a replacement stream that stops short.

@@ -106,6 +106,11 @@ const OWNED_STATE_KEYS = [
 
 export interface ChatOwnedStateAccount {
   update(state: ChatSessionState): boolean;
+  /** Count the unpublished summary generation alongside the last published set. */
+  updateSummaryAssembly(
+    assembly: ChatSessionState["accumulatedFileChangeSummaries"] | null,
+    published: ChatSessionState["accumulatedFileChangeSummaries"],
+  ): boolean;
   size(): RetainedValueSize;
 }
 
@@ -117,6 +122,17 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
   const blockSizes = new WeakMap<object, MeasuredBlock>();
   let imageResolutions: LiveAssistantMessage["imageResolutions"] | null = null;
   let imageResolutionSize: RetainedValueSize = {
+    rawBytes: 0,
+    estimatedHeapBytes: 0,
+  };
+  const summaryRowSizes = new WeakMap<object, RetainedValueSize>();
+  let summaryAssembly:
+    | ChatSessionState["accumulatedFileChangeSummaries"]
+    | null = null;
+  let publishedSummaries:
+    | ChatSessionState["accumulatedFileChangeSummaries"]
+    | null = null;
+  let summaryAssemblySize: RetainedValueSize = {
     rawBytes: 0,
     estimatedHeapBytes: 0,
   };
@@ -207,6 +223,45 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
   };
 
   return {
+    updateSummaryAssembly(assembly, published): boolean {
+      if (assembly === null) {
+        if (summaryAssembly === null) return false;
+        summaryAssembly = null;
+        publishedSummaries = null;
+        summaryAssemblySize = { rawBytes: 0, estimatedHeapBytes: 0 };
+        return true;
+      }
+      if (summaryAssembly === assembly && publishedSummaries === published) {
+        return false;
+      }
+      summaryAssembly = assembly;
+      publishedSummaries = published;
+      // Both arrays remain reachable during a replacement. Charge the new
+      // array, but not row objects that are already held by the published one.
+      // Cached row sizes mean appending a chunk never re-encodes its prefix.
+      const publishedRows = new Set(published);
+      const seenRows = new Set<object>();
+      let assemblyRawBytes = 2 + Math.max(0, assembly.length - 1);
+      let assemblyHeapBytes = 32 + assembly.length * 8;
+      for (const row of assembly) {
+        let rowSize = summaryRowSizes.get(row);
+        if (rowSize === undefined) {
+          rowSize = retainedValueSize(row);
+          summaryRowSizes.set(row, rowSize);
+        }
+        assemblyRawBytes += rowSize.rawBytes;
+        if (seenRows.has(row)) continue;
+        seenRows.add(row);
+        if (!publishedRows.has(row)) {
+          assemblyHeapBytes += rowSize.estimatedHeapBytes;
+        }
+      }
+      summaryAssemblySize = {
+        rawBytes: assemblyRawBytes,
+        estimatedHeapBytes: assemblyHeapBytes,
+      };
+      return true;
+    },
     update(state): boolean {
       let changed = false;
       for (const key of OWNED_STATE_KEYS) {
@@ -237,6 +292,10 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
       }
       return changed;
     },
-    size: () => ({ rawBytes, estimatedHeapBytes }),
+    size: () => ({
+      rawBytes: rawBytes + summaryAssemblySize.rawBytes,
+      estimatedHeapBytes:
+        estimatedHeapBytes + summaryAssemblySize.estimatedHeapBytes,
+    }),
   };
 }
