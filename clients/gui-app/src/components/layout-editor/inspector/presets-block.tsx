@@ -121,6 +121,7 @@ export function PresetsBlock(props: {
             presetId={presetId}
             arrangement={snapshot.arrangement}
             last={snapshot.basePreset === presetId}
+            modified={snapshot.basePreset === presetId && modified}
             onApply={() => {
               applyPreset(presetId, reveal);
             }}
@@ -183,10 +184,13 @@ function PresetCard(props: {
   readonly presetId: LayoutPresetId;
   readonly arrangement: LayoutArrangement;
   readonly last: boolean;
+  /** Whether this is the applied preset and the values have moved off it. */
+  readonly modified: boolean;
   readonly onApply: () => void;
 }): ReactNode {
-  const { presetId, arrangement, last, onApply } = props;
+  const { presetId, arrangement, last, modified, onApply } = props;
   const captionId = useId();
+  const modifiedId = useId();
   const name = PRESET_LABELS[presetId];
   return (
     // A `<div role="button">`, not a native `<button>`: the miniature draws
@@ -198,7 +202,7 @@ function PresetCard(props: {
       tabIndex={0}
       data-preset={presetId}
       aria-label={`Apply ${name}`}
-      aria-describedby={captionId}
+      aria-describedby={modified ? `${modifiedId} ${captionId}` : captionId}
       aria-current={last ? "true" : undefined}
       onClick={onApply}
       onKeyDown={(event) => {
@@ -224,8 +228,25 @@ function PresetCard(props: {
         </span>
       ) : null}
       <span className="flex min-w-0 flex-col gap-0.5 px-1">
-        <span className="truncate text-ui-sm font-medium text-foreground">
-          {name}
+        {/* Wraps: in the 380px dock the label drops under the name rather
+          than truncating it. */}
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2">
+          <span className="truncate text-ui-sm font-medium text-foreground">
+            {name}
+          </span>
+          {modified ? (
+            <span
+              id={modifiedId}
+              data-testid="preset-card-modified"
+              className="flex shrink-0 items-center gap-1.5 text-ui-xs text-muted-foreground"
+            >
+              <span
+                aria-hidden
+                className="size-1.5 shrink-0 rounded-full bg-info"
+              />
+              Modified
+            </span>
+          ) : null}
         </span>
         <span
           id={captionId}

@@ -239,6 +239,10 @@ describe("View changes (L-89 overturned: no separate level)", () => {
     expect(screen.getByTestId("preset-status-line").textContent).toBe(
       "Default · Modified",
     );
+    // The applied card carries the same label; the others do not.
+    const applied = screen.getByRole("button", { name: "Apply Default" });
+    expect(within(applied).getByTestId("preset-card-modified")).not.toBeNull();
+    expect(screen.getAllByTestId("preset-card-modified")).toHaveLength(1);
     const toggle = screen.getByRole("button", { name: "View changes" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
