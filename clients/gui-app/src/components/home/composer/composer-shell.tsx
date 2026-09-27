@@ -107,7 +107,11 @@ function ComposerGrabber({
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>): void => {
     const sheet = event.currentTarget.parentElement;
-    if (sheet === null) return;
+    // A sheet still holding its top is mid-pull or settling shut: not a
+    // moment to start another pull from.
+    if (sheet === null || sheet.style.getPropertyValue(SHEET_TOP) !== "") {
+      return;
+    }
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     pull.current = {

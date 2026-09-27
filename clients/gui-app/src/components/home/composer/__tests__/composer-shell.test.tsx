@@ -277,6 +277,25 @@ describe("ComposerShell phone expansion", () => {
     vi.useRealTimers();
   });
 
+  it("ignores a press while the sheet is still settling shut", () => {
+    viewportMock.phone = true;
+    vi.useFakeTimers();
+    const expansion = makeExpansion(true);
+    renderShellWithEditor(expansion, FITTING_EDITOR);
+    const zone = grabberOrThrow();
+
+    pull(zone, 100, 130);
+    pull(zone, 100, 60);
+
+    // The second pull moved nothing: the top still rests on the card's place.
+    expect(
+      zone.parentElement?.style.getPropertyValue("--composer-sheet-top"),
+    ).toBe("0px");
+    vi.advanceTimersByTime(200);
+    expect(expansion.onExpandedChange).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
   it("holds the sheet's top under the finger while the pull lasts", () => {
     viewportMock.phone = true;
     const expansion = makeExpansion(true);
