@@ -23,6 +23,7 @@ import {
   type WorktreeHostListingRow,
 } from "@/hooks/worktree/use-worktree-host-listing";
 import { rowsByRequestedPath } from "@/lib/worktree/worktree-path-match";
+import { worktreeQuerySuccessOrderFor } from "@/lib/worktree/worktree-query-success-order";
 import {
   subscribeWorktreeChangedCoverageExpired,
   useWorktreeChangedStreamCovered,
@@ -46,51 +47,6 @@ const EMPTY_ENRICHMENT: WorktreeEnrichment = {
   isFetching: false,
   error: null,
 };
-
-interface WorktreeQuerySuccessOrder {
-  orderFor(queryKey: readonly unknown[]): number;
-}
-
-const worktreeQuerySuccessOrders = new WeakMap<
-  QueryClient,
-  WorktreeQuerySuccessOrder
->();
-
-/**
- * TanStack's dataUpdatedAt has millisecond resolution. A selection enabled
- * after an empty listing can succeed within that same millisecond, so compare
- * the cache's successful update edges when their timestamps tie. One tracker
- * per QueryClient serves every mounted worktree consumer.
- */
-function worktreeQuerySuccessOrderFor(
-  queryClient: QueryClient,
-): WorktreeQuerySuccessOrder {
-  const existing = worktreeQuerySuccessOrders.get(queryClient);
-  if (existing !== undefined) return existing;
-  const queryCache = queryClient.getQueryCache();
-  const orderByQuery = new WeakMap<object, number>();
-  let nextOrder = 0;
-  queryCache.subscribe((event) => {
-    const queryKey: unknown = event.query.queryKey;
-    if (
-      event.type !== "updated" ||
-      event.action.type !== "success" ||
-      !Array.isArray(queryKey) ||
-      !hostQueryKeys.matchesMethodOnAnyHost(queryKey, "worktree.listAllForHost")
-    )
-      return;
-    nextOrder += 1;
-    orderByQuery.set(event.query, nextOrder);
-  });
-  const tracker: WorktreeQuerySuccessOrder = {
-    orderFor: (queryKey) => {
-      const query = queryCache.find({ queryKey, exact: true });
-      return query === undefined ? 0 : (orderByQuery.get(query) ?? 0);
-    },
-  };
-  worktreeQuerySuccessOrders.set(queryClient, tracker);
-  return tracker;
-}
 
 /** One path's selection-mode read, as far as the merge below needs it. */
 interface PerPathRead {
@@ -349,14 +305,10 @@ export function useWorktreeEnrichmentForClient(
   useEffect(() => {
     const hostId = readiness.hostId;
     if (!queriesEnabled || !listingSettled || hostId === null) return;
-    const stopListeners = uniquePaths.flatMap((path) => {
-      const listed = listingRowsByPath.get(path) ?? [];
-      const selectionEnabledWhileCovered = requiresPerPathActivityRead(
-        activityRequirement,
-        true,
-        listed,
-      );
-      if (!selectionEnabledWhileCovered) return [];
+    // Every path becomes selection-dependent when coverage expires. Invalidate
+    // even a query that was disabled while covered: another observer may have
+    // refreshed it during grace, leaving it fresh when this observer enables.
+    const stopListeners = uniquePaths.map((path) => {
       const key = perPathEnrichmentQueryKey(hostId, path);
       const owner = acquireCoverageExpiryOwner(queryClient, hostId, path);
       const unsubscribe = subscribeWorktreeChangedCoverageExpired(
@@ -370,17 +322,13 @@ export function useWorktreeEnrichmentForClient(
           });
         },
       );
-      return [
-        () => {
-          unsubscribe();
-          owner.release();
-        },
-      ];
+      return () => {
+        unsubscribe();
+        owner.release();
+      };
     });
     return () => stopListeners.forEach((stop) => stop());
   }, [
-    activityRequirement,
-    listingRowsByPath,
     listingSettled,
     queriesEnabled,
     queryClient,

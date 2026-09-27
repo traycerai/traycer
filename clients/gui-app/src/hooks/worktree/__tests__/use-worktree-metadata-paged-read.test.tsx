@@ -671,6 +671,111 @@ describe("worktree metadata from one paged read per host", () => {
     expect(fixture.selectionCalls).toEqual([[bindingPath], [bindingPath]]);
   });
 
+  it("uses an equally timestamped cached binding selection when both query results predate the hook", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const timestamp = Date.now();
+    vi.setSystemTime(timestamp);
+    const bindingPath = "/wt/binding";
+    const fixture = createFixture([]);
+    const listingKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "worktree.listAllForHost"
+    >(HOST_ID, "worktree.listAllForHost", {
+      includeActivity: false,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    });
+    const selectionKey = perPathEnrichmentQueryKey(HOST_ID, bindingPath);
+    fixture.queryClient.setQueryData(
+      listingKey,
+      { worktrees: [], nextCursor: null },
+      { updatedAt: timestamp },
+    );
+    fixture.queryClient.setQueryData(
+      selectionKey,
+      {
+        worktrees: [row(bindingPath, timestamp, "cached binding")],
+        nextCursor: null,
+      },
+      { updatedAt: timestamp },
+    );
+    markWorktreeChangedStreamOpen(HOST_ID);
+
+    const { result } = renderHook(
+      () =>
+        useWorktreeEnrichmentForClient(
+          fixture.client,
+          [bindingPath],
+          true,
+          "none",
+        ),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() =>
+      expect(result.current.worktrees[0]?.branch).toBe("cached binding"),
+    );
+    expect(fixture.pagedCalls()).toBe(0);
+    expect(fixture.selectionCalls).toEqual([]);
+  });
+
+  it("invalidates a fresh selection refreshed by another observer during grace when this consumer enables it at expiry", async () => {
+    const fixture = createFixture([row("/wt/a", 10, "listed")]);
+    const path = "/wt/a";
+    const selectionKey = perPathEnrichmentQueryKey(HOST_ID, path);
+    fixture.queryClient.setQueryDefaults(selectionKey, {
+      staleTime: Infinity,
+    });
+    markWorktreeChangedStreamOpen(HOST_ID);
+    const dormantConsumer = renderHook(
+      () =>
+        useWorktreeEnrichmentForClient(fixture.client, [path], true, "none"),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() =>
+      expect(dormantConsumer.result.current.worktrees[0]?.branch).toBe(
+        "listed",
+      ),
+    );
+    expect(fixture.pagedCalls()).toBe(1);
+    expect(fixture.selectionCalls).toEqual([]);
+
+    vi.useFakeTimers();
+    markWorktreeChangedStreamClosed(HOST_ID);
+    expect(isWorktreeChangedStreamCovered(HOST_ID)).toBe(true);
+    fixture.host.selection.set(path, row(path, 20, "during grace"));
+    const refreshingConsumer = renderHook(
+      () =>
+        useWorktreeEnrichmentForClient(fixture.client, [path], true, "always"),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30);
+      await Promise.resolve();
+    });
+    expect(fixture.selectionCalls).toEqual([[path]]);
+    expect(dormantConsumer.result.current.worktrees[0]?.branch).toBe(
+      "during grace",
+    );
+    refreshingConsumer.unmount();
+
+    fixture.host.selection.set(path, row(path, 30, "after grace"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORKTREE_CHANGED_RECOVERY_GRACE_MS + 1);
+      await vi.advanceTimersByTimeAsync(30);
+      await Promise.resolve();
+    });
+
+    expect(isWorktreeChangedStreamCovered(HOST_ID)).toBe(false);
+    expect(fixture.selectionCalls).toEqual([[path], [path]]);
+    expect(dormantConsumer.result.current.worktrees[0]?.branch).toBe(
+      "after grace",
+    );
+    expect(fixture.pagedCalls()).toBe(2);
+  });
+
   it("prefers a later listing's owners, inUse and scripts when resolvedAt ties the selection answer", async () => {
     const oldSelection = {
       ...row("/wt/a", 10, "selection-answer"),
