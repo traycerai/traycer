@@ -24,7 +24,14 @@ class FakeAudioContext {
   readonly destination = {};
   state: AudioContextState = "running";
   readonly close = vi.fn(() => Promise.resolve());
-  readonly resume = vi.fn(() => Promise.resolve());
+  readonly resume = vi.fn(() => {
+    this.state = "running";
+    return Promise.resolve();
+  });
+  readonly suspend = vi.fn(() => {
+    this.state = "suspended";
+    return Promise.resolve();
+  });
 
   createOscillator() {
     const oscillator = {
@@ -72,6 +79,54 @@ describe("playNotificationChimeSound", () => {
     expect(oscillators).toHaveLength(1);
     expect(oscillators[0].start).toHaveBeenCalledWith(2);
     expect(oscillators[0].stop).toHaveBeenCalledWith(2.02);
+  });
+
+  it("suspends the audio context after warmup so an idle renderer is not holding a running context", () => {
+    const contexts: FakeAudioContext[] = [];
+    class TrackingAudioContext extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+    }
+    vi.stubGlobal("AudioContext", TrackingAudioContext);
+
+    prepareNotificationChimeAudio();
+
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0].suspend).toHaveBeenCalledOnce();
+    expect(contexts[0].state).toBe("suspended");
+  });
+
+  it("plays a chime while the document is hidden after warmup left the context suspended", async () => {
+    const contexts: FakeAudioContext[] = [];
+    class TrackingAudioContext extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+    }
+    vi.stubGlobal("AudioContext", TrackingAudioContext);
+
+    prepareNotificationChimeAudio();
+    expect(contexts[0].state).toBe("suspended");
+    const oscillatorsAfterWarmup = oscillators.length;
+
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "hidden",
+    });
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => true,
+    });
+
+    playNotificationChimeSound("classic");
+
+    expect(contexts[0].resume).toHaveBeenCalledOnce();
+    await contexts[0].resume.mock.results[0].value;
+    await Promise.resolve();
+    expect(oscillators.length).toBeGreaterThan(oscillatorsAfterWarmup);
   });
 
   it("does not create an audio context when chimes are disabled", () => {

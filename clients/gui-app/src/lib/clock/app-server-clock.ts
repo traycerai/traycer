@@ -5,6 +5,7 @@ import {
   type ServerClockState,
 } from "@traycer-clients/shared/clock/server-time-offset-tracker";
 import type { AuthServerTimeObservation } from "@traycer-clients/shared/auth/auth-validation-types";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 /**
  * The renderer's single server-time offset tracker.
@@ -42,12 +43,13 @@ const WALL_CLOCK_TICK_INTERVAL_MS = 10_000;
  * module (a unit test, a storybook render) leaves a live interval behind.
  */
 export function startAppServerClockMonitor(): () => void {
-  const handle = setInterval(() => {
-    appServerClock.noteWallClockTick();
-  }, WALL_CLOCK_TICK_INTERVAL_MS);
-  return () => {
-    clearInterval(handle);
-  };
+  return startVisibleInterval({
+    tick: () => {
+      appServerClock.noteWallClockTick();
+    },
+    intervalMs: WALL_CLOCK_TICK_INTERVAL_MS,
+    fireOnShow: true,
+  });
 }
 
 /**

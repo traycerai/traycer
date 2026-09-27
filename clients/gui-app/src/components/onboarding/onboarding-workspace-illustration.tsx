@@ -53,6 +53,10 @@ import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-h
 import { OnboardingBrowserPreview } from "@/components/onboarding/onboarding-browser-preview";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { cn } from "@/lib/utils";
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
 import { useOnboardingHorizontalDrag } from "@/components/onboarding/use-onboarding-swipe";
 import {
   DIORAMA_CHAPTERS,
@@ -156,14 +160,11 @@ function useDioramaPlayback(
     const onVisibilityChange = () => {
       clock.current = setDioramaPaused(
         clock.current,
-        document.hidden,
+        !isDocumentVisible(),
         performance.now(),
       );
     };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
+    return subscribeDocumentVisibility(onVisibilityChange);
   }, []);
 
   // One rAF loop per chapter, reading elapsed time off the clock rather than
@@ -177,7 +178,7 @@ function useDioramaPlayback(
     const started = performance.now();
     clock.current = {
       startedAt: started,
-      pausedAt: document.hidden ? started : null,
+      pausedAt: isDocumentVisible() ? null : started,
     };
     let frame = 0;
     const tick = () => {

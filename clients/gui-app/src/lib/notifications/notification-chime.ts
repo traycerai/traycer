@@ -475,6 +475,14 @@ const CHIME_VOICES: Readonly<
 
 let notificationAudioContext: AudioContext | null = null;
 let primedAudioContext: AudioContext | null = null;
+let activeChimes = 0;
+
+function suspendNotificationAudioIfIdle(): void {
+  if (activeChimes > 0) return;
+  const context = notificationAudioContext;
+  if (context === null || context.state !== "running") return;
+  void context.suspend().catch(() => undefined);
+}
 
 function getNotificationAudioContext(): AudioContext | null {
   if (typeof window === "undefined") return null;
@@ -512,11 +520,15 @@ export function prepareNotificationChimeAudio(): void {
     if (context.state === "suspended") {
       void context
         .resume()
-        .then(() => primeNotificationAudioRenderer(context))
+        .then(() => {
+          primeNotificationAudioRenderer(context);
+          suspendNotificationAudioIfIdle();
+        })
         .catch(() => undefined);
       return;
     }
     primeNotificationAudioRenderer(context);
+    suspendNotificationAudioIfIdle();
   } catch {
     // Audio setup can be rejected by autoplay or device restrictions.
   }
@@ -547,6 +559,7 @@ export function disposeNotificationChimeAudio(): void {
   const context = notificationAudioContext;
   notificationAudioContext = null;
   primedAudioContext = null;
+  activeChimes = 0;
   if (context === null || context.state === "closed") return;
   void context.close().catch(() => undefined);
 }
@@ -593,6 +606,7 @@ export function playNotificationChimeSound(
 
     const scheduleChime = (): void => {
       if (context.state === "closed") return;
+      activeChimes += 1;
       const voices = CHIME_VOICES[sound];
       const lastVoice = voices.reduce((latest, voice) =>
         voice.delay + voice.duration > latest.delay + latest.duration
@@ -648,7 +662,11 @@ export function playNotificationChimeSound(
         oscillator.start(startsAt);
         oscillator.stop(endsAt + 0.02);
         if (voice === lastVoice) {
-          oscillator.onended = () => master.disconnect();
+          oscillator.onended = () => {
+            master.disconnect();
+            activeChimes -= 1;
+            suspendNotificationAudioIfIdle();
+          };
         }
       });
     };

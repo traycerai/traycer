@@ -25,6 +25,7 @@ import {
   type AnalyticsResourcePressureTier,
   type AnalyticsSessionAgeBucket,
 } from "@/lib/analytics";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 const BYTES_PER_MB = 1024 * 1024;
 const MS_PER_HOUR = 3_600_000;
@@ -260,13 +261,15 @@ export function createResourceTelemetrySampler(
     const firstTimer = window.setTimeout(() => {
       sampleOnce();
     }, RESOURCE_FIRST_SAMPLE_DELAY_MS);
-    const repeatTimer = window.setInterval(() => {
-      sampleOnce();
-    }, RESOURCE_SAMPLE_INTERVAL_MS);
+    const stopRepeat = startVisibleInterval({
+      tick: sampleOnce,
+      intervalMs: RESOURCE_SAMPLE_INTERVAL_MS,
+      fireOnShow: true,
+    });
     return () => {
       stopped = true;
       window.clearTimeout(firstTimer);
-      window.clearInterval(repeatTimer);
+      stopRepeat();
     };
   };
 
