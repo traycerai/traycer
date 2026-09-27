@@ -14,13 +14,19 @@ import {
   render,
   type RenderResult,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { useOfficeEligibility } from "@/components/epic-canvas/comm-graph/office/use-office-eligibility";
+import {
+  __resetDocumentVisibilitySubscribersForTests,
+  __setBrowserDocumentHiddenForTests,
+} from "@/lib/dom/document-visibility";
 
 afterEach(() => {
   cleanup();
+  __setBrowserDocumentHiddenForTests(false);
+  __resetDocumentVisibilitySubscribersForTests();
 });
 
 interface ProbeProps {
@@ -84,27 +90,21 @@ describe("useOfficeEligibility", () => {
   });
 
   it("is ineligible while the document itself is hidden", () => {
-    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
-    try {
-      const result = renderProbe({ intersecting: true });
-      expect(eligibleText(result)).toBe("false");
-    } finally {
-      hidden.mockRestore();
-    }
+    __setBrowserDocumentHiddenForTests(true);
+    const result = renderProbe({ intersecting: true });
+    expect(eligibleText(result)).toBe("false");
   });
 
   it("becomes eligible when visibilitychange reports the document visible again", () => {
-    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    __setBrowserDocumentHiddenForTests(true);
     const result = renderProbe({ intersecting: true });
     expect(eligibleText(result)).toBe("false");
 
-    hidden.mockReturnValue(false);
     act(() => {
-      document.dispatchEvent(new Event("visibilitychange"));
+      __setBrowserDocumentHiddenForTests(false);
     });
 
     expect(eligibleText(result)).toBe("true");
-    hidden.mockRestore();
   });
 
   it("stays eligible for a visible pane that does not have focus", () => {

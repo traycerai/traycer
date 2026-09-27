@@ -249,6 +249,29 @@ describe("TerminalSessionRegistry", () => {
     });
   });
 
+  it("keeps a running terminal-agent outside the cap after the epic-only grace", () => {
+    const registry = new TerminalSessionRegistry();
+    const agent = createHandle("terminal-agent");
+    registry.acquire("agent-grace", () => agent.handle, HOST_ID);
+    registry.release("agent-grace", agent.handle, true);
+    vi.advanceTimersByTime(
+      DESKTOP_RETENTION_PROFILE.unknownActivityCapGraceMs + 1,
+    );
+
+    const plains = Array.from(
+      { length: MAX_LINGERING_PLAIN_TERMINALS + 1 },
+      () => createHandle("terminal"),
+    );
+    plains.forEach((entry, index) => {
+      registry.acquire(`plain-grace-${index}`, () => entry.handle, HOST_ID);
+      registry.release(`plain-grace-${index}`, entry.handle, true);
+    });
+
+    expect(registry.get("agent-grace")).toBe(agent.handle);
+    expect(agent.closeCount()).toBe(1);
+    expect(plains[0].closeCount()).toBe(2);
+  });
+
   it("forceRelease during the linger window disposes once and cancels the timer", () => {
     const registry = new TerminalSessionRegistry();
     const owned = createHandle("terminal");

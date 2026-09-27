@@ -89,3 +89,21 @@ export function __resetDocumentVisibilitySubscribersForTests(): void {
   listeners.clear();
   desktopWindowOnScreen = true;
 }
+
+/**
+ * Test seam: drive both Page Visibility inputs the helper and
+ * `isDocumentVisible()` read. Dispatching `visibilitychange` is what the
+ * module's DOM listener forwards to subscribers.
+ */
+export function __setBrowserDocumentHiddenForTests(hidden: boolean): void {
+  if (typeof document === "undefined") return;
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => (hidden ? "hidden" : "visible"),
+  });
+  Object.defineProperty(document, "hidden", {
+    configurable: true,
+    get: () => hidden,
+  });
+  document.dispatchEvent(new Event("visibilitychange"));
+}

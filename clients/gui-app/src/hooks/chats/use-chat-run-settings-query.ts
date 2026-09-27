@@ -5,9 +5,11 @@ import type {
   HostRpcError,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { GET_CHAT_RUN_SETTINGS_BATCH_MAX_IDS } from "@traycer/protocol/host/epic/chat-records";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { hostQueryKeys } from "@/lib/query-keys";
 
@@ -15,6 +17,23 @@ type GetChatRunSettingsResponse = ResponseOfMethod<
   HostRpcRegistry,
   "epic.getChatRunSettings"
 >;
+type GetChatRunSettingsBatchResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "epic.getChatRunSettingsBatch"
+>;
+
+export type ChatRunSettingsBatchRead = {
+  readonly data: GetChatRunSettingsResponse | undefined;
+  readonly isPending: boolean;
+  readonly isError: boolean;
+};
+
+const RUN_SETTINGS_QUERY_OPTIONS = {
+  staleTime: 60_000,
+  refetchOnWindowFocus: false,
+  retry: (failureCount: number, error: HostRpcError) =>
+    error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
+} as const;
 
 /**
  * One chat's persisted run-settings tuple, read from the host that OWNS it.
@@ -93,37 +112,133 @@ export function useChatRunSettings(args: {
  * Persisted run-settings tuples for a set of chats owned by one host.
  *
  * The caller must establish the ownership boundary before passing `chatIds`:
- * one requester cannot resolve records owned by another host. Keeping the
- * batch on `useHostQueries` starts the independent reads together and reuses
- * the same viewer-scoped cache entries as {@link useChatRunSettings}.
+ * one requester cannot resolve records owned by another host.
+ *
+ * On a host that advertised `epic.getChatRunSettingsBatch`, this is one RPC
+ * per 50 ids. On an older host it falls back to one `epic.getChatRunSettings`
+ * per chat, the same singles {@link useChatRunSettings} uses.
  */
 export function useChatRunSettingsBatch(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
   readonly chatIds: ReadonlyArray<string>;
   readonly enabled: boolean;
-}): Array<UseQueryResult<GetChatRunSettingsResponse, HostRpcError>> {
+}): ReadonlyArray<ChatRunSettingsBatchRead> {
   const viewerUserId = useCloudChatViewerId();
-  const requests = useMemo(
+  const hostId = args.client?.getActiveHostId() ?? null;
+  const batchSupported = useHostMethodSupport(
+    hostId,
+    "epic.getChatRunSettingsBatch",
+  );
+  const canQuery = args.enabled && viewerUserId.length > 0;
+  // `null` is "handshake not yet known". Firing N singles in that window, then
+  // switching to the batch once the manifest lands, is a launch burst the
+  // batch method exists to avoid. Wait. `false` is a completed handshake
+  // without the method: those hosts stay on singles.
+  const useBatch = batchSupported === true;
+  const useSingles = batchSupported === false;
+  const batchRequests = useMemo(
     () =>
-      args.chatIds.map((chatId) => ({
-        method: "epic.getChatRunSettings" as const,
-        params: { epicId: args.epicId, chatId },
-      })),
+      chunkChatIds(args.chatIds, GET_CHAT_RUN_SETTINGS_BATCH_MAX_IDS).map(
+        (chatIds) => ({
+          method: "epic.getChatRunSettingsBatch" as const,
+          params: { epicId: args.epicId, chatIds: [...chatIds] },
+        }),
+      ),
     [args.chatIds, args.epicId],
   );
-  return useHostQueries<HostRpcRegistry, "epic.getChatRunSettings">({
+  const singleRequests = useMemo(
+    () =>
+      useSingles
+        ? args.chatIds.map((chatId) => ({
+            method: "epic.getChatRunSettings" as const,
+            params: { epicId: args.epicId, chatId },
+          }))
+        : [],
+    [args.chatIds, args.epicId, useSingles],
+  );
+  const batchResults = useHostQueries<
+    HostRpcRegistry,
+    "epic.getChatRunSettingsBatch",
+    BatchSettingsByChatId
+  >({
     cacheKeyIdentity: viewerUserId,
     client: args.client,
-    requests,
+    requests: batchRequests,
     options: {
-      enabled: args.enabled && viewerUserId.length > 0,
-      staleTime: 60_000,
-      refetchOnWindowFocus: false,
-      retry: (failureCount, error) =>
-        error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
+      enabled: canQuery && useBatch,
+      ...RUN_SETTINGS_QUERY_OPTIONS,
+    },
+    combine: combineBatchSettings,
+  });
+  const singleResults = useHostQueries<
+    HostRpcRegistry,
+    "epic.getChatRunSettings"
+  >({
+    cacheKeyIdentity: viewerUserId,
+    client: args.client,
+    requests: singleRequests,
+    options: {
+      enabled: canQuery && useSingles,
+      ...RUN_SETTINGS_QUERY_OPTIONS,
     },
   });
+  return useMemo(() => {
+    if (useBatch) {
+      const unresolved = batchResults.pending || batchResults.failed;
+      return args.chatIds.map((chatId) => {
+        const settings = batchResults.byChatId.get(chatId);
+        return {
+          data: unresolved ? undefined : { settings: settings ?? null },
+          isPending: batchResults.pending,
+          isError: batchResults.failed,
+        };
+      });
+    }
+    return singleResults.map((result) => ({
+      data: result.data,
+      isPending: result.isPending,
+      isError: result.isError,
+    }));
+  }, [args.chatIds, batchResults, singleResults, useBatch]);
+}
+
+type BatchSettingsByChatId = {
+  readonly byChatId: ReadonlyMap<
+    string,
+    GetChatRunSettingsResponse["settings"]
+  >;
+  readonly pending: boolean;
+  readonly failed: boolean;
+};
+
+function combineBatchSettings(
+  results: Array<UseQueryResult<GetChatRunSettingsBatchResponse, HostRpcError>>,
+): BatchSettingsByChatId {
+  const byChatId = new Map<string, GetChatRunSettingsResponse["settings"]>();
+  for (const result of results) {
+    if (result.data === undefined) continue;
+    for (const entry of result.data.entries) {
+      byChatId.set(entry.chatId, entry.settings);
+    }
+  }
+  return {
+    byChatId,
+    pending: results.some((result) => result.isPending),
+    failed: results.some((result) => result.isError),
+  };
+}
+
+function chunkChatIds(
+  ids: ReadonlyArray<string>,
+  maxPerChunk: number,
+): ReadonlyArray<ReadonlyArray<string>> {
+  if (ids.length === 0) return [];
+  return Array.from(
+    { length: Math.ceil(ids.length / maxPerChunk) },
+    (_unused, index) =>
+      ids.slice(index * maxPerChunk, (index + 1) * maxPerChunk),
+  );
 }
 
 /**
@@ -148,5 +263,8 @@ export function invalidateChatRunSettings(
 ): void {
   void queryClient.invalidateQueries({
     queryKey: hostQueryKeys.methodScope(hostId, "epic.getChatRunSettings"),
+  });
+  void queryClient.invalidateQueries({
+    queryKey: hostQueryKeys.methodScope(hostId, "epic.getChatRunSettingsBatch"),
   });
 }

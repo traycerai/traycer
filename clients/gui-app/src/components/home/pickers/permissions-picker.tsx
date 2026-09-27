@@ -12,12 +12,14 @@ import {
 import { NarrowOnlyTooltip } from "@/components/home/toolbar/narrow-only-tooltip";
 import { ToolbarPillButton } from "@/components/home/toolbar/toolbar-buttons";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { Badge } from "@/components/ui/badge";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { cn } from "@/lib/utils";
 import { useLayoutStore } from "@/stores/settings/layout-store";
 import {
+  AUTO_JUDGE_UNAVAILABLE_DESCRIPTION,
   AUTO_MID_TURN_NOTICE,
-  PERMISSION_OPTIONS,
+  PERMISSION_PICKER_OPTIONS,
   findPermissionLabel,
   findPermissionOption,
   isPermissionMode,
@@ -27,12 +29,9 @@ import {
   type PermissionMode,
 } from "@/components/home/data/landing-options";
 import {
-  autoJudgeRowFace,
   autoModeMidTurnLock,
   type AutoJudgeBilling,
-  type AutoJudgeRowFace,
 } from "@/lib/auto-mode/auto-judge-billing";
-import { AutoJudgeLine } from "@/components/home/pickers/auto-judge-line";
 
 interface PermissionsPickerProps {
   value: PermissionMode;
@@ -75,9 +74,8 @@ interface PermissionsPickerProps {
    */
   turnActive: boolean;
   /**
-   * Which pocket this host's judge is charged to, for the `auto` row's meta
-   * line. `null` - still loading, or a host that has no notion of a judge -
-   * renders no meta line at all, which is exactly today's behaviour.
+   * The active judge determines whether Auto can be selected mid-turn.
+   * `null` means that the judge is still unknown; see `autoModeMidTurnLock`.
    */
   judgeBilling: AutoJudgeBilling | null;
   /**
@@ -134,6 +132,8 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   );
   const Icon = findPermissionOption(displayValue).icon;
   const label = findPermissionLabel(displayValue);
+  const experimental = displayValue === "auto";
+  const accessibleLabel = experimental ? `${label} — Experimental` : label;
   // The Auto row's mid-turn lock, when the run's own provider would review:
   // see `autoModeMidTurnLock`. Read once, for the guard and the row alike.
   const autoMidTurnLock = autoModeMidTurnLock({
@@ -158,21 +158,27 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   const trigger = (
     <DropdownMenuTrigger asChild>
       <ToolbarPillButton
-        aria-label={label}
+        aria-label={accessibleLabel}
         disabled={disabled}
         className={cn(
-          "max-w-[min(32cqw,13rem)] disabled:cursor-not-allowed disabled:opacity-50",
+          "min-w-0 disabled:cursor-not-allowed disabled:opacity-50",
+          experimental ? "max-w-full" : "max-w-[min(32cqw,13rem)]",
           compact && "justify-center",
         )}
       >
         <Icon className="size-4 shrink-0" />
         <span
           className={cn(
-            "min-w-0 flex-1 truncate whitespace-nowrap @max-lg:hidden",
-            compact && "hidden",
+            "min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap @max-lg:hidden",
+            compact ? "hidden" : "inline-flex",
           )}
         >
-          {label}
+          <span className="truncate">{label}</span>
+          {experimental ? (
+            <Badge variant="muted" size="xs">
+              Experimental
+            </Badge>
+          ) : null}
         </span>
         <ChevronDown
           className={cn(
@@ -188,7 +194,7 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
     <DropdownMenu>
       {compact ? (
         <TooltipWrapper
-          label={label}
+          label={accessibleLabel}
           side="top"
           sideOffset={undefined}
           align={undefined}
@@ -196,7 +202,7 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
           {trigger}
         </TooltipWrapper>
       ) : (
-        <NarrowOnlyTooltip label={label}>{trigger}</NarrowOnlyTooltip>
+        <NarrowOnlyTooltip label={accessibleLabel}>{trigger}</NarrowOnlyTooltip>
       )}
       <DropdownMenuContent
         align="start"
@@ -238,7 +244,7 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
             onChange(next);
           }}
         >
-          {PERMISSION_OPTIONS.map((option) => {
+          {PERMISSION_PICKER_OPTIONS.map((option) => {
             const OptionIcon = option.icon;
             // The ROW's constraint and the HOST's line, through the one
             // predicate that pairs them. The row alone lights `auto` up on a
@@ -250,9 +256,8 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
               hostKnowsAutoMode,
             );
             // Supported, but not for THIS turn: the row shows the lock's own
-            // sentence in place of its description, and neither the billing
-            // line nor the "switches now" notice, both of which would
-            // contradict it.
+            // sentence in place of its description, without a contradictory
+            // "switches now" notice.
             const lockedMidTurn =
               isSupported && option.id === "auto" && autoMidTurnLock !== null;
             let description: string;
@@ -265,6 +270,11 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
               });
             } else if (lockedMidTurn) {
               description = autoMidTurnLock;
+            } else if (
+              option.id === "auto" &&
+              judgeBilling?.kind === "blocked"
+            ) {
+              description = AUTO_JUDGE_UNAVAILABLE_DESCRIPTION;
             } else {
               description = option.description;
             }
@@ -282,15 +292,8 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
                 <OptionIcon className="mt-0.5 size-4 text-muted-foreground" />
                 <PermissionOptionBody
                   label={option.label}
+                  experimental={option.id === "auto"}
                   description={description}
-                  judgeFace={
-                    isSupported &&
-                    !lockedMidTurn &&
-                    option.id === "auto" &&
-                    judgeBilling !== null
-                      ? autoJudgeRowFace(judgeBilling)
-                      : null
-                  }
                   notice={
                     isSupported &&
                     !lockedMidTurn &&
@@ -323,31 +326,28 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   );
 }
 
-/**
- * One option's text column: name, what it does, and - on `auto` only - which
- * pocket it spends and what a mid-turn switch actually does.
- *
- * Extracted so the `auto` row's two extra lines do not push the map callback
- * above the complexity ceiling; it renders nothing for `judgeFace` / `notice`
- * on every other row, which is what keeps their absence the default.
- */
+/** One option's label and description, plus any mid-turn switching notice. */
 function PermissionOptionBody(props: {
   readonly label: string;
+  readonly experimental: boolean;
   readonly description: string;
-  readonly judgeFace: AutoJudgeRowFace | null;
   readonly notice: string | null;
 }) {
   return (
     <span className="min-w-0">
-      <span className="block font-medium leading-5 text-foreground">
-        {props.label}
+      <span className="flex flex-wrap items-center gap-2">
+        <span className="font-medium leading-5 text-foreground">
+          {props.label}
+        </span>
+        {props.experimental ? (
+          <Badge variant="muted" size="xs">
+            Experimental
+          </Badge>
+        ) : null}
       </span>
       <span className="block leading-5 text-muted-foreground">
         {props.description}
       </span>
-      {props.judgeFace !== null ? (
-        <AutoJudgeLine face={props.judgeFace} testId="permission-option-meta" />
-      ) : null}
       {props.notice !== null ? (
         <span
           data-testid="permission-option-mid-turn-notice"
