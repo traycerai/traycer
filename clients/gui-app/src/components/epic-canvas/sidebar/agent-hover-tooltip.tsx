@@ -36,7 +36,7 @@
  * can hand it a different truth. `ownerHostUnreachable` is the one exception,
  * and it is not shown - it only chooses between the outcomes. See its own doc.
  */
-import { useState, type ReactElement, type ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -45,8 +45,6 @@ import { AgentRoleHoverContent } from "@/components/epic-canvas/sidebar/agent-ro
 
 export interface AgentHoverTooltipProps {
   readonly trigger: ReactElement;
-  /** Sidebar first-use hover mounts after its intent delay, already open. */
-  readonly initiallyOpen?: boolean;
   readonly epicId: string;
   readonly nodeId: string;
   readonly nodeName: string;
@@ -126,7 +124,6 @@ function fallbackTooltipLabel(
 }
 
 export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
-  const [tooltipOpen, setTooltipOpen] = useState(props.initiallyOpen ?? false);
   const {
     epicId,
     hostId,
@@ -157,7 +154,6 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
     return (
       <WorktreeOwnerMetadataTooltip
         trigger={props.trigger}
-        initiallyOpen={props.initiallyOpen}
         title={nodeName}
         hostId={hostId}
         epicId={epicId}
@@ -175,10 +171,6 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
   return (
     <TooltipWrapper
       label={fallbackTooltipLabel(nodeName, roleContent, extraContent)}
-      open={props.initiallyOpen === undefined ? undefined : tooltipOpen}
-      onOpenChange={
-        props.initiallyOpen === undefined ? undefined : setTooltipOpen
-      }
       side={side}
       sideOffset={6}
       align="start"

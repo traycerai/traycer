@@ -42,11 +42,20 @@ import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { ArtifactPanelSearchShell } from "@/components/epic-canvas/sidebar/epic-sidebar-artifact-search";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { LazySidebarConfirmDialog } from "@/components/epic-canvas/sidebar/lazy-sidebar-confirm-dialog";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ContextMenuContent } from "@/components/ui/context-menu";
 import { SidebarGroup, SidebarGroupContent } from "@/components/ui/sidebar";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
-import { LazySidebarTooltipWrapper } from "@/components/epic-canvas/sidebar/lazy-sidebar-hover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   useAcknowledgedRootCreatePending,
   useArtifactSort,
@@ -97,6 +106,7 @@ import {
   Check,
   FileDown,
   FileText,
+  MoreHorizontal,
   Pencil,
   Plus,
   Trash2,
@@ -167,10 +177,9 @@ import type {
 } from "@/stores/epics/open-epic/types";
 import {
   SidebarContextMenuItems,
+  SidebarDropdownMenuItems,
   type SidebarRowMenuEntry,
 } from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
-import { SidebarRowMoreMenu } from "@/components/epic-canvas/sidebar/sidebar-row-more-menu";
-import { useSidebarRowDropdownMount } from "@/components/epic-canvas/sidebar/use-sidebar-row-dropdown-mount";
 
 interface ArtifactTreePanelBodyProps {
   readonly epicId: string;
@@ -1468,7 +1477,7 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
         onToggleSelection={onToggleSelection}
       />
       {renderDeleteDialog ? (
-        <LazySidebarConfirmDialog
+        <ConfirmDestructiveDialog
           blockedReason={null}
           open={confirmDeleteOpen}
           onOpenChange={onConfirmDeleteOpenChange}
@@ -1900,22 +1909,20 @@ function ArtifactUnreadMarker(props: {
   const label =
     props.variant === "self" ? "Unread artifact" : "Contains unread artifacts";
   return (
-    <LazySidebarTooltipWrapper
-      label={label}
-      side="top"
-      sideOffset={undefined}
-      align={undefined}
-    >
-      <span
-        aria-label={label}
-        data-testid={`epic-sidebar-unread-${props.nodeId}`}
-        data-unread-marker={props.variant}
-        className={cn(
-          "h-4 w-0.5 shrink-0 rounded-full",
-          props.variant === "self" ? "bg-info" : "bg-info/50",
-        )}
-      />
-    </LazySidebarTooltipWrapper>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          aria-label={label}
+          data-testid={`epic-sidebar-unread-${props.nodeId}`}
+          data-unread-marker={props.variant}
+          className={cn(
+            "h-4 w-0.5 shrink-0 rounded-full",
+            props.variant === "self" ? "bg-info" : "bg-info/50",
+          )}
+        />
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -1929,21 +1936,19 @@ function ArtifactStatusDot(props: ArtifactStatusDotProps) {
   const { nodeId, statusValue, showStatusDot } = props;
   if (statusValue === null || !showStatusDot) return null;
   return (
-    <LazySidebarTooltipWrapper
-      label={STATUS_LABELS[statusValue] ?? "Unknown"}
-      side="top"
-      sideOffset={undefined}
-      align={undefined}
-    >
-      <span
-        className={cn(
-          "size-2 shrink-0 rounded-full",
-          STATUS_DOT_CLASSES[statusValue] ?? "bg-muted-foreground",
-        )}
-        data-testid={`epic-sidebar-status-dot-${nodeId}`}
-        aria-hidden
-      />
-    </LazySidebarTooltipWrapper>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn(
+            "size-2 shrink-0 rounded-full",
+            STATUS_DOT_CLASSES[statusValue] ?? "bg-muted-foreground",
+          )}
+          data-testid={`epic-sidebar-status-dot-${nodeId}`}
+          aria-hidden
+        />
+      </TooltipTrigger>
+      <TooltipContent>{STATUS_LABELS[statusValue] ?? "Unknown"}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -1971,64 +1976,10 @@ function ArtifactAddChildButton(props: ArtifactAddChildButtonProps) {
     disabled,
     disabledTooltip,
   );
-  const dropdown = useSidebarRowDropdownMount();
-  const dropdownTriggerProps = disabled
-    ? {}
-    : {
-        id: dropdown.triggerId,
-        "aria-haspopup": "menu" as const,
-        "aria-expanded": dropdown.open,
-        "data-state": dropdown.open ? "open" : "closed",
-        "data-slot": "dropdown-menu-trigger",
-        onPointerDown: dropdown.onPointerDown,
-        onKeyDown: dropdown.onKeyDown,
-        onClick: dropdown.onClick,
-      };
-  const trigger = (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-xs"
-      {...dropdownTriggerProps}
-      aria-label="Add child artifact"
-      aria-disabled={ariaDisabled ? true : undefined}
-      data-testid={`epic-sidebar-add-${nodeId}`}
-      className={cn(
-        "absolute right-7 top-1/2 -translate-y-1/2",
-        ARIA_DISABLED_TRIGGER_CLASS,
-        rowAddControlRevealClass(addChildIsPending),
-      )}
-      disabled={nativeDisabled}
-    >
-      {addChildIsPending ? (
-        <AgentSpinningDots
-          className={undefined}
-          testId={undefined}
-          variant={undefined}
-        />
-      ) : (
-        <Plus className="size-3" />
-      )}
-    </Button>
-  );
-  if (disabled) {
-    if (disabledTooltip === null) return trigger;
-    return (
-      <LazySidebarTooltipWrapper
-        label={disabledTooltip}
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        {trigger}
-      </LazySidebarTooltipWrapper>
-    );
-  }
-  if (!dropdown.mounted) return trigger;
   return (
     <AddNodeDropdown
-      open={dropdown.open}
-      onOpenChange={dropdown.setOpen}
+      open={undefined}
+      onOpenChange={undefined}
       menuPlacement="row"
       epicId={epicId}
       menuTestId={`epic-sidebar-add-menu-${nodeId}`}
@@ -2043,10 +1994,33 @@ function ArtifactAddChildButton(props: ArtifactAddChildButtonProps) {
       tuiAgentPending={undefined}
       excludeTypes={ARTIFACT_PANEL_EXCLUDED_TYPES}
       disabledTypes={undefined}
-      disabled={false}
+      disabled={disabled}
       disabledTooltip={disabledTooltip}
     >
-      {trigger}
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        aria-label="Add child artifact"
+        aria-disabled={ariaDisabled ? true : undefined}
+        data-testid={`epic-sidebar-add-${nodeId}`}
+        className={cn(
+          "absolute right-7 top-1/2 -translate-y-1/2",
+          ARIA_DISABLED_TRIGGER_CLASS,
+          rowAddControlRevealClass(addChildIsPending),
+        )}
+        disabled={nativeDisabled}
+      >
+        {addChildIsPending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : (
+          <Plus className="size-3" />
+        )}
+      </Button>
     </AddNodeDropdown>
   );
 }
@@ -2171,11 +2145,25 @@ function ArtifactMoreMenu(props: {
 }) {
   const { nodeId, nodeName, entries } = props;
   return (
-    <SidebarRowMoreMenu
-      nodeId={nodeId}
-      label={`Artifact actions for ${nodeName}`}
-      entries={entries}
-      className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tree-item:opacity-100 aria-expanded:opacity-100"
-    />
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`Artifact actions for ${nodeName}`}
+          data-testid={`epic-sidebar-more-${nodeId}`}
+          className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tree-item:opacity-100 aria-expanded:opacity-100"
+          onClick={(event) => {
+            event.stopPropagation();
+          }}
+        >
+          <MoreHorizontal className="size-3" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-max">
+        <SidebarDropdownMenuItems entries={entries} />
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

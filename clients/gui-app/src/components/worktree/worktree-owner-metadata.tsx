@@ -67,8 +67,6 @@ const CLOSED_HOVER_STATE: OwnerMetadataHoverState = {
 
 export function WorktreeOwnerMetadataTooltip(props: {
   readonly trigger: ReactElement;
-  /** A lazy sidebar hover has already waited through the 500ms intent. */
-  readonly initiallyOpen?: boolean;
   readonly title: string;
   readonly hostId: string;
   readonly epicId: string;
@@ -77,11 +75,8 @@ export function WorktreeOwnerMetadataTooltip(props: {
   readonly supplementalContent: ReactNode | null;
   readonly side: "top" | "right" | "bottom" | "left";
 }): ReactNode {
-  const [hoverState, setHoverState] = useState<OwnerMetadataHoverState>(() =>
-    props.initiallyOpen
-      ? { pressed: false, hoverOpen: true }
-      : CLOSED_HOVER_STATE,
-  );
+  const [hoverState, setHoverState] =
+    useState<OwnerMetadataHoverState>(CLOSED_HOVER_STATE);
   const open = !hoverState.pressed && hoverState.hoverOpen;
   const client = useHostClientForHostId(props.hostId);
   const { openTile } = useEpicTileNavigation();

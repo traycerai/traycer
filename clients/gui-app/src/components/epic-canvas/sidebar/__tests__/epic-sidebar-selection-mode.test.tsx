@@ -9,7 +9,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { domMax, LazyMotion } from "motion/react";
-import { forwardRef, type ComponentProps, type ReactNode } from "react";
+import { forwardRef, type ReactNode } from "react";
 import type { Mock } from "vitest";
 import type { ChatSearchMessageHitsStatus } from "@/hooks/chats/use-chat-search-message-hits";
 import type { ProviderId } from "@/components/home/data/landing-options";
@@ -480,77 +480,6 @@ vi.mock("@/components/ui/tooltip", () => ({
     <div role="tooltip">{props.children}</div>
   ),
 }));
-
-// First-use lazy roots omit DropdownMenu/Tooltip/Confirm until a gesture.
-// This suite asserts menu contents and hover labels in the untouched DOM, so
-// the lazy wrappers render their previous eager compositions. The C suite
-// (`sidebar-row-first-use-overlays`) keeps the real lazy components.
-vi.mock("@/components/epic-canvas/sidebar/sidebar-row-more-menu", async () => {
-  const { SidebarDropdownMenuItems } =
-    await import("@/components/epic-canvas/sidebar/sidebar-row-menu-items");
-  const { Button } = await import("@/components/ui/button");
-  const { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } =
-    await import("@/components/ui/dropdown-menu");
-  const { MoreHorizontal } = await import("lucide-react");
-  return {
-    SidebarRowMoreMenu: (props: {
-      readonly nodeId: string;
-      readonly label: string;
-      readonly className: string;
-      readonly entries: ReadonlyArray<
-        import("@/components/epic-canvas/sidebar/sidebar-row-menu-items").SidebarRowMenuEntry
-      >;
-    }) => (
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label={props.label}
-            data-testid={`epic-sidebar-more-${props.nodeId}`}
-            className={props.className}
-            onClick={(event) => {
-              event.stopPropagation();
-            }}
-          >
-            <MoreHorizontal className="size-3" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-max">
-          <SidebarDropdownMenuItems entries={props.entries} />
-        </DropdownMenuContent>
-      </DropdownMenu>
-    ),
-  };
-});
-
-vi.mock("@/components/epic-canvas/sidebar/lazy-sidebar-hover", async () => {
-  const { AgentHoverTooltip } =
-    await import("@/components/epic-canvas/sidebar/agent-hover-tooltip");
-  const { TooltipWrapper } = await import("@/components/ui/tooltip-wrapper");
-  return {
-    LazySidebarAgentHoverTooltip: (
-      props: import("@/components/epic-canvas/sidebar/agent-hover-tooltip").AgentHoverTooltipProps,
-    ) => <AgentHoverTooltip {...props} />,
-    LazySidebarTooltipWrapper: (
-      props: ComponentProps<typeof TooltipWrapper>,
-    ) => <TooltipWrapper {...props} />,
-  };
-});
-
-vi.mock(
-  "@/components/epic-canvas/sidebar/lazy-sidebar-confirm-dialog",
-  async () => {
-    const { ConfirmDestructiveDialog } =
-      await import("@/components/ui/confirm-destructive-dialog");
-    return {
-      LazySidebarConfirmDialog: (
-        props: import("@/components/ui/confirm-destructive-dialog").ConfirmDestructiveDialogProps,
-      ) => <ConfirmDestructiveDialog {...props} />,
-    };
-  },
-);
 
 vi.mock("@/components/ui/sidebar", () => ({
   Sidebar: (props: {
