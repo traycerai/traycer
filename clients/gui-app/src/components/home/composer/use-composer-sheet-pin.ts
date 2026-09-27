@@ -1,17 +1,11 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
 
-const PINNED_PROPERTIES = ["left", "top", "width", "height"] as const;
-
 /**
- * Lays the open sheet over its slot. The slot is an empty `fixed` box that CSS
- * sizes against the surface; the sheet is `absolute`, and copies the slot's
- * box, measured from the sheet's own offset parent. The sheet cannot simply be
- * `fixed` itself: iOS WebKit draws no caret for an editor inside a fixed box
- * that resolves against a canvas tile, so the draft would be typed blind.
- *
- * Written straight to the element, before paint, so the sheet never shows at
- * a stale box; the slot is watched because the surface resizes under it when
- * the keyboard comes and goes.
+ * Lays the open sheet over its slot, an empty `fixed` box that CSS sizes
+ * against the surface. The sheet cannot be `fixed` itself: iOS WebKit draws
+ * no caret for an editor inside a fixed box that resolves against a canvas
+ * tile. The slot is watched because the surface resizes under it when the
+ * keyboard comes and goes.
  */
 export function useComposerSheetPin(expanded: boolean): {
   slotRef: RefObject<HTMLDivElement | null>;
@@ -25,23 +19,22 @@ export function useComposerSheetPin(expanded: boolean): {
     const sheet = sheetRef.current;
     if (!expanded || slot === null || sheet === null) return undefined;
     const pin = (): void => {
-      const origin = sheet.offsetParent;
-      if (origin === null) return;
+      const origin = sheet.offsetParent?.getBoundingClientRect();
+      if (origin === undefined) return;
       const box = slot.getBoundingClientRect();
-      const from = origin.getBoundingClientRect();
-      sheet.style.left = `${box.left - from.left}px`;
-      sheet.style.top = `${box.top - from.top}px`;
-      sheet.style.width = `${box.width}px`;
-      sheet.style.height = `${box.height}px`;
+      Object.assign(sheet.style, {
+        left: `${box.left - origin.left}px`,
+        top: `${box.top - origin.top}px`,
+        width: `${box.width}px`,
+        height: `${box.height}px`,
+      });
     };
     const observer = new ResizeObserver(pin);
     observer.observe(slot);
     pin();
     return () => {
       observer.disconnect();
-      for (const property of PINNED_PROPERTIES) {
-        sheet.style.removeProperty(property);
-      }
+      Object.assign(sheet.style, { left: "", top: "", width: "", height: "" });
     };
   }, [expanded]);
 

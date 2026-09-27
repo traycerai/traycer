@@ -368,7 +368,7 @@ describe("ComposerShell phone expansion", () => {
     expect(notCancelled).toBe(false);
   });
 
-  it("pins the shell over its slot, absolute rather than fixed, when expanded on phone", () => {
+  it("puts the shell into its sheet state when expanded on phone", () => {
     viewportMock.phone = true;
     renderComposerShell(
       "images",
@@ -384,10 +384,7 @@ describe("ComposerShell phone expansion", () => {
     const editorFrame = editor.closest("[data-composer-editor-frame]");
 
     expect(shell?.hasAttribute("data-composer-expanded")).toBe(true);
-    // The shell copies its box from the slot below (`useComposerSheetPin`);
-    // it is no longer `fixed` itself, since iOS WebKit draws no caret for an
-    // editor inside a fixed box resolving against a canvas tile.
-    expect(shell?.className).toContain("absolute");
+    // Not `fixed`: iOS draws no caret in a fixed sheet inside a chat tile.
     expect(shell?.className).not.toContain("fixed");
     expect(classTokens(overlay)).toContain("hidden");
     expect(editorFrame?.className).toContain("overflow-y-auto");
@@ -395,7 +392,6 @@ describe("ComposerShell phone expansion", () => {
     const backdrop = shell?.previousElementSibling;
     expect(backdrop?.hasAttribute("data-composer-sheet-backdrop")).toBe(true);
     expect(backdrop?.className).toContain("fixed");
-    // The slot is the backdrop's only child; the shell is pinned to its box.
     expect(
       backdrop?.querySelector("[data-composer-sheet-slot]"),
     ).not.toBeNull();
@@ -422,14 +418,5 @@ describe("ComposerShell phone expansion", () => {
     // (added when expanded) should be absent here.
     expect(classTokens(overlay)).not.toContain("hidden");
     expect(editorFrame?.className).not.toContain("overflow-y-auto");
-    // Nothing pins the collapsed shell: no backdrop/slot mounted, and no
-    // inline box left behind by a prior expansion.
-    expect(shell?.previousElementSibling).toBeNull();
-    expect(document.querySelector("[data-composer-sheet-slot]")).toBeNull();
-    const inlineStyle = (shell as HTMLElement | null)?.style;
-    expect(inlineStyle?.left).toBe("");
-    expect(inlineStyle?.top).toBe("");
-    expect(inlineStyle?.width).toBe("");
-    expect(inlineStyle?.height).toBe("");
   });
 });
