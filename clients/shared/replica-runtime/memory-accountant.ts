@@ -194,6 +194,9 @@ export interface AccountantSnapshot {
 export interface MemoryAccountant {
   register(spec: PlaneBudgetSpec): BudgetRegistration;
 
+  /** Observe completed holder measurements, after the holder has been updated. */
+  subscribeSettlements(listener: () => void): () => void;
+
   /**
    * Charge an estimate. Cheap, called on the hot path, superseded by
    * {@link settle}.
@@ -381,6 +384,7 @@ export function createMemoryAccountant(
   requireFiniteNonNegative(observedCeilingBytes, "observedCeiling");
 
   const planes = new Map<BudgetPlaneId, PlaneState>();
+  const settlementListeners = new Set<() => void>();
 
   const snapshot = (): AccountantSnapshot => {
     const usages = [...planes.values()].map(usageOf);
@@ -395,6 +399,11 @@ export function createMemoryAccountant(
   };
 
   return {
+    subscribeSettlements(listener): () => void {
+      settlementListeners.add(listener);
+      return () => settlementListeners.delete(listener);
+    },
+
     register(spec: PlaneBudgetSpec): BudgetRegistration {
       if (planes.has(spec.planeId)) {
         throw new Error(
@@ -456,6 +465,7 @@ export function createMemoryAccountant(
       const plane = requireRegistered(planes, planeId);
       plane.holders.set(holderId, { settled: bytes, provisional: 0 });
       plane.protectedLatch = false;
+      for (const listener of settlementListeners) listener();
     },
 
     release(planeId: BudgetPlaneId, holderId: BudgetHolderId): void {

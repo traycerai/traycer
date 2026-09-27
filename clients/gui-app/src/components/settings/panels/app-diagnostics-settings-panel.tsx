@@ -469,8 +469,16 @@ function JsHeapReadout(): ReactNode {
             Accounted data only, not renderer memory. Raw bytes are UTF-8
             serialized data; estimated heap bytes model retained objects and
             strings. This omits DOM, layout, compiled code and engine overhead.
+            Estimates were calibrated against after-GC Node V8 heap deltas; the
+            phone&apos;s WebKit engine has not been calibrated. A device
+            measurement is still needed for its 96 MiB allowance.
           </p>
           <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono tabular-nums">
+            <span>Accounted managed data</span>
+            <span className="text-right">
+              {formatMemoryBytes(managedData.accountant.totalChargedBytes)} /{" "}
+              {formatMemoryBytes(managedData.maxManagedDataBytes)}
+            </span>
             <span>Task rows, raw</span>
             <span className="text-right">
               {formatMemoryBytes(managedData.rawReplicaDataBytes)}

@@ -37,6 +37,7 @@ import {
 import {
   ChatSessionRegistry,
   DEFAULT_CHAT_IDLE_TTL_MS,
+  chatCapHasActiveWork,
 } from "@/stores/chats/session-registry";
 import {
   BROWSER_STREAM_FLUSH_TIMERS,
@@ -45,6 +46,12 @@ import {
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { setEpicChatWorkProbe } from "@/stores/epics/open-epic/session-registry";
 import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
+import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import { createManagedDataByteBudget } from "@/stores/replica-memory/managed-data-byte-budget";
+import {
+  readProcessMemoryRuntime,
+  subscribeProcessMemorySettlements,
+} from "@/stores/replica-memory/process-memory-accountant";
 
 const registry = new ChatSessionRegistry({
   idleTtlMs: DEFAULT_CHAT_IDLE_TTL_MS,
@@ -53,6 +60,21 @@ const registry = new ChatSessionRegistry({
   // bootstrap selected it.
   maxWarmSessions: () => getRetentionProfile().maxWarmChatSessions,
 });
+
+const managedDataByteBudget = createManagedDataByteBudget({
+  readAccountedBytes: () =>
+    readProcessMemoryRuntime()?.accountant.snapshot().totalChargedBytes ?? null,
+  readLimitBytes: () => getRetentionProfile().maxManagedDataBytes,
+  evictOldestChat: () => registry.evictOldestEligibleForByteBudget(),
+  evictOldestTask: () =>
+    getOpenEpicRegistry().evictOldestEligibleForByteBudget(),
+  scheduleMicrotask: (callback) => queueMicrotask(callback),
+});
+subscribeProcessMemorySettlements(() => managedDataByteBudget.noteSettlement());
+registry.subscribe(() => managedDataByteBudget.noteEligibilityChange());
+getOpenEpicRegistry().subscribe(() =>
+  managedDataByteBudget.noteEligibilityChange(),
+);
 
 /**
  * Coalesce streamed `blockDelta` events onto the animation frame so a fast
@@ -140,10 +162,16 @@ function rebindChatStoreWatches(): void {
   }
   for (const handle of live) {
     if (chatStoreWatches.has(handle)) continue;
+    let capHasActiveWork = chatCapHasActiveWork(handle);
     chatStoreWatches.set(
       handle,
       handle.store.subscribe(() => {
         retryDeferredEpicParks();
+        const nextCapHasActiveWork = chatCapHasActiveWork(handle);
+        if (nextCapHasActiveWork !== capHasActiveWork) {
+          capHasActiveWork = nextCapHasActiveWork;
+          managedDataByteBudget.noteEligibilityChange();
+        }
       }),
     );
   }

@@ -867,6 +867,13 @@ export class OpenEpicSessionRegistry {
     );
   }
 
+  /** Byte pressure follows the count cap's data-loss and activity verdict. */
+  evictOldestEligibleForByteBudget(): boolean {
+    return this.sessions.evictOldestEligible((entry) =>
+      this.isEligibleForCapEviction(entry.key),
+    );
+  }
+
   capExemptionTelemetry(): EpicCapExemptionTelemetry {
     const current = emptyCapExemptionCounts();
     for (const reason of this.capExemptionEpisodes.values()) {

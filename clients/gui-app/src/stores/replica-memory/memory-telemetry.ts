@@ -6,6 +6,7 @@ import type {
 import { BUDGET_PLANE_IDS } from "@traycer-clients/shared/replica-runtime";
 import type { EpicReplicaProjectionCounts } from "@/stores/replica-memory/epic-replica-budget";
 import type { ProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
+import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 
 /**
  * Exit-criteria telemetry for putting a plane under the accountant: docs
@@ -38,6 +39,7 @@ export interface ReplicaMemoryTelemetry {
   };
   readonly pressureByPlane: Readonly<Record<BudgetPlaneId, BudgetPressure>>;
   readonly observedCeilingBytes: number;
+  readonly maxManagedDataBytes: number;
 }
 
 /**
@@ -85,6 +87,7 @@ export function collectReplicaMemoryTelemetry(
     },
     pressureByPlane,
     observedCeilingBytes: runtime.observedCeilingBytes,
+    maxManagedDataBytes: getRetentionProfile().maxManagedDataBytes,
   };
 }
 

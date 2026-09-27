@@ -303,6 +303,13 @@ export class ChatSessionRegistry {
     this.sessions.forceRelease(chatSessionKey(epicId, chatId, hostId));
   }
 
+  /** Byte pressure uses the same active-work hold as the count cap. */
+  evictOldestEligibleForByteBudget(): boolean {
+    return this.sessions.evictOldestEligible(
+      (entry) => !chatCapHasActiveWork(entry.session),
+    );
+  }
+
   /**
    * End every live session of one epic - leased, warm, on any host.
    *
