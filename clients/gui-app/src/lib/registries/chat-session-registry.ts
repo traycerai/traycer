@@ -45,6 +45,7 @@ import {
 } from "@/stores/chats/stream-flush-coordinator";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { setEpicChatWorkProbe } from "@/stores/epics/open-epic/session-registry";
+import { subscribeAgentActivity } from "@/stores/agent-activity-store";
 import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { createManagedDataByteBudget } from "@/stores/replica-memory/managed-data-byte-budget";
@@ -122,8 +123,6 @@ const CHAT_SESSION_SCOPE_SEPARATOR = "\u0000";
 /** Passed to `reconnectAll` so a hand-driven wake is distinguishable in logs. */
 const CHAT_SESSION_WAKE_REASON = "user-retry";
 
-const handleHostIds = new WeakMap<ChatSessionStoreHandle, string | null>();
-
 let streamClientFactoryOverride: ChatStreamClientFactory | null = null;
 
 export function __setChatStreamClientFactoryForTests(
@@ -180,35 +179,46 @@ setEpicChatWorkProbe((epicId) => registry.unsettledWorkForEpic(epicId));
  * this window's open-tab entries and returns immediately for every epic not
  * sitting on a refused park, which is all of them almost all of the time.
  */
-const chatStoreWatches = new Map<ChatSessionStoreHandle, () => void>();
+interface ChatStoreWatch {
+  unsubscribe: () => void;
+  capHasActiveWork: boolean;
+}
+
+const chatStoreWatches = new Map<ChatSessionStoreHandle, ChatStoreWatch>();
+
+function refreshChatCapEligibility(
+  handle: ChatSessionStoreHandle,
+  watch: ChatStoreWatch,
+): boolean {
+  const next = chatCapHasActiveWork(handle, registry.hostIdForHandle(handle));
+  if (next === watch.capHasActiveWork) return false;
+  watch.capHasActiveWork = next;
+  return true;
+}
 
 function rebindChatStoreWatches(): void {
   const live = new Set(registry.listHandles());
-  for (const [handle, unsubscribe] of Array.from(chatStoreWatches)) {
+  for (const [handle, watch] of Array.from(chatStoreWatches)) {
     if (live.has(handle)) continue;
-    unsubscribe();
+    watch.unsubscribe();
     chatStoreWatches.delete(handle);
   }
   for (const handle of live) {
     if (chatStoreWatches.has(handle)) continue;
-    let capHasActiveWork = chatCapHasActiveWork(
-      handle,
-      handleHostIds.get(handle) ?? null,
-    );
-    chatStoreWatches.set(
-      handle,
-      handle.store.subscribe(() => {
-        retryDeferredEpicParks();
-        const nextCapHasActiveWork = chatCapHasActiveWork(
-          handle,
-          handleHostIds.get(handle) ?? null,
-        );
-        if (nextCapHasActiveWork !== capHasActiveWork) {
-          capHasActiveWork = nextCapHasActiveWork;
-          managedDataByteBudget.noteEligibilityChange();
-        }
-      }),
-    );
+    const watch: ChatStoreWatch = {
+      capHasActiveWork: chatCapHasActiveWork(
+        handle,
+        registry.hostIdForHandle(handle),
+      ),
+      unsubscribe: () => undefined,
+    };
+    watch.unsubscribe = handle.store.subscribe(() => {
+      retryDeferredEpicParks();
+      if (refreshChatCapEligibility(handle, watch)) {
+        managedDataByteBudget.noteEligibilityChange();
+      }
+    });
+    chatStoreWatches.set(handle, watch);
   }
 }
 
@@ -218,10 +228,21 @@ registry.subscribe(() => {
 });
 rebindChatStoreWatches();
 
+// Agent turns are reported on a separate stream. A warm chat can become
+// evictable when that stream removes its turn without a chat-store write or a
+// live epic session to relay the change. Wake the byte budget on that edge.
+subscribeAgentActivity(() => {
+  let changed = false;
+  for (const [handle, watch] of chatStoreWatches) {
+    if (refreshChatCapEligibility(handle, watch)) changed = true;
+  }
+  if (changed) managedDataByteBudget.noteEligibilityChange();
+});
+
 export function getChatSessionHandleHostId(
   handle: ChatSessionStoreHandle,
 ): string | null {
-  return handleHostIds.get(handle) ?? null;
+  return registry.hostIdForHandle(handle);
 }
 
 export function disposeAllChatSessions(): void {
@@ -460,7 +481,6 @@ export function useChatSessionHandle(
         }),
     );
     acquiredHandle = next;
-    handleHostIds.set(next, hostId);
     setHandle(next);
 
     return () => {

@@ -3293,6 +3293,18 @@ export function createChatSessionStoreWithNotificationDependencies(
    * callback settling synchronously, which nothing enforces".
    */
   let storeReady = false;
+  const settlePrivateStringSetCharge = (): void => {
+    // An inherited delivery marker can be seated before create() returns.
+    // The initial whole-state settlement below picks that charge up.
+    if (!storeReady || disposed) return;
+    const size = ownedStateAccount.size();
+    memory.chatWindows.recordOwnedStateSize(
+      holderId,
+      size.rawBytes,
+      size.estimatedHeapBytes,
+    );
+    settleOwnedStateBudget();
+  };
   /**
    * The ONLY writer of {@link connectionEpoch}.
    *
@@ -3574,14 +3586,20 @@ export function createChatSessionStoreWithNotificationDependencies(
    * the row, so the prompt returning to its composer is what the user saw
    * happen. See `takeMessageDeliveryRestoration`.
    */
-  const watchedMessageDeliveryIds = new Set<string>();
+  const watchedMessageDeliveryIds = ownedStateAccount.createPrivateStringSet(
+    "watchedMessageDeliveryIds",
+    settlePrivateStringSetCharge,
+  );
   /**
    * Withdrawn openings this store has answered - restored, or found with
    * nothing to restore. Never cleared: a withdrawal is final, so a message
    * handled once has nothing left to hand back, and a second take would put the
    * same prompt in the composer twice.
    */
-  const handledMessageDeliveryIds = new Set<string>();
+  const handledMessageDeliveryIds = ownedStateAccount.createPrivateStringSet(
+    "handledMessageDeliveryIds",
+    settlePrivateStringSetCharge,
+  );
   /**
    * The acknowledgement an earlier store for this chat on this device still
    * owed when it went away - a reload between the restore and the host's
@@ -9401,7 +9419,6 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingCancelRestorations: {},
       failedSendRestoration: null,
       hashOnlyRecoveries: {},
-      hashOnlyRecovery: null,
       currentComposerSettings: null,
       liveAssistantMessage: null,
       liveTurnUsage: null,
@@ -11178,10 +11195,19 @@ export function createChatSessionStoreWithNotificationDependencies(
     store,
     deliveredNotices: {
       notices: new WeakSet<ChatErrorNotice>(),
-      retainedClientActionIds: new Set<string>(),
-      clientActionIds: new Set<string>(),
+      retainedClientActionIds: ownedStateAccount.createPrivateStringSet(
+        "deliveredRetainedNoticeClientActionIds",
+        settlePrivateStringSetCharge,
+      ),
+      clientActionIds: ownedStateAccount.createPrivateStringSet(
+        "deliveredNoticeClientActionIds",
+        settlePrivateStringSetCharge,
+      ),
     },
-    deliveredRestoreCompletionKeys: new Set<string>(),
+    deliveredRestoreCompletionKeys: ownedStateAccount.createPrivateStringSet(
+      "deliveredRestoreCompletionKeys",
+      settlePrivateStringSetCharge,
+    ),
     setSurfaceVisibility: (surfaceId, visible) => {
       if (surfaceVisibility.get(surfaceId) === visible) return;
       surfaceVisibility.set(surfaceId, visible);

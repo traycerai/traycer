@@ -60,6 +60,8 @@ import type { TranscriptWindow } from "@/stores/chats/transcript-window";
  * guess.
  */
 const MAX_WITNESS_OCCURRENCES = 512;
+// Diagnostic-only history must not outgrow the bounded witness stream itself.
+const MAX_TRUNCATED_SOURCE_KEYS = MAX_WITNESS_OCCURRENCES;
 
 interface WitnessOccurrence {
   readonly key: string;
@@ -212,7 +214,14 @@ export function createImageWitnessStore(): ImageWitnessStore {
       if (occurrences.length > MAX_WITNESS_OCCURRENCES) {
         const evicted = occurrences.shift();
         if (evicted !== undefined) {
+          // Refresh recency when one source truncates again. This set is only
+          // diagnostic evidence; no matching or ordering decision reads it.
+          truncated.delete(evicted.key);
           truncated.add(evicted.key);
+          if (truncated.size > MAX_TRUNCATED_SOURCE_KEYS) {
+            const oldest = truncated.values().next();
+            if (!oldest.done) truncated.delete(oldest.value);
+          }
         }
       }
       return seq;

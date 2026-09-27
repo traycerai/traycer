@@ -12,6 +12,48 @@ import {
 
 type TextBlock = Extract<ContentBlock, { readonly type: "text" }>;
 
+export const CHAT_PRIVATE_STRING_SET_NAMES = [
+  "watchedMessageDeliveryIds",
+  "handledMessageDeliveryIds",
+  "deliveredNoticeClientActionIds",
+  "deliveredRetainedNoticeClientActionIds",
+  "deliveredRestoreCompletionKeys",
+] as const;
+
+type PrivateStringSetName = (typeof CHAT_PRIVATE_STRING_SET_NAMES)[number];
+
+class AccountedStringSet extends Set<string> {
+  constructor(
+    private readonly recordMutation: (
+      value: string,
+      delta: 1 | -1,
+      nextSize: number,
+    ) => void,
+    private readonly onChange: () => void,
+  ) {
+    super();
+  }
+
+  override add(value: string): this {
+    if (this.has(value)) return this;
+    super.add(value);
+    this.recordMutation(value, 1, this.size);
+    this.onChange();
+    return this;
+  }
+
+  override delete(value: string): boolean {
+    if (!super.delete(value)) return false;
+    this.recordMutation(value, -1, this.size);
+    this.onChange();
+    return true;
+  }
+
+  override clear(): void {
+    for (const value of Array.from(this)) this.delete(value);
+  }
+}
+
 interface MeasuredBlock {
   readonly size: RetainedValueSize;
   readonly text: {
@@ -51,61 +93,113 @@ function crossesSurrogateBoundary(previous: string, delta: string): boolean {
   return last >= 0xd800 && last <= 0xdbff && first >= 0xdc00 && first <= 0xdfff;
 }
 
+type ChatSessionDataKey = {
+  [Key in keyof ChatSessionState]: ChatSessionState[Key] extends (
+    ...args: never[]
+  ) => unknown
+    ? never
+    : Key;
+}[keyof ChatSessionState];
+
 /**
- * State this chat store owns outside its transcript and six existing whole-set
- * charges. `messages`, `events`, and `transcriptRowContext` alias data held by
- * `transcriptWindow` on the windowed line and are deliberately absent.
- *
- * The store publishes new top-level values rather than mutating them. Only a
- * changed identity is visited, so streaming a transcript never serializes an
- * unchanged recovery ledger or accumulated-change list.
+ * Exhaustive census of the store's retained data fields. `true` is charged by
+ * this account. Each string says why the field is not charged here. The key
+ * union comes from ChatSessionState, so adding a data field without deciding
+ * its ownership fails type-check instead of silently opening a budget hole.
+ * Actions are functions and carry no per-instance data beyond the calibrated
+ * fixed store cost.
  */
-const OWNED_STATE_KEYS = [
-  "fatalClose",
-  "preSnapshotRetries",
-  "chat",
-  "access",
-  "messageDelivery",
-  "unacknowledgedDeliveryRestore",
-  "activeTurn",
-  "accumulatedFileChanges",
-  "transcriptDerived",
-  "coldRewrittenMessageIds",
-  "accumulatedFileChangeSummaries",
-  "pendingFallback",
-  "pendingReturn",
-  "lastFailedAttempt",
-  "lastFallbackOutcome",
-  "heldUpdates",
-  "portForwards",
-  "pendingBackgroundStops",
-  "pendingBackgroundStopAll",
-  "pendingBackgroundSessionStop",
-  "fallbackChoiceLease",
-  "confirmedManualFallbackAction",
-  "unattendedFallbackOutcome",
-  "restore",
-  "settledRestoreCompletions",
-  "pendingActions",
-  "acceptedActions",
-  "pendingUserMessages",
-  "errorNotices",
-  "deliveredNoticeActionIds",
-  "deliveredLastCopyActionIds",
-  "lastCopyPrompts",
-  "openedSubagentCardBlockIds",
-  "pendingCancelRestorations",
-  "failedSendRestoration",
-  "hashOnlyRecoveries",
-  "currentComposerSettings",
-  "liveAssistantMessage",
-  "liveTurnUsage",
-  "worktreeBinding",
-  "missingWorktreePaths",
-] as const satisfies readonly (keyof ChatSessionState)[];
+export const CHAT_STATE_FIELD_ACCOUNTING = {
+  epicId: "identity string included in the calibrated fixed store charge",
+  chatId: "identity string included in the calibrated fixed store charge",
+  connectionStatus: "small scalar included in the fixed store charge",
+  fatalClose: true,
+  snapshotLoaded: "boolean included in the fixed store charge",
+  preSnapshotRetries: true,
+  preSnapshotReloadStartedAt: "timestamp included in the fixed store charge",
+  transcriptBaselineEpoch: "counter included in the fixed store charge",
+  connectionEpoch: "counter included in the fixed store charge",
+  transcriptHydrationSequence: "counter included in the fixed store charge",
+  transcriptRowContext:
+    "derived span context; span contextBytes and per-record transcript overhead cover it",
+  chat: true,
+  access: true,
+  messages:
+    "records alias transcriptWindow on the windowed line; legacy transcript charge covers them",
+  events:
+    "records alias transcriptWindow on the windowed line; legacy transcript charge covers them",
+  queue: "charged by chatWholeSetSliceBytes",
+  messageDelivery: true,
+  unacknowledgedDeliveryRestore: true,
+  runStatus: "small scalar included in the fixed store charge",
+  activeTurn: true,
+  turnLifecycleRevision: "counter included in the fixed store charge",
+  steerProtocolSupported: "boolean included in the fixed store charge",
+  draftBlobBridgeSupported: "boolean included in the fixed store charge",
+  interviewDeliveryRetryProtocolSupported:
+    "boolean included in the fixed store charge",
+  autoPermissionModeProtocolSupported:
+    "small scalar included in the fixed store charge",
+  turnInProgress: "boolean included in the fixed store charge",
+  pendingApprovals: "charged by chatWholeSetSliceBytes",
+  pendingFileEditApprovals: "charged by chatWholeSetSliceBytes",
+  pendingInterviews: "charged by chatWholeSetSliceBytes",
+  accumulatedFileChanges: true,
+  transcriptWindow: "charged by the transcript window budget",
+  transcriptDerived: true,
+  accumulatedFileChangeCount: "counter included in the fixed store charge",
+  coldRewrittenMessageIds: true,
+  jumpTargetOrdinal: "ordinal included in the fixed store charge",
+  accumulatedFileChangeSummaries: true,
+  accumulatedSummaryGenerationSeated:
+    "boolean included in the fixed store charge",
+  accumulatedSummaryAssemblyStarted:
+    "boolean included in the fixed store charge; private array is charged separately",
+  backgroundItems: "charged by chatWholeSetSliceBytes",
+  pendingFallback: true,
+  pendingReturn: true,
+  lastFailedAttempt: true,
+  lastFallbackOutcome: true,
+  managedCommands: "charged by chatWholeSetSliceBytes",
+  heldUpdates: true,
+  portForwards: true,
+  pendingBackgroundStops: true,
+  pendingBackgroundStopAll: true,
+  pendingBackgroundSessionStop: true,
+  fallbackChoiceLease: true,
+  confirmedManualFallbackAction: true,
+  unattendedFallbackOutcome: true,
+  restore: true,
+  settledRestoreCompletions: true,
+  pendingActions: true,
+  acceptedActions: true,
+  pendingUserMessages: true,
+  errorNotices: true,
+  deliveredNoticeActionIds: true,
+  deliveredLastCopyActionIds: true,
+  lastCopyPrompts: true,
+  openedSubagentCardBlockIds: true,
+  pendingCancelRestorations: true,
+  failedSendRestoration: true,
+  hashOnlyRecoveries: true,
+  currentComposerSettings: true,
+  liveAssistantMessage: true,
+  liveTurnUsage: true,
+  worktreeBinding: true,
+  missingWorktreePaths: true,
+} as const satisfies Readonly<Record<ChatSessionDataKey, true | string>>;
+
+const OWNED_STATE_KEYS = (
+  Object.keys(CHAT_STATE_FIELD_ACCOUNTING) as ChatSessionDataKey[]
+).filter((key) => CHAT_STATE_FIELD_ACCOUNTING[key] === true);
 
 export interface ChatOwnedStateAccount {
   update(state: ChatSessionState): boolean;
+  /** Mutations of private delivery and toast ledgers settle without a store write. */
+  createPrivateStringSet(
+    name: PrivateStringSetName,
+    onChange: () => void,
+  ): Set<string>;
   /** Count the unpublished summary generation alongside the last published set. */
   updateSummaryAssembly(
     assembly: ChatSessionState["accumulatedFileChangeSummaries"] | null,
@@ -119,6 +213,9 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
   const sizes = new Map<keyof ChatSessionState, RetainedValueSize>();
   let rawBytes = 0;
   let estimatedHeapBytes = 0;
+  let privateSetRawBytes = 0;
+  let privateSetEstimatedHeapBytes = 0;
+  const privateSetCounts = new Map<PrivateStringSetName, number>();
   const blockSizes = new WeakMap<object, MeasuredBlock>();
   let imageResolutions: LiveAssistantMessage["imageResolutions"] | null = null;
   let imageResolutionSize: RetainedValueSize = {
@@ -139,7 +236,10 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
 
   const measureBlock = (block: ContentBlock): MeasuredBlock => {
     const cached = blockSizes.get(block);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      appendedTextBlocks.delete(block);
+      return cached;
+    }
     if (block.type !== "text") {
       const measured = { size: retainedValueSize(block), text: null };
       blockSizes.set(block, measured);
@@ -148,6 +248,11 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
 
     const header = retainedValueSize({ ...block, text: "" });
     const append = appendedTextBlocks.get(block);
+    // The link is useful only while this block is being measured. Keeping it
+    // makes the current block root every prior full-text version through the
+    // WeakMap's values, growing actual retained heap quadratically on a long
+    // streamed response even though the charged size is linear.
+    appendedTextBlocks.delete(block);
     const previous =
       append === undefined ? undefined : blockSizes.get(append.previous);
     let measured: MeasuredBlock;
@@ -223,6 +328,28 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
   };
 
   return {
+    createPrivateStringSet(name, onChange): Set<string> {
+      if (privateSetCounts.has(name)) {
+        throw new Error(`private string set already registered: ${name}`);
+      }
+      privateSetCounts.set(name, 0);
+      return new AccountedStringSet((value, delta, nextSize) => {
+        const previousSize = nextSize - delta;
+        const stringSize = retainedValueSize(value);
+        const crossesEmptyBoundary =
+          (delta === 1 && previousSize === 0) ||
+          (delta === -1 && nextSize === 0);
+        const rawDelta = stringSize.rawBytes + (crossesEmptyBoundary ? 2 : 1);
+        const heapDelta =
+          stringSize.estimatedHeapBytes +
+          24 +
+          (delta === 1 && previousSize === 0 ? 48 : 0) +
+          (delta === -1 && nextSize === 0 ? 48 : 0);
+        privateSetRawBytes += delta * rawDelta;
+        privateSetEstimatedHeapBytes += delta * heapDelta;
+        privateSetCounts.set(name, nextSize);
+      }, onChange);
+    },
     updateSummaryAssembly(assembly, published): boolean {
       if (assembly === null) {
         if (summaryAssembly === null) return false;
@@ -293,9 +420,11 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
       return changed;
     },
     size: () => ({
-      rawBytes: rawBytes + summaryAssemblySize.rawBytes,
+      rawBytes: rawBytes + summaryAssemblySize.rawBytes + privateSetRawBytes,
       estimatedHeapBytes:
-        estimatedHeapBytes + summaryAssemblySize.estimatedHeapBytes,
+        estimatedHeapBytes +
+        summaryAssemblySize.estimatedHeapBytes +
+        privateSetEstimatedHeapBytes,
     }),
   };
 }

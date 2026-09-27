@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import * as ts from "typescript";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 import { BUDGET_PLANE_IDS } from "@traycer-clients/shared/replica-runtime";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
@@ -14,12 +18,40 @@ import {
   resetProcessMemoryRuntimeForTests,
 } from "@/stores/replica-memory/process-memory-accountant";
 import {
+  CHAT_PRIVATE_STRING_SET_NAMES,
+  CHAT_STATE_FIELD_ACCOUNTING,
   createChatOwnedStateAccount,
   noteLiveTextAppend,
 } from "../chat-owned-state-account";
 
 const EPIC_ID = "epic-chat-owned-state-account";
 const CHAT_ID = "chat-owned-state-account";
+
+// Every direct Map/Set allocation in chat-session-store.ts needs an ownership
+// decision. This source census makes a future private collection fail a test
+// until its accounting or exclusion is explained. The five durable ID ledgers
+// use createPrivateStringSet instead and are tested by their charge behavior.
+const PRIVATE_COLLECTION_DECISIONS = {
+  liveChatSessionStores: "references live stores already charged per handle",
+  handoffCaptureRoots:
+    "temporary post-disposal custody until async draft handoff settles",
+  surfaceVisibility: "one scalar per mounted surface in the fixed store charge",
+  stagingRevisionByRestoredAction:
+    "scalar sidecar bounded by outstanding restore actions",
+  hydrationRequestMarks: "at most eight outstanding range requests",
+  noticesSuppressedAfterDispatch: "short timeout per in-flight refusal notice",
+  stickySweptByAction:
+    "bounded by in-flight actions; values reference recovery evidence",
+  taskIds: "temporary stop-all frame construction",
+  next: "temporary copy of charged state collections",
+  settledActionIds: "temporary snapshot reconciliation result",
+  hiddenQueueItemIds: "temporary queue projection",
+  byAction: "temporary draft handoff dedupe map",
+  running: "temporary background-work projection",
+  pending: "temporary interview projection",
+  EMPTY_COLD_REWRITTEN_IDS: "shared immutable empty singleton",
+  opened: "temporary copy of a charged state collection",
+} as const;
 
 function bindingWithLargePath(path: string): WorktreeBinding {
   return {
@@ -87,6 +119,109 @@ afterEach(() => {
 });
 
 describe("chat owned-state memory accounting", () => {
+  it("has an explicit decision for each private Map or Set in the chat store", () => {
+    const path = resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../chats/chat-session-store.ts",
+    );
+    const source = readFileSync(path, "utf8");
+    const tree = ts.createSourceFile(
+      path,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const namedCollections = new Set<string>();
+    const accountedPrivateSets = new Set<string>();
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.initializer !== undefined &&
+        ts.isNewExpression(node.initializer) &&
+        ts.isIdentifier(node.initializer.expression) &&
+        (node.initializer.expression.text === "Map" ||
+          node.initializer.expression.text === "Set")
+      ) {
+        namedCollections.add(node.name.text);
+      }
+      if (
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === "createPrivateStringSet" &&
+        node.arguments.length > 0 &&
+        ts.isStringLiteral(node.arguments[0])
+      ) {
+        accountedPrivateSets.add(node.arguments[0].text);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(tree);
+    expect(Array.from(namedCollections).sort()).toEqual(
+      Object.keys(PRIVATE_COLLECTION_DECISIONS).sort(),
+    );
+    expect(Array.from(accountedPrivateSets).sort()).toEqual(
+      [...CHAT_PRIVATE_STRING_SET_NAMES].sort(),
+    );
+  });
+
+  it("classifies every data field the real store publishes", () => {
+    const handle = openStore();
+    try {
+      const dataKeys = Object.entries(handle.store.getState())
+        .filter(([, value]) => typeof value !== "function")
+        .map(([key]) => key)
+        .sort();
+      expect(Object.keys(CHAT_STATE_FIELD_ACCOUNTING).sort()).toEqual(dataKeys);
+      for (const classification of Object.values(CHAT_STATE_FIELD_ACCOUNTING)) {
+        expect(classification === true || classification.length > 0).toBe(true);
+      }
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  it("charges private string ledgers incrementally and releases deleted entries", () => {
+    const account = createChatOwnedStateAccount();
+    const changed = vi.fn();
+    const ledger = account.createPrivateStringSet(
+      "watchedMessageDeliveryIds",
+      changed,
+    );
+    const before = account.size();
+    ledger.add("first-message");
+    const first = account.size();
+    expect(first.estimatedHeapBytes).toBeGreaterThan(before.estimatedHeapBytes);
+    ledger.add("first-message");
+    expect(account.size()).toEqual(first);
+    expect(changed).toHaveBeenCalledTimes(1);
+
+    ledger.add("second-message");
+    expect(account.size().estimatedHeapBytes).toBeGreaterThan(
+      first.estimatedHeapBytes,
+    );
+    ledger.delete("first-message");
+    ledger.delete("second-message");
+    expect(account.size()).toEqual(before);
+  });
+
+  it("settles handle-owned toast and restore ledgers without a store write", () => {
+    const handle = openStore();
+    try {
+      const baseline = chatWindowUsage().settledBytes;
+      handle.deliveredNotices.retainedClientActionIds.add("last-copy-action");
+      const afterNotice = chatWindowUsage().settledBytes;
+      expect(afterNotice).toBeGreaterThan(baseline);
+
+      handle.deliveredRestoreCompletionKeys.add("restore-completion");
+      expect(chatWindowUsage().settledBytes).toBeGreaterThan(afterNotice);
+      handle.deliveredRestoreCompletionKeys.delete("restore-completion");
+      expect(chatWindowUsage().settledBytes).toBe(afterNotice);
+    } finally {
+      handle.dispose();
+    }
+  });
+
   it("counts an unpublished summary generation without encoding its unchanged prefix", () => {
     const handle = openStore();
     const account = createChatOwnedStateAccount();
