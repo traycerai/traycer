@@ -5,6 +5,10 @@ import {
   onboardingFieldLuminance,
   onboardingFieldPeakAlpha,
 } from "@/components/onboarding/onboarding-field-alpha";
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
 
 /* The atmosphere behind the welcome screen and the tour: a slow noise field
    quantised through an ordered dither into a grid of dots, in the theme's own
@@ -342,7 +346,7 @@ export function OnboardingField(props: { readonly welcoming: boolean }) {
     const play = (): void => {
       if (frame !== 0) window.cancelAnimationFrame(frame);
       frame = 0;
-      if (still.matches || document.hidden) {
+      if (still.matches || !isDocumentVisible()) {
         draw();
         return;
       }
@@ -359,7 +363,7 @@ export function OnboardingField(props: { readonly welcoming: boolean }) {
     });
     const box = new ResizeObserver(resize);
     box.observe(parent);
-    document.addEventListener("visibilitychange", play);
+    const stopVisibility = subscribeDocumentVisibility(play);
     still.addEventListener("change", play);
 
     return () => {
@@ -367,7 +371,7 @@ export function OnboardingField(props: { readonly welcoming: boolean }) {
       settleFocusRef.current = null;
       theme.disconnect();
       box.disconnect();
-      document.removeEventListener("visibilitychange", play);
+      stopVisibility();
       still.removeEventListener("change", play);
       gl.deleteProgram(program);
       gl.deleteBuffer(corners);

@@ -475,6 +475,30 @@ const CHIME_VOICES: Readonly<
 
 let notificationAudioContext: AudioContext | null = null;
 let primedAudioContext: AudioContext | null = null;
+let activeChimes = 0;
+
+function suspendNotificationAudioIfIdle(): void {
+  if (activeChimes > 0) return;
+  const context = notificationAudioContext;
+  if (context === null || context.state !== "running") return;
+  // `suspend()` queues a control message; `state` stays `"running"` until
+  // it runs. A play that arrives in that window schedules against a still-
+  // running context, then the message parks it. Resume again if a chime
+  // started in the meantime.
+  void context
+    .suspend()
+    .then(() => {
+      if (
+        activeChimes > 0 &&
+        context === notificationAudioContext &&
+        context.state === "suspended"
+      ) {
+        return context.resume();
+      }
+      return undefined;
+    })
+    .catch(() => undefined);
+}
 
 function getNotificationAudioContext(): AudioContext | null {
   if (typeof window === "undefined") return null;
@@ -512,11 +536,15 @@ export function prepareNotificationChimeAudio(): void {
     if (context.state === "suspended") {
       void context
         .resume()
-        .then(() => primeNotificationAudioRenderer(context))
+        .then(() => {
+          primeNotificationAudioRenderer(context);
+          suspendNotificationAudioIfIdle();
+        })
         .catch(() => undefined);
       return;
     }
     primeNotificationAudioRenderer(context);
+    suspendNotificationAudioIfIdle();
   } catch {
     // Audio setup can be rejected by autoplay or device restrictions.
   }
@@ -547,6 +575,7 @@ export function disposeNotificationChimeAudio(): void {
   const context = notificationAudioContext;
   notificationAudioContext = null;
   primedAudioContext = null;
+  activeChimes = 0;
   if (context === null || context.state === "closed") return;
   void context.close().catch(() => undefined);
 }
@@ -591,76 +620,120 @@ export function playNotificationChimeSound(
     const context = getNotificationAudioContext();
     if (context === null) return;
 
+    activeChimes += 1;
+    const releaseChimeReservation = (): void => {
+      activeChimes -= 1;
+      suspendNotificationAudioIfIdle();
+    };
     const scheduleChime = (): void => {
-      if (context.state === "closed") return;
-      const voices = CHIME_VOICES[sound];
-      const lastVoice = voices.reduce((latest, voice) =>
-        voice.delay + voice.duration > latest.delay + latest.duration
-          ? voice
-          : latest,
-      );
-      const chimeStartsAt = context.currentTime + SCHEDULE_AHEAD_SECONDS;
-      const master = context.createGain();
-      master.gain.setValueAtTime(CHIME_MASTER_GAIN, chimeStartsAt);
-      master.connect(context.destination);
-
-      voices.forEach((voice) => {
-        const startsAt = chimeStartsAt + voice.delay;
-        const endsAt = startsAt + voice.duration;
-        const oscillator = context.createOscillator();
-        const gain = context.createGain();
-        oscillator.type = voice.type;
-        oscillator.frequency.setValueAtTime(voice.startFrequency, startsAt);
-        voice.frequencyWaypoints?.forEach((waypoint) => {
-          oscillator.frequency.exponentialRampToValueAtTime(
-            waypoint.frequency,
-            startsAt + waypoint.time,
-          );
-        });
-        oscillator.frequency.exponentialRampToValueAtTime(
-          voice.endFrequency,
-          startsAt + voice.frequencyRampDuration,
+      if (context.state === "closed") {
+        releaseChimeReservation();
+        return;
+      }
+      try {
+        const voices = CHIME_VOICES[sound];
+        const lastVoice = voices.reduce((latest, voice) =>
+          voice.delay + voice.duration > latest.delay + latest.duration
+            ? voice
+            : latest,
         );
-        gain.gain.setValueAtTime(SILENCE_GAIN, startsAt);
-        if (
-          voice.decayStart !== undefined &&
-          voice.decayTimeConstant !== undefined
-        ) {
-          gain.gain.linearRampToValueAtTime(
-            voice.gain,
-            startsAt + voice.attack,
-          );
-          gain.gain.setTargetAtTime(
-            SILENCE_GAIN,
-            startsAt + voice.decayStart,
-            voice.decayTimeConstant,
-          );
-          gain.gain.exponentialRampToValueAtTime(SILENCE_GAIN, endsAt);
-        } else {
-          gain.gain.exponentialRampToValueAtTime(
-            voice.gain,
-            startsAt + voice.attack,
-          );
-          gain.gain.exponentialRampToValueAtTime(SILENCE_GAIN, endsAt);
+        const chimeStartsAt = context.currentTime + SCHEDULE_AHEAD_SECONDS;
+        const master = context.createGain();
+        const started: OscillatorNode[] = [];
+        master.gain.setValueAtTime(CHIME_MASTER_GAIN, chimeStartsAt);
+        master.connect(context.destination);
+
+        try {
+          voices.forEach((voice) => {
+            const startsAt = chimeStartsAt + voice.delay;
+            const endsAt = startsAt + voice.duration;
+            const oscillator = context.createOscillator();
+            const gain = context.createGain();
+            oscillator.type = voice.type;
+            oscillator.frequency.setValueAtTime(voice.startFrequency, startsAt);
+            voice.frequencyWaypoints?.forEach((waypoint) => {
+              oscillator.frequency.exponentialRampToValueAtTime(
+                waypoint.frequency,
+                startsAt + waypoint.time,
+              );
+            });
+            oscillator.frequency.exponentialRampToValueAtTime(
+              voice.endFrequency,
+              startsAt + voice.frequencyRampDuration,
+            );
+            gain.gain.setValueAtTime(SILENCE_GAIN, startsAt);
+            if (
+              voice.decayStart !== undefined &&
+              voice.decayTimeConstant !== undefined
+            ) {
+              gain.gain.linearRampToValueAtTime(
+                voice.gain,
+                startsAt + voice.attack,
+              );
+              gain.gain.setTargetAtTime(
+                SILENCE_GAIN,
+                startsAt + voice.decayStart,
+                voice.decayTimeConstant,
+              );
+              gain.gain.exponentialRampToValueAtTime(SILENCE_GAIN, endsAt);
+            } else {
+              gain.gain.exponentialRampToValueAtTime(
+                voice.gain,
+                startsAt + voice.attack,
+              );
+              gain.gain.exponentialRampToValueAtTime(SILENCE_GAIN, endsAt);
+            }
+            oscillator.connect(gain);
+            gain.connect(master);
+            oscillator.start(startsAt);
+            oscillator.stop(endsAt + 0.02);
+            started.push(oscillator);
+            if (voice === lastVoice) {
+              oscillator.onended = () => {
+                master.disconnect();
+                releaseChimeReservation();
+              };
+            }
+          });
+        } catch {
+          // A later voice can throw after an earlier one is already playing.
+          // Tear those down and release once so their onended cannot underflow
+          // activeChimes and leave a later chime suspended while it is audible.
+          for (const oscillator of started) {
+            oscillator.onended = null;
+            try {
+              oscillator.stop();
+            } catch {
+              // Already stopped.
+            }
+            try {
+              oscillator.disconnect();
+            } catch {
+              // Already disconnected.
+            }
+          }
+          try {
+            master.disconnect();
+          } catch {
+            // Never connected, or already disconnected.
+          }
+          releaseChimeReservation();
         }
-        oscillator.connect(gain);
-        gain.connect(master);
-        oscillator.start(startsAt);
-        oscillator.stop(endsAt + 0.02);
-        if (voice === lastVoice) {
-          oscillator.onended = () => master.disconnect();
-        }
-      });
+      } catch {
+        releaseChimeReservation();
+      }
     };
 
-    if (context.state === "suspended") {
-      void context
-        .resume()
-        .then(scheduleChime)
-        .catch(() => undefined);
+    if (context.state === "running") {
+      scheduleChime();
       return;
     }
-    scheduleChime();
+    void context
+      .resume()
+      .then(scheduleChime)
+      .catch(() => {
+        releaseChimeReservation();
+      });
   } catch {
     // Audio setup can be rejected by autoplay or device restrictions.
   }
