@@ -117,18 +117,31 @@ function populate(replica, fixture, replicaIndex) {
 }
 
 if (isMainThread) {
-  const output = await Promise.all(
-    FIXTURES.map(
-      (fixture) =>
-        new Promise((resolve, reject) => {
+  const output = [];
+  for (const fixture of FIXTURES) {
+    const samples = [];
+    // A fresh V8 isolate's after-GC heap delta can occasionally fall well
+    // below its neighboring runs. The median keeps that GC timing noise from
+    // deciding whether the estimator clears the 30% calibration gate.
+    for (let sample = 0; sample < 5; sample += 1) {
+      samples.push(
+        await new Promise((resolve, reject) => {
           const worker = new Worker(new URL(import.meta.url), {
             workerData: fixture,
           });
           worker.once("message", resolve);
           worker.once("error", reject);
         }),
-    ),
-  );
+      );
+    }
+    const median = [...samples].sort(
+      (left, right) => left.deltaBytes - right.deltaBytes,
+    )[2];
+    output.push({
+      ...median,
+      sampleDeltas: samples.map((sample) => sample.deltaBytes),
+    });
+  }
   process.stdout.write(JSON.stringify(output, null, 2) + "\n");
 } else {
   const fixture = workerData;
