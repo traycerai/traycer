@@ -206,16 +206,20 @@ describe("Dictation hotkey stays wired when Layout ▸ Composer hides the mic bu
 
 // ── Access (permission mode) ────────────────────────────────────────────────
 
-function renderPermissionsPicker() {
+function renderPermissionsPicker(value: "full_access" | "auto") {
   return render(
     <PermissionsPicker
-      value="full_access"
+      value={value}
       disabled={false}
       onChange={vi.fn()}
       supportedPermissionModes={null}
       harnessLabel={null}
       catalogSupportedModes={null}
-      hostKnowsAutoMode={false}
+      // Only matters for `value: "auto"`, which needs the host to be able to
+      // spell it or the display value clamps down to `auto_accept_edits`;
+      // `false` is the original fixture's value and is inert for every other
+      // mode (see `normalizePermissionMode`).
+      hostKnowsAutoMode={value === "auto"}
       turnActive={false}
       judgeBilling={null}
       closeFocus="composer"
@@ -224,28 +228,67 @@ function renderPermissionsPicker() {
   );
 }
 
+// The label text sits in a `<span class="truncate">`, itself the first child
+// of the name+chip wrapper span that actually carries the `hidden` utility
+// (it also owns the Experimental badge on the Auto row, so the pair hides as
+// one group) - `hidden` is never on the text node itself.
+function labelGroup(button: HTMLElement, label: string): HTMLElement {
+  const text = within(button).getByText(label);
+  const group = text.parentElement;
+  if (group === null) throw new Error("label has no wrapper");
+  return group;
+}
+
 describe("PermissionsPicker follows Layout ▸ Composer 'Access'", () => {
   it("shows the label and chevron when access is visible", () => {
-    renderPermissionsPicker();
+    renderPermissionsPicker("full_access");
 
     const button = screen.getByRole("button", { name: "Full access" });
-    const label = within(button).getByText("Full access");
+    const group = labelGroup(button, "Full access");
     const chevron = button.querySelectorAll("svg")[1];
 
-    expect(label.className.split(/\s+/)).not.toContain("hidden");
+    expect(group.className.split(/\s+/)).not.toContain("hidden");
     expect(chevron.getAttribute("class")?.split(/\s+/)).not.toContain("hidden");
   });
 
-  it("hides the label and chevron but keeps the accessible name when access is compact", () => {
+  it("hides the label group and chevron but keeps the accessible name when access is compact", () => {
     useLayoutStore.getState().setComposerAccess("compact");
-    renderPermissionsPicker();
+    renderPermissionsPicker("full_access");
 
     const button = screen.getByRole("button", { name: "Full access" });
-    const label = within(button).getByText("Full access");
+    const group = labelGroup(button, "Full access");
     const chevron = button.querySelectorAll("svg")[1];
 
-    expect(label.className.split(/\s+/)).toContain("hidden");
+    expect(group.className.split(/\s+/)).toContain("hidden");
     expect(chevron.getAttribute("class")?.split(/\s+/)).toContain("hidden");
+  });
+
+  // Auto's Experimental badge sits inside the same wrapper as its label, so a
+  // switch to compact must hide the whole name+chip group together rather
+  // than leaving the chip visible once the label text disappears.
+  it("hides Auto's label+Experimental-chip group together when access is compact", () => {
+    useLayoutStore.getState().setComposerAccess("compact");
+    renderPermissionsPicker("auto");
+
+    const button = screen.getByRole("button", {
+      name: "Auto — Experimental",
+    });
+    const group = labelGroup(button, "Auto");
+
+    expect(group.className.split(/\s+/)).toContain("hidden");
+    expect(within(group).getByText("Experimental")).toBeTruthy();
+  });
+
+  it("shows Auto's label and Experimental chip together when access is visible", () => {
+    renderPermissionsPicker("auto");
+
+    const button = screen.getByRole("button", {
+      name: "Auto — Experimental",
+    });
+    const group = labelGroup(button, "Auto");
+
+    expect(group.className.split(/\s+/)).not.toContain("hidden");
+    expect(within(group).getByText("Experimental")).toBeTruthy();
   });
 });
 

@@ -51,6 +51,7 @@ import {
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   PERMISSION_OPTIONS,
+  PERMISSION_PICKER_OPTIONS,
   composerOffersPermissionMode,
   normalizePermissionMode,
   type PermissionMode,
@@ -925,11 +926,22 @@ function TestPickers(props: {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {PERMISSION_OPTIONS.filter((option) =>
+              {PERMISSION_PICKER_OPTIONS.filter((option) =>
                 tuple.permissionModes.includes(option.id),
               ).map((option) => (
-                <SelectItem key={option.id} value={option.id}>
-                  {option.label}
+                <SelectItem
+                  key={option.id}
+                  value={option.id}
+                  textValue={option.label}
+                >
+                  <span className="inline-flex items-center gap-2">
+                    {option.label}
+                    {option.id === "auto" ? (
+                      <Badge variant="muted" size="xs">
+                        Experimental
+                      </Badge>
+                    ) : null}
+                  </span>
                 </SelectItem>
               ))}
             </SelectContent>

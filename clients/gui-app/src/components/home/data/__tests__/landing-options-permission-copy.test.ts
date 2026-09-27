@@ -4,10 +4,11 @@ import {
   AUTO_MID_TURN_NOTICE,
   PERMISSION_MODE_DETAILS,
   PERMISSION_OPTIONS,
+  PERMISSION_PICKER_OPTIONS,
 } from "@/components/home/data/landing-options";
 
 describe("PERMISSION_OPTIONS - labels, descriptions and icons", () => {
-  it("keeps the four modes in most-restrictive-to-most-permissive order", () => {
+  it("keeps the four modes in most-restrictive-to-most-permissive order - the safety order the fallback walk depends on", () => {
     expect(PERMISSION_OPTIONS.map((option) => option.id)).toEqual([
       "supervised",
       "auto_accept_edits",
@@ -44,6 +45,23 @@ describe("PERMISSION_OPTIONS - labels, descriptions and icons", () => {
         icon: ShieldOff,
       },
     ]);
+  });
+});
+
+describe("PERMISSION_PICKER_OPTIONS - presentation order", () => {
+  it("puts Experimental Auto last, independent of PERMISSION_OPTIONS' safety order", () => {
+    expect(PERMISSION_PICKER_OPTIONS.map((option) => option.id)).toEqual([
+      "supervised",
+      "auto_accept_edits",
+      "full_access",
+      "auto",
+    ]);
+  });
+
+  it("carries the exact same option objects PERMISSION_OPTIONS does, only reordered", () => {
+    expect(new Set(PERMISSION_PICKER_OPTIONS)).toEqual(
+      new Set(PERMISSION_OPTIONS),
+    );
   });
 });
 
