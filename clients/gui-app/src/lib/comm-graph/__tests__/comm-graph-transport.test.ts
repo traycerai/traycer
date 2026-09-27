@@ -6,6 +6,7 @@ import {
   commGraphCursorAtEnd,
   commGraphCursorIndex,
   commGraphEventAtFraction,
+  commGraphMarkerIndexNearFraction,
   commGraphPlaybackPace,
   commGraphPlayheadFraction,
   commGraphTrackFraction,
@@ -281,6 +282,102 @@ describe("commGraphEventAtFraction", () => {
 
   it("is null only when there is nothing to seek to", () => {
     expect(commGraphEventAtFraction([], TRACK, 0.5)).toBeNull();
+  });
+});
+
+describe("commGraphMarkerIndexNearFraction", () => {
+  // Drawn at 0, 0.5 and 1 - see `TRACK`.
+  const MARKERS = commGraphTransportMarkers(EVENTS, TRACK);
+  const REACH = 0.05;
+
+  it("finds the marker the pointer is exactly on", () => {
+    expect(commGraphMarkerIndexNearFraction(MARKERS, 0, REACH)).toBe(0);
+    expect(commGraphMarkerIndexNearFraction(MARKERS, 0.5, REACH)).toBe(1);
+    expect(commGraphMarkerIndexNearFraction(MARKERS, 1, REACH)).toBe(2);
+  });
+
+  it("picks the NEARER of the two neighbours, on either side", () => {
+    // Not "the last row at or before", which is the seek's rule: a pointer
+    // just left of a tick is on that tick.
+    expect(commGraphMarkerIndexNearFraction(MARKERS, 0.48, REACH)).toBe(1);
+    expect(commGraphMarkerIndexNearFraction(MARKERS, 0.52, REACH)).toBe(1);
+    expect(commGraphMarkerIndexNearFraction(MARKERS, 0.97, REACH)).toBe(2);
+    expect(commGraphMarkerIndexNearFraction(MARKERS, 0.03, REACH)).toBe(0);
+  });
+
+  it("is null between ticks, so empty track shows no label", () => {
+    // The control on the two cases above: "always the nearest" would satisfy
+    // them and would hang a label on the pointer wherever it went.
+    expect(commGraphMarkerIndexNearFraction(MARKERS, 0.25, REACH)).toBeNull();
+    expect(commGraphMarkerIndexNearFraction(MARKERS, 0.44, REACH)).toBeNull();
+  });
+
+  it("reaches exactly as far as the tolerance and no farther", () => {
+    const quarter = 0.25;
+    expect(commGraphMarkerIndexNearFraction(MARKERS, 0.75, quarter)).toBe(2);
+    expect(commGraphMarkerIndexNearFraction(MARKERS, 0.7, 0.19)).toBeNull();
+  });
+
+  it("gives a pointer exactly between two ticks to the LATER row", () => {
+    expect(commGraphMarkerIndexNearFraction(MARKERS, 0.25, 0.25)).toBe(1);
+    expect(commGraphMarkerIndexNearFraction(MARKERS, 0.75, 0.25)).toBe(2);
+  });
+
+  it("gives a pile of ticks to the last row drawn on it, from either side", () => {
+    // Rows two to four share an instant, so they share a pixel. Later ticks
+    // paint over earlier ones, so the one under the pointer is the last.
+    const piled = [
+      event({ id: 1, timestamp: 0 }),
+      event({ id: 2, timestamp: 1_000 }),
+      event({ id: 3, timestamp: 1_000 }),
+      event({ id: 4, timestamp: 1_000 }),
+      event({ id: 5, timestamp: 2_000 }),
+    ];
+    const markers = commGraphTransportMarkers(piled, trackFor(piled));
+    expect(markers.map((marker) => marker.fraction)).toEqual([
+      0, 0.5, 0.5, 0.5, 1,
+    ]);
+
+    expect(commGraphMarkerIndexNearFraction(markers, 0.5, REACH)).toBe(3);
+    expect(commGraphMarkerIndexNearFraction(markers, 0.52, REACH)).toBe(3);
+    // Approached from the LEFT the search lands on the first of the pile,
+    // which is the case a plain upper bound gets wrong.
+    expect(commGraphMarkerIndexNearFraction(markers, 0.48, REACH)).toBe(3);
+  });
+
+  it("is null for an empty log", () => {
+    expect(commGraphMarkerIndexNearFraction([], 0.5, REACH)).toBeNull();
+  });
+
+  it("finds a single row at the live edge, where it is drawn", () => {
+    const one = [event({ id: 1, timestamp: 1_000 })];
+    const markers = commGraphTransportMarkers(one, trackFor(one));
+    expect(markers[0].fraction).toBe(1);
+
+    expect(commGraphMarkerIndexNearFraction(markers, 0.98, REACH)).toBe(0);
+    expect(commGraphMarkerIndexNearFraction(markers, 0, REACH)).toBeNull();
+  });
+
+  it("resolves a track whose rows all share one instant", () => {
+    // A zero-length track: `offsets / totalMs` is 0 / 0 here, which is why the
+    // search runs over the drawn fractions and not the replay offsets.
+    const together = [
+      event({ id: 1, timestamp: 1_000 }),
+      event({ id: 2, timestamp: 1_000 }),
+      event({ id: 3, timestamp: 1_000 }),
+    ];
+    const markers = commGraphTransportMarkers(together, trackFor(together));
+    expect(markers.map((marker) => marker.fraction)).toEqual([1, 1, 1]);
+
+    expect(commGraphMarkerIndexNearFraction(markers, 0.99, REACH)).toBe(2);
+    expect(commGraphMarkerIndexNearFraction(markers, 1, REACH)).toBe(2);
+    expect(commGraphMarkerIndexNearFraction(markers, 0.5, REACH)).toBeNull();
+  });
+
+  it("clamps nothing: a pointer past either end still resolves by distance", () => {
+    expect(commGraphMarkerIndexNearFraction(MARKERS, -0.02, REACH)).toBe(0);
+    expect(commGraphMarkerIndexNearFraction(MARKERS, 1.02, REACH)).toBe(2);
+    expect(commGraphMarkerIndexNearFraction(MARKERS, 1.5, REACH)).toBeNull();
   });
 });
 

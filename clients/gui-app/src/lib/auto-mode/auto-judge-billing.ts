@@ -11,8 +11,8 @@
  * allotment. The rate is a fact about our behaviour that we control and that
  * cannot go stale when GitHub reprices; the allotment is theirs, and it would.
  *
- * The composer's Auto row names the MODEL as well as the pocket ("Reviewed by
- * Sonnet 5 on Traycer · uses credits"), so the run-level shape carries a model
+ * The composer's Auto row names the MODEL as well as the pocket ("Sonnet 5 ·
+ * Low", then "Uses Traycer credits"), so the run-level shape carries a model
  * label. Which judge that is comes from `autoJudge.get`'s `effective`, and
  * under Automatic's fallback it is the conversation's own harness - see
  * {@link autoJudgeTarget}.
@@ -530,38 +530,103 @@ function judgeHarnessLabel(harnessId: string): string {
 export const COPILOT_PREMIUM_REQUESTS_PER_HOUR = "60–350";
 
 /**
- * The one-line disclosure on the composer's Auto row, so a user who never
- * opens Settings still learns which model reviews and which pocket is charged
+ * The disclosure on the composer's Auto row, so a user who never opens
+ * Settings still learns which model reviews and which pocket is charged
  * BEFORE turning the mode on.
+ *
+ * Drawn the way Settings ▸ Permissions ▸ Judge draws the same judge: the
+ * provider's icon and the model, then who pays behind a status dot with the
+ * pocket's name set apart. The desktop dropdown and the mobile sheet both
+ * render this one shape, so neither can drift from the other.
  */
-export function autoJudgeMetaLine(billing: AutoJudgeBilling): string {
+export interface AutoJudgeRowFace {
+  /** Who reviews; `null` when no judge runs, since naming one would claim a
+   *  reviewer that is never called. */
+  readonly judge: {
+    /** Whose icon leads the line. */
+    readonly harnessId: string;
+    /** "Grok 4.7 · High", or the provider's own classifier. */
+    readonly label: string;
+  } | null;
+  readonly tone: "success" | "warning";
+  /** Who pays. `emphasis` is the pocket's name, drawn in foreground text. */
+  readonly pocket: {
+    readonly before: string;
+    readonly emphasis: string | null;
+    readonly after: string;
+  };
+  /** A quieter line under the pocket: Copilot's measured rate, else `null`. */
+  readonly detail: string | null;
+}
+
+export function autoJudgeRowFace(billing: AutoJudgeBilling): AutoJudgeRowFace {
   switch (billing.kind) {
     case "traycer":
-      return `Reviewed by ${judgeModelWithEffort(billing)} on Traycer · uses credits`;
+      return {
+        judge: {
+          harnessId: TRAYCER_JUDGE_HARNESS_ID,
+          label: judgeModelWithEffort(billing),
+        },
+        tone: "success",
+        pocket: { before: "Uses ", emphasis: "Traycer", after: " credits" },
+        detail: null,
+      };
     case "provider":
-      // The metered case is named with its range, whether the user picked
-      // Copilot or Automatic fell back to a Copilot conversation.
-      if (billing.harnessId === COPILOT_JUDGE_HARNESS_ID) {
-        return `Reviewed by ${judgeModelWithEffort(billing)} on Copilot · uses premium requests (${COPILOT_PREMIUM_REQUESTS_PER_HOUR} per hour)`;
-      }
-      return `Reviewed by ${judgeModelWithEffort(billing)} on ${billing.harnessLabel} · your account`;
+      return {
+        judge: {
+          harnessId: billing.harnessId,
+          label: judgeModelWithEffort(billing),
+        },
+        tone: "success",
+        pocket: {
+          before: "Billed to your ",
+          emphasis: billing.harnessLabel,
+          after: " account",
+        },
+        // The metered case is named with its range, whether the user picked
+        // Copilot or Automatic fell back to a Copilot conversation.
+        detail:
+          billing.harnessId === COPILOT_JUDGE_HARNESS_ID
+            ? `Uses premium requests: ${COPILOT_PREMIUM_REQUESTS_PER_HOUR} per hour`
+            : null,
+      };
     case "provider-native":
-      return `Reviewed by ${billing.harnessLabel}'s built-in classifier · no extra cost`;
+      return {
+        judge: {
+          harnessId: billing.harnessId,
+          label: `${billing.harnessLabel}'s built-in classifier`,
+        },
+        tone: "success",
+        pocket: { before: "No extra cost", emphasis: null, after: "" },
+        detail: null,
+      };
     // Says what HAPPENS, not what is missing: a user about to turn Auto on
     // needs to know every command will come to them.
     case "blocked":
-      return "No judge available on this machine · asks you instead";
+      return {
+        judge: null,
+        tone: "warning",
+        pocket: {
+          before: "No judge available on this machine · asks you instead",
+          emphasis: null,
+          after: "",
+        },
+        detail: null,
+      };
   }
 }
 
-/** "Sonnet 5 (Low)" - the model, and the effort it reviews at when named. */
+/**
+ * "Sonnet 5 · Low" - the model, and the effort it reviews at when named, in
+ * the format the model chips use.
+ */
 function judgeModelWithEffort(billing: {
   readonly modelLabel: string;
   readonly effortLabel: string | null;
 }): string {
   return billing.effortLabel === null
     ? billing.modelLabel
-    : `${billing.modelLabel} (${billing.effortLabel})`;
+    : `${billing.modelLabel} · ${billing.effortLabel}`;
 }
 
 /**

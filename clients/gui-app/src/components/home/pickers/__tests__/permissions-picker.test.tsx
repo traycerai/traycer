@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
 import {
@@ -213,6 +219,18 @@ describe("<PermissionsPicker /> - the four labels and one-line descriptions", ()
   });
 });
 
+/**
+ * The Auto row's judge line as it reads, without the provider logo: a brand
+ * icon carries an SVG `<title>` that `textContent` would splice into the text.
+ */
+function metaText(): string {
+  const clone = screen.getByTestId("permission-option-meta").cloneNode(true);
+  if (!(clone instanceof HTMLElement))
+    throw new Error("meta is not an element");
+  for (const svg of clone.querySelectorAll("svg")) svg.remove();
+  return clone.textContent;
+}
+
 describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
   it("shows the traycer meta line naming the model", () => {
     renderPicker({
@@ -224,9 +242,7 @@ describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
     });
     openMenu();
 
-    expect(screen.getByTestId("permission-option-meta").textContent).toBe(
-      "Reviewed by Sonnet 5 on Traycer · uses credits",
-    );
+    expect(metaText()).toBe("Sonnet 5 · Uses Traycer credits");
   });
 
   it("shows the provider-account meta line naming the model and the provider", () => {
@@ -241,12 +257,14 @@ describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
     });
     openMenu();
 
-    expect(screen.getByTestId("permission-option-meta").textContent).toBe(
-      "Reviewed by Sonnet on Claude Code · your account",
-    );
+    const meta = screen.getByTestId("permission-option-meta");
+    expect(metaText()).toBe("Sonnet · Billed to your Claude Code account");
+    // The provider name is rendered in its own (emphasis) element, not just
+    // concatenated into the surrounding text.
+    expect(within(meta).getByText("Claude Code")).toBeTruthy();
   });
 
-  it("shows the Copilot premium-request meta line", () => {
+  it("shows the Copilot premium-request meta line and detail", () => {
     renderPicker({
       judgeBilling: {
         kind: "provider",
@@ -258,9 +276,13 @@ describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
     });
     openMenu();
 
-    expect(screen.getByTestId("permission-option-meta").textContent).toBe(
-      "Reviewed by GPT-5 on Copilot · uses premium requests (60–350 per hour)",
+    const meta = screen.getByTestId("permission-option-meta");
+    expect(metaText()).toBe(
+      "GPT-5 · Billed to your Copilot accountUses premium requests: 60–350 per hour",
     );
+    expect(
+      within(meta).getByText("Uses premium requests: 60–350 per hour"),
+    ).toBeTruthy();
   });
 
   it("shows the provider-native no-extra-cost meta line", () => {
@@ -273,8 +295,8 @@ describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
     });
     openMenu();
 
-    expect(screen.getByTestId("permission-option-meta").textContent).toBe(
-      "Reviewed by Claude Code's built-in classifier · no extra cost",
+    expect(metaText()).toBe(
+      "Claude Code's built-in classifier · No extra cost",
     );
   });
 
@@ -302,8 +324,8 @@ describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
     });
     openMenu();
 
-    expect(screen.getByTestId("permission-option-meta").textContent).toBe(
-      "Reviewed by codex-judge-default on Codex · your account",
+    expect(metaText()).toBe(
+      "codex-judge-default · Billed to your Codex account",
     );
   });
 
@@ -442,8 +464,8 @@ describe("<PermissionsPicker /> - mid-turn lock", () => {
     openMenu();
 
     expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
-    expect(screen.getByTestId("permission-option-meta").textContent).toBe(
-      "Reviewed by Claude Code's built-in classifier · no extra cost",
+    expect(metaText()).toBe(
+      "Claude Code's built-in classifier · No extra cost",
     );
   });
 
