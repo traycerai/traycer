@@ -36,6 +36,12 @@ export interface RetentionProfile {
   readonly maxWarmChatSessions: number;
   /** Lingering plain terminals (`TerminalSessionRegistry`). */
   readonly maxLingeringPlainTerminals: number;
+  /**
+   * Decoded-byte budget for the renderer-side transcript image store
+   * (`lib/attachments/transcript-image-bytes-store.ts`). Chat and artifact
+   * attachments re-enter as unary `bytesBase64` on every relaunch without it.
+   */
+  readonly transcriptImageCacheBytes: number;
 }
 
 /** Electron desktop and the browser: the numbers the app has always run. */
@@ -46,6 +52,7 @@ export const DESKTOP_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   retainedTopLevelSurfaces: 5,
   maxWarmChatSessions: 6,
   maxLingeringPlainTerminals: 6,
+  transcriptImageCacheBytes: 64 * 1024 * 1024,
 });
 
 /** The installed Capacitor app: a 2 GB process ceiling, one visible tab. */
@@ -56,6 +63,7 @@ export const MOBILE_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   retainedTopLevelSurfaces: 2,
   maxWarmChatSessions: 3,
   maxLingeringPlainTerminals: 3,
+  transcriptImageCacheBytes: 16 * 1024 * 1024,
 });
 
 /**

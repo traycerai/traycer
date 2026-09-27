@@ -231,6 +231,9 @@ describe("CollabTileBody syncing strip", () => {
     const strip = screen.getByTestId(STRIP_ID);
     expect(strip.textContent).toContain("Syncing…");
     expect(strip.className).toContain("pointer-events-none");
+    // The words are for assistive tech only: the visible signal is the bar,
+    // and a visible caption sat under the version-history button.
+    expect(screen.getByTestId(`${STRIP_ID}-label`).className).toBe("sr-only");
     expect(screen.getByTestId("editor-content")).toBe(editorBefore);
     expect(editorLife).toEqual({ mounts: 1, unmounts: 0 });
 

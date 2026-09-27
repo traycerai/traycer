@@ -1439,6 +1439,38 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
     });
 
+    // The message names the working next moves - not just the missing
+    // endpoint - since the 2026-09-27 staging outage left an operator here
+    // with nothing but "no host endpoint is published" and no path out.
+    it("the no-metadata stop message also names 'traycer host update' as a next move", async () => {
+      const { controller } = stageForceStop();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-metadata" });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("traycer host update"),
+      });
+    });
+
+    // `stopForRestart`'s CLI-owned path (no Desktop agent): unlike a plain
+    // `stop --force`, a restart's stop half has a caller that RECYCLES the
+    // job afterwards (`kickstart -k`, `stopServiceForRestart`), which acts on
+    // the process launchd tracks rather than a pid.json pid - so nothing is
+    // published to kill is not a failure here, it is the expected shape of
+    // "already gone, already mid-boot, or never there". Throwing on it (the
+    // `operation === "stop"` behaviour above) is what turned `host restart
+    // --force` into a refusal that named no working command.
+    it("stopForRestart resolves forcedRecycle:true (never throws) when forceStopHostProcess reports no-metadata", async () => {
+      const { controller } = stageForceStop();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-metadata" });
+
+      await expect(
+        controller.stopForRestart(label, { force: true }),
+      ).resolves.toEqual({ forcedRecycle: true });
+    });
+
     it("throws SERVICE_CONTROL_FAILED naming the identity refusal when forceStopHostProcess reports identity-unverified", async () => {
       const { controller } = stageForceStop();
       MOCKS.forceStopHostProcess.mockResolvedValue({

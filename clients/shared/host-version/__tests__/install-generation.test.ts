@@ -60,6 +60,13 @@ const MIGRATED_CALLERS: readonly string[] = [
   // discovery scan rather than by anyone reading the diff. This is the exact
   // case cold review B added that scan for, on its first real outing.
   "clients/traycer-cli/src/commands/host-start.ts",
+  // The restart commands' half of the same comparison `host-start.ts` makes:
+  // `host restart` / `host free-port-and-restart` decide under the contender
+  // lock whether a `waiting-to-activate` park names the installed bytes, and
+  // this string is compared byte-for-byte against the baseline
+  // `installGenerationOf` (`host/update-run.ts`) wrote at park time. Caught by
+  // the discovery scan on the PR that added it (traycer#2208), as designed.
+  "clients/traycer-cli/src/host/parked-activation-relaunch.ts",
   // Desktop main's own capture, migrated with Q7. It is the only caller
   // outside this package, and the only one whose encoded string is compared
   // ACROSS A PROCESS BOUNDARY: desktop main reads the fingerprint from disk
