@@ -4,7 +4,7 @@
  * `use-comm-graph-feed-health.ts` for why this rolls up per-host socket
  * status instead of captioning it onto every agent node.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import {
   deriveCommGraphFeedHealth,
@@ -24,6 +24,7 @@ import type {
   CommGraphCloudSubscriptionHandlers,
   CommGraphCloudSubscriptionOpener,
 } from "@/lib/comm-graph/comm-graph-cloud-subscription";
+import { __setCommGraphDataCommitWindowMsForTests } from "@/lib/comm-graph/comm-graph-data-commit-window";
 
 function host(hostId: string, status: CommGraphHostStatus): CommGraphHostState {
   return { hostId, status, cursor: null, snapshotBoundary: null };
@@ -100,8 +101,15 @@ describe("deriveCommGraphFeedHealth", () => {
  * way a mounted `useCommGraphSnapshot` caller would.
  */
 describe("useCommGraphFeedHealth", () => {
+  beforeEach(() => {
+    // Frames publish as they are applied: these cases read the snapshot in
+    // the tick they push in.
+    __setCommGraphDataCommitWindowMsForTests(0);
+  });
+
   afterEach(() => {
     __resetCommGraphCloudRegistryForTests();
+    __setCommGraphDataCommitWindowMsForTests(null);
   });
 
   it("reports null before any claim, reflects a degraded status while attached, and reports null again once detached even though the last status was degraded", () => {

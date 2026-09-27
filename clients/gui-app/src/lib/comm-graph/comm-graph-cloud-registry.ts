@@ -2,6 +2,7 @@ import {
   CommGraphCloudSubscriptionManager,
   type CommGraphCloudSubscriptionOpener,
 } from "@/lib/comm-graph/comm-graph-cloud-subscription";
+import { commGraphDataCommitWindowMs } from "@/lib/comm-graph/comm-graph-data-commit-window";
 import { dropCommGraphRowOpenKeys } from "@/stores/epics/comm-graph-row-open-store";
 import { reconcilePrunedCommGraphTimelineRows } from "@/stores/epics/comm-graph-timeline-store";
 
@@ -59,6 +60,7 @@ export function getCommGraphCloudSubscriptionManager(
         dropCommGraphRowOpenKeys(epicId, rowKeys);
         reconcilePrunedCommGraphTimelineRows(epicId, rowKeys);
       },
+      commGraphDataCommitWindowMs(),
     ),
     openersByClaim: new Map(),
     claimByRelayHostId: new Map(),
