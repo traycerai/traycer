@@ -16,6 +16,7 @@ import type {
   AutoPolicyReadState,
 } from "@traycer/protocol/host/auto-mode/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -449,12 +450,20 @@ function RulesEditor(props: {
 
   return (
     <div className="flex flex-col gap-4">
-      <p className="px-1 text-ui-sm text-muted-foreground">
-        Your rules go on top of Traycer&apos;s built-in ones and apply to your
-        account on every machine. A repository with{" "}
-        <code className="font-mono">.traycer/auto-policy.md</code> adds its own
-        restrictions on top.
-      </p>
+      <div className="space-y-1.5 px-1">
+        <h2 className="flex flex-wrap items-center gap-2 text-ui-sm font-medium">
+          Auto mode rules
+          <Badge variant="muted" size="xs">
+            Experimental
+          </Badge>
+        </h2>
+        <p className="text-ui-sm text-muted-foreground">
+          Your rules go on top of Traycer&apos;s built-in ones and apply to your
+          account on every machine. A repository with{" "}
+          <code className="font-mono">.traycer/auto-policy.md</code> adds its
+          own restrictions on top.
+        </p>
+      </div>
       <RulesBanner
         readState={readState}
         canWrite={canWrite}

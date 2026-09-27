@@ -254,6 +254,13 @@ describe("RulesTab", () => {
 
       expect(screen.queryByTestId("auto-policy-section-allow")).toBeNull();
     });
+
+    it("badges the 'Auto mode rules' heading as Experimental", () => {
+      render(tab({}));
+
+      const heading = screen.getByRole("heading", { name: /Auto mode rules/ });
+      expect(within(heading).getByText("Experimental")).not.toBeNull();
+    });
   });
 
   describe("Save and Discard", () => {

@@ -4265,7 +4265,9 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
         Providers page consumes both once on mount, and has the Permissions
         tab whenever this line can render.
   - **Rules** (`rules-tab.tsx`) edits the ACCOUNT's Auto mode policy in place,
-    over `autoPolicy.get` / `autoPolicy.set`. It shows four sections in
+    over `autoPolicy.get` / `autoPolicy.set`. Its **Auto mode rules** heading
+    carries the muted xs **Experimental** badge, including on direct navigation.
+    It shows four sections in
     Traycer's order (Environment, Always allow, Ask first, Never allow), plus
     **Notes** for text under none of them. Each section has its tagline,
     description, a monospace textarea, and the built-in rules it extends.
@@ -4752,7 +4754,9 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     error> …", with the account (that provider's last-used, checked against its
     live accounts, else the first account listed - never a disabled Terminal
     account; no control for a provider with none) and the permission mode (the
-    user's default, clamped to what the provider honours) beneath; agent mode
+    user's default, clamped to what the provider honours) beneath. This picker
+    uses the shared presentation order, with Auto last and its **Experimental**
+    badge on both the option and selected value. Agent mode
     and fast mode are carried from the defaults, as the new-conversation modal
     seeds them. A model catalog that fails to load says so in the Model picker
     and offers "Try again". It answers for the DRAFT, blank rows and an unsaved
