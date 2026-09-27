@@ -80,6 +80,7 @@ import type {
 import type { PendingChatCreation } from "./pending-chat-creations";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { appLogger } from "@/lib/logger";
+import { createMainProjectionAccount } from "@/stores/replica-memory/main-projection-account";
 // The read seam's own word for "this client has no body to give you", raised
 // HERE because this is the layer that sees the grant say so. The edge back is
 // type-only (`OpenEpicStoreHandle`), so there is no runtime cycle.
@@ -1224,6 +1225,7 @@ export function createOpenEpicStore(
   nextIngestFenceIdentity += 1;
 
   let storeApi: StoreApi<OpenEpicState> | null = null;
+  const mainProjectionAccount = createMainProjectionAccount();
   /**
    * The worker's own dirty verdict, before main-only body refusals are folded
    * into it.
@@ -1667,7 +1669,10 @@ export function createOpenEpicStore(
     };
   }
 
+  const isDisposed = (): boolean => disposed;
+
   function applyProjection(patch: Partial<EpicRuntimeProjection>): void {
+    if (disposed) return;
     const api = storeApi;
     if (api === null) {
       // UNREACHABLE, and thrown rather than assumed away.
@@ -1729,6 +1734,17 @@ export function createOpenEpicStore(
         ? projected
         : { ...projected, bindingVersion: bindingEpoch },
     );
+    // Zustand notifies synchronously. A clean-state publication can make a
+    // warm registry entry byte-eligible, and its subscriber may dispose this
+    // store before `setState` returns. Its port has then released every holder.
+    if (isDisposed()) return;
+    const projectionSize = mainProjectionAccount.recordPatch(projected);
+    if (projectionSize !== null) {
+      options.accounting.settleMainProjectionBytes(
+        projectionSize.rawBytes,
+        projectionSize.estimatedHeapBytes,
+      );
+    }
     dropBodiesWhoseRoomIsGone();
     retryBodiesWhoseRoomBecameReady();
   }

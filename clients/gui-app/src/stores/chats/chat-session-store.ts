@@ -88,7 +88,6 @@ import {
   refreshSeatedRows,
   streamWindowMessage,
   touchTranscriptRange,
-  transcriptWindowChargedBytes,
   updateWindowMessage,
   TRANSCRIPT_WINDOW_MAX_BYTES,
   type OrdinalRange,
@@ -96,9 +95,17 @@ import {
 } from "@/stores/chats/transcript-window";
 import { ensureProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
 import {
+  createChatOwnedStateAccount,
+  noteLiveTextAppend,
+} from "@/stores/replica-memory/chat-owned-state-account";
+import type { RetainedValueSize } from "@/stores/replica-memory/retained-value-size";
+import {
+  CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES,
+  CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
   chatHolderId,
-  chatSessionChargeBytes,
+  chatSessionEstimatedHeapBytes,
   chatWholeSetSliceBytes,
+  estimatedTranscriptWindowBytes,
   evictChatWindowForAccountant,
   legacyTranscriptResidencyBytes,
   type ChatWholeSetSlices,
@@ -3216,6 +3223,9 @@ export function createChatSessionStoreWithNotificationDependencies(
   const notificationUserId = options.userId;
   const memory = ensureProcessMemoryRuntime(options.environment);
   const holderId = chatHolderId(options.hostId, options.epicId, options.chatId);
+  const ownedStateAccount = createChatOwnedStateAccount();
+  let settleOwnedStateBudget = (): void => undefined;
+  let unsubscribeOwnedState = (): void => undefined;
   let recencyStamp = 0;
   let disposed = false;
   let streamClient: ChatStreamClientHandle | null = null;
@@ -3284,6 +3294,34 @@ export function createChatSessionStoreWithNotificationDependencies(
    * callback settling synchronously, which nothing enforces".
    */
   let storeReady = false;
+  const settlePrivateStringSetCharge = (): void => {
+    // An inherited delivery marker can be seated before create() returns.
+    // The initial whole-state settlement below picks that charge up.
+    if (!storeReady || disposed) return;
+    const size = ownedStateAccount.size();
+    memory.chatWindows.recordOwnedStateSize(
+      holderId,
+      size.rawBytes,
+      size.estimatedHeapBytes,
+    );
+    settleOwnedStateBudget();
+  };
+  const settleImageWitnessSize = (size: RetainedValueSize): void => {
+    if (
+      disposed ||
+      !ownedStateAccount.updateImageWitnessSize(size) ||
+      !storeReady
+    ) {
+      return;
+    }
+    const total = ownedStateAccount.size();
+    memory.chatWindows.recordOwnedStateSize(
+      holderId,
+      total.rawBytes,
+      total.estimatedHeapBytes,
+    );
+    settleOwnedStateBudget();
+  };
   /**
    * The ONLY writer of {@link connectionEpoch}.
    *
@@ -3565,14 +3603,20 @@ export function createChatSessionStoreWithNotificationDependencies(
    * the row, so the prompt returning to its composer is what the user saw
    * happen. See `takeMessageDeliveryRestoration`.
    */
-  const watchedMessageDeliveryIds = new Set<string>();
+  const watchedMessageDeliveryIds = ownedStateAccount.createPrivateStringSet(
+    "watchedMessageDeliveryIds",
+    settlePrivateStringSetCharge,
+  );
   /**
    * Withdrawn openings this store has answered - restored, or found with
    * nothing to restore. Never cleared: a withdrawal is final, so a message
    * handled once has nothing left to hand back, and a second take would put the
    * same prompt in the composer twice.
    */
-  const handledMessageDeliveryIds = new Set<string>();
+  const handledMessageDeliveryIds = ownedStateAccount.createPrivateStringSet(
+    "handledMessageDeliveryIds",
+    settlePrivateStringSetCharge,
+  );
   /**
    * The acknowledgement an earlier store for this chat on this device still
    * owed when it went away - a reload between the restore and the host's
@@ -4509,6 +4553,7 @@ export function createChatSessionStoreWithNotificationDependencies(
      * carried across reconnects exactly as the window's spans are.
      */
     let imageWitnesses = createImageWitnessStore();
+    imageWitnesses.setRetainedSizeListener(settleImageWitnessSize);
 
     /**
      * The ordinal range the transcript viewport is showing, as last reported
@@ -4605,6 +4650,26 @@ export function createChatSessionStoreWithNotificationDependencies(
     let assemblingSummaries:
       | readonly ChatAccumulatedFileChangeSummary[]
       | null = null;
+    const accountSummaryAssembly = (
+      assembly: readonly ChatAccumulatedFileChangeSummary[] | null,
+    ): void => {
+      if (
+        disposed ||
+        !ownedStateAccount.updateSummaryAssembly(
+          assembly,
+          get().accumulatedFileChangeSummaries,
+        )
+      ) {
+        return;
+      }
+      const size = ownedStateAccount.size();
+      memory.chatWindows.recordOwnedStateSize(
+        holderId,
+        size.rawBytes,
+        size.estimatedHeapBytes,
+      );
+      settleOwnedStateBudget();
+    };
 
     /**
      * The range request currently in flight, so a stream of identical
@@ -5674,14 +5739,19 @@ export function createChatSessionStoreWithNotificationDependencies(
       memory.chatWindows.settle(
         memory.accountant,
         holderId,
-        chatSessionChargeBytes(window, chatSlicesOf(get())),
+        chatSessionEstimatedHeapBytes(window, chatSlicesOf(get())) +
+          ownedStateAccount.size().estimatedHeapBytes,
       );
       memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
     };
 
     const legacyTranscriptChargeBytes = (state: ChatSessionState): number =>
       legacyTranscriptResidencyBytes(state.messages, state.events) +
-      chatWholeSetSliceBytes(chatSlicesOf(state));
+      chatWholeSetSliceBytes(chatSlicesOf(state)) +
+      CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+      (state.messages.length + state.events.length) *
+        CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES +
+      ownedStateAccount.size().estimatedHeapBytes;
 
     const commitLegacyTranscriptBudget = (): void => {
       recencyStamp = memory.stampChatRecency();
@@ -5719,11 +5789,15 @@ export function createChatSessionStoreWithNotificationDependencies(
         memory.accountant,
         holderId,
         windowedLine
-          ? chatSessionChargeBytes(state.transcriptWindow, chatSlicesOf(state))
+          ? chatSessionEstimatedHeapBytes(
+              state.transcriptWindow,
+              chatSlicesOf(state),
+            ) + ownedStateAccount.size().estimatedHeapBytes
           : legacyTranscriptChargeBytes(state),
       );
       memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
     };
+    settleOwnedStateBudget = commitWholeSetSliceBudget;
 
     const publishWindowedTranscript = (
       window: TranscriptWindow,
@@ -5754,22 +5828,42 @@ export function createChatSessionStoreWithNotificationDependencies(
             state.messages,
             state.events,
           );
+          const transcriptEstimatedBytes =
+            transcriptBytes +
+            (state.messages.length + state.events.length) *
+              CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES;
+          const requiredBytes =
+            chatWholeSetSliceBytes(chatSlicesOf(state)) +
+            CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+            ownedStateAccount.size().estimatedHeapBytes;
           // No ordinal/range exists on the legacy line, so this transcript is
           // the sole recoverable copy rather than an evictable window.
           memory.chatWindows.settle(
             memory.accountant,
             holderId,
-            transcriptBytes + chatWholeSetSliceBytes(chatSlicesOf(state)),
+            transcriptBytes +
+              chatWholeSetSliceBytes(chatSlicesOf(state)) +
+              CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+              (state.messages.length + state.events.length) *
+                CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES +
+              ownedStateAccount.size().estimatedHeapBytes,
           );
           return {
             reclaimedBytes: 0,
-            protectedBytesByKind:
-              transcriptBytes === 0
+            protectedBytesByKind: [
+              ...(transcriptEstimatedBytes === 0
                 ? []
-                : [{ kind: "sole-copy", bytes: transcriptBytes }],
+                : [
+                    {
+                      kind: "sole-copy" as const,
+                      bytes: transcriptEstimatedBytes,
+                    },
+                  ]),
+              { kind: "required" as const, bytes: requiredBytes },
+            ],
           };
         }
-        const current = transcriptWindowChargedBytes(state.transcriptWindow);
+        const current = estimatedTranscriptWindowBytes(state.transcriptWindow);
         const { window, outcome } = evictChatWindowForAccountant(
           state.transcriptWindow,
           Math.max(0, current - overBytes),
@@ -5782,9 +5876,20 @@ export function createChatSessionStoreWithNotificationDependencies(
         memory.chatWindows.settle(
           memory.accountant,
           holderId,
-          chatSessionChargeBytes(window, chatSlicesOf(get())),
+          chatSessionEstimatedHeapBytes(window, chatSlicesOf(get())) +
+            ownedStateAccount.size().estimatedHeapBytes,
         );
-        return outcome;
+        const requiredBytes =
+          chatWholeSetSliceBytes(chatSlicesOf(get())) +
+          CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+          ownedStateAccount.size().estimatedHeapBytes;
+        return {
+          ...outcome,
+          protectedBytesByKind: [
+            ...outcome.protectedBytesByKind,
+            { kind: "required", bytes: requiredBytes },
+          ],
+        };
       },
     });
 
@@ -6093,10 +6198,14 @@ export function createChatSessionStoreWithNotificationDependencies(
       // below and it disagree at the one site whose own comment demands a
       // blank slate for a later re-upgrade.
       assemblingSummaries = null;
+      accountSummaryAssembly(null);
       // The witness store's evidence orders copies within the windowed
       // coordinate space this line is abandoning; a later re-upgrade starts
       // a new lineage and must not inherit stamps from the old one.
+      imageWitnesses.setRetainedSizeListener(null);
       imageWitnesses = createImageWitnessStore();
+      imageWitnesses.setRetainedSizeListener(settleImageWitnessSize);
+      settleImageWitnessSize(imageWitnesses.retainedSize());
       applyAuthoritativeSnapshot(
         frame,
         {
@@ -7334,6 +7443,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (frame.snapshot.indexRevision === null) {
           accumulatedSummaryGeneration = -1;
           assemblingSummaries = null;
+          accountSummaryAssembly(null);
           recovery.resetSummaryStream();
           // The retained array is now the PREVIOUS generation's, so it vouches
           // for nothing until a replacement chunk lands - including when its
@@ -7705,6 +7815,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // the completion watchdog measures the ASSEMBLY, not the retained
           // array whose length may coincide with the count.
           assemblingSummaries = [];
+          accountSummaryAssembly(assemblingSummaries);
           set(summaryTrustState());
         }
         // A chunk starting PAST the end is a chunk whose predecessor was
@@ -7735,6 +7846,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           ...frame.chunk.summaries,
         ];
         assemblingSummaries = summaries;
+        // This array is retained privately until final. The published state
+        // still owns the previous generation, so a store subscriber alone
+        // cannot see these bytes. The account caches row sizes by identity.
+        accountSummaryAssembly(frame.chunk.isFinal ? null : summaries);
         // Published only once whole. Until then the previous set keeps the
         // panel honest, and the watchdog - armed below off the un-seated
         // flag - is what recovers a replacement stream that stops short.
@@ -9325,7 +9440,6 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingCancelRestorations: {},
       failedSendRestoration: null,
       hashOnlyRecoveries: {},
-      hashOnlyRecovery: null,
       currentComposerSettings: null,
       liveAssistantMessage: null,
       liveTurnUsage: null,
@@ -11013,6 +11127,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         clearResnapshotRequestTimer();
         clearStreamCompletionWatchdog();
         legacyTranscriptAdapter.detach("disposed");
+        unsubscribeOwnedState();
         memory.chatWindows.detach(holderId);
         memory.accountant.release(BUDGET_PLANE_IDS.chatWindows, holderId);
         closeStreamClient();
@@ -11045,6 +11160,18 @@ export function createChatSessionStoreWithNotificationDependencies(
   // here and the `create()` above is the window `storeReady` exists to name, and
   // anything inserted before this line silently joins it.
   storeReady = true;
+  const updateOwnedStateCharge = (state: ChatSessionState): void => {
+    if (disposed || !ownedStateAccount.update(state)) return;
+    const size = ownedStateAccount.size();
+    memory.chatWindows.recordOwnedStateSize(
+      holderId,
+      size.rawBytes,
+      size.estimatedHeapBytes,
+    );
+    settleOwnedStateBudget();
+  };
+  updateOwnedStateCharge(store.getState());
+  unsubscribeOwnedState = store.subscribe(updateOwnedStateCharge);
 
   if (notificationUserId !== null) {
     unsubscribeLiveCompletionAcknowledgements =
@@ -11089,10 +11216,19 @@ export function createChatSessionStoreWithNotificationDependencies(
     store,
     deliveredNotices: {
       notices: new WeakSet<ChatErrorNotice>(),
-      retainedClientActionIds: new Set<string>(),
-      clientActionIds: new Set<string>(),
+      retainedClientActionIds: ownedStateAccount.createPrivateStringSet(
+        "deliveredRetainedNoticeClientActionIds",
+        settlePrivateStringSetCharge,
+      ),
+      clientActionIds: ownedStateAccount.createPrivateStringSet(
+        "deliveredNoticeClientActionIds",
+        settlePrivateStringSetCharge,
+      ),
     },
-    deliveredRestoreCompletionKeys: new Set<string>(),
+    deliveredRestoreCompletionKeys: ownedStateAccount.createPrivateStringSet(
+      "deliveredRestoreCompletionKeys",
+      settlePrivateStringSetCharge,
+    ),
     setSurfaceVisibility: (surfaceId, visible) => {
       if (surfaceVisibility.get(surfaceId) === visible) return;
       surfaceVisibility.set(surfaceId, visible);
@@ -13621,6 +13757,19 @@ function applyContentBlockDelta(
 ): Partial<ChatSessionState> {
   const applied = reduceContentBlockDelta(state, event, witnesses);
   if (applied === state) return applied;
+  if (
+    event.type === "text.delta" &&
+    state.liveAssistantMessage !== null &&
+    applied.liveAssistantMessage !== undefined &&
+    applied.liveAssistantMessage !== null
+  ) {
+    noteLiveTextAppend(
+      state.liveAssistantMessage.blocks,
+      applied.liveAssistantMessage.blocks,
+      event.blockId,
+      event.delta,
+    );
+  }
   if (!isSubagentCardOpeningEvent(event)) return applied;
   if (state.openedSubagentCardBlockIds.has(event.blockId)) return applied;
   const opened = new Set(state.openedSubagentCardBlockIds);

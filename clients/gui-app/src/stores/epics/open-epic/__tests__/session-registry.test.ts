@@ -36,6 +36,7 @@ import {
   DESKTOP_RETENTION_PROFILE,
   setRetentionProfile,
 } from "@/stores/replica-memory/retention-profile";
+import { createManagedDataByteBudget } from "@/stores/replica-memory/managed-data-byte-budget";
 import { createArtifactInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
 import {
   openStoreForTest,
@@ -951,6 +952,7 @@ describe("unknown activity grace applies only to epic cap eviction", () => {
       const second = buildTestHandle("profile-second", false);
       registry.acquire("profile-first", () => h(first));
       registry.acquire("profile-second", () => h(second));
+      expect(registry.nextByteEvictionGraceDeadlineMs()).toBe(1_000);
 
       vi.advanceTimersByTime(999);
       expect(registry.size()).toBe(2);
@@ -960,6 +962,71 @@ describe("unknown activity grace applies only to epic cap eviction", () => {
     } finally {
       registry.disposeAll();
       setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+      vi.useRealTimers();
+    }
+  });
+
+  it("wakes byte eviction at grace expiry below the count cap", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    setRetentionProfile({
+      ...DESKTOP_RETENTION_PROFILE,
+      unknownActivityCapGraceMs: 1_000,
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 2 });
+    const pendingPrunes: Array<() => void> = [];
+    let accountedBytes = 120;
+    try {
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+      });
+      const onlyTask = buildTestHandle("byte-grace-only-task", false);
+      registry.acquire("byte-grace-only-task", () => h(onlyTask));
+      expect(registry.size()).toBe(1);
+      const deadlineMs = registry.nextByteEvictionGraceDeadlineMs();
+      expect(deadlineMs).toBe(1_000);
+
+      const budget = createManagedDataByteBudget({
+        readAccountedBytes: () => accountedBytes,
+        readLimitBytes: () => 100,
+        evictOldestChat: () => false,
+        evictOldestTask: () => {
+          const evicted = registry.evictOldestEligibleForByteBudget();
+          if (evicted) accountedBytes = 90;
+          return evicted;
+        },
+        scheduleMicrotask: (callback) => pendingPrunes.push(callback),
+      });
+      const flushPrune = (): void => {
+        const callback = pendingPrunes.shift();
+        if (callback === undefined) throw new Error("no prune was queued");
+        callback();
+      };
+
+      // Byte pressure exists, but the task remains protected during its
+      // unknown-activity grace. This plateau is retried when grace expires.
+      budget.noteSettlement();
+      flushPrune();
+      expect(budget.snapshot().overProtected).toBe(true);
+      expect(onlyTask.disposed).toBe(false);
+      expect(registry.size()).toBe(1);
+
+      if (deadlineMs === null) throw new Error("grace deadline was not set");
+      setTimeout(() => budget.noteEligibilityChange(), deadlineMs - Date.now());
+      vi.advanceTimersByTime(999);
+      expect(onlyTask.disposed).toBe(false);
+      expect(pendingPrunes).toHaveLength(0);
+
+      vi.advanceTimersByTime(1);
+      flushPrune();
+      expect(onlyTask.disposed).toBe(true);
+      expect(registry.size()).toBe(0);
+      expect(accountedBytes).toBe(90);
+      expect(budget.snapshot()).toEqual({ prunes: 1, overProtected: false });
+    } finally {
+      registry.disposeAll();
+      setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+      __resetAgentActivityStoreForTests();
       vi.useRealTimers();
     }
   });
@@ -1053,8 +1120,11 @@ describe("unknown activity grace applies only to epic cap eviction", () => {
       registry.acquire("backward-clock-first", () => h(first));
       registry.acquire("backward-clock-second", () => h(second));
 
+      const deadlineMs = registry.nextByteEvictionGraceDeadlineMs();
+      expect(deadlineMs).not.toBeNull();
       // The grace timer is already armed for graceMs of elapsed time.
       vi.setSystemTime(-60_000);
+      expect(registry.nextByteEvictionGraceDeadlineMs()).toBe(deadlineMs);
       vi.advanceTimersByTime(graceMs);
 
       expect(first.disposed).toBe(true);

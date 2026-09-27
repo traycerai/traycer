@@ -15,9 +15,10 @@ import type {
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import { jsonByteLength } from "@/stores/replica-memory/json-bytes";
 import {
-  evictTranscriptWindowToBudget,
+  evictTranscriptWindowToEstimatedBudget,
   transcriptWindowChargedBytes,
-  transcriptWindowProtectedBytes,
+  transcriptWindowProtectedEstimatedBytes,
+  transcriptWindowStaleTierBytes,
   type OrdinalRange,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
@@ -42,18 +43,106 @@ export function chatSessionChargeBytes(
   window: TranscriptWindow,
   slices: ChatWholeSetSlices,
 ): number {
-  return transcriptWindowChargedBytes(window) + chatWholeSetSliceBytes(slices);
+  return (
+    transcriptWindowChargedBytes(window) +
+    transcriptWindowStaleTierBytes(window) +
+    chatWholeSetSliceBytes(slices)
+  );
+}
+
+/**
+ * V8 calibration of an unmounted store after GC. The fixed term covers the
+ * store's subscriptions, closures, and empty state; each retained transcript
+ * record has ledger, span and derived-state overhead beyond its JSON body.
+ * These terms are not raw bytes. The process budget includes the per-record
+ * term when selecting a span; the transcript's own eight-MiB cap stays raw.
+ */
+export const CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES = 48 * 1024;
+export const CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES = 600;
+
+export function estimatedTranscriptWindowBytes(
+  window: TranscriptWindow,
+): number {
+  const retainedRecords =
+    window.records.messages.size +
+    window.records.events.size +
+    window.liveMessages.length +
+    window.liveEvents.length;
+  return (
+    transcriptWindowChargedBytes(window) +
+    transcriptWindowStaleTierBytes(window) +
+    retainedRecords * CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES
+  );
+}
+
+/** Stale carry cannot be reclaimed by fresh-span eviction. */
+export function staleTranscriptProtectedHeapBytes(
+  window: TranscriptWindow,
+): number {
+  const freshMessages = new Set<string>();
+  const freshEvents = new Set<string>();
+  for (const span of window.spans) {
+    for (const id of span.messageIds) freshMessages.add(id);
+    for (const id of span.eventIds) freshEvents.add(id);
+  }
+  let count = 0;
+  for (const id of window.records.messages.keys()) {
+    if (!freshMessages.has(id)) count += 1;
+  }
+  for (const id of window.records.events.keys()) {
+    if (!freshEvents.has(id)) count += 1;
+  }
+  return (
+    transcriptWindowStaleTierBytes(window) +
+    count * CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES
+  );
+}
+
+export function chatSessionEstimatedHeapBytes(
+  window: TranscriptWindow,
+  slices: ChatWholeSetSlices,
+): number {
+  return (
+    estimatedTranscriptWindowBytes(window) +
+    chatWholeSetSliceBytes(slices) +
+    CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES
+  );
 }
 
 export function chatWholeSetSliceBytes(slices: ChatWholeSetSlices): number {
   return (
-    jsonByteLength(slices.queue) +
-    jsonByteLength(slices.pendingApprovals) +
-    jsonByteLength(slices.pendingFileEditApprovals) +
-    jsonByteLength(slices.pendingInterviews) +
-    jsonByteLength(slices.backgroundItems) +
-    jsonByteLength(slices.managedCommands)
+    sliceBytes(slices.queue) +
+    sliceBytes(slices.pendingApprovals) +
+    sliceBytes(slices.pendingFileEditApprovals) +
+    sliceBytes(slices.pendingInterviews) +
+    sliceBytes(slices.backgroundItems) +
+    sliceBytes(slices.managedCommands)
   );
+}
+
+/**
+ * Each slice's figure, by the slice object's identity.
+ *
+ * Every transcript publish re-settles the session's charge, and most publishes
+ * move none of these slices - a skeleton chunk, an index echo, a range answer.
+ * Re-serializing all six each time was a `JSON.stringify` of the whole managed
+ * command list (hundreds of entries on a long chat) per publish, producing a
+ * throwaway string only to measure it.
+ *
+ * Exact, not approximate, because the chat store never mutates a slice in
+ * place: a change to any of them is a new array or object in a new state, so
+ * a changed slice is a cache miss and is measured afresh. A `WeakMap`, so a
+ * replaced slice's figure goes with it.
+ */
+const sliceBytesByIdentity = new WeakMap<object, number>();
+
+function sliceBytes(slice: unknown): number {
+  if (typeof slice !== "object" || slice === null) return jsonByteLength(slice);
+  const cached = sliceBytesByIdentity.get(slice);
+  if (cached !== undefined) return cached;
+  const bytes = jsonByteLength(slice);
+  sliceBytesByIdentity.set(slice, bytes);
+  return bytes;
 }
 
 /**
@@ -94,6 +183,13 @@ export interface ChatWindowBudgetSession {
 export interface ChatWindowBudgetBook {
   attach(session: ChatWindowBudgetSession): void;
   detach(holderId: BudgetHolderId): void;
+  recordOwnedStateSize(
+    holderId: BudgetHolderId,
+    rawBytes: number,
+    estimatedHeapBytes: number,
+  ): void;
+  rawOwnedStateBytes(): number;
+  estimatedOwnedStateHeapBytes(): number;
   settle(
     accountant: MemoryAccountant,
     holderId: BudgetHolderId,
@@ -110,6 +206,10 @@ export interface ChatWindowBudgetBook {
 
 export function createChatWindowBudgetBook(): ChatWindowBudgetBook {
   const sessions = new Map<BudgetHolderId, ChatWindowBudgetSession>();
+  const ownedStateByHolder = new Map<
+    BudgetHolderId,
+    { readonly rawBytes: number; readonly estimatedHeapBytes: number }
+  >();
 
   return {
     attach(session: ChatWindowBudgetSession): void {
@@ -118,6 +218,25 @@ export function createChatWindowBudgetBook(): ChatWindowBudgetBook {
 
     detach(holderId: BudgetHolderId): void {
       sessions.delete(holderId);
+      ownedStateByHolder.delete(holderId);
+    },
+
+    recordOwnedStateSize(holderId, rawBytes, estimatedHeapBytes): void {
+      ownedStateByHolder.set(holderId, { rawBytes, estimatedHeapBytes });
+    },
+
+    rawOwnedStateBytes(): number {
+      let total = 0;
+      for (const size of ownedStateByHolder.values()) total += size.rawBytes;
+      return total;
+    },
+
+    estimatedOwnedStateHeapBytes(): number {
+      let total = 0;
+      for (const size of ownedStateByHolder.values()) {
+        total += size.estimatedHeapBytes;
+      }
+      return total;
     },
 
     settle(
@@ -174,9 +293,9 @@ export function createChatWindowBudgetBook(): ChatWindowBudgetBook {
 }
 
 /**
- * Evict one window toward a byte target, reporting protection the way the
- * accountant needs. Live records that remain after span eviction are
- * `"tail"`: they have no ordinal, so dropping them is not recoverable.
+ * Evict one window toward an estimated-heap target, including the per-record
+ * overhead that is freed with an unshared row. Live records remain `"tail"`:
+ * they have no ordinal, so dropping them is not recoverable.
  */
 export function evictChatWindowForAccountant(
   window: TranscriptWindow,
@@ -184,23 +303,29 @@ export function evictChatWindowForAccountant(
   visible: OrdinalRange | null,
   required: readonly number[],
 ): { readonly window: TranscriptWindow; readonly outcome: EvictionOutcome } {
-  const before = transcriptWindowChargedBytes(window);
-  const next = evictTranscriptWindowToBudget(
-    window,
-    maxBytes,
+  const before = estimatedTranscriptWindowBytes(window);
+  const next = evictTranscriptWindowToEstimatedBudget(window, maxBytes, {
     visible,
     required,
-  );
-  const after = transcriptWindowChargedBytes(next);
+    recordOverheadBytes: CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
+  });
+  const after = estimatedTranscriptWindowBytes(next);
+  const staleProtectedBytes = staleTranscriptProtectedHeapBytes(next);
   return {
     window: next,
     outcome: {
       reclaimedBytes: Math.max(0, before - after),
-      protectedBytesByKind: transcriptWindowProtectedBytes(
-        next,
-        visible,
-        required,
-      ),
+      protectedBytesByKind: [
+        ...transcriptWindowProtectedEstimatedBytes(
+          next,
+          visible,
+          required,
+          CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
+        ),
+        ...(staleProtectedBytes === 0
+          ? []
+          : [{ kind: "required" as const, bytes: staleProtectedBytes }]),
+      ],
     },
   };
 }

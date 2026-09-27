@@ -6,6 +6,7 @@ import type {
 import { BUDGET_PLANE_IDS } from "@traycer-clients/shared/replica-runtime";
 import type { EpicReplicaProjectionCounts } from "@/stores/replica-memory/epic-replica-budget";
 import type { ProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
+import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 
 /**
  * Exit-criteria telemetry for putting a plane under the accountant: docs
@@ -19,6 +20,13 @@ export interface ReplicaMemoryTelemetry {
   readonly accountant: AccountantSnapshot;
   readonly docsResident: number;
   readonly bytesDecoded: number;
+  /** UTF-8 JSON form and calibrated heap estimate are distinct measurements. */
+  readonly rawReplicaDataBytes: number;
+  readonly estimatedReplicaDataHeapBytes: number;
+  readonly rawMainProjectionBytes: number;
+  readonly estimatedMainProjectionHeapBytes: number;
+  readonly rawChatOwnedStateBytes: number;
+  readonly estimatedChatOwnedStateHeapBytes: number;
   readonly projectionRowCounts: EpicReplicaProjectionCounts;
   readonly evictionEffectiveness: {
     readonly evictionsRequested: number;
@@ -33,6 +41,7 @@ export interface ReplicaMemoryTelemetry {
   };
   readonly pressureByPlane: Readonly<Record<BudgetPlaneId, BudgetPressure>>;
   readonly observedCeilingBytes: number;
+  readonly maxManagedDataBytes: number;
 }
 
 /**
@@ -65,6 +74,15 @@ export function collectReplicaMemoryTelemetry(
     accountant,
     docsResident: runtime.hotDocs.docsResident(),
     bytesDecoded: accountant.totalChargedBytes,
+    rawReplicaDataBytes: runtime.epicReplicas.rawReplicaDataBytes(),
+    estimatedReplicaDataHeapBytes:
+      runtime.epicReplicas.estimatedReplicaDataHeapBytes(),
+    rawMainProjectionBytes: runtime.epicReplicas.rawMainProjectionBytes(),
+    estimatedMainProjectionHeapBytes:
+      runtime.epicReplicas.estimatedMainProjectionHeapBytes(),
+    rawChatOwnedStateBytes: runtime.chatWindows.rawOwnedStateBytes(),
+    estimatedChatOwnedStateHeapBytes:
+      runtime.chatWindows.estimatedOwnedStateHeapBytes(),
     projectionRowCounts: runtime.epicReplicas.projectionRowCounts(),
     evictionEffectiveness: {
       evictionsRequested,
@@ -74,6 +92,7 @@ export function collectReplicaMemoryTelemetry(
     },
     pressureByPlane,
     observedCeilingBytes: runtime.observedCeilingBytes,
+    maxManagedDataBytes: getRetentionProfile().maxManagedDataBytes,
   };
 }
 
