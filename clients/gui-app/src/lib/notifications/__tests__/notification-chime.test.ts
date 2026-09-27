@@ -6,6 +6,7 @@ import {
   playNotificationChimeSound,
   prepareNotificationChimeAudio,
 } from "@/lib/notifications/notification-chime";
+import { __setBrowserDocumentHiddenForTests } from "@/lib/dom/document-visibility";
 
 type AudioParamMock = Mock<(value: number, atTime: number) => void>;
 type OscillatorEventMock = Mock<(atTime: number) => void>;
@@ -113,21 +114,17 @@ describe("playNotificationChimeSound", () => {
     expect(contexts[0].state).toBe("suspended");
     const oscillatorsAfterWarmup = oscillators.length;
 
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      get: () => "hidden",
-    });
-    Object.defineProperty(document, "hidden", {
-      configurable: true,
-      get: () => true,
-    });
+    try {
+      __setBrowserDocumentHiddenForTests(true);
+      playNotificationChimeSound("classic");
 
-    playNotificationChimeSound("classic");
-
-    expect(contexts[0].resume).toHaveBeenCalledOnce();
-    await contexts[0].resume.mock.results[0].value;
-    await Promise.resolve();
-    expect(oscillators.length).toBeGreaterThan(oscillatorsAfterWarmup);
+      expect(contexts[0].resume).toHaveBeenCalledOnce();
+      await contexts[0].resume.mock.results[0].value;
+      await Promise.resolve();
+      expect(oscillators.length).toBeGreaterThan(oscillatorsAfterWarmup);
+    } finally {
+      __setBrowserDocumentHiddenForTests(false);
+    }
   });
 
   it("resumes again if a chime starts while an idle suspend is still in flight", async () => {

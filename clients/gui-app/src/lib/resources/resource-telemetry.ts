@@ -25,7 +25,6 @@ import {
   type AnalyticsResourcePressureTier,
   type AnalyticsSessionAgeBucket,
 } from "@/lib/analytics";
-import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 const BYTES_PER_MB = 1024 * 1024;
 const MS_PER_HOUR = 3_600_000;
@@ -261,15 +260,17 @@ export function createResourceTelemetrySampler(
     const firstTimer = window.setTimeout(() => {
       sampleOnce();
     }, RESOURCE_FIRST_SAMPLE_DELAY_MS);
-    const stopRepeat = startVisibleInterval({
-      tick: sampleOnce,
-      intervalMs: RESOURCE_SAMPLE_INTERVAL_MS,
-      fireOnShow: true,
-    });
+    // Plain interval: this sampler exists to catch heap growth over long
+    // sessions, including ones that sit minimised. A 15-minute tick is
+    // cheap, and `fireOnShow` would cluster samples on restore and skew
+    // `heapSlopeMbPerHour`.
+    const repeatTimer = window.setInterval(() => {
+      sampleOnce();
+    }, RESOURCE_SAMPLE_INTERVAL_MS);
     return () => {
       stopped = true;
       window.clearTimeout(firstTimer);
-      stopRepeat();
+      window.clearInterval(repeatTimer);
     };
   };
 

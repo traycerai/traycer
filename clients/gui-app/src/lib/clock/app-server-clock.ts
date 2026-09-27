@@ -5,7 +5,6 @@ import {
   type ServerClockState,
 } from "@traycer-clients/shared/clock/server-time-offset-tracker";
 import type { AuthServerTimeObservation } from "@traycer-clients/shared/auth/auth-validation-types";
-import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 /**
  * The renderer's single server-time offset tracker.
@@ -43,13 +42,17 @@ const WALL_CLOCK_TICK_INTERVAL_MS = 10_000;
  * module (a unit test, a storybook render) leaves a live interval behind.
  */
 export function startAppServerClockMonitor(): () => void {
-  return startVisibleInterval({
-    tick: () => {
-      appServerClock.noteWallClockTick();
-    },
-    intervalMs: WALL_CLOCK_TICK_INTERVAL_MS,
-    fireOnShow: true,
-  });
+  // Plain interval: parked streams wait exclusively on
+  // `appServerClock.subscribeToRecovery()`, which `noteWallClockTick`
+  // publishes. Pausing this while the window is off screen would leave
+  // those streams down until the user came back, even after NTP or a
+  // manual clock fix.
+  const handle = setInterval(() => {
+    appServerClock.noteWallClockTick();
+  }, WALL_CLOCK_TICK_INTERVAL_MS);
+  return () => {
+    clearInterval(handle);
+  };
 }
 
 /**
