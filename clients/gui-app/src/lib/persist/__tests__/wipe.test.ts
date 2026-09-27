@@ -315,6 +315,10 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     "traycer-gui-app:window-7:landing-images",
     "traycer-gui-app:default:file-edit-recovery",
     "traycer-gui-app:window-7:file-edit-recovery",
+    "traycer-gui-app:anon:transcript-images",
+    "traycer-gui-app:user-1:transcript-images",
+    "traycer-gui-app:anon:transcript-image-meta",
+    "traycer-gui-app:user-1:transcript-image-meta",
     "traycer-gui-app:some-other-store",
     "unrelated-app-db",
   ];
@@ -343,7 +347,7 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     return { deleted };
   }
 
-  it("deletes only known renderer dbs (landing-image, file-edit-recovery, legacy stash, tab-recovery); same-prefix + unrelated dbs survive", async () => {
+  it("deletes only known renderer dbs (landing-image, file-edit-recovery, transcript-images, legacy stash, tab-recovery); same-prefix + unrelated dbs survive", async () => {
     const { deleted } = installIndexedDB({
       databases: () => Promise.resolve(DB_NAMES.map((name) => ({ name }))),
     });
@@ -361,6 +365,10 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
         "traycer-gui-app:window-7:landing-images",
         "traycer-gui-app:default:file-edit-recovery",
         "traycer-gui-app:window-7:file-edit-recovery",
+        "traycer-gui-app:anon:transcript-images",
+        "traycer-gui-app:user-1:transcript-images",
+        "traycer-gui-app:anon:transcript-image-meta",
+        "traycer-gui-app:user-1:transcript-image-meta",
         "traycer-gui-app:tab-recovery",
       ].sort(),
     );

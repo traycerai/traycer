@@ -11,6 +11,7 @@ import type {
   ImageBytesResult,
   ScopedImageBytesFetcher,
 } from "@/lib/attachments/image-blob-cache";
+import { persistTranscriptImageBytes } from "@/lib/attachments/transcript-image-bytes-store";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { base64ToBytes } from "@/lib/composer/image-base64";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
@@ -328,7 +329,11 @@ export function useChatImageFetcher(): ScopedImageBytesFetcher {
     [scope, handle],
   );
   return useMemo<ScopedImageBytesFetcher>(
-    () => ({ scopeKey: chatAttachmentScopeKey(handle, scope), fetch }),
+    () =>
+      persistTranscriptImageBytes({
+        scopeKey: chatAttachmentScopeKey(handle, scope),
+        fetch,
+      }),
     [handle, scope, fetch],
   );
 }

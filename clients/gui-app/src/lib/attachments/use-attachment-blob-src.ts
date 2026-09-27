@@ -12,6 +12,7 @@ import {
   type ImageBytesResult,
   type ScopedImageBytesFetcher,
 } from "@/lib/attachments/image-blob-cache";
+import { persistTranscriptImageBytes } from "@/lib/attachments/transcript-image-bytes-store";
 import {
   IMAGE_UNAVAILABLE_GRACE_MS,
   useImageBlobUrlState,
@@ -254,7 +255,11 @@ export function useEpicImageFetcher(): ScopedImageBytesFetcher {
     [handle, scope, installedArm, armGeneration],
   );
   return useMemo<ScopedImageBytesFetcher>(
-    () => ({ scopeKey: epicAttachmentScopeKey(handle, scope), fetch }),
+    () =>
+      persistTranscriptImageBytes({
+        scopeKey: epicAttachmentScopeKey(handle, scope),
+        fetch,
+      }),
     [handle, scope, fetch],
   );
 }
