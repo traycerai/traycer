@@ -86,7 +86,7 @@ function scheduleByteGraceWake(): void {
       managedDataByteBudget.noteEligibilityChange();
       scheduleByteGraceWake();
     },
-    Math.max(0, deadlineMs - Date.now()),
+    Math.max(0, deadlineMs - performance.now()),
   );
 }
 subscribeProcessMemorySettlements(() => {
@@ -185,12 +185,18 @@ function rebindChatStoreWatches(): void {
   }
   for (const handle of live) {
     if (chatStoreWatches.has(handle)) continue;
-    let capHasActiveWork = chatCapHasActiveWork(handle);
+    let capHasActiveWork = chatCapHasActiveWork(
+      handle,
+      handleHostIds.get(handle) ?? null,
+    );
     chatStoreWatches.set(
       handle,
       handle.store.subscribe(() => {
         retryDeferredEpicParks();
-        const nextCapHasActiveWork = chatCapHasActiveWork(handle);
+        const nextCapHasActiveWork = chatCapHasActiveWork(
+          handle,
+          handleHostIds.get(handle) ?? null,
+        );
         if (nextCapHasActiveWork !== capHasActiveWork) {
           capHasActiveWork = nextCapHasActiveWork;
           managedDataByteBudget.noteEligibilityChange();

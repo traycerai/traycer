@@ -321,7 +321,11 @@ export class ChatSessionRegistry {
   /** Byte pressure uses the same active-work hold as the count cap. */
   evictOldestEligibleForByteBudget(): boolean {
     return this.sessions.evictOldestEligible(
-      (entry) => !chatCapHasActiveWork(entry.session),
+      (entry) =>
+        !chatCapHasActiveWork(
+          entry.session,
+          this.hostIdByHandle.get(entry.session) ?? null,
+        ),
     );
   }
 

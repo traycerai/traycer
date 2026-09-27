@@ -879,7 +879,7 @@ export class OpenEpicSessionRegistry {
 
   /** Next grace expiry that can make a clean, unmounted task byte-eligible. */
   nextByteEvictionGraceDeadlineMs(): number | null {
-    const nowMs = this.environment.clock.now();
+    const nowMs = this.environment.clock.monotonicNow();
     const graceMs = getRetentionProfile().unknownActivityCapGraceMs;
     let nextDeadlineMs: number | null = null;
     for (const entry of this.sessions.entries()) {

@@ -1075,8 +1075,11 @@ describe("unknown activity grace applies only to epic cap eviction", () => {
       registry.acquire("backward-clock-first", () => h(first));
       registry.acquire("backward-clock-second", () => h(second));
 
+      const deadlineMs = registry.nextByteEvictionGraceDeadlineMs();
+      expect(deadlineMs).not.toBeNull();
       // The grace timer is already armed for graceMs of elapsed time.
       vi.setSystemTime(-60_000);
+      expect(registry.nextByteEvictionGraceDeadlineMs()).toBe(deadlineMs);
       vi.advanceTimersByTime(graceMs);
 
       expect(first.disposed).toBe(true);
