@@ -636,6 +636,104 @@ describe("worktree metadata from one paged read per host", () => {
     expect(fixture.selectionCalls).toEqual([[path], [path]]);
   });
 
+  it.each(["recreated", "reset"] as const)(
+    "retries a stale selection after an empty listing query is %s with its count restarted",
+    async (listingLifecycle) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const timestamp = Date.now();
+      vi.setSystemTime(timestamp);
+      const path = "/wt/binding";
+      const fixture = createFixture([]);
+      const listingKey = hostQueryKeys.method<
+        HostRpcRegistry,
+        "worktree.listAllForHost"
+      >(HOST_ID, "worktree.listAllForHost", {
+        includeActivity: false,
+        activityPaths: null,
+        cursor: null,
+        limit: null,
+        forceRefresh: false,
+      });
+      const selectionKey = perPathEnrichmentQueryKey(HOST_ID, path);
+      fixture.queryClient.setQueryDefaults(selectionKey, {
+        staleTime: Infinity,
+      });
+      fixture.host.selection.set(path, row(path, 10, "initial selection"));
+      markWorktreeChangedStreamOpen(HOST_ID);
+      const mount = () =>
+        renderHook(
+          () =>
+            useWorktreeEnrichmentForClient(
+              fixture.client,
+              [path],
+              true,
+              "always",
+            ),
+          { wrapper: fixture.Wrapper },
+        );
+
+      const first = mount();
+      await waitFor(() =>
+        expect(first.result.current.worktrees[0]?.branch).toBe(
+          "initial selection",
+        ),
+      );
+      await settle();
+      expect(fixture.pagedCalls()).toBe(1);
+      expect(fixture.selectionCalls).toEqual([[path]]);
+
+      fixture.host.selection.set(path, row(path, 20, "handled selection"));
+      vi.setSystemTime(timestamp + 1);
+      await act(async () => {
+        await fixture.queryClient.invalidateQueries({
+          queryKey: listingKey,
+          exact: true,
+        });
+      });
+      await waitFor(() =>
+        expect(first.result.current.worktrees[0]?.branch).toBe(
+          "handled selection",
+        ),
+      );
+      await settle();
+      expect(fixture.pagedCalls()).toBe(2);
+      expect(fixture.selectionCalls).toEqual([[path], [path]]);
+      first.unmount();
+
+      let expectedBranch: string;
+      if (listingLifecycle === "recreated") {
+        fixture.queryClient.removeQueries({
+          queryKey: listingKey,
+          exact: true,
+        });
+        fixture.host.selection.set(path, row(path, 30, "after recreation"));
+        vi.setSystemTime(timestamp + 2);
+        expectedBranch = "after recreation";
+      } else {
+        fixture.host.selection.set(path, row(path, 30, "after reset"));
+        vi.setSystemTime(timestamp + 2);
+        await act(async () => {
+          await fixture.queryClient.resetQueries({
+            queryKey: listingKey,
+            exact: true,
+          });
+        });
+        expectedBranch = "after reset";
+      }
+
+      const second = mount();
+      await waitFor(() => expect(fixture.pagedCalls()).toBe(3));
+      await waitFor(() => expect(fixture.selectionCalls).toHaveLength(3));
+      await waitFor(() =>
+        expect(second.result.current.worktrees[0]?.branch).toBe(expectedBranch),
+      );
+      await settle();
+
+      expect(fixture.pagedCalls()).toBe(3);
+      expect(fixture.selectionCalls).toEqual([[path], [path], [path]]);
+    },
+  );
+
   it("shows whichever copy resolved last: a newer listing over an older selection answer", async () => {
     const fixture = createFixture([row("/wt/a", 10, "old")]);
     markWorktreeChangedStreamOpen(HOST_ID);

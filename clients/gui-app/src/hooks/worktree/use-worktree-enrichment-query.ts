@@ -70,9 +70,13 @@ const coverageExpiryOwners = new WeakMap<
 >();
 
 // Each listing success may demand one fresh selection answer for a path it
-// omits. The query object is the dedupe key across all mounted consumers and
-// falls out of this map when TanStack collects it.
-const missingPathInvalidationCount = new WeakMap<object, number>();
+// omits. Key both query identities so collecting and recreating the base list
+// cannot reuse a counter from its former incarnation. Success order remains
+// monotonic even when TanStack resets a query's dataUpdateCount in place.
+const missingPathInvalidationOrder = new WeakMap<
+  object,
+  WeakMap<object, number>
+>();
 
 function acquireCoverageExpiryOwner(
   queryClient: QueryClient,
@@ -362,8 +366,8 @@ export function useWorktreeEnrichmentForClient(
       queryKey: listingKey,
       exact: true,
     });
-    const listingUpdateCount = listingQuery?.state.dataUpdateCount ?? 0;
-    if (listingUpdateCount === 0) return;
+    if (listingQuery === undefined || listingQuery.state.dataUpdateCount === 0)
+      return;
     const listingFetchOrder = successOrder.fetchOrderFor(listingKey);
     const listingSuccessOrder = successOrder.orderFor(listingKey);
     uniquePaths.forEach((path, index) => {
@@ -390,12 +394,14 @@ export function useWorktreeEnrichmentForClient(
         })
       )
         return;
-      if (
-        (missingPathInvalidationCount.get(selectionQuery) ?? 0) >=
-        listingUpdateCount
-      )
+      let handledSelections = missingPathInvalidationOrder.get(listingQuery);
+      if (handledSelections === undefined) {
+        handledSelections = new WeakMap<object, number>();
+        missingPathInvalidationOrder.set(listingQuery, handledSelections);
+      }
+      if ((handledSelections.get(selectionQuery) ?? -1) >= listingSuccessOrder)
         return;
-      missingPathInvalidationCount.set(selectionQuery, listingUpdateCount);
+      handledSelections.set(selectionQuery, listingSuccessOrder);
       // A cached answer predating an empty listing may describe a removed
       // managed checkout or a binding that still exists. Ask the host once;
       // its selection result resolves that ambiguity without waiting for a
