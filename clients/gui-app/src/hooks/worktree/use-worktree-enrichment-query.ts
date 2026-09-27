@@ -69,6 +69,11 @@ const coverageExpiryOwners = new WeakMap<
   Map<string, Map<string, CoverageExpiryOwnerEntry>>
 >();
 
+// Each listing success may demand one fresh selection answer for a path it
+// omits. The query object is the dedupe key across all mounted consumers and
+// falls out of this map when TanStack collects it.
+const missingPathInvalidationCount = new WeakMap<object, number>();
+
 function acquireCoverageExpiryOwner(
   queryClient: QueryClient,
   hostId: string,
@@ -155,6 +160,8 @@ function selectionIsNewerThanListing(args: {
   readonly selectionDataUpdatedAt: number;
   readonly listingSuccessOrder: number;
   readonly selectionSuccessOrder: number;
+  readonly listingFetchOrder: number;
+  readonly selectionFetchOrder: number;
 }): boolean {
   const {
     listedCount,
@@ -164,6 +171,8 @@ function selectionIsNewerThanListing(args: {
     selectionDataUpdatedAt,
     listingSuccessOrder,
     selectionSuccessOrder,
+    listingFetchOrder,
+    selectionFetchOrder,
   } = args;
   if (listedCount > 0) {
     return readAt !== null && (listedAt === null || readAt > listedAt);
@@ -172,7 +181,13 @@ function selectionIsNewerThanListing(args: {
     listingDataUpdatedAt === 0 ||
     selectionDataUpdatedAt > listingDataUpdatedAt ||
     (selectionDataUpdatedAt === listingDataUpdatedAt &&
-      selectionSuccessOrder > listingSuccessOrder)
+      selectionSuccessOrder > listingSuccessOrder) ||
+    // A path supplied by a binding can be absent from the base list. If both
+    // requests belong to this change burst, the empty list has no authority
+    // to discard the selection just because its response arrived last.
+    (listingFetchOrder > 0 &&
+      selectionFetchOrder > 0 &&
+      selectionFetchOrder >= listingFetchOrder)
   );
 }
 
@@ -336,16 +351,86 @@ export function useWorktreeEnrichmentForClient(
     uniquePaths,
   ]);
 
+  useEffect(() => {
+    const hostId = readiness.hostId;
+    if (!queriesEnabled || !listing.isSuccess || hostId === null) return;
+    const listingKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "worktree.listAllForHost"
+    >(hostId, "worktree.listAllForHost", WORKTREE_HOST_LISTING_PARAMS);
+    const listingQuery = queryClient.getQueryCache().find({
+      queryKey: listingKey,
+      exact: true,
+    });
+    const listingUpdateCount = listingQuery?.state.dataUpdateCount ?? 0;
+    if (listingUpdateCount === 0) return;
+    const listingFetchOrder = successOrder.fetchOrderFor(listingKey);
+    const listingSuccessOrder = successOrder.orderFor(listingKey);
+    uniquePaths.forEach((path, index) => {
+      if ((listingRowsByPath.get(path)?.length ?? 0) > 0) return;
+      const read = perPath[index];
+      if (read.rows === null || read.isFetching) return;
+      const selectionKey = perPathEnrichmentQueryKey(hostId, path);
+      const selectionQuery = queryClient.getQueryCache().find({
+        queryKey: selectionKey,
+        exact: true,
+      });
+      if (selectionQuery === undefined) return;
+      if (
+        selectionIsNewerThanListing({
+          listedCount: 0,
+          readAt: newestResolvedAt(read.rows),
+          listedAt: null,
+          listingDataUpdatedAt: listing.dataUpdatedAt,
+          selectionDataUpdatedAt: read.dataUpdatedAt,
+          listingSuccessOrder,
+          selectionSuccessOrder: successOrder.orderFor(selectionKey),
+          listingFetchOrder,
+          selectionFetchOrder: successOrder.fetchOrderFor(selectionKey),
+        })
+      )
+        return;
+      if (
+        (missingPathInvalidationCount.get(selectionQuery) ?? 0) >=
+        listingUpdateCount
+      )
+        return;
+      missingPathInvalidationCount.set(selectionQuery, listingUpdateCount);
+      // A cached answer predating an empty listing may describe a removed
+      // managed checkout or a binding that still exists. Ask the host once;
+      // its selection result resolves that ambiguity without waiting for a
+      // later frame or remount.
+      void queryClient.invalidateQueries({
+        queryKey: selectionKey,
+        exact: true,
+        refetchType: "active",
+      });
+    });
+  }, [
+    listing.dataUpdatedAt,
+    listing.isSuccess,
+    listingRowsByPath,
+    perPath,
+    queriesEnabled,
+    queryClient,
+    readiness.hostId,
+    successOrder,
+    uniquePaths,
+  ]);
+
   return useMemo<WorktreeEnrichment>(() => {
     if (uniquePaths.length === 0) return EMPTY_ENRICHMENT;
     const worktrees: WorktreeHostEntryV14[] = [];
-    const listingSuccessOrder = successOrder.orderFor(
-      hostQueryKeys.method<HostRpcRegistry, "worktree.listAllForHost">(
-        readiness.hostId,
-        "worktree.listAllForHost",
-        WORKTREE_HOST_LISTING_PARAMS,
-      ),
+    const listingKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "worktree.listAllForHost"
+    >(
+      readiness.hostId,
+      "worktree.listAllForHost",
+      WORKTREE_HOST_LISTING_PARAMS,
     );
+    const listingSuccessOrder = successOrder.orderFor(listingKey);
+    const listingFetchOrder = successOrder.fetchOrderFor(listingKey);
     uniquePaths.forEach((path, index) => {
       const listed = listingRowsByPath.get(path) ?? [];
       const read = perPath[index]?.rows ?? null;
@@ -358,6 +443,9 @@ export function useWorktreeEnrichmentForClient(
       const selectionSuccessOrder = successOrder.orderFor(
         perPathEnrichmentQueryKey(readiness.hostId, path),
       );
+      const selectionFetchOrder = successOrder.fetchOrderFor(
+        perPathEnrichmentQueryKey(readiness.hostId, path),
+      );
       const preferRead = selectionIsNewerThanListing({
         listedCount: listed.length,
         readAt,
@@ -366,6 +454,8 @@ export function useWorktreeEnrichmentForClient(
         selectionDataUpdatedAt: perPath[index]?.dataUpdatedAt ?? 0,
         listingSuccessOrder,
         selectionSuccessOrder,
+        listingFetchOrder,
+        selectionFetchOrder,
       });
       let chosen: readonly WorktreeHostEntryV14[] = listed;
       if (preferRead) chosen = read;

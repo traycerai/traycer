@@ -76,7 +76,33 @@ interface Fixture {
   readonly host: Host;
   readonly pagedCalls: () => number;
   readonly selectionCalls: string[][];
+  readonly deferNextPagedResponse: () => (
+    worktrees: WorktreeHostEntryV16[],
+  ) => void;
+  readonly deferNextSelectionResponse: () => (
+    worktrees: WorktreeHostEntryV16[],
+  ) => void;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+}
+
+interface FixtureResponse {
+  readonly worktrees: WorktreeHostEntryV16[];
+  readonly nextCursor: null;
+}
+
+interface DeferredFixtureResponse {
+  readonly promise: Promise<FixtureResponse>;
+  readonly resolve: (response: FixtureResponse) => void;
+}
+
+function createDeferredFixtureResponse(): DeferredFixtureResponse {
+  let resolve: (response: FixtureResponse) => void = () => {
+    throw new Error("Deferred fixture response was not initialized");
+  };
+  const promise = new Promise<FixtureResponse>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function createFixture(listing: WorktreeHostEntryV16[]): Fixture {
@@ -84,6 +110,20 @@ function createFixture(listing: WorktreeHostEntryV16[]): Fixture {
   const host: Host = { listing, selection: new Map() };
   let paged = 0;
   const selectionCalls: string[][] = [];
+  let deferredPagedResponse: DeferredFixtureResponse | null = null;
+  let deferredSelectionResponse: DeferredFixtureResponse | null = null;
+  const deferNextPagedResponse = () => {
+    const deferred = createDeferredFixtureResponse();
+    deferredPagedResponse = deferred;
+    return (worktrees: WorktreeHostEntryV16[]) =>
+      deferred.resolve({ worktrees, nextCursor: null });
+  };
+  const deferNextSelectionResponse = () => {
+    const deferred = createDeferredFixtureResponse();
+    deferredSelectionResponse = deferred;
+    return (worktrees: WorktreeHostEntryV16[]) =>
+      deferred.resolve({ worktrees, nextCursor: null });
+  };
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
@@ -96,12 +136,18 @@ function createFixture(listing: WorktreeHostEntryV16[]): Fixture {
         "worktree.listAllForHost": (params) => {
           if (params.activityPaths === null) {
             paged += 1;
+            const deferred = deferredPagedResponse;
+            deferredPagedResponse = null;
+            if (deferred !== null) return deferred.promise;
             return Promise.resolve({
               worktrees: [...host.listing],
               nextCursor: null,
             });
           }
           selectionCalls.push([...params.activityPaths]);
+          const deferred = deferredSelectionResponse;
+          deferredSelectionResponse = null;
+          if (deferred !== null) return deferred.promise;
           return Promise.resolve({
             worktrees: params.activityPaths.flatMap((path) => {
               const answered =
@@ -130,6 +176,8 @@ function createFixture(listing: WorktreeHostEntryV16[]): Fixture {
     host,
     pagedCalls: () => paged,
     selectionCalls,
+    deferNextPagedResponse,
+    deferNextSelectionResponse,
     Wrapper,
   };
 }
@@ -515,6 +563,79 @@ describe("worktree metadata from one paged read per host", () => {
     expect(fixture.selectionCalls).toEqual([["/wt/cold"]]);
   });
 
+  it("keeps a binding selection completed before an empty burst listing response", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const path = "/wt/binding";
+    const fixture = createFixture([]);
+    fixture.host.selection.set(path, row(path, 10, "initial binding"));
+    markWorktreeChangedStreamOpen(HOST_ID);
+    const { result } = renderHook(
+      () =>
+        useWorktreeEnrichmentForClient(fixture.client, [path], true, "none"),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() =>
+      expect(result.current.worktrees[0]?.branch).toBe("initial binding"),
+    );
+    await settle();
+    expect(fixture.pagedCalls()).toBe(1);
+    expect(fixture.selectionCalls).toEqual([[path]]);
+
+    const listingKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "worktree.listAllForHost"
+    >(HOST_ID, "worktree.listAllForHost", {
+      includeActivity: false,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    });
+    const listingQuery = fixture.queryClient.getQueryCache().find({
+      queryKey: listingKey,
+      exact: true,
+    });
+    expect(listingQuery).toBeDefined();
+    const listingUpdateCount = listingQuery?.state.dataUpdateCount ?? 0;
+    const responseTimestamp = Date.now();
+    const resolveSelection = fixture.deferNextSelectionResponse();
+    const resolveListing = fixture.deferNextPagedResponse();
+    act(() => {
+      invalidateWorktreeChangedCaches(fixture.queryClient, HOST_ID, {
+        root: true,
+        worktreePaths: new Set([path]),
+      });
+    });
+    await waitFor(() => {
+      expect(fixture.pagedCalls()).toBe(2);
+      expect(fixture.selectionCalls).toHaveLength(2);
+    });
+
+    act(() => {
+      vi.setSystemTime(responseTimestamp + 1);
+      resolveSelection([row(path, 20, "burst selection")]);
+    });
+    await waitFor(() =>
+      expect(result.current.worktrees[0]?.branch).toBe("burst selection"),
+    );
+
+    act(() => {
+      vi.setSystemTime(responseTimestamp + 2);
+      resolveListing([]);
+    });
+    await waitFor(() =>
+      expect(listingQuery?.state.dataUpdateCount).toBeGreaterThan(
+        listingUpdateCount,
+      ),
+    );
+
+    // A path absent from the base listing may still be supplied by a host
+    // binding. Selection succeeded during this burst; an empty listing that
+    // completes second must not erase it or wait for a frame that never comes.
+    expect(result.current.worktrees[0]?.branch).toBe("burst selection");
+    expect(fixture.selectionCalls).toEqual([[path], [path]]);
+  });
+
   it("shows whichever copy resolved last: a newer listing over an older selection answer", async () => {
     const fixture = createFixture([row("/wt/a", 10, "old")]);
     markWorktreeChangedStreamOpen(HOST_ID);
@@ -566,6 +687,7 @@ describe("worktree metadata from one paged read per host", () => {
     expect(fixture.selectionCalls).toEqual([["/wt/a"]]);
 
     fixture.host.listing = [];
+    fixture.host.selection.delete("/wt/a");
     const baseListingKey = hostQueryKeys.method<
       HostRpcRegistry,
       "worktree.listAllForHost"
@@ -584,11 +706,12 @@ describe("worktree metadata from one paged read per host", () => {
     });
     await waitFor(() => expect(fixture.pagedCalls()).toBe(2));
 
+    await waitFor(() => expect(fixture.selectionCalls).toHaveLength(2));
+    await settle();
     expect(result.current.worktrees).toEqual([]);
-    expect(fixture.selectionCalls).toEqual([["/wt/a"]]);
   });
 
-  it("accepts a same-millisecond binding selection, but suppresses it after a later empty listing until it refetches", async () => {
+  it("refetches a cached binding selection after a later empty listing in the same millisecond", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const timestamp = Date.now();
     vi.setSystemTime(timestamp);
@@ -635,8 +758,12 @@ describe("worktree metadata from one paged read per host", () => {
     const listingUpdateCount = listingQuery?.state.dataUpdateCount ?? 0;
 
     // A later empty response has the same Date.now() value as the cached
-    // selection answer. Its cache update order must still suppress that old
-    // row; a fresh selection derive may make the binding path visible again.
+    // selection answer. The old answer must be refreshed automatically, even
+    // though its query was otherwise fresh under stream coverage.
+    fixture.host.selection.set(
+      bindingPath,
+      row(bindingPath, timestamp, "fresh binding selection"),
+    );
     await act(async () => {
       await fixture.queryClient.invalidateQueries({
         queryKey: listingKey,
@@ -648,19 +775,6 @@ describe("worktree metadata from one paged read per host", () => {
         listingUpdateCount,
       ),
     );
-    expect(result.current.worktrees).toEqual([]);
-    expect(fixture.selectionCalls).toEqual([[bindingPath]]);
-
-    fixture.host.selection.set(
-      bindingPath,
-      row(bindingPath, timestamp, "fresh binding selection"),
-    );
-    await act(async () => {
-      await fixture.queryClient.invalidateQueries({
-        queryKey: perPathEnrichmentQueryKey(HOST_ID, bindingPath),
-        exact: true,
-      });
-    });
     await waitFor(() =>
       expect(result.current.worktrees[0]?.branch).toBe(
         "fresh binding selection",
