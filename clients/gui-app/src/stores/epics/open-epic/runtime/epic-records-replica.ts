@@ -118,6 +118,7 @@ export interface EpicRecordsReplicaSources {
   readonly onRootDocChanged?: (updateBytes: number) => void;
   readonly onRootDocReplaced?: () => void;
   readonly onRetainedRowsChanged?: (size: RetainedValueSize) => void;
+  readonly onRetainedOverlayChanged?: (size: RetainedValueSize) => void;
   /**
    * Fires when the set of held attachment hashes changes.
    *
@@ -517,6 +518,7 @@ export function createEpicRecordsReplica(
 
   const overlay: MetadataOverlayStore = createMetadataOverlayStore({
     environment,
+    onRetainedStateChanged: (size) => sources.onRetainedOverlayChanged?.(size),
     republish: () => republishForOverlay(),
     isProjectorAttached: () => projector.isAttached(),
     hasFreshRootSnapshotForOpenCycle: () =>

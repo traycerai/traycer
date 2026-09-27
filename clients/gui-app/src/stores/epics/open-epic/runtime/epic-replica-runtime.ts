@@ -545,10 +545,18 @@ export function createEpicReplicaRuntime(
    * the snapshot is the figure we actually received.
    */
   let rootSettledBytes = 0;
-  let rootSettleTimer: RuntimeTimer | null = null;
+  let rootSettleIdleTimer: RuntimeTimer | null = null;
+  let rootSettleMaxTimer: RuntimeTimer | null = null;
   const cancelRootSettle = (): void => {
-    rootSettleTimer?.cancel();
-    rootSettleTimer = null;
+    rootSettleIdleTimer?.cancel();
+    rootSettleMaxTimer?.cancel();
+    rootSettleIdleTimer = null;
+    rootSettleMaxTimer = null;
+  };
+  const settleRoot = (): void => {
+    cancelRootSettle();
+    rootSettledBytes = Y.encodeStateAsUpdate(records.doc).byteLength;
+    accounting.settleRootBytes(rootSettledBytes);
   };
   const resetRootCharge = (): void => {
     cancelRootSettle();
@@ -563,10 +571,19 @@ export function createEpicReplicaRuntime(
     rawBytes: 0,
     estimatedHeapBytes: 0,
   };
+  let metadataOverlaySize: RetainedValueSize = {
+    rawBytes: 0,
+    estimatedHeapBytes: 0,
+  };
   const replicaDataSize = (): RetainedValueSize => ({
-    rawBytes: laneRowSize.rawBytes + recordRowSize.rawBytes,
+    rawBytes:
+      laneRowSize.rawBytes +
+      recordRowSize.rawBytes +
+      metadataOverlaySize.rawBytes,
     estimatedHeapBytes:
-      laneRowSize.estimatedHeapBytes + recordRowSize.estimatedHeapBytes,
+      laneRowSize.estimatedHeapBytes +
+      recordRowSize.estimatedHeapBytes +
+      metadataOverlaySize.estimatedHeapBytes,
   });
   const settleReplicaData = (): void => {
     const size = replicaDataSize();
@@ -725,17 +742,20 @@ export function createEpicReplicaRuntime(
     onRootDocChanged: (updateBytes) => {
       accounting.chargeRootProvisional(updateBytes);
       // Each edit adds only its received update. A whole-doc encode is paid
-      // once after an idle burst, never on the edit's synchronous path.
-      cancelRootSettle();
-      rootSettleTimer = environment.scheduler.schedule(250, () => {
-        rootSettleTimer = null;
-        rootSettledBytes = Y.encodeStateAsUpdate(records.doc).byteLength;
-        accounting.settleRootBytes(rootSettledBytes);
-      });
+      // after a quiet burst or at most once per two seconds under a continuous
+      // stream, never on the edit's synchronous path. The maximum delay also
+      // ensures provisional growth eventually wakes global byte eviction.
+      rootSettleIdleTimer?.cancel();
+      rootSettleIdleTimer = environment.scheduler.schedule(250, settleRoot);
+      rootSettleMaxTimer ??= environment.scheduler.schedule(2_000, settleRoot);
     },
     onRootDocReplaced: resetRootCharge,
     onRetainedRowsChanged: (size) => {
       recordRowSize = size;
+      settleReplicaData();
+    },
+    onRetainedOverlayChanged: (size) => {
+      metadataOverlaySize = size;
       settleReplicaData();
     },
     // Published from HERE because the control slice is the runtime's; the
@@ -765,6 +785,7 @@ export function createEpicReplicaRuntime(
     readSeedOffer: () => records.readSeedOffer(),
     isDisposed,
   });
+  metadataOverlaySize = records.overlay.retainedSize();
 
   const attemptedHostByCommandId = new Map<string, string>();
   const commandQueue: CommandQueue<EpicWriteCommandIntent> =
@@ -868,6 +889,7 @@ export function createEpicReplicaRuntime(
       };
     },
   });
+  settleReplicaData();
 
   // ── Sequencing ────────────────────────────────────────────────────────────
 

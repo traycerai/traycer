@@ -101,6 +101,7 @@ const OWNED_STATE_KEYS = [
   "liveAssistantMessage",
   "liveTurnUsage",
   "worktreeBinding",
+  "missingWorktreePaths",
 ] as const satisfies readonly (keyof ChatSessionState)[];
 
 export interface ChatOwnedStateAccount {

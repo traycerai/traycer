@@ -5,6 +5,7 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import type { LiveAssistantMessage } from "@/stores/chats/chat-session-store";
+import { retainedValueSize } from "../retained-value-size";
 import {
   getProcessMemoryRuntime,
   resetProcessMemoryRuntimeForTests,
@@ -104,6 +105,35 @@ describe("chat owned-state memory accounting", () => {
       expect(encode).not.toHaveBeenCalled();
     } finally {
       encode.mockRestore();
+      handle.dispose();
+    }
+  });
+
+  it("charges a paths-only missing-worktree update", () => {
+    const handle = openStore();
+    const account = createChatOwnedStateAccount();
+    try {
+      const initial = handle.store.getState();
+      expect(account.update(initial)).toBe(true);
+      const baseline = account.size();
+      const paths = ["/workspace/missing-repo", "/workspace/another-repo"];
+
+      expect(account.update({ ...initial, missingWorktreePaths: paths })).toBe(
+        true,
+      );
+      const expectedPathDelta = retainedValueSize(paths);
+      const previousPathSize = retainedValueSize(initial.missingWorktreePaths);
+      expect(account.size()).toEqual({
+        rawBytes:
+          baseline.rawBytes +
+          expectedPathDelta.rawBytes -
+          previousPathSize.rawBytes,
+        estimatedHeapBytes:
+          baseline.estimatedHeapBytes +
+          expectedPathDelta.estimatedHeapBytes -
+          previousPathSize.estimatedHeapBytes,
+      });
+    } finally {
       handle.dispose();
     }
   });
