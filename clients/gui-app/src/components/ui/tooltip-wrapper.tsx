@@ -13,6 +13,7 @@ interface TooltipWrapperProps {
   readonly sideOffset: number | undefined;
   readonly align: "start" | "center" | "end" | undefined;
   readonly open?: boolean;
+  readonly defaultOpen?: boolean;
   readonly onOpenChange?: (open: boolean) => void;
   /**
    * Element the tooltip must stay inside, normally the surrounding
@@ -47,6 +48,7 @@ export function TooltipWrapper(props: TooltipWrapperProps) {
     sideOffset,
     align,
     open,
+    defaultOpen,
     onOpenChange,
     collisionBoundary,
     collisionPadding,
@@ -65,7 +67,7 @@ export function TooltipWrapper(props: TooltipWrapperProps) {
     return <Slot.Root {...rest}>{children}</Slot.Root>;
   }
   return (
-    <Tooltip open={open} onOpenChange={onOpenChange}>
+    <Tooltip open={open} defaultOpen={defaultOpen} onOpenChange={onOpenChange}>
       <TooltipTrigger asChild {...rest}>
         {children}
       </TooltipTrigger>

@@ -22,7 +22,7 @@ import {
   makePublishedChatTileRef,
   publishedChatTileId,
 } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { LazySidebarTooltipWrapper } from "@/components/epic-canvas/sidebar/lazy-sidebar-hover";
 import { TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import {
   BASE_PAD_LEFT,
@@ -255,7 +255,7 @@ export function EpicSidebarCloudChatRow(
               reach - so it travels with the row rather than with a section, and
               it is absent when that is not true of this chat. */}
           {ownerReachable ? null : (
-            <TooltipWrapper
+            <LazySidebarTooltipWrapper
               label={lockCopy.tooltip}
               side="right"
               sideOffset={undefined}
@@ -269,7 +269,7 @@ export function EpicSidebarCloudChatRow(
                 // button contributes nothing but noise.
                 aria-hidden="true"
               />
-            </TooltipWrapper>
+            </LazySidebarTooltipWrapper>
           )}
           <CloudRowIdleTime
             publishedAt={cloudChatRowLastActiveAt(
