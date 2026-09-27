@@ -305,8 +305,9 @@ function holdsNothingToLose(state: OpenEpicState): boolean {
 }
 
 /**
- * The cap's "something is in progress" gate: an agent is working in the epic,
- * OR the activity plane cannot currently say that none is.
+ * The cap's "something is in progress" gate: an agent turn is running in the
+ * epic, OR the activity plane cannot currently say that none is. Background-only
+ * work does not count - see {@link hasActiveAgentWork}.
  *
  * The second arm is what the transport clause used to cover by accident: an
  * outage that closes the activity stream also puts every epic transport into
@@ -353,12 +354,29 @@ function epicIsBusyAcrossHosts(
   epicId: string,
   hostIds: Iterable<string>,
 ): boolean {
-  if (!agentActivityPlaneAnswers()) return true;
-  if (hasActiveAgentWork(epicId)) return true;
+  return epicBusyReason(epicId, hostIds) !== null;
+}
+
+/**
+ * Which arm of {@link epicIsBusyAcrossHosts} holds, or `null` when none does.
+ * The names are what the cap walk's debug line reports for an epic it could
+ * not evict.
+ */
+type EpicBusyReason =
+  | "activity-plane-blind"
+  | "turn-in-progress"
+  | "host-not-covered";
+
+function epicBusyReason(
+  epicId: string,
+  hostIds: Iterable<string>,
+): EpicBusyReason | null {
+  if (!agentActivityPlaneAnswers()) return "activity-plane-blind";
+  if (hasActiveAgentWork(epicId)) return "turn-in-progress";
   for (const hostId of hostIds) {
-    if (!agentActivityPlaneCoversHost(hostId)) return true;
+    if (!agentActivityPlaneCoversHost(hostId)) return "host-not-covered";
   }
-  return false;
+  return null;
 }
 
 /**
@@ -647,6 +665,10 @@ export class OpenEpicSessionRegistry {
         // session's host - see `epicIsBusy`.
         hasActiveWork: (session) =>
           epicIsBusy(session.epicId, session.handle.hostId),
+        // The same arms, named. `"none"` is unreachable: the walk reads this
+        // only after `hasActiveWork` answered true.
+        activeWorkReason: (session) =>
+          epicBusyReason(session.epicId, [session.handle.hostId]) ?? "none",
         // Never evict a session holding unsynced edits or unflushed writes.
         // The transport is NOT consulted - see `holdsNothingToLose`.
         isEvictable: (session) =>
@@ -1638,14 +1660,24 @@ function unsubscribeSession(session: EpicRegistrySession): void {
 }
 
 /**
- * Prune guard: never evict a session whose epic has an agent working on it.
+ * Prune guard: never evict a session whose epic has an agent turn running.
  *
  * Reads the host-selected activity view rather than the epic's own
  * collaboration awareness. The dedicated capability needs no live epic
  * subscription, so the guard keeps working while an epic session attaches.
+ *
+ * `turn`, not `working`. `working` also lists an agent whose only live work is
+ * background-only - a running shell, a monitor, a scheduled wake - and that
+ * can stay true for as long as a dev server runs, which pinned an otherwise
+ * idle epic resident past the cap and made it unparkable for hours. Releasing
+ * this renderer's session stops none of that work on the host, and nothing
+ * the session holds is lost by it (`holdsNothingToLose` is the gate for
+ * that), so only an in-progress turn is a reason to keep it. An agent the host
+ * never classified counts as a turn there, so this cannot read an
+ * unclassified agent as idle.
  */
 function hasActiveAgentWork(epicId: string): boolean {
-  return getEpicAgentActivity(epicId).working.size > 0;
+  return getEpicAgentActivity(epicId).turn.size > 0;
 }
 
 /**
