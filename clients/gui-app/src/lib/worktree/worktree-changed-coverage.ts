@@ -41,9 +41,11 @@ function clearRecoveryGraceTimer(hostId: string): void {
 
 function expireRecoveryGrace(hostId: string): void {
   recoveryGraceUntilByHost.delete(hostId);
+  const expiryListeners = [
+    ...(expiryListenersByHost.get(hostId)?.values() ?? []),
+  ].map(({ listener }) => listener);
   notify(hostId);
-  for (const { listener } of expiryListenersByHost.get(hostId)?.values() ??
-    []) {
+  for (const listener of expiryListeners) {
     listener();
   }
 }

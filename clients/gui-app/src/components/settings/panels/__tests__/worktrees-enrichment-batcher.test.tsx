@@ -135,7 +135,7 @@ describe("useWorktreeEnrichmentForClient - resolves a binding-sourced trailing s
     );
 
     const { result } = renderHook(
-      () => useWorktreeEnrichmentForClient(client, ["/wt/app/"], true, false),
+      () => useWorktreeEnrichmentForClient(client, ["/wt/app/"], true, "none"),
       { wrapper: Wrapper },
     );
 

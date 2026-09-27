@@ -29,6 +29,20 @@ function worktreeListingKey(hostId: string, activityPaths: string[] | null) {
   );
 }
 
+function worktreeActivityKey(hostId: string, activityPath: string) {
+  return hostQueryKeys.method<HostRpcRegistry, "worktree.listAllForHost">(
+    hostId,
+    "worktree.listAllForHost",
+    {
+      includeActivity: true,
+      activityPaths: [activityPath],
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    },
+  );
+}
+
 /** Same builder shape as `use-host-query.ts` (`queryKeys.hostMethod`). */
 const listModelsKey = queryKeys.hostMethod<
   HostRpcRegistry,
@@ -177,6 +191,67 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
         "success",
     );
     expect(listing.fetches.count).toBe(2);
+  });
+
+  it("spares successful covered path activity on reconnect, retries failed activity, and sweeps uncovered hosts", async () => {
+    const queryClient = createAppQueryClient();
+    const invalidator = createHostQueryInvalidator(queryClient);
+    const coveredGood = mountCountedQuery(
+      queryClient,
+      worktreeActivityKey(HOST_ID, "/wt/good"),
+      {
+        staleTime: 0,
+        impl: () => Promise.resolve({ worktrees: [], nextCursor: null }),
+      },
+    );
+    const coveredFailed = mountCountedQuery(
+      queryClient,
+      worktreeActivityKey(HOST_ID, "/wt/failed"),
+      {
+        staleTime: 0,
+        impl: () => Promise.reject(new Error("activity unavailable")),
+      },
+    );
+    const oldHost = "old-host";
+    const uncovered = mountCountedQuery(
+      queryClient,
+      worktreeActivityKey(oldHost, "/wt/old"),
+      {
+        staleTime: 0,
+        impl: () => Promise.resolve({ worktrees: [], nextCursor: null }),
+      },
+    );
+    stops.push(coveredGood.stop, coveredFailed.stop, uncovered.stop);
+    await waitUntil(
+      () =>
+        coveredGood.fetches.count === 1 &&
+        queryClient.getQueryState(worktreeActivityKey(HOST_ID, "/wt/good"))
+          ?.status === "success" &&
+        coveredFailed.fetches.count === 1 &&
+        queryClient.getQueryState(worktreeActivityKey(HOST_ID, "/wt/failed"))
+          ?.status === "error" &&
+        uncovered.fetches.count === 1 &&
+        queryClient.getQueryState(worktreeActivityKey(oldHost, "/wt/old"))
+          ?.status === "success",
+    );
+    markWorktreeChangedStreamOpen(HOST_ID);
+
+    invalidator.invalidateHostScope(HOST_ID, {
+      refetchActive: true,
+      recovery: "reconnect",
+    });
+    invalidator.invalidateHostScope(oldHost, {
+      refetchActive: true,
+      recovery: "reconnect",
+    });
+
+    await waitUntil(
+      () => coveredFailed.fetches.count === 2 && uncovered.fetches.count === 2,
+    );
+    await settle(20);
+    expect(coveredGood.fetches.count).toBe(1);
+    expect(coveredFailed.fetches.count).toBe(2);
+    expect(uncovered.fetches.count).toBe(2);
   });
 
   it("with refetchActive: true, refetches non-catalog host queries and leaves catalog methods entirely untouched", async () => {

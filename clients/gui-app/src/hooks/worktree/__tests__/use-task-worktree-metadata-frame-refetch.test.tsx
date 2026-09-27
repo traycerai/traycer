@@ -49,7 +49,7 @@ const EPIC_OTHER = "epic-other";
 const OWNED_COUNT = 27;
 const OTHER_COUNT = 3;
 /** Serialized fixture response, excluding RPC framing and compression. */
-const BASE_RESPONSE_BYTES = 15_289;
+const BASE_RESPONSE_BYTES = 15_349;
 
 const OWNED_PATHS: readonly string[] = Array.from(
   { length: OWNED_COUNT },
@@ -96,7 +96,9 @@ function entryRow(path: string, epicId: string): WorktreeHostEntryV16 {
     ],
     branchStatus: null,
     createdAt: null,
-    prState: null,
+    // This fixture models settled listings; null activity intentionally opts
+    // a row into task-metadata selection enrichment.
+    prState: "none",
     prNumber: null,
     prUrl: null,
     mergedHeadShaMatches: false,

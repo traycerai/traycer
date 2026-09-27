@@ -1,5 +1,10 @@
-import { useMemo } from "react";
-import { useQueries, type UseQueryResult } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
+import {
+  useQueries,
+  useQueryClient,
+  type QueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -8,6 +13,7 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import {
   createWorktreeEnrichmentBatcherForClient,
+  perPathEnrichmentQueryKey,
   perPathEnrichmentQueryOptions,
 } from "@/components/settings/panels/worktrees-enrichment-batcher";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -16,7 +22,10 @@ import {
   type WorktreeHostListingRow,
 } from "@/hooks/worktree/use-worktree-host-listing";
 import { rowsByRequestedPath } from "@/lib/worktree/worktree-path-match";
-import { useWorktreeChangedStreamCovered } from "@/lib/worktree/worktree-changed-coverage";
+import {
+  subscribeWorktreeChangedCoverageExpired,
+  useWorktreeChangedStreamCovered,
+} from "@/lib/worktree/worktree-changed-coverage";
 import type { HostRpcRegistry } from "@/lib/host";
 
 export interface WorktreeEnrichment {
@@ -42,6 +51,67 @@ interface PerPathRead {
   readonly isPending: boolean;
   readonly isFetching: boolean;
   readonly error: HostRpcError | null;
+}
+
+type WorktreeActivityRequirement = "none" | "ifMissing" | "always";
+
+interface CoverageExpiryOwnerEntry {
+  readonly owner: object;
+  count: number;
+}
+
+const coverageExpiryOwners = new WeakMap<
+  QueryClient,
+  Map<string, Map<string, CoverageExpiryOwnerEntry>>
+>();
+
+function acquireCoverageExpiryOwner(
+  queryClient: QueryClient,
+  hostId: string,
+  path: string,
+): { readonly owner: object; readonly release: () => void } {
+  let byHost = coverageExpiryOwners.get(queryClient);
+  if (byHost === undefined) {
+    byHost = new Map();
+    coverageExpiryOwners.set(queryClient, byHost);
+  }
+  let byPath = byHost.get(hostId);
+  if (byPath === undefined) {
+    byPath = new Map();
+    byHost.set(hostId, byPath);
+  }
+  let entry = byPath.get(path);
+  if (entry === undefined) {
+    entry = { owner: {}, count: 0 };
+    byPath.set(path, entry);
+  }
+  entry.count += 1;
+  const owner = entry.owner;
+  return {
+    owner,
+    release: () => {
+      const current = byPath.get(path);
+      if (current === undefined || current.owner !== owner) return;
+      current.count -= 1;
+      if (current.count === 0) byPath.delete(path);
+      if (byPath.size === 0) byHost.delete(hostId);
+    },
+  };
+}
+
+function requiresPerPathActivityRead(
+  activityRequirement: WorktreeActivityRequirement,
+  streamCovered: boolean,
+  listed: readonly WorktreeHostListingRow[],
+): boolean {
+  return (
+    activityRequirement === "always" ||
+    (activityRequirement === "ifMissing" &&
+      listed.some((row) => row.prState === null)) ||
+    !streamCovered ||
+    listed.length === 0 ||
+    listed.every((row) => row.resolvedAt === null)
+  );
 }
 
 // Module-level so its identity is stable: `useQueries` re-runs `combine`
@@ -127,8 +197,10 @@ function mergeEqualTimestampRows(
  *   managed walk): read exactly as before this listing existed;
  * - an older or unwatched host: a selection read still touches stale PR facts
  *   because that host has no subscriber-owned recurring probe.
- * - a PR-number search: resolve every listed path's activity so a current
- *   search does not mistake the base listing's unknown PR for no match.
+ * - task/owner metadata with a resolved row whose PR fact was never probed:
+ *   one selection read fills the missing activity, including submodules;
+ * - a PR-number search: touch every listed path's activity so a current
+ *   search does not mistake a stale PR fact for no match.
  *
  * Per path, a strictly newer selection derive wins. On a timestamp tie, the
  * listing owns current base fields while an earlier selection may still carry
@@ -141,8 +213,9 @@ export function useWorktreeEnrichmentForClient(
   client: HostClient<HostRpcRegistry> | null,
   paths: readonly string[],
   enabled: boolean,
-  requireActivity: boolean,
+  activityRequirement: WorktreeActivityRequirement,
 ): WorktreeEnrichment {
+  const queryClient = useQueryClient();
   const readiness = useReactiveHostReadiness(client);
   const streamCovered = useWorktreeChangedStreamCovered(
     enabled && paths.length > 0 ? readiness.hostId : null,
@@ -175,13 +248,14 @@ export function useWorktreeEnrichmentForClient(
     queries: uniquePaths.map((path) => {
       const listed = listingRowsByPath.get(path) ?? [];
       // Read what the listing cannot answer, and preserve the old-host
-      // selection path when no replay stream owns PR freshness. A deliberate
-      // PR-number search needs activity facts even for a resolved base row.
-      const needsRead =
-        requireActivity ||
-        !streamCovered ||
-        listed.length === 0 ||
-        listed.every((row) => row.resolvedAt === null);
+      // selection path when no replay stream owns PR freshness. A settled
+      // listing row already carries cached activity, but a resolved row with
+      // a null PR fact may have been derived without an activity probe.
+      const needsRead = requiresPerPathActivityRead(
+        activityRequirement,
+        streamCovered,
+        listed,
+      );
       return perPathEnrichmentQueryOptions({
         hostId: readiness.hostId,
         path,
@@ -192,6 +266,47 @@ export function useWorktreeEnrichmentForClient(
     }),
     combine: combinePerPathReads,
   });
+  useEffect(() => {
+    const hostId = readiness.hostId;
+    if (!queriesEnabled || !listingSettled || hostId === null) return;
+    const stopListeners = uniquePaths.flatMap((path) => {
+      const listed = listingRowsByPath.get(path) ?? [];
+      const selectionEnabledWhileCovered = requiresPerPathActivityRead(
+        activityRequirement,
+        true,
+        listed,
+      );
+      if (!selectionEnabledWhileCovered) return [];
+      const key = perPathEnrichmentQueryKey(hostId, path);
+      const owner = acquireCoverageExpiryOwner(queryClient, hostId, path);
+      const unsubscribe = subscribeWorktreeChangedCoverageExpired(
+        hostId,
+        owner.owner,
+        () => {
+          void queryClient.invalidateQueries({
+            queryKey: key,
+            exact: true,
+            refetchType: "active",
+          });
+        },
+      );
+      return [
+        () => {
+          unsubscribe();
+          owner.release();
+        },
+      ];
+    });
+    return () => stopListeners.forEach((stop) => stop());
+  }, [
+    activityRequirement,
+    listingRowsByPath,
+    listingSettled,
+    queriesEnabled,
+    queryClient,
+    readiness.hostId,
+    uniquePaths,
+  ]);
 
   return useMemo<WorktreeEnrichment>(() => {
     if (uniquePaths.length === 0) return EMPTY_ENRICHMENT;

@@ -78,34 +78,46 @@ function isActiveRefetchExempt(query: Query): boolean {
 }
 
 /**
- * The one shared, cheap worktree listing gets its reconnect answer from the
- * replay-capable stream. A generic host recovery sweep can run before replay
- * finishes; force-refetching here would erase the zero-read unchanged-resume
- * case and fan out through every always-mounted consumer. Other worktree
- * reads (including selection reads on older hosts) keep normal recovery.
+ * Successful base-listing and single-path activity reads on a replay-covered
+ * host get their reconnect answer from the stream. A generic host recovery
+ * sweep can run before replay finishes; force-refetching here would erase the
+ * zero-read unchanged-resume case. A root/path frame still invalidates these
+ * reads. Failed reads and reads on older or uncovered hosts keep recovery.
  */
-function isReplayCoveredWorktreeListing(query: Query): boolean {
+function isReplayCoveredWorktreeParams(params: unknown): boolean {
+  if (params === null || typeof params !== "object") return false;
+  if (
+    !("activityPaths" in params) ||
+    !("limit" in params) ||
+    params.limit !== null ||
+    !("includeActivity" in params) ||
+    !("forceRefresh" in params) ||
+    params.forceRefresh !== false
+  ) {
+    return false;
+  }
+  if (params.activityPaths === null) return params.includeActivity === false;
+  return (
+    Array.isArray(params.activityPaths) &&
+    params.activityPaths.length === 1 &&
+    params.includeActivity === true &&
+    "cursor" in params &&
+    params.cursor === null
+  );
+}
+
+function isReplayCoveredWorktreeRead(query: Query): boolean {
   if (query.queryKey[2] !== "worktree.listAllForHost") return false;
   // Replay only replaces the uncertainty about a previously successful row.
-  // A failed listing still needs the recovery sweep to unstrand its reader.
-  if (query.state.status === "error" || query.state.fetchFailureCount > 0) {
+  // A failed or pending read still needs the recovery sweep to unstrand it.
+  if (query.state.status !== "success" || query.state.fetchFailureCount > 0) {
     return false;
   }
   const hostId = query.queryKey[1];
-  if (typeof hostId !== "string" || !isWorktreeChangedStreamCovered(hostId)) {
-    return false;
-  }
-  const params = query.queryKey[3];
-  if (params === null || typeof params !== "object") return false;
   return (
-    "activityPaths" in params &&
-    params.activityPaths === null &&
-    "limit" in params &&
-    params.limit === null &&
-    "includeActivity" in params &&
-    params.includeActivity === false &&
-    "forceRefresh" in params &&
-    params.forceRefresh === false
+    typeof hostId === "string" &&
+    isWorktreeChangedStreamCovered(hostId) &&
+    isReplayCoveredWorktreeParams(query.queryKey[3])
   );
 }
 
@@ -170,8 +182,8 @@ function recoverySweepReaches(
  * the active slot (P4.2). An identity transition marks stale WITHOUT
  * refetching, because the request context may already be gone; the two
  * host-named sweeps can refetch active observers - except the cache-only
- * carve-outs in `isActiveRefetchExempt` and the replay-covered base worktree
- * listing, which are skipped entirely. `recoverySweepReaches` also leaves
+ * carve-outs in `isActiveRefetchExempt` and successful replay-covered worktree
+ * reads, which are skipped entirely. `recoverySweepReaches` also leaves
  * alone a read still on its first attempt and, after a stall, every read that
  * settled without failing.
  */
@@ -195,7 +207,7 @@ export function createHostQueryInvalidator(
           .filter(
             (query) =>
               !isActiveRefetchExempt(query) &&
-              !isReplayCoveredWorktreeListing(query),
+              !isReplayCoveredWorktreeRead(query),
           );
         const affectedQueries = new Set(
           inScope.filter((query) =>

@@ -47,7 +47,9 @@ function row(
     lastActivityAt: null,
     branchStatus: null,
     createdAt: null,
-    prState: null,
+    // Resolved fixture rows are settled unless a test opts in to missing
+    // activity explicitly. `null` means the listing lacks PR activity facts.
+    prState: "none",
     prNumber: null,
     prUrl: null,
     mergedHeadShaMatches: false,
@@ -156,7 +158,7 @@ describe("worktree metadata from one paged read per host", () => {
           fixture.client,
           paths,
           true,
-          false,
+          "none",
         ),
       }),
       { wrapper: fixture.Wrapper },
@@ -182,7 +184,12 @@ describe("worktree metadata from one paged read per host", () => {
 
     const { result } = renderHook(
       () =>
-        useWorktreeEnrichmentForClient(fixture.client, ["/wt/a"], true, true),
+        useWorktreeEnrichmentForClient(
+          fixture.client,
+          ["/wt/a"],
+          true,
+          "always",
+        ),
       { wrapper: fixture.Wrapper },
     );
     await waitFor(() => expect(result.current.worktrees[0]?.prNumber).toBe(42));
@@ -193,6 +200,66 @@ describe("worktree metadata from one paged read per host", () => {
     expect(result.current.worktrees[0]?.prState).toBe("open");
   });
 
+  it("reads only missing PR activity for task metadata rows and carries submodule facts", async () => {
+    const missingActivity = {
+      ...row("/wt/missing", 10, "listed"),
+      prState: null,
+    };
+    const settledActivity = row("/wt/settled", 10, "settled");
+    const fixture = createFixture([missingActivity, settledActivity]);
+    fixture.host.selection.set("/wt/missing", {
+      ...row("/wt/missing", 10, "selection"),
+      prState: "open",
+      prNumber: 51,
+      prUrl: "https://example.test/pull/51",
+      submodules: [
+        {
+          repoIdentifier: { owner: "acme", repo: "shared" },
+          branch: "feature/shared",
+          prState: "merged",
+          prNumber: 52,
+          prUrl: "https://example.test/shared/pull/52",
+          mergedHeadShaMatches: true,
+          mergedIntoDefault: true,
+          atPinnedCommit: true,
+          unmergedCommitCount: null,
+          unmergedCommitSubjects: null,
+        },
+      ],
+    });
+    markWorktreeChangedStreamOpen(HOST_ID);
+
+    const { result } = renderHook(
+      () =>
+        useWorktreeEnrichmentForClient(
+          fixture.client,
+          ["/wt/missing", "/wt/settled"],
+          true,
+          "ifMissing",
+        ),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() =>
+      expect(result.current.worktrees[0]?.submodules).toHaveLength(1),
+    );
+    await settle();
+    expect(fixture.selectionCalls).toEqual([["/wt/missing"]]);
+    expect(result.current.worktrees[0]).toMatchObject({
+      branch: "listed",
+      prState: "open",
+      prNumber: 51,
+      submodules: [
+        {
+          repoIdentifier: { owner: "acme", repo: "shared" },
+          prState: "merged",
+          prNumber: 52,
+        },
+      ],
+    });
+    expect(result.current.worktrees[1]?.prState).toBe("none");
+  });
+
   it("costs nothing on remount with the host stream open and performs no resolved-row enrichment reads", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const fixture = createFixture(RESOLVED);
@@ -201,7 +268,7 @@ describe("worktree metadata from one paged read per host", () => {
     const mount = () =>
       renderHook(
         () =>
-          useWorktreeEnrichmentForClient(fixture.client, paths, true, false),
+          useWorktreeEnrichmentForClient(fixture.client, paths, true, "none"),
         { wrapper: fixture.Wrapper },
       );
 
@@ -227,7 +294,7 @@ describe("worktree metadata from one paged read per host", () => {
     const mount = () =>
       renderHook(
         () =>
-          useWorktreeEnrichmentForClient(fixture.client, paths, true, false),
+          useWorktreeEnrichmentForClient(fixture.client, paths, true, "none"),
         { wrapper: fixture.Wrapper },
       );
 
@@ -274,7 +341,7 @@ describe("worktree metadata from one paged read per host", () => {
     );
     const rowConsumer = renderHook(
       () =>
-        useWorktreeEnrichmentForClient(fixture.client, ["/wt/a"], true, false),
+        useWorktreeEnrichmentForClient(fixture.client, ["/wt/a"], true, "none"),
       { wrapper: fixture.Wrapper },
     );
     await waitFor(() => {
@@ -296,6 +363,7 @@ describe("worktree metadata from one paged read per host", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(WORKTREE_CHANGED_RECOVERY_GRACE_MS);
         await vi.advanceTimersByTimeAsync(1);
+        await vi.advanceTimersByTimeAsync(30);
         await Promise.resolve();
       });
       expect(fixture.pagedCalls()).toBe(2);
@@ -306,7 +374,70 @@ describe("worktree metadata from one paged read per host", () => {
         "after grace",
       );
       expect(fixture.pagedCalls()).toBe(2);
-      expect(fixture.selectionCalls).toEqual([]);
+      expect(fixture.selectionCalls).toEqual([["/wt/a"]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refetches a mounted missing-activity path once when replay grace expires", async () => {
+    const fixture = createFixture([
+      { ...row("/wt/a", 10, "a"), prState: null },
+    ]);
+    const selectionRow = {
+      ...row("/wt/a", 10, "a"),
+      prState: "open" as const,
+      prNumber: 54,
+      prUrl: "https://example.test/pull/54",
+    };
+    fixture.host.selection.set("/wt/a", selectionRow);
+    markWorktreeChangedStreamOpen(HOST_ID);
+    const mount = () =>
+      renderHook(
+        () =>
+          useWorktreeEnrichmentForClient(
+            fixture.client,
+            ["/wt/a"],
+            true,
+            "ifMissing",
+          ),
+        { wrapper: fixture.Wrapper },
+      );
+    const first = mount();
+    const second = mount();
+    await waitFor(() =>
+      expect(first.result.current.worktrees[0]?.prState).toBe("open"),
+    );
+    await settle();
+    expect(second.result.current.worktrees[0]?.prNumber).toBe(54);
+    expect(fixture.selectionCalls).toEqual([["/wt/a"]]);
+    expect(fixture.pagedCalls()).toBe(1);
+
+    vi.useFakeTimers();
+    try {
+      markWorktreeChangedStreamClosed(HOST_ID);
+      fixture.host.selection.set("/wt/a", {
+        ...selectionRow,
+        prState: "merged",
+        resolvedAt: 20,
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WORKTREE_CHANGED_RECOVERY_GRACE_MS);
+        await vi.advanceTimersByTimeAsync(1);
+        // The path read coalesces in the enrichment batcher's 25ms window.
+        await vi.advanceTimersByTimeAsync(30);
+        await Promise.resolve();
+      });
+      vi.useRealTimers();
+      expect(isWorktreeChangedStreamCovered(HOST_ID)).toBe(false);
+      expect(fixture.pagedCalls()).toBe(2);
+      await waitFor(() => expect(fixture.selectionCalls).toHaveLength(2));
+      await waitFor(() =>
+        expect(first.result.current.worktrees[0]?.prState).toBe("merged"),
+      );
+      expect(second.result.current.worktrees[0]?.prState).toBe("merged");
+      expect(fixture.selectionCalls).toEqual([["/wt/a"], ["/wt/a"]]);
+      expect(fixture.pagedCalls()).toBe(2);
     } finally {
       vi.useRealTimers();
     }
@@ -329,7 +460,7 @@ describe("worktree metadata from one paged read per host", () => {
             fixture.client,
             ["/wt/a"],
             true,
-            false,
+            "none",
           ),
         { wrapper: fixture.Wrapper },
       );
@@ -368,7 +499,7 @@ describe("worktree metadata from one paged read per host", () => {
     const paths = ["/wt/a", "/wt/cold"];
 
     const { result } = renderHook(
-      () => useWorktreeEnrichmentForClient(fixture.client, paths, true, false),
+      () => useWorktreeEnrichmentForClient(fixture.client, paths, true, "none"),
       { wrapper: fixture.Wrapper },
     );
 
@@ -388,7 +519,7 @@ describe("worktree metadata from one paged read per host", () => {
     const paths = ["/wt/a"];
 
     const { result } = renderHook(
-      () => useWorktreeEnrichmentForClient(fixture.client, paths, true, false),
+      () => useWorktreeEnrichmentForClient(fixture.client, paths, true, "none"),
       { wrapper: fixture.Wrapper },
     );
     await waitFor(() =>
@@ -449,7 +580,7 @@ describe("worktree metadata from one paged read per host", () => {
     markWorktreeChangedStreamOpen(HOST_ID);
     const { result } = renderHook(
       () =>
-        useWorktreeEnrichmentForClient(fixture.client, ["/wt/a"], true, false),
+        useWorktreeEnrichmentForClient(fixture.client, ["/wt/a"], true, "none"),
       { wrapper: fixture.Wrapper },
     );
     await waitFor(() =>
@@ -460,6 +591,7 @@ describe("worktree metadata from one paged read per host", () => {
 
     const laterListing = {
       ...row("/wt/a", 10, "listing-answer"),
+      prState: null,
       owners: [
         {
           epicId: "new-epic",
@@ -517,7 +649,7 @@ describe("worktree metadata from one paged read per host", () => {
     const paths = ["/wt/a", "/wt/b"];
 
     const { result } = renderHook(
-      () => useWorktreeEnrichmentForClient(fixture.client, paths, true, false),
+      () => useWorktreeEnrichmentForClient(fixture.client, paths, true, "none"),
       { wrapper: fixture.Wrapper },
     );
     await waitFor(() => expect(result.current.worktrees).toHaveLength(2));

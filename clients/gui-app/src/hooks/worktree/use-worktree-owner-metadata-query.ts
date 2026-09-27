@@ -218,7 +218,7 @@ export function useWorktreeOwnerMetadata(args: {
     args.client,
     worktreePaths,
     args.enabled,
-    false,
+    "ifMissing",
   );
   const refreshMutation = useHostMutation<
     HostRpcRegistry,
