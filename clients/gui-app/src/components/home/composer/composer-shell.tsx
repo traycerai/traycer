@@ -12,6 +12,7 @@ import type { ComposerPickerStore } from "@/components/chat/composer/picker/comp
 import { ComposerNarrowProvider } from "@/components/home/composer/composer-narrow-context";
 import { useComposerNarrowObserver } from "@/components/home/composer/composer-narrow-hooks";
 import { useComposerEditorOverflow } from "@/components/home/composer/use-composer-editor-overflow";
+import { useComposerSheetPin } from "@/components/home/composer/use-composer-sheet-pin";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
 import type { FileTransferDragOverlayVariant } from "@/lib/files/file-transfer-paths";
@@ -182,10 +183,11 @@ function ComposerAreaImpl({
   // by the measured cover. The installed app measures the same cover but its
   // shell already subtracts it, so there this stays out of the way.
   const browserKeyboardInset = useVirtualKeyboardInset();
-  const sheetStyle =
-    expanded && !isMobileApp() && browserKeyboardInset > 0
+  const slotStyle =
+    !isMobileApp() && browserKeyboardInset > 0
       ? { bottom: `calc(${browserKeyboardInset}px + 1rem)` }
       : undefined;
+  const { slotRef, sheetRef } = useComposerSheetPin(expanded);
   return (
     <div className="relative">
       <ComposerMenu pickerStore={pickerStore} />
@@ -193,33 +195,44 @@ function ComposerAreaImpl({
           pseudo-element: a negative-z child paints above its parent's
           background, and the entrance animation's transform would make the
           sheet the pseudo-element's containing block for its duration. Same
-          layer as the sheet, earlier in the DOM, so the sheet paints over it. */}
+          layer as the sheet, earlier in the DOM, so the sheet paints over it.
+
+          It fills the SURFACE the card sits on: `fixed`, so it does not
+          depend on the stack of positioned wrappers between it and that
+          surface, and both surfaces that mount it are layout roots - the
+          canvas tile host transforms its tile, the landing surface is
+          `contain-layout` - so "fixed" resolves against them, under the app
+          header, rather than against the viewport. */}
       {expanded ? (
         <div
           aria-hidden
           data-composer-sheet-backdrop=""
           className="fixed inset-0 z-40 bg-canvas/60"
-        />
+        >
+          {/* The box the sheet takes. The bottom clears the home indicator
+              only while the keyboard is down: with it up, the surface
+              already ends at the keyboard (the shell's safe-height tokens
+              subtract it), and the inset dwarfs the indicator's, so the max
+              is 0. */}
+          <div
+            ref={slotRef}
+            data-composer-sheet-slot=""
+            style={slotStyle}
+            className="absolute inset-x-4 top-2 bottom-[calc(max(0px,var(--safe-area-inset-bottom)-var(--keyboard-inset))+1rem)]"
+          />
+        </div>
       ) : null}
       <div
+        ref={sheetRef}
         data-composer-shell=""
         data-composer-expanded={expanded ? "" : undefined}
-        style={sheetStyle}
         className={cn(
           "relative rounded-lg bg-foreground/3 ring-1 ring-border ring-inset focus-within:ring-ring/30",
-          // The sheet fills the SURFACE the card sits on: `fixed`, so it does
-          // not depend on the stack of positioned wrappers between it and
-          // that surface, and both surfaces that mount it are layout roots -
-          // the canvas tile host transforms its tile, the landing surface is
-          // `contain-layout` - so "fixed" resolves against them, under the
-          // app header, rather than against the viewport. The bottom clears
-          // the home indicator only while the keyboard is down: with it up,
-          // the surface already ends at the keyboard (the shell's
-          // safe-height tokens subtract it), and the inset dwarfs the
-          // indicator's, so the max is 0. The frame takes the scroll so the
-          // toolbar stays put.
+          // The sheet is pinned over the slot above (`useComposerSheetPin`
+          // says why it is not `fixed` itself). The frame takes the scroll so
+          // the toolbar stays put.
           expanded &&
-            "fixed inset-x-4 top-2 bottom-[calc(max(0px,var(--safe-area-inset-bottom)-var(--keyboard-inset))+1rem)] z-40 flex flex-col bg-card shadow-lg animate-in slide-in-from-bottom duration-300",
+            "absolute z-40 flex flex-col bg-card shadow-lg animate-in slide-in-from-bottom duration-300",
         )}
       >
         {overlay}
