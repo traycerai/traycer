@@ -207,6 +207,9 @@ function CountdownRoutingCard({
   );
   const resolvers: FallbackIdentityResolvers = { labelFor, modelLabelFor };
   const plan = routingCountdownPlan(pending);
+  // Which countdown this is: the host's plan id changes exactly when the
+  // planned step does, and `"none"` is its own window.
+  const windowKey = `${pending.traversalId}:${pending.impendingAction?.planId ?? "none"}`;
   const failed = fallbackTupleIdentity(
     pending.failedTuple,
     labelFor,
@@ -280,13 +283,13 @@ function CountdownRoutingCard({
         onOpenSettings={openSettings}
       />
       <CountdownHeadline
+        // One mount per window; see `CountdownHeadline`.
+        key={windowKey}
         state={pending.state}
         plan={plan}
         deadline={pending.deadline}
         graceRemainingMs={pending.graceRemainingMs}
-        // Which countdown this is: the host's plan id changes exactly when
-        // the planned step does, and `"none"` is its own window.
-        windowKey={`${pending.traversalId}:${pending.impendingAction?.planId ?? "none"}`}
+        windowKey={windowKey}
       />
       <CountdownRouteLine
         pending={pending}
@@ -447,6 +450,17 @@ function CountdownRouteLine({
  * the deadline under the React Compiler, and the bar would freeze at its first
  * width while the label kept ticking - the failure the countdown's compiler
  * pin exists to catch.
+ *
+ * Mounted once per WINDOW: the card keys it by `windowKey`, so a new plan is a
+ * new mount and its identity is the window's. That is what keeps the drain's
+ * latch from outliving its window. The second clock can be paused - it does
+ * not fire while the window is off screen - and the host mints a new plan
+ * without re-arming the deadline, so a plan landing during a hide would be
+ * rendered against the sample from before it and latch that stale remainder
+ * as the new window's length. A new mount's first render is floored at the
+ * moment it mounts (`useGraceCountdownState`), which for a new plan is the
+ * moment the plan arrived. The one visible cost: a new plan's bar appears
+ * full at once instead of sweeping up from the old plan's leftover.
  */
 function CountdownHeadline({
   state,

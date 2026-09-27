@@ -20,6 +20,7 @@ import {
 } from "@/components/chat/fallback/routing-card";
 import type { RoutingDestinationPicker } from "@/components/chat/fallback/routing-destination-picker";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { setDesktopWindowOnScreen } from "@/lib/dom/document-visibility";
 import { formatWaitTime } from "@/lib/relative-time";
 import { FALLBACK_SETTINGS_SECTION_ID } from "@/lib/settings-sections";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
@@ -654,6 +655,49 @@ describe("RoutingCard", () => {
       expect(after).toBe(region);
       expect(region.textContent).toBe("Resuming shortly…");
     });
+
+    it("names the resume time as of the show, not as of the hide: a time that stopped being far while off screen reads short", () => {
+      vi.useFakeTimers();
+      const mountedAt = Date.now();
+      const deadline = mountedAt + 25 * 60 * 60_000;
+      // Not vacuous: the two readings differ, weekday form a day out and the
+      // short form under it.
+      const farForm = formatWaitTime(deadline, mountedAt);
+      const nearForm = formatWaitTime(deadline, mountedAt + 2 * 60 * 60_000);
+      expect(nearForm).not.toBe(farForm);
+      renderWaiting(
+        cardPending({
+          state: "waiting",
+          reason: "rate_limit",
+          failedTuple: FAILED_CLAUDE_TUPLE,
+          targetTuple: null,
+          impendingAction: null,
+          deadline,
+        }),
+        true,
+      );
+      const status = (): string | null =>
+        within(screen.getByTestId("routing-card-headline")).getByRole("status")
+          .textContent;
+      expect(status()).toBe(`Resuming at ${farForm}`);
+      try {
+        // Off screen the minute clock does not fire, so nothing re-reads it
+        // across the two hours.
+        act(() => {
+          setDesktopWindowOnScreen(false);
+        });
+        act(() => {
+          vi.advanceTimersByTime(2 * 60 * 60_000);
+        });
+        // The show edge fires the clock once; no further time passes.
+        act(() => {
+          setDesktopWindowOnScreen(true);
+        });
+        expect(status()).toBe(`Resuming at ${nearForm}`);
+      } finally {
+        setDesktopWindowOnScreen(true);
+      }
+    });
   });
 
   describe("when the card cannot act", () => {
@@ -1135,6 +1179,148 @@ describe("RoutingCard", () => {
       });
       expect(headline()).toBe("Switching in 4s");
       expect(fillWidthPercent()).toBeCloseTo(80, 0);
+    });
+
+    it("re-opened while visible: a new plan remounts the drain fill instead of reusing the same node", () => {
+      // The card keys `<CountdownHeadline>` by its window, so a new plan
+      // remounts the headline and its drain bar: the new window's bar appears
+      // full at once rather than the old node sweeping up to it by CSS.
+      vi.useFakeTimers();
+      const deadline = Date.now() + 15_000;
+      const view = render(
+        countdownTree(
+          planFrame({
+            state: "hold",
+            planId: "plan-p",
+            target: DESTINATION_A,
+            targetTuple: null,
+            deadline,
+            revision: 1,
+          }),
+        ),
+      );
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      const fillBefore = screen.getByTestId("routing-drain-fill");
+
+      view.rerender(
+        countdownTree(
+          planFrame({
+            state: "hold",
+            planId: "plan-p-prime",
+            target: DESTINATION_B,
+            targetTuple: null,
+            deadline,
+            revision: 2,
+          }),
+        ),
+      );
+
+      // Falsification: drop the key and this is the same node, swept by CSS.
+      expect(screen.getByTestId("routing-drain-fill")).not.toBe(fillBefore);
+      expect(fillWidthPercent()).toBe(100);
+    });
+
+    it("re-opened while off screen: a plan change during the hide opens the new window full", () => {
+      // The host can mint a new planId while the window is off screen (e.g.
+      // "resolving" turning into a named destination) without re-arming the
+      // deadline, and the second clock does not fire while off screen.
+      // `useDrainFraction` latches the largest remainder it sees per window,
+      // so a new plan rendered against the pre-hide sample would latch 13s as
+      // its window and draw 5/13 on show - 38.46, seen before the card keyed
+      // the headline by its window.
+      vi.useFakeTimers();
+      try {
+        const deadline = Date.now() + 15_000;
+        const view = render(
+          countdownTree(
+            planFrame({
+              state: "hold",
+              planId: "plan-p",
+              target: DESTINATION_A,
+              targetTuple: null,
+              deadline,
+              revision: 1,
+            }),
+          ),
+        );
+        act(() => {
+          vi.advanceTimersByTime(2_000);
+        });
+        expect(headline()).toBe("Switching in 13s");
+
+        act(() => {
+          setDesktopWindowOnScreen(false);
+        });
+        act(() => {
+          // No tick fires while off screen: the second clock is off too.
+          vi.advanceTimersByTime(8_000);
+        });
+
+        view.rerender(
+          countdownTree(
+            planFrame({
+              state: "hold",
+              planId: "plan-p-prime",
+              target: DESTINATION_B,
+              targetTuple: null,
+              deadline,
+              revision: 2,
+            }),
+          ),
+        );
+
+        act(() => {
+          setDesktopWindowOnScreen(true);
+        });
+
+        expect(headline()).toBe("Switching in 5s");
+        // The new plan's window opens full, as the visible re-opened case
+        // above asserts.
+        expect(fillWidthPercent()).toBe(100);
+      } finally {
+        setDesktopWindowOnScreen(true);
+      }
+    });
+
+    it("re-opened while off screen with no plan change: the same window keeps its own remaining time", () => {
+      vi.useFakeTimers();
+      try {
+        const deadline = Date.now() + 15_000;
+        render(
+          countdownTree(
+            planFrame({
+              state: "hold",
+              planId: "plan-p",
+              target: DESTINATION_A,
+              targetTuple: null,
+              deadline,
+              revision: 1,
+            }),
+          ),
+        );
+        act(() => {
+          vi.advanceTimersByTime(2_000);
+        });
+
+        act(() => {
+          setDesktopWindowOnScreen(false);
+        });
+        act(() => {
+          vi.advanceTimersByTime(8_000);
+        });
+
+        act(() => {
+          setDesktopWindowOnScreen(true);
+        });
+
+        // No further advance: the window's own remaining time is 5s of 15s.
+        expect(headline()).toBe("Switching in 5s");
+        expect(fillWidthPercent()).toBeCloseTo(33.3, 0);
+      } finally {
+        setDesktopWindowOnScreen(true);
+      }
     });
 
     it("a second change commits with no hold frame: switching names the third destination, never Deciding", () => {
