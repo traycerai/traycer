@@ -66,7 +66,7 @@ export type EpicCapExemptionCounts = Readonly<
 export interface EpicCapExemptionTelemetry {
   /** Entries currently retained in an over-cap population, by first blocker. */
   readonly current: EpicCapExemptionCounts;
-  /** Transitions into an over-cap reason, deduplicated across repeated walks. */
+  /** Each key/reason once per continuous over-cap episode. */
   readonly occurrences: EpicCapExemptionCounts;
 }
 
@@ -685,6 +685,10 @@ export class OpenEpicSessionRegistry {
     createRendererRuntimeEnvironment();
   private readonly sessions: SessionRegistry<EpicRegistrySession>;
   private capExemptionEpisodes = new Map<string, EpicCapExemptionReason>();
+  private readonly capExemptionSeenReasons = new Map<
+    string,
+    Set<EpicCapExemptionReason>
+  >();
   private readonly capExemptionOccurrences = emptyCapExemptionCounts();
   private capGraceTimer: RuntimeTimer | null = null;
   private capGraceDeadlineMs: number | null = null;
@@ -779,12 +783,14 @@ export class OpenEpicSessionRegistry {
           holdsNothingToLose(session.handle.store.getState()),
         onBeforeDispose: (session, cause) => {
           this.capExemptionEpisodes.delete(session.epicId);
+          this.capExemptionSeenReasons.delete(session.epicId);
           const cap =
             typeof options.maxLive === "function"
               ? options.maxLive()
               : options.maxLive;
           if (this.sessions.size() <= cap) {
             this.capExemptionEpisodes.clear();
+            this.capExemptionSeenReasons.clear();
             this.scheduleCapGraceRecheck(null);
           }
           // Attribute BEFORE either teardown arm. A dirty outgoing handle is
@@ -869,6 +875,28 @@ export class OpenEpicSessionRegistry {
     };
   }
 
+  private recordCapExemptionOccurrence(
+    epicId: string,
+    reason: EpicCapExemptionReason,
+    population: number,
+    cap: number,
+  ): void {
+    let seenReasons = this.capExemptionSeenReasons.get(epicId);
+    if (seenReasons === undefined) {
+      seenReasons = new Set<EpicCapExemptionReason>();
+      this.capExemptionSeenReasons.set(epicId, seenReasons);
+    }
+    if (seenReasons.has(reason)) return;
+    seenReasons.add(reason);
+    this.capExemptionOccurrences[reason] += 1;
+    appLogger.debug("[open-epic-session-registry] cap exemption", {
+      epic: epicId,
+      reason,
+      resident: population,
+      cap,
+    });
+  }
+
   private recordCapEvaluation(
     evaluation: WarmCapEvaluation<EpicRegistrySession>,
   ): void {
@@ -876,14 +904,20 @@ export class OpenEpicSessionRegistry {
     const nowMs = this.environment.clock.now();
     const graceMs = getRetentionProfile().unknownActivityCapGraceMs;
     let nextDeadlineMs: number | null = null;
+    let becameEligibleDuringWalk = false;
     for (const entry of evaluation.blocked) {
-      const reason = epicCapExemptionReason(
-        entry.session,
-        entry.blocker,
-        nowMs,
-        graceMs,
-      );
+      const eligibleNow = this.isEligibleForCapEviction(entry.key);
+      const reason = eligibleNow
+        ? "eligible-after-walk"
+        : epicCapExemptionReason(entry.session, entry.blocker, nowMs, graceMs);
       next.set(entry.key, reason);
+      // The shared cap walk and this report read activity and time separately.
+      // A grace deadline can pass after candidate selection, leaving a clean
+      // entry eligible here even though the walk did not evict it. Retry once
+      // through the normal safety gates instead of canceling its grace timer.
+      if (entry.blocker === "eligible-after-walk" || eligibleNow) {
+        becameEligibleDuringWalk = true;
+      }
       if (
         (reason === "activity-plane-blind" || reason === "host-uncovered") &&
         entry.session.unknownActivitySinceMs !== null
@@ -896,21 +930,32 @@ export class OpenEpicSessionRegistry {
           nextDeadlineMs = deadlineMs;
         }
       }
-      if (this.capExemptionEpisodes.get(entry.key) === reason) continue;
-      this.capExemptionOccurrences[reason] += 1;
-      appLogger.debug("[open-epic-session-registry] cap exemption", {
-        epic: entry.key,
+      this.recordCapExemptionOccurrence(
+        entry.key,
         reason,
-        resident: evaluation.population,
-        cap: evaluation.cap,
-      });
+        evaluation.population,
+        evaluation.cap,
+      );
     }
     this.capExemptionEpisodes = next;
+    if (next.size === 0) this.capExemptionSeenReasons.clear();
+    if (becameEligibleDuringWalk) nextDeadlineMs = nowMs;
+    // An already armed grace timer may be the only event left to trigger a
+    // recheck if the clock crosses its deadline during this report. Keep it
+    // until it fires while the registry is still over cap.
+    if (next.size > 0 && nextDeadlineMs === null) {
+      nextDeadlineMs = this.capGraceDeadlineMs;
+    }
     this.scheduleCapGraceRecheck(nextDeadlineMs);
   }
 
   private scheduleCapGraceRecheck(deadlineMs: number | null): void {
-    if (deadlineMs === this.capGraceDeadlineMs) return;
+    if (
+      deadlineMs === this.capGraceDeadlineMs &&
+      (deadlineMs === null || deadlineMs > this.environment.clock.now())
+    ) {
+      return;
+    }
     this.capGraceTimer?.cancel();
     this.capGraceTimer = null;
     this.capGraceDeadlineMs = deadlineMs;
@@ -1686,6 +1731,7 @@ export class OpenEpicSessionRegistry {
     this.sessions.transact(() => {
       this.sessions.disposeAll();
       this.capExemptionEpisodes.clear();
+      this.capExemptionSeenReasons.clear();
       Object.assign(this.capExemptionOccurrences, emptyCapExemptionCounts());
       // Retentions go too. This is the auth lifecycle's hook - sign-out,
       // user-switch, token expiry - and its whole contract is that no prior

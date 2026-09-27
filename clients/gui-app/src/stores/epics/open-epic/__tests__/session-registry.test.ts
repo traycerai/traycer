@@ -961,6 +961,42 @@ describe("unknown activity grace applies only to epic cap eviction", () => {
     }
   });
 
+  it("rechecks when grace expires between the candidate walk and its exemption report", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    try {
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+      });
+      const first = buildTestHandle("crossing-first", false);
+      const second = buildTestHandle("crossing-second", false);
+      registry.acquire("crossing-first", () => h(first));
+      registry.acquire("crossing-second", () => h(second));
+
+      let clockReads = 0;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => {
+        clockReads += 1;
+        return clockReads <= 4 ? graceMs - 1 : graceMs;
+      });
+      try {
+        registry.prune();
+      } finally {
+        clock.mockRestore();
+      }
+
+      expect(registry.size()).toBe(2);
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      vi.setSystemTime(graceMs);
+      vi.advanceTimersByTime(0);
+      expect(first.disposed).toBe(true);
+      expect(registry.size()).toBe(1);
+    } finally {
+      registry.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
   it("resets only after a fresh covering answer, even while mounted", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -1753,6 +1789,42 @@ describe("cap eviction defers to the activity plane's own health (rebased onto a
       expect(
         registry.capExemptionTelemetry().current["activity-plane-blind"],
       ).toBe(0);
+    } finally {
+      debug.mockRestore();
+    }
+  });
+
+  it("counts a reason once per epic while overflow continues through reason changes", () => {
+    const debug = vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+    try {
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+      });
+      const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+      const first = buildTestHandle("reason-first", false);
+      const second = buildTestHandle("reason-second", false);
+      registry.acquire("reason-first", () => h(first));
+      registry.acquire("reason-second", () => h(second));
+      expect(
+        registry.capExemptionTelemetry().occurrences["activity-plane-blind"],
+      ).toBe(2);
+
+      registry.acquireMounted("reason-first", () => h(first));
+      expect(registry.capExemptionTelemetry().current.demand).toBe(1);
+      registry.releaseMounted("reason-first");
+      expect(
+        registry.capExemptionTelemetry().current["activity-plane-blind"],
+      ).toBe(2);
+      expect(
+        registry.capExemptionTelemetry().occurrences["activity-plane-blind"],
+      ).toBe(2);
+      const firstBlindLogs = debug.mock.calls.filter(
+        ([message, fields]) =>
+          message === "[open-epic-session-registry] cap exemption" &&
+          fields.epic === "reason-first" &&
+          fields.reason === "activity-plane-blind",
+      );
+      expect(firstBlindLogs).toHaveLength(1);
     } finally {
       debug.mockRestore();
     }
