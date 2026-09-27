@@ -16,7 +16,10 @@ import { SidebarArtwork } from "@/components/layout/sidebar-artwork";
  * cap matches the drag-time cap of half the layout row, so a persisted
  * width never starves the canvas on a small window.
  */
-import { memo, useMemo, useRef, type ReactNode } from "react";
+import { memo, useCallback, useMemo, useRef, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Pencil } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import {
   EpicLeftPanelHost,
@@ -40,8 +43,29 @@ import { useHeaderTabAppearance } from "@/hooks/appearance/use-header-tab-appear
 import {
   useEpicSnapshotFetchError,
   useEpicSnapshotLoaded,
+  useRegisteredEpicLocalHome,
+  useRegisteredEpicPermissionRole,
   useRegisteredEpicTitleGenerating,
 } from "@/lib/epic-selectors";
+import {
+  SIDE_TAB_TITLE_CLASS,
+  SIDE_TAB_TITLE_INPUT_CLASS,
+} from "@/components/layout/tabs/side-strip/side-strip-tokens";
+import {
+  useInlineRename,
+  type InlineRename,
+} from "@/hooks/ui/use-inline-rename";
+import { isEditableRole } from "@/lib/epic-permissions";
+import { getEpicSessionHandleHostClient } from "@/lib/registries/epic-session-registry";
+import { reconcileAuthoritativeEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  settleDetachedEpicTitleCommit,
+  settleEpicTitleWrite,
+} from "@/lib/epic-title-write-settlement";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { useHeaderTabForRef } from "@/stores/tabs/use-header-tabs";
 import { tabAppearance, type HeaderTab } from "@/stores/tabs/types";
 import {
@@ -236,6 +260,7 @@ function PanelTaskHeaderRow(props: {
   readonly tab: HeaderTab;
 }) {
   const { resolvedTabName, displayName } = useHeaderTabTitle(props.tab);
+  const rename = usePanelTaskTitleRename(props.epicId, resolvedTabName);
   const titleGenerating = useRegisteredEpicTitleGenerating(props.epicId);
   const appearance = tabAppearance(props.tab);
   const Icon = props.tab.icon;
@@ -256,8 +281,106 @@ function PanelTaskHeaderRow(props: {
         />
       }
       title={displayName}
+      titleEditor={
+        rename.isEditing ? (
+          <input
+            {...rename.inputProps}
+            aria-label="Edit task title"
+            data-testid="epic-sidebar-task-header-title-input"
+            className={cn(
+              SIDE_TAB_TITLE_INPUT_CLASS,
+              SIDE_TAB_TITLE_CLASS,
+              "font-semibold",
+            )}
+          />
+        ) : null
+      }
+      titleAction={
+        rename.canEdit ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Rename task"
+            data-testid="epic-sidebar-task-header-rename"
+            onClick={rename.startEditing}
+          >
+            <Pencil />
+          </Button>
+        ) : null
+      }
     />
   );
+}
+
+/**
+ * Inline rename for the panel's task title. The panel sits inside the task's
+ * session, so the rename is that session's own write command - it reaches the
+ * host serving the task, and the title overlay shows it at once - exactly as
+ * the tab strip and the mobile header write it. The admission rule is theirs
+ * too: an editable role, and a cloud verdict unless the task is local-homed.
+ * `title` is the RAW title, so the "Untitled task" fallback is never seeded
+ * into the input.
+ */
+function usePanelTaskTitleRename(
+  epicId: string,
+  title: string,
+): InlineRename & { readonly canEdit: boolean } {
+  const handle = useMaybeOpenEpicHandle();
+  const queryClient = useQueryClient();
+  const permissionRole = useRegisteredEpicPermissionRole(epicId);
+  const localHome = useRegisteredEpicLocalHome(epicId);
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const canEdit =
+    handle !== null &&
+    isEditableRole(permissionRole) &&
+    (localHome || cloudAuthorized);
+  const commit = useCallback(
+    async (next: string) => {
+      if (handle === null) return;
+      // Re-checked at COMMIT: an edit opened before a demotion must not land
+      // on the retained credential afterwards.
+      if (
+        !localHome &&
+        !authorizesCloudCapability(useAuthStore.getState().status)
+      ) {
+        return;
+      }
+      const sessionClient = getEpicSessionHandleHostClient(handle);
+      const hostId = sessionClient?.getActiveHostId() ?? null;
+      const userId = sessionClient?.getRequestContextUserId() ?? null;
+      const state = handle.store.getState();
+      const commandId = await state.enqueueWriteCommand({
+        kind: "update-epic-title",
+        title: next,
+        updatedAt: Date.now(),
+      });
+      if (commandId === null) return;
+      settleEpicTitleWrite(state.waitForWriteCommand(commandId), {
+        onCommitted: () => {
+          if (userId === null) return;
+          reconcileAuthoritativeEpicTitleInCloudTaskCaches(
+            queryClient,
+            { hostId, userId },
+            epicId,
+            next,
+          );
+        },
+        source: "Epic panel header",
+      });
+    },
+    [epicId, handle, localHome, queryClient],
+  );
+  const rename = useInlineRename({
+    value: title,
+    canEdit,
+    onCommit: (next: string) => {
+      settleDetachedEpicTitleCommit(commit(next), "Epic panel header");
+    },
+  });
+  return { ...rename, canEdit };
 }
 
 /**

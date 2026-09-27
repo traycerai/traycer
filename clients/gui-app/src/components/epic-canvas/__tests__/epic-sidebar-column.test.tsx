@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useState, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -136,6 +138,14 @@ function buildSessionHandle(epicId: string): OpenedStoreForTest {
   });
 }
 
+/** The app root's query client; the panel header's rename reads it. */
+function QueryWrapper(props: { readonly children: ReactNode }) {
+  const [client] = useState(() => new QueryClient());
+  return (
+    <QueryClientProvider client={client}>{props.children}</QueryClientProvider>
+  );
+}
+
 function renderColumn() {
   return render(
     <TooltipProvider>
@@ -143,6 +153,7 @@ function renderColumn() {
         <EpicSidebarColumn epicId={EPIC_ID} tabId={TAB_ID} side="left" />
       </div>
     </TooltipProvider>,
+    { wrapper: QueryWrapper },
   );
 }
 
@@ -155,6 +166,7 @@ function renderColumnWithSession(handle: OpenedStoreForTest) {
         </div>
       </EpicSessionContext.Provider>
     </TooltipProvider>,
+    { wrapper: QueryWrapper },
   );
 }
 

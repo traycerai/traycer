@@ -503,6 +503,8 @@ export function AppFramePanelTaskHeader(): ReactNode {
       testId={null}
       chip={<AppFrameTaskChip task={APP_FRAME_ACTIVE_TASK} />}
       title={APP_FRAME_ACTIVE_TASK.label}
+      titleEditor={null}
+      titleAction={null}
     />
   );
 }

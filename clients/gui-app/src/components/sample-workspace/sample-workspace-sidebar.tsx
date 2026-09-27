@@ -214,6 +214,8 @@ export function SampleWorkspaceSidebar(): ReactNode {
             />
           }
           title={SAMPLE_TASK_TITLE}
+          titleEditor={null}
+          titleAction={null}
         />
         <div className="min-h-0 flex-1">
           {displayedPanels.length === 0 ? null : (
