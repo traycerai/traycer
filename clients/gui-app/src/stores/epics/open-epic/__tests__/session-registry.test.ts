@@ -1,6 +1,6 @@
 import * as Y from "yjs";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
@@ -22,6 +22,7 @@ import {
 } from "@/stores/epics/open-epic/session-registry";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
+import { appLogger } from "@/lib/logger";
 import { createArtifactInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
 import {
   openStoreForTest,
@@ -274,12 +275,14 @@ describe("OpenEpicSessionRegistry", () => {
     expect(registry.size()).toBe(2);
     expect(activeA.disposed).toBe(false);
     expect(activeB.disposed).toBe(false);
+    expect(registry.capExemptionTelemetry().current["agent-working"]).toBe(2);
 
     clearAgentWorking(activeA);
 
     expect(registry.size()).toBe(1);
     expect(activeA.disposed).toBe(true);
     expect(activeB.disposed).toBe(false);
+    expect(registry.capExemptionTelemetry().current["agent-working"]).toBe(0);
   });
 
   it("does not evict dirty entries even when above the cap (soft-cap overflow)", () => {
@@ -1342,6 +1345,165 @@ describe("cap eviction defers to the activity plane's own health (rebased onto a
     expect(registry.size()).toBe(6);
     for (const th of handles) {
       expect(th.disposed).toBe(false);
+    }
+  });
+
+  it("records the blind activity exemption for each clean session retained above the cap", () => {
+    const debug = vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+    try {
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+      });
+      const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+      const first = buildTestHandle("blind-a", false);
+      const second = buildTestHandle("blind-b", false);
+
+      registry.acquireMounted("blind-a", () => h(first));
+      registry.releaseMounted("blind-a");
+      registry.acquireMounted("blind-b", () => h(second));
+      registry.releaseMounted("blind-b");
+
+      expect(registry.size()).toBe(2);
+      expect(debug).toHaveBeenCalledWith(
+        "[open-epic-session-registry] cap exemption",
+        expect.objectContaining({
+          epic: "blind-a",
+          reason: "activity-plane-blind",
+        }),
+      );
+      expect(debug).toHaveBeenCalledWith(
+        "[open-epic-session-registry] cap exemption",
+        expect.objectContaining({
+          epic: "blind-b",
+          reason: "activity-plane-blind",
+        }),
+      );
+      expect(
+        registry.capExemptionTelemetry().current["activity-plane-blind"],
+      ).toBe(2);
+      expect(
+        registry.capExemptionTelemetry().occurrences["activity-plane-blind"],
+      ).toBe(2);
+
+      registry.prune();
+      registry.prune();
+      const exemptionLogs = debug.mock.calls.filter(
+        ([message, fields]) =>
+          message === "[open-epic-session-registry] cap exemption" &&
+          (fields.epic === "blind-a" || fields.epic === "blind-b") &&
+          fields.reason === "activity-plane-blind",
+      );
+      expect(exemptionLogs).toHaveLength(2);
+      expect(
+        registry.capExemptionTelemetry().occurrences["activity-plane-blind"],
+      ).toBe(2);
+
+      __setAgentActivityPlaneAnsweringForTests();
+      expect(registry.size()).toBe(1);
+      expect(
+        registry.capExemptionTelemetry().current["activity-plane-blind"],
+      ).toBe(0);
+    } finally {
+      debug.mockRestore();
+    }
+  });
+
+  it("changes the reported exemption when a fresh activity frame exposes unsynced edits", () => {
+    const debug = vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+    try {
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+      });
+      const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+      const first = buildTestHandle("dirty-a", true);
+      const second = buildTestHandle("dirty-b", true);
+      registry.acquireMounted("dirty-a", () => h(first));
+      registry.releaseMounted("dirty-a");
+      registry.acquireMounted("dirty-b", () => h(second));
+      registry.releaseMounted("dirty-b");
+
+      expect(
+        registry.capExemptionTelemetry().current["activity-plane-blind"],
+      ).toBe(2);
+      __setAgentActivityPlaneAnsweringForTests();
+      expect(registry.size()).toBe(2);
+      expect(
+        registry.capExemptionTelemetry().current["activity-plane-blind"],
+      ).toBe(0);
+      expect(registry.capExemptionTelemetry().current["unsynced-edits"]).toBe(
+        2,
+      );
+      expect(
+        registry.capExemptionTelemetry().occurrences["unsynced-edits"],
+      ).toBe(2);
+
+      first.handle.store.setState({ isDirty: false });
+      expect(registry.size()).toBe(1);
+      expect(registry.capExemptionTelemetry().current["unsynced-edits"]).toBe(
+        0,
+      );
+    } finally {
+      debug.mockRestore();
+    }
+  });
+
+  it("labels demand separately from an unknown activity plane", () => {
+    const debug = vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+    try {
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+      });
+      const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+      const first = buildTestHandle("demand-a", false);
+      const second = buildTestHandle("demand-b", false);
+      registry.acquireMounted("demand-a", () => h(first));
+      registry.acquireMounted("demand-b", () => h(second));
+
+      expect(registry.capExemptionTelemetry().current.demand).toBe(2);
+      expect(
+        registry.capExemptionTelemetry().current["activity-plane-blind"],
+      ).toBe(0);
+      registry.releaseMounted("demand-a");
+      expect(registry.size()).toBe(2);
+      expect(registry.capExemptionTelemetry().current.demand).toBe(1);
+      expect(
+        registry.capExemptionTelemetry().current["activity-plane-blind"],
+      ).toBe(1);
+    } finally {
+      debug.mockRestore();
+    }
+  });
+
+  it("names an uncovered session host when another host's activity plane answers", () => {
+    const debug = vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+    try {
+      __resetAgentActivityStoreForTests();
+      __setHostAgentActivityHealthForTests("host-serving", {
+        connectionStatus: "open",
+        servedBy: "local",
+        stateFrameSeenThisEpoch: true,
+        cloudSyncStatus: null,
+      });
+      const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+      const first = withHostId(
+        buildTestHandle("remote-a", false),
+        "host-elsewhere",
+      );
+      const second = withHostId(
+        buildTestHandle("remote-b", false),
+        "host-elsewhere",
+      );
+      registry.acquireMounted("remote-a", () => h(first));
+      registry.releaseMounted("remote-a");
+      registry.acquireMounted("remote-b", () => h(second));
+      registry.releaseMounted("remote-b");
+
+      expect(registry.size()).toBe(2);
+      expect(registry.capExemptionTelemetry().current["host-uncovered"]).toBe(
+        2,
+      );
+    } finally {
+      debug.mockRestore();
     }
   });
 

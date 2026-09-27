@@ -6,6 +6,8 @@ import {
   createSessionRegistry,
   type SessionRegistry,
   type SessionDisposeCause,
+  type WarmCapBlocker,
+  type WarmCapEvaluation,
 } from "@traycer-clients/shared/replica-runtime";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { appLogger } from "@/lib/logger";
@@ -42,6 +44,42 @@ import {
  * all.
  */
 export { DEFAULT_MAX_LIVE_EPICS } from "@/stores/replica-memory/budget-limits";
+
+export type EpicCapExemptionReason =
+  | "demand"
+  | "activity-plane-blind"
+  | "host-uncovered"
+  | "agent-working"
+  | "unsynced-edits"
+  | "unsynced-queue"
+  | "unflushed-writes"
+  | "eligible-after-walk"
+  | "not-evictable";
+
+export type EpicCapExemptionCounts = Readonly<
+  Record<EpicCapExemptionReason, number>
+>;
+
+export interface EpicCapExemptionTelemetry {
+  /** Entries currently retained in an over-cap population, by first blocker. */
+  readonly current: EpicCapExemptionCounts;
+  /** Transitions into an over-cap reason, deduplicated across repeated walks. */
+  readonly occurrences: EpicCapExemptionCounts;
+}
+
+function emptyCapExemptionCounts(): Record<EpicCapExemptionReason, number> {
+  return {
+    demand: 0,
+    "activity-plane-blind": 0,
+    "host-uncovered": 0,
+    "agent-working": 0,
+    "unsynced-edits": 0,
+    "unsynced-queue": 0,
+    "unflushed-writes": 0,
+    "eligible-after-walk": 0,
+    "not-evictable": 0,
+  };
+}
 
 /**
  * Soft threshold on retained-dirty buffers (see {@link RetainedUnsyncedBuffer}).
@@ -361,6 +399,29 @@ function epicIsBusyAcrossHosts(
   return false;
 }
 
+function epicCapExemptionReason(
+  session: EpicRegistrySession,
+  blocker: WarmCapBlocker,
+): EpicCapExemptionReason {
+  if (blocker === "demand") return "demand";
+  if (blocker === "eligible-after-walk") return "eligible-after-walk";
+  if (blocker === "active-work") {
+    if (!agentActivityPlaneAnswers()) return "activity-plane-blind";
+    if (hasActiveAgentWork(session.epicId)) return "agent-working";
+    if (!agentActivityPlaneCoversHost(session.handle.hostId)) {
+      return "host-uncovered";
+    }
+    // A concurrent plane change may remove the reason between the cap's
+    // first gate and this diagnostic read. Keep the conservative label.
+    return "agent-working";
+  }
+  const state = session.handle.store.getState();
+  if (state.isDirty) return "unsynced-edits";
+  if (state.writeCommands.length > 0) return "unflushed-writes";
+  if (state.unsyncedQueueSize > 0) return "unsynced-queue";
+  return "not-evictable";
+}
+
 /**
  * The chat plane's half of the park verdict, injected rather than imported.
  *
@@ -568,6 +629,8 @@ function findMergeTarget(
  */
 export class OpenEpicSessionRegistry {
   private readonly sessions: SessionRegistry<EpicRegistrySession>;
+  private capExemptionEpisodes = new Map<string, EpicCapExemptionReason>();
+  private readonly capExemptionOccurrences = emptyCapExemptionCounts();
   private releaseListener: ((epicId: string) => void) | null = null;
   /**
    * Cached snapshot of the last-computed `getUnsyncedEdits()` result. We
@@ -642,6 +705,9 @@ export class OpenEpicSessionRegistry {
         // prune picks is the least recently USED, not the least recently
         // released.
         refreshOrderOnRelease: false,
+        onWarmCapEvaluated: (evaluation) => {
+          this.recordCapEvaluation(evaluation);
+        },
         retainWhenIdle: () => true,
         // Agent working, plane blind, or a union that does not reach this
         // session's host - see `epicIsBusy`.
@@ -652,6 +718,12 @@ export class OpenEpicSessionRegistry {
         isEvictable: (session) =>
           holdsNothingToLose(session.handle.store.getState()),
         onBeforeDispose: (session, cause) => {
+          this.capExemptionEpisodes.delete(session.epicId);
+          const cap =
+            typeof options.maxLive === "function"
+              ? options.maxLive()
+              : options.maxLive;
+          if (this.sessions.size() <= cap) this.capExemptionEpisodes.clear();
           // Attribute BEFORE either teardown arm. A dirty outgoing handle is
           // retained by calling detachTransport below rather than by the
           // registry's dispose callback, but both routes end the same durable
@@ -700,6 +772,36 @@ export class OpenEpicSessionRegistry {
 
   size(): number {
     return this.sessions.size();
+  }
+
+  capExemptionTelemetry(): EpicCapExemptionTelemetry {
+    const current = emptyCapExemptionCounts();
+    for (const reason of this.capExemptionEpisodes.values()) {
+      current[reason] += 1;
+    }
+    return {
+      current,
+      occurrences: { ...this.capExemptionOccurrences },
+    };
+  }
+
+  private recordCapEvaluation(
+    evaluation: WarmCapEvaluation<EpicRegistrySession>,
+  ): void {
+    const next = new Map<string, EpicCapExemptionReason>();
+    for (const entry of evaluation.blocked) {
+      const reason = epicCapExemptionReason(entry.session, entry.blocker);
+      next.set(entry.key, reason);
+      if (this.capExemptionEpisodes.get(entry.key) === reason) continue;
+      this.capExemptionOccurrences[reason] += 1;
+      appLogger.debug("[open-epic-session-registry] cap exemption", {
+        epic: entry.key,
+        reason,
+        resident: evaluation.population,
+        cap: evaluation.cap,
+      });
+    }
+    this.capExemptionEpisodes = next;
   }
 
   /**
@@ -1443,6 +1545,8 @@ export class OpenEpicSessionRegistry {
   disposeAll(): void {
     this.sessions.transact(() => {
       this.sessions.disposeAll();
+      this.capExemptionEpisodes.clear();
+      Object.assign(this.capExemptionOccurrences, emptyCapExemptionCounts());
       // Retentions go too. This is the auth lifecycle's hook - sign-out,
       // user-switch, token expiry - and its whole contract is that no prior
       // identity's Y.Doc survives into the next session. A retention that

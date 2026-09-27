@@ -154,6 +154,26 @@ export type SessionDisposeVerdict = "dispose" | "retain";
  */
 export type WarmCapScope = "demand-free" | "all-entries";
 
+/** The first gate that kept a counted entry out of the cap's eviction list. */
+export type WarmCapBlocker =
+  | "demand"
+  | "active-work"
+  | "not-evictable"
+  | "eligible-after-walk";
+
+export interface WarmCapBlockedEntry<TSession> {
+  readonly key: SessionKey;
+  readonly session: TSession;
+  readonly blocker: WarmCapBlocker;
+}
+
+export interface WarmCapEvaluation<TSession> {
+  readonly cap: number;
+  readonly population: number;
+  /** Empty when the cap was satisfied, including after successful eviction. */
+  readonly blocked: readonly WarmCapBlockedEntry<TSession>[];
+}
+
 /**
  * What the LAST unit of demand leaving should do, as the releasing caller sees
  * it.
@@ -246,6 +266,16 @@ export interface SessionRegistryPolicy<TSession> {
    *    prune picks.
    */
   readonly refreshOrderOnRelease: boolean;
+
+  /**
+   * Observes the final cap result, after eligible entries were reclaimed.
+   * The registry invokes it with an empty `blocked` list when an overflow
+   * resolves, so a plane can end its diagnostic episode without watching
+   * unrelated membership changes. No eviction decision reads this callback.
+   */
+  readonly onWarmCapEvaluated?: (
+    evaluation: WarmCapEvaluation<TSession>,
+  ) => void;
 
   /**
    * Whether a session that has just lost its last unit of demand should be
@@ -727,12 +757,48 @@ export function createSessionRegistry<TSession>(
     return population;
   }
 
+  function reportWarmCapEvaluation(
+    evaluation: WarmCapEvaluation<TSession>,
+  ): void {
+    try {
+      policy.onWarmCapEvaluated?.(evaluation);
+    } catch {
+      // A diagnostic sink must not turn an otherwise successful cap walk into
+      // a failed acquire or release. Keep the failure itself identifier-free.
+      environment.logger.warn("[session-registry] cap observation failed", {
+        cap: evaluation.cap,
+        population: evaluation.population,
+      });
+    }
+  }
+
   function enforceWarmCap(): void {
+    const cap = policy.maxWarm;
     // The cheap short-circuit every release takes: the counted population can
     // never exceed the total, so an under-cap registry skips the walk.
-    if (entries.size <= policy.maxWarm) return;
-    const overflow = warmPopulation().length - policy.maxWarm;
-    if (overflow <= 0) return;
+    if (entries.size <= cap) {
+      if (policy.onWarmCapEvaluated !== undefined) {
+        reportWarmCapEvaluation({
+          cap,
+          population:
+            policy.warmCapScope === "all-entries"
+              ? entries.size
+              : warmPopulation().length,
+          blocked: [],
+        });
+      }
+      return;
+    }
+    const population = warmPopulation();
+    const overflow = population.length - cap;
+    if (overflow <= 0) {
+      reportWarmCapEvaluation({
+        cap,
+        population: population.length,
+        blocked: [],
+      });
+      return;
+    }
     const candidates: RegistryEntry<TSession>[] = [];
     for (const entry of entries.values()) {
       if (entry.demand > 0) continue;
@@ -745,6 +811,33 @@ export function createSessionRegistry<TSession>(
       for (const entry of candidates.slice(0, overflow)) {
         teardown(entry, "warm-overflow");
       }
+    });
+    if (policy.onWarmCapEvaluated === undefined) return;
+    const remaining = warmPopulation();
+    if (remaining.length <= cap) {
+      reportWarmCapEvaluation({
+        cap,
+        population: remaining.length,
+        blocked: [],
+      });
+      return;
+    }
+    const blocked: WarmCapBlockedEntry<TSession>[] = [];
+    for (const entry of remaining) {
+      const blocker: WarmCapBlocker =
+        entry.demand > 0
+          ? "demand"
+          : policy.hasActiveWork(entry.session)
+            ? "active-work"
+            : policy.isEvictable(entry.session)
+              ? "eligible-after-walk"
+              : "not-evictable";
+      blocked.push({ key: entry.key, session: entry.session, blocker });
+    }
+    reportWarmCapEvaluation({
+      cap,
+      population: remaining.length,
+      blocked,
     });
   }
 
