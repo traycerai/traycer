@@ -33,6 +33,7 @@ import {
   type SessionRegistryPolicy,
   type SessionDisposeCause,
   type SessionDisposeVerdict,
+  type WarmCapEvaluation,
   type WarmCapScope,
 } from "../session-registry";
 import type {
@@ -833,6 +834,74 @@ function createTrackedPolicy(config: PolicyConfig): TrackedPolicy {
 }
 
 describe("createSessionRegistry", () => {
+  it("keeps cap enforcement independent of a failing observation sink", () => {
+    const environment = createFakeEnvironment();
+    const policy = {
+      ...createTrackedPolicy({
+        ...defaultPolicyConfig(),
+        maxWarm: 1,
+        warmCapScope: "all-entries" as const,
+      }),
+      onWarmCapEvaluated: () => {
+        throw new Error("observer failed");
+      },
+    };
+    const registry = createSessionRegistry({ environment, policy });
+    const first = makeSession("first");
+    const second = makeSession("second");
+    registry.acquire("first", "scope", () => first);
+    registry.acquire("second", "scope", () => second);
+
+    expect(() => registry.pruneWarm()).not.toThrow();
+    expect(registry.size()).toBe(2);
+    expect(environment.logger.warn).toHaveBeenCalledWith(
+      "[session-registry] cap observation failed",
+      { cap: 1, population: 2 },
+    );
+  });
+
+  it("reports each remaining cap blocker after partial eviction and clears the report when pressure resolves", () => {
+    const environment = createFakeEnvironment();
+    const events: WarmCapEvaluation<RegSession>[] = [];
+    const policy = {
+      ...createTrackedPolicy({
+        ...defaultPolicyConfig(),
+        maxWarm: 1,
+        warmCapScope: "all-entries" as const,
+        idleTtlMs: null,
+      }),
+      onWarmCapEvaluated: (evaluation: WarmCapEvaluation<RegSession>) => {
+        events.push(evaluation);
+      },
+    };
+    const registry = createSessionRegistry({ environment, policy });
+    const held = makeSession("held");
+    const busy = makeSession("busy");
+    busy.busy = true;
+    const idle = makeSession("idle");
+
+    registry.acquire("held", "scope", () => held);
+    registry.acquire("busy", "scope", () => busy);
+    registry.release("busy", "warm");
+    registry.acquire("idle", "scope", () => idle);
+    registry.release("idle", "warm");
+
+    expect(idle.disposed).toBe(true);
+    expect(events.at(-1)).toEqual({
+      cap: 1,
+      population: 2,
+      blocked: [
+        { key: "held", session: held, blocker: "demand" },
+        { key: "busy", session: busy, blocker: "active-work" },
+      ],
+    });
+
+    busy.busy = false;
+    registry.pruneWarm();
+    expect(busy.disposed).toBe(true);
+    expect(events.at(-1)).toEqual({ cap: 1, population: 1, blocked: [] });
+  });
+
   describe("warmCapScope", () => {
     it('"demand-free" excludes held sessions from the cap entirely — N held + 1 warm evicts nothing under maxWarm 1', () => {
       const environment = createFakeEnvironment();

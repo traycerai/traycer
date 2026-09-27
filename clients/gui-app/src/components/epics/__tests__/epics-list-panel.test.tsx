@@ -2537,9 +2537,9 @@ describe("<EpicsListPanel />", () => {
     renderPanel("page", "/");
 
     const overflow = await screen.findByRole("button", {
-      name: "Show 1 more pull request",
+      name: "Show 2 more pull requests",
     });
-    expect(overflow.textContent).toBe("+1");
+    expect(overflow.textContent).toBe("+2");
     expect(
       screen.queryByRole("link", { name: "Open docs PR #86 Open" }),
     ).toBeNull();
