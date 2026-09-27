@@ -54,31 +54,24 @@ import { automaticJudgeInputs } from "@/lib/auto-mode/auto-judge-billing";
 //
 // `staleTime: Infinity` still leaves one hole: TanStack's NO-DATA path ignores
 // it, so a fan-out whose observers are enabled fetches every harness with no
-// cached entry. On the app-wide default host the prefetcher fills those slots
-// at app load and the hole never shows - but a composer pinned to another host
-// reads that HOST's cache slots, which nothing prefetched, so a picker or
-// palette subpage mounting there cold-started `listModels` for every available
-// harness at once: one spawned provider server per rail entry, on a host the
-// user had merely opened a picker on. `modelsFetch` (below) closes that hole:
-// only `"all-harnesses"` (the prefetcher's app-load fill) may fan out; every
-// other surface is `"cached-only"` and warms exactly the harness it is about
-// via its own targeted query on the shared cache slot.
+// cached entry. A picker or palette subpage mounting on a cold host used to
+// cold-start `listModels` for every available harness at once: one spawned
+// provider server per rail entry. `modelsFetch` (below) closes that hole:
+// `"all-harnesses"` is the explicit fan-out and no user-facing surface mounts
+// it; every other surface is `"cached-only"` and warms exactly the harness it
+// is about via its own targeted query on the shared cache slot.
 //
-// Models therefore refresh in exactly four places:
-//   - the app-load fill (`HarnessCatalogPrefetcher`), the ONLY fan-out
-//     (`modelsFetch: "all-harnesses"`), which populates the default host's
-//     cache once per app session; every surface renders from that cache,
-//     including while a refresh is in flight (a background refetch keeps the
-//     previous data, so `isPending` stays false and no surface blanks);
+// Models therefore refresh in exactly three places:
 //   - the picker's intent edges - popover open, harness selection - which
 //     refresh ONLY the selected harness, and only once its cached entry is
 //     older than `HARNESS_CATALOG_REFRESH_AFTER_MS`
 //     (`harnessCatalogEntryNeedsRefresh`);
 //   - targeted per-harness fetches on their surface's own gate: the picker's
 //     selected-harness and browsed-provider queries
-//     (`useGuiHarnessModelsQueryForClient`), and label surfaces warming their
-//     one subject harness (`useGuiHarnessModelsWarmup`) - each fetching a
-//     single harness's slot on the composer's / owner's host, never the rail;
+//     (`useGuiHarnessModelsQueryForClient`), the composer toolbar's selected
+//     harness, and label surfaces warming their one subject harness
+//     (`useGuiHarnessModelsWarmup`) - each fetching a single harness's slot
+//     on the composer's / owner's host, never the rail;
 //   - the picker's manual refresh button (`useRefreshHarnessCatalog`), whose
 //     `invalidateQueries` beats `staleTime: Infinity` and re-fetches every
 //     ACTIVE query (on a non-default host that is the picker's own targeted
@@ -155,9 +148,10 @@ export interface QueryActivityOptions {
  * cache for - it never affects what the catalog SURFACES (cached entries render
  * either way, and keep tracking cache updates):
  *   - `"all-harnesses"`: the model fan-out fetches every available harness with
- *     no cached entry. Reserved for the app-load fill; on a cold host this is
- *     one spawned provider server per rail entry, so no user-facing surface
- *     gets to be the trigger.
+ *     no cached entry. Boot no longer uses this: a cold `listModels` can spawn
+ *     a provider server, and the launch fill was one RPC per available
+ *     harness. Kept for tests and an explicit all-rail refresh. No user-facing
+ *     surface mounts it.
  *   - `"cached-only"`: the fan-out never fetches - entries surface whatever the
  *     shared cache slots hold. A surface that needs a specific harness resolved
  *     on a cold host owns a targeted query for it
@@ -559,20 +553,17 @@ export function useGuiHarnessCatalogForClient(
     cacheKeyIdentity: undefined,
     requests,
     options: {
-      // Only the app-load fill may fan out (see `CatalogQueryActivityOptions`):
-      // TanStack's no-data path ignores `staleTime`, so an enabled observer on
-      // a cold host's cache slot IS a fetch - and on a non-default host every
-      // slot is cold, which made a picker/palette mount there spawn every
-      // provider's server at once. A `"cached-only"` observer never fetches;
-      // it still surfaces and tracks the shared slots, which the surface's own
-      // targeted per-harness queries fill.
+      // `"all-harnesses"` is the explicit fan-out (see
+      // `CatalogQueryActivityOptions`). Boot no longer mounts it. A `"cached-only"`
+      // observer never fetches; it still surfaces and tracks the shared slots,
+      // which the surface's own targeted per-harness queries fill.
       enabled: activity.enabled && activity.modelsFetch === "all-harnesses",
       // Cache-only (see the module header). These observers are created and
       // destroyed as each surface activates, so a finite staleTime turned every
       // picker open / chat-tile reveal / palette subpage mount past the window
       // into a fan-out across EVERY harness. A harness with no cached entry yet
-      // (newly available, or the app-load fill still in flight) still fetches -
-      // TanStack's no-data path ignores staleTime - so this only suppresses
+      // (newly available, or a targeted first-use still in flight) still fetches
+      // - TanStack's no-data path ignores staleTime - so this only suppresses
       // re-pulling harnesses we already hold.
       staleTime: Infinity,
       // Match the standalone model-query contract above: inactivity may mark
@@ -628,6 +619,9 @@ export function useGuiHarnessCatalogForClient(
       attached && harnessesQuery.data !== undefined
         ? harnessesQuery.data.harnesses.map((harness) => {
             const modelQuery = queryByHarnessId.get(harness.id);
+            // TanStack structural-shares `query.data`; reuse that array so a
+            // label index keyed on models identity does not rebuild on a
+            // same-data refetch.
             const models = modelQuery?.data?.models ?? EMPTY_GUI_MODEL_OPTIONS;
             const retainPendingModels =
               harness.enabled &&

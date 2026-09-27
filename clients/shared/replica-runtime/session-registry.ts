@@ -279,6 +279,13 @@ export interface SessionRegistryPolicy<TSession> {
   hasActiveWork(session: TSession): boolean;
 
   /**
+   * Which of this plane's reasons made {@link hasActiveWork} answer `true`,
+   * named for the cap walk's debug line. Read only when it did, so a plane
+   * with one reason may answer a constant.
+   */
+  activeWorkReason(session: TSession): string;
+
+  /**
    * Whether this session is safe to drop at all - the epic plane's `isClean()`
    * (no unsynced edits, no unflushed writes). Independent of
    * {@link hasActiveWork}: one is about work in flight, the other about work
@@ -727,18 +734,47 @@ export function createSessionRegistry<TSession>(
     return population;
   }
 
+  /**
+   * Why the cap walk may not evict a counted entry, or `null` when it may.
+   * First match wins, in the order the walk has always tested them.
+   */
+  function warmCapHold(entry: RegistryEntry<TSession>): string | null {
+    if (entry.demand > 0) return "surface-demand";
+    if (policy.hasActiveWork(entry.session)) {
+      return policy.activeWorkReason(entry.session);
+    }
+    if (!policy.isEvictable(entry.session)) return "unflushed";
+    return null;
+  }
+
   function enforceWarmCap(): void {
     // The cheap short-circuit every release takes: the counted population can
     // never exceed the total, so an under-cap registry skips the walk.
     if (entries.size <= policy.maxWarm) return;
-    const overflow = warmPopulation().length - policy.maxWarm;
+    const population = warmPopulation();
+    const overflow = population.length - policy.maxWarm;
     if (overflow <= 0) return;
+    // Walking the counted population rather than every entry yields the same
+    // candidates: anything evictable is demand-free and not busy, and every
+    // such entry is counted under either scope. What it adds is `held` - the
+    // counted entries the walk cannot evict, which is what keeps it over cap.
     const candidates: RegistryEntry<TSession>[] = [];
-    for (const entry of entries.values()) {
-      if (entry.demand > 0) continue;
-      if (policy.hasActiveWork(entry.session)) continue;
-      if (!policy.isEvictable(entry.session)) continue;
-      candidates.push(entry);
+    const held: string[] = [];
+    for (const entry of population) {
+      const hold = warmCapHold(entry);
+      if (hold === null) candidates.push(entry);
+      else held.push(`${entry.key}=${hold}`);
+    }
+    if (candidates.length < overflow) {
+      environment.logger.debug(
+        "[session-registry] warm cap walk kept entries over cap",
+        {
+          maxWarm: policy.maxWarm,
+          counted: population.length,
+          overCap: overflow - candidates.length,
+          held: held.join(","),
+        },
+      );
     }
     candidates.sort((a, b) => a.order - b.order);
     transact(() => {

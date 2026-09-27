@@ -1355,3 +1355,45 @@ describe("FallbackTestModelPanel - picker-driven scenarios (T4)", () => {
     expect(request.blocked.permissionMode).toBe("full_access");
   });
 });
+
+describe("FallbackTestModelPanel - permission Select shows Auto's Experimental badge", () => {
+  afterEach(() => {
+    resetMocks();
+  });
+
+  it("lists the supported permission options in the picker's presentation order (Auto last), badging only Auto", () => {
+    resetMocks();
+    renderPanel({});
+
+    // HARNESSES fixtures all support every mode, so the visible list is every
+    // mode - in PERMISSION_PICKER_OPTIONS' order, not PERMISSION_OPTIONS'
+    // safety order the tuple's own `permissionModes` derivation still uses.
+    openSelect(screen.getByTestId("fallback-test-model-permission"));
+
+    const options = screen.getAllByRole("option");
+    expect(options).toHaveLength(4);
+    expect(within(options[0]).getByText("Supervised")).not.toBeNull();
+    expect(within(options[1]).getByText("Auto-accept edits")).not.toBeNull();
+    expect(within(options[2]).getByText("Full access")).not.toBeNull();
+    expect(within(options[3]).getByText("Auto")).not.toBeNull();
+    expect(within(options[3]).getByText("Experimental")).not.toBeNull();
+
+    for (const option of [options[0], options[1], options[2]]) {
+      expect(within(option).queryByText("Experimental")).toBeNull();
+    }
+  });
+
+  it("shows Auto's label and Experimental chip on the trigger once Auto is picked", () => {
+    resetMocks();
+    renderPanel({});
+
+    openSelect(screen.getByTestId("fallback-test-model-permission"));
+    const autoOption = screen.getAllByRole("option")[3];
+    fireEvent.focus(autoOption);
+    fireEvent.keyDown(autoOption, { key: "Enter" });
+
+    const trigger = screen.getByTestId("fallback-test-model-permission");
+    expect(within(trigger).getByText("Auto")).not.toBeNull();
+    expect(within(trigger).getByText("Experimental")).not.toBeNull();
+  });
+});
