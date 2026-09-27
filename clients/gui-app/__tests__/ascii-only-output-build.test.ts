@@ -28,7 +28,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { build, parseSync, Visitor } from "vite";
+import { build, parseSync, type Plugin, Visitor } from "vite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { asciiOnlyOutput } from "../vite/ascii-only-output";
 
@@ -94,6 +94,39 @@ const WORKER_SOURCE = [
   "self.pattern = /[—–]/;",
   "",
 ].join("\n");
+
+// A JavaScript asset another plugin emits with its map as BYTES: an asset's
+// source can be text or bytes, and a byte-backed map carries mappings to
+// shift just the same. `self.after` sits after a wide string on one line.
+const BYTE_ASSET_FILE = "byte-mapped-asset.js";
+const BYTE_ASSET_SOURCE = 'self.label="…";self.after=1;';
+// Two segments: column 0 and `self.after`'s column 15, each to the same
+// column of line 0 in the one source.
+const BYTE_ASSET_MAP = JSON.stringify({
+  version: 3,
+  sources: ["byte-mapped-asset.src.js"],
+  names: [],
+  mappings: "AAAA,eAAe",
+});
+
+/** Emits {@link BYTE_ASSET_FILE} and its map, the map's source as bytes. */
+function emitByteMappedAsset(): Plugin {
+  return {
+    name: "test-emit-byte-mapped-asset",
+    buildStart() {
+      this.emitFile({
+        type: "asset",
+        fileName: BYTE_ASSET_FILE,
+        source: BYTE_ASSET_SOURCE,
+      });
+      this.emitFile({
+        type: "asset",
+        fileName: `${BYTE_ASSET_FILE}.map`,
+        source: new TextEncoder().encode(BYTE_ASSET_MAP),
+      });
+    },
+  };
+}
 
 const MARKER_EXPECTATIONS: ReadonlyArray<{
   readonly marker: string;
@@ -345,7 +378,7 @@ beforeAll(async () => {
     root: dir,
     configFile: false,
     logLevel: "silent",
-    plugins: [asciiOnlyOutput()],
+    plugins: [emitByteMappedAsset(), asciiOnlyOutput()],
     build: {
       outDir: join(dir, "dist"),
       emptyOutDir: true,
@@ -465,5 +498,23 @@ describe("asciiOnlyOutput (real rolldown-vite build)", () => {
       expect(segment.source.sourceLine).toBe(original.line);
       expect(segment.source.sourceColumn).toBe(original.column);
     }
+  });
+  it("shifts a JavaScript asset's map when the map's source is bytes", () => {
+    const asset = requireBuildOutput().jsChunksWithMaps.find(
+      (file) => file.fileName === BYTE_ASSET_FILE,
+    );
+    if (asset === undefined) {
+      throw new Error(`${BYTE_ASSET_FILE} was not emitted with its map`);
+    }
+    expect(asset.code.includes("\\u2026")).toBe(true);
+
+    const written = lineColumnOf(asset.code, asset.code.indexOf("self.after"));
+    const segment = decodeMappings(parseSourceMap(asset.mapText).mappings)[
+      written.line
+    ].find((entry) => entry.generatedColumn === written.column);
+
+    expect(segment?.source?.sourceColumn).toBe(
+      BYTE_ASSET_SOURCE.indexOf("self.after"),
+    );
   });
 });

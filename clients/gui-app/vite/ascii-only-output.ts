@@ -26,7 +26,9 @@ import { parseSync, Visitor, type Plugin, type Rolldown } from "vite";
  *   (`String.raw`), and an escape would change it;
  * - elsewhere - identifiers and comments - `\uXXXX` for a non-whitespace
  *   character, and a plain space for Unicode whitespace, which an escape
- *   would turn into an identifier character;
+ *   would turn into an identifier character. An astral character becomes one
+ *   `\u{XXXXX}` code point escape: an identifier cannot be spelled with the
+ *   two halves of a surrogate pair;
  * - U+2028 and U+2029: left alone everywhere. They can be line terminators,
  *   and replacing one would change the chunk's line structure - and every
  *   source-map line after it.
@@ -96,9 +98,9 @@ function shiftMapAsset(
   const mapFileName = `${fileName}.map`;
   if (!(mapFileName in bundle)) return;
   const mapAsset = bundle[mapFileName];
-  if (mapAsset.type === "asset" && typeof mapAsset.source === "string") {
-    mapAsset.source = withShiftedMappings(mapAsset.source, lineEdits);
-  }
+  if (mapAsset.type !== "asset") return;
+  // An asset's source can be bytes as well as text; both carry the mappings.
+  mapAsset.source = withShiftedMappings(assetText(mapAsset.source), lineEdits);
 }
 
 /**
@@ -135,9 +137,15 @@ export interface AsciiRewrite {
 
 const NON_ASCII_RE = /[\u0080-\uffff]/g;
 const WHITESPACE_RE = /\s/;
+const LINE_FEED = 0x0a;
+const CARRIAGE_RETURN = 0x0d;
 const LINE_SEPARATOR = 0x2028;
 const PARAGRAPH_SEPARATOR = 0x2029;
 const BACKSLASH = 0x5c;
+const HIGH_SURROGATE_MIN = 0xd800;
+const HIGH_SURROGATE_MAX = 0xdbff;
+const LOW_SURROGATE_MIN = 0xdc00;
+const LOW_SURROGATE_MAX = 0xdfff;
 
 type SpanKind = "literal" | "raw";
 
@@ -179,22 +187,20 @@ export function escapeNonAsciiJavaScript(
     const span = spans[spanIndex];
     if (inSpan && span.kind === "raw") continue;
 
-    let start = offset;
-    let replacement: string;
-    if (inSpan) {
-      if (escapedByBackslash(code, offset, span.start)) start -= 1;
-      replacement = unicodeEscape(unit);
-    } else {
-      replacement = WHITESPACE_RE.test(match[0]) ? " " : unicodeEscape(unit);
-    }
-    parts.push(code.slice(copiedThrough, start), replacement);
-    copiedThrough = offset + 1;
+    const { start, end, text } = replacementAt(
+      code,
+      offset,
+      inSpan ? span : null,
+    );
+    NON_ASCII_RE.lastIndex = end;
+    parts.push(code.slice(copiedThrough, start), text);
+    copiedThrough = end;
     const line = lineIndexOf(lineStarts, start);
     const edits = lineEdits.get(line) ?? [];
     edits.push({
       column: start - lineStarts[line],
-      removed: offset + 1 - start,
-      inserted: replacement.length,
+      removed: end - start,
+      inserted: text.length,
     });
     lineEdits.set(line, edits);
   }
@@ -210,8 +216,58 @@ export function escapeNonAsciiJavaScript(
   return { code: rewritten, lineEdits };
 }
 
+interface Replacement {
+  /** First code unit replaced: an escaping backslash, when one is folded in. */
+  readonly start: number;
+  /** One past the last code unit replaced. */
+  readonly end: number;
+  readonly text: string;
+}
+
+/** How the character at `offset` is rewritten, inside `span` or outside any. */
+function replacementAt(
+  code: string,
+  offset: number,
+  span: Span | null,
+): Replacement {
+  const unit = code.charCodeAt(offset);
+  if (span !== null) {
+    const start = escapedByBackslash(code, offset, span.start)
+      ? offset - 1
+      : offset;
+    return { start, end: offset + 1, text: unicodeEscape(unit) };
+  }
+  if (isSurrogatePairAt(code, offset)) {
+    return {
+      start: offset,
+      end: offset + 2,
+      text: codePointEscape(code.codePointAt(offset) ?? unit),
+    };
+  }
+  return {
+    start: offset,
+    end: offset + 1,
+    text: WHITESPACE_RE.test(code[offset]) ? " " : unicodeEscape(unit),
+  };
+}
+
 function unicodeEscape(unit: number): string {
   return `\\u${unit.toString(16).padStart(4, "0")}`;
+}
+
+function codePointEscape(codePoint: number): string {
+  return `\\u{${codePoint.toString(16)}}`;
+}
+
+function isSurrogatePairAt(code: string, offset: number): boolean {
+  const high = code.charCodeAt(offset);
+  const low = code.charCodeAt(offset + 1);
+  return (
+    high >= HIGH_SURROGATE_MIN &&
+    high <= HIGH_SURROGATE_MAX &&
+    low >= LOW_SURROGATE_MIN &&
+    low <= LOW_SURROGATE_MAX
+  );
 }
 
 /** An odd run of backslashes right before `offset`, within the literal. */
@@ -264,10 +320,27 @@ function literalSpans(code: string, filename: string): readonly Span[] {
   return spans.sort((left, right) => left.start - right.start);
 }
 
+/**
+ * Where each line of `code` starts, by ECMAScript's line terminators: LF, CR,
+ * CRLF (one break), U+2028 and U+2029. That is how rolldown numbers a map's
+ * lines - a separator kept in a tagged template starts a new `mappings` line -
+ * so counting LF alone would put every edit after one on the wrong line.
+ */
 function lineStartOffsets(code: string): readonly number[] {
   const starts = [0];
   for (let index = 0; index < code.length; index += 1) {
-    if (code.charCodeAt(index) === 0x0a) starts.push(index + 1);
+    const unit = code.charCodeAt(index);
+    if (unit === CARRIAGE_RETURN && code.charCodeAt(index + 1) === LINE_FEED) {
+      continue;
+    }
+    if (
+      unit === LINE_FEED ||
+      unit === CARRIAGE_RETURN ||
+      unit === LINE_SEPARATOR ||
+      unit === PARAGRAPH_SEPARATOR
+    ) {
+      starts.push(index + 1);
+    }
   }
   return starts;
 }

@@ -91,12 +91,93 @@ describe("escapeNonAsciiJavaScript", () => {
     ).toThrow(/does not parse/);
   });
 
-  it("refuses a rewrite that no longer parses", () => {
-    // An astral identifier character has no `\uXXXX` spelling an identifier
-    // accepts - the surrogate-pair escape is not an identifier.
-    expect(() => escapeNonAsciiJavaScript("const 𝑥 = 1;", "chunk.js")).toThrow(
-      /does not parse after escaping/,
-    );
+  it("escapes an astral identifier as one code-point escape", () => {
+    const ident = String.fromCodePoint(0x1d400);
+    const result = escapeNonAsciiJavaScript(`var ${ident}x = 1;`, "a.js");
+    if (result === null) throw new Error("expected a rewrite");
+    expect(result.code).toContain("\\u{1d400}x");
+    expect(result.code.toLowerCase()).not.toContain("\\ud835");
+    const edits = [...result.lineEdits.values()].flat();
+    expect(edits).toHaveLength(1);
+    expect(edits[0].removed).toBe(2);
+    const body = `var ${ident}x = 1; return ${ident}x;`;
+    expect(evaluate(rewriteBody(body))).toEqual(evaluate(body));
+  });
+
+  it("escapes an astral character in a string as a surrogate pair", () => {
+    const ident = String.fromCodePoint(0x1d400);
+    const result = escapeNonAsciiJavaScript(`"${ident}"`, "a.js");
+    if (result === null) throw new Error("expected a rewrite");
+    expect(result.code.toLowerCase()).toContain("\\ud835\\udc00");
+  });
+
+  /**
+   * `lineEdits` is keyed by ECMAScript line index, the same numbering
+   * rolldown uses for `mappings`. A tagged template keeps U+2028 / U+2029
+   * (and a source CR / CRLF is a line break), so an edit after one belongs
+   * on the next line, with its column counted from just after that break.
+   * LF-only counting would leave every case below on line 0 except CRLF,
+   * which LF-only and a doubled CR+LF count disagree on (line 1 vs line 2).
+   */
+  function emDashEdit(code: string): {
+    readonly line: number;
+    readonly column: number;
+  } {
+    const result = escapeNonAsciiJavaScript(code, "chunk.js");
+    if (result === null) throw new Error("expected a rewrite");
+    const entries = [...result.lineEdits.entries()];
+    expect(entries).toHaveLength(1);
+    const [line, edits] = entries[0];
+    expect(edits).toHaveLength(1);
+    expect(edits[0].removed).toBe(1);
+    expect(edits[0].inserted).toBe(6);
+    return { line, column: edits[0].column };
+  }
+
+  it("keys an em-dash edit after a tagged-template U+2028 to line 1", () => {
+    const ls = String.fromCharCode(0x2028);
+    const code = `String.raw\`${ls}\`+"—"`;
+    const afterBreak = code.indexOf(ls) + 1;
+    const dash = code.indexOf("—");
+    expect(emDashEdit(code)).toEqual({
+      line: 1,
+      column: dash - afterBreak,
+    });
+  });
+
+  it("keys an em-dash edit after a tagged-template U+2029 to line 1", () => {
+    const ps = String.fromCharCode(0x2029);
+    const code = `String.raw\`${ps}\`+"—"`;
+    const afterBreak = code.indexOf(ps) + 1;
+    const dash = code.indexOf("—");
+    expect(emDashEdit(code)).toEqual({
+      line: 1,
+      column: dash - afterBreak,
+    });
+  });
+
+  it("keys an em-dash edit after a bare CR to line 1", () => {
+    const cr = String.fromCharCode(0x0d);
+    const code = `"a"${cr}"—"`;
+    const afterBreak = code.indexOf(cr) + 1;
+    const dash = code.indexOf("—");
+    expect(emDashEdit(code)).toEqual({
+      line: 1,
+      column: dash - afterBreak,
+    });
+  });
+
+  it("keys an em-dash edit after CRLF to line 1, not line 2", () => {
+    const crlf = `${String.fromCharCode(0x0d)}${String.fromCharCode(0x0a)}`;
+    const code = `"a"${crlf}"—"`;
+    const result = escapeNonAsciiJavaScript(code, "chunk.js");
+    if (result === null) throw new Error("expected a rewrite");
+    const afterBreak = code.indexOf(crlf) + crlf.length;
+    const dash = code.indexOf("—");
+    expect(result.lineEdits.get(2)).toBeUndefined();
+    expect(result.lineEdits.get(1)).toEqual([
+      { column: dash - afterBreak, removed: 1, inserted: 6 },
+    ]);
   });
 });
 
