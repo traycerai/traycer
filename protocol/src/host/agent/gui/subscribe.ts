@@ -1731,9 +1731,11 @@ export const lastFailedAttemptSchema = lazySchema(() =>
      * limit that is no reset at all: the post-limit probe that learns one
      * answers after the stamp. So whenever {@link waitDisposition} was decided
      * against a verified boundary (`eligible`, `beyond_cap`), the host writes
-     * THAT boundary's `resetsAt` / `resetsAtSource` / `scope` here - the time the
-     * wait would be armed for - and a card naming it cannot disagree with the
-     * verdict it names it under. Otherwise this is the stamp, unchanged.
+     * THAT boundary's `resetsAt` / `resetsAtSource` / `scope` here - the
+     * boundary the wait is armed FROM - and a card naming it cannot disagree
+     * with the verdict it names it under. Otherwise this is the stamp,
+     * unchanged. The time the wait RESUMES at is later, by a margin and a
+     * per-chat jitter, and is {@link waitResumesAt}.
      */
     failure: agentFailureSchema,
     /**
@@ -1832,9 +1834,52 @@ export const lastFailedAttemptSchema = lazySchema(() =>
      * otherwise be explained in terms of a model that never ran.
      */
     failedTuple: chatRunSettingsSchema.nullable(),
+    /**
+     * When a `wait_once` pressed now would resume the chat
+     * (`chat.subscribe@1.18`): the HOST's deadline, not the provider's
+     * boundary.
+     *
+     * The host arms the wait FROM the boundary {@link failure} carries, plus a
+     * margin for the provider's approximate clock and this chat's place in a
+     * jitter window (so a user's parked chats do not all resume in the same
+     * second). That sum is the one derivation the waiting card and its
+     * countdown read once the wait is running, so a card offering the wait
+     * names THIS time and the card the press opens names the same one. Naming
+     * `failure.resetsAt` instead offered a time minutes earlier than the one
+     * the press armed.
+     *
+     * A number exactly when {@link eligibleRungs} offers `wait_once`, `null`
+     * otherwise. ABSENT means a host too old to publish it: a card falls back
+     * to `failure.resetsAt`, the boundary, which is early by the margin and the
+     * jitter but is the closest time that host gives it. Computed at frame
+     * time, like {@link eligibleRungs}: `chat.fallback.runManualRung` arms the
+     * deadline, and this value only names it in advance.
+     *
+     * Lines `1.10`-`1.17` bind the hand-frozen
+     * `lastFailedAttemptSchemaPreWaitResume` below, which does not carry it.
+     */
+    waitResumesAt: z.number().nullable().optional(),
   }),
 );
 export type LastFailedAttempt = z.infer<typeof lastFailedAttemptSchema>;
+
+// Wire-freeze of the failed-attempt DTO as every line from `chat.subscribe@1.10`
+// through `@1.17` ships it: the live DTO without the `waitResumesAt` that
+// `1.18` added. A hand-copied object, NOT `.omit()` off the live one, so a
+// later key cannot reach those lines through it. `1.13`-`1.17` bind it
+// directly (the windowed snapshot and the turn-state frame); `1.10`-`1.12`
+// reach it through `lastFailedAttemptSchemaPreAuto`, which narrows its tuple.
+const lastFailedAttemptSchemaPreWaitResume = lazySchema(() =>
+  z.object({
+    userMessageId: z.string(),
+    turnId: z.string(),
+    failure: agentFailureSchema,
+    eligibleRungs: z.array(z.enum(["retry", "switch", "wait_once"])),
+    waitDisposition: fallbackWaitDispositionSchema,
+    switchDisposition: fallbackSwitchDispositionSchema,
+    failedTuple: chatRunSettingsSchema.nullable(),
+  }),
+);
 
 // ─── Pre-`auto` freezes of the provider-fallback tuples ─────────────────────
 //
@@ -1869,7 +1914,7 @@ const pendingReturnSchemaPreAuto = lazySchema(() =>
   }),
 );
 const lastFailedAttemptSchemaPreAuto = lazySchema(() =>
-  lastFailedAttemptSchema.extend({
+  lastFailedAttemptSchemaPreWaitResume.extend({
     failedTuple: chatRunSettingsSchemaPreAuto.nullable(),
   }),
 );
@@ -2174,6 +2219,16 @@ const chatSubscribeTurnStateChangedServerFrameSchemaPreAuto = lazySchema(() =>
     pendingReturn: pendingReturnSchemaPreAuto.optional(),
     lastFailedAttempt: lastFailedAttemptSchemaPreAuto.optional(),
   }),
+);
+
+// The same frame as `1.13`-`1.17` ship it: the live frame with the failed
+// attempt frozen before `1.18`'s `waitResumesAt`. `.extend` over the existing
+// key keeps its position, so the shape moves by that nested key alone.
+const chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume = lazySchema(
+  () =>
+    chatSubscribeTurnStateChangedServerFrameSchema.extend({
+      lastFailedAttempt: lastFailedAttemptSchemaPreWaitResume.optional(),
+    }),
 );
 
 /**
@@ -4944,10 +4999,11 @@ const chatWindowedSnapshotSchemaV113 = lazySchema(() =>
     derived: chatTranscriptDerivedSchema,
     // Re-widened here and only here: `1.10` froze the fallback tuples pre-`auto`
     // and `1.11` inherited that freeze, so `1.13` is where a tuple may name the
-    // mode again.
+    // mode again. The failed attempt binds its pre-`waitResumesAt` freeze,
+    // which `1.14`-`1.17` inherit and only the live line re-widens.
     pendingFallback: pendingFallbackSchema.optional(),
     pendingReturn: pendingReturnSchema.optional(),
-    lastFailedAttempt: lastFailedAttemptSchema.optional(),
+    lastFailedAttempt: lastFailedAttemptSchemaPreWaitResume.optional(),
   }),
 );
 
@@ -4992,12 +5048,14 @@ const chatWindowedSnapshotSchemaV117 = lazySchema(() =>
   }),
 );
 // The live windowed snapshot (`chat.subscribe@1.18`): `1.17` with the queue's
-// `pausedReason` and a tail whose notices may carry a settled `receipt`. Both
-// are existing keys, so `.extend` keeps their positions.
+// `pausedReason`, a tail whose notices may carry a settled `receipt`, and a
+// failed attempt that names when its wait would resume (`waitResumesAt`). All
+// three are existing keys, so `.extend` keeps their positions.
 export const chatWindowedSnapshotSchema = lazySchema(() =>
   chatWindowedSnapshotSchemaV117.extend({
     queue: chatQueueStateSchema,
     tail: chatTranscriptWindowSchema,
+    lastFailedAttempt: lastFailedAttemptSchema.optional(),
   }),
 );
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
@@ -5161,7 +5219,7 @@ const chatSubscribeServerFrameSchemaV114 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -5181,7 +5239,7 @@ const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreReceipt,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -5201,7 +5259,7 @@ const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreReceipt,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -5209,9 +5267,11 @@ const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
   ]),
 );
 
-// `chat.subscribe@1.17`'s server frames: the live union without the two keys
+// `chat.subscribe@1.17`'s server frames: the live union without the three keys
 // `1.18` added - the queue's `pausedReason` (on the snapshot and on
-// `queueChanged`) and a notice's `receipt` (on the tail and on `range`).
+// `queueChanged`), a notice's `receipt` (on the tail and on `range`), and the
+// failed attempt's `waitResumesAt` (on the snapshot and on `turnStateChanged`,
+// a freeze `1.13`-`1.16` share).
 const chatSubscribeServerFrameSchemaV117 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchema.extend({
@@ -5221,7 +5281,7 @@ const chatSubscribeServerFrameSchemaV117 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreReceipt,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -5396,7 +5456,7 @@ const chatSubscribeServerFrameSchemaV113 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasV113,
@@ -5894,7 +5954,7 @@ export const chatSubscribeV117 = defineStreamRpcContract({
 /**
  * The model-routing line.
  *
- * `1.18` adds two optional keys, and deliberately no union member:
+ * `1.18` adds three optional keys, and deliberately no union member:
  *
  *   - `receipt` on a provider notice's metadata
  *     (`providerNoticeMetadataSchema`): the structured account of a traversal
@@ -5905,21 +5965,35 @@ export const chatSubscribeV117 = defineStreamRpcContract({
  *     rather than the kind;
  *   - `pausedReason` on the queue (`chatQueueStateSchema`): why the host paused
  *     it, as an open string, so a client stops inferring "paused after an
- *     error" from state that cannot tell it from a hand pause.
+ *     error" from state that cannot tell it from a hand pause;
+ *   - `waitResumesAt` on the failed attempt (`lastFailedAttemptSchema`): when
+ *     the card's wait would resume, the host's deadline rather than the
+ *     provider's boundary, so the card offers the time the press arms.
  *
- * TOLERANCE, not projection. Both keys are `.nullable().optional()` inside
- * non-strict objects, so the host writes them at every minor: a `<=1.17`
- * peer's decoder - the frozen `1.13`-`1.17` schemas, which hold neither key -
- * drops them as unknown members and keeps the row and the queue (the settled
- * notice degrades to the divider it rendered before, the pill to the generic
- * one), and a `1.18` client reading a `<=1.17` host's frame sees both keys
- * absent, which it reads as `null`. Nothing is withheld and nothing is
- * refused. A new notice KIND or metadata ARM would instead fail an old peer's
- * whole row, which is why neither is used.
+ * What an old DECODER tolerates: all three keys. Each is
+ * `.nullable().optional()` inside a non-strict object, so a `<=1.17` peer's
+ * decoder - the frozen `1.13`-`1.17` schemas, which hold none of them, and for
+ * `waitResumesAt` the `1.10`-`1.12` ones as well - drops a key it does not
+ * know as an unknown member and keeps the row, the queue and the card. A new
+ * notice KIND or metadata ARM would instead fail an old peer's whole row,
+ * which is why neither is used.
  *
- * Optional rather than defaulted for the `turnProfile` reason (see the two
- * keys' own comments): absence means "not recorded", and a defaulted key would
- * be required on every object literal of either type.
+ * What the PRODUCER sends differs by key. `receipt` and `pausedReason` are
+ * written at every minor and nothing projects them away, so that tolerance is
+ * what a `<=1.17` peer actually exercises: the settled notice degrades to the
+ * divider it rendered before, the pill to the generic one. `waitResumesAt` is
+ * sent from `1.18` only - the host's per-line projection withholds it below
+ * that minor, by name - so a `<=1.17` peer of a current host never receives
+ * it and keeps the wait button on the provider's boundary; its decoder's
+ * tolerance covers only a producer that did send it.
+ *
+ * A `1.18` client reading a `<=1.17` host's frame sees the keys absent:
+ * `receipt` and `pausedReason` it reads as `null`, and a missing
+ * `waitResumesAt` sends the card back to `failure.resetsAt`.
+ *
+ * Optional rather than defaulted for the `turnProfile` reason (see the keys'
+ * own comments): absence means "not recorded", and a defaulted key would be
+ * required on every object literal of its type.
  *
  * The client frames are `1.17`'s, unchanged.
  */

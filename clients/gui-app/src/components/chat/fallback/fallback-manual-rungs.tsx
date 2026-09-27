@@ -630,14 +630,22 @@ function PendingDots() {
 }
 
 /**
- * "Wait until 3:00 PM" ("Wait until Sat 3:00 PM" past a day), or `null`.
+ * "Wait until 3:02 PM" ("Wait until Sat 3:02 PM" past a day), or `null`.
+ *
+ * The time is `waitResumesAt`, the host's deadline for a wait pressed now:
+ * the boundary plus a margin and this chat's jitter, the one derivation the
+ * waiting card's "Resuming at" reads once the press lands. `failure.resetsAt`
+ * is the provider's boundary, which the host arms FROM; naming it offered
+ * "Wait until 3:00" for a wait that then read "Resuming at 3:02". An older
+ * host sends no `waitResumesAt`, and the boundary is then the closest time
+ * there is.
  *
  * Two gates, and they are not redundant. `wait_once` in `eligibleRungs` is the
  * HOST's answer - it is present iff the failure carries a verified boundary
- * within the policy cap. The `resetsAt` check that follows is not a second
+ * within the policy cap. The time check that follows is not a second
  * eligibility rule; it is this component refusing to name a time it does not
- * have, since the field is optional on the failure payload and a button reading
- * "Wait until undefined" is worse than no button.
+ * have, since both fields are optional and a button reading "Wait until
+ * undefined" is worse than no button.
  *
  * The host now keeps the two in step - it restates the boundary its verdict
  * was decided against onto `failure` - and this second gate is where they were
@@ -649,7 +657,7 @@ function waitUntilLabel(
   now: number,
 ): string | null {
   if (!attempt.eligibleRungs.includes("wait_once")) return null;
-  const resetsAt = attempt.failure.resetsAt;
-  if (resetsAt === undefined) return null;
-  return `Wait until ${formatWaitTime(resetsAt, now)}`;
+  const resumesAt = attempt.waitResumesAt ?? attempt.failure.resetsAt;
+  if (resumesAt === undefined) return null;
+  return `Wait until ${formatWaitTime(resumesAt, now)}`;
 }

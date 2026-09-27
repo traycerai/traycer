@@ -535,6 +535,120 @@ describe("FallbackManualRungActions", () => {
     ).toBeDefined();
   });
 
+  // `waitResumesAt` is when a `wait_once` pressed NOW would resume (boundary +
+  // margin + per-chat jitter), so the button names it instead of the bare
+  // provider boundary the host will not actually wake at.
+  it("names Wait until with waitResumesAt, not the boundary, when the host sends it", () => {
+    const waitResumesAt = RESETS_AT + 150_000;
+    seedAttempt({
+      ...positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+      waitResumesAt,
+    });
+    renderActions(TURN_ID);
+    expect(
+      screen.getByRole("button", {
+        name: `Wait until ${formatClockTime(waitResumesAt)}`,
+      }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("button", {
+        name: `Wait until ${formatClockTime(RESETS_AT)}`,
+      }),
+    ).toBeNull();
+  });
+
+  it("names Wait until with the weekday of waitResumesAt once it is a day or more away", () => {
+    const waitResumesAt = Date.now() + 4 * 24 * 60 * 60_000;
+    seedAttempt({
+      ...positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+      waitResumesAt,
+    });
+    renderActions(TURN_ID);
+    expect(
+      screen.getByRole("button", {
+        name: `Wait until ${formatResetDateTime(waitResumesAt)}`,
+      }),
+    ).toBeDefined();
+  });
+
+  // An older host never sends the field: the boundary is the best name there is.
+  it("falls back to the boundary when waitResumesAt is absent (older host)", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderActions(TURN_ID);
+    expect(
+      screen.getByRole("button", {
+        name: `Wait until ${formatClockTime(RESETS_AT)}`,
+      }),
+    ).toBeDefined();
+  });
+
+  it("draws no Wait until when waitResumesAt is null and wait_once is not offered", () => {
+    seedAttempt({
+      ...positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ["retry", "switch"],
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+      waitResumesAt: null,
+    });
+    renderActions(TURN_ID);
+    expect(screen.queryByRole("button", { name: /Wait until/ })).toBeNull();
+  });
+
+  // A host that still offers wait_once but sends a null waitResumesAt: the label
+  // must fall back to the boundary, never render a time built from null.
+  it("falls back to the boundary when waitResumesAt is null but wait_once is still offered", () => {
+    seedAttempt({
+      ...positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+      waitResumesAt: null,
+    });
+    renderActions(TURN_ID);
+    expect(
+      screen.getByRole("button", {
+        name: `Wait until ${formatClockTime(RESETS_AT)}`,
+      }),
+    ).toBeDefined();
+    for (const button of screen.getAllByRole("button")) {
+      expect(button.textContent).not.toMatch(/Invalid Date|1970|Wait until $/);
+      expect(button.getAttribute("aria-label") ?? "").not.toMatch(
+        /Invalid Date|1970|Wait until $/,
+      );
+    }
+  });
+
   // The negative twins of the case above, and the reason this card needed a
   // gate at all: `ErrorSegment` is DURABLE TRANSCRIPT, so this row mounts for
   // anyone who can open the chat, and `chat.fallback.runManualRung` is a plain

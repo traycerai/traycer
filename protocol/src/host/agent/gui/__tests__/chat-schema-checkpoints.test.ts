@@ -112,7 +112,13 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // identical, as is every line above. Both keys first reached 1.13–1.17 by
 // reference, through the live message bodies and the live queue; the
 // hand-frozen `contentBlockSchemaPreReceipt` chain and
-// `chatQueueStateSchemaPrePausedReason` are what keep them off.
+// `chatQueueStateSchemaPrePausedReason` are what keep them off. A third
+// `1.18` key, the failed attempt's `waitResumesAt`, reached further: every
+// line from 1.10 up bound `lastFailedAttemptSchema` by reference (1.10-1.12
+// through its pre-`auto` `.extend`, 1.13-1.17 through the windowed snapshot
+// and the shared `turnStateChanged` frame), and all eight digests moved. The
+// hand-frozen `lastFailedAttemptSchemaPreWaitResume` puts them back,
+// identical.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
