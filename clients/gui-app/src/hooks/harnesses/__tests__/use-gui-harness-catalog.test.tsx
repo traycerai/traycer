@@ -1517,6 +1517,25 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
     expect(result.current.modelsLoading).toBe(false);
   });
 
+  it("keeps a harness models array identity across a same-data rerender", async () => {
+    const fixture = createScopedFixture(["opencode"], null);
+    const { result, rerender } = renderHook(
+      () =>
+        useGuiHarnessCatalogForClient(fixture.client, null, {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "all-harnesses",
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current.harnesses[0]?.models.length).toBe(1);
+    });
+    const first = result.current.harnesses[0]?.models;
+    rerender();
+    expect(result.current.harnesses[0]?.models).toBe(first);
+  });
+
   it('"all-harnesses" on the same fixture still fans out across every available harness - the positive control for the zero above', async () => {
     const fixture = createScopedFixture(["opencode", "claude"], null);
     renderHook(

@@ -1778,12 +1778,10 @@ function useChatTileSessionViewModel(
   // transcript describes turns that ran on the TAB host, so a slug that host
   // does not advertise must degrade to the raw slug rather than borrow a label
   // (or a reasoning-effort label, which is version-specific) from a host that
-  // never served the turn. On a default-host tab this is the slot the
-  // app-load prefetcher already filled, so nothing changes there; on a
-  // remote-host tab the labels appear as that host's per-harness slots warm —
-  // this tile's own composer warms its selected harness on mount, and its
-  // picker warms whatever the user browses (the catalog fan-out itself is
-  // `"cached-only"` everywhere but the app-load fill).
+  // never served the turn. Labels appear as that host's per-harness slots
+  // warm: this tile's own composer warms its selected harness on mount, and
+  // its picker warms whatever the user browses. The catalog fan-out itself is
+  // `"cached-only"`.
   const tabHostCatalogClient = useTabHostClient();
   const tabModelCatalog = useGuiHarnessCatalogForClient(
     tabHostCatalogClient,
