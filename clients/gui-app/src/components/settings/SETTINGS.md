@@ -2041,9 +2041,17 @@ md:top-0`): positioned against the nearest scrollport - the settings
     pinned child opaque inside a `bg-card/40` pane is what cost the
     model-providers tab its sticky search.
   - **Tabs** (`panels/layout/tabs-layout-group.tsx`) - what the top-level tab
-    strip carries. One row: `Home tab`
+    strip carries. `Home tab`
     (`settings-store.homeTabEnabled`, default off), the fixed Home tab and the
-    task list it draws. `Home density` was the second row and is gone, with the
+    task list it draws. While it is on, three Selects under it set the Home
+    status board's display thresholds (`homeStatusInProgressStaleAfter`,
+    default 2 h; `homeStatusNeedsYouStaleAfter`, default Never;
+    `homeStatusDoneHideAfter`, default 24 h, up to Never - hosts keep done
+    rows for the same 7 days as any row, which the row's description says).
+    They are per device, change only what the
+    table dims and hides (`lib/home-focus/home-status-thresholds.ts`), and are
+    kept when the switch goes off. Being mode-gated they own no search entry:
+    they `contributesTo` the `Home tab` row. `Home density` was the second row and is gone, with the
     whole `layout-store.home` slice behind it. It is a GROUP rather
     than a row inside Status bar,
     because a tab is not part of the footer and the two collapse differently:

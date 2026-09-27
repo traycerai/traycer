@@ -1623,6 +1623,71 @@ describe("<LayoutSettingsPanel />", () => {
       ).toBe("true");
     });
 
+    it("hides the status board thresholds while the Home tab is off", () => {
+      render(<LayoutSettingsPanel />);
+      const tabsGroup = screen.getByTestId("layout-tabs-group");
+
+      for (const name of [
+        "In progress stale after",
+        "Needs you stale after",
+        "Done hide after",
+      ]) {
+        expect(within(tabsGroup).queryByRole("combobox", { name })).toBeNull();
+      }
+
+      fireEvent.click(
+        within(tabsGroup).getByRole("switch", { name: "Home tab" }),
+      );
+
+      expect(
+        within(tabsGroup).getByRole("combobox", {
+          name: "In progress stale after",
+        }).textContent,
+      ).toBe("2 h");
+      expect(
+        within(tabsGroup).getByRole("combobox", {
+          name: "Needs you stale after",
+        }).textContent,
+      ).toBe("Never");
+      expect(
+        within(tabsGroup).getByRole("combobox", { name: "Done hide after" })
+          .textContent,
+      ).toBe("24 h");
+    });
+
+    it("writes each status board threshold, tracking its analytics id", () => {
+      useSettingsStore.setState({ homeTabEnabled: true });
+      render(<LayoutSettingsPanel />);
+
+      choose("In progress stale after", "Never");
+      choose("Needs you stale after", "4 h");
+      choose("Done hide after", "Never");
+
+      const state = useSettingsStore.getState();
+      expect(state.homeStatusInProgressStaleAfter).toBe("never");
+      expect(state.homeStatusNeedsYouStaleAfter).toBe("4h");
+      expect(state.homeStatusDoneHideAfter).toBe("never");
+      for (const setting of [
+        "homeStatusInProgressStaleAfter",
+        "homeStatusNeedsYouStaleAfter",
+        "homeStatusDoneHideAfter",
+      ]) {
+        expect(trackSettingChanged).toHaveBeenCalledWith("layout", setting);
+      }
+    });
+
+    it("keeps the stored thresholds when the Home tab is switched off", () => {
+      useSettingsStore.setState({
+        homeTabEnabled: true,
+        homeStatusDoneHideAfter: "4h",
+      });
+      render(<LayoutSettingsPanel />);
+
+      fireEvent.click(screen.getByRole("switch", { name: "Home tab" }));
+
+      expect(useSettingsStore.getState().homeStatusDoneHideAfter).toBe("4h");
+    });
+
     // No `isMobileApp()` gate anywhere in this group: that build has no strip
     // but it does draw the Home tab, as the first entry in the nav drawer.
     it("renders whole in the installed mobile app, where the Status bar group collapses", () => {

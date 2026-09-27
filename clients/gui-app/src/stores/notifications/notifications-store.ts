@@ -14,6 +14,7 @@ import {
   NOTIFICATIONS_ARRAY_KEY,
   parseNotificationRoomEntry,
 } from "@traycer/protocol/notifications/notification-room";
+import { removeHomeStatusRow } from "@traycer/protocol/notifications/home-status-room";
 import {
   isReopenableHostStreamClose,
   type HostReconnectEngine,
@@ -38,9 +39,18 @@ interface NotificationsState {
   readonly entryIds: ReadonlyArray<string>;
   readonly unreadCount: number;
   readonly revision: number;
+  /**
+   * How many `openNotificationsStream` lanes currently feed the replica. The
+   * room is only opened for a cloud-authorized session, so a zero here means
+   * `doc` is not the account's live room - whatever it still holds is left
+   * over from a lane that has since closed.
+   */
+  readonly openStreamCount: number;
   markAsRead: (notificationId: string) => void;
   markAllAsRead: () => void;
   clearAll: () => void;
+  /** Deletes one Home status row, as a local edit the open lane sends on. */
+  dismissHomeStatusRow: (key: string) => void;
   reset: () => void;
 }
 
@@ -180,6 +190,7 @@ function createNotificationsStore(
       entryIds: [],
       unreadCount: 0,
       revision: 0,
+      openStreamCount: 0,
 
       markAsRead: (notificationId) => {
         const doc = replica.getDoc();
@@ -221,6 +232,17 @@ function createNotificationsStore(
         }, LOCAL_ORIGIN);
       },
 
+      dismissHomeStatusRow: (key) => {
+        const doc = replica.getDoc();
+        // The helper's own transaction nests into this one, so the delete
+        // carries LOCAL_ORIGIN and the forwarder sends it upstream.
+        doc.transact(() => {
+          removeHomeStatusRow(doc, key);
+        }, LOCAL_ORIGIN);
+      },
+
+      // `openStreamCount` is left alone: it counts lanes, which a doc swap
+      // neither opens nor closes.
       reset: () => {
         // `onProjection` binds to the Y.Doc that `replace()` swaps out.
         if (unwireProjection !== null) {
@@ -357,8 +379,15 @@ export function openNotificationsStream(
     }
   };
   targetDoc.on("update", forwardLocal);
+  useNotificationsStore.setState((state) => ({
+    openStreamCount: state.openStreamCount + 1,
+  }));
 
   return () => {
+    if (disposed) return;
+    useNotificationsStore.setState((state) => ({
+      openStreamCount: state.openStreamCount - 1,
+    }));
     disposed = true;
     reopenScheduler.dispose();
     targetDoc.off("update", forwardLocal);
@@ -397,6 +426,11 @@ export function useNotificationEntryById(id: string): NotificationEntry | null {
 
 export function useNotificationUnreadCount(): number {
   return useNotificationsStore((state) => state.unreadCount);
+}
+
+/** Whether a lane is feeding the per-user room replica right now. */
+export function useNotificationsReplicaOpen(): boolean {
+  return useNotificationsStore((state) => state.openStreamCount > 0);
 }
 
 /**

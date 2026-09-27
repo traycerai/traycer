@@ -257,6 +257,39 @@ export const LAYOUT = defineSettingsSection("layout", {
     availableWhen: alwaysAvailable,
     keywords: ["home", "tab strip", "overview", "focus view", "running"],
   },
+  // The status board's display thresholds. Drawn only while the Home tab is
+  // on, so they own no entry of their own: their words land on the Home tab
+  // row, which is always there to switch them into view.
+  homeStatusInProgressStale: {
+    kind: "row",
+    group: "tabs",
+    search: { contributesTo: "homeTab" },
+    label: "In progress — stale after",
+    description:
+      "How long an in-progress row on the Home status board can go without an update before it is dimmed and marked stale.",
+    availableWhen: alwaysAvailable,
+    keywords: ["status board", "stale", "in progress", "dim", "threshold"],
+  },
+  homeStatusNeedsYouStale: {
+    kind: "row",
+    group: "tabs",
+    search: { contributesTo: "homeTab" },
+    label: "Needs you — stale after",
+    description:
+      "How long a row waiting on you can go without an update before it is dimmed and marked stale.",
+    availableWhen: alwaysAvailable,
+    keywords: ["status board", "stale", "needs you", "waiting", "threshold"],
+  },
+  homeStatusDoneHide: {
+    kind: "row",
+    group: "tabs",
+    search: { contributesTo: "homeTab" },
+    label: "Done — hide after",
+    description:
+      "How long a finished row stays on the Home status board. Rows older than 7 days are always cleared.",
+    availableWhen: alwaysAvailable,
+    keywords: ["status board", "done", "finished", "hide", "clear", "never"],
+  },
   composer: {
     kind: "group",
     search: { anchor: "layout-composer" },

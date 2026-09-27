@@ -316,6 +316,9 @@ export type AnalyticsSetting =
   | "defaultServiceTier"
   | "diffViewerPreferences"
   | "homeTabEnabled"
+  | "homeStatusInProgressStaleAfter"
+  | "homeStatusNeedsYouStaleAfter"
+  | "homeStatusDoneHideAfter"
   | "taskTabLayout"
   // The Layout page's own controls. Dotted rather than camel-cased because
   // they name a path into one persisted store's slice, not a flat
@@ -1303,6 +1306,9 @@ const ANALYTICS_SETTINGS = new Set<string>(
     defaultServiceTier: true,
     diffViewerPreferences: true,
     homeTabEnabled: true,
+    homeStatusInProgressStaleAfter: true,
+    homeStatusNeedsYouStaleAfter: true,
+    homeStatusDoneHideAfter: true,
     taskTabLayout: true,
     "layout.preset.compact": true,
     "layout.preset.default": true,

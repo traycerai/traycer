@@ -22,6 +22,8 @@ import type { MergedNotificationRow } from "@/stores/notifications/merged-notifi
 import { ROW_CLASS } from "@/components/home-focus/home-focus-row-style";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import type { HomeStatusRow } from "@traycer/protocol/notifications/home-status-room";
+import type { HomeStatusThresholds } from "@/lib/home-focus/home-status-thresholds";
 import {
   useAuthStore,
   type AuthStatus,
@@ -45,6 +47,25 @@ const actionsMock = vi.hoisted(() => ({
 }));
 vi.mock("@/hooks/home-focus/use-focus-actions", () => ({
   useFocusActions: () => actionsMock,
+}));
+
+/** The status board as the page reads it. Empty by default, which is what
+ * every suite that is not about the board expects. */
+const statusBoardMock = vi.hoisted(() => {
+  const thresholds: HomeStatusThresholds = {
+    inProgressStaleAfterMs: 2 * 60 * 60 * 1000,
+    needsYouStaleAfterMs: null,
+    doneHideAfterMs: 24 * 60 * 60 * 1000,
+  };
+  return {
+    rows: [] as HomeStatusRow[],
+    now: 0,
+    thresholds,
+    dismiss: vi.fn(),
+  };
+});
+vi.mock("@/hooks/home-focus/use-home-status-board", () => ({
+  useHomeStatusBoard: () => statusBoardMock,
 }));
 
 const navigateMock = vi.hoisted(() => vi.fn());
@@ -257,6 +278,9 @@ beforeEach(() => {
   actionsMock.stopAgent.mockReset();
   actionsMock.stopManagedCommand.mockReset();
   actionsMock.stopping.clear();
+  statusBoardMock.rows = [];
+  statusBoardMock.now = Date.now();
+  statusBoardMock.dismiss.mockReset();
   navigateMock.mockReset();
   tabNavigationMock.navigateToTabIntent.mockReset();
   localHostMock.value = null;
@@ -2566,6 +2590,135 @@ describe("<HomeFocusView /> origin host chip", () => {
     render(<HomeFocusView />);
 
     expect(screen.queryByTestId("home-focus-origin-host")).toBeNull();
+  });
+});
+
+function statusRow(overrides: Partial<HomeStatusRow>): HomeStatusRow {
+  return {
+    key: overrides.key ?? nextId("status"),
+    status: "in-progress",
+    item: "Host restart fix",
+    note: "CI running",
+    agentId: "agent-1",
+    agentName: "Fable impl",
+    epicId: "epic-1",
+    hostId: "host-1",
+    harnessId: "claude",
+    updatedAt: Date.now(),
+    ...overrides,
+  };
+}
+
+describe("<HomeFocusView /> status board", () => {
+  it("draws the board above the sections, leaving them unchanged", () => {
+    statusBoardMock.rows = [
+      statusRow({ key: "a", status: "needs-you" }),
+      statusRow({ key: "b" }),
+    ];
+    modelMock.value = model({
+      tasks: [
+        taskRow({ epicId: "epic-waiting", needsYou: true }),
+        taskRow({ epicId: "epic-busy" }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const board = screen.getByTestId("home-status-table");
+    const needsYou = sectionOf("needs-you");
+    expect(
+      board.compareDocumentPosition(needsYou) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      board.compareDocumentPosition(screen.getByTestId("home-focus-summary")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      within(board)
+        .getAllByTestId("home-status-row")
+        .map((element) => element.getAttribute("data-row-key")),
+    ).toEqual(["a", "b"]);
+    expect(headingOf("needs-you")).toBe("Needs you · 1");
+    expect(headingOf("running")).toBe("Running · 1");
+  });
+
+  it("draws the board on an otherwise empty page, without the empty state under it", () => {
+    statusBoardMock.rows = [statusRow({ key: "a", status: "needs-you" })];
+    modelMock.value = model({});
+    render(<HomeFocusView />);
+
+    expect(screen.getByTestId("home-status-table")).toBeDefined();
+    expect(screen.queryByTestId("home-focus-empty")).toBeNull();
+  });
+
+  // Getting started is not an empty-state message - it is a checklist Home
+  // shows whatever is running - so a board with rows hides only "Nothing
+  // needs you", and the checklist stays, under the board.
+  it("keeps Getting started under a board with rows, dropping only the empty state", () => {
+    statusBoardMock.rows = [statusRow({ key: "a", status: "needs-you" })];
+    modelMock.value = model({});
+    render(<HomeFocusView />);
+
+    const board = screen.getByTestId("home-status-table");
+    const gettingStarted = screen.getByTestId("home-getting-started");
+    expect(
+      board.compareDocumentPosition(gettingStarted) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.queryByTestId("home-focus-empty")).toBeNull();
+  });
+
+  it("shows Getting started and the empty state on a page with no board", () => {
+    modelMock.value = model({});
+    render(<HomeFocusView />);
+
+    expect(screen.getByTestId("home-getting-started")).toBeDefined();
+    expect(screen.getByTestId("home-focus-empty")).toBeDefined();
+  });
+
+  it("keeps the empty state when the board is empty too", () => {
+    modelMock.value = model({});
+    render(<HomeFocusView />);
+
+    expect(screen.queryByTestId("home-status-table")).toBeNull();
+    expect(screen.getByTestId("home-focus-empty")).toBeDefined();
+  });
+
+  it("draws nothing for an empty board", () => {
+    modelMock.value = model({ tasks: [taskRow({})] });
+    render(<HomeFocusView />);
+
+    expect(screen.queryByTestId("home-status-table")).toBeNull();
+    expect(screen.getByTestId("home-focus-section-running")).toBeDefined();
+  });
+
+  it("opens the agent that wrote a row through the page's own action", () => {
+    statusBoardMock.rows = [
+      statusRow({
+        key: "a",
+        epicId: "epic-7",
+        agentId: "agent-7",
+        hostId: "host-remote",
+      }),
+    ];
+    modelMock.value = model({});
+    render(<HomeFocusView />);
+
+    fireEvent.click(screen.getByTestId("home-status-agent"));
+    expect(actionsMock.openAgent).toHaveBeenCalledWith(
+      "epic-7",
+      "agent-7",
+      "host-remote",
+    );
+  });
+
+  it("dismisses a row through the board", () => {
+    statusBoardMock.rows = [statusRow({ key: "a", item: "Mobile 1.4" })];
+    modelMock.value = model({});
+    render(<HomeFocusView />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss Mobile 1.4" }));
+    expect(statusBoardMock.dismiss).toHaveBeenCalledWith("a");
   });
 });
 

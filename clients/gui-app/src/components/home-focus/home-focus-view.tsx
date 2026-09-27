@@ -36,6 +36,8 @@ import {
 } from "@/components/home-focus/home-focus-task-groups";
 import { useFocusActions } from "@/hooks/home-focus/use-focus-actions";
 import { useFocusModel } from "@/hooks/home-focus/use-focus-model";
+import { useHomeStatusBoard } from "@/hooks/home-focus/use-home-status-board";
+import { HomeStatusTable } from "@/components/home-focus/home-status-table";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import {
   selectTaskGroups,
@@ -390,6 +392,7 @@ function selectHomeSections(
 export function HomeFocusView(): ReactNode {
   const model = useFocusModel();
   const actions: HomeFocusRowActions = useFocusActions();
+  const statusBoard = useHomeStatusBoard();
   const hostGrouping = useHomeHostGroups(model);
   const sections = useMemo(
     () => selectHomeSections(model, hostGrouping),
@@ -402,6 +405,9 @@ export function HomeFocusView(): ReactNode {
   const disclosure = useTaskDisclosure(liveKeys);
   const empty =
     sections.groups.length === 0 && sections.needsYou.prompts.length === 0;
+  // "Nothing needs you" under a board listing a row that does would contradict
+  // it, so the empty state speaks only for a page with no board either.
+  const showEmptyState = empty && statusBoard.rows.length === 0;
   return (
     // One landmark for the whole page - the inner groups are plain containers
     // with `h2` headings so a screen reader gets a heading outline rather than
@@ -414,7 +420,16 @@ export function HomeFocusView(): ReactNode {
       {/* `pb-safe-bottom-gutter`, not `pb-6`: the page scrolls to its own end,
           so the last row has to clear the home indicator on a phone and still
           keep a real gutter on a desktop where every inset is zero. */}
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-4 pt-6 pb-safe-bottom-gutter">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-2 px-4 pt-6 pb-safe-bottom-gutter">
+        {/* Above everything, and outside the empty branch: the board is its own
+            source, so a quiet page with nothing running still shows it. */}
+        <HomeStatusTable
+          rows={statusBoard.rows}
+          now={statusBoard.now}
+          thresholds={statusBoard.thresholds}
+          onDismiss={statusBoard.dismiss}
+          onOpenAgent={actions.openAgent}
+        />
         <HomeSummaryLine sections={sections} grouping={hostGrouping} />
         <ActivityCoverageNotice
           activity={model.coverage.activity}
@@ -427,9 +442,8 @@ export function HomeFocusView(): ReactNode {
           )}
         />
         <HomeGettingStartedSection />
-        {empty ? (
-          <HomeFocusEmptyState />
-        ) : (
+        {showEmptyState ? <HomeFocusEmptyState /> : null}
+        {empty ? null : (
           <HomeHostGroupedContext.Provider value={hostGrouping.enabled}>
             <HomeFocusSections
               model={model}

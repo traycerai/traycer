@@ -36,6 +36,17 @@ import {
 } from "@/lib/diff/diff-viewer-preferences";
 import { worktreeBranchPrefixError } from "@/lib/worktree/worktree-branch-prefix-validation";
 import {
+  DEFAULT_HOME_STATUS_DONE_HIDE_AFTER,
+  DEFAULT_HOME_STATUS_IN_PROGRESS_STALE_AFTER,
+  DEFAULT_HOME_STATUS_NEEDS_YOU_STALE_AFTER,
+  isHomeStatusDoneHideAfter,
+  isHomeStatusInProgressStaleAfter,
+  isHomeStatusNeedsYouStaleAfter,
+  type HomeStatusDoneHideAfter,
+  type HomeStatusInProgressStaleAfter,
+  type HomeStatusNeedsYouStaleAfter,
+} from "@/lib/home-focus/home-status-thresholds";
+import {
   DEFAULT_NOTIFICATION_CHIME_SOUNDS,
   isNotificationChimeSound,
   NOTIFICATION_CHIME_EVENT_TYPES,
@@ -377,6 +388,14 @@ export interface SettingsState {
    * drawer behave exactly as they did before Home existed.
    */
   homeTabEnabled: boolean;
+  /**
+   * When the Home status board dims a row and marks it stale, per status, and
+   * when it stops showing a `done` row. Display only, per device - the room
+   * and the hosts' pruning are unaffected (`lib/home-focus/home-status-thresholds.ts`).
+   */
+  homeStatusInProgressStaleAfter: HomeStatusInProgressStaleAfter;
+  homeStatusNeedsYouStaleAfter: HomeStatusNeedsYouStaleAfter;
+  homeStatusDoneHideAfter: HomeStatusDoneHideAfter;
   /** How task tabs share space when the header fills up. */
   taskTabLayout: TaskTabLayout;
   /**
@@ -456,6 +475,13 @@ export interface SettingsState {
     value: NotificationChimeSound,
   ) => void;
   setHomeTabEnabled: (value: boolean) => void;
+  setHomeStatusInProgressStaleAfter: (
+    value: HomeStatusInProgressStaleAfter,
+  ) => void;
+  setHomeStatusNeedsYouStaleAfter: (
+    value: HomeStatusNeedsYouStaleAfter,
+  ) => void;
+  setHomeStatusDoneHideAfter: (value: HomeStatusDoneHideAfter) => void;
   setTaskTabLayout: (value: TaskTabLayout) => void;
   togglePinnedContextBreakdownField: (field: ContextBreakdownField) => void;
   /**
@@ -515,6 +541,9 @@ type PersistedSettingsState = Pick<
   | "workspaceFileWordWrap"
   | "notificationChimeSounds"
   | "homeTabEnabled"
+  | "homeStatusInProgressStaleAfter"
+  | "homeStatusNeedsYouStaleAfter"
+  | "homeStatusDoneHideAfter"
   | "taskTabLayout"
   | "pinnedContextBreakdownFields"
   | "contextIndicatorStyle"
@@ -599,6 +628,9 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     workspaceFileWordWrap: state.workspaceFileWordWrap,
     notificationChimeSounds: state.notificationChimeSounds,
     homeTabEnabled: state.homeTabEnabled,
+    homeStatusInProgressStaleAfter: state.homeStatusInProgressStaleAfter,
+    homeStatusNeedsYouStaleAfter: state.homeStatusNeedsYouStaleAfter,
+    homeStatusDoneHideAfter: state.homeStatusDoneHideAfter,
     taskTabLayout: state.taskTabLayout,
     pinnedContextBreakdownFields: state.pinnedContextBreakdownFields,
     contextIndicatorStyle: state.contextIndicatorStyle,
@@ -654,6 +686,10 @@ export const useSettingsStore = create<SettingsState>()(
       workspaceFileWordWrap: null,
       notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
       homeTabEnabled: false,
+      homeStatusInProgressStaleAfter:
+        DEFAULT_HOME_STATUS_IN_PROGRESS_STALE_AFTER,
+      homeStatusNeedsYouStaleAfter: DEFAULT_HOME_STATUS_NEEDS_YOU_STALE_AFTER,
+      homeStatusDoneHideAfter: DEFAULT_HOME_STATUS_DONE_HIDE_AFTER,
       taskTabLayout: "scroll",
       pinnedContextBreakdownFields: DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
       contextIndicatorStyle: DEFAULT_CONTEXT_INDICATOR_STYLE,
@@ -810,6 +846,15 @@ export const useSettingsStore = create<SettingsState>()(
         );
       },
       setHomeTabEnabled: makeSetter(set, "homeTabEnabled"),
+      setHomeStatusInProgressStaleAfter: makeSetter(
+        set,
+        "homeStatusInProgressStaleAfter",
+      ),
+      setHomeStatusNeedsYouStaleAfter: makeSetter(
+        set,
+        "homeStatusNeedsYouStaleAfter",
+      ),
+      setHomeStatusDoneHideAfter: makeSetter(set, "homeStatusDoneHideAfter"),
       setTaskTabLayout: makeSetter(set, "taskTabLayout"),
       togglePinnedContextBreakdownField: (field) => {
         set((s) => {
@@ -939,6 +984,7 @@ export const useSettingsStore = create<SettingsState>()(
             typeof merged.homeTabEnabled === "boolean"
               ? merged.homeTabEnabled
               : false,
+          ...resolvePersistedHomeStatusThresholds(persisted),
           pinnedContextBreakdownFields:
             resolvePersistedPinnedContextBreakdownFields(
               persisted.pinnedContextBreakdownFields,
@@ -961,6 +1007,37 @@ export const useSettingsStore = create<SettingsState>()(
  */
 export function isHomeTabEnabled(): boolean {
   return useSettingsStore.getState().homeTabEnabled;
+}
+
+/**
+ * The Home status board's thresholds are closed vocabularies: a blob from
+ * before they existed, or from a build offering other choices, comes back as
+ * the default rather than a value no option names.
+ */
+function resolvePersistedHomeStatusThresholds(
+  persisted: Record<string, unknown>,
+): Pick<
+  SettingsState,
+  | "homeStatusInProgressStaleAfter"
+  | "homeStatusNeedsYouStaleAfter"
+  | "homeStatusDoneHideAfter"
+> {
+  const {
+    homeStatusInProgressStaleAfter: inProgress,
+    homeStatusNeedsYouStaleAfter: needsYou,
+    homeStatusDoneHideAfter: doneHide,
+  } = persisted;
+  return {
+    homeStatusInProgressStaleAfter: isHomeStatusInProgressStaleAfter(inProgress)
+      ? inProgress
+      : DEFAULT_HOME_STATUS_IN_PROGRESS_STALE_AFTER,
+    homeStatusNeedsYouStaleAfter: isHomeStatusNeedsYouStaleAfter(needsYou)
+      ? needsYou
+      : DEFAULT_HOME_STATUS_NEEDS_YOU_STALE_AFTER,
+    homeStatusDoneHideAfter: isHomeStatusDoneHideAfter(doneHide)
+      ? doneHide
+      : DEFAULT_HOME_STATUS_DONE_HIDE_AFTER,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

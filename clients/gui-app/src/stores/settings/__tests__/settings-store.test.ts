@@ -51,6 +51,9 @@ function resetSettingsStore(): void {
     startPageWallpaper: null,
     showGreeting: true,
     showRecentHistory: true,
+    homeStatusInProgressStaleAfter: "2h",
+    homeStatusNeedsYouStaleAfter: "never",
+    homeStatusDoneHideAfter: "24h",
   });
 }
 
@@ -63,6 +66,62 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().artifactIconColors).toEqual(
       DEFAULT_EPIC_NODE_ICON_COLORS,
     );
+  });
+
+  it("defaults the Home status board thresholds", () => {
+    const state = useSettingsStore.getState();
+    expect(state.homeStatusInProgressStaleAfter).toBe("2h");
+    expect(state.homeStatusNeedsYouStaleAfter).toBe("never");
+    expect(state.homeStatusDoneHideAfter).toBe("24h");
+  });
+
+  it("rehydrates a settings blob from before the thresholds existed with the defaults", async () => {
+    useSettingsStore.setState({
+      homeStatusInProgressStaleAfter: "30m",
+      homeStatusNeedsYouStaleAfter: "1h",
+      homeStatusDoneHideAfter: "1h",
+    });
+    await rehydrateFrom({ homeTabEnabled: true, taskTabLayout: "shrink" });
+
+    const state = useSettingsStore.getState();
+    expect(state.homeTabEnabled).toBe(true);
+    expect(state.homeStatusInProgressStaleAfter).toBe("2h");
+    expect(state.homeStatusNeedsYouStaleAfter).toBe("never");
+    expect(state.homeStatusDoneHideAfter).toBe("24h");
+  });
+
+  it("persists and rehydrates the Home status board thresholds", async () => {
+    useSettingsStore.getState().setHomeStatusInProgressStaleAfter("1h");
+    useSettingsStore.getState().setHomeStatusNeedsYouStaleAfter("8h");
+    useSettingsStore.getState().setHomeStatusDoneHideAfter("never");
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(persisted).not.toBeNull();
+
+    useSettingsStore.setState({
+      homeStatusInProgressStaleAfter: "2h",
+      homeStatusNeedsYouStaleAfter: "never",
+      homeStatusDoneHideAfter: "24h",
+    });
+    window.localStorage.setItem("traycer-gui-app:settings", persisted ?? "");
+    await useSettingsStore.persist.rehydrate();
+
+    const state = useSettingsStore.getState();
+    expect(state.homeStatusInProgressStaleAfter).toBe("1h");
+    expect(state.homeStatusNeedsYouStaleAfter).toBe("8h");
+    expect(state.homeStatusDoneHideAfter).toBe("never");
+  });
+
+  it("rehydrates an unknown threshold as its default, not as the stored string", async () => {
+    await rehydrateFrom({
+      homeStatusInProgressStaleAfter: "3h",
+      homeStatusNeedsYouStaleAfter: 60,
+      homeStatusDoneHideAfter: "48h",
+    });
+
+    const state = useSettingsStore.getState();
+    expect(state.homeStatusInProgressStaleAfter).toBe("2h");
+    expect(state.homeStatusNeedsYouStaleAfter).toBe("never");
+    expect(state.homeStatusDoneHideAfter).toBe("24h");
   });
 
   it("defaults the chat turn minimap to the right side", () => {
