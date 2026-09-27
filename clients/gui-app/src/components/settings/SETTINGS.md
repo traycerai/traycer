@@ -2927,7 +2927,8 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     rather than after CLI & Args so it cannot become a provider's default tab:
     amp and cursor advertise `env` without `general`, and a tab every provider
     gets must not displace the one the provider asked for.
-    The body is one card: the heading "Who reviews {provider}'s commands", then
+    The body is one card: the heading "Who reviews {provider}'s commands"
+    with Auto mode's muted xs **Experimental** badge, then
     `ProviderJudgeSwitch` (`panels/permissions/provider-judge-switch.tsx`),
     then an "All permission settings" link to Permissions ▸ Judge. The link
     passes `hostId: null` because Settings is already scoped to the machine
