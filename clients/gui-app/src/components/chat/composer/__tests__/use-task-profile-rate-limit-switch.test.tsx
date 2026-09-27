@@ -61,6 +61,8 @@ vi.mock("@/hooks/chats/use-chat-run-settings-query", () => ({
     batch.chatIds = args.chatIds;
     return args.chatIds.map((chatId) => ({
       data: { settings: batch.settingsByChatId.get(chatId) ?? null },
+      isPending: false,
+      isError: false,
     }));
   },
 }));
@@ -178,6 +180,7 @@ describe("useTaskProfileRateLimitSwitch", () => {
     );
 
     expect(batch.chatIds).toEqual([
+      CURRENT_CHAT_ID,
       sameHostMatch.id,
       sameHostDifferentModel.id,
     ]);

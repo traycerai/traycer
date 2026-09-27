@@ -1,6 +1,15 @@
 import * as Y from "yjs";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
+import { appLogger } from "@/lib/logger";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
@@ -259,6 +268,53 @@ describe("OpenEpicSessionRegistry", () => {
     expect(inactiveA.disposed).toBe(true);
     expect(inactiveB.disposed).toBe(false);
     expect(registry.get("active")).not.toBeNull();
+  });
+
+  it("evicts a clean session whose agent has only background-only work", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 2 });
+    const background = buildTestHandle("background", false);
+    const inactiveA = buildTestHandle("inactive-a", false);
+    const inactiveB = buildTestHandle("inactive-b", false);
+
+    markAgentBackgroundOnly(background, "chat-shell");
+    registry.acquire("background", () => h(background));
+    registry.acquire("inactive-a", () => h(inactiveA));
+    registry.acquire("inactive-b", () => h(inactiveB));
+
+    expect(registry.size()).toBe(2);
+    expect(background.disposed).toBe(true);
+    expect(inactiveA.disposed).toBe(false);
+    expect(inactiveB.disposed).toBe(false);
+  });
+
+  it("lets a clean session park while its agent has only background-only work, and refuses while a turn runs", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const th = buildTestHandle("e-bg", false);
+    registry.acquire("e-bg", () => h(th));
+
+    markAgentBackgroundOnly(th, "chat-shell");
+    expect(registry.canPark("e-bg")).toBe(true);
+
+    markAgentWorking(th, "chat-shell");
+    expect(registry.canPark("e-bg")).toBe(false);
+  });
+
+  it("auto-prunes overflow when a turn ends and only background-only work remains", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const activeA = buildTestHandle("active-a", false);
+    const activeB = buildTestHandle("active-b", false);
+
+    markAgentWorking(activeA, "chat-a");
+    markAgentWorking(activeB, "chat-b");
+    registry.acquire("active-a", () => h(activeA));
+    registry.acquire("active-b", () => h(activeB));
+    expect(registry.size()).toBe(2);
+
+    markAgentBackgroundOnly(activeA, "chat-a");
+
+    expect(registry.size()).toBe(1);
+    expect(activeA.disposed).toBe(true);
+    expect(activeB.disposed).toBe(false);
   });
 
   it("auto-prunes overflow when active agent work clears", () => {
@@ -598,26 +654,37 @@ describe("OpenEpicSessionRegistry", () => {
  * each time mirrors the host, which republishes its full entry on every
  * activity boundary.
  */
-const workingByEpic = new Map<string, readonly string[]>();
+const workingByEpic = new Map<
+  string,
+  { working: readonly string[]; turn: readonly string[] }
+>();
 
 function publishWorkingSet(): void {
-  const byEpic: Record<
-    string,
-    { working: readonly string[]; turn: readonly string[] }
-  > = {};
-  for (const [epicId, agentIds] of workingByEpic) {
-    byEpic[epicId] = { working: agentIds, turn: agentIds };
-  }
-  publishAgentActivity([{ hostId: "host-registry", byEpic }]);
+  publishAgentActivity([
+    { hostId: "host-registry", byEpic: Object.fromEntries(workingByEpic) },
+  ]);
 }
 
 function markAgentWorking(handle: TestHandle, agentId: string): void {
-  workingByEpic.set(handle.handle.epicId, [agentId]);
+  workingByEpic.set(handle.handle.epicId, {
+    working: [agentId],
+    turn: [agentId],
+  });
+  publishWorkingSet();
+}
+
+/**
+ * The host's shape for an agent whose only live work is background-only - a
+ * running shell, a monitor, a scheduled wake: listed in `working`, absent from
+ * `turn`.
+ */
+function markAgentBackgroundOnly(handle: TestHandle, agentId: string): void {
+  workingByEpic.set(handle.handle.epicId, { working: [agentId], turn: [] });
   publishWorkingSet();
 }
 
 function clearAgentWorking(handle: TestHandle): void {
-  workingByEpic.set(handle.handle.epicId, []);
+  workingByEpic.set(handle.handle.epicId, { working: [], turn: [] });
   publishWorkingSet();
 }
 
@@ -708,6 +775,112 @@ describe("cap eviction defers to the activity plane's own health", () => {
 
     expect(registry.size()).toBe(5);
     expect(handles[0].disposed).toBe(true);
+  });
+});
+
+// ── Cap walk debug line: which exemption held each over-cap entry ────────────
+// The reason names are the evidence a field report is read against, so they
+// are pinned here by name: a rename would silently break every log query
+// written against them.
+//
+// Each case clears the spy before the acquire whose walk it reads: registries
+// from earlier cases stay subscribed to the activity plane and log their own
+// walks when a later case moves it.
+describe("cap walk names the exemption holding each entry over cap", () => {
+  const CAP_WALK_MESSAGE =
+    "[session-registry] warm cap walk kept entries over cap";
+
+  function lastCapWalkLine(debug: MockInstance): unknown {
+    const lines = debug.mock.calls.filter(
+      (call: unknown[]) => call[0] === CAP_WALK_MESSAGE,
+    );
+    return lines.length === 0 ? null : lines[lines.length - 1][1];
+  }
+
+  let debug: MockInstance;
+  beforeEach(() => {
+    debug = vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    debug.mockRestore();
+  });
+
+  it("names a mounted surface, unflushed edits and a turn in progress, and never background-only work", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const turn = buildTestHandle("e-turn", false);
+    const background = buildTestHandle("e-bg", false);
+    markAgentWorking(turn, "chat-turn");
+    markAgentBackgroundOnly(background, "chat-shell");
+
+    registry.acquireMounted("e-mounted", () =>
+      h(buildTestHandle("e-mounted", false)),
+    );
+    registry.acquire("e-dirty", () => h(buildTestHandle("e-dirty", true)));
+    registry.acquire("e-turn", () => h(turn));
+    debug.mockClear();
+    registry.acquire("e-bg", () => h(background));
+
+    expect(background.disposed).toBe(true);
+    expect(lastCapWalkLine(debug)).toEqual({
+      maxWarm: 1,
+      counted: 4,
+      overCap: 2,
+      held: "e-mounted=surface-demand,e-dirty=unflushed,e-turn=turn-in-progress",
+    });
+  });
+
+  it("names a blind activity plane", () => {
+    __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+      connectionStatus: "closed",
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    registry.acquire("e0", () => h(buildTestHandle("e0", false)));
+    debug.mockClear();
+    registry.acquire("e1", () => h(buildTestHandle("e1", false)));
+
+    expect(lastCapWalkLine(debug)).toEqual({
+      maxWarm: 1,
+      counted: 2,
+      overCap: 1,
+      held: "e0=activity-plane-blind,e1=activity-plane-blind",
+    });
+  });
+
+  it("names a host the serving union does not cover", () => {
+    // Start from an empty store so the only slice is a narrow serving host's,
+    // which cannot vouch for a session bound to any other host.
+    __resetAgentActivityStoreForTests();
+    __setHostAgentActivityHealthForTests("host-serving", {
+      connectionStatus: "open",
+      servedBy: "local",
+      stateFrameSeenThisEpoch: true,
+      cloudSyncStatus: null,
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 0 });
+    debug.mockClear();
+    registry.acquire("e-elsewhere", () =>
+      h(withHostId(buildTestHandle("e-elsewhere", false), "host-elsewhere")),
+    );
+
+    expect(lastCapWalkLine(debug)).toEqual({
+      maxWarm: 0,
+      counted: 1,
+      overCap: 1,
+      held: "e-elsewhere=host-not-covered",
+    });
+  });
+
+  it("logs nothing when the walk evicts down to the cap, even with no candidate to spare", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 2 });
+    const clean = buildTestHandle("e-clean", false);
+    registry.acquire("e-dirty", () => h(buildTestHandle("e-dirty", true)));
+    registry.acquire("e-clean", () => h(clean));
+    debug.mockClear();
+    registry.acquire("e-next", () => h(buildTestHandle("e-next", true)));
+
+    expect(clean.disposed).toBe(true);
+    expect(registry.size()).toBe(2);
+    expect(lastCapWalkLine(debug)).toBeNull();
   });
 });
 
