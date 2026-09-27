@@ -123,6 +123,7 @@ import {
   worktreeBindingIsFolderless,
 } from "@/hooks/composer/use-workspace-mention-roots";
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
+import { notifyChatTileSessionAcquired } from "@/components/epic-canvas/chat-prewarm-handoff";
 import { useEpicParked } from "@/lib/epics/epic-parking";
 import { useEpicDraftGuard } from "@/lib/epics/use-epic-draft-guard";
 import {
@@ -542,6 +543,16 @@ function ChatTileForChat(props: ChatTileProps) {
     tabHostId,
     !epicParked && (chatRecord !== null || isCrossHostOpen || isCloudKnown),
   );
+  useEffect(() => {
+    if (handle !== null) {
+      notifyChatTileSessionAcquired(
+        epicId,
+        tabHostId,
+        node.id,
+        node.instanceId,
+      );
+    }
+  }, [handle, epicId, tabHostId, node.id, node.instanceId]);
   const reachability = useHostReachability(tabHostId);
   // The chat's own bounded load (invariant 6), for both halves of the wait:
   // while `handle === null`, and after it until the first snapshot. The
