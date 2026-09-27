@@ -40,14 +40,13 @@
  *
  * ## Why the probe is load-bearing rather than an optimisation
  *
- * A remote mux transport reports `"unknown"` FOREVER, structurally:
- * `RemoteStreamClient.getMethodSupport` is a hardcoded `return "unknown"` and
- * its `subscribeMethodSupport` is a no-op, because the mux resolves an
- * incompatible method as a fatal error on that stream's subscribe attempt
- * rather than as a queryable pre-check. Over the relay the manifest therefore
- * never resolves and the probe is not the first signal - it is the ONLY one. A
- * selector that waited for support to settle would never open an epic on a
- * remote host at all.
+ * A remote session publishes method support from `openAck`, and an omitted
+ * method reads `"unsupported"`; `RemoteStreamClient` forwards both reads and
+ * change notifications. Other support readers can still be undecided before
+ * local negotiation or before a worker's support copy arrives. The status
+ * subscribe supplies a typed success or method-unsupported outcome if that
+ * reader has not settled. The probe is a fallback for an undecided reader,
+ * not an extra round trip on the normal remote `openAck` path.
  *
  * ## HOLD through unknown on reconnect
  *

@@ -325,8 +325,8 @@ export function createEpicArtifactBodyLanes(
       //
       // A method-incompatible close is different in kind. It is not this
       // body's connection failing, it is the host saying it does not serve
-      // this METHOD - a statement about the arm, not the tile - and on a
-      // forever-unknown remote connection nothing else will ever say it.
+      // this METHOD - a statement about the arm, not the tile. The refused
+      // subscribe is authoritative even after a prior support prediction.
       reportStatus: (status) => {
         if (isMethodIncompatibleClose(status.closeReason)) {
           onLaneUnsupported();

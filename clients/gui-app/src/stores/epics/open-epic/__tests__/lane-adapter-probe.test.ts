@@ -5,12 +5,11 @@
  * `"undecided"` - and states that `"undecided"` is not a selection: nothing
  * may be installed while it holds. `epic-replica-runtime.ts`'s
  * `applySelection()` is supposed to answer that with a PROBE
- * (`laneArm.probe()`) rather than silence, because a client only learns a
- * method's support from a subscribe completing. A runtime that installed no
- * arm while undecided would open no subscribe, learn nothing, and stall
- * forever on a connection whose support never resolves on its own - which is
- * exactly what a remote mux transport does (`RemoteStreamClient` hardcodes
- * `"unknown"`).
+ * (`laneArm.probe()`) rather than silence when the support reader has no
+ * verdict. A runtime that installed no arm while undecided would open no
+ * subscribe and could stall if that reader never publishes another edge.
+ * Remote sessions normally publish support at `openAck`; this pin exercises
+ * the generic undecided-reader fallback.
  *
  * A prior round of tests covered `readEpicAdapterVerdict` and
  * `planEpicAdapterTransition` in isolation and never started a real runtime
@@ -93,15 +92,12 @@ function markAllLaneMethodsSupported(support: SupportController): void {
 }
 
 /**
- * The relay transport, as a value a test CANNOT shortcut.
+ * Undecided support, as a value a test CANNOT shortcut.
  *
- * `RemoteStreamClient.getMethodSupport` answers `"unknown"` forever - the mux
- * resolves an incompatible method as a fatal on the subscribe attempt rather
- * than as a queryable pre-check - and its listeners never fire, because there
- * is nothing to report. This is deliberately a frozen literal with no `set`
- * and no `notify` in scope: an earlier version of this pin used the mutable
- * controller and resolved support BY HAND, which drove the manifest branch and
- * left the relay invariant the test is named for completely unpinned.
+ * Remote `openAck` normally publishes a verdict, even `"unsupported"` for an
+ * omitted method. This frozen literal instead keeps the reader unknown, with
+ * no `set` or `notify`: an earlier pin resolved support BY HAND, driving the
+ * decided branch instead of testing the probe fallback.
  */
 const FOREVER_UNKNOWN_SUPPORT: {
   readonly support: EpicMethodSupportReader;
@@ -394,8 +390,8 @@ let nextEpicSequence = 0;
 /**
  * The two support sources a pin may run against.
  *
- * `"forever-unknown"` is the relay case and hands back NO controller, so a test
- * on it physically cannot resolve support by hand - which is the mistake the
+ * `"forever-unknown"` models an undecided support reader and hands back NO
+ * controller, so a test cannot resolve support by hand - the mistake the
  * first version of this suite made.
  */
 type SupportMode =
@@ -404,14 +400,13 @@ type SupportMode =
   | "controllable";
 
 /**
- * The relay case AFTER the worker's manifest-registry subscription exists.
+ * An undecided support reader AFTER the worker's registry subscription.
  *
- * Support is still `"unknown"` for every method and forever - this is a relay,
- * and `RemoteStreamClient` has nothing to report - but the listener CAN fire.
- * That pairing is not a contrivance: `spawn-epic-runtime-worker` re-emits its
- * manifest on `subscribeNegotiatedManifests`, and the negotiated registry is
- * rewritten on every session re-attach, so a relay reconnect now reaches
- * `applySelection` while every support answer it reads stays `"unknown"`.
+ * Stream support is held `"unknown"` by this fixture, but a separately
+ * negotiated unary manifest CAN notify this listener.
+ * `spawn-epic-runtime-worker` re-emits on `subscribeNegotiatedManifests`,
+ * which is written on re-attach; a reconnect can therefore reach
+ * `applySelection` while the stream methods under test remain unknown.
  *
  * `FOREVER_UNKNOWN_SUPPORT` deliberately cannot do this - its listener is a
  * no-op - which is why the re-probe pins need their own source rather than a
@@ -509,7 +504,7 @@ describe("lane adapter probe - forever-unknown support must still reach the lane
     }
   });
 
-  it("(a) the relay case: forever-unknown support installs the lanes off the PROBE'S OWN OUTCOME, adopting its stream", () => {
+  it("(a) undecided support installs the lanes off the PROBE'S OWN OUTCOME, adopting its stream", () => {
     const rig = buildRuntimeRig("forever-unknown");
     runtimes.push(rig.runtime);
 
@@ -528,7 +523,7 @@ describe("lane adapter probe - forever-unknown support must still reach the lane
     // every method and no listener ever fires - `FOREVER_UNKNOWN_SUPPORT` has
     // no `set` and no `notify` to reach. So if the runtime installed the arm
     // by re-reading the manifest, nothing here could ever make it do so, and
-    // the epic would never render. That is the relay stall this pin exists
+    // the epic would never render. That is the undecided-reader stall this pin exists
     // for, and resolving support by hand is precisely how a previous version
     // of this test hid it.
     rig.status.deliverSnapshot();

@@ -1191,16 +1191,16 @@ export function createEpicReplicaRuntime(
    * probe that succeeds moves anything.
    *
    * With no arm installed there is nothing to hold and no guarantee that the
-   * verdict will decide: a remote session publishes its manifest at `openAck`,
-   * but an absent/incomplete manifest (or a local host with no cached support)
-   * can still leave a method unknown. So that case probes rather than waiting
-   * indefinitely - see {@link EpicLaneArm.probe}.
+   * verdict will decide: a remote session publishes support at `openAck`,
+   * but local negotiation or a worker's support copy can still be pending.
+   * So that case probes rather than waiting indefinitely - see
+   * {@link EpicLaneArm.probe}.
    *
    * An installed LEGACY arm is the same stall one step later if support is
    * still unknown. Re-probing on that edge makes "a host that upgrades under
-   * this tab moves onto the lanes" true even when its manifest has not supplied
-   * a usable verdict. A current remote peer normally settles support at
-   * `openAck`, so this fallback adds no serial RTT on that path.
+   * this tab moves onto the lanes" true even when its support reader has not
+   * supplied a usable verdict. A current remote peer normally settles support
+   * at `openAck`, so this fallback adds no serial RTT on that path.
    *
    * When support stays unknown against a legacy host, the fallback costs one
    * refused subscribe per reconnect. A decided `"unsupported"` verdict from

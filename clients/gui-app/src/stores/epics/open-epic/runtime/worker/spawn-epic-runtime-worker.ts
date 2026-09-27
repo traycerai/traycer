@@ -105,10 +105,10 @@ export interface RuntimeWorkerLike extends BridgeMessageTargetLike {
  *
  * The four stream methods an epic runtime can open, and nothing else. The
  * manifest is a replica of main's negotiation, not a copy of it: the worker's
- * lookup answers `"unknown"` / `null` for anything absent, which is the same
- * answer a relay connection gives forever and which selection already treats as
- * "not a selection". So a method the worker never opens costs a wire entry and
- * buys nothing.
+ * lookup answers `"unknown"` / `null` for anything absent from its copied
+ * snapshot. Selection treats that as undecided; the remote session itself
+ * instead answers `"unsupported"` for a method absent from `openAck`. So a
+ * method the worker never opens costs a wire entry and buys nothing.
  *
  * `epic.subscribe` is in the set even though it is the arm being retired -
  * the legacy arm is still selectable, and a manifest that named only the lanes
@@ -583,12 +583,11 @@ export function spawnEpicRuntimeWorker<TProjection>(
    * until some later list response dislodges it.
    *
    * The registry subscription earns its keep a second time, on the arm
-   * selection. `RemoteStreamClient.subscribeMethodSupport` is a no-op and its
-   * `getMethodSupport` is `"unknown"` forever, so over a relay the first
-   * subscription produces NO edge at all - not a late one. The registry is
-   * written on every session re-attach (`remote-session.ts`), which makes this
-   * the only signal that reaches a worker-hosted runtime when a remote host is
-   * upgraded underneath an open tab. See `applySelection`'s re-probe.
+   * selection. Remote stream method support now publishes at `openAck`, but
+   * that edge says nothing about the separately negotiated unary `docArm`.
+   * The registry publishes that arm on the first handshake and on every
+   * re-attach, including when a remote host is upgraded under an open tab.
+   * See `applySelection`'s re-probe.
    *
    * It fires for any host's change, not just this one's, and re-emitting an
    * unchanged manifest is deliberately not filtered: the worker's own

@@ -17,13 +17,10 @@ import { useGlobalResourcesScopeSupport } from "@/stores/resources/resources-reg
  * it can decline to acquire at all: convicting a host here costs nothing,
  * because no stream had to be opened to learn it.
  *
- * It answers for LOCAL hosts only. `RemoteStreamClient` reports `"unknown"`
- * support and a `null` schema version for every method BY DESIGN — the mux
- * session resolves an incompatible method as a fatal on the subscribe attempt,
- * not as a queryable pre-check, so there is no learned capability cache to
- * read. Both terms below therefore stay false for a remote host and this
- * returns `false`: the mount acquires, which is exactly right, because opening
- * the stream is how a remote host's capability becomes knowable at all.
+ * It can answer for either transport once support has settled: remote sessions
+ * publish method support and schema version at `openAck`. While a reader is
+ * still undecided, both terms below stay false and the mount may acquire;
+ * the stream's own outcome then settles the fallback.
  */
 export function useGlobalResourcesPreCheckUnsupported(): boolean {
   const resourcesSupport = useStreamMethodSupport("resources.subscribe");
@@ -40,15 +37,14 @@ export function useGlobalResourcesPreCheckUnsupported(): boolean {
  * subscription at all — `false` while the evidence is still unresolved, since
  * "we have not negotiated yet" is not a verdict.
  *
- * Two independent sources, because neither covers both transports:
+ * Two independent sources, because they answer at different times:
  *
- *  1. the pre-check above, which answers for a local host before a stream
- *     exists, and
- *  2. the live stream's own negotiation, republished by the registry, which is
- *     the ONLY thing that can answer for a remote one.
+ *  1. the client-wide pre-check above, which can answer before this stream
+ *     opens on either transport, and
+ *  2. the live stream's own negotiation, republished by the registry, which
+ *     remains authoritative for the opened session.
  *
- * (2) is not merely a fallback for (1)'s blind spot on remote hosts — it is the
- * only signal that catches an `@1.0` host of EITHER kind that got past the
+ * (2) catches an `@1.0` host of either kind that got past the
  * mount, because such a host does not fail a global subscribe. The `@1.1`
  * request keeps `epicId` on the wire so the probe downgrades cleanly, so the
  * old host accepts it and answers with one empty projection for an epic named

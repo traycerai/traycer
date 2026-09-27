@@ -13,9 +13,8 @@
  * the `/stream` handshake checks compatibility PER METHOD at subscribe time, so
  * a host that lacks one is a per-feature degrade rather than a fatal connection
  * error. That is what makes a partial advertisement REACHABLE - a host halfway
- * through a rollout, or a mux transport that answers `"unknown"` for everything
- * - and therefore something the client has to decide about rather than assume
- * away.
+ * through a rollout, or a support reader still awaiting its handshake - and
+ * therefore something the client has to decide about rather than assume away.
  *
  * The degrade is not degraded: a host without these lanes is a host that still
  * serves `epic.subscribe@1`, and the `@1` legacy adapter produces the same read
@@ -41,13 +40,11 @@ export const EPIC_LANE_METHODS = [
  * Whether this connection may take the lane path.
  *
  * `support` answers per method, in the transport's own three-valued vocabulary:
- * `"supported"`, `"unsupported"`, or `"unknown"` when the handshake has not
- * settled - and a remote mux transport answers `"unknown"` forever, because it
- * resolves an incompatible method as a fatal on the subscribe attempt rather
- * than as a queryable pre-check. `"unknown"` therefore must not be read as a
- * yes: a client that waited for it to resolve would wait for nothing, and one
- * that took it as support would open three lanes against a host that answers
- * none of them.
+ * `"supported"`, `"unsupported"`, or `"unknown"` before a handshake or a
+ * worker's support snapshot settles. A remote session publishes support at
+ * `openAck`, including `"unsupported"` for an omitted method. `"unknown"`
+ * must not be read as a yes: doing so could open three lanes against a host
+ * that answers none of them.
  */
 export function hostServesEpicLanes(
   support: (method: string) => "unknown" | "supported" | "unsupported",
