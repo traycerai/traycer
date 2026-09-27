@@ -116,6 +116,7 @@ import {
   __resetCommGraphCloudRegistryForTests,
   getCommGraphCloudSubscriptionManager,
 } from "@/lib/comm-graph/comm-graph-cloud-registry";
+import { __setCommGraphDataCommitWindowMsForTests } from "@/lib/comm-graph/comm-graph-data-commit-window";
 import {
   COMM_GRAPH_PLAYBACK_SPEEDS,
   useCommGraphTimelineStore,
@@ -477,6 +478,9 @@ async function seekToIndex(index: number): Promise<void> {
 }
 
 beforeEach(() => {
+  // Frames publish as they are applied: these cases read the snapshot in the
+  // tick they push in.
+  __setCommGraphDataCommitWindowMsForTests(0);
   relayHandlers.current = null;
   nextIngestVersion = 0;
   useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
@@ -507,6 +511,7 @@ afterEach(() => {
   useCommGraphTimelineStore.setState({ stateByEpicId: {} });
   harness.teardown();
   queryClient.clear();
+  __setCommGraphDataCommitWindowMsForTests(null);
 });
 
 /**

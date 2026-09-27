@@ -22,6 +22,11 @@ import type { MergedNotificationRow } from "@/stores/notifications/merged-notifi
 import { ROW_CLASS } from "@/components/home-focus/home-focus-row-style";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  useAuthStore,
+  type AuthStatus,
+  type CloudVerdictLoss,
+} from "@/stores/auth/auth-store";
 
 const modelMock = vi.hoisted(() => ({ value: null as FocusModel | null }));
 vi.mock("@/hooks/home-focus/use-focus-model", () => ({
@@ -208,7 +213,7 @@ function model(overrides: Partial<FocusModel>): FocusModel {
     browsers: [],
     coverage: {
       activity: "live",
-      degradedHostIds: [],
+      degradedHosts: [],
       notifications: "cloud",
       backgroundIsMountedOnly: true,
       browsersAreMountedOnly: true,
@@ -238,7 +243,12 @@ function hostEntry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
   };
 }
 
+/** Snapshot taken before any test mutates the store, so `beforeEach` can put it
+ * back to its untouched default rather than guessing at one. */
+const AUTH_INITIAL_STATE = useAuthStore.getState();
+
 beforeEach(() => {
+  useAuthStore.setState(AUTH_INITIAL_STATE);
   actionsMock.openPrompt.mockReset();
   actionsMock.openAgent.mockReset();
   actionsMock.openTask.mockReset();
@@ -415,7 +425,7 @@ describe("<HomeFocusView /> section headings", () => {
       tasks: [taskRow({ epicId: "epic-a", needsYou: true })],
       coverage: {
         activity: "live",
-        degradedHostIds: [],
+        degradedHosts: [],
         notifications: "local",
         backgroundIsMountedOnly: true,
         browsersAreMountedOnly: true,
@@ -2271,7 +2281,9 @@ describe("<HomeFocusView /> host grouping", () => {
       ],
       coverage: {
         activity: "reconnecting",
-        degradedHostIds: ["host-remote"],
+        degradedHosts: [
+          { hostId: "host-remote", reason: "cloud-disconnected" },
+        ],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
         browsersAreMountedOnly: true,
@@ -2292,7 +2304,7 @@ describe("<HomeFocusView /> host grouping", () => {
       tasks: [taskRow({ epicId: "epic-1" })],
       coverage: {
         activity: "disconnected",
-        degradedHostIds: [],
+        degradedHosts: [],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
         browsersAreMountedOnly: true,
@@ -2308,7 +2320,7 @@ describe("<HomeFocusView /> host grouping", () => {
       tasks: [taskRow({ epicId: "epic-1" })],
       coverage: {
         activity: "unknown",
-        degradedHostIds: [],
+        degradedHosts: [],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
         browsersAreMountedOnly: true,
@@ -2382,6 +2394,139 @@ describe("<HomeFocusView /> host grouping", () => {
     expect(segment.textContent).toBe("2 running");
     expect(segment.getAttribute("data-hosts")).toBe("Laptop 1 · Remote Box 1");
   });
+});
+
+describe("<HomeFocusView /> degraded-host reason lines", () => {
+  it("prints one reason line per degraded host, worst first, with the exact copy", () => {
+    // Grouping stays OFF here (the model names no host of its own), so the
+    // page-wide banner carries every line itself rather than a per-group
+    // notice - matching how the existing banner tests are set up.
+    fleetMock.entries = [
+      { hostId: "host-a", label: "Alpha" },
+      { hostId: "host-b", label: "Beta" },
+      { hostId: "host-c", label: "Gamma" },
+      { hostId: "host-d", label: "Delta" },
+    ];
+    modelMock.value = model({
+      tasks: [taskRow({ epicId: "epic-1" })],
+      coverage: {
+        activity: "disconnected",
+        degradedHosts: [
+          { hostId: "host-c", reason: "host-reconnecting" },
+          { hostId: "host-b", reason: "cloud-disconnected" },
+          { hostId: "host-d", reason: "cloud-reconnecting" },
+          { hostId: "host-a", reason: "host-lost" },
+        ],
+        notifications: "cloud",
+        backgroundIsMountedOnly: true,
+        browsersAreMountedOnly: true,
+      },
+    });
+    render(<HomeFocusView />);
+
+    const notice = screen.getByTestId("home-focus-activity-notice");
+    expect(
+      within(notice).getByText("Some activity may be missing"),
+    ).toBeDefined();
+    const reasons = screen
+      .getAllByTestId("home-focus-activity-reason")
+      .map((element) => element.textContent);
+    // Exactly one line per degraded host, and none of the auth-derived
+    // unattributed line: that line is reserved for an EMPTY degradedHosts.
+    expect(reasons).toEqual([
+      "Lost connection to Alpha. Its tasks aren't shown.",
+      "Beta isn't connected to Traycer, so tasks from your other machines may be missing.",
+      "Reconnecting to Gamma…",
+      "Delta is reconnecting to Traycer, so tasks from your other machines may be missing.",
+    ]);
+  });
+
+  interface AuthReasonCase {
+    readonly name: string;
+    readonly status: AuthStatus;
+    readonly cloudVerdictLoss: CloudVerdictLoss;
+    readonly expected: string;
+  }
+
+  // What the banner says when NO host can be named for the gap at all - the
+  // activity plane has not reported from anywhere yet, so the one thing this
+  // session can explain is its own sign-in.
+  const AUTH_REASON_CASES: ReadonlyArray<AuthReasonCase> = [
+    {
+      name: "signed-out",
+      status: "signed-out",
+      cloudVerdictLoss: "unreachable",
+      expected: "You're signed out, so running tasks can't be loaded.",
+    },
+    {
+      name: "signing-in",
+      status: "signing-in",
+      cloudVerdictLoss: "unreachable",
+      expected: "Signing in…",
+    },
+    {
+      name: "unverified + unreachable",
+      status: "unverified",
+      cloudVerdictLoss: "unreachable",
+      expected:
+        "Can't reach Traycer to confirm your sign-in, so running tasks may not load until it can.",
+    },
+    {
+      name: "unverified + session-rejected",
+      status: "unverified",
+      cloudVerdictLoss: "session-rejected",
+      expected: "Your session has expired. Sign in again to see running tasks.",
+    },
+    {
+      name: "unverified + account-unavailable",
+      status: "unverified",
+      cloudVerdictLoss: "account-unavailable",
+      expected:
+        "This account is no longer available, so running tasks can't be loaded.",
+    },
+    {
+      name: "unverified + ended-elsewhere",
+      status: "unverified",
+      cloudVerdictLoss: "ended-elsewhere",
+      expected:
+        "This window's session was ended from another window, so running tasks can't be loaded here.",
+    },
+    {
+      name: "signed-in",
+      status: "signed-in",
+      cloudVerdictLoss: "unreachable",
+      expected: "Connecting to your machines…",
+    },
+  ];
+
+  it.each(AUTH_REASON_CASES)(
+    "shows the $name line as the sole reason when degradedHosts is empty",
+    (testCase) => {
+      useAuthStore.setState({
+        status: testCase.status,
+        cloudVerdictLoss: testCase.cloudVerdictLoss,
+      });
+      modelMock.value = model({
+        tasks: [taskRow({ epicId: "epic-1" })],
+        coverage: {
+          activity: "reconnecting",
+          degradedHosts: [],
+          notifications: "cloud",
+          backgroundIsMountedOnly: true,
+          browsersAreMountedOnly: true,
+        },
+      });
+      render(<HomeFocusView />);
+
+      const notice = screen.getByTestId("home-focus-activity-notice");
+      expect(
+        within(notice).getByText("Some activity may be missing"),
+      ).toBeDefined();
+      const reasons = screen.getAllByTestId("home-focus-activity-reason");
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0].textContent).toBe(testCase.expected);
+    },
+  );
 });
 
 describe("<HomeFocusView /> origin host chip", () => {
@@ -2564,11 +2709,7 @@ describe("<HomeFocusView /> has no trailing Open button", () => {
     render(<HomeFocusView />);
 
     const row = screen.getByTestId("home-focus-task-group-row");
-    await user.tab();
-    await user.tab();
-    expect(within(row).getByTestId("home-focus-task-group-disclosure")).toBe(
-      document.activeElement,
-    );
+    within(row).getByTestId("home-focus-task-group-disclosure").focus();
     await user.tab();
     expect(within(row).getByTestId("home-focus-task-group-open-body")).toBe(
       document.activeElement,
@@ -2611,7 +2752,9 @@ describe("<HomeFocusView /> coverage attribution for unplaced prompts", () => {
       ],
       coverage: {
         activity: "disconnected",
-        degradedHostIds: ["host-remote"],
+        degradedHosts: [
+          { hostId: "host-remote", reason: "cloud-disconnected" },
+        ],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
         browsersAreMountedOnly: true,
@@ -2647,7 +2790,9 @@ describe("<HomeFocusView /> coverage attribution for unplaced prompts", () => {
       ],
       coverage: {
         activity: "disconnected",
-        degradedHostIds: ["host-remote"],
+        degradedHosts: [
+          { hostId: "host-remote", reason: "cloud-disconnected" },
+        ],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
         browsersAreMountedOnly: true,

@@ -89,6 +89,7 @@ import * as Y from "yjs";
 import { CommGraphTile } from "@/components/epic-canvas/renderers/comm-graph-tile";
 import { __setCommGraphCloudSubscriptionOpenerForTests } from "@/lib/comm-graph/comm-graph-opener-override";
 import { __resetCommGraphCloudRegistryForTests } from "@/lib/comm-graph/comm-graph-cloud-registry";
+import { __setCommGraphDataCommitWindowMsForTests } from "@/lib/comm-graph/comm-graph-data-commit-window";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   commGraphTileId,
@@ -183,6 +184,9 @@ function storedView(): CommGraphTileViewState | null {
 }
 
 beforeEach(() => {
+  // Frames publish as they are applied: these cases read the snapshot in the
+  // tick they push in.
+  __setCommGraphDataCommitWindowMsForTests(0);
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -207,6 +211,7 @@ afterEach(() => {
   __resetCommGraphCloudRegistryForTests();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   queryClient.clear();
+  __setCommGraphDataCommitWindowMsForTests(null);
 });
 
 describe("comm-graph view mode", () => {

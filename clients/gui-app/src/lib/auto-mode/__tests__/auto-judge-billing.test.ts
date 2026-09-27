@@ -21,7 +21,7 @@ import {
   autoJudgeBillingForRun,
   autoJudgeEffortLabel,
   autoJudgeGetKnowsReasoningEffort,
-  autoJudgeMetaLine,
+  autoJudgeRowFace,
   autoJudgeSetStoresReasoningEffort,
   autoJudgeTarget,
   autoModeMidTurnLock,
@@ -489,9 +489,16 @@ describe("autoJudgeTarget", () => {
       throw new Error("expected a billing verdict, got null");
     }
     expect(billing).toEqual({ kind: "blocked" });
-    expect(autoJudgeMetaLine(billing)).toBe(
-      "No judge available on this machine · asks you instead",
-    );
+    expect(autoJudgeRowFace(billing)).toEqual({
+      judge: null,
+      tone: "warning",
+      pocket: {
+        before: "No judge available on this machine · asks you instead",
+        emphasis: null,
+        after: "",
+      },
+      detail: null,
+    });
   });
 
   // Provider-native precedence is unaffected by the fix above: a run whose
@@ -695,93 +702,150 @@ describe("autoJudgeBillingForRun", () => {
   });
 });
 
-describe("autoJudgeMetaLine", () => {
-  it("names the model and Traycer credits for the traycer kind", () => {
+describe("autoJudgeRowFace", () => {
+  it("names the model, success tone and Traycer credits for the traycer kind", () => {
     expect(
-      autoJudgeMetaLine({
+      autoJudgeRowFace({
         kind: "traycer",
         modelLabel: "Sonnet 5",
         effortLabel: null,
       }),
-    ).toBe("Reviewed by Sonnet 5 on Traycer · uses credits");
+    ).toEqual({
+      judge: { harnessId: "traycer", label: "Sonnet 5" },
+      tone: "success",
+      pocket: { before: "Uses ", emphasis: "Traycer", after: " credits" },
+      detail: null,
+    });
   });
 
   it("names the model and effort, and Traycer credits, for the traycer kind when an effort is named", () => {
     expect(
-      autoJudgeMetaLine({
+      autoJudgeRowFace({
         kind: "traycer",
         modelLabel: "Sonnet 5",
         effortLabel: "Low",
       }),
-    ).toBe("Reviewed by Sonnet 5 (Low) on Traycer · uses credits");
+    ).toEqual({
+      judge: { harnessId: "traycer", label: "Sonnet 5 · Low" },
+      tone: "success",
+      pocket: { before: "Uses ", emphasis: "Traycer", after: " credits" },
+      detail: null,
+    });
   });
 
   it("names the model and the provider's own account for the provider kind", () => {
     expect(
-      autoJudgeMetaLine({
+      autoJudgeRowFace({
         kind: "provider",
         harnessId: "claude",
         harnessLabel: "Claude Code",
         modelLabel: "Sonnet",
         effortLabel: null,
       }),
-    ).toBe("Reviewed by Sonnet on Claude Code · your account");
+    ).toEqual({
+      judge: { harnessId: "claude", label: "Sonnet" },
+      tone: "success",
+      pocket: {
+        before: "Billed to your ",
+        emphasis: "Claude Code",
+        after: " account",
+      },
+      detail: null,
+    });
   });
 
   it("names the model and effort for the provider kind when an effort is named", () => {
     expect(
-      autoJudgeMetaLine({
+      autoJudgeRowFace({
         kind: "provider",
         harnessId: "claude",
         harnessLabel: "Claude Code",
         modelLabel: "Sonnet",
         effortLabel: "Low",
       }),
-    ).toBe("Reviewed by Sonnet (Low) on Claude Code · your account");
+    ).toEqual({
+      judge: { harnessId: "claude", label: "Sonnet · Low" },
+      tone: "success",
+      pocket: {
+        before: "Billed to your ",
+        emphasis: "Claude Code",
+        after: " account",
+      },
+      detail: null,
+    });
   });
 
   it("names the premium-request range for the Copilot provider kind", () => {
     expect(
-      autoJudgeMetaLine({
+      autoJudgeRowFace({
         kind: "provider",
         harnessId: "copilot",
         harnessLabel: "Copilot",
         modelLabel: "GPT-5",
         effortLabel: null,
       }),
-    ).toBe(
-      "Reviewed by GPT-5 on Copilot · uses premium requests (60–350 per hour)",
-    );
+    ).toEqual({
+      judge: { harnessId: "copilot", label: "GPT-5" },
+      tone: "success",
+      pocket: {
+        before: "Billed to your ",
+        emphasis: "Copilot",
+        after: " account",
+      },
+      detail: "Uses premium requests: 60–350 per hour",
+    });
   });
 
   it("names the model and effort for the Copilot provider kind when an effort is named", () => {
     expect(
-      autoJudgeMetaLine({
+      autoJudgeRowFace({
         kind: "provider",
         harnessId: "copilot",
         harnessLabel: "Copilot",
         modelLabel: "GPT-5",
         effortLabel: "High",
       }),
-    ).toBe(
-      "Reviewed by GPT-5 (High) on Copilot · uses premium requests (60–350 per hour)",
-    );
+    ).toEqual({
+      judge: { harnessId: "copilot", label: "GPT-5 · High" },
+      tone: "success",
+      pocket: {
+        before: "Billed to your ",
+        emphasis: "Copilot",
+        after: " account",
+      },
+      detail: "Uses premium requests: 60–350 per hour",
+    });
   });
 
   it("names the provider's own classifier, at no extra cost, for the provider-native kind", () => {
     expect(
-      autoJudgeMetaLine({
+      autoJudgeRowFace({
         kind: "provider-native",
         harnessId: "claude",
         harnessLabel: "Claude Code",
       }),
-    ).toBe("Reviewed by Claude Code's built-in classifier · no extra cost");
+    ).toEqual({
+      judge: {
+        harnessId: "claude",
+        label: "Claude Code's built-in classifier",
+      },
+      tone: "success",
+      pocket: { before: "No extra cost", emphasis: null, after: "" },
+      detail: null,
+    });
   });
 
-  it("says no judge is available for the blocked kind", () => {
-    expect(autoJudgeMetaLine({ kind: "blocked" })).toBe(
-      "No judge available on this machine · asks you instead",
-    );
+  it("says no judge is available, with a warning tone, for the blocked kind", () => {
+    expect(autoJudgeRowFace({ kind: "blocked" })).toEqual({
+      judge: null,
+      tone: "warning",
+      pocket: {
+        before: "No judge available on this machine · asks you instead",
+        emphasis: null,
+        after: "",
+      },
+      detail: null,
+    });
   });
 });
 
