@@ -205,6 +205,8 @@ export interface ChatOwnedStateAccount {
     assembly: ChatSessionState["accumulatedFileChangeSummaries"] | null,
     published: ChatSessionState["accumulatedFileChangeSummaries"],
   ): boolean;
+  /** Window-owned image witness tables can outlive the transcript rows they saw. */
+  updateImageWitnessSize(size: RetainedValueSize): boolean;
   size(): RetainedValueSize;
 }
 
@@ -230,6 +232,10 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
     | ChatSessionState["accumulatedFileChangeSummaries"]
     | null = null;
   let summaryAssemblySize: RetainedValueSize = {
+    rawBytes: 0,
+    estimatedHeapBytes: 0,
+  };
+  let imageWitnessSize: RetainedValueSize = {
     rawBytes: 0,
     estimatedHeapBytes: 0,
   };
@@ -328,6 +334,16 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
   };
 
   return {
+    updateImageWitnessSize(size): boolean {
+      if (
+        imageWitnessSize.rawBytes === size.rawBytes &&
+        imageWitnessSize.estimatedHeapBytes === size.estimatedHeapBytes
+      ) {
+        return false;
+      }
+      imageWitnessSize = size;
+      return true;
+    },
     createPrivateStringSet(name, onChange): Set<string> {
       if (privateSetCounts.has(name)) {
         throw new Error(`private string set already registered: ${name}`);
@@ -420,11 +436,16 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
       return changed;
     },
     size: () => ({
-      rawBytes: rawBytes + summaryAssemblySize.rawBytes + privateSetRawBytes,
+      rawBytes:
+        rawBytes +
+        summaryAssemblySize.rawBytes +
+        privateSetRawBytes +
+        imageWitnessSize.rawBytes,
       estimatedHeapBytes:
         estimatedHeapBytes +
         summaryAssemblySize.estimatedHeapBytes +
-        privateSetEstimatedHeapBytes,
+        privateSetEstimatedHeapBytes +
+        imageWitnessSize.estimatedHeapBytes,
     }),
   };
 }

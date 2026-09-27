@@ -53,6 +53,13 @@ const PRIVATE_COLLECTION_DECISIONS = {
   opened: "temporary copy of a charged state collection",
 } as const;
 
+const IMAGE_WITNESS_COLLECTION_DECISIONS = {
+  heldEvidence: 1, // Weak keys cannot hold a message after its transcript copy dies.
+  resetFloors: 1, // Charged incrementally, including keys whose rows left the window.
+  truncated: 1, // Bounded at 512 and charged incrementally.
+  stamps: 3, // Per-copy metadata follows the transcript's retained image rows.
+} as const;
+
 function bindingWithLargePath(path: string): WorktreeBinding {
   return {
     entries: [
@@ -119,6 +126,47 @@ afterEach(() => {
 });
 
 describe("chat owned-state memory accounting", () => {
+  it("classifies every collection allocated by the retained image witness sidecar", () => {
+    const path = resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../chats/image-witness-store.ts",
+    );
+    const tree = ts.createSourceFile(
+      path,
+      readFileSync(path, "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const allocations = new Map<string, number>();
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isNewExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        ["Map", "Set", "WeakMap", "WeakSet"].includes(node.expression.text)
+      ) {
+        const parent = node.parent;
+        let owner: string | null = null;
+        if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) {
+          owner = parent.name.text;
+        } else if (
+          ts.isPropertyAssignment(parent) &&
+          ts.isIdentifier(parent.name)
+        ) {
+          owner = parent.name.text;
+        }
+        expect(owner).not.toBeNull();
+        if (owner !== null) {
+          allocations.set(owner, (allocations.get(owner) ?? 0) + 1);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(tree);
+    expect(Object.fromEntries(allocations)).toEqual(
+      IMAGE_WITNESS_COLLECTION_DECISIONS,
+    );
+  });
+
   it("has an explicit decision for each private Map or Set in the chat store", () => {
     const path = resolve(
       dirname(fileURLToPath(import.meta.url)),

@@ -98,6 +98,7 @@ import {
   createChatOwnedStateAccount,
   noteLiveTextAppend,
 } from "@/stores/replica-memory/chat-owned-state-account";
+import type { RetainedValueSize } from "@/stores/replica-memory/retained-value-size";
 import {
   CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES,
   CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
@@ -3305,6 +3306,22 @@ export function createChatSessionStoreWithNotificationDependencies(
     );
     settleOwnedStateBudget();
   };
+  const settleImageWitnessSize = (size: RetainedValueSize): void => {
+    if (
+      disposed ||
+      !ownedStateAccount.updateImageWitnessSize(size) ||
+      !storeReady
+    ) {
+      return;
+    }
+    const total = ownedStateAccount.size();
+    memory.chatWindows.recordOwnedStateSize(
+      holderId,
+      total.rawBytes,
+      total.estimatedHeapBytes,
+    );
+    settleOwnedStateBudget();
+  };
   /**
    * The ONLY writer of {@link connectionEpoch}.
    *
@@ -4536,6 +4553,7 @@ export function createChatSessionStoreWithNotificationDependencies(
      * carried across reconnects exactly as the window's spans are.
      */
     let imageWitnesses = createImageWitnessStore();
+    imageWitnesses.setRetainedSizeListener(settleImageWitnessSize);
 
     /**
      * The ordinal range the transcript viewport is showing, as last reported
@@ -6184,7 +6202,10 @@ export function createChatSessionStoreWithNotificationDependencies(
       // The witness store's evidence orders copies within the windowed
       // coordinate space this line is abandoning; a later re-upgrade starts
       // a new lineage and must not inherit stamps from the old one.
+      imageWitnesses.setRetainedSizeListener(null);
       imageWitnesses = createImageWitnessStore();
+      imageWitnesses.setRetainedSizeListener(settleImageWitnessSize);
+      settleImageWitnessSize(imageWitnesses.retainedSize());
       applyAuthoritativeSnapshot(
         frame,
         {

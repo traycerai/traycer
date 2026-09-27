@@ -3,6 +3,10 @@ import type {
   Message,
 } from "@traycer/protocol/persistence/epic/messages";
 import type { TranscriptWindow } from "@/stores/chats/transcript-window";
+import {
+  retainedValueSize,
+  type RetainedValueSize,
+} from "@/stores/replica-memory/retained-value-size";
 
 /**
  * # Witnessed image-resolution writes: the evidence rule 2 compares
@@ -173,16 +177,42 @@ export interface ImageWitnessStore {
   readonly invalidateAll: () => void;
   /** Sources whose oldest occurrences the global bound evicted. Diagnostics. */
   readonly truncatedSources: () => ReadonlySet<string>;
+  /** Incremental charge for the private occurrence, reset, and diagnostic tables. */
+  readonly retainedSize: () => RetainedValueSize;
+  readonly setRetainedSizeListener: (
+    listener: ((size: RetainedValueSize) => void) | null,
+  ) => void;
 }
 
 export function createImageWitnessStore(): ImageWitnessStore {
   let seq = 0;
   /** Receipt order; oldest first, evicted first. */
   let occurrences: WitnessOccurrence[] = [];
+  let occurrenceSizes: RetainedValueSize[] = [];
   const heldEvidence = new WeakMap<Message, HeldCopyEvidence>();
   const resetFloors = new Map<string, number>();
   let invalidationFloor = 0;
   const truncated = new Set<string>();
+  let rawBytes = 0;
+  let estimatedHeapBytes = 0;
+  let retainedSizeListener: ((size: RetainedValueSize) => void) | null = null;
+  const retainedSize = (): RetainedValueSize => ({
+    rawBytes,
+    estimatedHeapBytes,
+  });
+  const notifySize = (): void => retainedSizeListener?.(retainedSize());
+  const adjustOccurrence = (
+    size: RetainedValueSize,
+    direction: 1 | -1,
+  ): void => {
+    rawBytes += direction * (size.rawBytes + 1);
+    estimatedHeapBytes += direction * (size.estimatedHeapBytes + 16);
+  };
+  const adjustKey = (key: string, direction: 1 | -1): void => {
+    const size = retainedValueSize(key);
+    rawBytes += direction * (size.rawBytes + 1);
+    estimatedHeapBytes += direction * (size.estimatedHeapBytes + 48);
+  };
 
   const occurrencesFor = (key: string): WitnessOccurrence[] =>
     occurrences.filter((occurrence) => occurrence.key === key);
@@ -206,24 +236,34 @@ export function createImageWitnessStore(): ImageWitnessStore {
   return {
     record: (messageId, entry) => {
       seq += 1;
-      occurrences.push({
+      const occurrence = {
         key: occurrenceKey(messageId, entry.canonicalSource),
         seq,
         entry,
-      });
+      };
+      occurrences.push(occurrence);
+      const occurrenceSize = retainedValueSize(occurrence);
+      occurrenceSizes.push(occurrenceSize);
+      adjustOccurrence(occurrenceSize, 1);
       if (occurrences.length > MAX_WITNESS_OCCURRENCES) {
         const evicted = occurrences.shift();
+        const evictedSize = occurrenceSizes.shift();
+        if (evictedSize !== undefined) adjustOccurrence(evictedSize, -1);
         if (evicted !== undefined) {
           // Refresh recency when one source truncates again. This set is only
           // diagnostic evidence; no matching or ordering decision reads it.
-          truncated.delete(evicted.key);
+          if (truncated.delete(evicted.key)) adjustKey(evicted.key, -1);
           truncated.add(evicted.key);
+          adjustKey(evicted.key, 1);
           if (truncated.size > MAX_TRUNCATED_SOURCE_KEYS) {
             const oldest = truncated.values().next();
-            if (!oldest.done) truncated.delete(oldest.value);
+            if (!oldest.done && truncated.delete(oldest.value)) {
+              adjustKey(oldest.value, -1);
+            }
           }
         }
       }
+      notifySize();
       return seq;
     },
     servedStamp: (messageId, entry) =>
@@ -282,20 +322,40 @@ export function createImageWitnessStore(): ImageWitnessStore {
     capturedAt: (copy) => evidenceFor(copy)?.capturedAt ?? 0,
     resetServedRecord: (messageId) => {
       seq += 1;
+      if (!resetFloors.has(messageId)) adjustKey(messageId, 1);
       resetFloors.set(messageId, seq);
       const prefix = `${messageId}\u0000`;
-      occurrences = occurrences.filter(
-        (occurrence) => !occurrence.key.startsWith(prefix),
-      );
+      const kept: WitnessOccurrence[] = [];
+      const keptSizes: RetainedValueSize[] = [];
+      occurrences.forEach((occurrence, index) => {
+        const size = occurrenceSizes[index];
+        if (occurrence.key.startsWith(prefix)) {
+          adjustOccurrence(size, -1);
+        } else {
+          kept.push(occurrence);
+          keptSizes.push(size);
+        }
+      });
+      occurrences = kept;
+      occurrenceSizes = keptSizes;
+      notifySize();
     },
     lineageFloor: (messageId) =>
       Math.max(resetFloors.get(messageId) ?? 0, invalidationFloor),
     invalidateAll: () => {
       seq += 1;
       invalidationFloor = seq;
+      for (const size of occurrenceSizes) adjustOccurrence(size, -1);
+      for (const key of resetFloors.keys()) adjustKey(key, -1);
       occurrences = [];
+      occurrenceSizes = [];
       resetFloors.clear();
+      notifySize();
     },
     truncatedSources: () => truncated,
+    retainedSize,
+    setRetainedSizeListener: (listener) => {
+      retainedSizeListener = listener;
+    },
   };
 }
