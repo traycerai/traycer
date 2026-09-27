@@ -4,7 +4,6 @@ import { useHistoryQuery } from "@/hooks/home/use-history-query";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import type { TrayEpic } from "@traycer-clients/shared/platform/runner-host";
 import { useTrayProjectionStore } from "@/stores/tray/tray-projection-store";
-import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 // Upper bound on epics shipped to the tray. The native menu shows the first
 // few inline and folds the rest into a "More" submenu, so we send a slightly
@@ -29,13 +28,15 @@ export function useTrayEpicsSource(): void {
   // to the value computed when this hook first mounted (it lives for the whole
   // app session) and never refresh. The projection store dedupes by content,
   // so a tick that doesn't change any label is a no-op and fires no IPC.
+  //
+  // Plain `setInterval`, not `startVisibleInterval`: the native tray menu
+  // stays on screen when the desktop window is minimised, and opening the
+  // tray does not show the window, so a visibility gate would freeze labels
+  // until the user restored the GUI.
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    return startVisibleInterval({
-      tick: () => setNowMs(Date.now()),
-      intervalMs: 60_000,
-      fireOnShow: true,
-    });
+    const id = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(id);
   }, []);
 
   const { data } = useHistoryQuery({

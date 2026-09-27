@@ -481,7 +481,23 @@ function suspendNotificationAudioIfIdle(): void {
   if (activeChimes > 0) return;
   const context = notificationAudioContext;
   if (context === null || context.state !== "running") return;
-  void context.suspend().catch(() => undefined);
+  // `suspend()` queues a control message; `state` stays `"running"` until
+  // it runs. A play that arrives in that window schedules against a still-
+  // running context, then the message parks it. Resume again if a chime
+  // started in the meantime.
+  void context
+    .suspend()
+    .then(() => {
+      if (
+        activeChimes > 0 &&
+        context === notificationAudioContext &&
+        context.state === "suspended"
+      ) {
+        return context.resume();
+      }
+      return undefined;
+    })
+    .catch(() => undefined);
 }
 
 function getNotificationAudioContext(): AudioContext | null {
@@ -604,9 +620,12 @@ export function playNotificationChimeSound(
     const context = getNotificationAudioContext();
     if (context === null) return;
 
+    activeChimes += 1;
     const scheduleChime = (): void => {
-      if (context.state === "closed") return;
-      activeChimes += 1;
+      if (context.state === "closed") {
+        activeChimes -= 1;
+        return;
+      }
       const voices = CHIME_VOICES[sound];
       const lastVoice = voices.reduce((latest, voice) =>
         voice.delay + voice.duration > latest.delay + latest.duration
@@ -671,14 +690,16 @@ export function playNotificationChimeSound(
       });
     };
 
-    if (context.state === "suspended") {
-      void context
-        .resume()
-        .then(scheduleChime)
-        .catch(() => undefined);
+    if (context.state === "running") {
+      scheduleChime();
       return;
     }
-    scheduleChime();
+    void context
+      .resume()
+      .then(scheduleChime)
+      .catch(() => {
+        activeChimes -= 1;
+      });
   } catch {
     // Audio setup can be rejected by autoplay or device restrictions.
   }

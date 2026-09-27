@@ -17,6 +17,7 @@ const oscillators: Array<{
   };
   readonly start: OscillatorEventMock;
   readonly stop: OscillatorEventMock;
+  onended: (() => void) | null;
 }> = [];
 
 class FakeAudioContext {
@@ -127,6 +128,59 @@ describe("playNotificationChimeSound", () => {
     await contexts[0].resume.mock.results[0].value;
     await Promise.resolve();
     expect(oscillators.length).toBeGreaterThan(oscillatorsAfterWarmup);
+  });
+
+  it("resumes again if a chime starts while an idle suspend is still in flight", async () => {
+    const contexts: FakeAudioContext[] = [];
+    let releaseSuspend: () => void = () => undefined;
+    class DeferredSuspendContext extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+
+      override readonly suspend = vi.fn(() => {
+        return new Promise<void>((resolve) => {
+          releaseSuspend = () => {
+            this.state = "suspended";
+            resolve();
+          };
+        });
+      });
+    }
+    vi.stubGlobal("AudioContext", DeferredSuspendContext);
+
+    prepareNotificationChimeAudio();
+    expect(contexts[0].suspend).toHaveBeenCalledOnce();
+    expect(contexts[0].state).toBe("running");
+
+    playNotificationChimeSound("classic");
+    expect(oscillators.length).toBeGreaterThan(1);
+    expect(contexts[0].state).toBe("running");
+
+    releaseSuspend();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(contexts[0].resume).toHaveBeenCalled();
+    expect(contexts[0].state).toBe("running");
+  });
+
+  it("suspends after the last oscillator of a chime ends", () => {
+    const contexts: FakeAudioContext[] = [];
+    class TrackingAudioContext extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+    }
+    vi.stubGlobal("AudioContext", TrackingAudioContext);
+
+    playNotificationChimeSound("classic");
+    const ended = oscillators.find((oscillator) => oscillator.onended !== null);
+    expect(ended?.onended).toEqual(expect.any(Function));
+    ended?.onended?.();
+    expect(contexts[0].suspend).toHaveBeenCalledOnce();
+    expect(contexts[0].state).toBe("suspended");
   });
 
   it("does not create an audio context when chimes are disabled", () => {
