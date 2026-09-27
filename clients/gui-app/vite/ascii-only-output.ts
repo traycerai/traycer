@@ -1,4 +1,5 @@
-import { parseSync, Visitor, type Plugin } from "vite";
+import { Buffer } from "node:buffer";
+import { parseSync, Visitor, type Plugin, type Rolldown } from "vite";
 
 /**
  * # ASCII-only JavaScript output
@@ -34,6 +35,16 @@ import { parseSync, Visitor, type Plugin } from "vite";
  * columns shifted along each edited line (see {@link shiftMappingColumns}).
  * The rewritten chunk is parsed again and the build fails if it does not
  * parse, rather than shipping a chunk that might not load.
+ *
+ * A chunk's map lives in two places, and both are shifted. The `.map` asset is
+ * what gets written. `output.map` is what LATER `generateBundle` hooks build
+ * on: Vite's own run after every `post` plugin, and its import analysis, on
+ * rewriting a chunk's preload list, composes that edit onto `output.map` and
+ * rewrites the asset from the result. With only the asset shifted, that
+ * rewrite silently brings back the unshifted columns.
+ *
+ * JavaScript that a library ships prebuilt - pdf.js's worker - reaches the
+ * bundle as an ASSET, not a chunk, and is rewritten the same way.
  */
 export function asciiOnlyOutput(): Plugin {
   return {
@@ -42,23 +53,71 @@ export function asciiOnlyOutput(): Plugin {
     enforce: "post",
     generateBundle(_options, bundle) {
       for (const output of Object.values(bundle)) {
-        if (output.type !== "chunk") continue;
-        const rewrite = escapeNonAsciiJavaScript(output.code, output.fileName);
-        if (rewrite === null) continue;
-        output.code = rewrite.code;
-        // The map the build writes is this asset, not `output.map`.
-        const mapFileName = `${output.fileName}.map`;
-        if (!(mapFileName in bundle)) continue;
-        const mapAsset = bundle[mapFileName];
-        if (mapAsset.type === "asset" && typeof mapAsset.source === "string") {
-          mapAsset.source = withShiftedMappings(
-            mapAsset.source,
-            rewrite.lineEdits,
+        if (output.type === "chunk") {
+          const rewrite = escapeNonAsciiJavaScript(
+            output.code,
+            output.fileName,
           );
+          if (rewrite === null) continue;
+          output.code = rewrite.code;
+          if (output.map !== null) {
+            output.map = withShiftedSourceMap(output.map, rewrite.lineEdits);
+          }
+          shiftMapAsset(bundle, output.fileName, rewrite.lineEdits);
+        } else if (JAVASCRIPT_FILE_RE.test(output.fileName)) {
+          const rewrite = escapeNonAsciiJavaScript(
+            assetText(output.source),
+            output.fileName,
+          );
+          if (rewrite === null) continue;
+          output.source = rewrite.code;
+          shiftMapAsset(bundle, output.fileName, rewrite.lineEdits);
         }
       }
     },
   };
+}
+
+const JAVASCRIPT_FILE_RE = /\.m?js$/;
+
+/** Strict UTF-8: a JavaScript asset that is not valid UTF-8 fails the build. */
+const UTF8 = new TextDecoder("utf-8", { fatal: true });
+
+function assetText(source: string | Uint8Array): string {
+  return typeof source === "string" ? source : UTF8.decode(source);
+}
+
+/** Shifts the columns of `<fileName>.map`, when the bundle carries one. */
+function shiftMapAsset(
+  bundle: Rolldown.OutputBundle,
+  fileName: string,
+  lineEdits: ReadonlyMap<number, readonly ColumnEdit[]>,
+): void {
+  const mapFileName = `${fileName}.map`;
+  if (!(mapFileName in bundle)) return;
+  const mapAsset = bundle[mapFileName];
+  if (mapAsset.type === "asset" && typeof mapAsset.source === "string") {
+    mapAsset.source = withShiftedMappings(mapAsset.source, lineEdits);
+  }
+}
+
+/**
+ * `map` with its columns shifted. A new object, assigned back to the chunk:
+ * rolldown hands the next hook the map it was given, and `toString` and
+ * `toUrl` must serialise the shifted mappings, not the original ones.
+ */
+function withShiftedSourceMap(
+  map: Rolldown.SourceMap,
+  lineEdits: ReadonlyMap<number, readonly ColumnEdit[]>,
+): Rolldown.SourceMap {
+  const shifted: Rolldown.SourceMap = {
+    ...map,
+    mappings: shiftMappingColumns(map.mappings, lineEdits),
+    toString: () => JSON.stringify(shifted),
+    toUrl: () =>
+      `data:application/json;charset=utf-8;base64,${Buffer.from(JSON.stringify(shifted), "utf-8").toString("base64")}`,
+  };
+  return shifted;
 }
 
 /** One replacement, on one line of the ORIGINAL code, in UTF-16 columns. */
