@@ -11,6 +11,7 @@ import { useWorktreeEnrichmentForClient } from "@/hooks/worktree/use-worktree-en
 import { useWorktreeHostIndexForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createAppQueryClient } from "@/lib/query-client";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { invalidateWorktreeChangedCaches } from "@/lib/worktree/invalidate-worktree-changed-caches";
 import {
   isWorktreeChangedStreamCovered,
@@ -541,6 +542,49 @@ describe("worktree metadata from one paged read per host", () => {
     await settle();
     expect(fixture.pagedCalls()).toBe(2);
     expect(fixture.selectionCalls).toHaveLength(0);
+  });
+
+  it("does not resurrect a stale selection row after a successful listing removes that managed path", async () => {
+    const fixture = createFixture([row("/wt/a", 10, "listed")]);
+    fixture.host.selection.set("/wt/a", row("/wt/a", 20, "stale selection"));
+    markWorktreeChangedStreamOpen(HOST_ID);
+    const { result } = renderHook(
+      () =>
+        useWorktreeEnrichmentForClient(
+          fixture.client,
+          ["/wt/a"],
+          true,
+          "always",
+        ),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() =>
+      expect(result.current.worktrees[0]?.branch).toBe("stale selection"),
+    );
+    await settle();
+    expect(fixture.selectionCalls).toEqual([["/wt/a"]]);
+
+    fixture.host.listing = [];
+    const baseListingKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "worktree.listAllForHost"
+    >(HOST_ID, "worktree.listAllForHost", {
+      includeActivity: false,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    });
+    await act(async () => {
+      await fixture.queryClient.invalidateQueries({
+        queryKey: baseListingKey,
+        exact: true,
+      });
+    });
+    await waitFor(() => expect(fixture.pagedCalls()).toBe(2));
+
+    expect(result.current.worktrees).toEqual([]);
+    expect(fixture.selectionCalls).toEqual([["/wt/a"]]);
   });
 
   it("prefers a later listing's owners, inUse and scripts when resolvedAt ties the selection answer", async () => {

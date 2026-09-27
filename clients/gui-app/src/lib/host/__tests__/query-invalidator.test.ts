@@ -4,10 +4,19 @@ import {
   type QueryClient,
   type QueryKey,
 } from "@tanstack/react-query";
+import {
+  HostClient,
+  type HostQueryInvalidationOptions,
+  type IHostQueryInvalidator,
+} from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import { buildHostKeyRotationSweep } from "@/lib/host/host-key-rotation-sweep";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { appLogger } from "@/lib/logger";
+import { hostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys, queryKeys } from "@/lib/query-keys";
 import {
   markWorktreeChangedStreamOpen,
@@ -27,6 +36,24 @@ function worktreeListingKey(hostId: string, activityPaths: string[] | null) {
       forceRefresh: false,
     },
   );
+}
+
+function rotationEntry(publicKey: string) {
+  return {
+    ...mockRemoteHostEntry,
+    publicKey,
+    relayFuseGrace: false,
+    recentHostCheckIn: false,
+    planAllowsRemote: true,
+    remoteStatus: {
+      connectivity: "connectable" as const,
+      viewerReachability: "ok" as const,
+      clientCloud: "ok" as const,
+      updateState: "current" as const,
+      appVersion: null,
+      lastSeenAt: null,
+    },
+  };
 }
 
 function worktreeActivityKey(hostId: string, activityPath: string) {
@@ -190,6 +217,69 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
         queryClient.getQueryState(worktreeListingKey(HOST_ID, null))?.status ===
         "success",
     );
+    expect(listing.fetches.count).toBe(2);
+  });
+
+  it("a key rotation sweeps a successful replay-covered worktree listing that availability recovery leaves alone", async () => {
+    const rotatedHostId = mockRemoteHostEntry.hostId;
+    const queryClient = createAppQueryClient();
+    const underlyingInvalidator = createHostQueryInvalidator(queryClient);
+    const invalidationOptions: Array<{
+      readonly hostId: string | null;
+      readonly options: HostQueryInvalidationOptions;
+    }> = [];
+    const invalidator: IHostQueryInvalidator = {
+      invalidateHostScope: (hostId, options) => {
+        invalidationOptions.push({ hostId, options });
+        underlyingInvalidator.invalidateHostScope(hostId, options);
+      },
+    };
+    const key = worktreeListingKey(rotatedHostId, null);
+    const listing = mountCountedQuery(queryClient, key, {
+      staleTime: Infinity,
+      impl: () => Promise.resolve({ worktrees: [], nextCursor: null }),
+    });
+    stops.push(listing.stop);
+    await waitUntil(
+      () =>
+        listing.fetches.count === 1 &&
+        queryClient.getQueryState(key)?.status === "success",
+    );
+    markWorktreeChangedStreamOpen(rotatedHostId);
+
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator,
+      findHostById: (hostId) =>
+        hostId === rotatedHostId ? mockRemoteHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-rotation",
+        handlers: {},
+      }),
+    });
+    client.notifyHostAvailabilityRecovered(rotatedHostId, "reconnect");
+    await Promise.resolve();
+    await settle(20);
+    expect(listing.fetches.count).toBe(1);
+
+    const sweepHostKeyRotation = buildHostKeyRotationSweep({
+      sweepHostScope: (hostId) =>
+        client.invalidateHostScopeAfterKeyRotation(hostId),
+    });
+    sweepHostKeyRotation([rotationEntry("old-key")]);
+    sweepHostKeyRotation([rotationEntry("rotated-key")]);
+
+    await waitUntil(() => invalidationOptions.length === 2);
+    expect(invalidationOptions[1]).toEqual({
+      hostId: rotatedHostId,
+      options: {
+        refetchActive: true,
+        recovery: "reconnect",
+        ignoreWorktreeReplayCoverage: true,
+      },
+    });
+    await waitUntil(() => listing.fetches.count === 2);
     expect(listing.fetches.count).toBe(2);
   });
 

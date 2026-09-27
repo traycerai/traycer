@@ -177,15 +177,13 @@ function recoverySweepReaches(
  * privileged one.
  *
  * `HostClient` calls this on an auth identity transition, on availability
- * recovery, and on an unannounced host-scope sweep (today: the R-1
- * key-rotation sweep). Bind/unbind is not in that list any more - it went with
- * the active slot (P4.2). An identity transition marks stale WITHOUT
- * refetching, because the request context may already be gone; the two
- * host-named sweeps can refetch active observers - except the cache-only
- * carve-outs in `isActiveRefetchExempt` and successful replay-covered worktree
- * reads, which are skipped entirely. `recoverySweepReaches` also leaves
- * alone a read still on its first attempt and, after a stall, every read that
- * settled without failing.
+ * recovery, and on an unannounced host-scope sweep. Bind/unbind is not in
+ * that list any more - it went with the active slot (P4.2). An identity
+ * transition marks stale WITHOUT refetching, because the request context may
+ * already be gone. Availability recovery skips successful replay-covered
+ * worktree reads; a public-key rotation cannot trust the former host's replay
+ * coverage, so it re-asks them. Both retain the cache-only carve-outs in
+ * `isActiveRefetchExempt`.
  */
 export function createHostQueryInvalidator(
   client: QueryClient,
@@ -207,11 +205,15 @@ export function createHostQueryInvalidator(
           .filter(
             (query) =>
               !isActiveRefetchExempt(query) &&
-              !isReplayCoveredWorktreeRead(query),
+              (options.ignoreWorktreeReplayCoverage === true ||
+                !isReplayCoveredWorktreeRead(query)),
           );
         const affectedQueries = new Set(
           inScope.filter((query) =>
-            recoverySweepReaches(query, options.recovery),
+            options.ignoreWorktreeReplayCoverage === true &&
+            query.queryKey[2] === "worktree.listAllForHost"
+              ? true
+              : recoverySweepReaches(query, options.recovery),
           ),
         );
         // The one line that counts SWEEPS. The per-stream-client recovery
@@ -227,7 +229,10 @@ export function createHostQueryInvalidator(
           hostId: hostId ?? "all",
           recovery: options.recovery,
           refetching: affectedQueries.size,
-          inFlight: inScope.filter(attemptInFlightHasNotFailed).length,
+          inFlight: inScope.filter(
+            (query) =>
+              attemptInFlightHasNotFailed(query) && !affectedQueries.has(query),
+          ).length,
         });
         const predicate = (query: Query): boolean => affectedQueries.has(query);
         // A query waiting in TanStack's retry backoff is still `fetchStatus:

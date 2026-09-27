@@ -48,6 +48,7 @@ const EMPTY_ENRICHMENT: WorktreeEnrichment = {
 /** One path's selection-mode read, as far as the merge below needs it. */
 interface PerPathRead {
   readonly rows: readonly WorktreeHostEntryV14[] | null;
+  readonly dataUpdatedAt: number;
   readonly isPending: boolean;
   readonly isFetching: boolean;
   readonly error: HostRpcError | null;
@@ -123,6 +124,7 @@ function combinePerPathReads(
 ): readonly PerPathRead[] {
   return results.map((result) => ({
     rows: result.data?.worktrees ?? null,
+    dataUpdatedAt: result.dataUpdatedAt,
     isPending: result.isPending && result.fetchStatus === "fetching",
     isFetching: result.isFetching,
     error: result.error,
@@ -193,8 +195,9 @@ function mergeEqualTimestampRows(
  * - a row the listing reports UNRESOLVED (`resolvedAt: null`): the host
  *   derives on a selection read only (resolve-on-read), so without one it
  *   would answer the sentinel row forever;
- * - a path the listing does not name (a binding-sourced path outside the
- *   managed walk): read exactly as before this listing existed;
+ * - a path the listing does not name (a recently created binding-sourced
+ *   path): accept a selection read only if it succeeded after that listing;
+ *   an older cached selection cannot resurrect a removed path;
  * - an older or unwatched host: a selection read still touches stale PR facts
  *   because that host has no subscriber-owned recurring probe.
  * - task/owner metadata with a resolved row whose PR fact was never probed:
@@ -321,8 +324,12 @@ export function useWorktreeEnrichmentForClient(
       const readAt = newestResolvedAt(read);
       const listedAt = newestResolvedAt(listed);
       const preferRead =
-        listed.length === 0 ||
-        (readAt !== null && (listedAt === null || readAt > listedAt));
+        (listed.length === 0 &&
+          (listing.dataUpdatedAt === 0 ||
+            (perPath[index]?.dataUpdatedAt ?? 0) > listing.dataUpdatedAt)) ||
+        (listed.length > 0 &&
+          readAt !== null &&
+          (listedAt === null || readAt > listedAt));
       let chosen: readonly WorktreeHostEntryV14[] = listed;
       if (preferRead) chosen = read;
       else if (readAt !== null && readAt === listedAt) {
@@ -341,6 +348,7 @@ export function useWorktreeEnrichmentForClient(
     };
   }, [
     listing.error,
+    listing.dataUpdatedAt,
     listing.isFetching,
     listing.isPending,
     listingRowsByPath,

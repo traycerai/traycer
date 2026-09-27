@@ -29,9 +29,8 @@ export const WORKTREE_HOST_LISTING_UNWATCHED_STALE_MS = 60_000;
  *
  * Paged mode (`activityPaths: null`) never spawns git on the host: it serves
  * each row from the host's row cache - branch, uncommitted count, PR facts,
- * `resolvedAt` - whatever `includeActivity` says, which gates only the two
- * git probes (`lastActivityAt`, `branchStatus`) no background surface renders
- * (and which the protocol refuses to run unpaged). So this cheap read is
+ * `resolvedAt` - whatever `includeActivity` says, which gates fresh git and
+ * PR probes (and which the protocol refuses to run unpaged). So this cheap read is
  * enough for the index consumers (owner/path index, sweep counts,
  * uncommitted counts, env files) AND for the rows the History, Epic and owner
  * surfaces render, which used to cost one selection-mode read per 8
@@ -69,6 +68,8 @@ export interface WorktreeHostListing {
   /** The host has answered. */
   readonly isSuccess: boolean;
   readonly isFetching: boolean;
+  /** When the host last answered, including an empty successful listing. */
+  readonly dataUpdatedAt: number;
   readonly error: Error | null;
 }
 
@@ -123,6 +124,7 @@ export function useWorktreeHostListingForClient(
     isPending: enabled && query.isPending,
     isSuccess: query.isSuccess,
     isFetching: query.isFetching,
+    dataUpdatedAt: query.dataUpdatedAt,
     error: query.error instanceof Error ? query.error : null,
   };
 }
