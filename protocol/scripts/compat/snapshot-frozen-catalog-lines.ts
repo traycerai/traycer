@@ -43,6 +43,7 @@ import {
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
   getChatRunSettingsResponseSchemaV20,
+  getChatRunSettingsBatchResponseSchema,
 } from "../../src/host/epic/chat-records";
 import {
   providersListRequestSchema,
@@ -206,6 +207,7 @@ const FIXTURES = {
   "epic.getChatRunSettings@1.0": dump(getChatRunSettingsResponseSchemaV10),
   "epic.getChatRunSettings@2.0": dump(getChatRunSettingsResponseSchemaV20),
   "epic.getChatRunSettings@3.0": dump(getChatRunSettingsResponseSchema),
+  "epic.getChatRunSettingsBatch@1.0": dump(getChatRunSettingsBatchResponseSchema),
   "providers.list@1.0..6.0 request": dump(providersListRequestSchemaBeforeV70),
   // This row DOES get regenerated when a provider id is added, and it is the
   // one row here where that is the right answer rather than the forbidden one.
