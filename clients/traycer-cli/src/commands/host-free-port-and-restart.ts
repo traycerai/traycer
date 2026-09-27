@@ -4,6 +4,7 @@ import {
 } from "../host/free-port-kill";
 import { portRepairFailure } from "../host/free-port-outcome";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
+import { parkedActivationRelaunchable } from "../host/parked-activation-relaunch";
 import {
   requireCliUpdateMutationCapability,
   withCliUpdateContenderContext,
@@ -159,12 +160,12 @@ export function buildHostFreePortAndRestartCommand(
             if (failure !== null) throw failure;
           }
           const controller = createServiceController();
-          const restart = contenderContext.recoveryAction === "restart-current";
+          const stopOnly = contenderContext.recoveryAction === "stop-only";
           // Classified under the same lock acquisition that guards the action
           // below. Refusing beats stopping for a caller whose intent is "make
           // this host reachable again": the port is already freed above, and
           // stopping the service would add a down host to a parked update.
-          if (!restart && args.deferIfParked) {
+          if (stopOnly && args.deferIfParked) {
             return {
               kill: killInner,
               restarted: false,
@@ -172,6 +173,16 @@ export function buildHostFreePortAndRestartCommand(
               attestation: await attestInstallRuntime(ctx.runtime.environment),
             };
           }
+          // Same rule as `host restart`: a `waiting-to-activate` park whose
+          // claim matches the installed bytes is continued by the ordinary
+          // restart, which IS its activation restart; stopping instead left
+          // the machine hostless (`host/parked-activation-relaunch.ts`).
+          const restart =
+            !stopOnly ||
+            (await parkedActivationRelaunchable(
+              ctx.runtime.environment,
+              contenderContext.activeAttempt,
+            ));
           ctx.progress({
             stage: restart ? "service-restart" : "service-stop",
             message: restart
@@ -210,8 +221,8 @@ export function buildHostFreePortAndRestartCommand(
     // the other deliberately left it alone. Reporting them with one sentence
     // would tell a user their host is down when it is still running.
     const noRelaunch = deferredForParkedActivation
-      ? `left '${label.id}' untouched because a packaged update is waiting for its explicit activation`
-      : `stopped '${label.id}' without activating parked update bytes`;
+      ? `left '${label.id}' untouched because a packaged update is waiting for its explicit activation; run 'traycer host update' to activate it`
+      : `stopped '${label.id}' without activating parked update bytes; the host is now down - run 'traycer host update' to activate the update and bring it back`;
     // The kill sentence composes with whichever service action actually ran -
     // a stop-only or deferred outcome must not claim a restart was requested.
     const action = restarted

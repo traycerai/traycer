@@ -99,6 +99,10 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       environment,
       version: outcome.legacy.version,
       changed: outcome.legacy.previousVersion !== outcome.legacy.version,
+      // `changed` compares versions, so a restart that revived a stopped host
+      // onto already-installed bytes logs `changed:false`; the action is the
+      // fact that distinguishes that run from a true no-op.
+      postSwapAction: outcome.legacy.serviceLifecycle.postSwapAction,
       releasedReason: outcome.releasedReason,
       hasPostSwapError: outcome.legacy.serviceLifecycle.postSwapError !== null,
     });
@@ -152,6 +156,22 @@ function humanSummary(outcome: HostUpdateRunOutcome): string {
     // fine. A bound verb that declines over a stopped host does not reach
     // here at all any more; it exits non-zero from the run.
     return `host update did not claim an attempt (${outcome.releasedReason}); ${runningState(outcome)}`;
+  }
+  // A restart with nothing to compare against is the activation arm's
+  // `no-live-host` reading: the target was already installed, nothing was
+  // serving it, and the run's whole act was to bring the host up.
+  // `previousVersion` equals `version` there because no running version
+  // existed to name - so this has to be read BEFORE the equality test below,
+  // which would otherwise report a run that revived a stopped host as having
+  // done nothing (the 2026-09-27 staging outage: "already at ... (no-op)"
+  // printed while the host it had just started was booting).
+  if (
+    legacy.serviceLifecycle.postSwapAction === "restart" &&
+    legacy.previousVersion === legacy.version
+  ) {
+    return legacy.serviceLifecycle.postSwapError !== null
+      ? `started host ${legacy.version} (it was installed but not running); service did not converge: ${legacy.serviceLifecycle.postSwapError}`
+      : `started host ${legacy.version}; it was installed but not running`;
   }
   if (legacy.previousVersion === legacy.version) {
     return `host already at ${legacy.version} (no-op)`;

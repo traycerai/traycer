@@ -21,6 +21,7 @@ import {
   stopHostForRestartWithAttempt,
 } from "../host/update-mutation";
 import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
+import { parkedActivationRelaunchable } from "../host/parked-activation-relaunch";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { cliPostFinalizeMarkerPath } from "../store/paths";
 import {
@@ -136,7 +137,24 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
         if (args.ifIdle) {
           await assertHostNotBusy(ctx.runtime.environment);
         }
-        if (contenderContext.recoveryAction === "stop-only") {
+        const stopOnly = contenderContext.recoveryAction === "stop-only";
+        // `--defer-if-parked` is decided BEFORE the park is examined: that
+        // caller (Desktop's force-restart) runs its own activation once this
+        // command reports `deferred`, so a matching park must still defer
+        // rather than be activated here behind its back.
+        if (
+          stopOnly &&
+          !args.deferIfParked &&
+          (await parkedActivationRelaunchable(
+            ctx.runtime.environment,
+            contenderContext.activeAttempt,
+          ))
+        ) {
+          // A matching park: fall through to the ordinary restart below, which
+          // IS the activation restart the park is waiting for (see
+          // `host/parked-activation-relaunch.ts` for why a park, and only a
+          // park, may be continued this way).
+        } else if (stopOnly) {
           // Classified from the record under the SAME lock acquisition that
           // guards the action below, so no contender can change the record
           // between the decision and its effect.
@@ -153,12 +171,16 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
               attestation: await attestInstallRuntime(ctx.runtime.environment),
             };
           }
-          // An activate-continuation record proves that packaged-Mac bytes
-          // are waiting for the update executor's explicit activation edge.
-          // Force restart remains a usable recovery control, but relaunching
-          // the generic supervisor here could activate those parked bytes
-          // outside that continuation. Stop the current service safely and
-          // leave the parked record for the admitted activation flow.
+          // An ACTIVE activate-continuation record (`applying`, or
+          // `preparing/activate`) proves that bytes are placed and an
+          // executor may still be mid-flight outside the lock (the
+          // packaged-macOS executor releases between its spans). Relaunching
+          // the generic supervisor here could activate those bytes outside
+          // that continuation, so stop the current service safely and leave
+          // the record for the admitted activation flow. A parked record that
+          // does NOT match the installed bytes lands here too: the supervisor
+          // would refuse that relaunch at spawn anyway, and a stop that says
+          // so beats a "restart" that exits 0 having started nothing.
           await stopHostServiceWithAttempt(
             capability,
             {
@@ -226,8 +248,8 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
       human: restarted
         ? humanForRestart(label.id, locked.result)
         : deferredForParkedActivation
-          ? `left service '${label.id}' untouched because a packaged update is waiting for its explicit activation`
-          : `stopped service '${label.id}' without relaunch because a packaged update is waiting for its explicit activation`,
+          ? `left service '${label.id}' untouched because a packaged update is waiting for its explicit activation; run 'traycer host update' to activate it`
+          : `stopped service '${label.id}' without relaunch because a packaged update is waiting for its explicit activation; the host is now down - run 'traycer host update' to activate the update and bring it back`,
       exitCode: 0,
     };
   };

@@ -10,7 +10,11 @@ import {
   readHostPidMetadata,
   type HostPidMetadata,
 } from "../host/pid-metadata";
-import { bootstrapLogPath } from "../store/paths";
+import {
+  readUpdateAttemptRecord,
+  type HostUpdateAttemptRecord,
+} from "@traycer-clients/shared/host-update";
+import { bootstrapLogPath, hostHomeDir } from "../store/paths";
 import { makeColorizer, shouldUseColor, type Colorizer } from "../runner/ansi";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import type { RuntimeContext } from "../runner/runtime";
@@ -29,6 +33,44 @@ interface HostStatusOutput {
   // there is no decision left to report; `commands/login.ts` carries the same
   // pinned-null field for the same reason.
   readonly bootstrap: null;
+  /**
+   * The durable update attempt standing beside the host, when it is not
+   * terminal; `null` when there is none (or the record is unreadable - a
+   * status read never fails over it). Additive: every field above keeps its
+   * shape.
+   *
+   * Carried because it changes the next move. A parked or interrupted record
+   * makes every service command (`ensure`, `service install`, `service
+   * start`) refuse, and `host update` is the one command that resumes it - so
+   * a status that reports "not running" without this cannot point at the
+   * command that works.
+   */
+  readonly updateAttempt: HostStatusUpdateAttempt | null;
+}
+
+export interface HostStatusUpdateAttempt {
+  readonly attemptId: string;
+  readonly targetVersion: string;
+  readonly phase: HostUpdateAttemptRecord["phase"];
+  readonly execution: HostUpdateAttemptRecord["execution"];
+  readonly continuation: HostUpdateAttemptRecord["continuation"];
+}
+
+async function readNonterminalUpdateAttempt(
+  environment: RuntimeContext["environment"],
+): Promise<HostStatusUpdateAttempt | null> {
+  const read = await readUpdateAttemptRecord(hostHomeDir(environment));
+  if (read.kind !== "valid" || read.value.execution === "terminal") {
+    return null;
+  }
+  const record = read.value;
+  return {
+    attemptId: record.attemptId,
+    targetVersion: record.targetVersion,
+    phase: record.phase,
+    execution: record.execution,
+    continuation: record.continuation,
+  };
 }
 
 // Runner-aware `traycer host status` - reads pid metadata, bootstrap
@@ -71,6 +113,11 @@ export const hostStatusCommand: CommandFn = async (
   // observable.)
   const running =
     pidMetadata !== null && !publishedHostProcessGone(pidMetadata);
+  // Lock-free like the other three reads: a status projection observes the
+  // record and never contends for it.
+  const updateAttempt = await readNonterminalUpdateAttempt(
+    ctx.runtime.environment,
+  );
   const output: HostStatusOutput = {
     running,
     pidMetadata,
@@ -78,6 +125,7 @@ export const hostStatusCommand: CommandFn = async (
     bootstrapLogPath: bootstrapLogPath(ctx.runtime.environment),
     bootstrapLogTail,
     bootstrap: null,
+    updateAttempt,
   };
 
   return {
@@ -144,13 +192,16 @@ function renderHumanStatus(
   // observational and unhelpful in the same breath: it reports a stopped host
   // and leaves the reader with no next move, which is precisely the dead end
   // the implicit bootstrap used to paper over.
+  //
+  // And the move has to be one that WORKS from this state. While a nonterminal
+  // update record stands, `host ensure` yields to it and `service install` /
+  // `service start` refuse, so pointing at `ensure` sends the reader into the
+  // refusal loop the 2026-09-27 staging outage sat in for an hour. The one
+  // command that resumes a record is `host update`, so that is the hint when
+  // a record stands.
   if (!output.running) {
     lines.push("");
-    lines.push(
-      c.dim(
-        "Run 'traycer host ensure' to install, register, and start the host.",
-      ),
-    );
+    lines.push(c.dim(nextMoveHint(output.updateAttempt)));
   }
 
   const recent = output.bootstrapMarkers.slice(-RECENT_ACTIVITY_ROWS).reverse();
@@ -165,6 +216,16 @@ function renderHumanStatus(
   lines.push("");
   lines.push(c.dim("Run with --json for the full structured payload."));
   return lines.join("\n");
+}
+
+function nextMoveHint(attempt: HostStatusUpdateAttempt | null): string {
+  if (attempt === null) {
+    return "Run 'traycer host ensure' to install, register, and start the host.";
+  }
+  if (attempt.execution === "parked") {
+    return `An update to host ${attempt.targetVersion} is parked at ${attempt.phase} with no updater running. Run 'traycer host update' to resume it; that also starts the host.`;
+  }
+  return `An update to host ${attempt.targetVersion} is in progress (${attempt.phase}). Wait for it to finish; if it was interrupted, 'traycer host update' recovers it and starts the host.`;
 }
 
 function kvBlock(c: Colorizer, rows: readonly [string, string][]): string[] {

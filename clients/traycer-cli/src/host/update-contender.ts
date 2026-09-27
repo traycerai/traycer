@@ -7,7 +7,10 @@ import {
   type UpdateContenderOutcome,
   type UpdateMutationCapability,
 } from "@traycer-clients/shared/host-update";
-import type { UpdateMutationCapabilityAdoption } from "@traycer-clients/shared/host-update";
+import type {
+  HostUpdateAttemptRecord,
+  UpdateMutationCapabilityAdoption,
+} from "@traycer-clients/shared/host-update";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import {
@@ -252,10 +255,11 @@ function unwrapContenderOutcome<T>(
     case "nonterminal-attempt":
       throw cliError({
         code: CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
-        message:
+        message: `${
           outcome.disposition === "yield"
             ? "a host update attempt is in progress; this operation yielded to it"
-            : "a host update attempt is in progress; this maintenance operation is refused",
+            : "a host update attempt is in progress; this maintenance operation is refused"
+        } (${describeNonterminalAttempt(outcome.record)})`,
         details: {
           reason: options.reason,
           disposition: outcome.disposition,
@@ -281,6 +285,30 @@ function unwrapContenderOutcome<T>(
         exitCode: 75,
       });
   }
+}
+
+/**
+ * The way out, named in the refusal itself.
+ *
+ * Every service-shaped command (`service install`, `service start`, `host
+ * ensure`, `host stop`) refuses while a nonterminal attempt record stands, and
+ * the one command that resumes a record - `host update` - is not among them.
+ * Without this clause an operator whose host is down beside a parked record
+ * is sent from refusal to refusal (`host status` says "run host ensure", which
+ * yields to the same record), which is how the 2026-09-27 staging host stayed
+ * down for an hour with the recovery one command away.
+ *
+ * A PARKED record has no live updater by definition, so resuming it is always
+ * the right next move. An ACTIVE one may have a live holder momentarily
+ * outside the lock (the packaged-macOS executor releases between its spans),
+ * so the guidance is to wait first; `host update` still recovers an
+ * interrupted one, and says so when the holder is proven dead.
+ */
+function describeNonterminalAttempt(record: HostUpdateAttemptRecord): string {
+  const where = `attempt ${record.attemptId} is ${record.phase}/${record.execution} for host ${record.targetVersion}`;
+  return record.execution === "parked"
+    ? `${where}; it is parked with no updater running - run 'traycer host update' to resume it, which also starts the host if none is running`
+    : `${where}; wait for the running update to finish, or run 'traycer host update' to recover it if it was interrupted`;
 }
 
 function cliLockOptions(
