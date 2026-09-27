@@ -381,9 +381,8 @@ describe("image-blob-cache", () => {
   });
 
   it("does not let a stale in-flight grace timer drop a replacement after a failed fetch", async () => {
-    const firstFetcher = vi.fn(
-      (_hash: string, _signal: AbortSignal) =>
-        Promise.reject(new Error("fetch failed")),
+    const firstFetcher = vi.fn((_hash: string, _signal: AbortSignal) =>
+      Promise.reject(new Error("fetch failed")),
     );
     let replacementAborted = false;
     const resolvers: Array<(result: ImageBytesResult) => void> = [];
@@ -483,10 +482,7 @@ describe("image-blob-cache", () => {
     const IMAGE_COUNT = 5;
     const DECODED_BYTES_PER_IMAGE = 1_500_000;
     const payload = new Uint8Array(DECODED_BYTES_PER_IMAGE);
-    const resolvers = new Map<
-      string,
-      (result: ImageBytesResult) => void
-    >();
+    const resolvers = new Map<string, (result: ImageBytesResult) => void>();
     let abortCount = 0;
     let decodedTransferred = 0;
     const fetcher = vi.fn(

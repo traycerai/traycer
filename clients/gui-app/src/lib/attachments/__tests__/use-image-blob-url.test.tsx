@@ -423,10 +423,12 @@ describe("useImageBlobUrlState remount against the real cache", () => {
 
   it("reuses the in-flight fetch when the hook unmounts and remounts", async () => {
     let fetchCount = 0;
-    let resolveFetch: ((result: {
-      readonly bytes: Uint8Array<ArrayBuffer>;
-      readonly mediaType: null;
-    }) => void) | null = null;
+    let resolveFetch:
+      | ((result: {
+          readonly bytes: Uint8Array<ArrayBuffer>;
+          readonly mediaType: null;
+        }) => void)
+      | null = null;
     const fetch: ImageBytesFetcher = () => {
       fetchCount += 1;
       return new Promise((resolve) => {
