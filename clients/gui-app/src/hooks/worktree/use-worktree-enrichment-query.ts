@@ -19,6 +19,7 @@ import {
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import {
   useWorktreeHostListingForClient,
+  WORKTREE_HOST_LISTING_PARAMS,
   type WorktreeHostListingRow,
 } from "@/hooks/worktree/use-worktree-host-listing";
 import { rowsByRequestedPath } from "@/lib/worktree/worktree-path-match";
@@ -27,6 +28,7 @@ import {
   useWorktreeChangedStreamCovered,
 } from "@/lib/worktree/worktree-changed-coverage";
 import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
 
 export interface WorktreeEnrichment {
   /** The enriched rows, in `paths` order; a path the host no longer lists has none. */
@@ -44,6 +46,51 @@ const EMPTY_ENRICHMENT: WorktreeEnrichment = {
   isFetching: false,
   error: null,
 };
+
+interface WorktreeQuerySuccessOrder {
+  orderFor(queryKey: readonly unknown[]): number;
+}
+
+const worktreeQuerySuccessOrders = new WeakMap<
+  QueryClient,
+  WorktreeQuerySuccessOrder
+>();
+
+/**
+ * TanStack's dataUpdatedAt has millisecond resolution. A selection enabled
+ * after an empty listing can succeed within that same millisecond, so compare
+ * the cache's successful update edges when their timestamps tie. One tracker
+ * per QueryClient serves every mounted worktree consumer.
+ */
+function worktreeQuerySuccessOrderFor(
+  queryClient: QueryClient,
+): WorktreeQuerySuccessOrder {
+  const existing = worktreeQuerySuccessOrders.get(queryClient);
+  if (existing !== undefined) return existing;
+  const queryCache = queryClient.getQueryCache();
+  const orderByQuery = new WeakMap<object, number>();
+  let nextOrder = 0;
+  queryCache.subscribe((event) => {
+    const queryKey: unknown = event.query.queryKey;
+    if (
+      event.type !== "updated" ||
+      event.action.type !== "success" ||
+      !Array.isArray(queryKey) ||
+      !hostQueryKeys.matchesMethodOnAnyHost(queryKey, "worktree.listAllForHost")
+    )
+      return;
+    nextOrder += 1;
+    orderByQuery.set(event.query, nextOrder);
+  });
+  const tracker: WorktreeQuerySuccessOrder = {
+    orderFor: (queryKey) => {
+      const query = queryCache.find({ queryKey, exact: true });
+      return query === undefined ? 0 : (orderByQuery.get(query) ?? 0);
+    },
+  };
+  worktreeQuerySuccessOrders.set(queryClient, tracker);
+  return tracker;
+}
 
 /** One path's selection-mode read, as far as the merge below needs it. */
 interface PerPathRead {
@@ -144,6 +191,35 @@ function newestResolvedAt(rows: readonly { resolvedAt: number | null }[]) {
   return newest;
 }
 
+function selectionIsNewerThanListing(args: {
+  readonly listedCount: number;
+  readonly readAt: number | null;
+  readonly listedAt: number | null;
+  readonly listingDataUpdatedAt: number;
+  readonly selectionDataUpdatedAt: number;
+  readonly listingSuccessOrder: number;
+  readonly selectionSuccessOrder: number;
+}): boolean {
+  const {
+    listedCount,
+    readAt,
+    listedAt,
+    listingDataUpdatedAt,
+    selectionDataUpdatedAt,
+    listingSuccessOrder,
+    selectionSuccessOrder,
+  } = args;
+  if (listedCount > 0) {
+    return readAt !== null && (listedAt === null || readAt > listedAt);
+  }
+  return (
+    listingDataUpdatedAt === 0 ||
+    selectionDataUpdatedAt > listingDataUpdatedAt ||
+    (selectionDataUpdatedAt === listingDataUpdatedAt &&
+      selectionSuccessOrder > listingSuccessOrder)
+  );
+}
+
 /**
  * A cached selection can know activity facts that a base listing omitted,
  * while the later listing knows current owners, scripts and in-use state.
@@ -219,6 +295,7 @@ export function useWorktreeEnrichmentForClient(
   activityRequirement: WorktreeActivityRequirement,
 ): WorktreeEnrichment {
   const queryClient = useQueryClient();
+  const successOrder = worktreeQuerySuccessOrderFor(queryClient);
   const readiness = useReactiveHostReadiness(client);
   const streamCovered = useWorktreeChangedStreamCovered(
     enabled && paths.length > 0 ? readiness.hostId : null,
@@ -314,6 +391,13 @@ export function useWorktreeEnrichmentForClient(
   return useMemo<WorktreeEnrichment>(() => {
     if (uniquePaths.length === 0) return EMPTY_ENRICHMENT;
     const worktrees: WorktreeHostEntryV14[] = [];
+    const listingSuccessOrder = successOrder.orderFor(
+      hostQueryKeys.method<HostRpcRegistry, "worktree.listAllForHost">(
+        readiness.hostId,
+        "worktree.listAllForHost",
+        WORKTREE_HOST_LISTING_PARAMS,
+      ),
+    );
     uniquePaths.forEach((path, index) => {
       const listed = listingRowsByPath.get(path) ?? [];
       const read = perPath[index]?.rows ?? null;
@@ -323,13 +407,18 @@ export function useWorktreeEnrichmentForClient(
       }
       const readAt = newestResolvedAt(read);
       const listedAt = newestResolvedAt(listed);
-      const preferRead =
-        (listed.length === 0 &&
-          (listing.dataUpdatedAt === 0 ||
-            (perPath[index]?.dataUpdatedAt ?? 0) > listing.dataUpdatedAt)) ||
-        (listed.length > 0 &&
-          readAt !== null &&
-          (listedAt === null || readAt > listedAt));
+      const selectionSuccessOrder = successOrder.orderFor(
+        perPathEnrichmentQueryKey(readiness.hostId, path),
+      );
+      const preferRead = selectionIsNewerThanListing({
+        listedCount: listed.length,
+        readAt,
+        listedAt,
+        listingDataUpdatedAt: listing.dataUpdatedAt,
+        selectionDataUpdatedAt: perPath[index]?.dataUpdatedAt ?? 0,
+        listingSuccessOrder,
+        selectionSuccessOrder,
+      });
       let chosen: readonly WorktreeHostEntryV14[] = listed;
       if (preferRead) chosen = read;
       else if (readAt !== null && readAt === listedAt) {
@@ -353,6 +442,8 @@ export function useWorktreeEnrichmentForClient(
     listing.isPending,
     listingRowsByPath,
     perPath,
+    readiness.hostId,
+    successOrder,
     uniquePaths,
   ]);
 }

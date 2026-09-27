@@ -7,6 +7,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { WorktreeHostEntryV16 } from "@traycer/protocol/host/worktree-schemas";
+import { perPathEnrichmentQueryKey } from "@/components/settings/panels/worktrees-enrichment-batcher";
 import { useWorktreeEnrichmentForClient } from "@/hooks/worktree/use-worktree-enrichment-query";
 import { useWorktreeHostIndexForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -585,6 +586,89 @@ describe("worktree metadata from one paged read per host", () => {
 
     expect(result.current.worktrees).toEqual([]);
     expect(fixture.selectionCalls).toEqual([["/wt/a"]]);
+  });
+
+  it("accepts a same-millisecond binding selection, but suppresses it after a later empty listing until it refetches", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const timestamp = Date.now();
+    vi.setSystemTime(timestamp);
+    const bindingPath = "/wt/binding";
+    const fixture = createFixture([]);
+    fixture.host.selection.set(
+      bindingPath,
+      row(bindingPath, timestamp, "binding selection"),
+    );
+    markWorktreeChangedStreamOpen(HOST_ID);
+    const { result } = renderHook(
+      () =>
+        useWorktreeEnrichmentForClient(
+          fixture.client,
+          [bindingPath],
+          true,
+          "always",
+        ),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() =>
+      expect(result.current.worktrees[0]?.branch).toBe("binding selection"),
+    );
+    await settle();
+    expect(fixture.pagedCalls()).toBe(1);
+    expect(fixture.selectionCalls).toEqual([[bindingPath]]);
+
+    const listingKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "worktree.listAllForHost"
+    >(HOST_ID, "worktree.listAllForHost", {
+      includeActivity: false,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    });
+    const listingQuery = fixture.queryClient.getQueryCache().find({
+      queryKey: listingKey,
+      exact: true,
+    });
+    expect(listingQuery).toBeDefined();
+    const listingUpdateCount = listingQuery?.state.dataUpdateCount ?? 0;
+
+    // A later empty response has the same Date.now() value as the cached
+    // selection answer. Its cache update order must still suppress that old
+    // row; a fresh selection derive may make the binding path visible again.
+    await act(async () => {
+      await fixture.queryClient.invalidateQueries({
+        queryKey: listingKey,
+        exact: true,
+      });
+    });
+    await waitFor(() =>
+      expect(listingQuery?.state.dataUpdateCount).toBeGreaterThan(
+        listingUpdateCount,
+      ),
+    );
+    expect(result.current.worktrees).toEqual([]);
+    expect(fixture.selectionCalls).toEqual([[bindingPath]]);
+
+    fixture.host.selection.set(
+      bindingPath,
+      row(bindingPath, timestamp, "fresh binding selection"),
+    );
+    await act(async () => {
+      await fixture.queryClient.invalidateQueries({
+        queryKey: perPathEnrichmentQueryKey(HOST_ID, bindingPath),
+        exact: true,
+      });
+    });
+    await waitFor(() =>
+      expect(result.current.worktrees[0]?.branch).toBe(
+        "fresh binding selection",
+      ),
+    );
+    await settle();
+    expect(fixture.pagedCalls()).toBe(2);
+    expect(fixture.selectionCalls).toEqual([[bindingPath], [bindingPath]]);
   });
 
   it("prefers a later listing's owners, inUse and scripts when resolvedAt ties the selection answer", async () => {
