@@ -5,10 +5,18 @@ import {
   type ChatSkeletonResume,
 } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
 import type { TranscriptWindow } from "@/stores/chats/transcript-window";
+import {
+  clearDurableSkeletons,
+  hasDurableSkeletonHint,
+  loadDurableSkeleton,
+  removeDurableSkeleton,
+  saveDurableSkeleton,
+  skeletonResumeStorageKey,
+} from "./skeleton-resume-durable-cache";
 
 /**
- * The skeletons of chats this window has CLOSED, kept so re-opening one can
- * resume (`chat.subscribe@1.18`) instead of re-downloading it.
+ * Complete skeletons from this window, kept so a later `chat.subscribe@1.19`
+ * can resume instead of re-downloading them.
  *
  * A warm chat session already resumes on reconnect: it still holds its
  * skeleton, and its offer is built from that. A session the warm pool evicted,
@@ -26,14 +34,9 @@ import type { TranscriptWindow } from "@/stores/chats/transcript-window";
  * when a host actually resumes from it. Everything is bounded by
  * {@link SKELETON_RESUME_CACHE_MAX_CHARS} across all chats, oldest out first.
  *
- * ## Memory only
- *
- * Nothing here is persisted. A skeleton carries the first line of every user
- * message (`preview`), which does not belong on disk on the strength of an
- * optimization, and a reload that loses the cache costs only the saving. It is
- * dropped whole on an identity change (`disposingForIdentityTeardown`), and
- * keyed by user and host as well as chat, so one account can never offer
- * another's rows.
+ * The same bounded entry is persisted in an account-partitioned IndexedDB
+ * store. It is erased on sign-out and on the explicit persisted-state wipe.
+ * A cold load is attempted only when the tiny presence hint names this chat.
  *
  * A stale entry is harmless by construction: the host compares digests, and a
  * skeleton that moved since it was cached simply matches fewer blocks.
@@ -66,9 +69,10 @@ type Stored = {
 
 const cache = new Map<string, Stored>();
 let cachedChars = 0;
+let resetEpoch = 0;
 
 function keyOf(key: SkeletonResumeCacheKey): string {
-  return JSON.stringify([key.userId, key.hostId, key.epicId, key.chatId]);
+  return skeletonResumeStorageKey(key);
 }
 
 function drop(cacheKey: string): void {
@@ -89,18 +93,83 @@ export function rememberSkeletonForResume(
   window: TranscriptWindow,
 ): void {
   const cacheKey = keyOf(key);
-  drop(cacheKey);
-  if (!window.skeletonComplete || window.invalidated) return;
+  if (!window.skeletonComplete || window.invalidated) {
+    drop(cacheKey);
+    if (key.userId !== null)
+      void removeDurableSkeleton(cacheKey).catch(() => undefined);
+    return;
+  }
   const offer = buildSkeletonResumeOffer(window.skeleton, window.rowCount);
-  if (offer === null) return;
+  if (offer === null) {
+    drop(cacheKey);
+    if (key.userId !== null)
+      void removeDurableSkeleton(cacheKey).catch(() => undefined);
+    return;
+  }
+  const old = cache.get(cacheKey);
+  if (
+    old !== undefined &&
+    old.claim.blockDigests.length === offer.claim.blockDigests.length &&
+    old.claim.blockDigests.every(
+      (digest, index) => digest === offer.claim.blockDigests[index],
+    )
+  ) {
+    return;
+  }
   const entriesJson = JSON.stringify(offer.entries);
   // One chat larger than the whole budget is not cached at all, rather than
   // evicting everything else to make room it still would not have.
-  if (entriesJson.length > SKELETON_RESUME_CACHE_MAX_CHARS) return;
+  if (entriesJson.length > SKELETON_RESUME_CACHE_MAX_CHARS) {
+    drop(cacheKey);
+    if (key.userId !== null)
+      void removeDurableSkeleton(cacheKey).catch(() => undefined);
+    return;
+  }
+  drop(cacheKey);
   cache.set(cacheKey, { claim: offer.claim, entriesJson });
   cachedChars += entriesJson.length;
   // Map iteration is insertion order, and `drop` + `set` above re-inserts, so
   // the first key is always the least recently remembered or read.
+  while (
+    cachedChars > SKELETON_RESUME_CACHE_MAX_CHARS ||
+    cache.size > SKELETON_RESUME_CACHE_MAX_CHATS
+  ) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    drop(oldest);
+  }
+  if (key.userId !== null) {
+    void saveDurableSkeleton(cacheKey, {
+      claim: offer.claim,
+      entriesJson,
+    }).catch(() => undefined);
+  }
+}
+
+/** A no-hint miss requires no IndexedDB work before subscribing. */
+export function shouldLoadDurableSkeletonForResume(
+  key: SkeletonResumeCacheKey,
+): boolean {
+  const cacheKey = keyOf(key);
+  return (
+    key.userId !== null &&
+    !cache.has(cacheKey) &&
+    hasDurableSkeletonHint(cacheKey)
+  );
+}
+
+/** Load into the private cache only. No row is published before host confirmation. */
+export async function hydrateSkeletonForResume(
+  key: SkeletonResumeCacheKey,
+): Promise<void> {
+  if (!shouldLoadDurableSkeletonForResume(key)) return;
+  const epoch = resetEpoch;
+  const cacheKey = keyOf(key);
+  const loaded = await loadDurableSkeleton(cacheKey);
+  if (loaded === null || epoch !== resetEpoch || cache.has(cacheKey)) return;
+  if (loaded.entriesJson.length > SKELETON_RESUME_CACHE_MAX_CHARS) return;
+  cache.set(cacheKey, loaded);
+  cachedChars += loaded.entriesJson.length;
   while (
     cachedChars > SKELETON_RESUME_CACHE_MAX_CHARS ||
     cache.size > SKELETON_RESUME_CACHE_MAX_CHATS
@@ -135,10 +204,17 @@ export function readSkeletonForResume(
   };
 }
 
-/** Drop everything: the identity these skeletons belonged to is gone. */
-export function forgetAllSkeletonsForResume(): void {
+/** Drop memory immediately, then fence and clear the durable cache. */
+export function clearAllSkeletonsForResume(): Promise<void> {
+  resetEpoch += 1;
   cache.clear();
   cachedChars = 0;
+  return clearDurableSkeletons().catch(() => undefined);
+}
+
+/** Synchronous identity teardown entry point; the disk clear is queued. */
+export function forgetAllSkeletonsForResume(): void {
+  void clearAllSkeletonsForResume();
 }
 
 /** The cache's size, for tests. */
@@ -147,4 +223,10 @@ export function skeletonResumeCacheStatsForTests(): {
   readonly chars: number;
 } {
   return { chats: cache.size, chars: cachedChars };
+}
+
+/** Simulate a WebView process eviction without touching IndexedDB. */
+export function dropMemorySkeletonsForTests(): void {
+  cache.clear();
+  cachedChars = 0;
 }

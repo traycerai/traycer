@@ -1,10 +1,10 @@
 import type { ChatSkeletonChunk } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import {
   buildSkeletonResumeOffer,
   type ChatSkeletonResume,
   type SkeletonResumeOffer,
 } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
-import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { CachedSkeletonResume } from "@/stores/chats/skeleton-resume-cache";
 import type { TranscriptWindow } from "@/stores/chats/transcript-window";
 
@@ -117,14 +117,21 @@ export function createSkeletonResumeOfferHolder(): SkeletonResumeOfferHolder {
       const offer = pending;
       pending = null;
       if (retainedRows === undefined || offer === null) return chunk;
-      const entries = offer.readEntries();
       if (
-        retainedRows > entries.length ||
         retainedRows % offer.claim.blockSize !== 0 ||
         chunk.fromOrdinal !== retainedRows
       ) {
         return chunk;
       }
+      let entries: readonly RowSkeletonEntry[];
+      try {
+        entries = offer.readEntries();
+      } catch {
+        // The durable cache is untrusted input. Leave the chunk's gap intact;
+        // the transcript window invalidates it and asks for a full resnapshot.
+        return chunk;
+      }
+      if (retainedRows > entries.length) return chunk;
       return {
         epoch: chunk.epoch,
         fromOrdinal: 0,

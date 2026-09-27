@@ -7343,8 +7343,8 @@ export function createChatSessionStoreWithNotificationDependencies(
     // of the host's resumed answer back into a whole stream. See
     // `skeleton-resume-offer.ts`.
     const skeletonResumeOffers = createSkeletonResumeOfferHolder();
-    // This chat's slot in the closed-chat skeleton cache: read when the window
-    // has nothing to offer, written when the session is disposed.
+    // This chat's slot in the bounded resume cache. A completed stream writes
+    // it once; disposal never hashes or serializes a transcript.
     const skeletonCacheKey: SkeletonResumeCacheKey = {
       userId: options.userId,
       hostId: options.hostId,
@@ -7648,6 +7648,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           recovery.skeletonCompleted(window.epoch);
         }
         publishWindowedTranscript(window, null);
+        if (window.skeletonComplete && !window.invalidated) {
+          rememberSkeletonForResume(skeletonCacheKey, window);
+        }
         // Re-arms while the skeleton is still short, disarms once it covers
         // `rowCount`. A stream that simply stops after a non-final chunk is
         // otherwise indistinguishable from one still in progress.
@@ -11305,12 +11308,6 @@ export function createChatSessionStoreWithNotificationDependencies(
         // outgoing account rather than written where the next one would find
         // it.
         if (!identityTeardownInProgress) handOffUnrecordedPromptToStash();
-        // Leave the skeleton behind for the next open of this chat to resume
-        // from - never across an identity change, whose teardown clears the
-        // cache instead.
-        if (!identityTeardownInProgress) {
-          rememberSkeletonForResume(skeletonCacheKey, get().transcriptWindow);
-        }
         clearSuppressedNotices();
         unsubscribeSweptObserver();
         stickySweptByAction.clear();

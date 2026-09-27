@@ -410,6 +410,10 @@ describe("skeleton resume: re-opening a chat whose session was closed", () => {
       ],
     });
     cb.onWindowedSnapshot(bootstrapSnapshot(0, 2 * BLOCK + 44));
+    // The cached first lines are private offer material until the host names
+    // the prefix it checked. A stale claim must never surface here.
+    expect(windowOf(reopened).skeleton).toHaveLength(0);
+    expect(reopened.handle.store.getState().messages).toHaveLength(0);
     cb.onSkeletonChunk(
       chunkFrame({
         epoch: 0,
