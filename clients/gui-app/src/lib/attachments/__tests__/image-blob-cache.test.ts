@@ -360,6 +360,71 @@ describe("image-blob-cache", () => {
     second.release();
   });
 
+  it("revokes a blob created after last-ref drop once the restarted grace elapses", async () => {
+    const resolvers: Array<(result: ImageBytesResult) => void> = [];
+    const fetcher = vi.fn(
+      (_hash: string, _signal: AbortSignal) =>
+        new Promise<ImageBytesResult>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const { ops, revoked } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const lease = cache.acquire("h1", "image/png", scoped(fetcher), "grace");
+    lease.release();
+    resolvers[0]?.({ bytes: new Uint8Array([1]), mediaType: null });
+    const url = (await lease.promise).url;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(revoked).toEqual([url]);
+    expect(cache.size()).toBe(0);
+  });
+
+  it("does not let a stale in-flight grace timer drop a replacement after a failed fetch", async () => {
+    const firstFetcher = vi.fn(
+      (_hash: string, _signal: AbortSignal) =>
+        Promise.reject(new Error("fetch failed")),
+    );
+    let replacementAborted = false;
+    const resolvers: Array<(result: ImageBytesResult) => void> = [];
+    const replacementFetcher = vi.fn(
+      (_hash: string, signal: AbortSignal) =>
+        new Promise<ImageBytesResult>((resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            replacementAborted = true;
+            reject(new Error("replacement aborted"));
+          });
+          resolvers.push(resolve);
+        }),
+    );
+    const { ops } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const first = cache.acquire(
+      "fail-then-replace",
+      "image/png",
+      scoped(firstFetcher),
+      "grace",
+    );
+    first.release();
+    await expect(first.promise).rejects.toThrow("fetch failed");
+    expect(cache.size()).toBe(0);
+
+    const replacement = cache.acquire(
+      "fail-then-replace",
+      "image/png",
+      scoped(replacementFetcher),
+      "grace",
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(replacementAborted).toBe(false);
+    expect(cache.size()).toBe(1);
+    resolvers[0]?.({ bytes: new Uint8Array([2]), mediaType: null });
+    await replacement.promise;
+    expect(replacementAborted).toBe(false);
+    replacement.release();
+  });
+
   it("does not abort a session-retained in-flight fetch on last-ref drop", async () => {
     const resolvers: Array<(result: ImageBytesResult) => void> = [];
     let abortCount = 0;
@@ -459,9 +524,8 @@ describe("image-blob-cache", () => {
 
     const expectedDecoded = IMAGE_COUNT * DECODED_BYTES_PER_IMAGE;
     expect(decodedTransferred).toBe(expectedDecoded);
-    expect(wireBytesFor(decodedTransferred)).toBe(
-      IMAGE_COUNT * wireBytesFor(DECODED_BYTES_PER_IMAGE),
-    );
+    // 1.5 MiB raw → 2.0 MiB base64 on the unary JSON wire.
+    expect(wireBytesFor(DECODED_BYTES_PER_IMAGE)).toBe(2_000_000);
     expect(abortCount).toBe(0);
     expect(fetcher).toHaveBeenCalledTimes(IMAGE_COUNT);
 

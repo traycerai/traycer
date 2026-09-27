@@ -247,6 +247,7 @@ export function createImageBlobCache(
     const handle = setTimeout(() => {
       entry.cancelRevoke = null;
       if (entry.refCount > 0) return;
+      if (entries.get(identity) !== entry) return;
       if (entry.inFlight !== null) {
         entry.abort?.abort();
         entry.abort = null;

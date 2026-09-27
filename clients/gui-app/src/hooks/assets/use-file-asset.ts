@@ -822,12 +822,12 @@ export function useHostFileAsset(args: {
               "abort",
               () => {
                 reject(new Error("Image asset fetch was cancelled."));
-                // The cache aborts ONLY once the last reference to this
-                // identity drops (`imageBlobCache.release`) - that is the
-                // one moment this stream, which may be OWNED by a
-                // component other than the one that spawned it, is truly
-                // unneeded. A spawning component's own unmount must not
-                // reach this: see the cleanup below.
+                // The cache aborts once last-ref grace elapses (or never,
+                // for `"session"`). That is the one moment this stream,
+                // which may be OWNED by a component other than the one
+                // that spawned it, is truly unneeded. A spawning
+                // component's own unmount must not reach this: see the
+                // cleanup below.
                 sharedSubscription?.release();
               },
               { once: true },
