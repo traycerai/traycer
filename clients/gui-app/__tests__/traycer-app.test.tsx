@@ -437,6 +437,9 @@ describe("<TraycerApp />", () => {
           ),
         ).toBe(true);
       });
+      await act(async () => {
+        await Promise.resolve();
+      });
       expect(
         messenger.calls.filter(
           (call) => call.method === "agent.gui.listModels",

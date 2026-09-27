@@ -1442,6 +1442,7 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
   interface ScopedFixture {
     readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
     readonly client: HostClient<HostRpcRegistry>;
+    readonly queryClient: QueryClient;
     /** Harness ids of every `agent.gui.listModels` request, in arrival order. */
     readonly modelCalls: GuiHarnessId[];
   }
@@ -1486,7 +1487,7 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
         {props.children}
       </QueryClientProvider>
     );
-    return { Wrapper, client, modelCalls };
+    return { Wrapper, client, queryClient, modelCalls };
   }
 
   it("issues ZERO listModels on a cold cache, and reports entries as not loading rather than eternally pending", async () => {
@@ -1532,6 +1533,15 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
       expect(result.current.harnesses[0]?.models.length).toBe(1);
     });
     const first = result.current.harnesses[0]?.models;
+    await fixture.queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(
+        mockLocalHostEntry.hostId,
+        "agent.gui.listModels",
+      ),
+    });
+    await waitFor(() => {
+      expect(result.current.harnesses[0]?.models).toBe(first);
+    });
     rerender();
     expect(result.current.harnesses[0]?.models).toBe(first);
   });

@@ -136,7 +136,13 @@ export function useTaskProfileRateLimitSwitch(input: {
   });
 
   const affected = useMemo<ReadonlyArray<AffectedTaskChat>>(() => {
-    if (!enabled || epicId === null) {
+    if (
+      !enabled ||
+      epicId === null ||
+      settingsQueries.some(
+        (query) => query.data === undefined || query.isPending || query.isError,
+      )
+    ) {
       return NO_AFFECTED;
     }
     return candidateChatIds.flatMap((candidateChatId) => {

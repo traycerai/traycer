@@ -130,6 +130,9 @@ describe("useChatRunSettingsBatch", () => {
     );
     await waitFor(() => {
       expect(result.current[0]?.data?.settings).toEqual(SETTINGS);
+      expect(result.current[chatIds.length - 1]?.data?.settings).toEqual(
+        SETTINGS,
+      );
     });
     expect(fixture.counts.batch).toBe(2);
     expect(fixture.counts.single).toBe(0);

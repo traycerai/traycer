@@ -61,6 +61,8 @@ vi.mock("@/hooks/chats/use-chat-run-settings-query", () => ({
     batch.chatIds = args.chatIds;
     return args.chatIds.map((chatId) => ({
       data: { settings: batch.settingsByChatId.get(chatId) ?? null },
+      isPending: false,
+      isError: false,
     }));
   },
 }));

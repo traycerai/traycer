@@ -24,6 +24,8 @@ type GetChatRunSettingsBatchResponse = ResponseOfMethod<
 
 export type ChatRunSettingsBatchRead = {
   readonly data: GetChatRunSettingsResponse | undefined;
+  readonly isPending: boolean;
+  readonly isError: boolean;
 };
 
 const RUN_SETTINGS_QUERY_OPTIONS = {
@@ -147,11 +149,13 @@ export function useChatRunSettingsBatch(args: {
   );
   const singleRequests = useMemo(
     () =>
-      args.chatIds.map((chatId) => ({
-        method: "epic.getChatRunSettings" as const,
-        params: { epicId: args.epicId, chatId },
-      })),
-    [args.chatIds, args.epicId],
+      useSingles
+        ? args.chatIds.map((chatId) => ({
+            method: "epic.getChatRunSettings" as const,
+            params: { epicId: args.epicId, chatId },
+          }))
+        : [],
+    [args.chatIds, args.epicId, useSingles],
   );
   const batchResults = useHostQueries<
     HostRpcRegistry,
@@ -181,17 +185,21 @@ export function useChatRunSettingsBatch(args: {
   });
   return useMemo(() => {
     if (useBatch) {
+      const unresolved = batchResults.pending || batchResults.failed;
       return args.chatIds.map((chatId) => {
         const settings = batchResults.byChatId.get(chatId);
         return {
-          data:
-            settings === undefined && batchResults.pending
-              ? undefined
-              : { settings: settings ?? null },
+          data: unresolved ? undefined : { settings: settings ?? null },
+          isPending: batchResults.pending,
+          isError: batchResults.failed,
         };
       });
     }
-    return singleResults.map((result) => ({ data: result.data }));
+    return singleResults.map((result) => ({
+      data: result.data,
+      isPending: result.isPending,
+      isError: result.isError,
+    }));
   }, [args.chatIds, batchResults, singleResults, useBatch]);
 }
 
@@ -201,6 +209,7 @@ type BatchSettingsByChatId = {
     GetChatRunSettingsResponse["settings"]
   >;
   readonly pending: boolean;
+  readonly failed: boolean;
 };
 
 function combineBatchSettings(
@@ -216,6 +225,7 @@ function combineBatchSettings(
   return {
     byChatId,
     pending: results.some((result) => result.isPending),
+    failed: results.some((result) => result.isError),
   };
 }
 
