@@ -48,6 +48,29 @@ async function drainTranscriptImageMutations(): Promise<void> {
   await readTranscriptImageBytes("__drain__");
 }
 
+function wrapBackend(
+  inner: TranscriptImageBytesBackend,
+  overrides: Partial<TranscriptImageBytesBackend>,
+): TranscriptImageBytesBackend {
+  const get = overrides.get ?? ((key) => inner.get(key));
+  const set = overrides.set ?? ((key, value) => inner.set(key, value));
+  const touch =
+    overrides.touch ?? ((key, accessedAt) => inner.touch(key, accessedAt));
+  const del = overrides.del ?? ((key) => inner.del(key));
+  const listIndex = overrides.listIndex ?? (() => inner.listIndex());
+  const clear = overrides.clear ?? (() => inner.clear());
+  const close = overrides.close ?? (() => inner.close());
+  const commit =
+    overrides.commit ??
+    (async (change) => {
+      for (const key of change.del) await del(key);
+      if (change.set !== undefined) {
+        await set(change.set.key, change.set.value);
+      }
+    });
+  return { get, set, touch, del, commit, listIndex, clear, close };
+}
+
 describe("transcript-image-bytes-store", () => {
   beforeEach(() => {
     installTranscriptImageBytesBackend(
@@ -244,23 +267,18 @@ describe("transcript-image-bytes-store mechanism", () => {
     let releasePut: () => void = () => {};
     let setStarted = false;
     let setFinished = false;
-    const backend: TranscriptImageBytesBackend = {
-      get: (key) => inner.get(key),
-      set: async (key, value) => {
-        setStarted = true;
-        await new Promise<void>((resolve) => {
-          releasePut = resolve;
-        });
-        await inner.set(key, value);
-        setFinished = true;
-      },
-      touch: (key, accessedAt) => inner.touch(key, accessedAt),
-      del: (key) => inner.del(key),
-      listIndex: () => inner.listIndex(),
-      clear: () => inner.clear(),
-      close: () => inner.close(),
-    };
-    installTranscriptImageBytesBackend(backend);
+    installTranscriptImageBytesBackend(
+      wrapBackend(inner, {
+        set: async (key, value) => {
+          setStarted = true;
+          await new Promise<void>((resolve) => {
+            releasePut = resolve;
+          });
+          await inner.set(key, value);
+          setFinished = true;
+        },
+      }),
+    );
     const fetch = vi.fn(() => Promise.resolve(resultOf(8)));
     const fetcher = persistTranscriptImageBytes(
       scopedFetcher(fetch, "epic:chat"),
@@ -314,15 +332,11 @@ describe("transcript-image-bytes-store mechanism", () => {
 
   it("still returns live bytes when the durable put is rejected", async () => {
     const inner = createMemoryTranscriptImageBytesBackend();
-    installTranscriptImageBytesBackend({
-      get: (key) => inner.get(key),
-      set: () => Promise.reject(new Error("QuotaExceededError")),
-      touch: (key, accessedAt) => inner.touch(key, accessedAt),
-      del: (key) => inner.del(key),
-      listIndex: () => inner.listIndex(),
-      clear: () => inner.clear(),
-      close: () => inner.close(),
-    });
+    installTranscriptImageBytesBackend(
+      wrapBackend(inner, {
+        set: () => Promise.reject(new Error("QuotaExceededError")),
+      }),
+    );
     const fetcher = persistTranscriptImageBytes(
       scopedFetcher(() => Promise.resolve(resultOf(8)), "epic:chat"),
     );
@@ -354,21 +368,17 @@ describe("transcript-image-bytes-store mechanism", () => {
     const lookupKey = buildScopedImageCacheKey("epic:chat", "aborted");
     let releaseGet: () => void = () => {};
     let getStarted = false;
-    installTranscriptImageBytesBackend({
-      get: (key) => {
-        if (key !== lookupKey) return inner.get(key);
-        getStarted = true;
-        return new Promise((resolve) => {
-          releaseGet = () => resolve(undefined);
-        });
-      },
-      set: (key, value) => inner.set(key, value),
-      touch: (key, accessedAt) => inner.touch(key, accessedAt),
-      del: (key) => inner.del(key),
-      listIndex: () => inner.listIndex(),
-      clear: () => inner.clear(),
-      close: () => inner.close(),
-    });
+    installTranscriptImageBytesBackend(
+      wrapBackend(inner, {
+        get: (key) => {
+          if (key !== lookupKey) return inner.get(key);
+          getStarted = true;
+          return new Promise((resolve) => {
+            releaseGet = () => resolve(undefined);
+          });
+        },
+      }),
+    );
     const fetch = vi.fn(() => Promise.resolve(resultOf(8)));
     const fetcher = persistTranscriptImageBytes(
       scopedFetcher(fetch, "epic:chat"),
@@ -385,6 +395,78 @@ describe("transcript-image-bytes-store mechanism", () => {
     } finally {
       releaseGet();
     }
+  });
+
+  it("scans the durable index once, not on every get", async () => {
+    const inner = createMemoryTranscriptImageBytesBackend();
+    let listIndexCalls = 0;
+    installTranscriptImageBytesBackend(
+      wrapBackend(inner, {
+        listIndex: async () => {
+          listIndexCalls += 1;
+          return inner.listIndex();
+        },
+      }),
+    );
+    await writeTranscriptImageBytes("a", resultOf(8));
+    await readTranscriptImageBytes("a");
+    await readTranscriptImageBytes("a");
+    expect(listIndexCalls).toBe(1);
+  });
+
+  it("serves a durable hit when the LRU touch write fails", async () => {
+    const inner = createMemoryTranscriptImageBytesBackend();
+    installTranscriptImageBytesBackend(wrapBackend(inner, {}));
+    const fetch = vi.fn(() => Promise.resolve(resultOf(8)));
+    const fetcher = persistTranscriptImageBytes(
+      scopedFetcher(fetch, "epic:chat"),
+    );
+    await fetcher.fetch("hit", new AbortController().signal);
+    await drainTranscriptImageMutations();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    installTranscriptImageBytesBackend(
+      wrapBackend(inner, {
+        touch: () => Promise.reject(new Error("QuotaExceededError")),
+      }),
+    );
+    fetch.mockClear();
+    const resolved = await fetcher.fetch("hit", new AbortController().signal);
+    expect(resolved.bytes.byteLength).toBe(8);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("leaves existing entries in place when a put that needs eviction fails", async () => {
+    const inner = createMemoryTranscriptImageBytesBackend();
+    installTranscriptImageBytesBackend(
+      wrapBackend(inner, {
+        set: async (key, value) => {
+          if (key === "incoming") {
+            throw new Error("QuotaExceededError");
+          }
+          await inner.set(key, value);
+        },
+        commit: async (change) => {
+          if (change.set?.key === "incoming") {
+            throw new Error("QuotaExceededError");
+          }
+          for (const key of change.del) await inner.del(key);
+          if (change.set !== undefined) {
+            await inner.set(change.set.key, change.set.value);
+          }
+        },
+      }),
+    );
+    setRetentionProfile({
+      ...MOBILE_RETENTION_PROFILE,
+      transcriptImageCacheBytes: 100,
+    });
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    await writeTranscriptImageBytes("kept", resultOf(60));
+    vi.setSystemTime(2_000);
+    await writeTranscriptImageBytes("incoming", resultOf(60));
+    vi.useRealTimers();
+    expect(await readTranscriptImageBytes("kept")).not.toBeNull();
   });
 });
 
@@ -416,4 +498,134 @@ describe("transcript-image-bytes-store IndexedDB", () => {
       .filter((name): name is string => typeof name === "string");
     expect(after).not.toContain(transcriptImageDbName(null));
   });
+
+  it("reads bytes when the meta row is missing", async () => {
+    const dbName = transcriptImageDbName(null);
+    const request = indexedDB.open(dbName, 2);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains("bytes")) {
+        db.createObjectStore("bytes");
+      }
+      if (!db.objectStoreNames.contains("meta")) {
+        db.createObjectStore("meta");
+      }
+    };
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error ?? new Error("open failed"));
+    });
+    await new Promise<void>((resolve, reject) => {
+      const txn = db.transaction(["bytes"], "readwrite");
+      txn.objectStore("bytes").put(
+        {
+          bytes: new Uint8Array(8),
+          mediaType: "image/jpeg",
+          accessedAt: 1,
+        },
+        "orphan",
+      );
+      txn.oncomplete = () => resolve();
+      txn.onerror = () => reject(txn.error ?? new Error("orphan put failed"));
+    });
+    db.close();
+    expect(await readTranscriptImageBytes("orphan")).not.toBeNull();
+  });
+
+  it("evicts v1 bytes-only rows even when the first meta repair aborts", async () => {
+    const dbName = transcriptImageDbName(null);
+    const openV1 = indexedDB.open(dbName, 1);
+    openV1.onupgradeneeded = () => {
+      openV1.result.createObjectStore("bytes");
+    };
+    const v1 = await new Promise<IDBDatabase>((resolve, reject) => {
+      openV1.onsuccess = () => resolve(openV1.result);
+      openV1.onerror = () =>
+        reject(openV1.error ?? new Error("v1 open failed"));
+    });
+    await new Promise<void>((resolve, reject) => {
+      const txn = v1.transaction(["bytes"], "readwrite");
+      txn.objectStore("bytes").put(
+        {
+          bytes: new Uint8Array(60),
+          mediaType: "image/jpeg",
+          accessedAt: 1,
+        },
+        "old",
+      );
+      txn.oncomplete = () => resolve();
+      txn.onerror = () => reject(txn.error ?? new Error("v1 put failed"));
+    });
+    const restoreTransaction = abortFirstReadwrite(v1);
+    v1.close();
+    try {
+      setRetentionProfile({
+        ...MOBILE_RETENTION_PROFILE,
+        transcriptImageCacheBytes: 100,
+      });
+      expect(await readTranscriptImageBytes("missing")).toBeNull();
+      await writeTranscriptImageBytes("new", resultOf(60));
+      expect(transcriptImageBytesStats().residentBytes).toBe(60);
+      expect(transcriptImageBytesStats().size).toBe(1);
+      expect(await countByteRows(dbName)).toBe(1);
+    } finally {
+      restoreTransaction();
+    }
+  });
 });
+
+function abortFirstReadwrite(db: IDBDatabase): () => void {
+  const proto = Object.getPrototypeOf(db) as IDBDatabase;
+  const descriptor = Object.getOwnPropertyDescriptor(proto, "transaction");
+  if (descriptor === undefined || typeof descriptor.value !== "function") {
+    throw new Error("IDBDatabase.transaction is not a function");
+  }
+  const original = descriptor.value as (
+    this: IDBDatabase,
+    storeNames: string | Iterable<string>,
+    mode: IDBTransactionMode | undefined,
+  ) => IDBTransaction;
+  let abortNextReadwrite = true;
+  proto.transaction = function (
+    this: IDBDatabase,
+    storeNames: string | Iterable<string>,
+    mode: IDBTransactionMode | undefined,
+  ): IDBTransaction {
+    const txn = original.call(this, storeNames, mode);
+    if (abortNextReadwrite && mode === "readwrite") {
+      abortNextReadwrite = false;
+      queueMicrotask(() => {
+        try {
+          txn.abort();
+        } catch {
+          // Already finished.
+        }
+      });
+    }
+    return txn;
+  };
+  return () => {
+    Object.defineProperty(proto, "transaction", descriptor);
+  };
+}
+
+async function countByteRows(dbName: string): Promise<number> {
+  const request = indexedDB.open(dbName, 2);
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () =>
+      reject(request.error ?? new Error("count open failed"));
+  });
+  try {
+    const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+      const txn = db.transaction(["bytes"], "readonly");
+      const getKeys = txn.objectStore("bytes").getAllKeys();
+      getKeys.onsuccess = () => resolve(getKeys.result);
+      getKeys.onerror = () =>
+        reject(getKeys.error ?? new Error("count failed"));
+    });
+    return keys.length;
+  } finally {
+    db.close();
+  }
+}

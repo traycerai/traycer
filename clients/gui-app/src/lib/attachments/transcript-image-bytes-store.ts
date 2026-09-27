@@ -55,11 +55,24 @@ export interface TranscriptImageIndexRow {
   readonly accessedAt: number;
 }
 
+export interface TranscriptImageCommit {
+  readonly del: readonly string[];
+  readonly set?: {
+    readonly key: string;
+    readonly value: StoredTranscriptImage;
+  };
+}
+
 export interface TranscriptImageBytesBackend {
   get(key: string): Promise<StoredTranscriptImage | undefined>;
   set(key: string, value: StoredTranscriptImage): Promise<void>;
   touch(key: string, accessedAt: number): Promise<void>;
   del(key: string): Promise<void>;
+  /**
+   * Apply deletes and an optional insert in one mutation. IndexedDB uses one
+   * transaction so a failed insert does not keep the deletes.
+   */
+  commit(change: TranscriptImageCommit): Promise<void>;
   listIndex(): Promise<readonly TranscriptImageIndexRow[]>;
   clear(): Promise<void>;
   /** Release any held IndexedDB connection so `deleteDatabase` can finish. */
@@ -129,6 +142,13 @@ export function createMemoryTranscriptImageBytesBackend(): TranscriptImageBytesB
     },
     del: (key) => {
       data.delete(key);
+      return Promise.resolve();
+    },
+    commit: (change) => {
+      for (const key of change.del) data.delete(key);
+      if (change.set !== undefined) {
+        data.set(change.set.key, change.set.value);
+      }
       return Promise.resolve();
     },
     listIndex: () =>
@@ -231,9 +251,13 @@ function openTranscriptImageDb(
   return awaitRequest(request);
 }
 
+interface TranscriptImageSnapshot {
+  readonly bytesByKey: ReadonlyMap<string, unknown>;
+  readonly metaByKey: ReadonlyMap<string, IndexEntry>;
+}
+
 class HeldIdbBackend implements TranscriptImageBytesBackend {
   private db: IDBDatabase | null = null;
-  private reconciled = false;
 
   constructor(private readonly identity: string | null) {}
 
@@ -258,45 +282,82 @@ class HeldIdbBackend implements TranscriptImageBytesBackend {
   close(): void {
     this.db?.close();
     this.db = null;
-    this.reconciled = false;
   }
 
-  private async reconcile(db: IDBDatabase): Promise<void> {
-    if (this.reconciled) return;
+  private async readSnapshot(
+    db: IDBDatabase,
+  ): Promise<TranscriptImageSnapshot> {
     const readTxn = db.transaction([BYTES_STORE, META_STORE], "readonly");
     const [byteRows, metaRows] = await Promise.all([
       collectStoreRows<unknown>(readTxn.objectStore(BYTES_STORE)),
       collectStoreRows<unknown>(readTxn.objectStore(META_STORE)),
     ]);
     const bytesByKey = new Map(byteRows.map((row) => [row.key, row.value]));
-    const metaKeys = new Set(metaRows.map((row) => row.key));
+    const metaByKey = new Map<string, IndexEntry>();
+    for (const row of metaRows) {
+      if (!isIndexEntry(row.value)) continue;
+      metaByKey.set(row.key, row.value);
+    }
+    return { bytesByKey, metaByKey };
+  }
+
+  private indexFromSnapshot(
+    snapshot: TranscriptImageSnapshot,
+  ): TranscriptImageIndexRow[] {
+    const rows: TranscriptImageIndexRow[] = [];
+    const seen = new Set<string>();
+    for (const [key, meta] of snapshot.metaByKey) {
+      if (!snapshot.bytesByKey.has(key)) continue;
+      rows.push({
+        key,
+        byteLength: meta.byteLength,
+        accessedAt: meta.accessedAt,
+      });
+      seen.add(key);
+    }
+    for (const [key, stored] of snapshot.bytesByKey) {
+      if (seen.has(key)) continue;
+      const parsed = parseStoredTranscriptImage(stored);
+      if (parsed === undefined) continue;
+      rows.push({
+        key,
+        byteLength: parsed.bytes.byteLength,
+        accessedAt: parsed.accessedAt,
+      });
+    }
+    return rows;
+  }
+
+  private async repairFromSnapshot(
+    db: IDBDatabase,
+    snapshot: TranscriptImageSnapshot,
+  ): Promise<void> {
     const metaPuts: { key: string; value: IndexEntry }[] = [];
     const byteDeletes: string[] = [];
     const metaDeletes: string[] = [];
-    for (const [key, stored] of bytesByKey) {
-      if (metaKeys.has(key)) continue;
-      const storedImage = parseStoredTranscriptImage(stored);
-      if (storedImage === undefined) {
+    for (const [key, stored] of snapshot.bytesByKey) {
+      if (snapshot.metaByKey.has(key)) continue;
+      const parsed = parseStoredTranscriptImage(stored);
+      if (parsed === undefined) {
         byteDeletes.push(key);
         continue;
       }
       metaPuts.push({
         key,
         value: {
-          byteLength: storedImage.bytes.byteLength,
-          accessedAt: storedImage.accessedAt,
+          byteLength: parsed.bytes.byteLength,
+          accessedAt: parsed.accessedAt,
         },
       });
     }
-    for (const key of metaKeys) {
-      if (!bytesByKey.has(key)) metaDeletes.push(key);
+    for (const key of snapshot.metaByKey.keys()) {
+      if (!snapshot.bytesByKey.has(key)) metaDeletes.push(key);
     }
     if (
       metaPuts.length === 0 &&
       byteDeletes.length === 0 &&
       metaDeletes.length === 0
     ) {
-      this.reconciled = true;
       return;
     }
     const writeTxn = db.transaction([BYTES_STORE, META_STORE], "readwrite");
@@ -306,12 +367,10 @@ class HeldIdbBackend implements TranscriptImageBytesBackend {
     for (const key of byteDeletes) bytesStore.delete(key);
     for (const key of metaDeletes) metaStore.delete(key);
     await awaitTransaction(writeTxn);
-    this.reconciled = true;
   }
 
   async get(key: string): Promise<StoredTranscriptImage | undefined> {
     const db = await this.ensureOpen();
-    await this.reconcile(db);
     const txn = db.transaction([BYTES_STORE], "readonly");
     const value: unknown = await awaitRequest(
       txn.objectStore(BYTES_STORE).get(key),
@@ -320,23 +379,11 @@ class HeldIdbBackend implements TranscriptImageBytesBackend {
   }
 
   async set(key: string, value: StoredTranscriptImage): Promise<void> {
-    const db = await this.ensureOpen();
-    await this.reconcile(db);
-    const txn = db.transaction([BYTES_STORE, META_STORE], "readwrite");
-    txn.objectStore(BYTES_STORE).put(value, key);
-    txn.objectStore(META_STORE).put(
-      {
-        byteLength: value.bytes.byteLength,
-        accessedAt: value.accessedAt,
-      },
-      key,
-    );
-    await awaitTransaction(txn);
+    await this.commit({ del: [], set: { key, value } });
   }
 
   async touch(key: string, accessedAt: number): Promise<void> {
     const db = await this.ensureOpen();
-    await this.reconcile(db);
     const readTxn = db.transaction([META_STORE], "readonly");
     const meta: unknown = await awaitRequest(
       readTxn.objectStore(META_STORE).get(key),
@@ -350,27 +397,40 @@ class HeldIdbBackend implements TranscriptImageBytesBackend {
   }
 
   async del(key: string): Promise<void> {
+    await this.commit({ del: [key] });
+  }
+
+  async commit(change: TranscriptImageCommit): Promise<void> {
     const db = await this.ensureOpen();
-    await this.reconcile(db);
     const txn = db.transaction([BYTES_STORE, META_STORE], "readwrite");
-    txn.objectStore(BYTES_STORE).delete(key);
-    txn.objectStore(META_STORE).delete(key);
+    const bytesStore = txn.objectStore(BYTES_STORE);
+    const metaStore = txn.objectStore(META_STORE);
+    for (const key of change.del) {
+      bytesStore.delete(key);
+      metaStore.delete(key);
+    }
+    if (change.set !== undefined) {
+      bytesStore.put(change.set.value, change.set.key);
+      metaStore.put(
+        {
+          byteLength: change.set.value.bytes.byteLength,
+          accessedAt: change.set.value.accessedAt,
+        },
+        change.set.key,
+      );
+    }
     await awaitTransaction(txn);
   }
 
   async listIndex(): Promise<readonly TranscriptImageIndexRow[]> {
     const db = await this.ensureOpen();
-    await this.reconcile(db);
-    const txn = db.transaction([META_STORE], "readonly");
-    const rows = await collectStoreRows<unknown>(txn.objectStore(META_STORE));
-    const index: TranscriptImageIndexRow[] = [];
-    for (const row of rows) {
-      if (!isIndexEntry(row.value)) continue;
-      index.push({
-        key: row.key,
-        byteLength: row.value.byteLength,
-        accessedAt: row.value.accessedAt,
-      });
+    const snapshot = await this.readSnapshot(db);
+    const index = this.indexFromSnapshot(snapshot);
+    try {
+      await this.repairFromSnapshot(db, snapshot);
+    } catch {
+      // Repair is write admission. The index above already includes
+      // orphan bytes, so hydrate/eviction can see them.
     }
     return index;
   }
@@ -381,7 +441,6 @@ class HeldIdbBackend implements TranscriptImageBytesBackend {
     txn.objectStore(BYTES_STORE).clear();
     txn.objectStore(META_STORE).clear();
     await awaitTransaction(txn);
-    this.reconciled = true;
   }
 }
 
@@ -395,6 +454,7 @@ class TranscriptImageBytesStore {
   private backend: TranscriptImageBytesBackend | null = null;
   private backendIdentity: string | null | undefined = undefined;
   private readonly index = new Map<string, IndexEntry>();
+  private indexHydrated = false;
   private injectedBackend: TranscriptImageBytesBackend | null = null;
   private readonly generationByIdentity = new Map<string, number>();
   private mutation: Promise<void> = Promise.resolve();
@@ -405,6 +465,7 @@ class TranscriptImageBytesStore {
     this.backend = null;
     this.backendIdentity = undefined;
     this.index.clear();
+    this.indexHydrated = false;
   }
 
   private identityKey(identity: string | null): string {
@@ -438,6 +499,7 @@ class TranscriptImageBytesStore {
       this.backend = createIdbBackend(identity);
       this.backendIdentity = identity;
       this.index.clear();
+      this.indexHydrated = false;
     }
     return this.backend;
   }
@@ -445,6 +507,7 @@ class TranscriptImageBytesStore {
   private async hydrateIndex(
     backend: TranscriptImageBytesBackend,
   ): Promise<void> {
+    if (this.indexHydrated) return;
     const rows = await backend.listIndex();
     this.index.clear();
     for (const row of rows) {
@@ -453,6 +516,7 @@ class TranscriptImageBytesStore {
         accessedAt: row.accessedAt,
       });
     }
+    this.indexHydrated = true;
   }
 
   private totalBytes(): number {
@@ -461,25 +525,31 @@ class TranscriptImageBytesStore {
     return total;
   }
 
-  private async evictUntilFit(
-    backend: TranscriptImageBytesBackend,
-    incoming: number,
-  ): Promise<void> {
+  private keysToEvict(incoming: number, replacing: string): string[] {
     const budget = getRetentionProfile().transcriptImageCacheBytes;
-    if (incoming > budget) return;
-    while (this.totalBytes() + incoming > budget && this.index.size > 0) {
+    if (incoming > budget) return [];
+    const remaining = new Map(this.index);
+    remaining.delete(replacing);
+    const keys: string[] = [];
+    const totalOf = (): number => {
+      let total = 0;
+      for (const entry of remaining.values()) total += entry.byteLength;
+      return total;
+    };
+    while (totalOf() + incoming > budget && remaining.size > 0) {
       let oldestKey: string | null = null;
       let oldestAt = Number.POSITIVE_INFINITY;
-      for (const [key, entry] of this.index) {
+      for (const [key, entry] of remaining) {
         if (entry.accessedAt < oldestAt) {
           oldestAt = entry.accessedAt;
           oldestKey = key;
         }
       }
-      if (oldestKey === null) return;
-      this.index.delete(oldestKey);
-      await backend.del(oldestKey);
+      if (oldestKey === null) break;
+      remaining.delete(oldestKey);
+      keys.push(oldestKey);
     }
+    return keys;
   }
 
   async get(
@@ -496,7 +566,12 @@ class TranscriptImageBytesStore {
         byteLength: stored.bytes.byteLength,
         accessedAt,
       });
-      await backend.touch(key, accessedAt);
+      try {
+        await backend.touch(key, accessedAt);
+      } catch {
+        // LRU meta is bookkeeping. A failed touch must not turn a hit into a
+        // host re-fetch.
+      }
       return {
         bytes: copyBytes(stored.bytes),
         mediaType: stored.mediaType,
@@ -518,8 +593,7 @@ class TranscriptImageBytesStore {
       const byteLength = result.bytes.byteLength;
       const budget = getRetentionProfile().transcriptImageCacheBytes;
       if (byteLength > budget) return;
-      this.index.delete(key);
-      await this.evictUntilFit(backend, byteLength);
+      const evictKeys = this.keysToEvict(byteLength, key);
       if (generation !== this.generationOf(identity)) return;
       const accessedAt = Date.now();
       const stored: StoredTranscriptImage = {
@@ -527,8 +601,12 @@ class TranscriptImageBytesStore {
         mediaType: result.mediaType,
         accessedAt,
       };
+      await backend.commit({
+        del: evictKeys,
+        set: { key, value: stored },
+      });
+      for (const evicted of evictKeys) this.index.delete(evicted);
       this.index.set(key, { byteLength, accessedAt });
-      await backend.set(key, stored);
     });
   }
 
@@ -537,11 +615,13 @@ class TranscriptImageBytesStore {
       this.bumpGeneration(identity);
       if (this.injectedBackend !== null) {
         this.index.clear();
+        this.indexHydrated = false;
         await this.injectedBackend.clear();
         return;
       }
       if (this.backend !== null && this.backendIdentity === identity) {
         this.index.clear();
+        this.indexHydrated = false;
         this.backend.close();
         this.backend = null;
         this.backendIdentity = undefined;
