@@ -12,7 +12,7 @@ import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
-import { clearTranscriptImageBytesFor } from "@/lib/attachments/transcript-image-bytes-store";
+import { clearImagePathForIdentityTeardown } from "@/lib/attachments/image-path-identity-teardown";
 import {
   useAuthIdentityTransition,
   type AuthIdentityTransition,
@@ -117,10 +117,10 @@ export function EpicSessionLifecycleBridge(
       // to this boundary only: a chat or epic closing must NOT take it down,
       // because the text it holds is still the user's only copy.
       dismissRetainedDraftToasts();
-      // Chat attachment bytes are authorized per (epic, chat). Drop the
-      // outgoing account's transcript image partition so the next sign-in
-      // cannot render them from IndexedDB.
-      void clearTranscriptImageBytesFor(outgoingIdentity);
+      // Chat/artifact blob-cache keys omit the account. Drop in-memory
+      // maps so remount grace cannot join the outgoing fetch, then drop
+      // the outgoing IndexedDB partition.
+      void clearImagePathForIdentityTeardown(outgoingIdentity);
     });
   }, []);
 

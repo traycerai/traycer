@@ -16,6 +16,7 @@ import {
   transcriptImageMetaDbName,
   writeTranscriptImageBytes,
   type TranscriptImageBytesBackend,
+  type TranscriptImageIndexRow,
 } from "@/lib/attachments/transcript-image-bytes-store";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { PREPARED_IMAGE_MAX_BYTES } from "@/lib/composer/composer-image-preparation-session";
@@ -424,6 +425,84 @@ describe("transcript-image-bytes-store mechanism", () => {
     await expect(pending).rejects.toThrow(/cancelled/);
     await writeTranscriptImageBytes("other", resultOf(8));
     expect(await readTranscriptImageBytes("other")).not.toBeNull();
+  });
+
+  it("does not let an aborted hydrate rewrite the index after a partition clear", async () => {
+    const inner = createMemoryTranscriptImageBytesBackend();
+    let releaseList:
+      | ((rows: readonly TranscriptImageIndexRow[]) => void)
+      | undefined;
+    let listStarted = false;
+    installTranscriptImageBytesBackend(
+      wrapBackend(inner, {
+        listIndex: () => {
+          listStarted = true;
+          return new Promise((resolve) => {
+            releaseList = resolve;
+          });
+        },
+      }),
+    );
+    const fetcher = persistTranscriptImageBytes(
+      scopedFetcher(() => Promise.resolve(resultOf(8)), "epic:chat"),
+    );
+    const controller = new AbortController();
+    const pending = fetcher.fetch("stale", controller.signal);
+    await vi.waitFor(() => {
+      expect(listStarted).toBe(true);
+    });
+    controller.abort();
+    await expect(pending).rejects.toThrow(/cancelled/);
+    try {
+      await clearTranscriptImageBytesFor(null);
+      expect(transcriptImageBytesStats().size).toBe(0);
+      releaseList?.([{ key: "stale", byteLength: 8, accessedAt: 1 }]);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(transcriptImageBytesStats().size).toBe(0);
+    } finally {
+      installTranscriptImageBytesBackend(
+        createMemoryTranscriptImageBytesBackend(),
+      );
+    }
+  });
+
+  it("does not let hydrate publish after listIndex resolves and abort in the same turn", async () => {
+    const inner = createMemoryTranscriptImageBytesBackend();
+    let releaseList:
+      | ((rows: readonly TranscriptImageIndexRow[]) => void)
+      | undefined;
+    let listStarted = false;
+    installTranscriptImageBytesBackend(
+      wrapBackend(inner, {
+        listIndex: () => {
+          listStarted = true;
+          return new Promise((resolve) => {
+            releaseList = resolve;
+          });
+        },
+      }),
+    );
+    const fetcher = persistTranscriptImageBytes(
+      scopedFetcher(() => Promise.resolve(resultOf(8)), "epic:chat"),
+    );
+    const controller = new AbortController();
+    const pending = fetcher.fetch("stale", controller.signal);
+    await vi.waitFor(() => {
+      expect(listStarted).toBe(true);
+    });
+    try {
+      releaseList?.([{ key: "stale", byteLength: 8, accessedAt: 1 }]);
+      controller.abort();
+      await expect(pending).rejects.toThrow(/cancelled/);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(transcriptImageBytesStats().size).toBe(0);
+    } finally {
+      installTranscriptImageBytesBackend(
+        createMemoryTranscriptImageBytesBackend(),
+      );
+    }
   });
 
   it("scans the durable index once, not on every get", async () => {

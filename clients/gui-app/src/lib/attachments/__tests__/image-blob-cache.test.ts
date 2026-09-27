@@ -333,6 +333,44 @@ describe("image-blob-cache", () => {
     second.release();
   });
 
+  it("does not let a later identity join an in-flight fetch after teardown during grace", async () => {
+    const resolvers: Array<(result: ImageBytesResult) => void> = [];
+    let abortCount = 0;
+    const fetcher = vi.fn(
+      (_hash: string, signal: AbortSignal) =>
+        new Promise<ImageBytesResult>((resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            abortCount += 1;
+            reject(new Error("aborted"));
+          });
+          resolvers.push(resolve);
+        }),
+    );
+    const { ops } = makeOps();
+    const cache = createImageBlobCache(ops, 10_000);
+    const outgoing = cache.acquire(
+      "h1",
+      "image/png",
+      scopeFor('["chat-attachment","host","epic","chat"]', fetcher),
+      "grace",
+    );
+    outgoing.release();
+    expect(cache.size()).toBe(1);
+    const outgoingSettled = expect(outgoing.promise).rejects.toThrow();
+    cache.clear();
+    await outgoingSettled;
+    const incoming = cache.acquire(
+      "h1",
+      "image/png",
+      scopeFor('["chat-attachment","host","epic","chat"]', fetcher),
+      "grace",
+    );
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(abortCount).toBe(1);
+    expect(cache.size()).toBe(1);
+    incoming.release();
+  });
+
   it("restarts grace from resolve when the last holder dropped while in flight", async () => {
     const resolvers: Array<(result: ImageBytesResult) => void> = [];
     const fetcher = vi.fn(

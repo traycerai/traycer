@@ -129,6 +129,7 @@ export const CHAT_ATTACHMENT_READ_TIMEOUT_MS = 8_000;
  * app reload. Keyed on the pair, an upgrade re-probes exactly once.
  */
 const hostBuildsWithoutChatAttachmentRead = new Set<string>();
+let chatHostSupportGeneration = 0;
 
 /**
  * The key a verdict is remembered under, or `null` when it must not be
@@ -156,11 +157,12 @@ function hostBuildKey(scope: ChatAttachmentScopeValue): string | null {
 }
 
 /**
- * Test-only: forgets every remembered `E_HOST_UNSUPPORTED` verdict. The set is
- * module-global and deliberately session-lived, so a suite that exercises the
- * unsupported path would otherwise poison every later test in the same file.
+ * Forgets every remembered `E_HOST_UNSUPPORTED` verdict. Host ids belong to
+ * an account; identity teardown must not leave account A's probe pinning
+ * account B's session.
  */
-export function resetChatAttachmentHostSupportForTests(): void {
+export function resetChatAttachmentHostSupport(): void {
+  chatHostSupportGeneration += 1;
   hostBuildsWithoutChatAttachmentRead.clear();
 }
 
@@ -194,6 +196,7 @@ async function readChatAttachmentFromHost(
   if (buildKey !== null && hostBuildsWithoutChatAttachmentRead.has(buildKey)) {
     return null;
   }
+  const probeGeneration = chatHostSupportGeneration;
   // `plane` is omitted rather than sent as `null` when there is no selector:
   // it is an OPTIONAL literal on the wire, so a null would fail the host's
   // parse instead of reading as "no preference".
@@ -241,7 +244,11 @@ async function readChatAttachmentFromHost(
     return { bytes, mediaType: response.mediaType };
   } catch (error: unknown) {
     if (isHostUnsupported(error)) {
-      if (buildKey !== null) {
+      if (
+        buildKey !== null &&
+        !signal.aborted &&
+        probeGeneration === chatHostSupportGeneration
+      ) {
         hostBuildsWithoutChatAttachmentRead.add(buildKey);
       }
       return null;

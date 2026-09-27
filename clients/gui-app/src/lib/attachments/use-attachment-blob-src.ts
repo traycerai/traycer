@@ -59,13 +59,15 @@ export type AttachmentBlobSrcState =
  * would stay degraded for the session.
  */
 const hostBuildsWithoutArtifactAttachmentFetch = new Set<string>();
+let artifactHostSupportGeneration = 0;
 
 /**
- * Test-only: forgets every remembered `E_HOST_UNSUPPORTED` verdict. The set is
- * module-global and deliberately session-lived, so a suite that exercises the
- * unsupported path would otherwise poison every later test in the same file.
+ * Forgets every remembered `E_HOST_UNSUPPORTED` verdict. Host ids belong to
+ * an account; identity teardown must not leave account A's probe pinning
+ * account B's session.
  */
-export function resetArtifactAttachmentHostSupportForTests(): void {
+export function resetArtifactAttachmentHostSupport(): void {
+  artifactHostSupportGeneration += 1;
   hostBuildsWithoutArtifactAttachmentFetch.clear();
 }
 
@@ -114,6 +116,7 @@ async function readArtifactAttachmentFromHost(
   ) {
     return null;
   }
+  const probeGeneration = artifactHostSupportGeneration;
   try {
     const response = await scope.client.requestWithSignal(
       "epic.fetchArtifactAttachment",
@@ -130,7 +133,11 @@ async function readArtifactAttachmentFromHost(
     return { bytes, mediaType: response.mediaType };
   } catch (error: unknown) {
     if (error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED") {
-      if (buildKey !== null) {
+      if (
+        buildKey !== null &&
+        !signal.aborted &&
+        probeGeneration === artifactHostSupportGeneration
+      ) {
         hostBuildsWithoutArtifactAttachmentFetch.add(buildKey);
       }
       return null;
@@ -205,8 +212,8 @@ function acquireArmAbort(handle: ArmAbortSource): {
   };
 }
 
-/** Test-only: drop arm-abort leases so a hanging fetch cannot leak a subscribe. */
-export function resetEpicImageFetcherArmAbortForTests(): void {
+/** Drop arm-abort leases so an outgoing epic handle cannot abort the next account. */
+export function resetEpicImageFetcherArmAbort(): void {
   for (const lease of armAbortLeases.values()) {
     lease.unsubscribe();
     lease.abort.abort();

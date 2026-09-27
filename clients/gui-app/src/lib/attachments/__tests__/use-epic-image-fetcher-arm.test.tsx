@@ -12,8 +12,8 @@ import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  resetArtifactAttachmentHostSupportForTests,
-  resetEpicImageFetcherArmAbortForTests,
+  resetArtifactAttachmentHostSupport,
+  resetEpicImageFetcherArmAbort,
   useEpicImageFetcher,
 } from "@/lib/attachments/use-attachment-blob-src";
 import {
@@ -109,14 +109,14 @@ function wrapperFor(
 }
 
 beforeEach(() => {
-  resetArtifactAttachmentHostSupportForTests();
+  resetArtifactAttachmentHostSupport();
 });
 
 afterEach(() => {
   mocks.installedArm = "legacy";
   mocks.readEpicAttachmentBytes.mockReset();
   mocks.readHeldEpicAttachmentBytes.mockReset();
-  resetEpicImageFetcherArmAbortForTests();
+  resetEpicImageFetcherArmAbort();
   storeListeners.clear();
 });
 

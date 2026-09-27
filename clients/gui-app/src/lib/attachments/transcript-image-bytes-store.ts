@@ -457,6 +457,7 @@ class TranscriptImageBytesStore {
   private indexHydrated = false;
   private injectedBackend: TranscriptImageBytesBackend | null = null;
   private readonly generationByIdentity = new Map<string, number>();
+  private epoch = 0;
   private mutation: Promise<void> = Promise.resolve();
 
   installBackend(backend: TranscriptImageBytesBackend | null): void {
@@ -466,6 +467,7 @@ class TranscriptImageBytesStore {
     this.backendIdentity = undefined;
     this.index.clear();
     this.indexHydrated = false;
+    this.epoch += 1;
   }
 
   private identityKey(identity: string | null): string {
@@ -479,6 +481,11 @@ class TranscriptImageBytesStore {
   private bumpGeneration(identity: string | null): void {
     const key = this.identityKey(identity);
     this.generationByIdentity.set(key, this.generationOf(identity) + 1);
+    this.epoch += 1;
+  }
+
+  private bumpEpoch(): void {
+    this.epoch += 1;
   }
 
   private runExclusive<T>(
@@ -486,8 +493,13 @@ class TranscriptImageBytesStore {
     signal: AbortSignal | undefined,
   ): Promise<T | "aborted"> {
     const wrapped = async (): Promise<T | "aborted"> => {
-      if (signal?.aborted) return "aborted";
-      return raceAbort(signal, work());
+      if (signal?.aborted) {
+        this.bumpEpoch();
+        return "aborted";
+      }
+      return raceAbort(signal, work(), () => {
+        this.bumpEpoch();
+      });
     };
     const next = this.mutation.then(wrapped, wrapped);
     this.mutation = next.then(
@@ -513,9 +525,11 @@ class TranscriptImageBytesStore {
 
   private async hydrateIndex(
     backend: TranscriptImageBytesBackend,
+    epoch: number,
   ): Promise<void> {
     if (this.indexHydrated) return;
     const rows = await backend.listIndex();
+    if (epoch !== this.epoch) return;
     this.index.clear();
     for (const row of rows) {
       this.index.set(row.key, {
@@ -564,10 +578,18 @@ class TranscriptImageBytesStore {
     identity: string | null,
     signal: AbortSignal | undefined,
   ): Promise<ImageBytesResult | null> {
+    const epoch = this.epoch;
     const result = await this.runExclusive(async () => {
+      if (epoch !== this.epoch) return null;
       const backend = this.resolveBackendFor(identity);
-      await this.hydrateIndex(backend);
+      await this.hydrateIndex(backend, epoch);
+      if (epoch !== this.epoch) return null;
       const stored = await backend.get(key);
+      if (epoch !== this.epoch) {
+        return stored === undefined
+          ? null
+          : { bytes: copyBytes(stored.bytes), mediaType: stored.mediaType };
+      }
       if (stored === undefined) return null;
       const accessedAt = Date.now();
       this.index.set(key, {
@@ -594,10 +616,13 @@ class TranscriptImageBytesStore {
     identity: string | null,
     generation: number,
   ): Promise<void> {
+    const epoch = this.epoch;
     await this.runExclusive(async () => {
+      if (epoch !== this.epoch) return;
       if (generation !== this.generationOf(identity)) return;
       const backend = this.resolveBackendFor(identity);
-      await this.hydrateIndex(backend);
+      await this.hydrateIndex(backend, epoch);
+      if (epoch !== this.epoch) return;
       if (generation !== this.generationOf(identity)) return;
       const byteLength = result.bytes.byteLength;
       const budget = getRetentionProfile().transcriptImageCacheBytes;
@@ -614,6 +639,8 @@ class TranscriptImageBytesStore {
         del: evictKeys,
         set: { key, value: stored },
       });
+      if (epoch !== this.epoch) return;
+      if (generation !== this.generationOf(identity)) return;
       for (const evicted of evictKeys) this.index.delete(evicted);
       this.index.set(key, { byteLength, accessedAt });
     }, undefined);
@@ -710,21 +737,26 @@ export function transcriptImageBytesStats(): {
 function raceAbort<T>(
   signal: AbortSignal | undefined,
   work: Promise<T>,
+  onAbort: (() => void) | undefined,
 ): Promise<T | "aborted"> {
   if (signal === undefined) return work;
-  if (signal.aborted) return Promise.resolve("aborted");
+  if (signal.aborted) {
+    onAbort?.();
+    return Promise.resolve("aborted");
+  }
   return new Promise((resolve, reject) => {
-    const onAbort = (): void => {
+    const onAbortListener = (): void => {
+      onAbort?.();
       resolve("aborted");
     };
-    signal.addEventListener("abort", onAbort, { once: true });
+    signal.addEventListener("abort", onAbortListener, { once: true });
     work.then(
       (value) => {
-        signal.removeEventListener("abort", onAbort);
+        signal.removeEventListener("abort", onAbortListener);
         resolve(value);
       },
       (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
+        signal.removeEventListener("abort", onAbortListener);
         reject(error instanceof Error ? error : new Error(String(error)));
       },
     );

@@ -220,11 +220,10 @@ export interface ImageBlobCache {
    */
   discard: (scopeKey: string, subject: string) => void;
   /**
-   * Test-only: drops every entry immediately, bypassing grace/session
-   * retention and revoking every live URL. `"session"`-retention entries
-   * exist precisely to outlive their own test otherwise, so a shared cache
-   * instance (the app-wide singleton) needs this to stay isolated between
-   * tests - never call it from production code.
+   * Drops every entry immediately, bypassing grace/session retention,
+   * aborting in-flight fetches, and revoking every live URL. Identity
+   * teardown uses this so a remount grace window cannot join the outgoing
+   * account's fetch. Tests use it to isolate the singleton between cases.
    */
   clear: () => void;
 }
