@@ -72,9 +72,13 @@ export const FALLBACK_ACTION_OUTCOMES = [
    * attempt.
    *
    * Deliberately the SAME word `chat.fallback.listTargets` already uses for the
-   * same fact. The two enums are separate types and could have spelled it
-   * differently; one file renders both, and two words for one fact in one
-   * switch is how a renderer ends up implying they are different situations.
+   * same fact - an ids mismatch against the chat's latest attempt. The two
+   * enums are separate types and could have spelled it differently. Only this
+   * one is rendered: the chooser reads the listing's outcome solely to decide
+   * whether to preselect from its rows (anything but `listed` opens on the
+   * tuple it was entered from) and draws no copy for it. One spelling keeps
+   * one meaning across both, so a surface that ever does render the listing's
+   * outcome cannot read the pair as two different situations.
    */
   "attempt_not_latest",
   /**
@@ -767,7 +771,14 @@ export type ChatFallbackListTargetsRequest = z.infer<
 export const chatFallbackListTargetsResponseSchema = lazySchema(() =>
   z.object({
     /**
-     * By cause, as the host answers it:
+     * By cause, as the host answers it.
+     *
+     * First the chat's session is resolved. When it cannot be - the chat or
+     * its epic was deleted, or the session is unavailable (the host is
+     * shutting down, say) - the answer is `no_active_traversal` for EITHER
+     * selector, with empty lists: there is no session to ask.
+     *
+     * Once it resolves, per selector:
      *
      * - `listed` - the rows. For an `attempt` selector, whenever it names the
      *   chat's latest attempt: routed from that attempt's own tuple, with or
@@ -777,11 +788,14 @@ export const chatFallbackListTargetsResponseSchema = lazySchema(() =>
      * - `attempt_not_latest` - ONLY an `attempt` selector whose ids are not the
      *   chat's latest attempt, the same comparison `runManualRung` makes. The
      *   one answer here that says the chat has advanced past the named turn.
-     * - `no_active_traversal` - ONLY a `traversal` selector with no record, or
-     *   a record for another traversal. An attempt selector never gets it.
+     * - `no_active_traversal` - a `traversal` selector with no record, or a
+     *   record for another traversal. After resolution, an attempt selector
+     *   never gets it.
      * - `traversal_advanced` - a `traversal` selector whose revision is stale.
      * - `state_unreadable` - a record this build cannot parse, which is not the
-     *   same world as no record.
+     *   same world as no record; and ANY exception while listing, for either
+     *   selector - a failed read during the enumeration included - which the
+     *   host catches and answers this way rather than failing the call.
      */
     outcome: z.enum([
       "listed",
