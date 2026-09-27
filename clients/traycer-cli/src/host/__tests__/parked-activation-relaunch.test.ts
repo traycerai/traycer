@@ -202,3 +202,68 @@ describe("parkedActivationRelaunchable", () => {
     ).resolves.toBe(false);
   });
 });
+
+// `describeNonterminalRecordRecovery` is the ONE writer of the "what now"
+// sentence for `host restart`, `host free-port-and-restart` and `host status`.
+// Its first shipped version promised one-step recovery for every park; for a
+// park whose install has since changed, `host update` instead terminalizes it
+// `failed {install-changed}` and exits without a restart (traycer#2208 review).
+describe("describeNonterminalRecordRecovery", () => {
+  const claim = {
+    installedVersion: "1.7.0",
+    installGeneration: "id:some-install",
+    stageFingerprint: null,
+    allowDowngrade: false,
+    acceptStoreFormatLoss: false,
+  };
+
+  it("an ACTIVE record: wait, and `host update` recovers an interrupted one", async () => {
+    const { describeNonterminalRecordRecovery } =
+      await import("../parked-activation-relaunch");
+    const sentence = describeNonterminalRecordRecovery(
+      attemptRecord({ phase: "applying", execution: "active", claim }),
+      false,
+    );
+    expect(sentence).toContain("is in progress (applying)");
+    expect(sentence).toContain("wait for it to finish");
+    expect(sentence).toContain("'traycer host update'");
+    expect(sentence).not.toContain("traycer host ensure");
+  });
+
+  it("a park the install still matches: `host update` resumes it and starts the host", async () => {
+    const { describeNonterminalRecordRecovery } =
+      await import("../parked-activation-relaunch");
+    const sentence = describeNonterminalRecordRecovery(
+      attemptRecord({ claim }),
+      true,
+    );
+    expect(sentence).toContain("run 'traycer host update' to resume it");
+    expect(sentence).toContain("starts the host if none is running");
+    expect(sentence).not.toContain("traycer host ensure");
+  });
+
+  it("a claim-less park resumes the same way - the resume compares nothing", async () => {
+    const { describeNonterminalRecordRecovery } =
+      await import("../parked-activation-relaunch");
+    const sentence = describeNonterminalRecordRecovery(
+      attemptRecord({}),
+      false,
+    );
+    expect(sentence).toContain("run 'traycer host update' to resume it");
+    expect(sentence).not.toContain("traycer host ensure");
+  });
+
+  it("a park the install no longer matches: `host update` retires it and exits, so `host ensure` is the start", async () => {
+    const { describeNonterminalRecordRecovery } =
+      await import("../parked-activation-relaunch");
+    const sentence = describeNonterminalRecordRecovery(
+      attemptRecord({ claim }),
+      false,
+    );
+    expect(sentence).toContain("installed host no longer matches");
+    expect(sentence).toContain("retire the stale record");
+    expect(sentence).toContain("'traycer host ensure' to start the host");
+    // The overpromise this replaces: never claim the resume brings it back.
+    expect(sentence).not.toContain("also starts the host");
+  });
+});

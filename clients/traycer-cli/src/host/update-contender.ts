@@ -306,8 +306,12 @@ function unwrapContenderOutcome<T>(
  */
 function describeNonterminalAttempt(record: HostUpdateAttemptRecord): string {
   const where = `attempt ${record.attemptId} is ${record.phase}/${record.execution} for host ${record.targetVersion}`;
+  // This site holds no install record to compare the park against, so the
+  // park sentence names the one branch a resume can take that does NOT start
+  // the host (`describeNonterminalRecordRecovery` in
+  // `host/parked-activation-relaunch.ts` has the per-record version).
   return record.execution === "parked"
-    ? `${where}; it is parked with no updater running - run 'traycer host update' to resume it, which also starts the host if none is running`
+    ? `${where}; it is parked with no updater running - run 'traycer host update' to resume it, which also starts the host if none is running; if it exits reporting that the installed host changed, the stale record is retired and 'traycer host ensure' starts the host`
     : `${where}; wait for the running update to finish, or run 'traycer host update' to recover it if it was interrupted`;
 }
 

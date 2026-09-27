@@ -15,6 +15,10 @@ import {
   type HostUpdateAttemptRecord,
 } from "@traycer-clients/shared/host-update";
 import { bootstrapLogPath, hostHomeDir } from "../store/paths";
+import {
+  describeNonterminalRecordRecovery,
+  parkedActivationRelaunchable,
+} from "../host/parked-activation-relaunch";
 import { makeColorizer, shouldUseColor, type Colorizer } from "../runner/ansi";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import type { RuntimeContext } from "../runner/runtime";
@@ -54,22 +58,50 @@ export interface HostStatusUpdateAttempt {
   readonly phase: HostUpdateAttemptRecord["phase"];
   readonly execution: HostUpdateAttemptRecord["execution"];
   readonly continuation: HostUpdateAttemptRecord["continuation"];
+  /**
+   * For a park: whether the installed host is still the one the park's claim
+   * names, which is what decides whether `host update` resumes it in one step
+   * or retires it as stale. `null` for a non-parked record, where the question
+   * does not arise.
+   */
+  readonly parkMatchesInstall: boolean | null;
+}
+
+/**
+ * The projection for the payload, and the sentence for the human block, from
+ * ONE read of the record - so the hint always describes the attempt the
+ * payload shows.
+ */
+interface NonterminalUpdateAttemptRead {
+  readonly summary: HostStatusUpdateAttempt;
+  readonly recovery: string;
 }
 
 async function readNonterminalUpdateAttempt(
   environment: RuntimeContext["environment"],
-): Promise<HostStatusUpdateAttempt | null> {
+): Promise<NonterminalUpdateAttemptRead | null> {
   const read = await readUpdateAttemptRecord(hostHomeDir(environment));
   if (read.kind !== "valid" || read.value.execution === "terminal") {
     return null;
   }
   const record = read.value;
+  const parkMatchesInstall =
+    record.execution === "parked"
+      ? await parkedActivationRelaunchable(environment, record)
+      : null;
   return {
-    attemptId: record.attemptId,
-    targetVersion: record.targetVersion,
-    phase: record.phase,
-    execution: record.execution,
-    continuation: record.continuation,
+    summary: {
+      attemptId: record.attemptId,
+      targetVersion: record.targetVersion,
+      phase: record.phase,
+      execution: record.execution,
+      continuation: record.continuation,
+      parkMatchesInstall,
+    },
+    recovery: describeNonterminalRecordRecovery(
+      record,
+      parkMatchesInstall === true,
+    ),
   };
 }
 
@@ -125,12 +157,16 @@ export const hostStatusCommand: CommandFn = async (
     bootstrapLogPath: bootstrapLogPath(ctx.runtime.environment),
     bootstrapLogTail,
     bootstrap: null,
-    updateAttempt,
+    updateAttempt: updateAttempt === null ? null : updateAttempt.summary,
   };
 
   return {
     data: output,
-    human: renderHumanStatus(output, ctx.runtime),
+    human: renderHumanStatus(
+      output,
+      updateAttempt === null ? null : updateAttempt.recovery,
+      ctx.runtime,
+    ),
     exitCode: 0,
   };
 };
@@ -139,6 +175,9 @@ export const hostStatusCommand: CommandFn = async (
 
 function renderHumanStatus(
   output: HostStatusOutput,
+  // The recovery sentence for a standing nonterminal update record, `null`
+  // when there is none; the not-running hint below is built from it.
+  updateRecovery: string | null,
   runtime: RuntimeContext,
 ): string {
   // The block is printed on stdout, so that is the stream that decides.
@@ -201,7 +240,7 @@ function renderHumanStatus(
   // a record stands.
   if (!output.running) {
     lines.push("");
-    lines.push(c.dim(nextMoveHint(output.updateAttempt)));
+    lines.push(c.dim(nextMoveHint(updateRecovery)));
   }
 
   const recent = output.bootstrapMarkers.slice(-RECENT_ACTIVITY_ROWS).reverse();
@@ -218,14 +257,13 @@ function renderHumanStatus(
   return lines.join("\n");
 }
 
-function nextMoveHint(attempt: HostStatusUpdateAttempt | null): string {
-  if (attempt === null) {
+function nextMoveHint(updateRecovery: string | null): string {
+  if (updateRecovery === null) {
     return "Run 'traycer host ensure' to install, register, and start the host.";
   }
-  if (attempt.execution === "parked") {
-    return `An update to host ${attempt.targetVersion} is parked at ${attempt.phase} with no updater running. Run 'traycer host update' to resume it; that also starts the host.`;
-  }
-  return `An update to host ${attempt.targetVersion} is in progress (${attempt.phase}). Wait for it to finish; if it was interrupted, 'traycer host update' recovers it and starts the host.`;
+  // The shared sentence (`describeNonterminalRecordRecovery`), capitalised for
+  // a line of its own.
+  return `${updateRecovery.charAt(0).toUpperCase()}${updateRecovery.slice(1)}.`;
 }
 
 function kvBlock(c: Colorizer, rows: readonly [string, string][]): string[] {

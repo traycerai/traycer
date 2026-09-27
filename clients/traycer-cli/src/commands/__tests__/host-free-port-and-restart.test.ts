@@ -562,7 +562,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
       expect(mocks.controllerCalls).toEqual(["stop"]);
       expect(result.data).toMatchObject({ killed: false, killError: "EPERM" });
       expect(result.human).toBe(
-        `pid 4242 could not be signalled (EPERM); port verified free anyway (port 51820 has no listener (freed before the signal)); stopped '${label.id}' without activating parked update bytes; the host is now down - run 'traycer host update' to activate the update and bring it back`,
+        `pid 4242 could not be signalled (EPERM); port verified free anyway (port 51820 has no listener (freed before the signal)); stopped '${label.id}' without activating parked update bytes; the host is now down: an update to host 1.2.3 is parked at waiting-to-activate with no updater running; run 'traycer host update' to resume it, which also starts the host if none is running`,
       );
       mocks.killResult = {
         killed: true,

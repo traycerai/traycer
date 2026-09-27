@@ -90,12 +90,14 @@ const BASE_LEGACY: LegacyHostUpdateResult = {
 function outcome(
   previousVersion: string | null,
   serviceLifecycle: LegacyHostUpdateServiceLifecycle,
+  startedStoppedHost: boolean,
 ): HostUpdateRunOutcome {
   return {
     legacy: { ...BASE_LEGACY, previousVersion, serviceLifecycle },
     releasedReason: null,
     foreignRuntimeVersion: null,
     runningVersion: "2.0.0",
+    startedStoppedHost,
   };
 }
 
@@ -103,16 +105,16 @@ beforeEach(() => {
   mocks.runHostUpdateMock.mockReset();
 });
 
+const RESTART: LegacyHostUpdateServiceLifecycle = {
+  priorServiceState: "stopped",
+  stoppedBeforeSwap: false,
+  postSwapAction: "restart",
+  postSwapError: null,
+};
+
 describe("buildHostUpdateCommand — humanSummary", () => {
-  it("a restart with previousVersion === version and no postSwapError reports the host as started, not a no-op", async () => {
-    mocks.runHostUpdateMock.mockResolvedValue(
-      outcome("2.0.0", {
-        priorServiceState: "stopped",
-        stoppedBeforeSwap: false,
-        postSwapAction: "restart",
-        postSwapError: null,
-      }),
-    );
+  it("a run that started a stopped host reports that, not a no-op", async () => {
+    mocks.runHostUpdateMock.mockResolvedValue(outcome("2.0.0", RESTART, true));
     const command = buildHostUpdateCommand(baseArgs());
 
     const result = await command(fakeCtx());
@@ -122,32 +124,48 @@ describe("buildHostUpdateCommand — humanSummary", () => {
     );
   });
 
-  it("the same restart with a postSwapError reports the converge-failure variant", async () => {
+  it("the same run with a postSwapError says the start was ATTEMPTED - a failed restart may have left no host running", async () => {
     mocks.runHostUpdateMock.mockResolvedValue(
-      outcome("2.0.0", {
-        priorServiceState: "stopped",
-        stoppedBeforeSwap: false,
-        postSwapAction: "restart",
-        postSwapError: "boom",
-      }),
+      outcome("2.0.0", { ...RESTART, postSwapError: "boom" }, true),
     );
     const command = buildHostUpdateCommand(baseArgs());
 
     const result = await command(fakeCtx());
 
     expect(result.human).toBe(
-      "started host 2.0.0 (it was installed but not running); service did not converge: boom",
+      "attempted to start host 2.0.0 (it was installed but not running); service did not converge: boom",
+    );
+  });
+
+  // The discriminator is the run's own fact, not `previousVersion === version`:
+  // a live host publishing the catalog version under a record whose runtime
+  // stamp differs is debt with equal versions too, and that run REPLACED a
+  // running host (traycer#2208 review).
+  it("a restart of a LIVE host onto the same version string is reported as a restart, never as a start", async () => {
+    mocks.runHostUpdateMock.mockResolvedValue(outcome("2.0.0", RESTART, false));
+    const command = buildHostUpdateCommand(baseArgs());
+
+    const result = await command(fakeCtx());
+
+    expect(result.human).toBe("restarted host 2.0.0 onto the installed build");
+  });
+
+  it("the same live-host restart with a postSwapError reports the attempt and the error", async () => {
+    mocks.runHostUpdateMock.mockResolvedValue(
+      outcome("2.0.0", { ...RESTART, postSwapError: "boom" }, false),
+    );
+    const command = buildHostUpdateCommand(baseArgs());
+
+    const result = await command(fakeCtx());
+
+    expect(result.human).toBe(
+      "attempted to restart host 2.0.0 onto the installed build; service did not converge: boom",
     );
   });
 
   it("postSwapAction: none with equal versions stays the plain no-op sentence (unchanged)", async () => {
     mocks.runHostUpdateMock.mockResolvedValue(
-      outcome("2.0.0", {
-        priorServiceState: "stopped",
-        stoppedBeforeSwap: false,
-        postSwapAction: "none",
-        postSwapError: null,
-      }),
+      outcome("2.0.0", { ...RESTART, postSwapAction: "none" }, false),
     );
     const command = buildHostUpdateCommand(baseArgs());
 
@@ -157,14 +175,7 @@ describe("buildHostUpdateCommand — humanSummary", () => {
   });
 
   it("a restart with a genuine version change reports the ordinary update sentence", async () => {
-    mocks.runHostUpdateMock.mockResolvedValue(
-      outcome("1.9.0", {
-        priorServiceState: "stopped",
-        stoppedBeforeSwap: false,
-        postSwapAction: "restart",
-        postSwapError: null,
-      }),
-    );
+    mocks.runHostUpdateMock.mockResolvedValue(outcome("1.9.0", RESTART, false));
     const command = buildHostUpdateCommand(baseArgs());
 
     const result = await command(fakeCtx());
@@ -172,15 +183,8 @@ describe("buildHostUpdateCommand — humanSummary", () => {
     expect(result.human).toBe("updated host 1.9.0 → 2.0.0");
   });
 
-  it("logs 'Host update command completed' with postSwapAction", async () => {
-    mocks.runHostUpdateMock.mockResolvedValue(
-      outcome("2.0.0", {
-        priorServiceState: "stopped",
-        stoppedBeforeSwap: false,
-        postSwapAction: "restart",
-        postSwapError: null,
-      }),
-    );
+  it("logs 'Host update command completed' with postSwapAction and startedStoppedHost", async () => {
+    mocks.runHostUpdateMock.mockResolvedValue(outcome("2.0.0", RESTART, true));
     const command = buildHostUpdateCommand(baseArgs());
     const ctx = fakeCtx();
 
@@ -188,7 +192,10 @@ describe("buildHostUpdateCommand — humanSummary", () => {
 
     expect(ctx.runtime.logger.info).toHaveBeenCalledWith(
       "Host update command completed",
-      expect.objectContaining({ postSwapAction: "restart" }),
+      expect.objectContaining({
+        postSwapAction: "restart",
+        startedStoppedHost: true,
+      }),
     );
   });
 });

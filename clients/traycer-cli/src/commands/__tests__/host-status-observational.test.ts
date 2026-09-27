@@ -51,10 +51,19 @@ vi.mock("../../host/bootstrap-log", () => ({
   readBootstrapLogTail: mocks.readBootstrapLogTailMock,
 }));
 
-vi.mock("../../store/paths", () => ({
-  bootstrapLogPath: () => "/tmp/test-bootstrap.log",
-  hostHomeDir: () => "/tmp/test-host-home",
-}));
+// Spread the real module: `host status` now reads the install record (through
+// `manifest/host-install`) to tell a resumable park from a stale one, and that
+// module imports further path helpers. Only the two the command's own reads
+// resolve are redirected; `/tmp/test-host-home` holds no install record, so a
+// parked fixture reads as "does not match the install" unless it is claim-less.
+vi.mock("../../store/paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../store/paths")>();
+  return {
+    ...actual,
+    bootstrapLogPath: () => "/tmp/test-bootstrap.log",
+    hostHomeDir: () => "/tmp/test-host-home",
+  };
+});
 
 vi.mock("../../store/cli-lock", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../store/cli-lock")>();

@@ -540,6 +540,12 @@ describe("buildHostRestartCommand", () => {
         restarted: false,
         deferredForParkedActivation: false,
       });
+      // The guidance is about THIS record: a stale park is not brought back
+      // by `host update` alone (it retires the record `install-changed` and
+      // exits), so the sentence must not promise that (traycer#2208 review).
+      expect(result.human).toContain("installed host no longer matches");
+      expect(result.human).toContain("'traycer host ensure' to start the host");
+      expect(result.human).not.toContain("also starts the host");
     });
 
     it("a claim whose installGeneration disagrees with the installed bytes stays stop-only", async () => {

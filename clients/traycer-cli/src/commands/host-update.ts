@@ -103,6 +103,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       // onto already-installed bytes logs `changed:false`; the action is the
       // fact that distinguishes that run from a true no-op.
       postSwapAction: outcome.legacy.serviceLifecycle.postSwapAction,
+      startedStoppedHost: outcome.startedStoppedHost,
       releasedReason: outcome.releasedReason,
       hasPostSwapError: outcome.legacy.serviceLifecycle.postSwapError !== null,
     });
@@ -157,21 +158,34 @@ function humanSummary(outcome: HostUpdateRunOutcome): string {
     // here at all any more; it exits non-zero from the run.
     return `host update did not claim an attempt (${outcome.releasedReason}); ${runningState(outcome)}`;
   }
-  // A restart with nothing to compare against is the activation arm's
-  // `no-live-host` reading: the target was already installed, nothing was
-  // serving it, and the run's whole act was to bring the host up.
-  // `previousVersion` equals `version` there because no running version
-  // existed to name - so this has to be read BEFORE the equality test below,
-  // which would otherwise report a run that revived a stopped host as having
-  // done nothing (the 2026-09-27 staging outage: "already at ... (no-op)"
-  // printed while the host it had just started was booting).
+  // The activation arm's `no-live-host` reading: the target was already
+  // installed, nothing was serving it, and the run's whole act was to bring
+  // the host up. `previousVersion` equals `version` there because no running
+  // version existed to name, so it has to be read BEFORE the equality test
+  // below, which would otherwise report a run that revived a stopped host as
+  // having done nothing (the 2026-09-27 staging outage: "already at ...
+  // (no-op)" printed while the host it had just started was booting).
+  //
+  // Decided from the run's OWN fact, not from the version equality: a live
+  // host publishing the catalog version under a record whose runtime stamp
+  // differs is debt with `previousVersion === version` too, and that run
+  // REPLACED a running host rather than starting a stopped one.
+  if (outcome.startedStoppedHost) {
+    // "attempted", not "started", when the service did not converge: a
+    // restart that failed may have left no host running at all.
+    return legacy.serviceLifecycle.postSwapError !== null
+      ? `attempted to start host ${legacy.version} (it was installed but not running); service did not converge: ${legacy.serviceLifecycle.postSwapError}`
+      : `started host ${legacy.version}; it was installed but not running`;
+  }
   if (
     legacy.serviceLifecycle.postSwapAction === "restart" &&
     legacy.previousVersion === legacy.version
   ) {
+    // A live host was replaced by the installed build of the SAME version
+    // string (runtime stamp differed, or another build of the same release).
     return legacy.serviceLifecycle.postSwapError !== null
-      ? `started host ${legacy.version} (it was installed but not running); service did not converge: ${legacy.serviceLifecycle.postSwapError}`
-      : `started host ${legacy.version}; it was installed but not running`;
+      ? `attempted to restart host ${legacy.version} onto the installed build; service did not converge: ${legacy.serviceLifecycle.postSwapError}`
+      : `restarted host ${legacy.version} onto the installed build`;
   }
   if (legacy.previousVersion === legacy.version) {
     return `host already at ${legacy.version} (no-op)`;

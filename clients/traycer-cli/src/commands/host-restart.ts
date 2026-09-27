@@ -21,7 +21,10 @@ import {
   stopHostForRestartWithAttempt,
 } from "../host/update-mutation";
 import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
-import { parkedActivationRelaunchable } from "../host/parked-activation-relaunch";
+import {
+  describeNonterminalRecordRecovery,
+  parkedActivationRelaunchable,
+} from "../host/parked-activation-relaunch";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { cliPostFinalizeMarkerPath } from "../store/paths";
 import {
@@ -168,6 +171,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             // admitted activation flow either way.
             return {
               kind: "deferred-for-parked-activation" as const,
+              record: contenderContext.activeAttempt,
               attestation: await attestInstallRuntime(ctx.runtime.environment),
             };
           }
@@ -196,6 +200,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
           );
           return {
             kind: "stopped-for-parked-activation" as const,
+            record: contenderContext.activeAttempt,
             attestation: await attestInstallRuntime(ctx.runtime.environment),
           };
         }
@@ -233,6 +238,14 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
     // now down" from "your host is still up, activation is pending".
     const deferredForParkedActivation =
       locked.kind === "deferred-for-parked-activation";
+    // The record the stop-only classification was made from, so the guidance
+    // is about THAT record: a park this command declined to relaunch did not
+    // match the install (a matching one took the restart above), and an
+    // active record is a different sentence again.
+    const recovery =
+      locked.kind === "restarted" || locked.record === null
+        ? null
+        : describeNonterminalRecordRecovery(locked.record, false);
     return {
       data: {
         restarted,
@@ -248,8 +261,8 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
       human: restarted
         ? humanForRestart(label.id, locked.result)
         : deferredForParkedActivation
-          ? `left service '${label.id}' untouched because a packaged update is waiting for its explicit activation; run 'traycer host update' to activate it`
-          : `stopped service '${label.id}' without relaunch because a packaged update is waiting for its explicit activation; the host is now down - run 'traycer host update' to activate the update and bring it back`,
+          ? `left service '${label.id}' untouched because a packaged update is waiting for its explicit activation${recovery === null ? "" : `: ${recovery}`}`
+          : `stopped service '${label.id}' without relaunch because a packaged update is waiting for its explicit activation; the host is now down${recovery === null ? "" : `: ${recovery}`}`,
       exitCode: 0,
     };
   };
