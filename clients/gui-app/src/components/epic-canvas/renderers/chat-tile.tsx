@@ -211,10 +211,7 @@ import { useQueuedPromptBlobRepair } from "@/hooks/chats/use-queued-prompt-blob-
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
-import {
-  useGuiHarnessCatalogForClient,
-  type GuiHarnessCatalogEntry,
-} from "@/hooks/harnesses/use-gui-harness-catalog";
+import { useGuiHarnessCatalogForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useInitialChatHandoffDriver } from "@/hooks/chats/use-initial-chat-handoff-driver";
 import { useChatActions } from "@/hooks/chats/use-chat-actions";
 import { useChatSetupFailureRestoreDriver } from "@/hooks/chats/use-chat-setup-failure-restore-driver";
@@ -251,12 +248,12 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
-  agentModelKey,
   resolveAgentReasoningLabel,
   resolveAgentSenderDisplay,
   resolveSenderLabel,
   type SenderDisplayContext,
 } from "@/lib/chat/sender-display";
+import { getModelLabelIndex } from "@/lib/chat/model-label-index";
 import {
   selectEpicRunSettingsEntry,
   selectGlobalLastRunSettings,
@@ -387,35 +384,6 @@ interface ChatTileSessionViewProps {
    * synthesized loaded and never waits.
    */
   readonly preContent: ChatTilePreContentFrame | null;
-}
-
-function buildModelReasoningLabels(
-  harnesses: ReadonlyArray<GuiHarnessCatalogEntry>,
-): ReadonlyMap<string, ReadonlyMap<string, string>> {
-  return new Map(
-    harnesses.flatMap((harness) =>
-      harness.models.map((model) =>
-        reasoningLabelEntry(
-          harness.id,
-          model.slug,
-          new Map(
-            model.supportedReasoningEfforts.map((option) => [
-              option.id,
-              option.label,
-            ]),
-          ),
-        ),
-      ),
-    ),
-  );
-}
-
-function reasoningLabelEntry(
-  harnessId: GuiHarnessCatalogEntry["id"],
-  modelSlug: string,
-  labels: ReadonlyMap<string, string>,
-): readonly [string, ReadonlyMap<string, string>] {
-  return [agentModelKey(harnessId, modelSlug), labels];
 }
 
 /**
@@ -1800,20 +1768,8 @@ function useChatTileSessionViewModel(
     { enabled: false, subscribed: surfaceVisible, modelsFetch: "cached-only" },
   );
   const displayCatalog = tabModelCatalog.harnesses;
-  const modelLabels = useMemo<ReadonlyMap<string, string>>(
-    () =>
-      new Map(
-        displayCatalog.flatMap((harness) =>
-          harness.models.map((model) => [
-            agentModelKey(harness.id, model.slug),
-            model.label,
-          ]),
-        ),
-      ),
-    [displayCatalog],
-  );
-  const modelReasoningLabels = useMemo(
-    () => buildModelReasoningLabels(displayCatalog),
+  const { modelLabels, modelReasoningLabels } = useMemo(
+    () => getModelLabelIndex(displayCatalog),
     [displayCatalog],
   );
   const handoffScope = useMemo<InitialChatHandoffScope>(
