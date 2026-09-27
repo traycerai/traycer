@@ -23,6 +23,16 @@ const metaSchema = z.object({
   chars: z.number().int().nonnegative(),
   touchedAt: z.number().int().nonnegative(),
 });
+const storageKeySchema = z.tuple([
+  z.string(),
+  z.string(),
+  z.string(),
+  z.string(),
+]);
+
+function nextTouchedAt(entries: readonly z.infer<typeof metaSchema>[]): number {
+  return Math.max(Date.now(), ...entries.map((entry) => entry.touchedAt + 1));
+}
 
 export interface DurableSkeleton {
   readonly claim: ChatSkeletonResume;
@@ -76,6 +86,31 @@ function writePresence(keys: readonly string[]): void {
 /** An absent hint means there is no IndexedDB load on the chat-open path. */
 export function hasDurableSkeletonHint(key: string): boolean {
   return presence().includes(key);
+}
+
+/** Account-scoped hints to prewarm before a chat tab opens. */
+export function hintedDurableSkeletonKeysForUser(userId: string): readonly {
+  readonly userId: string;
+  readonly hostId: string;
+  readonly epicId: string;
+  readonly chatId: string;
+}[] {
+  return presence().flatMap((key) => {
+    try {
+      const parsed = storageKeySchema.safeParse(JSON.parse(key));
+      if (!parsed.success || parsed.data[0] !== userId) return [];
+      return [
+        {
+          userId,
+          hostId: parsed.data[1],
+          epicId: parsed.data[2],
+          chatId: parsed.data[3],
+        },
+      ];
+    } catch {
+      return [];
+    }
+  });
 }
 
 function database(): Promise<IDBDatabase | null> {
@@ -178,10 +213,20 @@ async function loadDurableSkeletonBestEffort(
     const current = await database();
     if (current === null || readGeneration !== generation) return;
     const tx = current.transaction("meta", "readwrite");
-    tx.objectStore("meta").put(
-      { key, chars: parsed.data.entriesJson.length, touchedAt: Date.now() },
-      key,
-    );
+    const metaStore = tx.objectStore("meta");
+    const request = metaStore.getAll();
+    request.onsuccess = () => {
+      const entries = z.array(metaSchema).safeParse(request.result);
+      if (!entries.success) return;
+      metaStore.put(
+        {
+          key,
+          chars: parsed.data.entriesJson.length,
+          touchedAt: nextTouchedAt(entries.data),
+        },
+        key,
+      );
+    };
     await transactionDone(tx);
   }).catch(() => undefined);
   return { claim: parsed.data.claim, entriesJson: parsed.data.entriesJson };
@@ -212,10 +257,11 @@ export function saveDurableSkeleton(
       const candidates = (parsed.success ? parsed.data : []).filter(
         (entry) => entry.key !== key,
       );
+      const touchedAt = nextTouchedAt(parsed.success ? parsed.data : []);
       candidates.push({
         key,
         chars: value.entriesJson.length,
-        touchedAt: Date.now(),
+        touchedAt,
       });
       candidates.sort((left, right) => right.touchedAt - left.touchedAt);
       let chars = 0;
@@ -241,10 +287,7 @@ export function saveDurableSkeleton(
           },
           key,
         );
-        metaStore.put(
-          { key, chars: value.entriesJson.length, touchedAt: Date.now() },
-          key,
-        );
+        metaStore.put({ key, chars: value.entriesJson.length, touchedAt }, key);
       }
     };
     if ((await transactionDone(tx)) && isCurrentGeneration(writeGeneration))

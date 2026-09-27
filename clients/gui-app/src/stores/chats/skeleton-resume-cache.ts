@@ -8,6 +8,7 @@ import type { TranscriptWindow } from "@/stores/chats/transcript-window";
 import {
   clearDurableSkeletons,
   hasDurableSkeletonHint,
+  hintedDurableSkeletonKeysForUser,
   loadDurableSkeleton,
   removeDurableSkeleton,
   saveDurableSkeleton,
@@ -177,6 +178,13 @@ export async function hydrateSkeletonForResume(
     const oldest = cache.keys().next().value;
     if (oldest === undefined) break;
     drop(oldest);
+  }
+}
+
+/** Start account-scoped loads before a chat tab opens; never delay the open. */
+export function primeDurableSkeletonsForResume(userId: string): void {
+  for (const key of hintedDurableSkeletonKeysForUser(userId)) {
+    void hydrateSkeletonForResume(key).catch(() => undefined);
   }
 }
 

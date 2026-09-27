@@ -36,6 +36,7 @@ import {
 } from "@/stores/chats/chat-session-store";
 import {
   hydrateSkeletonForResume,
+  primeDurableSkeletonsForResume,
   shouldLoadDurableSkeletonForResume,
 } from "@/stores/chats/skeleton-resume-cache";
 import {
@@ -110,6 +111,20 @@ getOpenEpicRegistry().subscribe(() => {
   scheduleByteGraceWake();
 });
 
+// The app normally knows its account before a chat tab mounts. Load its tiny
+// set of hinted entries then, off the chat-open path. A slow/missing IndexedDB
+// answer can only lose the byte saving; it cannot delay the subscribe.
+const initialSkeletonCacheUserId = useAuthStore.getState().profile?.userId;
+if (initialSkeletonCacheUserId !== undefined) {
+  primeDurableSkeletonsForResume(initialSkeletonCacheUserId);
+}
+useAuthStore.subscribe((state, previous) => {
+  const userId = state.profile?.userId;
+  if (userId !== undefined && userId !== previous.profile?.userId) {
+    primeDurableSkeletonsForResume(userId);
+  }
+});
+
 /**
  * Coalesce streamed `blockDelta` events onto the animation frame so a fast
  * turn renders at the display refresh rate instead of once per token - the
@@ -126,8 +141,6 @@ const CHAT_SESSION_SCOPE_SEPARATOR = "\u0000";
 
 /** Passed to `reconnectAll` so a hand-driven wake is distinguishable in logs. */
 const CHAT_SESSION_WAKE_REASON = "user-retry";
-/** Only a hinted durable hit can wait; a miss subscribes immediately. */
-const SKELETON_RESUME_LOAD_BUDGET_MS = 25;
 
 let streamClientFactoryOverride: ChatStreamClientFactory | null = null;
 
@@ -502,23 +515,9 @@ export function useChatSessionHandle(
       registry.get(epicId, chatId, hostId, scopeKey) === null &&
       shouldLoadDurableSkeletonForResume(cacheKey)
     ) {
-      setHandle(null);
-      void new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, SKELETON_RESUME_LOAD_BUDGET_MS);
-        void hydrateSkeletonForResume(cacheKey).then(
-          () => {
-            clearTimeout(timer);
-            resolve();
-          },
-          () => {
-            clearTimeout(timer);
-            resolve();
-          },
-        );
-      }).then(acquire);
-    } else {
-      acquire();
+      void hydrateSkeletonForResume(cacheKey).catch(() => undefined);
     }
+    acquire();
 
     return () => {
       cancelled = true;

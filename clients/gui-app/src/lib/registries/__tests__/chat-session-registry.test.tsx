@@ -104,6 +104,35 @@ vi.mock("@/lib/host/use-durable-stream-transport", () => ({
   useDurableStreamTransportFactory: () => stableOpenTransport,
 }));
 
+const skeletonResumeCacheHooks = vi.hoisted(() => ({
+  shouldLoad: null as (() => boolean) | null,
+  hydrate: null as (() => Promise<void>) | null,
+  prewarmUsers: [] as string[],
+}));
+vi.mock("@/stores/chats/skeleton-resume-cache", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/stores/chats/skeleton-resume-cache")
+    >();
+  return {
+    ...actual,
+    shouldLoadDurableSkeletonForResume: (
+      key: Parameters<typeof actual.shouldLoadDurableSkeletonForResume>[0],
+    ) =>
+      skeletonResumeCacheHooks.shouldLoad?.() ??
+      actual.shouldLoadDurableSkeletonForResume(key),
+    hydrateSkeletonForResume: (
+      key: Parameters<typeof actual.hydrateSkeletonForResume>[0],
+    ) =>
+      skeletonResumeCacheHooks.hydrate?.() ??
+      actual.hydrateSkeletonForResume(key),
+    primeDurableSkeletonsForResume: (userId: string) => {
+      skeletonResumeCacheHooks.prewarmUsers.push(userId);
+      actual.primeDurableSkeletonsForResume(userId);
+    },
+  };
+});
+
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { disposeAllChatSessions } from "@/lib/registries/chat-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -297,6 +326,9 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
     globalClientRef.value = null;
     openTransportRef.fn = null;
     readySessionHosts.value = new Set();
+    skeletonResumeCacheHooks.shouldLoad = null;
+    skeletonResumeCacheHooks.hydrate = null;
+    skeletonResumeCacheHooks.prewarmUsers.length = 0;
     useAuthStore.setState({ profile: null, status: "signed-out" });
   });
 
@@ -346,6 +378,41 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
     expect(tracked.records()).toHaveLength(2);
     expect(tracked.records()[0].closeCount).toBe(1);
     expect(tracked.records()[1].closeCount).toBe(0);
+  });
+
+  it("acquires while a hinted durable skeleton load is still pending", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    skeletonResumeCacheHooks.shouldLoad = () => true;
+    let hydrationStarted = false;
+    skeletonResumeCacheHooks.hydrate = () => {
+      hydrationStarted = true;
+      return new Promise<void>(() => {});
+    };
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = remoteTarget("resume-prewarm-key");
+
+    const { result } = renderHook(
+      () => useChatSessionHandle("chat-resume-pending", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    expect(hydrationStarted).toBe(true);
+    expect(tracked.records()).toHaveLength(1);
+    expect(skeletonResumeCacheHooks.prewarmUsers).toContain(
+      CHAT_PROFILE_USER_ID,
+    );
   });
 
   // G1's control: the scope dropped the websocket URL, but only for a LOCAL

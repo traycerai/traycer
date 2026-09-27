@@ -1,11 +1,12 @@
 import { IDBFactory as FakeIDBFactory } from "fake-indexeddb";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import { SKELETON_RESUME_BLOCK_SIZE } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
 import {
   clearAllSkeletonsForResume,
   dropMemorySkeletonsForTests,
   hydrateSkeletonForResume,
+  primeDurableSkeletonsForResume,
   readSkeletonForResume,
   rememberSkeletonForResume,
   shouldLoadDurableSkeletonForResume,
@@ -13,6 +14,7 @@ import {
 import {
   drainDurableSkeletonWritesForTests,
   hasDurableSkeletonHint,
+  hintedDurableSkeletonKeysForUser,
   saveDurableSkeleton,
   skeletonResumeStorageKey,
 } from "@/stores/chats/skeleton-resume-durable-cache";
@@ -79,6 +81,28 @@ describe("durable skeleton resume", () => {
     await clearAllSkeletonsForResume();
     expect(hasDurableSkeletonHint(storageKey)).toBe(false);
     expect(shouldLoadDurableSkeletonForResume(KEY)).toBe(false);
+  });
+
+  it("prewarms only durable skeleton hints for the signed-in account", async () => {
+    const otherAccountKey = skeletonResumeStorageKey({
+      ...KEY,
+      userId: "user-2",
+    });
+    const durable = {
+      claim: { derivation: 1, blockSize: 256, blockDigests: ["digest"] },
+      entriesJson: JSON.stringify(entries()),
+    };
+    await saveDurableSkeleton(skeletonResumeStorageKey(KEY), durable);
+    await saveDurableSkeleton(otherAccountKey, durable);
+    dropMemorySkeletonsForTests();
+
+    expect(hintedDurableSkeletonKeysForUser(KEY.userId)).toEqual([KEY]);
+    primeDurableSkeletonsForResume(KEY.userId);
+
+    await vi.waitFor(() => {
+      expect(readSkeletonForResume(KEY)?.readEntries()).toEqual(entries());
+    });
+    expect(readSkeletonForResume({ ...KEY, userId: "user-2" })).toBeNull();
   });
 
   it("bounds the durable store to eight chats, evicting the oldest", async () => {
