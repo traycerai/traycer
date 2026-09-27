@@ -28,6 +28,11 @@ export function useTrayEpicsSource(): void {
   // to the value computed when this hook first mounted (it lives for the whole
   // app session) and never refresh. The projection store dedupes by content,
   // so a tick that doesn't change any label is a no-op and fires no IPC.
+  //
+  // Plain `setInterval`, not `startVisibleInterval`: the native tray menu
+  // stays on screen when the desktop window is minimised, and opening the
+  // tray does not show the window, so a visibility gate would freeze labels
+  // until the user restored the GUI.
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 60_000);

@@ -42,6 +42,11 @@ const WALL_CLOCK_TICK_INTERVAL_MS = 10_000;
  * module (a unit test, a storybook render) leaves a live interval behind.
  */
 export function startAppServerClockMonitor(): () => void {
+  // Plain interval: parked streams wait exclusively on
+  // `appServerClock.subscribeToRecovery()`, which `noteWallClockTick`
+  // publishes. Pausing this while the window is off screen would leave
+  // those streams down until the user came back, even after NTP or a
+  // manual clock fix.
   const handle = setInterval(() => {
     appServerClock.noteWallClockTick();
   }, WALL_CLOCK_TICK_INTERVAL_MS);

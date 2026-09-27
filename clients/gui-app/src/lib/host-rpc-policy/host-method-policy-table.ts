@@ -1456,6 +1456,10 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: null,
   },
+  "epic.getChatRunSettingsBatch": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
   // The terminal-agent RECORD read (TUI eviction), the sibling of
   // `epic.listChatRecords` above and polled at its exact cadence for its
   // exact reasons: the facts it serves are committed to the host's registry

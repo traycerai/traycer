@@ -78,7 +78,7 @@ export interface PermissionOption {
 // an eye (you watch everything), a pen (edits flow), a shield on (something
 // reviews for you), a shield off (nothing does). Exceptions do not go into
 // these sentences; they live where they apply - `PERMISSION_MODE_DETAILS`
-// below, and the Auto row's meta line.
+// below, and the picker's availability and mid-turn notices.
 const SUPERVISED_PERMISSION_OPTION: PermissionOption = {
   id: "supervised",
   label: "Supervised",
@@ -108,22 +108,22 @@ const FULL_ACCESS_PERMISSION_OPTION: PermissionOption = {
   icon: ShieldOff,
 };
 
-// Order is load-bearing twice over: the picker renders in this order, and
-// `findSafestSupportedPermissionMode` walks it to pick a clamp target. `auto`
-// sits above `auto_accept_edits` because it does everything that mode does and
-// additionally lets a judge approve commands.
-//
-// That POSITION is not what makes `auto` clamp to `auto_accept_edits`, and
-// reading it that way is the trap: the safest-supported walk starts at the top
-// of this list, so on a host serving the pre-auto trio it lands on
-// `supervised`, three rows below where the user was. `PERMISSION_FALLBACK_MODE`
-// is what names the target; the order here only has to keep `auto` ABOVE
-// `auto_accept_edits` so the two agree about which way is down.
+// Safety order, most restrictive first: the fallback walk depends on it.
+// Auto's explicit compatibility fallback is declared in PERMISSION_FALLBACK_MODE.
+// Picker presentation has its own order below and must not change this one.
 export const PERMISSION_OPTIONS: ReadonlyArray<PermissionOption> = [
   SUPERVISED_PERMISSION_OPTION,
   AUTO_ACCEPT_EDITS_PERMISSION_OPTION,
   AUTO_PERMISSION_OPTION,
   FULL_ACCESS_PERMISSION_OPTION,
+];
+
+// Experimental Auto is last in the pickers, independent of its safety rank.
+export const PERMISSION_PICKER_OPTIONS: ReadonlyArray<PermissionOption> = [
+  SUPERVISED_PERMISSION_OPTION,
+  AUTO_ACCEPT_EDITS_PERMISSION_OPTION,
+  FULL_ACCESS_PERMISSION_OPTION,
+  AUTO_PERMISSION_OPTION,
 ];
 
 /**
@@ -548,6 +548,9 @@ export function catalogSupportedPermissionModes(
  */
 export const AUTO_MID_TURN_NOTICE =
   "Switches now. Anything already waiting still asks you.";
+
+export const AUTO_JUDGE_UNAVAILABLE_DESCRIPTION =
+  "No judge available on this machine · asks you instead";
 
 /**
  * What a disabled option says, and WHO it blames.

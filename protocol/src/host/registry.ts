@@ -571,6 +571,7 @@ import {
   epicGetChatRunSettingsV10,
   epicGetChatRunSettingsV20,
   epicGetChatRunSettingsV30,
+  epicGetChatRunSettingsBatchV10,
   epicListChatPublicationTargetsV10,
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
@@ -8532,6 +8533,23 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: epicGetChatRunSettingsDowngradeV30ToV10,
         2: epicGetChatRunSettingsDowngradeV30ToV20,
       },
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // N-chat counterpart of the unary above. Same owner-scoped nulls, same
+  // store-first precedence, one round trip. Optional for the same reason:
+  // an old host answers `E_HOST_UNSUPPORTED` and the client falls back to
+  // N singles of `epic.getChatRunSettings`.
+  "epic.getChatRunSettingsBatch": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicGetChatRunSettingsBatchV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
     },
     degrade: { kind: "unsupported" },
   },

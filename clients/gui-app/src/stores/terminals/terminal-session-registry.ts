@@ -140,6 +140,7 @@ export class TerminalSessionRegistry {
         // terminal-agent. A lingering plain terminal is not busy - it is warm
         // on a clock.
         hasActiveWork: ({ handle }) => shouldKeepLeaseFree(handle),
+        activeWorkReason: () => "agent-running",
         // Nothing a terminal handle holds is lost by disposing it: the PTY runs
         // host-side and a reattach replays scrollback.
         isEvictable: () => true,

@@ -26,6 +26,8 @@ import { EPIC_REPLICAS_MAX_LIVE } from "./budget-limits";
 export interface RetentionProfile {
   /** Live epic sessions, mounted ones included (`OpenEpicSessionRegistry`). */
   readonly maxLiveEpics: number;
+  /** How long unknown agent activity may defer epic cap eviction. */
+  readonly unknownActivityCapGraceMs: number;
   /** Hidden top-level tabs kept mounted (`TopLevelTabHost`). */
   readonly retainedTopLevelSurfaces: number;
   /** Lease-free warm chat sessions (`ChatSessionRegistry`). */
@@ -37,6 +39,7 @@ export interface RetentionProfile {
 /** Electron desktop and the browser: the numbers the app has always run. */
 export const DESKTOP_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   maxLiveEpics: EPIC_REPLICAS_MAX_LIVE,
+  unknownActivityCapGraceMs: 60_000,
   retainedTopLevelSurfaces: 5,
   maxWarmChatSessions: 6,
   maxLingeringPlainTerminals: 6,
@@ -45,6 +48,7 @@ export const DESKTOP_RETENTION_PROFILE: RetentionProfile = Object.freeze({
 /** The installed Capacitor app: a 2 GB process ceiling, one visible tab. */
 export const MOBILE_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   maxLiveEpics: 3,
+  unknownActivityCapGraceMs: 60_000,
   retainedTopLevelSurfaces: 2,
   maxWarmChatSessions: 3,
   maxLingeringPlainTerminals: 3,
