@@ -1886,6 +1886,51 @@ describe("chat find: an older index hit is a candidate until confirmed (F14)", (
     expect(find.scrollToLocation).not.toHaveBeenCalled();
   });
 
+  it("lets a press in the same direction reclaim a read the reader had moved away from", async () => {
+    const host = realOldHost();
+    const find = renderFind({
+      initial: realOldTranscript(false),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+      requestIndexRead,
+      support: null,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
+    });
+    flushFrames();
+
+    act(() => {
+      void adapter.previous();
+    });
+    find.navigateAway();
+    // The reader asks for the same step again while the read is still out.
+    act(() => {
+      void adapter.previous();
+    });
+    // One read, not two.
+    expect(
+      requestIndexRead.mock.calls.filter(([read]) => read !== null),
+    ).toHaveLength(1);
+    find.scrollToLocation.mockClear();
+
+    act(() => {
+      find.setTranscript(realOldTranscript(true));
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    // The press made the step theirs again: it lands on u-real.
+    expect(adapter.getSnapshot()).toMatchObject({ total: 2, current: 1 });
+    flushFrames();
+    expect(find.scrollToLocation).toHaveBeenCalled();
+  });
+
   it("does not carry a step on past a dropped read once the reader navigated away", async () => {
     const host = hostFixture(
       fakeIndex([
@@ -1963,6 +2008,125 @@ describe("chat find: an older index hit is a candidate until confirmed (F14)", (
     });
     flushFrames();
     expect(find.scrollToLocation).not.toHaveBeenCalled();
+  });
+
+  // A step back past the oldest entry waits on the next index page; the
+  // reader can move before it arrives. The read the page leads to belongs to
+  // that step, so it inherits the step's generation, not a fresh one.
+  function pageTwoTranscript(): TranscriptState {
+    return transcriptOf(
+      [
+        userSpec("u-real", 1, "an old needle that paints", false),
+        // Page 1: held rows the index says match and the rows do not paint.
+        ...Array.from({ length: 100 }, (_unused, index) =>
+          userSpec(`u-${index}`, index + 2, `a phantom ${index}`, true),
+        ),
+        userSpec("u-new", 1000, NEW_TEXT, true),
+      ],
+      null,
+    );
+  }
+
+  function pageTwoHydrated(): TranscriptState {
+    return transcriptOf(
+      [
+        userSpec("u-real", 1, "an old needle that paints", true),
+        ...Array.from({ length: 100 }, (_unused, index) =>
+          userSpec(`u-${index}`, index + 2, `a phantom ${index}`, true),
+        ),
+        userSpec("u-new", 1000, NEW_TEXT, true),
+      ],
+      null,
+    );
+  }
+
+  async function steppedIntoPageTwo(options: {
+    readonly moveWhileLoading: boolean;
+  }) {
+    const host = hostFixture(
+      fakeIndex([
+        {
+          messageId: "u-real",
+          tier: "user",
+          createdAt: 1,
+          text: "an old needle that paints",
+        },
+        ...Array.from({ length: 100 }, (_unused, index) => ({
+          messageId: `u-${index}`,
+          tier: "user" as const,
+          createdAt: index + 2,
+          text: `needle ${index}`,
+        })),
+      ]),
+    );
+    const searchCount = (): number =>
+      host.messenger.calls.filter((call) => call.method === "chat.search")
+        .length;
+    const find = renderFind({
+      initial: pageTwoTranscript(),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+      requestIndexRead,
+      support: null,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(searchCount()).toBe(1);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    // Page 1 is spent on arrival: every hit is a held row that paints no match.
+    expect(adapter.getSnapshot()).toMatchObject({ total: 1, current: 1 });
+    expect(adapter.getSnapshot().coverageMessage).not.toContain("may match");
+    flushFrames();
+
+    // Back from the one loaded match, the oldest entry: page 2 is asked for.
+    act(() => {
+      void adapter.previous();
+    });
+    // A minimap pick while it loads.
+    if (options.moveWhileLoading) find.navigateAway();
+    await waitFor(() => {
+      expect(searchCount()).toBe(2);
+    });
+    await waitFor(() => {
+      expect(requestIndexRead).toHaveBeenLastCalledWith({
+        messageId: "u-real",
+        target: "u-real",
+      });
+    });
+    find.scrollToLocation.mockClear();
+    act(() => {
+      find.setTranscript(pageTwoHydrated());
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    return { adapter, find };
+  }
+
+  it("does not let a step that waited on a page take the viewport after the reader moved", async () => {
+    const { adapter, find } = await steppedIntoPageTwo({
+      moveWhileLoading: true,
+    });
+    // Learned and counted; the active match is still the one it was.
+    expect(adapter.getSnapshot()).toMatchObject({ total: 2, current: 2 });
+    flushFrames();
+    expect(find.scrollToLocation).not.toHaveBeenCalled();
+  });
+
+  it("lands a step that waited on a page when the reader stayed put", async () => {
+    const { adapter, find } = await steppedIntoPageTwo({
+      moveWhileLoading: false,
+    });
+    expect(adapter.getSnapshot()).toMatchObject({ total: 2, current: 1 });
+    flushFrames();
+    expect(find.scrollToLocation).toHaveBeenCalled();
   });
 
   it("still lands a confirmed read when only find's own reveal ran while it was out", async () => {

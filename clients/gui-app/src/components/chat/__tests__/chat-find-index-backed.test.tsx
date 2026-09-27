@@ -2279,4 +2279,130 @@ describe("chat find over a windowed transcript: older rows from the index", () =
     expect(requestIndexRead).toHaveBeenLastCalledWith(null);
     expect(adapter.getSnapshot().total).toBe(1);
   });
+
+  // Over a partial skeleton a read that sees every NAMED slice without a
+  // match concludes nothing. Under memory pressure the slices cannot all be
+  // held at once, so reading them again would end the same way: the hit is
+  // parked, still "may match", until the skeleton changes.
+  const UNNAMED_SLICE_TEXT = "the unnamed slice has the needle";
+
+  /**
+   * T in four slices: part:0 and part:1 named and cold, part:2 hydrated (so
+   * the record is held), part:3 unnamed until the skeleton completes and the
+   * one holding the needle. `u-other` has no index document.
+   */
+  function pressuredTurn(input: {
+    readonly complete: boolean;
+    readonly hydratedParts: ReadonlySet<number>;
+  }): TranscriptState {
+    return transcriptWithSkeleton(
+      [
+        turnPart(0, input.hydratedParts.has(0), "slice 0"),
+        turnPart(1, input.hydratedParts.has(1), "slice 1"),
+        turnPart(2, input.hydratedParts.has(2), "slice 2"),
+        turnPart(3, input.hydratedParts.has(3), UNNAMED_SLICE_TEXT),
+        userSpec("u-other", 100, "a recent note", false),
+      ],
+      input.complete ? 5 : 3,
+      input.complete,
+    );
+  }
+
+  function readCount(): number {
+    return requestIndexRead.mock.calls.filter(([read]) => read !== null).length;
+  }
+
+  it("parks a read that concludes nothing over a partial skeleton, and reads it again only once the skeleton changes", async () => {
+    const host = hostFixture(
+      fakeIndex([
+        {
+          messageId: "a-T",
+          tier: "assistant",
+          createdAt: 21,
+          text: UNNAMED_SLICE_TEXT,
+        },
+      ]),
+    );
+    const find = renderFind({
+      initial: pressuredTurn({ complete: false, hydratedParts: new Set([2]) }),
+      client: host.client,
+      queryClient: host.queryClient,
+      scroller,
+      requestIndexJump,
+      requestIndexRead,
+    });
+    const adapter = find.getAdapter();
+
+    act(() => {
+      void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    });
+    await waitFor(() => {
+      expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
+    });
+
+    // The nearest named slice first, then the next.
+    act(() => {
+      void adapter.next();
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "a-T",
+      target: "assistant:T:part:1",
+    });
+    act(() => {
+      find.setTranscript(
+        pressuredTurn({ complete: false, hydratedParts: new Set([1, 2]) }),
+      );
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "a-T",
+      target: "assistant:T:part:0",
+    });
+    // part:0 lands and part:1 is evicted to make room: both seen, no match.
+    act(() => {
+      find.setTranscript(
+        pressuredTurn({ complete: false, hydratedParts: new Set([0, 2]) }),
+      );
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    expect(readCount()).toBe(2);
+    // Still counted as "may match", never as a match.
+    expect(adapter.getSnapshot()).toMatchObject({
+      total: 0,
+      coverageMessage: CAVEAT_MAY_MATCH_ONE,
+    });
+
+    // No read without a press, and a press does not re-enter it either.
+    act(() => {
+      find.setTranscript(
+        pressuredTurn({ complete: false, hydratedParts: new Set([2]) }),
+      );
+    });
+    act(() => {
+      void adapter.next();
+    });
+    expect(readCount()).toBe(2);
+
+    // The skeleton completes: part:3 is named, and the hit is a candidate
+    // again - read, and confirmed where the needle really is.
+    act(() => {
+      find.setTranscript(
+        pressuredTurn({ complete: true, hydratedParts: new Set([2]) }),
+      );
+    });
+    expect(adapter.getSnapshot().coverageMessage).toBe(CAVEAT_MAY_MATCH_ONE);
+    act(() => {
+      void adapter.next();
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith({
+      messageId: "a-T",
+      target: "assistant:T:part:3",
+    });
+    act(() => {
+      find.setTranscript(
+        pressuredTurn({ complete: true, hydratedParts: new Set([2, 3]) }),
+      );
+    });
+    expect(requestIndexRead).toHaveBeenLastCalledWith(null);
+    expect(adapter.getSnapshot().total).toBe(1);
+  });
 });
