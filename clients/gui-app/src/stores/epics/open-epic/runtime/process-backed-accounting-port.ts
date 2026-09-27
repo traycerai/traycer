@@ -29,6 +29,8 @@ import {
   epicColdRoomHolderId,
   epicCommandOverlayHolderId,
   epicReplicaBookKey,
+  epicReplicaDataHolderId,
+  epicMainProjectionHolderId,
   epicRootHolderId,
 } from "@/stores/replica-memory/epic-replica-budget";
 import type {
@@ -77,9 +79,13 @@ export function createProcessBackedAccountingPort(
   // drops `source` before it detaches, deliberately, so by then the tier
   // answers emptily. So the port keeps the list itself.
   const chargedHotRooms = new Set<string>();
+  let mainProjectionEstimatedHeapBytes = 0;
+  let retired = false;
+  const isRetired = (): boolean => retired;
 
   return {
     registerBooks(next): void {
+      retired = false;
       source = next;
       memory.hotDocs.attach({
         key: bookKey,
@@ -89,7 +95,10 @@ export function createProcessBackedAccountingPort(
       });
       memory.epicReplicas.attach({
         key: bookKey,
-        measure: () => source?.measureRootBytes() ?? 0,
+        measure: () =>
+          (source?.measureRootBytes() ?? 0) +
+          (source?.measureReplicaDataBytes().estimatedHeapBytes ?? 0) +
+          mainProjectionEstimatedHeapBytes,
         projectionCounts: () =>
           source?.projectionCounts() ?? {
             artifacts: 0,
@@ -106,7 +115,9 @@ export function createProcessBackedAccountingPort(
       // Source first: the detaches below can be reached from a reconcile that
       // is already walking the books, and an unregistered source answering
       // emptily is safer than one answering from a runtime mid-teardown.
+      retired = true;
       source = null;
+      mainProjectionEstimatedHeapBytes = 0;
       memory.hotDocs.detach(bookKey);
       // The counterpart of `epicReplicas.release` below, and needed for the
       // same reason: `detach` removes the TIER - the thing eviction walks -
@@ -138,6 +149,7 @@ export function createProcessBackedAccountingPort(
     // the plane on every keystroke-driven write.
 
     settleRootBytes(bytes): void {
+      if (isRetired()) return;
       memory.epicReplicas.settleRoot(
         memory.accountant,
         epicRootHolderId(hostId, epicId, runtimeToken),
@@ -146,7 +158,43 @@ export function createProcessBackedAccountingPort(
       memory.accountant.reconcile(BUDGET_PLANE_IDS.epicReplicas);
     },
 
+    chargeRootProvisional(bytes): void {
+      if (isRetired()) return;
+      memory.accountant.chargeProvisional(
+        BUDGET_PLANE_IDS.epicReplicas,
+        epicRootHolderId(hostId, epicId, runtimeToken),
+        bytes,
+      );
+    },
+
+    settleReplicaDataBytes(rawBytes, estimatedHeapBytes): void {
+      if (isRetired()) return;
+      memory.epicReplicas.settleReplicaData(memory.accountant, {
+        bookKey,
+        holderId: epicReplicaDataHolderId(hostId, epicId, runtimeToken),
+        rawBytes,
+        estimatedHeapBytes,
+      });
+      memory.accountant.reconcile(BUDGET_PLANE_IDS.epicReplicas);
+    },
+
+    settleMainProjectionBytes(rawBytes, estimatedHeapBytes): void {
+      // A synchronous store listener can retire this port during publication;
+      // a late continuation must not recreate a holder after release.
+      if (isRetired()) return;
+      mainProjectionEstimatedHeapBytes = estimatedHeapBytes;
+      memory.epicReplicas.settleMainProjection(memory.accountant, {
+        bookKey,
+        holderId: epicMainProjectionHolderId(hostId, epicId, runtimeToken),
+        rawBytes,
+        estimatedHeapBytes,
+      });
+      if (isRetired()) return;
+      memory.accountant.reconcile(BUDGET_PLANE_IDS.epicReplicas);
+    },
+
     settleColdRoomBytes(artifactRoomId, bytes): void {
+      if (isRetired()) return;
       memory.epicReplicas.settleColdRoom(
         memory.accountant,
         bookKey,
@@ -157,6 +205,7 @@ export function createProcessBackedAccountingPort(
     },
 
     settleCommandOverlayBytes(bytes): void {
+      if (isRetired()) return;
       memory.epicReplicas.settleCommandOverlay(
         memory.accountant,
         epicCommandOverlayHolderId(hostId, epicId, runtimeToken),
@@ -165,6 +214,7 @@ export function createProcessBackedAccountingPort(
     },
 
     settleHotDocBytes(artifactRoomId, bytes): void {
+      if (isRetired()) return;
       chargedHotRooms.add(artifactRoomId);
       memory.hotDocs.settle(
         memory.accountant,
@@ -175,6 +225,7 @@ export function createProcessBackedAccountingPort(
     },
 
     chargeHotDocProvisional(artifactRoomId, bytes): void {
+      if (isRetired()) return;
       chargedHotRooms.add(artifactRoomId);
       memory.hotDocs.chargeProvisional(
         memory.accountant,
@@ -184,6 +235,7 @@ export function createProcessBackedAccountingPort(
     },
 
     releaseHotDoc(artifactRoomId): void {
+      if (isRetired()) return;
       chargedHotRooms.delete(artifactRoomId);
       memory.hotDocs.release(
         memory.accountant,
@@ -210,6 +262,7 @@ export function createProcessBackedAccountingPort(
     },
 
     noteHotDocEvictionDeferred(): void {
+      if (isRetired()) return;
       memory.accountant.noteEvictionDeferred(BUDGET_PLANE_IDS.hotDocs);
     },
   };

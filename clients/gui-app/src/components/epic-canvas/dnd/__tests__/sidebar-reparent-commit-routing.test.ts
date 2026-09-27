@@ -163,6 +163,8 @@ const handle = vi.hoisted(() => ({ marker: "handle" }));
 
 vi.mock("@/lib/registries/epic-session-registry", () => ({
   getOpenEpicRegistry: () => ({
+    subscribe: (_listener: () => void) => () => undefined,
+    nextByteEvictionGraceDeadlineMs: () => null,
     peek: () => ({
       store: {
         getState: () => ({
