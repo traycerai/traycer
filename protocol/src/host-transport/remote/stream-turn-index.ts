@@ -31,7 +31,8 @@ export function removeIndexedItem<T extends IndexedStreamTurnItem>(
 }
 
 interface StreamGroup<T> {
-  entries: T[];
+  /** Completed prefix slots are cleared immediately so their bodies can be collected. */
+  entries: Array<T | undefined>;
   front: number;
 }
 
@@ -59,13 +60,17 @@ export class StreamTurnIndex<T extends StreamTurnItem> {
   /** Visits one oldest message per stream, independent of each stream's tail. */
   *heads(): IterableIterator<T> {
     for (const group of this.groups.values()) {
-      yield group.entries[group.front];
+      const head = group.entries[group.front];
+      if (head === undefined) {
+        throw new Error("stream turn index lost its FIFO head");
+      }
+      yield head;
     }
   }
 
   headSerial(streamId: number): number | undefined {
     const group = this.groups.get(streamId);
-    return group?.entries[group.front].serial;
+    return group?.entries[group.front]?.serial;
   }
 
   /** A partial message keeps its FIFO head but yields the next stream's turn. */
@@ -84,13 +89,19 @@ export class StreamTurnIndex<T extends StreamTurnItem> {
     if (group === undefined || group.entries[group.front] !== item) {
       throw new Error("stream turn index lost its FIFO head");
     }
+    group.entries[group.front] = undefined;
     group.front += 1;
     if (group.front === group.entries.length) {
       this.groups.delete(streamId);
-    } else if (group.front >= 32 && group.front * 2 >= group.entries.length) {
-      // A long-lived stream's consumed prefix must not retain drained items.
-      group.entries.splice(0, group.front);
-      group.front = 0;
+    } else {
+      if (group.front >= 32 && group.front * 2 >= group.entries.length) {
+        // The cleared prefix still has array capacity; compact it periodically.
+        group.entries.splice(0, group.front);
+        group.front = 0;
+      }
+      // A stream with another message ready must yield after a completed one
+      // too, or a replenished stream can starve another stream indefinitely.
+      this.rotate(streamId);
     }
   }
 

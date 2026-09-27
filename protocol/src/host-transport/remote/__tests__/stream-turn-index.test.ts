@@ -60,7 +60,7 @@ describe("StreamTurnIndex", () => {
     expect(Array.from(index.heads())).toEqual([first, other]);
     index.complete(first);
     expect(index.headSerial(1)).toBe(second.serial);
-    expect(Array.from(index.heads())).toEqual([second, other]);
+    expect(Array.from(index.heads())).toEqual([other, second]);
 
     index.dropStream(2);
     expect(Array.from(index.heads())).toEqual([second]);
@@ -86,5 +86,24 @@ describe("StreamTurnIndex", () => {
     expect(inventory).toEqual([first]);
     expect(last.queueIndex).toBe(-1);
     expect(first.queueIndex).toBe(0);
+  });
+
+  it("yields a nonempty stream after completion so replenishment cannot starve peers", () => {
+    const index = new StreamTurnIndex<StreamTurnItem>();
+    const a1 = queued(1, 1);
+    const a2 = queued(1, 2);
+    const a3 = queued(1, 3);
+    const b1 = queued(2, 4);
+    const b2 = queued(2, 5);
+    for (const item of [a1, b1, a2, a3, b2]) index.enqueue(item);
+
+    expect(Array.from(index.heads())).toEqual([a1, b1]);
+    index.complete(a1);
+    expect(Array.from(index.heads())).toEqual([b1, a2]);
+
+    index.complete(b1);
+    expect(Array.from(index.heads())).toEqual([a2, b2]);
+    index.complete(a2);
+    expect(Array.from(index.heads())).toEqual([b2, a3]);
   });
 });
