@@ -9,7 +9,10 @@ import {
   getProcessMemoryRuntime,
   resetProcessMemoryRuntimeForTests,
 } from "@/stores/replica-memory/process-memory-accountant";
-import { createChatOwnedStateAccount } from "../chat-owned-state-account";
+import {
+  createChatOwnedStateAccount,
+  noteLiveTextAppend,
+} from "../chat-owned-state-account";
 
 const EPIC_ID = "epic-chat-owned-state-account";
 const CHAT_ID = "chat-owned-state-account";
@@ -150,6 +153,78 @@ describe("chat owned-state memory accounting", () => {
         ([value]) => typeof value === "string" && value.length >= 1024 * 1024,
       );
       expect(largePayloadEncodes).toHaveLength(0);
+    } finally {
+      encode.mockRestore();
+      handle.dispose();
+    }
+  });
+
+  it("accounts growing text deltas without re-encoding the accumulated live text", () => {
+    const handle = openStore();
+    const account = createChatOwnedStateAccount();
+    const initial = handle.store.getState();
+    const startingText = "x".repeat(1024 * 1024);
+    const block = {
+      type: "text",
+      blockId: "growing-live-text",
+      status: "streaming",
+      timestamp: 1,
+      text: startingText,
+      providerNotice: null,
+    } as const;
+    const live: LiveAssistantMessage = {
+      turnId: "turn-live-deltas",
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [block],
+      startedAt: 1,
+      blocksVersion: 1,
+      imageResolutions: [],
+      imageResolutionsVersion: 0,
+      timestamp: 1,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    account.update({ ...initial, liveAssistantMessage: live });
+    const initialSize = account.size().estimatedHeapBytes;
+    const encode = vi.spyOn(TextEncoder.prototype, "encode");
+    try {
+      let text = startingText;
+      let previousBlocks: readonly (typeof block)[] = [block];
+      let finalLive = live;
+      for (let version = 2; version <= 31; version += 1) {
+        text += "x";
+        const nextBlocks = [{ ...block, text }];
+        noteLiveTextAppend(previousBlocks, nextBlocks, block.blockId, "x");
+        finalLive = {
+          ...live,
+          blocksVersion: version,
+          blocks: nextBlocks,
+        };
+        account.update({
+          ...initial,
+          liveAssistantMessage: finalLive,
+        });
+        previousBlocks = nextBlocks;
+      }
+      expect(account.size().estimatedHeapBytes).toBeGreaterThan(initialSize);
+      const encodedCharacters = encode.mock.calls.reduce(
+        (total, [value]) =>
+          total + (typeof value === "string" ? value.length : 0),
+        0,
+      );
+      expect(encodedCharacters).toBeLessThan(20_000);
+
+      encode.mockClear();
+      const fullMeasure = createChatOwnedStateAccount();
+      fullMeasure.update({ ...initial, liveAssistantMessage: finalLive });
+      expect(account.size()).toEqual(fullMeasure.size());
     } finally {
       encode.mockRestore();
       handle.dispose();

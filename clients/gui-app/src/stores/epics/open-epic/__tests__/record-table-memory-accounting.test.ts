@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
+import {
+  createRecordTable,
+  type RecordTablePlane,
+} from "../runtime/record-table";
 import { createChatRecordTable } from "../runtime/chat-record-table";
 
 const EPIC_ID = "epic-record-table-memory-accounting";
@@ -84,9 +88,55 @@ describe("record table retained-row accounting", () => {
       reason: "deleted",
     };
     expect(table.applyDelta(removal)).not.toBeNull();
-    expect(table.retainedRowSize()).toEqual({
-      rawBytes: 0,
-      estimatedHeapBytes: 0,
+    const removedSize = table.retainedRowSize();
+    expect(removedSize.rawBytes).toBeGreaterThan(0);
+    expect(removedSize.estimatedHeapBytes).toBeGreaterThan(0);
+    expect(table.applyDelta(removal)).toBeNull();
+    expect(table.retainedRowSize()).toEqual(removedSize);
+  });
+
+  it("charges a retained removal for a never-held row and releases it when retractions are forgotten", () => {
+    interface Row {
+      readonly id: string;
+      readonly revision: number;
+      readonly payload: string;
+    }
+    const emptySlice: readonly Row[] = [];
+    const plane: RecordTablePlane<Row, readonly Row[]> = {
+      rowKey: (row) => row.id,
+      retractionIdOf: (row) => row.id,
+      isVisibleToUser: () => true,
+      supersedesOnSnapshot: (candidate, held) =>
+        candidate.revision > held.revision,
+      supersedesOnUpsert: (candidate, held) =>
+        candidate.revision > held.revision,
+      recency: null,
+      buildSlice: (rows) => rows,
+      slicesEq: (left, right) => left.length === right.length,
+      emptySlice,
+    };
+    const table = createRecordTable(plane, {
+      getCurrentUserId: () => null,
+      onBeforePublish: () => undefined,
+      onRowServed: () => undefined,
+      onUpsertAdmitted: () => undefined,
+      onRemoval: () => false,
     });
+    const baseline = table.retainedRowSize();
+
+    const publication = table.applyRemoval("never-held", "deleted");
+    expect(publication).not.toBeNull();
+    expect(publication?.retractions).toEqual({ "never-held": "deleted" });
+    const retained = table.retainedRowSize();
+    expect(retained.rawBytes).toBeGreaterThan(baseline.rawBytes);
+    expect(retained.estimatedHeapBytes).toBeGreaterThan(
+      baseline.estimatedHeapBytes,
+    );
+
+    expect(table.applyRemoval("never-held", "deleted")).toBeNull();
+    expect(table.retainedRowSize()).toEqual(retained);
+
+    table.forgetRetractions();
+    expect(table.retainedRowSize()).toEqual(baseline);
   });
 });

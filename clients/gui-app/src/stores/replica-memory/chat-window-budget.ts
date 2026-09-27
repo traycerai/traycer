@@ -15,9 +15,10 @@ import type {
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import { jsonByteLength } from "@/stores/replica-memory/json-bytes";
 import {
-  evictTranscriptWindowToBudget,
+  evictTranscriptWindowToEstimatedBudget,
   transcriptWindowChargedBytes,
-  transcriptWindowProtectedBytes,
+  transcriptWindowProtectedEstimatedBytes,
+  transcriptWindowStaleTierBytes,
   type OrdinalRange,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
@@ -42,22 +43,25 @@ export function chatSessionChargeBytes(
   window: TranscriptWindow,
   slices: ChatWholeSetSlices,
 ): number {
-  return transcriptWindowChargedBytes(window) + chatWholeSetSliceBytes(slices);
+  return (
+    transcriptWindowChargedBytes(window) +
+    transcriptWindowStaleTierBytes(window) +
+    chatWholeSetSliceBytes(slices)
+  );
 }
 
 /**
  * V8 calibration of an unmounted store after GC. The fixed term covers the
  * store's subscriptions, closures, and empty state; each retained transcript
  * record has ledger, span and derived-state overhead beyond its JSON body.
- * These terms are not raw bytes and are kept out of the transcript's own
- * eight-MiB eviction arithmetic.
+ * These terms are not raw bytes. The process budget includes the per-record
+ * term when selecting a span; the transcript's own eight-MiB cap stays raw.
  */
 export const CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES = 48 * 1024;
 export const CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES = 600;
 
-export function chatSessionEstimatedHeapBytes(
+export function estimatedTranscriptWindowBytes(
   window: TranscriptWindow,
-  slices: ChatWholeSetSlices,
 ): number {
   const retainedRecords =
     window.records.messages.size +
@@ -65,9 +69,43 @@ export function chatSessionEstimatedHeapBytes(
     window.liveMessages.length +
     window.liveEvents.length;
   return (
-    chatSessionChargeBytes(window, slices) +
-    CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+    transcriptWindowChargedBytes(window) +
+    transcriptWindowStaleTierBytes(window) +
     retainedRecords * CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES
+  );
+}
+
+/** Stale carry cannot be reclaimed by fresh-span eviction. */
+export function staleTranscriptProtectedHeapBytes(
+  window: TranscriptWindow,
+): number {
+  const freshMessages = new Set<string>();
+  const freshEvents = new Set<string>();
+  for (const span of window.spans) {
+    for (const id of span.messageIds) freshMessages.add(id);
+    for (const id of span.eventIds) freshEvents.add(id);
+  }
+  let count = 0;
+  for (const id of window.records.messages.keys()) {
+    if (!freshMessages.has(id)) count += 1;
+  }
+  for (const id of window.records.events.keys()) {
+    if (!freshEvents.has(id)) count += 1;
+  }
+  return (
+    transcriptWindowStaleTierBytes(window) +
+    count * CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES
+  );
+}
+
+export function chatSessionEstimatedHeapBytes(
+  window: TranscriptWindow,
+  slices: ChatWholeSetSlices,
+): number {
+  return (
+    estimatedTranscriptWindowBytes(window) +
+    chatWholeSetSliceBytes(slices) +
+    CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES
   );
 }
 
@@ -255,9 +293,9 @@ export function createChatWindowBudgetBook(): ChatWindowBudgetBook {
 }
 
 /**
- * Evict one window toward a byte target, reporting protection the way the
- * accountant needs. Live records that remain after span eviction are
- * `"tail"`: they have no ordinal, so dropping them is not recoverable.
+ * Evict one window toward an estimated-heap target, including the per-record
+ * overhead that is freed with an unshared row. Live records remain `"tail"`:
+ * they have no ordinal, so dropping them is not recoverable.
  */
 export function evictChatWindowForAccountant(
   window: TranscriptWindow,
@@ -265,23 +303,29 @@ export function evictChatWindowForAccountant(
   visible: OrdinalRange | null,
   required: readonly number[],
 ): { readonly window: TranscriptWindow; readonly outcome: EvictionOutcome } {
-  const before = transcriptWindowChargedBytes(window);
-  const next = evictTranscriptWindowToBudget(
-    window,
-    maxBytes,
+  const before = estimatedTranscriptWindowBytes(window);
+  const next = evictTranscriptWindowToEstimatedBudget(window, maxBytes, {
     visible,
     required,
-  );
-  const after = transcriptWindowChargedBytes(next);
+    recordOverheadBytes: CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
+  });
+  const after = estimatedTranscriptWindowBytes(next);
+  const staleProtectedBytes = staleTranscriptProtectedHeapBytes(next);
   return {
     window: next,
     outcome: {
       reclaimedBytes: Math.max(0, before - after),
-      protectedBytesByKind: transcriptWindowProtectedBytes(
-        next,
-        visible,
-        required,
-      ),
+      protectedBytesByKind: [
+        ...transcriptWindowProtectedEstimatedBytes(
+          next,
+          visible,
+          required,
+          CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
+        ),
+        ...(staleProtectedBytes === 0
+          ? []
+          : [{ kind: "required" as const, bytes: staleProtectedBytes }]),
+      ],
     },
   };
 }

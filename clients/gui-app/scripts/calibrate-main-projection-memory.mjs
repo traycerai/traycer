@@ -23,6 +23,13 @@ const FIXTURES = [
   { name: "small", stores: 200, rows: 1, titleBytes: 24 },
   { name: "many-row", stores: 5, rows: 1000, titleBytes: 24 },
   { name: "large-title", stores: 10, rows: 1, titleBytes: 100_000 },
+  {
+    name: "shared-chat-rows",
+    stores: 5,
+    rows: 1000,
+    titleBytes: 24,
+    sharedRows: true,
+  },
 ];
 
 function afterGc() {
@@ -46,6 +53,24 @@ function sourceProjection(fixture, storeIndex) {
   const byId = {};
   const allIds = [];
   for (let rowIndex = 0; rowIndex < fixture.rows; rowIndex += 1) {
+    if (fixture.sharedRows) {
+      const id = `chat-${storeIndex}-${rowIndex}`;
+      allIds.push(id);
+      byId[id] = {
+        id,
+        title: title(fixture.titleBytes, storeIndex * fixture.rows + rowIndex),
+        parentId: null,
+        createdAt: 1000,
+        updatedAt: 1000,
+        userId: null,
+        hostId: "calibration-host",
+        isTitleEditedByUser: false,
+        docResident: false,
+        settings: null,
+        archivedAt: null,
+      };
+      continue;
+    }
     const id = `artifact-${storeIndex}-${rowIndex}`;
     allIds.push(id);
     byId[id] = {
@@ -59,6 +84,14 @@ function sourceProjection(fixture, storeIndex) {
       updatedAt: 1000,
       status: null,
       createdManually: false,
+    };
+  }
+  if (fixture.sharedRows) {
+    // unionChatsSlice creates a distinct chats root but retains each row from
+    // chatRecords. structuredClone preserves those nested aliases.
+    return {
+      chatRecords: { byId, allIds },
+      chats: { byId: { ...byId }, allIds: [...allIds] },
     };
   }
   return { artifacts: { byId, allIds } };

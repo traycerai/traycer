@@ -2,10 +2,54 @@ import type {
   ChatSessionState,
   LiveAssistantMessage,
 } from "@/stores/chats/chat-session-store";
+import type { ContentBlock } from "@traycer/protocol/persistence/epic/schemas";
 import {
+  estimatedStringBytesFromWidth,
   retainedValueSize,
   type RetainedValueSize,
+  v8StringWidth,
 } from "./retained-value-size";
+
+type TextBlock = Extract<ContentBlock, { readonly type: "text" }>;
+
+interface MeasuredBlock {
+  readonly size: RetainedValueSize;
+  readonly text: {
+    readonly rawBytes: number;
+    readonly width: 1 | 2;
+  } | null;
+}
+
+const appendedTextBlocks = new WeakMap<
+  object,
+  { readonly previous: TextBlock; readonly delta: string }
+>();
+
+/**
+ * The protocol accumulator's `text.delta` branch has already appended this
+ * exact delta. Give the store subscriber that proof before it measures the
+ * next live block; checking a long prefix here would repeat the hot-path scan.
+ */
+export function noteLiveTextAppend(
+  previousBlocks: readonly ContentBlock[],
+  nextBlocks: readonly ContentBlock[],
+  blockId: string,
+  delta: string,
+): void {
+  const previous = previousBlocks.find((block) => block.blockId === blockId);
+  const next = nextBlocks.find((block) => block.blockId === blockId);
+  if (previous?.type !== "text" || next?.type !== "text" || previous === next) {
+    return;
+  }
+  appendedTextBlocks.set(next, { previous, delta });
+}
+
+function crossesSurrogateBoundary(previous: string, delta: string): boolean {
+  if (previous.length === 0 || delta.length === 0) return false;
+  const last = previous.charCodeAt(previous.length - 1);
+  const first = delta.charCodeAt(0);
+  return last >= 0xd800 && last <= 0xdbff && first >= 0xdc00 && first <= 0xdfff;
+}
 
 /**
  * State this chat store owns outside its transcript and six existing whole-set
@@ -69,11 +113,61 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
   const sizes = new Map<keyof ChatSessionState, RetainedValueSize>();
   let rawBytes = 0;
   let estimatedHeapBytes = 0;
-  const blockSizes = new WeakMap<object, RetainedValueSize>();
+  const blockSizes = new WeakMap<object, MeasuredBlock>();
   let imageResolutions: LiveAssistantMessage["imageResolutions"] | null = null;
   let imageResolutionSize: RetainedValueSize = {
     rawBytes: 0,
     estimatedHeapBytes: 0,
+  };
+
+  const measureBlock = (block: ContentBlock): MeasuredBlock => {
+    const cached = blockSizes.get(block);
+    if (cached !== undefined) return cached;
+    if (block.type !== "text") {
+      const measured = { size: retainedValueSize(block), text: null };
+      blockSizes.set(block, measured);
+      return measured;
+    }
+
+    const header = retainedValueSize({ ...block, text: "" });
+    const append = appendedTextBlocks.get(block);
+    const previous =
+      append === undefined ? undefined : blockSizes.get(append.previous);
+    let measured: MeasuredBlock;
+    if (
+      append !== undefined &&
+      previous?.text !== null &&
+      previous?.text !== undefined &&
+      block.text.length === append.previous.text.length + append.delta.length &&
+      block.text.endsWith(append.delta) &&
+      !crossesSurrogateBoundary(append.previous.text, append.delta)
+    ) {
+      const width =
+        previous.text.width === 2 || v8StringWidth(append.delta) === 2 ? 2 : 1;
+      const textRawBytes =
+        previous.text.rawBytes + retainedValueSize(append.delta).rawBytes - 2;
+      measured = {
+        size: {
+          rawBytes: header.rawBytes + textRawBytes - 2,
+          estimatedHeapBytes:
+            header.estimatedHeapBytes +
+            estimatedStringBytesFromWidth(block.text.length, width) -
+            estimatedStringBytesFromWidth(0, 1),
+        },
+        text: { rawBytes: textRawBytes, width },
+      };
+    } else {
+      const size = retainedValueSize(block);
+      measured = {
+        size,
+        text: {
+          rawBytes: size.rawBytes - header.rawBytes + 2,
+          width: v8StringWidth(block.text),
+        },
+      };
+    }
+    blockSizes.set(block, measured);
+    return measured;
   };
 
   const measureLiveAssistant = (
@@ -104,11 +198,7 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
     for (const block of live.blocks) {
       if (countedBlocks.has(block)) continue;
       countedBlocks.add(block);
-      let size = blockSizes.get(block);
-      if (size === undefined) {
-        size = retainedValueSize(block);
-        blockSizes.set(block, size);
-      }
+      const { size } = measureBlock(block);
       rawBytes += size.rawBytes;
       estimatedHeapBytes += size.estimatedHeapBytes;
     }

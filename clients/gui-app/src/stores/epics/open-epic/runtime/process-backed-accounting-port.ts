@@ -80,9 +80,12 @@ export function createProcessBackedAccountingPort(
   // answers emptily. So the port keeps the list itself.
   const chargedHotRooms = new Set<string>();
   let mainProjectionEstimatedHeapBytes = 0;
+  let retired = false;
+  const isRetired = (): boolean => retired;
 
   return {
     registerBooks(next): void {
+      retired = false;
       source = next;
       memory.hotDocs.attach({
         key: bookKey,
@@ -112,6 +115,7 @@ export function createProcessBackedAccountingPort(
       // Source first: the detaches below can be reached from a reconcile that
       // is already walking the books, and an unregistered source answering
       // emptily is safer than one answering from a runtime mid-teardown.
+      retired = true;
       source = null;
       mainProjectionEstimatedHeapBytes = 0;
       memory.hotDocs.detach(bookKey);
@@ -172,6 +176,9 @@ export function createProcessBackedAccountingPort(
     },
 
     settleMainProjectionBytes(rawBytes, estimatedHeapBytes): void {
+      // A synchronous store listener can retire this port during publication;
+      // a late continuation must not recreate a holder after release.
+      if (isRetired()) return;
       mainProjectionEstimatedHeapBytes = estimatedHeapBytes;
       memory.epicReplicas.settleMainProjection(memory.accountant, {
         bookKey,
@@ -179,6 +186,7 @@ export function createProcessBackedAccountingPort(
         rawBytes,
         estimatedHeapBytes,
       });
+      if (isRetired()) return;
       memory.accountant.reconcile(BUDGET_PLANE_IDS.epicReplicas);
     },
 

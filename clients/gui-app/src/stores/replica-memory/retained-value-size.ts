@@ -14,16 +14,23 @@ export interface RetainedValueSize {
 
 const textEncoder = new TextEncoder();
 
-function estimatedStringBytes(value: string): number {
+export function v8StringWidth(value: string): 1 | 2 {
   // V8 uses one-byte strings when every UTF-16 code unit fits in Latin-1.
-  let width = 1;
   for (let index = 0; index < value.length; index += 1) {
-    if (value.charCodeAt(index) > 0xff) {
-      width = 2;
-      break;
-    }
+    if (value.charCodeAt(index) > 0xff) return 2;
   }
-  return 24 + Math.ceil((value.length * width + 1) / 8) * 8;
+  return 1;
+}
+
+export function estimatedStringBytesFromWidth(
+  length: number,
+  width: 1 | 2,
+): number {
+  return 24 + Math.ceil((length * width + 1) / 8) * 8;
+}
+
+function estimatedStringBytes(value: string): number {
+  return estimatedStringBytesFromWidth(value.length, v8StringWidth(value));
 }
 
 function estimatedValueBytes(value: unknown, seen: WeakSet<object>): number {

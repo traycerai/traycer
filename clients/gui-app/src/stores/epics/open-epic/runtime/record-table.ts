@@ -585,6 +585,22 @@ export function createRecordTable<TRow, TSlice>(
    * {@link RecordTablePlane.retractionIdOf} names.
    */
   const retractions = new Map<string, ChatRecordRemovalReason>();
+  let retractionRawBytes = 0;
+  let retractionEstimatedHeapBytes = 0;
+
+  function retractionEntrySize(
+    id: string,
+    reason: ChatRecordRemovalReason,
+  ): RetainedValueSize {
+    const key = retainedValueSize(id);
+    const value = retainedValueSize(reason);
+    return {
+      rawBytes: key.rawBytes + 1 + value.rawBytes,
+      // Both strings and the retained Map entry survive after the frame.
+      estimatedHeapBytes:
+        key.estimatedHeapBytes + value.estimatedHeapBytes + 64,
+    };
+  }
 
   /** Local ingest order per row, and the watermark the last answer left. */
   const rowSeq = new Map<string, number>();
@@ -665,11 +681,18 @@ export function createRecordTable<TRow, TSlice>(
 
   return {
     retainedRowSize: () => ({
-      rawBytes,
+      rawBytes:
+        rawBytes +
+        retractionRawBytes +
+        (retractions.size === 0 ? 0 : retractions.size + 1),
       // The first row also makes the table's projected slice, id list and
       // metadata indexes live. Calibrated against after-GC V8 worker deltas;
       // empty tables keep none of these allocations.
-      estimatedHeapBytes: estimatedHeapBytes + (rows.size === 0 ? 0 : 1_100),
+      estimatedHeapBytes:
+        estimatedHeapBytes +
+        (rows.size === 0 ? 0 : 1_100) +
+        retractionEstimatedHeapBytes +
+        (retractions.size === 0 ? 0 : 64),
     }),
     current: () => slice,
     retainedRow: (rowKey: string) => rows.get(rowKey) ?? null,
@@ -680,6 +703,8 @@ export function createRecordTable<TRow, TSlice>(
 
     forgetRetractions(): void {
       retractions.clear();
+      retractionRawBytes = 0;
+      retractionEstimatedHeapBytes = 0;
     },
 
     applySnapshot(served, issuedAtSeq) {
@@ -834,7 +859,16 @@ export function createRecordTable<TRow, TSlice>(
       ) {
         return null;
       }
+      const previousReason = retractions.get(retractionId);
+      if (previousReason !== undefined) {
+        const previous = retractionEntrySize(retractionId, previousReason);
+        retractionRawBytes -= previous.rawBytes;
+        retractionEstimatedHeapBytes -= previous.estimatedHeapBytes;
+      }
+      const next = retractionEntrySize(retractionId, reason);
       retractions.set(retractionId, reason);
+      retractionRawBytes += next.rawBytes;
+      retractionEstimatedHeapBytes += next.estimatedHeapBytes;
       for (const key of doomed) dropRow(key);
       return recompute(true);
     },

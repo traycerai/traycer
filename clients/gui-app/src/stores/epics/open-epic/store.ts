@@ -1669,7 +1669,10 @@ export function createOpenEpicStore(
     };
   }
 
+  const isDisposed = (): boolean => disposed;
+
   function applyProjection(patch: Partial<EpicRuntimeProjection>): void {
+    if (disposed) return;
     const api = storeApi;
     if (api === null) {
       // UNREACHABLE, and thrown rather than assumed away.
@@ -1731,6 +1734,10 @@ export function createOpenEpicStore(
         ? projected
         : { ...projected, bindingVersion: bindingEpoch },
     );
+    // Zustand notifies synchronously. A clean-state publication can make a
+    // warm registry entry byte-eligible, and its subscriber may dispose this
+    // store before `setState` returns. Its port has then released every holder.
+    if (isDisposed()) return;
     const projectionSize = mainProjectionAccount.recordPatch(projected);
     if (projectionSize !== null) {
       options.accounting.settleMainProjectionBytes(

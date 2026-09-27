@@ -88,20 +88,23 @@ import {
   refreshSeatedRows,
   streamWindowMessage,
   touchTranscriptRange,
-  transcriptWindowChargedBytes,
   updateWindowMessage,
   TRANSCRIPT_WINDOW_MAX_BYTES,
   type OrdinalRange,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import { ensureProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
-import { createChatOwnedStateAccount } from "@/stores/replica-memory/chat-owned-state-account";
+import {
+  createChatOwnedStateAccount,
+  noteLiveTextAppend,
+} from "@/stores/replica-memory/chat-owned-state-account";
 import {
   CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES,
   CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
   chatHolderId,
   chatSessionEstimatedHeapBytes,
   chatWholeSetSliceBytes,
+  estimatedTranscriptWindowBytes,
   evictChatWindowForAccountant,
   legacyTranscriptResidencyBytes,
   type ChatWholeSetSlices,
@@ -5769,6 +5772,14 @@ export function createChatSessionStoreWithNotificationDependencies(
             state.messages,
             state.events,
           );
+          const transcriptEstimatedBytes =
+            transcriptBytes +
+            (state.messages.length + state.events.length) *
+              CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES;
+          const requiredBytes =
+            chatWholeSetSliceBytes(chatSlicesOf(state)) +
+            CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+            ownedStateAccount.size().estimatedHeapBytes;
           // No ordinal/range exists on the legacy line, so this transcript is
           // the sole recoverable copy rather than an evictable window.
           memory.chatWindows.settle(
@@ -5784,21 +5795,19 @@ export function createChatSessionStoreWithNotificationDependencies(
           return {
             reclaimedBytes: 0,
             protectedBytesByKind: [
-              ...(transcriptBytes === 0
-                ? []
-                : [{ kind: "sole-copy" as const, bytes: transcriptBytes }]),
-              ...(ownedStateAccount.size().estimatedHeapBytes === 0
+              ...(transcriptEstimatedBytes === 0
                 ? []
                 : [
                     {
-                      kind: "required" as const,
-                      bytes: ownedStateAccount.size().estimatedHeapBytes,
+                      kind: "sole-copy" as const,
+                      bytes: transcriptEstimatedBytes,
                     },
                   ]),
+              { kind: "required" as const, bytes: requiredBytes },
             ],
           };
         }
-        const current = transcriptWindowChargedBytes(state.transcriptWindow);
+        const current = estimatedTranscriptWindowBytes(state.transcriptWindow);
         const { window, outcome } = evictChatWindowForAccountant(
           state.transcriptWindow,
           Math.max(0, current - overBytes),
@@ -5814,16 +5823,17 @@ export function createChatSessionStoreWithNotificationDependencies(
           chatSessionEstimatedHeapBytes(window, chatSlicesOf(get())) +
             ownedStateAccount.size().estimatedHeapBytes,
         );
-        const ownedBytes = ownedStateAccount.size().estimatedHeapBytes;
-        return ownedBytes === 0
-          ? outcome
-          : {
-              ...outcome,
-              protectedBytesByKind: [
-                ...outcome.protectedBytesByKind,
-                { kind: "required", bytes: ownedBytes },
-              ],
-            };
+        const requiredBytes =
+          chatWholeSetSliceBytes(chatSlicesOf(get())) +
+          CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+          ownedStateAccount.size().estimatedHeapBytes;
+        return {
+          ...outcome,
+          protectedBytesByKind: [
+            ...outcome.protectedBytesByKind,
+            { kind: "required", bytes: requiredBytes },
+          ],
+        };
       },
     });
 
@@ -13673,6 +13683,19 @@ function applyContentBlockDelta(
 ): Partial<ChatSessionState> {
   const applied = reduceContentBlockDelta(state, event, witnesses);
   if (applied === state) return applied;
+  if (
+    event.type === "text.delta" &&
+    state.liveAssistantMessage !== null &&
+    applied.liveAssistantMessage !== undefined &&
+    applied.liveAssistantMessage !== null
+  ) {
+    noteLiveTextAppend(
+      state.liveAssistantMessage.blocks,
+      applied.liveAssistantMessage.blocks,
+      event.blockId,
+      event.delta,
+    );
+  }
   if (!isSubagentCardOpeningEvent(event)) return applied;
   if (state.openedSubagentCardBlockIds.has(event.blockId)) return applied;
   const opened = new Set(state.openedSubagentCardBlockIds);

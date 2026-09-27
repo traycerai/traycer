@@ -9,11 +9,16 @@ import {
 } from "@traycer-clients/shared/replica-runtime";
 import { createProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
 import {
+  CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES,
+  CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
   chatHolderId,
+  chatSessionEstimatedHeapBytes,
   chatWholeSetSliceBytes,
   createChatWindowBudgetBook,
+  estimatedTranscriptWindowBytes,
   evictChatWindowForAccountant,
   legacyTranscriptResidencyBytes,
+  staleTranscriptProtectedHeapBytes,
 } from "@/stores/replica-memory/chat-window-budget";
 import {
   appendLiveRecords,
@@ -24,6 +29,7 @@ import {
   streamWindowMessage,
   TRANSCRIPT_WINDOW_MAX_BYTES,
   transcriptWindowChargedBytes,
+  transcriptWindowStaleTierBytes,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import type {
@@ -254,7 +260,154 @@ describe("legacyTranscriptResidencyBytes", () => {
   });
 });
 
+describe("estimated chat-window eviction units", () => {
+  it("settles fixed and per-record heap overhead before the accountant requests eviction", () => {
+    const window = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [userMessage("estimated-chat-message", 1)],
+      events: [event("estimated-chat-event", 2)],
+    });
+    const slices = {
+      queue: [],
+      pendingApprovals: [],
+      pendingFileEditApprovals: [],
+      pendingInterviews: [],
+      backgroundItems: [],
+      managedCommands: [],
+    };
+    const rawCharge =
+      transcriptWindowChargedBytes(window) + chatWholeSetSliceBytes(slices);
+    const recordCount = window.liveMessages.length + window.liveEvents.length;
+    const estimatedCharge = chatSessionEstimatedHeapBytes(window, slices);
+    expect(estimatedCharge).toBe(
+      rawCharge +
+        CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+        recordCount * CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
+    );
+    expect(estimatedCharge).toBeGreaterThan(rawCharge);
+
+    const accountant = createMemoryAccountant({
+      environment: fakeEnvironment(),
+      observedCeilingBytes: 100_000,
+    });
+    const book = createChatWindowBudgetBook();
+    const evict = vi.fn((): EvictionOutcome => ({
+      reclaimedBytes: 0,
+      protectedBytesByKind: [{ kind: "required", bytes: estimatedCharge }],
+    }));
+    book.attach({
+      holderId: "estimated-chat",
+      touchedAt: () => 1,
+      evict,
+    });
+    accountant.register({
+      planeId: BUDGET_PLANE_IDS.chatWindows,
+      softLimitBytes: estimatedCharge - 1,
+      nearThresholdRatio: 0.8,
+      evict: (overBytes) => book.evict(overBytes),
+    });
+    book.settle(accountant, "estimated-chat", estimatedCharge);
+    accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
+
+    expect(evict).toHaveBeenCalledWith(1);
+    expect(
+      accountant
+        .snapshot()
+        .planes.find((plane) => plane.planeId === BUDGET_PLANE_IDS.chatWindows)
+        ?.settledBytes,
+    ).toBe(estimatedCharge);
+  });
+});
+
 describe("evictChatWindowForAccountant", () => {
+  it("includes stale carry bytes in process charge and protected reporting", () => {
+    let window = applyRangeResponse(
+      windowWithSkeleton(4),
+      rangeOf(
+        0,
+        ["row-0", "row-1"],
+        [userMessage("stale-carry-0", 0), userMessage("stale-carry-1", 1)],
+      ),
+      null,
+      null,
+    );
+    window = applyWindowedSnapshot(
+      window,
+      {
+        epoch: 2,
+        rowCount: 5,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 4,
+          messages: [userMessage("fresh-tail", 4)],
+          events: [],
+        },
+      },
+      null,
+      null,
+    );
+
+    expect(window.staleSpans).toHaveLength(1);
+    const staleProtectedBytes = staleTranscriptProtectedHeapBytes(window);
+    const activeBytes = transcriptWindowChargedBytes(window);
+    expect(staleProtectedBytes).toBeGreaterThan(0);
+    expect(estimatedTranscriptWindowBytes(window)).toBe(
+      activeBytes +
+        transcriptWindowStaleTierBytes(window) +
+        (window.records.messages.size + window.records.events.size) *
+          CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
+    );
+
+    expect(staleProtectedBytes).toBe(
+      transcriptWindowStaleTierBytes(window) +
+        2 * CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
+    );
+  });
+
+  it("selects one span using its estimated heap charge rather than raw bytes", () => {
+    const first = userMessage("heap-target-0", 0);
+    const second = userMessage("heap-target-1", 2);
+    let window = windowWithSkeleton(4);
+    window = applyRangeResponse(
+      window,
+      rangeOf(0, ["row-0"], [first]),
+      null,
+      null,
+    );
+    window = applyRangeResponse(
+      window,
+      rangeOf(2, ["row-2"], [second]),
+      null,
+      null,
+    );
+    expect(window.spans).toHaveLength(2);
+
+    const rawSpanBytes = recordByteLength(first);
+    const requestedOverage = rawSpanBytes + 300;
+    expect(requestedOverage).toBeGreaterThan(rawSpanBytes);
+    expect(requestedOverage).toBeLessThan(
+      rawSpanBytes + CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
+    );
+    const beforeEstimated = estimatedTranscriptWindowBytes(window);
+    const targetBytes = beforeEstimated - requestedOverage;
+
+    const { window: next, outcome } = evictChatWindowForAccountant(
+      window,
+      targetBytes,
+      null,
+      [],
+    );
+
+    expect(
+      transcriptWindowChargedBytes(window) - transcriptWindowChargedBytes(next),
+    ).toBe(rawSpanBytes);
+    expect(estimatedTranscriptWindowBytes(next)).toBeLessThanOrEqual(
+      targetBytes,
+    );
+    expect(outcome.reclaimedBytes).toBe(
+      beforeEstimated - estimatedTranscriptWindowBytes(next),
+    );
+  });
+
   it("reclaims unprotected spans and reports remaining live records as tail", () => {
     let window = windowWithSkeleton(4);
     window = applyRangeResponse(
