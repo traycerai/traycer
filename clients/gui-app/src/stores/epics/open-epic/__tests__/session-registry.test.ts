@@ -997,6 +997,71 @@ describe("unknown activity grace applies only to epic cap eviction", () => {
     }
   });
 
+  it("treats a turn row retained across an activity outage as unknown", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    try {
+      const staleTurn = buildTestHandle("stale-turn", false);
+      const second = buildTestHandle("stale-second", false);
+      markAgentWorking(staleTurn, "turn-before-outage");
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+        stateFrameSeenThisEpoch: false,
+      });
+      registry.acquire("stale-turn", () => h(staleTurn));
+      registry.acquire("stale-second", () => h(second));
+
+      expect(registry.size()).toBe(2);
+      expect(
+        registry.capExemptionTelemetry().current["activity-plane-blind"],
+      ).toBe(2);
+      vi.advanceTimersByTime(graceMs - 1);
+      expect(staleTurn.disposed).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(staleTurn.disposed).toBe(true);
+      expect(registry.size()).toBe(1);
+    } finally {
+      registry.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not restart an unknown episode when a mounted epic is replaced", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    try {
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+      });
+      const outgoing = buildTestHandle("replace-grace", false);
+      const replacement = buildTestHandle("replace-grace", false);
+      registry.acquireMounted("replace-grace", () => h(outgoing));
+      registry.acquireMounted("other-mounted", () =>
+        h(buildTestHandle("other-mounted", false)),
+      );
+
+      vi.advanceTimersByTime(30_000);
+      expect(
+        registry.replaceMounted("replace-grace", h(outgoing), h(replacement), {
+          hostStamp: "host-a",
+          ownerIdentityKey: "owner-a",
+          editsTransferredToReplacement: false,
+        }),
+      ).toBe(true);
+      registry.releaseMounted("replace-grace");
+      vi.advanceTimersByTime(graceMs - 30_000 - 1);
+      expect(replacement.disposed).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(replacement.disposed).toBe(true);
+      expect(registry.size()).toBe(1);
+    } finally {
+      registry.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
   it("resets only after a fresh covering answer, even while mounted", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -1055,7 +1120,12 @@ describe("unknown activity grace applies only to epic cap eviction", () => {
       const working = buildTestHandle("safe-working", false);
       markAgentWorking(working, "turn-grace");
       __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
-        connectionStatus: "closed",
+        // The current local frame reports this turn even though its cloud
+        // link cannot vouch for silence elsewhere in the fleet.
+        connectionStatus: "open",
+        servedBy: "local",
+        stateFrameSeenThisEpoch: true,
+        cloudSyncStatus: "reconnecting",
       });
       const clean = buildTestHandle("safe-clean", false);
       registry.acquireMounted("safe-mounted", () => h(mounted));
@@ -1828,6 +1898,28 @@ describe("cap eviction defers to the activity plane's own health (rebased onto a
     } finally {
       debug.mockRestore();
     }
+  });
+
+  it("keeps a reason counted once when an over-cap epic is replaced under the same key", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const outgoing = buildTestHandle("replace-reason", false);
+    const replacement = buildTestHandle("replace-reason", false);
+    const second = buildTestHandle("replace-second", false);
+    registry.acquireMounted("replace-reason", () => h(outgoing));
+    registry.acquireMounted("replace-second", () => h(second));
+    expect(registry.capExemptionTelemetry().occurrences.demand).toBe(2);
+
+    expect(
+      registry.replaceMounted("replace-reason", h(outgoing), h(replacement), {
+        hostStamp: "host-a",
+        ownerIdentityKey: "owner-a",
+        editsTransferredToReplacement: false,
+      }),
+    ).toBe(true);
+    expect(outgoing.disposed).toBe(true);
+    expect(registry.size()).toBe(2);
+    expect(registry.capExemptionTelemetry().current.demand).toBe(2);
+    expect(registry.capExemptionTelemetry().occurrences.demand).toBe(2);
   });
 
   it("changes the reported exemption when a fresh activity frame exposes unsynced edits", () => {

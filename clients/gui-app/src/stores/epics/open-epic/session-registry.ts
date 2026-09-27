@@ -19,6 +19,7 @@ import { useSyncExternalStore } from "react";
 import {
   agentActivityPlaneAnswers,
   agentActivityPlaneCoversHost,
+  agentActivityPlaneReportsEpicTurn,
   getEpicAgentActivity,
   subscribeAgentActivity,
   subscribeAgentActivityPlaneHealth,
@@ -307,9 +308,9 @@ function eligibilityKeyFor(
   // that just became evictable would not trigger a prune until an unrelated
   // field moved: `holdsNothingToLose` reads the three work fields below,
   // the activity plane's health, host reach and this epic's turn set are all
-  // separate terms. A blind -> known-working transition must re-evaluate the
-  // cap even though both states were busy to the old boolean key.
-  return `${holdsNothingToLose(state) ? 1 : 0}:${agentActivityPlaneAnswers() ? 1 : 0}:${agentActivityPlaneCoversHost(handle.hostId) ? 1 : 0}:${hasActiveAgentWork(epicId) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${state.writeCommands.length}:${metaTitle}:${liveTitle}`;
+  // separate terms. A blind -> freshly reported turn transition must
+  // re-evaluate the cap even though both states were busy to the old key.
+  return `${holdsNothingToLose(state) ? 1 : 0}:${agentActivityPlaneAnswers() ? 1 : 0}:${agentActivityPlaneCoversHost(handle.hostId) ? 1 : 0}:${agentActivityPlaneReportsEpicTurn(epicId) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${state.writeCommands.length}:${metaTitle}:${liveTitle}`;
 }
 
 /**
@@ -433,7 +434,7 @@ export function epicCapActivityBlocker(
   hostId: string,
   window: EpicCapActivityWindow,
 ): "agent-working" | EpicCapUnknownReason | null {
-  if (hasActiveAgentWork(epicId)) return "agent-working";
+  if (agentActivityPlaneReportsEpicTurn(epicId)) return "agent-working";
   const unknownReason = epicCapUnknownReason(hostId);
   if (unknownReason === null) return null;
   if (
@@ -782,8 +783,10 @@ export class OpenEpicSessionRegistry {
         isEvictable: (session) =>
           holdsNothingToLose(session.handle.store.getState()),
         onBeforeDispose: (session, cause) => {
-          this.capExemptionEpisodes.delete(session.epicId);
-          this.capExemptionSeenReasons.delete(session.epicId);
+          if (cause !== "replaced") {
+            this.capExemptionEpisodes.delete(session.epicId);
+            this.capExemptionSeenReasons.delete(session.epicId);
+          }
           const cap =
             typeof options.maxLive === "function"
               ? options.maxLive()
@@ -1280,10 +1283,21 @@ export class OpenEpicSessionRegistry {
         !previousDisposition.editsTransferredToReplacement
           ? previousDisposition
           : null;
+      const replacementSession = this.createSession(epicId, nextHandle);
+      if (
+        entry.session.unknownActivitySinceMs !== null &&
+        replacementSession.unknownActivitySinceMs !== null
+      ) {
+        // Re-pointing a live key cannot give the same unknown activity
+        // episode a new grace period. A fresh answer covering the successor
+        // host is the only event that clears it.
+        replacementSession.unknownActivitySinceMs =
+          entry.session.unknownActivitySinceMs;
+      }
       const replaced = this.sessions.replace(
         epicId,
         entry.session,
-        this.createSession(epicId, nextHandle),
+        replacementSession,
       );
       if (!replaced) {
         entry.session.pendingRetention = null;
@@ -1928,11 +1942,13 @@ function unsubscribeSession(session: EpicRegistrySession): void {
 }
 
 /**
- * Prune guard: never evict a session whose epic has an agent turn running.
+ * Strict parking guard: a recorded agent turn keeps the epic in use.
  *
  * Reads the host-selected activity view rather than the epic's own
- * collaboration awareness. The dedicated capability needs no live epic
- * subscription, so the guard keeps working while an epic session attaches.
+ * collaboration awareness. Parking keeps this conservative reading, including
+ * a retained turn row while the activity plane reconnects. Cap eviction uses
+ * `agentActivityPlaneReportsEpicTurn` so an unattested row is unknown and can
+ * expire under its separately approved grace.
  *
  * `turn`, not `working`. `working` also lists an agent whose only live work is
  * background-only - a running shell, a monitor, a scheduled wake - and that
