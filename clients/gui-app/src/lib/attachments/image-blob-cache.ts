@@ -26,9 +26,11 @@
  * nothing holds it, after a short grace window so scroll/remount churn
  * reuses the live blob; a `"session"`-retention URL (an immutable git
  * object, per image-preview decision #11) is never revoked once created,
- * only ever dropped by a page reload. A still-pending fetch is aborted once
- * its last reference drops regardless of retention, and a failed fetch never
- * poisons the entry - the next acquire retries.
+ * only ever dropped by a page reload. The same grace applies while a fetch
+ * is still in flight: last-ref drop schedules abort instead of cancelling
+ * immediately, so a remount (virtualization recycle, effect re-run) joins
+ * the live request. `"session"` in-flight entries skip that timer too. A
+ * failed fetch never poisons the entry - the next acquire retries.
  *
  * `acquire()` returns a LEASE bound to the exact entry instance it was
  * issued against, not a hash string a caller separately remembers. This
@@ -238,12 +240,18 @@ export function createImageBlobCache(
     // Session retention (immutable git object bytes, decision #11): a
     // zero-ref entry stays cached for the rest of the app session rather
     // than being revoked after the grace window, so a remount later reuses
-    // it instead of re-transferring bytes that cannot have changed.
+    // it instead of re-transferring bytes that cannot have changed. In-flight
+    // session entries keep their fetch for the same reason.
     if (entry.retention === "session") return;
     if (entry.cancelRevoke !== null) return;
     const handle = setTimeout(() => {
       entry.cancelRevoke = null;
       if (entry.refCount > 0) return;
+      if (entry.inFlight !== null) {
+        entry.abort?.abort();
+        entry.abort = null;
+        entry.inFlight = null;
+      }
       if (entry.resolved !== null) ops.revoke(entry.resolved.url);
       entries.delete(identity);
     }, graceMs);
@@ -261,15 +269,8 @@ export function createImageBlobCache(
     if (target.refCount > 0) target.refCount -= 1;
     if (target.refCount > 0) return;
     if (entries.get(identity) !== target) return;
-    if (target.inFlight !== null) {
-      // Nothing wants the bytes anymore - cancel the fetch and drop the entry so
-      // its observers/timers tear down; a re-acquire starts a fresh fetch.
-      target.abort?.abort();
-      target.abort = null;
-      target.inFlight = null;
-      entries.delete(identity);
-      return;
-    }
+    // In-flight and resolved share the grace window: a remount inside it
+    // rejoins the live fetch instead of aborting a still-wanted transfer.
     scheduleRevoke(identity, target);
   };
 
@@ -341,14 +342,21 @@ export function createImageBlobCache(
         target.resolved = resolved;
         target.inFlight = null;
         target.abort = null;
-        // Released while the fetch was in flight: revoke once the grace passes.
-        if (target.refCount === 0) scheduleRevoke(identity, target);
+        // Released while the fetch was in flight: restart grace from the
+        // moment the blob exists, so a remount still has a full window.
+        if (target.refCount === 0) {
+          target.cancelRevoke?.();
+          target.cancelRevoke = null;
+          scheduleRevoke(identity, target);
+        }
         return resolved;
       },
       (error) => {
         if (entries.get(identity) === target) {
           target.inFlight = null;
           target.abort = null;
+          target.cancelRevoke?.();
+          target.cancelRevoke = null;
           // Never leave a poisoned entry: drop it so a later acquire retries.
           entries.delete(identity);
         }

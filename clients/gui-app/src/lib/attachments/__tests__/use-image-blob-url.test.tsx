@@ -380,3 +380,85 @@ describe("useImageBlobUrlState", () => {
     expect(result.current.url).not.toBe(firstUrl);
   });
 });
+
+describe("useImageBlobUrlState remount against the real cache", () => {
+  let urlCounter = 0;
+  const originalCreate = Object.getOwnPropertyDescriptor(
+    URL,
+    "createObjectURL",
+  );
+  const originalRevoke = Object.getOwnPropertyDescriptor(
+    URL,
+    "revokeObjectURL",
+  );
+
+  beforeEach(() => {
+    urlCounter = 0;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      writable: true,
+      value: () => `blob:image/${++urlCounter}`,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      writable: true,
+      value: () => undefined,
+    });
+    imageBlobCache.clear();
+  });
+
+  afterEach(() => {
+    imageBlobCache.clear();
+    if (originalCreate === undefined) {
+      Reflect.deleteProperty(URL, "createObjectURL");
+    } else {
+      Object.defineProperty(URL, "createObjectURL", originalCreate);
+    }
+    if (originalRevoke === undefined) {
+      Reflect.deleteProperty(URL, "revokeObjectURL");
+    } else {
+      Object.defineProperty(URL, "revokeObjectURL", originalRevoke);
+    }
+  });
+
+  it("reuses the in-flight fetch when the hook unmounts and remounts", async () => {
+    let fetchCount = 0;
+    let resolveFetch: ((result: {
+      readonly bytes: Uint8Array<ArrayBuffer>;
+      readonly mediaType: null;
+    }) => void) | null = null;
+    const fetch: ImageBytesFetcher = () => {
+      fetchCount += 1;
+      return new Promise((resolve) => {
+        resolveFetch = resolve;
+      });
+    };
+    const fetcher = scopedFetcher(fetch, "test-scope");
+
+    const first = renderHook(() =>
+      useImageBlobUrlState("remount-hash", "image/png", fetcher, null),
+    );
+    expect(fetchCount).toBe(1);
+    first.unmount();
+
+    const second = renderHook(() =>
+      useImageBlobUrlState("remount-hash", "image/png", fetcher, null),
+    );
+    expect(fetchCount).toBe(1);
+
+    await act(async () => {
+      resolveFetch?.({
+        bytes: new Uint8Array([1]),
+        mediaType: null,
+      });
+      await Promise.resolve();
+    });
+    expect(second.result.current).toEqual({
+      status: "ready",
+      url: "blob:image/1",
+      mediaType: "image/png",
+    });
+    expect(fetchCount).toBe(1);
+    second.unmount();
+  });
+});
