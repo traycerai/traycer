@@ -106,4 +106,24 @@ describe("StreamTurnIndex", () => {
     index.complete(a2);
     expect(Array.from(index.heads())).toEqual([b2, a3]);
   });
+
+  it("clears completed body references before prefix compaction", () => {
+    const index = new StreamTurnIndex<StreamTurnItem>();
+    const first = queued(1, 1);
+    const second = queued(1, 2);
+    index.enqueue(first);
+    index.enqueue(second);
+
+    index.complete(first);
+
+    const groups: unknown = Reflect.get(index, "groups");
+    if (!(groups instanceof Map)) {
+      throw new Error("expected stream groups to be a Map");
+    }
+    const group: unknown = groups.get(1);
+    if (typeof group !== "object" || group === null) {
+      throw new Error("expected the stream group to remain queued");
+    }
+    expect(Reflect.get(group, "entries")).toEqual([undefined, second]);
+  });
 });
