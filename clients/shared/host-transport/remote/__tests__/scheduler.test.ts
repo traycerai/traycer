@@ -862,6 +862,74 @@ describe("PriorityScheduler", () => {
       vi.useRealTimers();
     }
   });
+
+  it("interleaves chunk streams around a deep same-stream FIFO tail", async () => {
+    vi.useFakeTimers();
+    try {
+      const streamA = 1130;
+      const streamB = 1131;
+      const tailCount = 1000;
+      const written: Array<{ streamId: number; chunked: boolean }> = [];
+      const scheduler = new PriorityScheduler({
+        write: async (frame) => {
+          written.push({ streamId: frame.streamId, chunked: frame.chunked });
+        },
+        onWriteError: (error) => {
+          throw error instanceof Error ? error : new Error(String(error));
+        },
+        initialBulkCredits: 0,
+        now: () => Date.now(),
+      });
+      const largeA = chunkedSource(streamA, QosClass.INTERACTIVE, 8);
+      const largeB = chunkedSource(streamB, QosClass.INTERACTIVE, 8);
+      const framesA = Math.ceil(largeA.totalBodyBytes / BULK_CHUNK_SIZE_BYTES);
+      const framesB = Math.ceil(largeB.totalBodyBytes / BULK_CHUNK_SIZE_BYTES);
+
+      scheduler.pause();
+      scheduler.enqueue(largeA);
+      for (let index = 0; index < tailCount; index += 1) {
+        scheduler.enqueue(messageSource(streamA, QosClass.INTERACTIVE));
+      }
+      scheduler.enqueue(largeB);
+      scheduler.resume();
+
+      const expectedStreamFrames = framesA + framesB + tailCount;
+      for (
+        let i = 0;
+        i < 200 &&
+        written.filter(
+          (entry) => entry.streamId === streamA || entry.streamId === streamB,
+        ).length < expectedStreamFrames;
+        i += 1
+      ) {
+        await vi.advanceTimersByTimeAsync(50);
+      }
+      expect(
+        written.filter((entry) => entry.streamId === streamA),
+      ).toHaveLength(framesA + tailCount);
+      expect(
+        written.filter((entry) => entry.streamId === streamB),
+      ).toHaveLength(framesB);
+
+      const chunkIndexes = (streamId: number): number[] =>
+        written.flatMap((entry, index) =>
+          entry.streamId === streamId && entry.chunked ? [index] : [],
+        );
+      const aChunks = chunkIndexes(streamA);
+      const bChunks = chunkIndexes(streamB);
+      expect(aChunks).toHaveLength(framesA);
+      expect(bChunks).toHaveLength(framesB);
+      expect(aChunks[1]).toBeLessThan(bChunks[bChunks.length - 1]);
+      expect(bChunks[1]).toBeLessThan(aChunks[aChunks.length - 1]);
+
+      const firstTailIndex = written.findIndex(
+        (entry) => entry.streamId === streamA && !entry.chunked,
+      );
+      expect(aChunks[aChunks.length - 1]).toBeLessThan(firstTailIndex);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("PriorityScheduler.queuedBytesForStream / onFrameWritten", () => {

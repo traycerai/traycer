@@ -9,6 +9,11 @@ import {
   ChunkPacer,
   type OutboundChunkSource,
 } from "@traycer/protocol/host-transport/chunking";
+import {
+  removeIndexedItem,
+  StreamTurnIndex,
+  type IndexedStreamTurnItem,
+} from "./stream-turn-index";
 
 /**
  * Priority scheduler with per-session bulk credits (Architecture §3, audit C2).
@@ -40,7 +45,7 @@ import {
  * the async encode+encrypt.
  */
 
-interface QueuedSource {
+interface QueuedSource extends IndexedStreamTurnItem {
   readonly source: OutboundChunkSource;
   /** Enqueue order across both queues; the per-stream FIFO comparator. */
   readonly serial: number;
@@ -59,8 +64,8 @@ export interface PrioritySchedulerOptions {
 export class PriorityScheduler {
   private readonly interactive: QueuedSource[] = [];
   private readonly bulk: QueuedSource[] = [];
-  private readonly interactiveStreamCounts = new Map<number, number>();
-  private readonly bulkStreamCounts = new Map<number, number>();
+  private readonly interactiveTurns = new StreamTurnIndex<QueuedSource>();
+  private readonly bulkTurns = new StreamTurnIndex<QueuedSource>();
   private readonly options: PrioritySchedulerOptions;
   private readonly now: () => number;
   private readonly pacer: ChunkPacer;
@@ -95,13 +100,21 @@ export class PriorityScheduler {
     if (this.stopped) {
       return;
     }
-    const item: QueuedSource = { source, serial: this.nextSerial++ };
+    const item: QueuedSource = {
+      source,
+      serial: this.nextSerial++,
+      queueIndex:
+        source.qos === QosClass.BULK
+          ? this.bulk.length
+          : this.interactive.length,
+    };
     if (source.qos === QosClass.BULK) {
       this.bulk.push(item);
+      this.bulkTurns.enqueue(item);
     } else {
       this.interactive.push(item);
+      this.interactiveTurns.enqueue(item);
     }
-    this.noteSourceQueued(source);
     void this.pump();
   }
 
@@ -227,11 +240,12 @@ export class PriorityScheduler {
     for (const queue of [this.interactive, this.bulk]) {
       for (let index = queue.length - 1; index >= 0; index -= 1) {
         if (queue[index].source.streamId === streamId) {
-          this.noteSourceRemoved(queue[index].source);
-          queue.splice(index, 1);
+          removeIndexedItem(queue, queue[index]);
         }
       }
     }
+    this.interactiveTurns.dropStream(streamId);
+    this.bulkTurns.dropStream(streamId);
     if (awaitLocalAbort) {
       this.chunkWindow.awaitLocalAbort(streamId);
     } else {
@@ -251,8 +265,8 @@ export class PriorityScheduler {
     this.stopped = true;
     this.interactive.length = 0;
     this.bulk.length = 0;
-    this.interactiveStreamCounts.clear();
-    this.bulkStreamCounts.clear();
+    this.interactiveTurns.clear();
+    this.bulkTurns.clear();
     this.chunkWindow.clear();
     if (this.paceResumeTimer !== null) {
       clearTimeout(this.paceResumeTimer);
@@ -261,109 +275,60 @@ export class PriorityScheduler {
   }
 
   private blockedByOtherQueue(
-    other: readonly QueuedSource[],
+    other: StreamTurnIndex<QueuedSource>,
     item: QueuedSource,
   ): boolean {
-    for (const candidate of other) {
-      if (
-        candidate.source.streamId === item.source.streamId &&
-        candidate.serial < item.serial
-      ) {
-        return true;
-      }
-    }
-    return false;
+    const blocking = other.headSerial(item.source.streamId);
+    return blocking !== undefined && blocking < item.serial;
   }
 
   private pullFromQueue(
     queue: QueuedSource[],
-    other: readonly QueuedSource[],
+    turns: StreamTurnIndex<QueuedSource>,
+    other: StreamTurnIndex<QueuedSource>,
   ): EncodeMuxFrameInput | null {
-    // Streams already passed over in this scan: a later item for one of them
-    // must not overtake the earlier item that was skipped.
-    const blockedStreams = new Set<number>();
-    for (let index = 0; index < queue.length; index += 1) {
-      const item = queue[index];
+    for (const item of turns.heads()) {
       const streamId = item.source.streamId;
-      if (blockedStreams.has(streamId)) {
-        continue;
-      }
       if (this.blockedByOtherQueue(other, item)) {
-        blockedStreams.add(streamId);
         continue;
       }
       if (!this.chunkWindow.canPull(item.source)) {
-        blockedStreams.add(streamId);
         continue;
       }
       const frameBytes = item.source.nextFrameByteSize;
       if (!this.pacer.tryConsume(frameBytes)) {
         this.notePaceWait(this.pacer.msUntilAvailable(frameBytes));
-        blockedStreams.add(streamId);
         continue;
       }
       const frame = item.source.nextFrame();
       this.chunkWindow.notePulled(item.source);
       if (item.source.done) {
-        this.noteSourceRemoved(item.source);
-        queue.splice(index, 1);
+        turns.complete(item);
+        removeIndexedItem(queue, item);
       } else {
-        // A chunked message keeps its reassembly slot on this stream, but it
-        // need not own the whole QoS queue until its last chunk. Move every
-        // queued message for this stream together so a later message on the
-        // SAME stream cannot overtake this partially sent one.
-        this.rotateStreamToBack(queue, streamId);
+        // Move only the stream's turn, not its potentially large message tail.
+        turns.rotate(streamId);
       }
       return frame;
     }
     return null;
   }
 
-  private rotateStreamToBack(queue: QueuedSource[], streamId: number): void {
-    const counts =
-      queue === this.bulk
-        ? this.bulkStreamCounts
-        : this.interactiveStreamCounts;
-    if (counts.size <= 1) return;
-    const sameStream: QueuedSource[] = [];
-    let next = 0;
-    for (const item of queue) {
-      if (item.source.streamId === streamId) {
-        sameStream.push(item);
-      } else {
-        queue[next++] = item;
-      }
-    }
-    for (const item of sameStream) {
-      queue[next++] = item;
-    }
-  }
-
-  private classStreamCounts(source: OutboundChunkSource): Map<number, number> {
-    return source.qos === QosClass.BULK
-      ? this.bulkStreamCounts
-      : this.interactiveStreamCounts;
-  }
-
-  private noteSourceQueued(source: OutboundChunkSource): void {
-    const counts = this.classStreamCounts(source);
-    counts.set(source.streamId, (counts.get(source.streamId) ?? 0) + 1);
-  }
-
-  private noteSourceRemoved(source: OutboundChunkSource): void {
-    const counts = this.classStreamCounts(source);
-    const remaining = (counts.get(source.streamId) ?? 0) - 1;
-    if (remaining === 0) counts.delete(source.streamId);
-    else counts.set(source.streamId, remaining);
-  }
-
   private next(): EncodeMuxFrameInput | null {
-    const interactive = this.pullFromQueue(this.interactive, this.bulk);
+    const interactive = this.pullFromQueue(
+      this.interactive,
+      this.interactiveTurns,
+      this.bulkTurns,
+    );
     if (interactive !== null) {
       return interactive;
     }
     if (this.bulk.length > 0 && this.bulkCredits > 0) {
-      const bulk = this.pullFromQueue(this.bulk, this.interactive);
+      const bulk = this.pullFromQueue(
+        this.bulk,
+        this.bulkTurns,
+        this.interactiveTurns,
+      );
       if (bulk !== null) {
         this.bulkCredits -= 1;
         return bulk;
