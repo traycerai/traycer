@@ -1248,12 +1248,11 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     library - selection, editing, import/export - lives in `ThemeGallery`,
     backed by `stores/settings/theme-library-store.ts` and applied by
     `lib/theme-applier.ts`. `themePreset` remains the built-in-palette
-    fallback the gallery clears on a custom selection. See
-    `docs/theme-customization.md`. Anything that bakes theme colours into a
-    non-CSS surface (a canvas, xterm, a worker) subscribes to
-    `useThemeRevision()` (`providers/use-theme-revision.ts`) rather than to
-    the mode/preset fields, because a custom theme repaints the cascade
-    without changing either.
+    fallback the gallery clears on a custom selection. Anything that bakes
+    theme colours into a non-CSS surface (a canvas, xterm, a worker)
+    subscribes to `useThemeRevision()` (`providers/use-theme-revision.ts`)
+    rather than to the mode/preset fields, because a custom theme repaints
+    the cascade without changing either.
     Shared menu, dialog and composer surfaces use solid theme fills.
     Background opacity remains retired after reproduced renderer flickering;
     old saved opacity values are ignored when the theme library is read.
