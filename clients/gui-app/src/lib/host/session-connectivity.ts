@@ -4,6 +4,7 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { isMobileApp } from "@/lib/mobile-app";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 /**
  * The SESSION plane of host connectivity: whether this device's own live
@@ -245,12 +246,20 @@ export function createSessionConnectivityStore(args: {
     const stopRecovered = streamClient.subscribeAvailabilityRecovered(notify);
     const stopClosed = streamClient.onClosed(notify);
     const stopResume = subscribeResume(restartEpisodeWait);
-    const poll = window.setInterval(notify, pollMs);
+    // The poll is how chrome notices a down edge that has no transport event.
+    // While the window is off screen nobody can see that chrome; fireOnShow
+    // plus onClosed / recovered / resume still observe the same transition
+    // by the time the window returns.
+    const stopPoll = startVisibleInterval({
+      tick: notify,
+      intervalMs: pollMs,
+      fireOnShow: true,
+    });
     detachSignals = () => {
       stopRecovered();
       stopClosed();
       stopResume();
-      window.clearInterval(poll);
+      stopPoll();
     };
   };
 

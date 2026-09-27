@@ -3,6 +3,7 @@ import type {
   IRunnerHost,
   LocalHostSnapshot,
 } from "@traycer-clients/shared/platform/runner-host";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 /**
  * Wall-clock millisecond timestamp that re-renders the consuming component on
@@ -26,12 +27,13 @@ import type {
 export function useNowMs(intervalMs: number): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    const handle = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, intervalMs);
-    return () => {
-      window.clearInterval(handle);
-    };
+    return startVisibleInterval({
+      tick: () => {
+        setNowMs(Date.now());
+      },
+      intervalMs,
+      fireOnShow: true,
+    });
   }, [intervalMs]);
   return nowMs;
 }

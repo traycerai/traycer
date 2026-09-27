@@ -11,6 +11,10 @@ import {
   subscribeStatusAnimation,
   useStatusAnimation,
 } from "@/lib/animation/status-animation-clock";
+import {
+  __resetDocumentVisibilitySubscribersForTests,
+  setDesktopWindowOnScreen,
+} from "@/lib/dom/document-visibility";
 
 function setDocumentHidden(hidden: boolean): void {
   Object.defineProperty(document, "visibilityState", {
@@ -107,6 +111,8 @@ afterEach(() => {
   cleanup();
   resetStatusAnimationClockForTests();
   setDocumentHidden(false);
+  setDesktopWindowOnScreen(true);
+  __resetDocumentVisibilitySubscribersForTests();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -214,6 +220,32 @@ describe("subscribeStatusAnimation", () => {
       STATUS_ANIMATION_TICK_MS,
       STATUS_ANIMATION_TICK_MS * 2,
     ]);
+  });
+
+  it("stops ticking when the desktop window is off screen even though Page Visibility stays visible", () => {
+    const calls: number[] = [];
+    subscribeStatusAnimation(
+      (elapsed) => calls.push(elapsed),
+      STATUS_ANIMATION_TICK_MS,
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(STATUS_ANIMATION_TICK_MS);
+    });
+    expect(calls).toEqual([STATUS_ANIMATION_TICK_MS]);
+    expect(document.visibilityState).toBe("visible");
+
+    setDesktopWindowOnScreen(false);
+    expect(vi.getTimerCount()).toBe(0);
+
+    act(() => {
+      vi.advanceTimersByTime(STATUS_ANIMATION_TICK_MS * 5);
+    });
+    expect(calls).toEqual([STATUS_ANIMATION_TICK_MS]);
+    expect(statusAnimationElapsedMs()).toBe(STATUS_ANIMATION_TICK_MS);
+
+    setDesktopWindowOnScreen(true);
+    expect(vi.getTimerCount()).toBe(1);
   });
 
   it("is a no-op under prefers-reduced-motion, with an inert unsubscribe", () => {
