@@ -30,6 +30,7 @@ import {
   epicCommandOverlayHolderId,
   epicReplicaBookKey,
   epicReplicaDataHolderId,
+  epicMainProjectionHolderId,
   epicRootHolderId,
 } from "@/stores/replica-memory/epic-replica-budget";
 import type {
@@ -78,6 +79,7 @@ export function createProcessBackedAccountingPort(
   // drops `source` before it detaches, deliberately, so by then the tier
   // answers emptily. So the port keeps the list itself.
   const chargedHotRooms = new Set<string>();
+  let mainProjectionEstimatedHeapBytes = 0;
 
   return {
     registerBooks(next): void {
@@ -92,7 +94,8 @@ export function createProcessBackedAccountingPort(
         key: bookKey,
         measure: () =>
           (source?.measureRootBytes() ?? 0) +
-          (source?.measureReplicaDataBytes().estimatedHeapBytes ?? 0),
+          (source?.measureReplicaDataBytes().estimatedHeapBytes ?? 0) +
+          mainProjectionEstimatedHeapBytes,
         projectionCounts: () =>
           source?.projectionCounts() ?? {
             artifacts: 0,
@@ -110,6 +113,7 @@ export function createProcessBackedAccountingPort(
       // is already walking the books, and an unregistered source answering
       // emptily is safer than one answering from a runtime mid-teardown.
       source = null;
+      mainProjectionEstimatedHeapBytes = 0;
       memory.hotDocs.detach(bookKey);
       // The counterpart of `epicReplicas.release` below, and needed for the
       // same reason: `detach` removes the TIER - the thing eviction walks -
@@ -161,6 +165,17 @@ export function createProcessBackedAccountingPort(
       memory.epicReplicas.settleReplicaData(memory.accountant, {
         bookKey,
         holderId: epicReplicaDataHolderId(hostId, epicId, runtimeToken),
+        rawBytes,
+        estimatedHeapBytes,
+      });
+      memory.accountant.reconcile(BUDGET_PLANE_IDS.epicReplicas);
+    },
+
+    settleMainProjectionBytes(rawBytes, estimatedHeapBytes): void {
+      mainProjectionEstimatedHeapBytes = estimatedHeapBytes;
+      memory.epicReplicas.settleMainProjection(memory.accountant, {
+        bookKey,
+        holderId: epicMainProjectionHolderId(hostId, epicId, runtimeToken),
         rawBytes,
         estimatedHeapBytes,
       });

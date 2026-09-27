@@ -126,6 +126,9 @@ export function createWorkerAccountingPort(
       settleReplicaDataBytes(rawBytes, estimatedHeapBytes): void {
         settle({ kind: "replica-data", rawBytes, estimatedHeapBytes });
       },
+      settleMainProjectionBytes(): void {
+        throw new Error("main projection settlement belongs on the renderer");
+      },
       settleColdRoomBytes(artifactRoomId, bytes): void {
         settle({ kind: "cold-room", artifactRoomId, bytes });
       },

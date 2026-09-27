@@ -9,6 +9,9 @@
  * not the Electron renderer or a WebKit process. The body uses the same
  * encoded-state byte charge as the hot-doc budget.
  */
+import { Buffer } from "node:buffer";
+import process from "node:process";
+import { URL } from "node:url";
 import {
   Worker,
   isMainThread,
@@ -31,9 +34,9 @@ const FIXTURES = [
 ];
 
 function usedAfterGc() {
-  if (global.gc === undefined) throw new Error("run with node --expose-gc");
-  global.gc();
-  global.gc();
+  if (globalThis.gc === undefined) throw new Error("run with node --expose-gc");
+  globalThis.gc();
+  globalThis.gc();
   return process.memoryUsage().heapUsed;
 }
 

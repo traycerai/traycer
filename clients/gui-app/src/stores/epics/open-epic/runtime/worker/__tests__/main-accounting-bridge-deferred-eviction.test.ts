@@ -100,6 +100,7 @@ function createTestPort(
     settleRootBytes(): void {},
     chargeRootProvisional(): void {},
     settleReplicaDataBytes(): void {},
+    settleMainProjectionBytes(): void {},
     settleColdRoomBytes(): void {},
     settleCommandOverlayBytes(): void {},
     settleHotDocBytes(artifactRoomId, bytes): void {

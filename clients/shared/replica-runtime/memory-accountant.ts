@@ -194,7 +194,7 @@ export interface AccountantSnapshot {
 export interface MemoryAccountant {
   register(spec: PlaneBudgetSpec): BudgetRegistration;
 
-  /** Observe completed holder measurements, after the holder has been updated. */
+  /** Observe completed holder measurements and releases. */
   subscribeSettlements(listener: () => void): () => void;
 
   /**
@@ -471,8 +471,9 @@ export function createMemoryAccountant(
     release(planeId: BudgetPlaneId, holderId: BudgetHolderId): void {
       const plane = planes.get(planeId);
       if (plane === undefined) return;
-      plane.holders.delete(holderId);
+      if (!plane.holders.delete(holderId)) return;
       plane.protectedLatch = false;
+      for (const listener of settlementListeners) listener();
     },
 
     noteEvictionDeferred(planeId: BudgetPlaneId): void {

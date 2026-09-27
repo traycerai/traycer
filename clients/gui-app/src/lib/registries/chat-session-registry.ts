@@ -70,11 +70,34 @@ const managedDataByteBudget = createManagedDataByteBudget({
     getOpenEpicRegistry().evictOldestEligibleForByteBudget(),
   scheduleMicrotask: (callback) => queueMicrotask(callback),
 });
-subscribeProcessMemorySettlements(() => managedDataByteBudget.noteSettlement());
+let byteGraceTimer: number | null = null;
+let byteGraceDeadlineMs: number | null = null;
+function scheduleByteGraceWake(): void {
+  const deadlineMs = getOpenEpicRegistry().nextByteEvictionGraceDeadlineMs();
+  if (deadlineMs === byteGraceDeadlineMs) return;
+  if (byteGraceTimer !== null) clearTimeout(byteGraceTimer);
+  byteGraceTimer = null;
+  byteGraceDeadlineMs = deadlineMs;
+  if (deadlineMs === null) return;
+  byteGraceTimer = window.setTimeout(
+    () => {
+      byteGraceTimer = null;
+      byteGraceDeadlineMs = null;
+      managedDataByteBudget.noteEligibilityChange();
+      scheduleByteGraceWake();
+    },
+    Math.max(0, deadlineMs - Date.now()),
+  );
+}
+subscribeProcessMemorySettlements(() => {
+  managedDataByteBudget.noteSettlement();
+  scheduleByteGraceWake();
+});
 registry.subscribe(() => managedDataByteBudget.noteEligibilityChange());
-getOpenEpicRegistry().subscribe(() =>
-  managedDataByteBudget.noteEligibilityChange(),
-);
+getOpenEpicRegistry().subscribe(() => {
+  managedDataByteBudget.noteEligibilityChange();
+  scheduleByteGraceWake();
+});
 
 /**
  * Coalesce streamed `blockDelta` events onto the animation frame so a fast

@@ -33,11 +33,14 @@ import {
 } from "@/stores/replica-memory/process-memory-accountant";
 import { CHAT_WINDOWS_SOFT_LIMIT_BYTES } from "@/stores/replica-memory/budget-limits";
 import {
+  CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES,
+  CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
   chatHolderId,
   chatWholeSetSliceBytes,
   legacyTranscriptResidencyBytes,
   type ChatWholeSetSlices,
 } from "@/stores/replica-memory/chat-window-budget";
+import { createChatOwnedStateAccount } from "@/stores/replica-memory/chat-owned-state-account";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
@@ -681,15 +684,21 @@ function sixWholeSetSlicesOf(state: ChatSessionState): ChatWholeSetSlices {
 }
 
 /**
- * The independently-recomputed legacy charge: the two EXPORTED building
- * blocks (`legacyTranscriptResidencyBytes`, `chatWholeSetSliceBytes`) summed
- * here, in the test - not the production module's own private
- * `legacyTranscriptChargeBytes`, which this file cannot import.
+ * The independently-recomputed legacy charge: raw transcript and whole-set
+ * bytes, calibrated fixed/per-record heap overhead, and estimated owned-state
+ * heap bytes. This stays outside the production module's private charge
+ * function so the tests verify its assembled result.
  */
 function expectedLegacyChargeBytes(state: ChatSessionState): number {
+  const ownedStateAccount = createChatOwnedStateAccount();
+  ownedStateAccount.update(state);
+  const retainedRecords = state.messages.length + state.events.length;
   return (
     legacyTranscriptResidencyBytes(state.messages, state.events) +
-    chatWholeSetSliceBytes(sixWholeSetSlicesOf(state))
+    chatWholeSetSliceBytes(sixWholeSetSlicesOf(state)) +
+    CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+    retainedRecords * CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES +
+    ownedStateAccount.size().estimatedHeapBytes
   );
 }
 
@@ -763,7 +772,7 @@ describe("chat-session-store - real legacy snapshots settle the process-wide cha
     }
   });
 
-  it("a real legacy snapshot that pushes chat-windows over budget settles the sole-copy amount, requests one eviction, reclaims nothing, and latches over-protected", () => {
+  it("a real legacy snapshot that pushes chat-windows over budget settles the sole-copy amount, requests eviction, reclaims nothing, and latches over-protected", () => {
     const memory = getProcessMemoryRuntime();
     // An accountant-only primer: settled directly, never attached to
     // `memory.chatWindows`, so the book's own eviction sweep (which only
@@ -794,7 +803,13 @@ describe("chat-session-store - real legacy snapshots settle the process-wide cha
       expect(usage.settledBytes - CHAT_WINDOWS_SOFT_LIMIT_BYTES).toBe(
         expectedLegacyBytes,
       );
-      expect(usage.evictionsRequested - baseline.evictionsRequested).toBe(1);
+      // Owned-state slices settle as the real snapshot is applied, so the
+      // accountant can reconcile more than once before the final snapshot
+      // settlement. Assert the invariant (an over-budget plane requested
+      // eviction) without pinning this internal number of intermediate passes.
+      expect(usage.evictionsRequested).toBeGreaterThan(
+        baseline.evictionsRequested,
+      );
       expect(usage.bytesReclaimed - baseline.bytesReclaimed).toBe(0);
       // Asserted BEFORE the direct `chatWindows.evict()` probe below: that
       // probe re-settles the same holder as a side effect, which clears the
@@ -815,6 +830,9 @@ describe("chat-session-store - real legacy snapshots settle the process-wide cha
         state.messages,
         state.events,
       );
+      const ownedStateAccount = createChatOwnedStateAccount();
+      ownedStateAccount.update(state);
+      const ownedStateHeapBytes = ownedStateAccount.size().estimatedHeapBytes;
       // Deliberately falsify only this holder's ledger while leaving the
       // resident transcript untouched. The direct eviction probe must
       // remeasure and restore the whole legacy charge; without the legacy
@@ -829,6 +847,7 @@ describe("chat-session-store - real legacy snapshots settle the process-wide cha
       expect(outcome.reclaimedBytes).toBe(0);
       expect(outcome.protectedBytesByKind).toEqual([
         { kind: "sole-copy", bytes: transcriptBytes },
+        { kind: "required", bytes: ownedStateHeapBytes },
       ]);
       expect(
         chatWindowsUsage(memory).settledBytes - CHAT_WINDOWS_SOFT_LIMIT_BYTES,

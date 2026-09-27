@@ -4,6 +4,7 @@ import { BUDGET_PLANE_IDS } from "@traycer-clients/shared/replica-runtime";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
+import type { LiveAssistantMessage } from "@/stores/chats/chat-session-store";
 import {
   getProcessMemoryRuntime,
   resetProcessMemoryRuntimeForTests,
@@ -98,6 +99,57 @@ describe("chat owned-state memory accounting", () => {
       encode.mockClear();
       expect(account.update(next)).toBe(false);
       expect(encode).not.toHaveBeenCalled();
+    } finally {
+      encode.mockRestore();
+      handle.dispose();
+    }
+  });
+
+  it("reuses the measured block while live assistant metadata streams", () => {
+    const handle = openStore();
+    const account = createChatOwnedStateAccount();
+    const initial = handle.store.getState();
+    const block = {
+      type: "text",
+      blockId: "large-live-block",
+      status: "streaming",
+      timestamp: 1,
+      text: "x".repeat(1024 * 1024),
+      providerNotice: null,
+    } as const;
+    const live: LiveAssistantMessage = {
+      turnId: "turn-live-cache",
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [block],
+      startedAt: 1,
+      blocksVersion: 1,
+      imageResolutions: [],
+      imageResolutionsVersion: 0,
+      timestamp: 1,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    const encode = vi.spyOn(TextEncoder.prototype, "encode");
+    try {
+      account.update({ ...initial, liveAssistantMessage: live });
+      encode.mockClear();
+      for (let update = 2; update < 32; update += 1) {
+        account.update({
+          ...initial,
+          liveAssistantMessage: { ...live, blocksVersion: update },
+        });
+      }
+      const largePayloadEncodes = encode.mock.calls.filter(
+        ([value]) => typeof value === "string" && value.length >= 1024 * 1024,
+      );
+      expect(largePayloadEncodes).toHaveLength(0);
     } finally {
       encode.mockRestore();
       handle.dispose();

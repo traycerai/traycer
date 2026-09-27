@@ -19,20 +19,24 @@ function microtaskQueue(): {
 }
 
 describe("managed-data byte budget", () => {
-  it("coalesces settlements into one prune and tries chat before task", () => {
+  it("coalesces settlements into one pass and evicts chats before tasks until under limit", () => {
     const queue = microtaskQueue();
-    let bytes = 120;
+    let bytes = 190;
+    let eligibleChats = 2;
     const calls: string[] = [];
     const budget = createManagedDataByteBudget({
       readAccountedBytes: () => bytes,
       readLimitBytes: () => 100,
       evictOldestChat: () => {
         calls.push("chat");
-        bytes = 80;
+        if (eligibleChats === 0) return false;
+        eligibleChats -= 1;
+        bytes -= 40;
         return true;
       },
       evictOldestTask: () => {
         calls.push("task");
+        bytes -= 20;
         return true;
       },
       scheduleMicrotask: queue.schedule,
@@ -45,7 +49,11 @@ describe("managed-data byte budget", () => {
     expect(calls).toEqual([]);
 
     queue.flushOne();
-    expect(calls).toEqual(["chat"]);
+    // Two chat evictions leave the total at 110 bytes. The pass then finds no
+    // more eligible chats, falls through to a task, and stops once usage is
+    // below the 100-byte limit.
+    expect(calls).toEqual(["chat", "chat", "chat", "task"]);
+    expect(bytes).toBe(90);
     expect(budget.snapshot()).toEqual({ prunes: 1, overProtected: false });
   });
 

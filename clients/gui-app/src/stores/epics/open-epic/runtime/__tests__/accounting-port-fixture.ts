@@ -46,6 +46,7 @@ export function createRecordingAccountingPort(): RecordingAccountingPort {
         `settleReplicaDataBytes:${String(rawBytes)}:${String(estimatedHeapBytes)}`,
       );
     },
+    settleMainProjectionBytes(): void {},
     settleColdRoomBytes(artifactRoomId, bytes): void {
       calls.push(`settleColdRoomBytes:${artifactRoomId}:${String(bytes)}`);
     },

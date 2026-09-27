@@ -130,6 +130,7 @@ export interface EpicRuntimeAccountingPort {
   settleRootBytes(bytes: number): void;
   chargeRootProvisional(bytes: number): void;
   settleReplicaDataBytes(rawBytes: number, estimatedHeapBytes: number): void;
+  settleMainProjectionBytes(rawBytes: number, estimatedHeapBytes: number): void;
   settleColdRoomBytes(artifactRoomId: string, bytes: number): void;
   settleCommandOverlayBytes(bytes: number): void;
   settleHotDocBytes(artifactRoomId: string, bytes: number): void;

@@ -23,6 +23,8 @@ export interface ReplicaMemoryTelemetry {
   /** UTF-8 JSON form and calibrated heap estimate are distinct measurements. */
   readonly rawReplicaDataBytes: number;
   readonly estimatedReplicaDataHeapBytes: number;
+  readonly rawMainProjectionBytes: number;
+  readonly estimatedMainProjectionHeapBytes: number;
   readonly rawChatOwnedStateBytes: number;
   readonly estimatedChatOwnedStateHeapBytes: number;
   readonly projectionRowCounts: EpicReplicaProjectionCounts;
@@ -75,6 +77,9 @@ export function collectReplicaMemoryTelemetry(
     rawReplicaDataBytes: runtime.epicReplicas.rawReplicaDataBytes(),
     estimatedReplicaDataHeapBytes:
       runtime.epicReplicas.estimatedReplicaDataHeapBytes(),
+    rawMainProjectionBytes: runtime.epicReplicas.rawMainProjectionBytes(),
+    estimatedMainProjectionHeapBytes:
+      runtime.epicReplicas.estimatedMainProjectionHeapBytes(),
     rawChatOwnedStateBytes: runtime.chatWindows.rawOwnedStateBytes(),
     estimatedChatOwnedStateHeapBytes:
       runtime.chatWindows.estimatedOwnedStateHeapBytes(),

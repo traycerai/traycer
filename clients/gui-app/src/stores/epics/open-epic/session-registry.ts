@@ -874,6 +874,29 @@ export class OpenEpicSessionRegistry {
     );
   }
 
+  /** Next grace expiry that can make a clean, unmounted task byte-eligible. */
+  nextByteEvictionGraceDeadlineMs(): number | null {
+    const nowMs = this.environment.clock.now();
+    const graceMs = getRetentionProfile().unknownActivityCapGraceMs;
+    let nextDeadlineMs: number | null = null;
+    for (const entry of this.sessions.entries()) {
+      if (entry.demand > 0) continue;
+      if (!holdsNothingToLose(entry.session.handle.store.getState())) continue;
+      const sinceMs = entry.session.unknownActivitySinceMs;
+      if (sinceMs === null) continue;
+      const blocker = this.epicCapActivityBlocker(entry.session);
+      if (blocker !== "activity-plane-blind" && blocker !== "host-uncovered") {
+        continue;
+      }
+      const deadlineMs = sinceMs + graceMs;
+      if (deadlineMs <= nowMs) continue;
+      if (nextDeadlineMs === null || deadlineMs < nextDeadlineMs) {
+        nextDeadlineMs = deadlineMs;
+      }
+    }
+    return nextDeadlineMs;
+  }
+
   capExemptionTelemetry(): EpicCapExemptionTelemetry {
     const current = emptyCapExemptionCounts();
     for (const reason of this.capExemptionEpisodes.values()) {

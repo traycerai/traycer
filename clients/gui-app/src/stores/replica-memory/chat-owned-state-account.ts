@@ -1,4 +1,7 @@
-import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import type {
+  ChatSessionState,
+  LiveAssistantMessage,
+} from "@/stores/chats/chat-session-store";
 import {
   retainedValueSize,
   type RetainedValueSize,
@@ -66,6 +69,51 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
   const sizes = new Map<keyof ChatSessionState, RetainedValueSize>();
   let rawBytes = 0;
   let estimatedHeapBytes = 0;
+  const blockSizes = new WeakMap<object, RetainedValueSize>();
+  let imageResolutions: LiveAssistantMessage["imageResolutions"] | null = null;
+  let imageResolutionSize: RetainedValueSize = {
+    rawBytes: 0,
+    estimatedHeapBytes: 0,
+  };
+
+  const measureLiveAssistant = (
+    live: LiveAssistantMessage,
+  ): RetainedValueSize => {
+    const header = retainedValueSize({
+      turnId: live.turnId,
+      sender: live.sender,
+      startedAt: live.startedAt,
+      blocksVersion: live.blocksVersion,
+      imageResolutionOwnerMessageId: live.imageResolutionOwnerMessageId,
+      imageResolutionsVersion: live.imageResolutionsVersion,
+      timestamp: live.timestamp,
+      reasoningEffort: live.reasoningEffort,
+      serviceTier: live.serviceTier,
+    });
+    if (imageResolutions !== live.imageResolutions) {
+      imageResolutions = live.imageResolutions;
+      imageResolutionSize = retainedValueSize(imageResolutions);
+    }
+    let rawBytes = header.rawBytes + imageResolutionSize.rawBytes + 2;
+    let estimatedHeapBytes =
+      header.estimatedHeapBytes +
+      imageResolutionSize.estimatedHeapBytes +
+      32 +
+      live.blocks.length * 8;
+    const countedBlocks = new Set<object>();
+    for (const block of live.blocks) {
+      if (countedBlocks.has(block)) continue;
+      countedBlocks.add(block);
+      let size = blockSizes.get(block);
+      if (size === undefined) {
+        size = retainedValueSize(block);
+        blockSizes.set(block, size);
+      }
+      rawBytes += size.rawBytes;
+      estimatedHeapBytes += size.estimatedHeapBytes;
+    }
+    return { rawBytes, estimatedHeapBytes };
+  };
 
   return {
     update(state): boolean {
@@ -79,10 +127,18 @@ export function createChatOwnedStateAccount(): ChatOwnedStateAccount {
           rawBytes -= previous.rawBytes;
           estimatedHeapBytes -= previous.estimatedHeapBytes;
         }
-        const next =
-          typeof value === "object" && value !== null
-            ? retainedValueSize(value)
-            : { rawBytes: 0, estimatedHeapBytes: 0 };
+        let next: RetainedValueSize = {
+          rawBytes: 0,
+          estimatedHeapBytes: 0,
+        };
+        if (
+          key === "liveAssistantMessage" &&
+          state.liveAssistantMessage !== null
+        ) {
+          next = measureLiveAssistant(state.liveAssistantMessage);
+        } else if (typeof value === "object" && value !== null) {
+          next = retainedValueSize(value);
+        }
         sizes.set(key, next);
         rawBytes += next.rawBytes;
         estimatedHeapBytes += next.estimatedHeapBytes;

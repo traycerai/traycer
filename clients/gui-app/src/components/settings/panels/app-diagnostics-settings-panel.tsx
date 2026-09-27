@@ -487,6 +487,14 @@ function JsHeapReadout(): ReactNode {
             <span className="text-right">
               {formatMemoryBytes(managedData.estimatedReplicaDataHeapBytes)}
             </span>
+            <span>Task projection copy, raw</span>
+            <span className="text-right">
+              {formatMemoryBytes(managedData.rawMainProjectionBytes)}
+            </span>
+            <span>Task projection copy, estimated heap</span>
+            <span className="text-right">
+              {formatMemoryBytes(managedData.estimatedMainProjectionHeapBytes)}
+            </span>
             <span>Other chat state, raw</span>
             <span className="text-right">
               {formatMemoryBytes(managedData.rawChatOwnedStateBytes)}
