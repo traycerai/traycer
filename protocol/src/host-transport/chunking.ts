@@ -594,28 +594,50 @@ export class ChunkInterleaveWindow {
   >();
   private reservedBytes = 0;
 
+  availableStartSlots(qos: QosClassValue): number {
+    return (
+      MAX_ACTIVE_CHUNKED_STREAMS -
+      (qos === QosClass.BULK ? 1 : 0) -
+      this.active.size
+    );
+  }
+
+  availableStartBytes(qos: QosClassValue): number {
+    return (
+      MAX_ACTIVE_CHUNKED_RESERVED_BYTES -
+      (qos === QosClass.BULK ? BULK_QOS_BODY_THRESHOLD_BYTES : 0) -
+      this.reservedBytes
+    );
+  }
+
+  /** Admission for a new partial body, independent of its queued stream head. */
+  canStartChunked(qos: QosClassValue, totalBodyBytes: number): boolean {
+    return (
+      this.availableStartSlots(qos) > 0 &&
+      totalBodyBytes <= this.availableStartBytes(qos)
+    );
+  }
+
+  /** A continuation or local terminal uses an already reserved peer body. */
+  usesExistingReservation(source: OutboundChunkSource): boolean {
+    const current = this.active.get(source.streamId);
+    return (
+      current?.source === source ||
+      (current?.source === null &&
+        (source.type === MuxFrameType.CLOSE ||
+          source.type === MuxFrameType.FATAL))
+    );
+  }
+
   canPull(source: OutboundChunkSource): boolean {
     if (!source.chunked) {
       return true;
     }
     const current = this.active.get(source.streamId);
     if (current !== undefined) {
-      return (
-        current.source === source ||
-        (current.source === null &&
-          (source.type === MuxFrameType.CLOSE ||
-            source.type === MuxFrameType.FATAL))
-      );
+      return this.usesExistingReservation(source);
     }
-    const bulk = source.qos === QosClass.BULK;
-    const countLimit = MAX_ACTIVE_CHUNKED_STREAMS - (bulk ? 1 : 0);
-    const byteLimit =
-      MAX_ACTIVE_CHUNKED_RESERVED_BYTES -
-      (bulk ? BULK_QOS_BODY_THRESHOLD_BYTES : 0);
-    return (
-      this.active.size < countLimit &&
-      this.reservedBytes + source.totalBodyBytes <= byteLimit
-    );
+    return this.canStartChunked(source.qos, source.totalBodyBytes);
   }
 
   notePulled(source: OutboundChunkSource): void {

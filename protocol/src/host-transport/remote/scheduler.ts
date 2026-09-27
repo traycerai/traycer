@@ -287,12 +287,15 @@ export class PriorityScheduler {
     turns: StreamTurnIndex<QueuedSource>,
     other: StreamTurnIndex<QueuedSource>,
   ): EncodeMuxFrameInput | null {
+    turns.reconsiderWindow(this.chunkWindow);
     for (const item of turns.heads()) {
       const streamId = item.source.streamId;
       if (this.blockedByOtherQueue(other, item)) {
+        turns.deferForOtherQueue(item);
         continue;
       }
       if (!this.chunkWindow.canPull(item.source)) {
+        turns.deferForWindow(item);
         continue;
       }
       const frameBytes = item.source.nextFrameByteSize;
@@ -304,6 +307,7 @@ export class PriorityScheduler {
       this.chunkWindow.notePulled(item.source);
       if (item.source.done) {
         turns.complete(item);
+        other.unblockFromOtherQueue(streamId, turns.headSerial(streamId));
         removeIndexedItem(queue, item);
       } else {
         // Move only the stream's turn, not its potentially large message tail.

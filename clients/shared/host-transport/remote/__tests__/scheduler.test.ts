@@ -10,8 +10,11 @@ import {
   CHUNK_PACE_BURST_FRAMES,
   CHUNK_PACE_BYTES_PER_SEC,
   CHUNK_PACE_FRAMES_PER_SEC,
+  ChunkInterleaveWindow,
+  MAX_ACTIVE_CHUNKED_STREAMS,
   OutboundChunkSource,
 } from "@traycer/protocol/host-transport/chunking";
+import { StreamTurnIndex } from "@traycer/protocol/host-transport/remote/stream-turn-index";
 import { InboundCreditTracker, PriorityScheduler } from "../scheduler";
 import { FINE_INBOUND_CREDIT_GRANT_BATCH } from "@traycer/protocol/host-transport/mux";
 
@@ -927,6 +930,249 @@ describe("PriorityScheduler", () => {
       );
       expect(aChunks[aChunks.length - 1]).toBeLessThan(firstTailIndex);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not rescan window-blocked stream heads on every active continuation", async () => {
+    vi.useFakeTimers();
+    const canPullSpy = vi.spyOn(ChunkInterleaveWindow.prototype, "canPull");
+    try {
+      const activeCount = MAX_ACTIVE_CHUNKED_STREAMS;
+      const blockedCount = 128;
+      const firstActiveStreamId = 5200;
+      const firstBlockedStreamId = 5300;
+      const activeSources = Array.from({ length: activeCount }, (_, index) =>
+        chunkedSource(firstActiveStreamId + index, QosClass.INTERACTIVE, 8),
+      );
+      const firstActiveSource = activeSources[0];
+      if (firstActiveSource === undefined) {
+        throw new Error("expected at least one active source");
+      }
+      const framesPerActiveSource = Math.ceil(
+        firstActiveSource.totalBodyBytes / BULK_CHUNK_SIZE_BYTES,
+      );
+      const written: number[] = [];
+      const scheduler = new PriorityScheduler({
+        write: async (frame) => {
+          written.push(frame.streamId);
+        },
+        onWriteError: (error) => {
+          throw error instanceof Error ? error : new Error(String(error));
+        },
+        initialBulkCredits: 0,
+        now: () => Date.now(),
+      });
+      scheduler.pause();
+      for (const source of activeSources) scheduler.enqueue(source);
+      for (let index = 0; index < blockedCount; index += 1) {
+        scheduler.enqueue(
+          chunkedSource(firstBlockedStreamId + index, QosClass.INTERACTIVE, 1),
+        );
+      }
+      scheduler.resume();
+      await vi.advanceTimersByTimeAsync(0);
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const startedStreams = new Set(written);
+        if (startedStreams.size === activeCount) break;
+        await vi.advanceTimersByTimeAsync(50);
+      }
+      expect(new Set(written).size).toBe(activeCount);
+      expect(
+        written.every(
+          (streamId) =>
+            streamId >= firstActiveStreamId &&
+            streamId < firstActiveStreamId + activeCount,
+        ),
+      ).toBe(true);
+      for (let index = 0; index < activeCount; index += 1) {
+        expect(
+          written.filter((streamId) => streamId === firstActiveStreamId + index)
+            .length,
+        ).toBeLessThan(framesPerActiveSource);
+      }
+
+      // The initial pass admits the active set and parks the remaining heads.
+      // Measure only repeated continuation turns, not that one-time discovery.
+      canPullSpy.mockClear();
+      const initialWriteCount = written.length;
+      for (
+        let attempt = 0;
+        attempt < 20 && written.length < initialWriteCount + 4;
+        attempt += 1
+      ) {
+        await vi.advanceTimersByTimeAsync(50);
+      }
+      const continuationCount = written.length - initialWriteCount;
+      expect(continuationCount).toBeGreaterThanOrEqual(4);
+      expect(
+        written
+          .slice(initialWriteCount)
+          .every(
+            (streamId) =>
+              streamId >= firstActiveStreamId &&
+              streamId < firstActiveStreamId + activeCount,
+          ),
+      ).toBe(true);
+      for (let index = 0; index < activeCount; index += 1) {
+        expect(
+          written.filter((streamId) => streamId === firstActiveStreamId + index)
+            .length,
+        ).toBeLessThan(framesPerActiveSource);
+      }
+      expect(canPullSpy.mock.calls.length).toBeLessThan(
+        blockedCount + activeCount * 2 + continuationCount * 3,
+      );
+      scheduler.stop();
+    } finally {
+      canPullSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a parked interactive peer take the slot before a completed stream successor", async () => {
+    vi.useFakeTimers();
+    const originalCanPull = ChunkInterleaveWindow.prototype.canPull;
+    const canPullSpy = vi.spyOn(ChunkInterleaveWindow.prototype, "canPull");
+    try {
+      const activeBulkCount = MAX_ACTIVE_CHUNKED_STREAMS - 1;
+      const firstBulkStreamId = 6100;
+      const streamA = 6200;
+      const streamB = 6201;
+      const sourceB = chunkedSource(streamB, QosClass.INTERACTIVE, 1);
+      let bWasWindowBlocked = false;
+      canPullSpy.mockImplementation(
+        function (this: ChunkInterleaveWindow, source) {
+          const canPull = originalCanPull.call(this, source);
+          if (source === sourceB && !canPull) bWasWindowBlocked = true;
+          return canPull;
+        },
+      );
+      let schedulerNow = 0;
+      const written: Array<{ streamId: number; chunked: boolean }> = [];
+      const scheduler = new PriorityScheduler({
+        write: async (frame) => {
+          written.push({ streamId: frame.streamId, chunked: frame.chunked });
+          schedulerNow += 50;
+        },
+        onWriteError: (error) => {
+          throw error instanceof Error ? error : new Error(String(error));
+        },
+        initialBulkCredits: 0,
+        now: () => schedulerNow,
+      });
+      scheduler.pause();
+      scheduler.adoptNegotiatedCreditWindow(activeBulkCount);
+      for (let index = 0; index < activeBulkCount; index += 1) {
+        scheduler.enqueue(
+          chunkedSource(firstBulkStreamId + index, QosClass.BULK, 2),
+        );
+      }
+      scheduler.resume();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(
+        written.filter(
+          (entry) =>
+            entry.streamId >= firstBulkStreamId &&
+            entry.streamId < firstBulkStreamId + activeBulkCount,
+        ),
+      ).toHaveLength(activeBulkCount);
+      expect(scheduler.availableCredits()).toBe(0);
+
+      const sourceA = chunkedSource(streamA, QosClass.INTERACTIVE, 8);
+      const sourceAFrames = Math.ceil(
+        sourceA.totalBodyBytes / BULK_CHUNK_SIZE_BYTES,
+      );
+      scheduler.enqueue(sourceA);
+      scheduler.enqueue(messageSource(streamA, QosClass.INTERACTIVE));
+      scheduler.enqueue(sourceB);
+
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const hasB = written.some((entry) => entry.streamId === streamB);
+        const hasASuccessor = written.some(
+          (entry) => entry.streamId === streamA && !entry.chunked,
+        );
+        if (hasB && hasASuccessor) break;
+        await vi.advanceTimersByTimeAsync(50);
+      }
+      const aLastChunkIndex = written.reduce(
+        (last, entry, index) =>
+          entry.streamId === streamA && entry.chunked ? index : last,
+        -1,
+      );
+      const aSuccessorIndex = written.findIndex(
+        (entry) => entry.streamId === streamA && !entry.chunked,
+      );
+      const bFirstChunkIndex = written.findIndex(
+        (entry) => entry.streamId === streamB,
+      );
+      expect(
+        written.filter((entry) => entry.streamId === streamA && entry.chunked),
+      ).toHaveLength(sourceAFrames);
+      expect(bWasWindowBlocked).toBe(true);
+      expect(bFirstChunkIndex).toBeGreaterThan(aLastChunkIndex);
+      expect(aSuccessorIndex).toBeGreaterThanOrEqual(0);
+      expect(bFirstChunkIndex).toBeLessThan(aSuccessorIndex);
+      scheduler.stop();
+    } finally {
+      canPullSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not rescan FIFO-blocked successors on unrelated active turns", async () => {
+    vi.useFakeTimers();
+    const headSerialSpy = vi.spyOn(StreamTurnIndex.prototype, "headSerial");
+    try {
+      const activeStreamId = 7100;
+      const firstBlockedStreamId = 7200;
+      const blockedCount = 80;
+      const written: number[] = [];
+      const scheduler = new PriorityScheduler({
+        write: async (frame) => {
+          written.push(frame.streamId);
+        },
+        onWriteError: (error) => {
+          throw error instanceof Error ? error : new Error(String(error));
+        },
+        initialBulkCredits: 0,
+        now: () => Date.now(),
+      });
+      scheduler.pause();
+      for (let index = 0; index < blockedCount; index += 1) {
+        const streamId = firstBlockedStreamId + index;
+        scheduler.enqueue(messageSource(streamId, QosClass.BULK));
+        scheduler.enqueue(messageSource(streamId, QosClass.INTERACTIVE));
+      }
+      const activeSource = chunkedSource(
+        activeStreamId,
+        QosClass.INTERACTIVE,
+        8,
+      );
+      const activeFrameCount = Math.ceil(
+        activeSource.totalBodyBytes / BULK_CHUNK_SIZE_BYTES,
+      );
+      scheduler.enqueue(activeSource);
+      headSerialSpy.mockClear();
+      scheduler.resume();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(written).toHaveLength(activeFrameCount);
+      expect(written.every((streamId) => streamId === activeStreamId)).toBe(
+        true,
+      );
+      expect(
+        written.some(
+          (streamId) =>
+            streamId >= firstBlockedStreamId &&
+            streamId < firstBlockedStreamId + blockedCount,
+        ),
+      ).toBe(false);
+      expect(headSerialSpy.mock.calls.length).toBeLessThan(
+        blockedCount + activeFrameCount * 3 + 20,
+      );
+      scheduler.stop();
+    } finally {
+      headSerialSpy.mockRestore();
       vi.useRealTimers();
     }
   });

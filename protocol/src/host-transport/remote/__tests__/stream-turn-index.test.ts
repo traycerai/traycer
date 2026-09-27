@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { MuxFrameType, QosClass } from "../../mux";
-import { OutboundChunkSource } from "../../chunking";
+import { describe, expect, it, vi } from "vitest";
+import { MuxFrameType, QosClass, type QosClassValue } from "../../mux";
+import {
+  BULK_CHUNK_SIZE_BYTES,
+  ChunkInterleaveWindow,
+  MAX_ACTIVE_CHUNKED_STREAMS,
+  OutboundChunkSource,
+} from "../../chunking";
 import { removeIndexedItem, StreamTurnIndex } from "../stream-turn-index";
 import type {
   IndexedStreamTurnItem,
@@ -18,6 +23,29 @@ function queued(streamId: number, serial: number): StreamTurnItem {
         qos: QosClass.INTERACTIVE,
         json: { serial },
         binary: null,
+      },
+      () => seq++,
+      false,
+    ),
+  };
+}
+
+function queuedChunked(
+  streamId: number,
+  serial: number,
+  totalBodyBytes: number,
+  qos: QosClassValue,
+): StreamTurnItem {
+  let seq = 0;
+  return {
+    serial,
+    source: new OutboundChunkSource(
+      {
+        type: MuxFrameType.STREAM_FRAME,
+        streamId,
+        qos,
+        json: null,
+        binary: new Uint8Array(totalBodyBytes - 5),
       },
       () => seq++,
       false,
@@ -125,5 +153,184 @@ describe("StreamTurnIndex", () => {
       throw new Error("expected the stream group to remain queued");
     }
     expect(Reflect.get(group, "entries")).toEqual([undefined, second]);
+  });
+
+  it("keeps window-deferred heads discoverable and reactivates them after a release", () => {
+    const index = new StreamTurnIndex<StreamTurnItem>();
+    const window = new ChunkInterleaveWindow();
+    const active = Array.from({ length: MAX_ACTIVE_CHUNKED_STREAMS }, (_, i) =>
+      queuedChunked(
+        100 + i,
+        100 + i,
+        BULK_CHUNK_SIZE_BYTES + 5,
+        QosClass.INTERACTIVE,
+      ),
+    );
+    for (const item of active) {
+      expect(item.source.chunked).toBe(true);
+      expect(window.canPull(item.source)).toBe(true);
+      item.source.nextFrame();
+      window.notePulled(item.source);
+    }
+    const parked = queuedChunked(
+      500,
+      500,
+      BULK_CHUNK_SIZE_BYTES + 5,
+      QosClass.INTERACTIVE,
+    );
+    const dropped = queuedChunked(
+      501,
+      501,
+      BULK_CHUNK_SIZE_BYTES + 5,
+      QosClass.INTERACTIVE,
+    );
+    index.enqueue(parked);
+    index.enqueue(dropped);
+    index.deferForWindow(parked);
+    index.deferForWindow(dropped);
+
+    expect(Array.from(index.heads())).toEqual([]);
+    expect(index.headSerial(parked.source.streamId)).toBe(parked.serial);
+    index.dropStream(dropped.source.streamId);
+    expect(index.headSerial(dropped.source.streamId)).toBeUndefined();
+
+    index.reconsiderWindow(window);
+    expect(Array.from(index.heads())).toEqual([]);
+    window.forgetStream(active[0].source.streamId);
+    index.reconsiderWindow(window);
+    expect(Array.from(index.heads())).toEqual([parked]);
+  });
+
+  it("promotes the oldest fitting deferred head after a large waiter leaves only 1 MiB", () => {
+    const index = new StreamTurnIndex<StreamTurnItem>();
+    const window = new ChunkInterleaveWindow();
+    vi.spyOn(window, "availableStartSlots").mockReturnValue(
+      MAX_ACTIVE_CHUNKED_STREAMS,
+    );
+    vi.spyOn(window, "availableStartBytes").mockReturnValue(3 * 1024 * 1024);
+    const largeWaiters = Array.from({ length: 16 }, (_, index) =>
+      queuedChunked(
+        700 + index,
+        700 + index,
+        2 * 1024 * 1024,
+        QosClass.INTERACTIVE,
+      ),
+    );
+    const smallWaiter = queuedChunked(
+      800,
+      800,
+      128 * 1024,
+      QosClass.INTERACTIVE,
+    );
+    const waiters = [...largeWaiters, smallWaiter];
+    for (const item of waiters) {
+      expect(item.source.chunked).toBe(true);
+      index.enqueue(item);
+      index.deferForWindow(item);
+    }
+
+    index.reconsiderWindow(window);
+
+    expect(Array.from(index.heads())).toEqual([largeWaiters[0], smallWaiter]);
+    for (const item of largeWaiters.slice(1)) {
+      expect(index.headSerial(item.source.streamId)).toBe(item.serial);
+    }
+  });
+
+  it("waits for every older other-queue head before waking a FIFO successor", () => {
+    const index = new StreamTurnIndex<StreamTurnItem>();
+    const successor = queued(42, 7);
+    index.enqueue(successor);
+    index.deferForOtherQueue(successor);
+
+    expect(Array.from(index.heads())).toEqual([]);
+    expect(index.headSerial(successor.source.streamId)).toBe(successor.serial);
+
+    index.unblockFromOtherQueue(successor.source.streamId, 5);
+    expect(Array.from(index.heads())).toEqual([]);
+    expect(index.headSerial(successor.source.streamId)).toBe(successor.serial);
+
+    index.unblockFromOtherQueue(successor.source.streamId, 6);
+    expect(Array.from(index.heads())).toEqual([]);
+    index.unblockFromOtherQueue(successor.source.streamId, undefined);
+    expect(Array.from(index.heads())).toEqual([successor]);
+  });
+
+  it("re-defers an oversized promoted BULK head and exposes a fitting later head", () => {
+    const index = new StreamTurnIndex<StreamTurnItem>();
+    const window = new ChunkInterleaveWindow();
+    vi.spyOn(window, "availableStartSlots").mockReturnValue(
+      MAX_ACTIVE_CHUNKED_STREAMS - 1,
+    );
+    vi.spyOn(window, "availableStartBytes").mockReturnValue(1024 * 1024);
+    const large = queuedChunked(900, 900, 2 * 1024 * 1024, QosClass.BULK);
+    const small = queuedChunked(901, 901, 128 * 1024, QosClass.BULK);
+    index.enqueue(large);
+    index.deferForOtherQueue(large);
+    index.enqueue(small);
+    index.deferForWindow(small);
+
+    index.unblockFromOtherQueue(large.source.streamId, undefined);
+    index.reconsiderWindow(window);
+
+    expect(Array.from(index.heads())).toEqual([small]);
+    expect(index.headSerial(large.source.streamId)).toBe(large.serial);
+  });
+
+  it("reselects the oldest fitting waiter when an unsent promotion loses its budget", () => {
+    const index = new StreamTurnIndex<StreamTurnItem>();
+    const window = new ChunkInterleaveWindow();
+    vi.spyOn(window, "availableStartSlots")
+      .mockReturnValueOnce(2)
+      .mockReturnValue(1);
+    vi.spyOn(window, "availableStartBytes")
+      .mockReturnValueOnce(256 * 1024)
+      .mockReturnValue(1024 * 1024);
+    const large = queuedChunked(1000, 1000, 1024 * 1024, QosClass.INTERACTIVE);
+    const small1 = queuedChunked(1001, 1001, 128 * 1024, QosClass.INTERACTIVE);
+    const small2 = queuedChunked(1002, 1002, 128 * 1024, QosClass.INTERACTIVE);
+    for (const item of [large, small1, small2]) {
+      index.enqueue(item);
+      index.deferForWindow(item);
+    }
+
+    index.reconsiderWindow(window);
+    expect(Array.from(index.heads())).toEqual([small1, small2]);
+
+    // No promoted source was pulled. A changed budget must return those stale
+    // promotions to the order index before selecting the oldest fitting head.
+    index.reconsiderWindow(window);
+
+    expect(Array.from(index.heads())).toEqual([large]);
+    expect(index.headSerial(small1.source.streamId)).toBe(small1.serial);
+    expect(index.headSerial(small2.source.streamId)).toBe(small2.serial);
+  });
+
+  it("reselects an older waiter after two small promotions were left unsent", () => {
+    const index = new StreamTurnIndex<StreamTurnItem>();
+    const window = new ChunkInterleaveWindow();
+    vi.spyOn(window, "availableStartSlots")
+      .mockReturnValueOnce(2)
+      .mockReturnValue(1);
+    vi.spyOn(window, "availableStartBytes")
+      .mockReturnValueOnce(256 * 1024)
+      .mockReturnValue(1024 * 1024);
+    const large = queuedChunked(1100, 1100, 1024 * 1024, QosClass.INTERACTIVE);
+    const small1 = queuedChunked(1101, 1101, 128 * 1024, QosClass.INTERACTIVE);
+    const small2 = queuedChunked(1102, 1102, 128 * 1024, QosClass.INTERACTIVE);
+    for (const item of [large, small1, small2]) {
+      index.enqueue(item);
+      index.deferForWindow(item);
+    }
+
+    index.reconsiderWindow(window);
+    expect(Array.from(index.heads())).toEqual([small1, small2]);
+
+    // The small heads were promoted while paced and remain unsent. A release
+    // opens a 1 MiB window, where the older large source now fits first.
+    index.reconsiderWindow(window);
+    expect(Array.from(index.heads())).toEqual([large]);
+    expect(index.headSerial(small1.source.streamId)).toBe(small1.serial);
+    expect(index.headSerial(small2.source.streamId)).toBe(small2.serial);
   });
 });
