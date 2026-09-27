@@ -19,7 +19,10 @@
  */
 import { describe, expect, it } from "vitest";
 import type { RuntimeEnvironment } from "@traycer-clients/shared/replica-runtime";
-import { ensureProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
+import {
+  ensureProcessMemoryRuntime,
+  subscribeProcessMemoryProvisionalCharges,
+} from "@/stores/replica-memory/process-memory-accountant";
 import { HOT_DOCS_SOFT_LIMIT_BYTES } from "@/stores/replica-memory/budget-limits";
 import { createProcessBackedAccountingPort } from "../process-backed-accounting-port";
 import type { EpicRuntimeAccountingSource } from "../epic-runtime-accounting-port";
@@ -95,6 +98,46 @@ describe("two ports for the same (hostId, epicId)", () => {
 
     incoming.unregisterBooks();
     expect(memory.hotDocs.docsResident()).toBe(baseline);
+  });
+});
+
+describe("provisional pressure and late reports", () => {
+  it("wakes the global budget for aggregate hot-doc growth and cannot restore retired holders", () => {
+    const environment = environmentStub();
+    const memory = ensureProcessMemoryRuntime(environment);
+    const baseline = memory.accountant.snapshot().totalChargedBytes;
+    const port = createProcessBackedAccountingPort({
+      hostId: "host-provisional",
+      epicId: "epic-provisional",
+      environment,
+    });
+    port.registerBooks(sourceWithRooms(["room-a", "room-b"]));
+    let wakes = 0;
+    const unsubscribe = subscribeProcessMemoryProvisionalCharges(() => {
+      wakes += 1;
+    });
+    try {
+      // Each room remains below a per-room settlement threshold, but their
+      // combined provisional bytes cross a process allowance of 100.
+      port.chargeHotDocProvisional("room-a", 60);
+      port.chargeHotDocProvisional("room-b", 60);
+      expect(wakes).toBe(2);
+      expect(memory.accountant.snapshot().totalChargedBytes - baseline).toBe(
+        120,
+      );
+
+      port.unregisterBooks();
+      expect(memory.accountant.snapshot().totalChargedBytes).toBe(baseline);
+      port.chargeRootProvisional(20);
+      port.chargeHotDocProvisional("room-a", 20);
+      port.settleRootBytes(20);
+      port.settleHotDocBytes("room-a", 20);
+      expect(wakes).toBe(2);
+      expect(memory.accountant.snapshot().totalChargedBytes).toBe(baseline);
+    } finally {
+      unsubscribe();
+      port.unregisterBooks();
+    }
   });
 });
 

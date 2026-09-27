@@ -51,6 +51,7 @@ import { createManagedDataByteBudget } from "@/stores/replica-memory/managed-dat
 import {
   readProcessMemoryRuntime,
   subscribeProcessMemorySettlements,
+  subscribeProcessMemoryProvisionalCharges,
 } from "@/stores/replica-memory/process-memory-accountant";
 
 const registry = new ChatSessionRegistry({
@@ -92,6 +93,11 @@ function scheduleByteGraceWake(): void {
 subscribeProcessMemorySettlements(() => {
   managedDataByteBudget.noteSettlement();
   scheduleByteGraceWake();
+});
+subscribeProcessMemoryProvisionalCharges(() => {
+  // The budget coalesces a burst into one microtask. Grace eligibility did
+  // not change, so avoid scanning task sessions on every hot-doc edit.
+  managedDataByteBudget.noteSettlement();
 });
 registry.subscribe(() => managedDataByteBudget.noteEligibilityChange());
 getOpenEpicRegistry().subscribe(() => {

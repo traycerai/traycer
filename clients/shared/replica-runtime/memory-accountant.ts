@@ -197,6 +197,9 @@ export interface MemoryAccountant {
   /** Observe completed holder measurements and releases. */
   subscribeSettlements(listener: () => void): () => void;
 
+  /** Observe cheap provisional growth without reconciling on the edit path. */
+  subscribeProvisionalCharges(listener: () => void): () => void;
+
   /**
    * Charge an estimate. Cheap, called on the hot path, superseded by
    * {@link settle}.
@@ -385,6 +388,7 @@ export function createMemoryAccountant(
 
   const planes = new Map<BudgetPlaneId, PlaneState>();
   const settlementListeners = new Set<() => void>();
+  const provisionalChargeListeners = new Set<() => void>();
 
   const snapshot = (): AccountantSnapshot => {
     const usages = [...planes.values()].map(usageOf);
@@ -402,6 +406,11 @@ export function createMemoryAccountant(
     subscribeSettlements(listener): () => void {
       settlementListeners.add(listener);
       return () => settlementListeners.delete(listener);
+    },
+
+    subscribeProvisionalCharges(listener): () => void {
+      provisionalChargeListeners.add(listener);
+      return () => provisionalChargeListeners.delete(listener);
     },
 
     register(spec: PlaneBudgetSpec): BudgetRegistration {
@@ -454,6 +463,7 @@ export function createMemoryAccountant(
         held.provisional += bytes;
       }
       plane.protectedLatch = false;
+      for (const listener of provisionalChargeListeners) listener();
     },
 
     settle(

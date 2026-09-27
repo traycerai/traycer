@@ -149,6 +149,7 @@ export function createProcessBackedAccountingPort(
     // the plane on every keystroke-driven write.
 
     settleRootBytes(bytes): void {
+      if (isRetired()) return;
       memory.epicReplicas.settleRoot(
         memory.accountant,
         epicRootHolderId(hostId, epicId, runtimeToken),
@@ -158,6 +159,7 @@ export function createProcessBackedAccountingPort(
     },
 
     chargeRootProvisional(bytes): void {
+      if (isRetired()) return;
       memory.accountant.chargeProvisional(
         BUDGET_PLANE_IDS.epicReplicas,
         epicRootHolderId(hostId, epicId, runtimeToken),
@@ -166,6 +168,7 @@ export function createProcessBackedAccountingPort(
     },
 
     settleReplicaDataBytes(rawBytes, estimatedHeapBytes): void {
+      if (isRetired()) return;
       memory.epicReplicas.settleReplicaData(memory.accountant, {
         bookKey,
         holderId: epicReplicaDataHolderId(hostId, epicId, runtimeToken),
@@ -191,6 +194,7 @@ export function createProcessBackedAccountingPort(
     },
 
     settleColdRoomBytes(artifactRoomId, bytes): void {
+      if (isRetired()) return;
       memory.epicReplicas.settleColdRoom(
         memory.accountant,
         bookKey,
@@ -201,6 +205,7 @@ export function createProcessBackedAccountingPort(
     },
 
     settleCommandOverlayBytes(bytes): void {
+      if (isRetired()) return;
       memory.epicReplicas.settleCommandOverlay(
         memory.accountant,
         epicCommandOverlayHolderId(hostId, epicId, runtimeToken),
@@ -209,6 +214,7 @@ export function createProcessBackedAccountingPort(
     },
 
     settleHotDocBytes(artifactRoomId, bytes): void {
+      if (isRetired()) return;
       chargedHotRooms.add(artifactRoomId);
       memory.hotDocs.settle(
         memory.accountant,
@@ -219,6 +225,7 @@ export function createProcessBackedAccountingPort(
     },
 
     chargeHotDocProvisional(artifactRoomId, bytes): void {
+      if (isRetired()) return;
       chargedHotRooms.add(artifactRoomId);
       memory.hotDocs.chargeProvisional(
         memory.accountant,
@@ -228,6 +235,7 @@ export function createProcessBackedAccountingPort(
     },
 
     releaseHotDoc(artifactRoomId): void {
+      if (isRetired()) return;
       chargedHotRooms.delete(artifactRoomId);
       memory.hotDocs.release(
         memory.accountant,
@@ -254,6 +262,7 @@ export function createProcessBackedAccountingPort(
     },
 
     noteHotDocEvictionDeferred(): void {
+      if (isRetired()) return;
       memory.accountant.noteEvictionDeferred(BUDGET_PLANE_IDS.hotDocs);
     },
   };

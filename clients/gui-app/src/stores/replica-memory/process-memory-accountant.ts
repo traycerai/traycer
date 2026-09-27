@@ -62,6 +62,9 @@ export function createProcessMemoryRuntime(
   accountant.subscribeSettlements(() => {
     for (const listener of settlementListeners) listener();
   });
+  accountant.subscribeProvisionalCharges(() => {
+    for (const listener of provisionalChargeListeners) listener();
+  });
 
   accountant.register({
     planeId: BUDGET_PLANE_IDS.chatWindows,
@@ -100,6 +103,7 @@ export function createProcessMemoryRuntime(
 
 let processRuntime: ProcessMemoryRuntime | null = null;
 const settlementListeners = new Set<() => void>();
+const provisionalChargeListeners = new Set<() => void>();
 
 /** The byte budget observes completed measurements across all planes. */
 export function subscribeProcessMemorySettlements(
@@ -108,6 +112,16 @@ export function subscribeProcessMemorySettlements(
   settlementListeners.add(listener);
   return () => {
     settlementListeners.delete(listener);
+  };
+}
+
+/** Provisional growth wakes the global byte budget without a hot-path encode. */
+export function subscribeProcessMemoryProvisionalCharges(
+  listener: () => void,
+): () => void {
+  provisionalChargeListeners.add(listener);
+  return () => {
+    provisionalChargeListeners.delete(listener);
   };
 }
 

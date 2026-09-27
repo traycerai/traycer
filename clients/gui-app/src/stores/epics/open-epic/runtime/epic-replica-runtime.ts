@@ -555,11 +555,13 @@ export function createEpicReplicaRuntime(
   };
   const settleRoot = (): void => {
     cancelRootSettle();
+    if (disposed) return;
     rootSettledBytes = Y.encodeStateAsUpdate(records.doc).byteLength;
     accounting.settleRootBytes(rootSettledBytes);
   };
   const resetRootCharge = (): void => {
     cancelRootSettle();
+    if (disposed) return;
     rootSettledBytes = 0;
     accounting.settleRootBytes(0);
   };
@@ -586,17 +588,23 @@ export function createEpicReplicaRuntime(
       metadataOverlaySize.estimatedHeapBytes,
   });
   const settleReplicaData = (): void => {
+    if (disposed) return;
     const size = replicaDataSize();
     accounting.settleReplicaDataBytes(size.rawBytes, size.estimatedHeapBytes);
   };
   const budgetSink: HotDocBudgetSink = {
-    settle: (artifactRoomId, bytes) =>
-      accounting.settleHotDocBytes(artifactRoomId, bytes),
-    settleCold: (artifactRoomId, bytes) =>
-      accounting.settleColdRoomBytes(artifactRoomId, bytes),
-    chargeProvisional: (artifactRoomId, bytes) =>
-      accounting.chargeHotDocProvisional(artifactRoomId, bytes),
-    release: (artifactRoomId) => accounting.releaseHotDoc(artifactRoomId),
+    settle: (artifactRoomId, bytes) => {
+      if (!disposed) accounting.settleHotDocBytes(artifactRoomId, bytes);
+    },
+    settleCold: (artifactRoomId, bytes) => {
+      if (!disposed) accounting.settleColdRoomBytes(artifactRoomId, bytes);
+    },
+    chargeProvisional: (artifactRoomId, bytes) => {
+      if (!disposed) accounting.chargeHotDocProvisional(artifactRoomId, bytes);
+    },
+    release: (artifactRoomId) => {
+      if (!disposed) accounting.releaseHotDoc(artifactRoomId);
+    },
   };
 
   // Explicit type arguments on every sink, and typed constants rather than
@@ -740,6 +748,7 @@ export function createEpicReplicaRuntime(
 
   const records = createEpicRecordsReplica({
     onRootDocChanged: (updateBytes) => {
+      if (disposed) return;
       accounting.chargeRootProvisional(updateBytes);
       // Each edit adds only its received update. A whole-doc encode is paid
       // after a quiet burst or at most once per two seconds under a continuous
