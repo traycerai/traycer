@@ -46,7 +46,8 @@ describe("poll census — exactly one 60s registry poller in production", () => 
   it("HOST_DIRECTORY_REFRESH_POLL_MS is the sole surviving 60s registry poller", () => {
     const source = readSource("lib/host/host-directory-service.ts");
     expect(source).toMatch(/const HOST_DIRECTORY_REFRESH_POLL_MS\s*=\s*60_000/);
-    expect(source).toMatch(/window\.setInterval\(/);
+    expect(source).toMatch(/startVisibleInterval\(/);
+    expect(source).not.toMatch(/window\.setInterval\(/);
   });
 
   it("use-registered-hosts-query.ts declares no poll constant and passes no interval", () => {
