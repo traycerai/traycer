@@ -178,6 +178,7 @@ describe("useTaskProfileRateLimitSwitch", () => {
     );
 
     expect(batch.chatIds).toEqual([
+      CURRENT_CHAT_ID,
       sameHostMatch.id,
       sameHostDifferentModel.id,
     ]);

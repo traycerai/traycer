@@ -114,18 +114,24 @@ export function useTaskProfileRateLimitSwitch(input: {
       : epicHandle.store.getState().chatRecords,
   );
 
-  const candidateChatIds = useMemo<ReadonlyArray<string>>(() => {
+  const hostChatIds = useMemo<ReadonlyArray<string>>(() => {
     if (!enabled || chatRecords === null || epicId === null) return [];
-    return chatRecords.allIds.filter((candidateChatId) => {
-      const chat = chatRecords.byId[candidateChatId];
-      return chat.hostId === tabHostId && candidateChatId !== chatId;
-    });
-  }, [chatId, chatRecords, enabled, epicId, tabHostId]);
+    return chatRecords.allIds
+      .filter((candidateChatId) => {
+        const chat = chatRecords.byId[candidateChatId];
+        return chat.hostId === tabHostId;
+      })
+      .toSorted((left, right) => left.localeCompare(right));
+  }, [chatRecords, enabled, epicId, tabHostId]);
+  const candidateChatIds = useMemo(
+    () => hostChatIds.filter((candidateChatId) => candidateChatId !== chatId),
+    [chatId, hostChatIds],
+  );
 
   const settingsQueries = useChatRunSettingsBatch({
     client: tabHostClient,
     epicId: epicId ?? "",
-    chatIds: candidateChatIds,
+    chatIds: hostChatIds,
     enabled: enabled && epicId !== null && selectedModelSlug !== null,
   });
 
@@ -133,7 +139,8 @@ export function useTaskProfileRateLimitSwitch(input: {
     if (!enabled || epicId === null) {
       return NO_AFFECTED;
     }
-    return candidateChatIds.flatMap((candidateChatId, index) => {
+    return candidateChatIds.flatMap((candidateChatId) => {
+      const index = hostChatIds.indexOf(candidateChatId);
       const settings = settingsQueries[index]?.data?.settings ?? null;
       if (
         settings === null ||
@@ -151,6 +158,7 @@ export function useTaskProfileRateLimitSwitch(input: {
     enabled,
     epicId,
     candidateChatIds,
+    hostChatIds,
     settingsQueries,
     harnessId,
     profileId,

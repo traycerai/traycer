@@ -129,7 +129,12 @@ export function useChatRunSettingsBatch(args: {
     "epic.getChatRunSettingsBatch",
   );
   const canQuery = args.enabled && viewerUserId.length > 0;
+  // `null` is "handshake not yet known". Firing N singles in that window, then
+  // switching to the batch once the manifest lands, is a launch burst the
+  // batch method exists to avoid. Wait. `false` is a completed handshake
+  // without the method: those hosts stay on singles.
   const useBatch = batchSupported === true;
+  const useSingles = batchSupported === false;
   const batchRequests = useMemo(
     () =>
       chunkChatIds(args.chatIds, GET_CHAT_RUN_SETTINGS_BATCH_MAX_IDS).map(
@@ -170,7 +175,7 @@ export function useChatRunSettingsBatch(args: {
     client: args.client,
     requests: singleRequests,
     options: {
-      enabled: canQuery && !useBatch,
+      enabled: canQuery && useSingles,
       ...RUN_SETTINGS_QUERY_OPTIONS,
     },
   });

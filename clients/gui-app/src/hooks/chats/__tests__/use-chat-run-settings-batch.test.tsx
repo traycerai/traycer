@@ -157,6 +157,22 @@ describe("useChatRunSettingsBatch", () => {
     expect(fixture.counts.batch).toBe(0);
   });
 
+  it("issues zero RPCs until the handshake says whether the batch method exists", () => {
+    const fixture = createFixture();
+    renderHook(
+      () =>
+        useChatRunSettingsBatch({
+          client: fixture.client,
+          epicId: "epic-1",
+          chatIds: ["chat-a", "chat-b"],
+          enabled: true,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    expect(fixture.counts.batch).toBe(0);
+    expect(fixture.counts.single).toBe(0);
+  });
+
   it("issues zero RPCs while disabled", () => {
     recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [
       "epic.getChatRunSettingsBatch",
