@@ -1,12 +1,30 @@
 import { describe, expect, it } from "vitest";
 import {
   arrangementChangeLine,
+  sessionChangeLines,
   styleChangeLines,
 } from "@/components/layout-editor/inspector/layout-change-lines";
-import { layoutChanges, type LayoutChange } from "@/lib/layout/layout-diff";
-import { effectiveLayoutValues } from "@/lib/layout/layout-presets";
+import { orderGroupListLabel } from "@/components/layout-editor/regions/surface-groups";
+import {
+  DEFAULT_ARRANGEMENT,
+  DEFAULT_DOCK_ORDER,
+  DEFAULT_TOOLBAR_LEFT,
+  USAGE_PROVIDER_IDS,
+  type LayoutArrangement,
+} from "@/lib/layout/layout-arrangement";
+import {
+  layoutChanges,
+  revertSession,
+  revertSessionLine,
+  type LayoutChange,
+} from "@/lib/layout/layout-diff";
+import {
+  effectiveLayoutValues,
+  PRESET_LABELS,
+} from "@/lib/layout/layout-presets";
 import type { LayoutOverrides } from "@/lib/layout/layout-values";
 import type { LayoutSnapshot } from "@/lib/layout/layout-snapshot";
+import { providerDisplayName } from "@/lib/provider-ordering";
 import { DEFAULT_LAYOUT_SNAPSHOT } from "@/stores/layout/layout-store";
 
 /**
@@ -115,5 +133,563 @@ describe("arrangementChangeLine - Reading width", () => {
     expect(line.label).toBe("Reading width");
     expect(line.current).toBe("Wide");
     expect(line.baseline).toBe("Default: Comfortable");
+  });
+});
+
+function sessionSnapshot(
+  basePreset: LayoutSnapshot["basePreset"],
+  overrides: LayoutOverrides,
+  arrangement: LayoutArrangement,
+): LayoutSnapshot {
+  return { basePreset, overrides, arrangement };
+}
+
+/**
+ * `sessionChangeLines` (session changes row): what an editor session has
+ * changed since it opened, measured against the ENTRY snapshot rather than
+ * the last-applied preset - so a layout already modified before the session
+ * began reads as no changes at all, unlike the preset-based View changes list.
+ */
+describe("sessionChangeLines", () => {
+  describe("identical entry and current", () => {
+    it("reads no changes in either list", () => {
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      const current = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+
+      const lines = sessionChangeLines(entry, current);
+
+      expect(lines.styles).toEqual([]);
+      expect(lines.arrangement).toEqual([]);
+    });
+  });
+
+  describe("a display change", () => {
+    it("names the region and words Shown/Hidden, with a value revert", () => {
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      const current = sessionSnapshot(
+        "default",
+        { minimap: { shown: "hidden" } },
+        DEFAULT_ARRANGEMENT,
+      );
+
+      const lines = sessionChangeLines(entry, current);
+
+      expect(lines.styles).toEqual([
+        {
+          key: "minimap.display",
+          label: "Minimap",
+          before: "Shown",
+          after: "Hidden",
+          revert: {
+            kind: "changes",
+            changes: [
+              {
+                kind: "value",
+                region: "minimap",
+                key: "shown",
+                current: "hidden",
+                baseline: "shown",
+              },
+            ],
+          },
+        },
+      ]);
+    });
+
+    it("folds a region's shown AND size both changing into one line", () => {
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      const current = sessionSnapshot(
+        "default",
+        { runningAgents: { shown: "hidden", size: "chip" } },
+        DEFAULT_ARRANGEMENT,
+      );
+
+      const lines = sessionChangeLines(entry, current);
+
+      expect(lines.styles).toHaveLength(1);
+      expect(lines.styles[0].key).toBe("runningAgents.display");
+      expect(lines.styles[0].label).toBe("Running agents");
+    });
+  });
+
+  describe("a preset switch", () => {
+    it("puts a Preset line first, then the values it visibly moved, each with its own revert", () => {
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      const current = sessionSnapshot("compact", {}, DEFAULT_ARRANGEMENT);
+
+      const lines = sessionChangeLines(entry, current);
+
+      expect(lines.styles[0]).toEqual({
+        key: "preset",
+        label: "Preset",
+        before: PRESET_LABELS.default,
+        after: PRESET_LABELS.compact,
+        revert: { kind: "preset" },
+      });
+
+      // Timestamps and Microphone are both Shown under Default and Hidden
+      // under Compact - values the switch visibly moved.
+      expect(lines.styles).toContainEqual({
+        key: "timestamps.display",
+        label: "Timestamps",
+        before: "Shown",
+        after: "Hidden",
+        revert: {
+          kind: "changes",
+          changes: [
+            {
+              kind: "value",
+              region: "timestamps",
+              key: "shown",
+              current: "hidden",
+              baseline: "shown",
+            },
+          ],
+        },
+      });
+      expect(lines.styles).toContainEqual({
+        key: "mic.display",
+        label: "Microphone",
+        before: "Shown",
+        after: "Hidden",
+        revert: {
+          kind: "changes",
+          changes: [
+            {
+              kind: "value",
+              region: "mic",
+              key: "shown",
+              current: "hidden",
+              baseline: "shown",
+            },
+          ],
+        },
+      });
+
+      // Minimap and Home tab read identically under both presets, so a
+      // switch between them names no line for either.
+      expect(lines.styles.some((line) => line.label === "Minimap")).toBe(false);
+      expect(lines.styles.some((line) => line.label === "Home tab")).toBe(
+        false,
+      );
+    });
+  });
+
+  describe("an entry already modified against its preset", () => {
+    it("reads no changes when the session itself changed nothing (the point of this list)", () => {
+      const overrides: LayoutOverrides = { mic: { shown: "hidden" } };
+      const entry = sessionSnapshot("default", overrides, DEFAULT_ARRANGEMENT);
+      const current = sessionSnapshot(
+        "default",
+        overrides,
+        DEFAULT_ARRANGEMENT,
+      );
+
+      const lines = sessionChangeLines(entry, current);
+
+      expect(lines.styles).toEqual([]);
+      expect(lines.arrangement).toEqual([]);
+    });
+  });
+
+  describe("an arrangement field change", () => {
+    it("names the field and words its before/after, with a field revert", () => {
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      const current = sessionSnapshot(
+        "default",
+        {},
+        {
+          ...DEFAULT_ARRANGEMENT,
+          sidebarSide: "right",
+        },
+      );
+
+      const lines = sessionChangeLines(entry, current);
+
+      expect(lines.arrangement).toContainEqual({
+        key: "sidebarSide",
+        label: "Sidebar side",
+        before: "Left",
+        after: "Right",
+        revert: {
+          kind: "changes",
+          changes: [
+            {
+              kind: "field",
+              field: "sidebarSide",
+              current: "right",
+              baseline: "left",
+            },
+          ],
+        },
+      });
+    });
+  });
+
+  describe("a reordered order group", () => {
+    it("reads before: null, after: Reordered, with an order revert", () => {
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      const current = sessionSnapshot(
+        "default",
+        {},
+        {
+          ...DEFAULT_ARRANGEMENT,
+          dock: [...DEFAULT_DOCK_ORDER].reverse(),
+        },
+      );
+
+      const lines = sessionChangeLines(entry, current);
+
+      expect(lines.arrangement).toContainEqual({
+        key: "order.dock",
+        label: `${orderGroupListLabel("dock")} order`,
+        before: null,
+        after: "Reordered",
+        revert: {
+          kind: "changes",
+          changes: [{ kind: "order", group: "dock" }],
+        },
+      });
+    });
+  });
+
+  describe("a provider hidden", () => {
+    it("reads Shown/Hidden, Automatic limits, with a provider revert", () => {
+      const [providerId] = USAGE_PROVIDER_IDS;
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      const current = sessionSnapshot(
+        "default",
+        {},
+        {
+          ...DEFAULT_ARRANGEMENT,
+          hiddenProviders: [providerId],
+        },
+      );
+
+      const lines = sessionChangeLines(entry, current);
+
+      expect(lines.arrangement).toContainEqual({
+        key: `provider.${providerId}`,
+        label: providerDisplayName(providerId),
+        before: "Shown, Automatic limits",
+        after: "Hidden, Automatic limits",
+        revert: {
+          kind: "changes",
+          changes: [{ kind: "provider", providerId }],
+        },
+      });
+    });
+  });
+
+  describe("a change made and then reverted to the entry value", () => {
+    it("reads no changes, even though `current` is a different object", () => {
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      const changed: LayoutArrangement = {
+        ...DEFAULT_ARRANGEMENT,
+        sidebarSide: "right",
+      };
+      const reverted: LayoutArrangement = {
+        ...changed,
+        sidebarSide: DEFAULT_ARRANGEMENT.sidebarSide,
+      };
+      const current = sessionSnapshot("default", {}, reverted);
+
+      const lines = sessionChangeLines(entry, current);
+
+      expect(lines.styles).toEqual([]);
+      expect(lines.arrangement).toEqual([]);
+    });
+  });
+
+  describe("dividerSeq alone differing", () => {
+    it("reads no changes: it is bookkeeping, not a setting", () => {
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      const current = sessionSnapshot(
+        "default",
+        {},
+        {
+          ...DEFAULT_ARRANGEMENT,
+          dividerSeq: DEFAULT_ARRANGEMENT.dividerSeq + 5,
+        },
+      );
+
+      const lines = sessionChangeLines(entry, current);
+
+      expect(lines.styles).toEqual([]);
+      expect(lines.arrangement).toEqual([]);
+    });
+  });
+});
+
+/**
+ * `revertSessionLine` / `revertSession`: what one line's revert, or the
+ * level's "Revert all", puts back - exactly that line (or everything), and
+ * nothing else the session also changed.
+ */
+describe("revertSessionLine", () => {
+  function styleKeys(snapshot: LayoutSnapshot, entry: LayoutSnapshot) {
+    return sessionChangeLines(entry, snapshot).styles.map((line) => line.key);
+  }
+
+  function arrangementKeys(snapshot: LayoutSnapshot, entry: LayoutSnapshot) {
+    return sessionChangeLines(entry, snapshot).arrangement.map(
+      (line) => line.key,
+    );
+  }
+
+  describe("a value line, including a display line with shown AND size", () => {
+    it("reverts only that region's line, leaving an unrelated one in place", () => {
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      const current = sessionSnapshot(
+        "default",
+        {
+          runningAgents: { shown: "hidden", size: "chip" },
+          mic: { shown: "hidden" },
+        },
+        DEFAULT_ARRANGEMENT,
+      );
+      const lines = sessionChangeLines(entry, current);
+      const line = lines.styles.find(
+        (entry) => entry.key === "runningAgents.display",
+      );
+      if (line === undefined) throw new Error("expected a display line");
+
+      const result = revertSessionLine(current, entry, line.revert);
+
+      expect(result.overrides.runningAgents).toBeUndefined();
+      expect(styleKeys(result, entry)).toEqual(["mic.display"]);
+    });
+  });
+
+  describe("a value line reverted after the preset changed mid-session", () => {
+    it("writes the entry's value as an override against the CURRENT preset, leaving the preset switch and the other moved values in place", () => {
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      // A pure preset switch: Compact's own `timestamps.shown` is "hidden",
+      // which differs from Default's "shown" - the entry's value.
+      const current = sessionSnapshot("compact", {}, DEFAULT_ARRANGEMENT);
+      const lines = sessionChangeLines(entry, current);
+      const line = lines.styles.find(
+        (entry) => entry.key === "timestamps.display",
+      );
+      if (line === undefined) throw new Error("expected a timestamps line");
+
+      const result = revertSessionLine(current, entry, line.revert);
+
+      // Compact's own base ("hidden") differs from the entry's value
+      // ("shown"), so the revert has to WRITE an override rather than merely
+      // dropping one.
+      expect(result.basePreset).toBe("compact");
+      expect(result.overrides.timestamps).toEqual({ shown: "shown" });
+
+      const afterKeys = styleKeys(result, entry);
+      expect(afterKeys).not.toContain("timestamps.display");
+      // The preset switch itself, and the other value it visibly moved,
+      // survive this one line's revert untouched.
+      expect(afterKeys).toContain("preset");
+      expect(afterKeys).toContain("mic.display");
+    });
+  });
+
+  describe("a field line", () => {
+    it("reverts only that field, leaving another field change in place", () => {
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      const current = sessionSnapshot(
+        "default",
+        {},
+        {
+          ...DEFAULT_ARRANGEMENT,
+          sidebarSide: "right",
+          minimapSide: "left",
+        },
+      );
+      const lines = sessionChangeLines(entry, current);
+      const line = lines.arrangement.find(
+        (entry) => entry.key === "sidebarSide",
+      );
+      if (line === undefined) throw new Error("expected a sidebarSide line");
+
+      const result = revertSessionLine(current, entry, line.revert);
+
+      expect(result.arrangement.sidebarSide).toBe(
+        DEFAULT_ARRANGEMENT.sidebarSide,
+      );
+      expect(result.arrangement.minimapSide).toBe("left");
+      expect(arrangementKeys(result, entry)).toEqual(["minimapSide"]);
+    });
+  });
+
+  describe("an order line", () => {
+    it("reverts only that group's order, leaving another group's reorder in place", () => {
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      const current = sessionSnapshot(
+        "default",
+        {},
+        {
+          ...DEFAULT_ARRANGEMENT,
+          dock: [...DEFAULT_DOCK_ORDER].reverse(),
+          toolbarLeft: [...DEFAULT_TOOLBAR_LEFT].reverse(),
+        },
+      );
+      const lines = sessionChangeLines(entry, current);
+      const line = lines.arrangement.find(
+        (entry) => entry.key === "order.dock",
+      );
+      if (line === undefined) throw new Error("expected an order.dock line");
+
+      const result = revertSessionLine(current, entry, line.revert);
+
+      expect(result.arrangement.dock).toEqual(DEFAULT_DOCK_ORDER);
+      expect(result.arrangement.toolbarLeft).toEqual(
+        [...DEFAULT_TOOLBAR_LEFT].reverse(),
+      );
+      expect(arrangementKeys(result, entry)).toEqual(["order.toolbarLeft"]);
+    });
+  });
+
+  describe("a provider line", () => {
+    const [providerA, providerB] = USAGE_PROVIDER_IDS;
+
+    it("reverts a hidden provider without touching another provider's picked limits", () => {
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      const current = sessionSnapshot(
+        "default",
+        {},
+        {
+          ...DEFAULT_ARRANGEMENT,
+          hiddenProviders: [providerA],
+          providerLimits: { [providerB]: { limitKeys: ["custom-key"] } },
+        },
+      );
+      const lines = sessionChangeLines(entry, current);
+      const line = lines.arrangement.find(
+        (entry) => entry.key === `provider.${providerA}`,
+      );
+      if (line === undefined) throw new Error("expected a provider line");
+
+      const result = revertSessionLine(current, entry, line.revert);
+
+      expect(result.arrangement.hiddenProviders).not.toContain(providerA);
+      expect(result.arrangement.providerLimits[providerB]).toEqual({
+        limitKeys: ["custom-key"],
+      });
+      expect(arrangementKeys(result, entry)).toEqual([`provider.${providerB}`]);
+    });
+
+    it("reverts a provider's picked limits without touching another provider's hidden state", () => {
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      const current = sessionSnapshot(
+        "default",
+        {},
+        {
+          ...DEFAULT_ARRANGEMENT,
+          hiddenProviders: [providerA],
+          providerLimits: { [providerB]: { limitKeys: ["custom-key"] } },
+        },
+      );
+      const lines = sessionChangeLines(entry, current);
+      const line = lines.arrangement.find(
+        (entry) => entry.key === `provider.${providerB}`,
+      );
+      if (line === undefined) throw new Error("expected a provider line");
+
+      const result = revertSessionLine(current, entry, line.revert);
+
+      expect(result.arrangement.providerLimits[providerB]).toBeUndefined();
+      expect(result.arrangement.hiddenProviders).toContain(providerA);
+      expect(arrangementKeys(result, entry)).toEqual([`provider.${providerA}`]);
+    });
+  });
+
+  describe("the preset line", () => {
+    it("restores basePreset and overrides, but leaves an arrangement change made afterward in place", () => {
+      const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+      const current = sessionSnapshot(
+        "compact",
+        {},
+        {
+          ...DEFAULT_ARRANGEMENT,
+          sidebarSide: "right",
+        },
+      );
+      const lines = sessionChangeLines(entry, current);
+      const line = lines.styles.find((entry) => entry.key === "preset");
+      if (line === undefined) throw new Error("expected a preset line");
+
+      const result = revertSessionLine(current, entry, line.revert);
+
+      expect(result.basePreset).toBe(entry.basePreset);
+      expect(result.overrides).toEqual(entry.overrides);
+      expect(result.arrangement.sidebarSide).toBe("right");
+
+      expect(styleKeys(result, entry)).toEqual([]);
+      expect(arrangementKeys(result, entry)).toEqual(["sidebarSide"]);
+    });
+  });
+});
+
+describe("revertSession", () => {
+  it("leaves zero lines in either list", () => {
+    const entry = sessionSnapshot("default", {}, DEFAULT_ARRANGEMENT);
+    const current = sessionSnapshot(
+      "compact",
+      {},
+      {
+        ...DEFAULT_ARRANGEMENT,
+        sidebarSide: "right",
+        hiddenProviders: [USAGE_PROVIDER_IDS[0]],
+      },
+    );
+
+    const result = revertSession(current, entry);
+    const lines = sessionChangeLines(entry, result);
+
+    expect(lines.styles).toEqual([]);
+    expect(lines.arrangement).toEqual([]);
+  });
+
+  it("keeps dividerSeq at max(entry, current) when the session raised it", () => {
+    const entry = sessionSnapshot(
+      "default",
+      {},
+      {
+        ...DEFAULT_ARRANGEMENT,
+        dividerSeq: 3,
+      },
+    );
+    const current = sessionSnapshot(
+      "default",
+      {},
+      {
+        ...DEFAULT_ARRANGEMENT,
+        dividerSeq: 9,
+      },
+    );
+
+    const result = revertSession(current, entry);
+
+    expect(result.arrangement.dividerSeq).toBe(9);
+  });
+
+  it("keeps dividerSeq at max(entry, current) when the entry's was already higher", () => {
+    const entry = sessionSnapshot(
+      "default",
+      {},
+      {
+        ...DEFAULT_ARRANGEMENT,
+        dividerSeq: 9,
+      },
+    );
+    const current = sessionSnapshot(
+      "default",
+      {},
+      {
+        ...DEFAULT_ARRANGEMENT,
+        dividerSeq: 3,
+      },
+    );
+
+    const result = revertSession(current, entry);
+
+    expect(result.arrangement.dividerSeq).toBe(9);
   });
 });

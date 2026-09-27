@@ -20,6 +20,8 @@ import {
   LayoutAreaLevel,
 } from "@/components/layout-editor/inspector/layout-form";
 import { LayoutFormHostContext } from "@/components/layout-editor/inspector/layout-form-host";
+import { SessionReviewLevel } from "@/components/layout-editor/inspector/session-changes";
+import type { SurfaceGroupId } from "@/components/layout-editor/regions/region-grammar";
 import { SurfacePlacementBar } from "@/components/layout-editor/surface-placement-bar";
 import { TooltipsSuppressedProvider } from "@/components/ui/tooltip-wrapper";
 import {
@@ -194,16 +196,35 @@ export function LayoutEditor(props: LayoutEditorProps): ReactNode {
 }
 
 /**
- * Which of the form's two levels the inspector shows: All settings, or the
- * area the editor store has open (`openArea`, or a canvas selection).
+ * Which level the inspector shows: All settings, the area the editor store
+ * has open (`openArea`, or a canvas selection), or the session's change list
+ * over either.
  *
  * Separate from the root so that none of it - least of all the notification
  * feed the relay row reads - is subscribed to while the editor is closed.
  */
 function InspectorBody(): ReactNode {
   const area = useLayoutEditorStore((state) => state.area);
+  const reviewing = useLayoutEditorStore((state) => state.reviewingSession);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [leftArea, setLeftArea] = useState(area);
+  const reviewedRef = useRef(reviewing);
+
+  // Back from the session's change list, focus lands on the Review that
+  // opened it, which comes back as the list goes. Only when focus went down
+  // with the list: leaving it for an area mounts that level's back row, which
+  // has already taken focus by the time this runs.
+  useEffect(() => {
+    const left = reviewedRef.current && !reviewing;
+    reviewedRef.current = reviewing;
+    if (!left) return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    rootRef.current
+      ?.closest("[data-layout-inspector-shell]")
+      ?.querySelector<HTMLElement>("[data-session-review-trigger]")
+      ?.focus();
+  }, [reviewing]);
 
   // Back at All settings, focus lands on the area row the user left, so the
   // keyboard is where the eye is. Tracked during render (the previous area is
@@ -219,16 +240,22 @@ function InspectorBody(): ReactNode {
   return (
     <InspectorShell onExit={closeLayoutEditor}>
       <div ref={rootRef}>
-        {area === null ? (
-          <LayoutAllSettings />
-        ) : (
-          // Keyed on the area, so arriving at one re-homes focus onto its back
-          // row rather than leaving it on the row that opened it.
-          <LayoutAreaLevel key={area} area={area} />
-        )}
+        <InspectorLevel reviewing={reviewing} area={area} />
       </div>
     </InspectorShell>
   );
+}
+
+function InspectorLevel(props: {
+  readonly reviewing: boolean;
+  readonly area: SurfaceGroupId | null;
+}): ReactNode {
+  const { reviewing, area } = props;
+  if (reviewing) return <SessionReviewLevel />;
+  if (area === null) return <LayoutAllSettings />;
+  // Keyed on the area, so arriving at one re-homes focus onto its back row
+  // rather than leaving it on the row that opened it.
+  return <LayoutAreaLevel key={area} area={area} />;
 }
 
 /**

@@ -13,17 +13,27 @@ import {
   type AnyGrammarRow,
 } from "@/components/layout-editor/regions/region-facts";
 import { orderGroupListLabel } from "@/components/layout-editor/regions/surface-groups";
-import type {
-  ArrangementChange,
-  ArrangementField,
-  LayoutChange,
-  LayoutValueLeaf,
-  StyleChange,
+import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
+import type { LayoutArrangement } from "@/lib/layout/layout-arrangement";
+import {
+  providerLimitKeys,
+  sessionLayoutChanges,
+  type ArrangementChange,
+  type ArrangementField,
+  type LayoutChange,
+  type LayoutValueLeaf,
+  type SessionRevert,
+  type StyleChange,
 } from "@/lib/layout/layout-diff";
-import { PRESET_LABELS, PRESET_VALUES } from "@/lib/layout/layout-presets";
+import {
+  effectiveLayoutValues,
+  PRESET_LABELS,
+  PRESET_VALUES,
+} from "@/lib/layout/layout-presets";
 import type { LayoutSnapshot } from "@/lib/layout/layout-snapshot";
 import type { LayoutValues } from "@/lib/layout/layout-values";
 import type { RegionId } from "@/lib/layout/region-id";
+import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { providerDisplayName } from "@/lib/provider-ordering";
 
 /**
@@ -54,7 +64,21 @@ export function styleChangeLines(
   values: LayoutValues,
 ): ReadonlyArray<LayoutChangeLine> {
   const preset = PRESET_LABELS[snapshot.basePreset];
-  const baselineValues = PRESET_VALUES[snapshot.basePreset];
+  return styleLines(changes, values, PRESET_VALUES[snapshot.basePreset]).map(
+    (line) => ({ ...line, baseline: `${preset}: ${line.baseline}` }),
+  );
+}
+
+/**
+ * One line per setting, both values as bare words. A region's display is
+ * stored as `shown` and `size` but set by one control, so the two collapse
+ * into one line that carries both changes.
+ */
+function styleLines(
+  changes: ReadonlyArray<StyleChange>,
+  values: LayoutValues,
+  baselineValues: LayoutValues,
+): ReadonlyArray<LayoutChangeLine> {
   const lines: LayoutChangeLine[] = [];
   const seenDisplay = new Set<RegionId>();
   for (const change of changes) {
@@ -67,7 +91,7 @@ export function styleChangeLines(
         key: `${region}.display`,
         label: name,
         current: displayWord(region, values[region]),
-        baseline: `${preset}: ${displayWord(region, baselineValues[region])}`,
+        baseline: displayWord(region, baselineValues[region]),
         changes: changes.filter(
           (entry) =>
             entry.region === region && DISPLAY_KEYS.includes(entry.key),
@@ -76,18 +100,127 @@ export function styleChangeLines(
       continue;
     }
     const label =
-      change.key === "style"
+      offGrammarLabel(region, change.key) ??
+      (change.key === "style"
         ? `${name} style`
-        : `${name}: ${detailRowLabel(region, change.key)}`;
+        : `${name}: ${detailRowLabel(region, change.key)}`);
     lines.push({
       key: `${region}.${change.key}`,
       label,
       current: leafWord(change, change.current),
-      baseline: `${preset}: ${leafWord(change, change.baseline)}`,
+      baseline: leafWord(change, change.baseline),
       changes: [change],
     });
   }
   return lines;
+}
+
+/**
+ * One line of the session list: a setting, what it was when the editor opened
+ * and what it is now. `before` is `null` where the two do not read as a pair
+ * of values - a reordered list is "Reordered", not one order against another.
+ */
+export interface SessionChangeLine {
+  readonly key: string;
+  readonly label: string;
+  readonly before: string | null;
+  readonly after: string;
+  /** What the line's revert puts back to where the session opened. */
+  readonly revert: SessionRevert;
+}
+
+export interface SessionChangeLines {
+  /** The preset line, when there is one, and then the value lines. */
+  readonly styles: ReadonlyArray<SessionChangeLine>;
+  readonly arrangement: ReadonlyArray<SessionChangeLine>;
+}
+
+/** What the session has changed, in the words the form uses. */
+export function sessionChangeLines(
+  entry: LayoutSnapshot,
+  current: LayoutSnapshot,
+): SessionChangeLines {
+  const changes = sessionLayoutChanges(entry, current);
+  const preset: ReadonlyArray<SessionChangeLine> =
+    changes.preset === null
+      ? []
+      : [
+          {
+            key: "preset",
+            label: "Preset",
+            before: PRESET_LABELS[changes.preset.baseline],
+            after: PRESET_LABELS[changes.preset.current],
+            revert: { kind: "preset" },
+          },
+        ];
+  const values = styleLines(
+    changes.styles,
+    effectiveLayoutValues(current.basePreset, current.overrides),
+    effectiveLayoutValues(entry.basePreset, entry.overrides),
+  ).map((line): SessionChangeLine => ({
+    key: line.key,
+    label: line.label,
+    before: line.baseline,
+    after: line.current,
+    revert: { kind: "changes", changes: line.changes },
+  }));
+  return {
+    styles: [...preset, ...values],
+    arrangement: changes.arrangement.map((change): SessionChangeLine => ({
+      ...sessionArrangementWords(
+        change,
+        entry.arrangement,
+        current.arrangement,
+      ),
+      revert: { kind: "changes", changes: [change] },
+    })),
+  };
+}
+
+function sessionArrangementWords(
+  change: ArrangementChange,
+  before: LayoutArrangement,
+  after: LayoutArrangement,
+): Omit<SessionChangeLine, "revert"> {
+  switch (change.kind) {
+    case "field":
+      return {
+        key: change.field,
+        label: FIELD_LABELS[change.field],
+        before: fieldWord(change.field, change.baseline),
+        after: fieldWord(change.field, change.current),
+      };
+    case "order":
+      return {
+        key: `order.${change.group}`,
+        label: `${orderGroupListLabel(change.group)} order`,
+        before: null,
+        after: "Reordered",
+      };
+    case "provider":
+      return {
+        key: `provider.${change.providerId}`,
+        label: providerDisplayName(change.providerId),
+        before: providerWord(before, change.providerId),
+        after: providerWord(after, change.providerId),
+      };
+  }
+}
+
+/** "Shown, Automatic limits", "Hidden, 2 limits": the two things a provider line covers. */
+function providerWord(
+  arrangement: LayoutArrangement,
+  providerId: RateLimitProviderId,
+): string {
+  const shown = arrangement.hiddenProviders.includes(providerId)
+    ? "Hidden"
+    : "Shown";
+  return `${shown}, ${limitsWord(providerLimitKeys(arrangement, providerId).length)}`;
+}
+
+function limitsWord(picked: number): string {
+  if (picked === 0) return "Automatic limits";
+  return picked === 1 ? "1 limit" : `${picked} limits`;
 }
 
 export function arrangementChangeLine(
@@ -133,6 +266,17 @@ function displayWord(region: RegionId, bag: LayoutValues[RegionId]): string {
   if (size === "full")
     return region === "access" ? "Icon and label" : "Full row";
   return "Shown";
+}
+
+/**
+ * A value stored in a region's bag but set by a row outside that region's
+ * grammar, named the way that row is. The readings on agent rows sit beside
+ * the Resource monitor's values and are a Sidebar switch.
+ */
+function offGrammarLabel(region: RegionId, key: string): string | null {
+  if (region === "resourceMonitor" && key === "agentRows")
+    return LAYOUT.definitions.resourceReadings.label;
+  return null;
 }
 
 /** A detail or style row's label, found by the key its control writes. */

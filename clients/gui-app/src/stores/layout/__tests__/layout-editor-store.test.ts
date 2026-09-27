@@ -607,6 +607,62 @@ describe("where the panel sits is the only persisted state (L-38)", () => {
   });
 });
 
+describe("reviewingSession - the session's change list as a level", () => {
+  it("popInspectorLevel leaves it first, leaving the area and rows intact on that press", () => {
+    session();
+    editorState().select("usageLimits");
+    editorState().setReviewingSession(true);
+
+    expect(editorState().popInspectorLevel()).toBe(true);
+
+    expect(editorState().reviewingSession).toBe(false);
+    expect(editorState().selected).toBe("usageLimits");
+    expect(editorState().area).toBe("statusBar");
+    expect(editorState().openRows).toContain("usageLimits");
+  });
+
+  it("openArea clears it", () => {
+    session();
+    editorState().setReviewingSession(true);
+
+    editorState().openArea("statusBar", null);
+
+    expect(editorState().reviewingSession).toBe(false);
+  });
+
+  it("selectSurface clears it", () => {
+    session();
+    editorState().setReviewingSession(true);
+
+    editorState().selectSurface("topBar");
+
+    expect(editorState().reviewingSession).toBe(false);
+  });
+
+  it("selectSetting clears it, even when the setting's area is already open", () => {
+    session();
+    editorState().openArea("topBar", null);
+    editorState().setReviewingSession(true);
+
+    editorState().selectSetting("sideStripView");
+
+    expect(editorState().reviewingSession).toBe(false);
+    expect(editorState().area).toBe("topBar");
+  });
+
+  it("endSession and beginSession reset it to false", () => {
+    session();
+    editorState().setReviewingSession(true);
+    expect(editorState().reviewingSession).toBe(true);
+
+    editorState().endSession();
+    expect(editorState().reviewingSession).toBe(false);
+
+    session();
+    expect(editorState().reviewingSession).toBe(false);
+  });
+});
+
 describe("session-scoped fields", () => {
   it("clears hover, selection and the filter on exit", () => {
     session();

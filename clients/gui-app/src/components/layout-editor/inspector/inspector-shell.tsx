@@ -31,6 +31,7 @@ import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { cn } from "@/lib/utils";
 import { RelayRow } from "@/components/layout-editor/inspector/relay-row";
+import { SessionChangesRow } from "@/components/layout-editor/inspector/session-changes";
 import type { LayoutDockMode } from "@/stores/layout/layout-editor-store";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 
@@ -59,8 +60,8 @@ const DOCK_MODES: ReadonlyArray<{
 
 /**
  * The inspector's own chrome (L-05): the header (title, the ⋯ menu with the
- * dock modes, Undo/Redo, the split `Done ▾`), the relay slot and the
- * scrollable body the caller supplies.
+ * dock modes, Undo/Redo, the split `Done ▾`), the session's change summary,
+ * the relay slot and the scrollable body the caller supplies.
  *
  * The dock is its one host. L-03's "one form, two hosts" is about the form,
  * which `Settings > Layout` draws inside its own shell; Undo, Redo, the dock
@@ -145,6 +146,7 @@ export function InspectorShell(props: InspectorShellProps): ReactNode {
         </TooltipWrapper>
         <DoneButton onExit={onExit} />
       </div>
+      <SessionChangesRow />
       <RelayRow
         onDone={() => {
           onExit("done");

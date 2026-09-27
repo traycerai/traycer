@@ -182,13 +182,16 @@ export function sideStripViewChanged(
 /** Any one leaf some region's value bag holds. */
 export type LayoutValueLeaf = boolean | string | ReadonlyArray<string>;
 
-/** One value that differs from the last-applied preset. */
+/** One value that differs from the value it is measured against. */
 export interface StyleChange {
   readonly kind: "value";
   readonly region: RegionId;
   readonly key: RegionValueKey;
   readonly current: LayoutValueLeaf;
-  /** The last-applied preset's value, which the line's revert restores. */
+  /**
+   * The last-applied preset's value on the change list, which the line's
+   * revert restores; the session's entry value on the session list.
+   */
   readonly baseline: LayoutValueLeaf;
 }
 
@@ -221,7 +224,8 @@ const ARRANGEMENT_FIELDS: ReadonlyArray<ArrangementField> = [
 ];
 
 /**
- * One piece of where things live that differs from what shipped.
+ * One piece of where things live that differs from the arrangement it is
+ * measured against.
  *
  * A reordered group and a changed provider carry no value pair: an order and
  * a provider's hidden state plus limits are not one value, and the line reads
@@ -232,7 +236,10 @@ export type ArrangementChange =
       readonly kind: "field";
       readonly field: ArrangementField;
       readonly current: LayoutArrangement[ArrangementField];
-      /** The shipped value, which the line's revert restores. */
+      /**
+       * The shipped value on the change list, which the line's revert
+       * restores; the session's entry value on the session list.
+       */
       readonly baseline: LayoutArrangement[ArrangementField];
     }
   | { readonly kind: "order"; readonly group: OrderGroupId }
@@ -288,6 +295,232 @@ export function layoutChanges(snapshot: LayoutSnapshot): LayoutChanges {
 export function layoutModified(snapshot: LayoutSnapshot): boolean {
   const changes = layoutChanges(snapshot);
   return changes.styles.length > 0 || changes.arrangement.length > 0;
+}
+
+/** What an editor session has changed so far. */
+export interface SessionLayoutChanges {
+  /** The last-applied preset, when the session has applied a different one. */
+  readonly preset: {
+    readonly current: LayoutPresetId;
+    readonly baseline: LayoutPresetId;
+  } | null;
+  readonly styles: ReadonlyArray<StyleChange>;
+  readonly arrangement: ReadonlyArray<ArrangementChange>;
+}
+
+/**
+ * Everything that differs between the layout a session opened on and the one
+ * it has now: values compared EFFECTIVE against effective, so a preset switch
+ * reads as the values it visibly moved, and the arrangement field by field.
+ *
+ * The same scope as {@link layoutChanges}: the choices made where they are
+ * drawn (shown accounts, the pinned breakdown's order, the parked set) are
+ * left out, and so is `dividerSeq`, which is bookkeeping.
+ */
+export function sessionLayoutChanges(
+  entry: LayoutSnapshot,
+  current: LayoutSnapshot,
+): SessionLayoutChanges {
+  const entryValues = effectiveLayoutValues(entry.basePreset, entry.overrides);
+  const values = effectiveLayoutValues(current.basePreset, current.overrides);
+  const before = entry.arrangement;
+  const after = current.arrangement;
+  return {
+    preset:
+      entry.basePreset === current.basePreset
+        ? null
+        : { current: current.basePreset, baseline: entry.basePreset },
+    styles: layoutRegionIds().flatMap((region) => {
+      const keys: ReadonlyArray<string> = Object.keys(
+        PRESET_VALUES.default[region],
+      );
+      return keys
+        .filter(isRegionValueKey)
+        .filter(
+          (key) =>
+            !sameRegionValue(
+              key,
+              regionSettingValue(values[region], key),
+              regionSettingValue(entryValues[region], key),
+            ),
+        )
+        .map((key): StyleChange => ({
+          kind: "value",
+          region,
+          key,
+          current: regionLeaf(values[region], key),
+          baseline: regionLeaf(entryValues[region], key),
+        }));
+    }),
+    arrangement: [
+      ...ARRANGEMENT_FIELDS.filter(
+        (field) => after[field] !== before[field],
+      ).map((field): ArrangementChange => ({
+        kind: "field",
+        field,
+        current: after[field],
+        baseline: before[field],
+      })),
+      ...ORDER_GROUP_IDS.filter(
+        (group) =>
+          !sameFieldList(orderIds(after, group), orderIds(before, group)),
+      ).map((group): ArrangementChange => ({ kind: "order", group })),
+      ...USAGE_PROVIDER_IDS.filter(
+        (providerId) => !sameProviderState(before, after, providerId),
+      ).map((providerId): ArrangementChange => ({
+        kind: "provider",
+        providerId,
+      })),
+    ],
+  };
+}
+
+/** Whether one provider is hidden the same way and draws the same limits in both. */
+function sameProviderState(
+  left: LayoutArrangement,
+  right: LayoutArrangement,
+  providerId: RateLimitProviderId,
+): boolean {
+  return (
+    left.hiddenProviders.includes(providerId) ===
+      right.hiddenProviders.includes(providerId) &&
+    sameFieldList(
+      providerLimitKeys(left, providerId),
+      providerLimitKeys(right, providerId),
+    )
+  );
+}
+
+/**
+ * What one line of the session list puts back. The preset line is its own
+ * kind: switching preset replaced every value at once, so putting it back
+ * restores the session's opening values with it, and - as applying one never
+ * does - leaves the arrangement alone.
+ */
+export type SessionRevert =
+  | { readonly kind: "preset" }
+  | { readonly kind: "changes"; readonly changes: ReadonlyArray<LayoutChange> };
+
+/** One session line put back to what it was when the session opened, and nothing else. */
+export function revertSessionLine(
+  current: LayoutSnapshot,
+  entry: LayoutSnapshot,
+  revert: SessionRevert,
+): LayoutSnapshot {
+  if (revert.kind === "preset")
+    return {
+      ...current,
+      basePreset: entry.basePreset,
+      overrides: entry.overrides,
+    };
+  return revert.changes.reduce(
+    (snapshot, change) => revertSessionChange(snapshot, entry, change),
+    current,
+  );
+}
+
+/**
+ * The whole layout back to where the session opened, as a step Undo can take
+ * back - unlike Discard, which also ends the session. `dividerSeq` keeps the
+ * higher count for the reason `resetLayout` gives.
+ */
+export function revertSession(
+  current: LayoutSnapshot,
+  entry: LayoutSnapshot,
+): LayoutSnapshot {
+  return {
+    ...entry,
+    arrangement: {
+      ...entry.arrangement,
+      dividerSeq: Math.max(
+        entry.arrangement.dividerSeq,
+        current.arrangement.dividerSeq,
+      ),
+    },
+  };
+}
+
+function revertSessionChange(
+  current: LayoutSnapshot,
+  entry: LayoutSnapshot,
+  change: LayoutChange,
+): LayoutSnapshot {
+  const arrangement = current.arrangement;
+  const before = entry.arrangement;
+  switch (change.kind) {
+    case "value": {
+      // Written against the CURRENT preset: the entry's value as an override,
+      // or no override at all where the current preset already has it.
+      const entryValues = effectiveLayoutValues(
+        entry.basePreset,
+        entry.overrides,
+      );
+      const target = regionLeaf(entryValues[change.region], change.key);
+      const base = regionSettingValue(
+        PRESET_VALUES[current.basePreset][change.region],
+        change.key,
+      );
+      const overrides: Record<string, unknown> = { ...current.overrides };
+      const kept: Record<string, unknown> = {
+        ...current.overrides[change.region],
+      };
+      if (sameRegionValue(change.key, base, target)) delete kept[change.key];
+      else kept[change.key] = target;
+      overrides[change.region] = kept;
+      return { ...current, overrides: resolvePersistedOverrides(overrides) };
+    }
+    case "field":
+      return {
+        ...current,
+        arrangement: { ...arrangement, [change.field]: before[change.field] },
+      };
+    case "order":
+      // Every order group is the arrangement field of the same name.
+      // `dividerSeq` stays: it only ever increases.
+      return {
+        ...current,
+        arrangement: { ...arrangement, [change.group]: before[change.group] },
+      };
+    case "provider": {
+      const providerId = change.providerId;
+      const providerLimits = { ...arrangement.providerLimits };
+      const selection = before.providerLimits[providerId];
+      if (selection === undefined) delete providerLimits[providerId];
+      else providerLimits[providerId] = selection;
+      return {
+        ...current,
+        arrangement: {
+          ...arrangement,
+          hiddenProviders: withHidden(
+            arrangement.hiddenProviders,
+            providerId,
+            before.hiddenProviders.includes(providerId),
+          ),
+          providerLimits,
+        },
+      };
+    }
+  }
+}
+
+/** The hidden list with one provider in or out of it, untouched when it already is. */
+function withHidden(
+  hidden: ReadonlyArray<RateLimitProviderId>,
+  providerId: RateLimitProviderId,
+  hide: boolean,
+): ReadonlyArray<RateLimitProviderId> {
+  if (hidden.includes(providerId) === hide) return hidden;
+  return hide
+    ? [...hidden, providerId]
+    : hidden.filter((entryId) => entryId !== providerId);
+}
+
+/** A provider's picked limits; none is Automatic, stored or not. */
+export function providerLimitKeys(
+  arrangement: LayoutArrangement,
+  providerId: RateLimitProviderId,
+): ReadonlyArray<string> {
+  return arrangement.providerLimits[providerId]?.limitKeys ?? [];
 }
 
 /** That one change put back, and nothing else. */

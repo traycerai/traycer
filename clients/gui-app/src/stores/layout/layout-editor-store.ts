@@ -162,6 +162,12 @@ export interface LayoutEditorState {
    * form is open. Selecting a region on the canvas opens its area.
    */
   readonly area: SurfaceGroupId | null;
+  /**
+   * Whether the inspector shows the session's change list, a level of its own
+   * above whatever {@link area} holds: opening an area leaves it, and its back
+   * row returns to the level beneath.
+   */
+  readonly reviewingSession: boolean;
   /** Rows whose disclosure is open in the area form, by row id. */
   readonly openRows: ReadonlyArray<string>;
   readonly hovered: RegionId | null;
@@ -255,10 +261,12 @@ export interface LayoutEditorState {
    * other way to be selected.
    */
   readonly toggleRow: (rowId: string) => void;
+  readonly setReviewingSession: (reviewingSession: boolean) => void;
   /**
-   * One rung of the Escape ladder: close the open rows (and the selection),
-   * then the selected surface or setting, then the area back to All settings. `false`
-   * means the ladder is already at All settings, where it stops.
+   * One rung of the Escape ladder: leave the session's change list, close the
+   * open rows (and the selection), then the selected surface or setting, then
+   * the area back to All settings. `false` means the ladder is already at All
+   * settings, where it stops.
    */
   readonly popInspectorLevel: () => boolean;
   readonly setHovered: (regionId: RegionId | null) => void;
@@ -293,6 +301,7 @@ const SESSION_DEFAULTS = {
   selectedSetting: null,
   hoveredSetting: null,
   area: null,
+  reviewingSession: false,
   openRows: [],
   hovered: null,
   pointed: null,
@@ -377,7 +386,8 @@ export const useLayoutEditorStore = create<LayoutEditorState>()(
           state.selectedSurface === selectedSurface &&
           state.selected === null &&
           state.selectedSetting === null &&
-          state.area === selectedSurface
+          state.area === selectedSurface &&
+          !state.reviewingSession
         )
           return;
         set({
@@ -385,6 +395,7 @@ export const useLayoutEditorStore = create<LayoutEditorState>()(
           selected: null,
           selectedSetting: null,
           area: selectedSurface,
+          reviewingSession: false,
           filter: "",
         });
       },
@@ -395,7 +406,8 @@ export const useLayoutEditorStore = create<LayoutEditorState>()(
           state.selectedSetting === selectedSetting &&
           state.selected === null &&
           state.selectedSurface === null &&
-          state.area === area
+          state.area === area &&
+          !state.reviewingSession
         )
           return;
         set({
@@ -403,6 +415,7 @@ export const useLayoutEditorStore = create<LayoutEditorState>()(
           selected: null,
           selectedSurface: null,
           area,
+          reviewingSession: false,
           filter: "",
         });
       },
@@ -452,11 +465,13 @@ export const useLayoutEditorStore = create<LayoutEditorState>()(
           state.selectedSurface === null &&
           state.selectedSetting === null &&
           state.openRows === openRows &&
-          (area === null || state.filter === "")
+          (area === null || state.filter === "") &&
+          !state.reviewingSession
         )
           return;
         set({
           area,
+          reviewingSession: false,
           selected: row,
           selectedSurface: null,
           selectedSetting: null,
@@ -491,8 +506,16 @@ export const useLayoutEditorStore = create<LayoutEditorState>()(
           set({ openRows });
         }
       },
+      setReviewingSession: (reviewingSession) => {
+        if (get().reviewingSession === reviewingSession) return;
+        set({ reviewingSession });
+      },
       popInspectorLevel: () => {
         const state = get();
+        if (state.reviewingSession) {
+          set({ reviewingSession: false });
+          return true;
+        }
         if (state.selected !== null || state.openRows.length > 0) {
           set({ selected: null, openRows: [] });
           return true;
