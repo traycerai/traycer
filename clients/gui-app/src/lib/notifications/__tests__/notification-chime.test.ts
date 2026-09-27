@@ -180,6 +180,43 @@ describe("playNotificationChimeSound", () => {
     expect(contexts[0].state).toBe("suspended");
   });
 
+  it("releases the active-chime reservation when scheduling throws, so idle suspend still runs", () => {
+    const contexts: FakeAudioContext[] = [];
+    class TrackingAudioContext extends FakeAudioContext {
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+    }
+    const original = Object.getOwnPropertyDescriptor(
+      FakeAudioContext.prototype,
+      "createOscillator",
+    );
+    Object.defineProperty(FakeAudioContext.prototype, "createOscillator", {
+      configurable: true,
+      writable: true,
+      value: () => {
+        throw new Error("audio resources unavailable");
+      },
+    });
+    try {
+      vi.stubGlobal("AudioContext", TrackingAudioContext);
+      playNotificationChimeSound("classic");
+      expect(contexts[0].suspend).toHaveBeenCalledOnce();
+      expect(contexts[0].state).toBe("suspended");
+    } finally {
+      if (original === undefined) {
+        Reflect.deleteProperty(FakeAudioContext.prototype, "createOscillator");
+      } else {
+        Object.defineProperty(
+          FakeAudioContext.prototype,
+          "createOscillator",
+          original,
+        );
+      }
+    }
+  });
+
   it("does not create an audio context when chimes are disabled", () => {
     const AudioContext = vi.fn(FakeAudioContext);
     vi.stubGlobal("AudioContext", AudioContext);

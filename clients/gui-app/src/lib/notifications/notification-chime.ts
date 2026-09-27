@@ -621,73 +621,80 @@ export function playNotificationChimeSound(
     if (context === null) return;
 
     activeChimes += 1;
+    const releaseChimeReservation = (): void => {
+      activeChimes -= 1;
+      suspendNotificationAudioIfIdle();
+    };
     const scheduleChime = (): void => {
       if (context.state === "closed") {
-        activeChimes -= 1;
+        releaseChimeReservation();
         return;
       }
-      const voices = CHIME_VOICES[sound];
-      const lastVoice = voices.reduce((latest, voice) =>
-        voice.delay + voice.duration > latest.delay + latest.duration
-          ? voice
-          : latest,
-      );
-      const chimeStartsAt = context.currentTime + SCHEDULE_AHEAD_SECONDS;
-      const master = context.createGain();
-      master.gain.setValueAtTime(CHIME_MASTER_GAIN, chimeStartsAt);
-      master.connect(context.destination);
-
-      voices.forEach((voice) => {
-        const startsAt = chimeStartsAt + voice.delay;
-        const endsAt = startsAt + voice.duration;
-        const oscillator = context.createOscillator();
-        const gain = context.createGain();
-        oscillator.type = voice.type;
-        oscillator.frequency.setValueAtTime(voice.startFrequency, startsAt);
-        voice.frequencyWaypoints?.forEach((waypoint) => {
-          oscillator.frequency.exponentialRampToValueAtTime(
-            waypoint.frequency,
-            startsAt + waypoint.time,
-          );
-        });
-        oscillator.frequency.exponentialRampToValueAtTime(
-          voice.endFrequency,
-          startsAt + voice.frequencyRampDuration,
+      try {
+        const voices = CHIME_VOICES[sound];
+        const lastVoice = voices.reduce((latest, voice) =>
+          voice.delay + voice.duration > latest.delay + latest.duration
+            ? voice
+            : latest,
         );
-        gain.gain.setValueAtTime(SILENCE_GAIN, startsAt);
-        if (
-          voice.decayStart !== undefined &&
-          voice.decayTimeConstant !== undefined
-        ) {
-          gain.gain.linearRampToValueAtTime(
-            voice.gain,
-            startsAt + voice.attack,
+        const chimeStartsAt = context.currentTime + SCHEDULE_AHEAD_SECONDS;
+        const master = context.createGain();
+        master.gain.setValueAtTime(CHIME_MASTER_GAIN, chimeStartsAt);
+        master.connect(context.destination);
+
+        voices.forEach((voice) => {
+          const startsAt = chimeStartsAt + voice.delay;
+          const endsAt = startsAt + voice.duration;
+          const oscillator = context.createOscillator();
+          const gain = context.createGain();
+          oscillator.type = voice.type;
+          oscillator.frequency.setValueAtTime(voice.startFrequency, startsAt);
+          voice.frequencyWaypoints?.forEach((waypoint) => {
+            oscillator.frequency.exponentialRampToValueAtTime(
+              waypoint.frequency,
+              startsAt + waypoint.time,
+            );
+          });
+          oscillator.frequency.exponentialRampToValueAtTime(
+            voice.endFrequency,
+            startsAt + voice.frequencyRampDuration,
           );
-          gain.gain.setTargetAtTime(
-            SILENCE_GAIN,
-            startsAt + voice.decayStart,
-            voice.decayTimeConstant,
-          );
-          gain.gain.exponentialRampToValueAtTime(SILENCE_GAIN, endsAt);
-        } else {
-          gain.gain.exponentialRampToValueAtTime(
-            voice.gain,
-            startsAt + voice.attack,
-          );
-          gain.gain.exponentialRampToValueAtTime(SILENCE_GAIN, endsAt);
-        }
-        oscillator.connect(gain);
-        gain.connect(master);
-        oscillator.start(startsAt);
-        oscillator.stop(endsAt + 0.02);
-        if (voice === lastVoice) {
-          oscillator.onended = () => {
-            master.disconnect();
-            activeChimes -= 1;
-            suspendNotificationAudioIfIdle();
-          };
-        }
-      });
+          gain.gain.setValueAtTime(SILENCE_GAIN, startsAt);
+          if (
+            voice.decayStart !== undefined &&
+            voice.decayTimeConstant !== undefined
+          ) {
+            gain.gain.linearRampToValueAtTime(
+              voice.gain,
+              startsAt + voice.attack,
+            );
+            gain.gain.setTargetAtTime(
+              SILENCE_GAIN,
+              startsAt + voice.decayStart,
+              voice.decayTimeConstant,
+            );
+            gain.gain.exponentialRampToValueAtTime(SILENCE_GAIN, endsAt);
+          } else {
+            gain.gain.exponentialRampToValueAtTime(
+              voice.gain,
+              startsAt + voice.attack,
+            );
+            gain.gain.exponentialRampToValueAtTime(SILENCE_GAIN, endsAt);
+          }
+          oscillator.connect(gain);
+          gain.connect(master);
+          oscillator.start(startsAt);
+          oscillator.stop(endsAt + 0.02);
+          if (voice === lastVoice) {
+            oscillator.onended = () => {
+              master.disconnect();
+              releaseChimeReservation();
+            };
+          }
+        });
+      } catch {
+        releaseChimeReservation();
+      }
     };
 
     if (context.state === "running") {
@@ -698,7 +705,7 @@ export function playNotificationChimeSound(
       .resume()
       .then(scheduleChime)
       .catch(() => {
-        activeChimes -= 1;
+        releaseChimeReservation();
       });
   } catch {
     // Audio setup can be rejected by autoplay or device restrictions.
