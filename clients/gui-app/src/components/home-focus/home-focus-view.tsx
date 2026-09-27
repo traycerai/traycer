@@ -414,7 +414,7 @@ export function HomeFocusView(): ReactNode {
       {/* `pb-safe-bottom-gutter`, not `pb-6`: the page scrolls to its own end,
           so the last row has to clear the home indicator on a phone and still
           keep a real gutter on a desktop where every inset is zero. */}
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-4 pt-6 pb-safe-bottom-gutter">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-2 px-4 pt-6 pb-safe-bottom-gutter">
         <HomeSummaryLine sections={sections} grouping={hostGrouping} />
         <ActivityCoverageNotice
           activity={model.coverage.activity}

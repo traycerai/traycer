@@ -10,6 +10,7 @@ import {
   type PluginsListData,
 } from "@/hooks/providers/native-response-map";
 import { nativePluginsListParams } from "@/lib/query-keys/providers-native-query-keys";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 /** Matches this query's `staleTime`: refresh exactly when it goes stale. */
 const PLUGINS_LIST_REFRESH_MS = 30_000;
@@ -67,10 +68,13 @@ export function useProvidersPluginsList(args: {
   const enabled = args.enabled;
   useEffect(() => {
     if (!enabled) return;
-    const timer = setInterval(() => {
-      void refetch();
-    }, PLUGINS_LIST_REFRESH_MS);
-    return () => clearInterval(timer);
+    return startVisibleInterval({
+      tick: () => {
+        void refetch();
+      },
+      intervalMs: PLUGINS_LIST_REFRESH_MS,
+      fireOnShow: true,
+    });
   }, [enabled, refetch]);
 
   return query;
