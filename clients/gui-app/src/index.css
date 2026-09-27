@@ -1104,37 +1104,6 @@
   transition-duration: 0s;
 }
 
-/*
- * The content viewport's rounded top corners, and why at 2x they are painted
- * instead of clipped.
- *
- * Rounding the viewport's own clip (`border-radius` under `overflow-clip`)
- * makes the compositor draw every composited layer inside it - tiles,
- * scrollers, the canvas - into a separate full-window render pass, only to
- * cut two corners off it. On a 1728x1084 window at 2x that pass and the
- * overlay buffers macOS keeps in flight for it cost several hundred MB of GPU
- * memory.
- *
- * At exactly 2dppx the frame stays square and each corner's arc element
- * paints the canvas colour outside its own arc: a spread shadow follows the
- * rounded border box outward, and `clip-path: inset(0)` keeps it inside that
- * corner's square. What shows outside the arc is the same `bg-canvas` the clip
- * used to reveal. The shadow reads `--canvas`, the value `bg-canvas` compiles
- * to: `@theme inline` emits no `--color-canvas` property, and an unset colour
- * would drop the shadow without a trace.
- *
- * Only at 2dppx, because only there was it proven pixel-identical. The frame's
- * top edge sits at a half CSS pixel for odd root font sizes (the header is in
- * rem), which is a whole device pixel at 2x and a half one at 1x or under app
- * zoom; off the device grid, dropping the render pass changes how the frame's
- * edge rows are composited. Every other resolution keeps the clip.
- *
- * The mask sits at z-30, so it covers what the clip covered only for content
- * that paints below it. Fixed-position and portalled overlays escape the clip
- * and paint above the mask, as before. An in-frame overlay that reaches a top
- * corner above z-30 has to round that corner itself: the repoint-failure
- * card (`epic-shell.tsx`) and the migration layer (`epic-migration-modal.tsx`).
- */
 @utility task-surface-frame {
   margin-top: -1px;
   border-top-left-radius: var(--radius-xl);
@@ -1157,24 +1126,13 @@
   &::before {
     left: 0;
     border-left-width: 1px;
-    border-top-left-radius: var(--radius-xl);
+    border-top-left-radius: inherit;
   }
 
   &::after {
     right: 0;
     border-right-width: 1px;
-    border-top-right-radius: var(--radius-xl);
-  }
-
-  @media (resolution: 2dppx) {
-    border-top-left-radius: 0;
-    border-top-right-radius: 0;
-
-    &::before,
-    &::after {
-      box-shadow: 0 0 0 var(--radius-xl) var(--canvas);
-      clip-path: inset(0);
-    }
+    border-top-right-radius: inherit;
   }
 }
 
