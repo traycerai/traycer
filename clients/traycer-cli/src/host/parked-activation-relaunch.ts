@@ -3,8 +3,12 @@ import {
   type HostUpdateAttemptRecord,
 } from "@traycer-clients/shared/host-update";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
-import { readHostInstallRecord } from "../manifest/host-install";
+import {
+  readHostInstallRecord,
+  type HostInstallRecord,
+} from "../manifest/host-install";
 import type { Environment } from "../runner/environment";
+import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 
 /**
  * The one `stop-only` shape a generic restart may legally continue: a
@@ -62,41 +66,78 @@ import type { Environment } from "../runner/environment";
  * ends the park `failed {install-changed}` before any restart
  * (`revalidateInstallIdentity`), exits 1, and leaves the host down.
  *
- * Three records, three sentences:
+ * Four records, four sentences:
  *
  *  - ACTIVE (`applying`, `preparing/activate`, ...): an executor may be
  *    mid-flight outside the lock; wait, and `host update` recovers a dead one.
- *  - a park the install still matches, or a claim-less park (the resume
- *    compares nothing and proceeds): `host update` resumes it and, with no
- *    host running, starts one - that is the activation arm's `no-live-host`
- *    reading.
- *  - a park with a claim the install no longer matches: `host update` retires
- *    it and exits reporting the change; the host is then started by a command
- *    the (now terminal) record no longer refuses.
+ *  - a `waiting-for-work` park (the busy-before-apply checkpoint, which has
+ *    placed no bytes), an activation park the install still matches, or a
+ *    claim-less one (the resume compares nothing and proceeds): `host update`
+ *    resumes it and, with no host running, starts one - the activation arm's
+ *    `no-live-host` reading.
+ *  - an activation park with a claim the install no longer matches: `host
+ *    update` retires it `failed {install-changed}` and exits reporting the
+ *    change; the host is then started by a command the (now terminal) record
+ *    no longer refuses.
+ *  - an activation park whose install record could not be READ: nothing can
+ *    say which of the two it is, and `host update` would fail on the same
+ *    read, so the record is the thing to repair first.
  *
  * `parkMatchesInstall` is the caller's `parkedActivationRelaunchable` answer,
  * passed in rather than re-read so the sentence describes the same install
- * the caller decided against. Ignored for a non-parked record.
+ * the caller decided against: `true` / `false` for a comparison that ran,
+ * `null` when none could (the install record was unreadable). Consulted only
+ * for a claimed `waiting-to-activate` park; every other record's sentence is
+ * decided by its own shape.
  */
 export function describeNonterminalRecordRecovery(
   record: HostUpdateAttemptRecord,
-  parkMatchesInstall: boolean,
+  parkMatchesInstall: boolean | null,
 ): string {
   if (record.execution !== "parked") {
     return `an update to host ${record.targetVersion} is in progress (${record.phase}); wait for it to finish, and if it was interrupted run 'traycer host update' to recover it and start the host`;
   }
-  if (record.claim === undefined || parkMatchesInstall) {
+  if (
+    record.phase !== "waiting-to-activate" ||
+    record.claim === undefined ||
+    parkMatchesInstall === true
+  ) {
     return `an update to host ${record.targetVersion} is parked at ${record.phase} with no updater running; run 'traycer host update' to resume it, which also starts the host if none is running`;
+  }
+  if (parkMatchesInstall === null) {
+    return `an update to host ${record.targetVersion} is parked at ${record.phase}, and the host install record could not be read, so whether the installed host still matches it is unknown; 'traycer host doctor' reports the install record, and once it reads again 'traycer host update' resumes the update`;
   }
   return `an update to host ${record.targetVersion} is parked at ${record.phase}, but the installed host no longer matches it, so nothing will relaunch it as-is; run 'traycer host update' to retire the stale record (it exits reporting the changed install), then 'traycer host ensure' to start the host`;
 }
 
+/**
+ * `true`: a `waiting-to-activate` park whose claim names the installed bytes -
+ * the one park a generic restart may continue. `false`: any other record, or a
+ * park the install does not match. `null`: the install record is present but
+ * unreadable, so the comparison could not run; callers that ACT treat it as
+ * `false` (unverifiable is refused, never admitted), and callers that DESCRIBE
+ * say so rather than calling the park stale (traycer#2208 review). Reading
+ * the record throws `HOST_INSTALL_RECORD_INVALID` on a malformed file by
+ * design (`manifest/host-install.ts`); an observational caller such as `host
+ * status` must not die on it.
+ */
 export async function parkedActivationRelaunchable(
   environment: Environment,
   record: HostUpdateAttemptRecord | null,
-): Promise<boolean> {
+): Promise<boolean | null> {
   if (record === null || record.execution !== "parked") return false;
-  const installed = await readHostInstallRecord(environment);
+  let installed: HostInstallRecord | null;
+  try {
+    installed = await readHostInstallRecord(environment);
+  } catch (err) {
+    if (
+      err instanceof CliError &&
+      err.code === CLI_ERROR_CODES.HOST_INSTALL_RECORD_INVALID
+    ) {
+      return null;
+    }
+    throw err;
+  }
   return parkedActivationMatchesInstall(
     record,
     installed === null

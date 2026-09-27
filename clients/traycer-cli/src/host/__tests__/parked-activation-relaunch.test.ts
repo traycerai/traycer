@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import type { HostUpdateAttemptRecord } from "@traycer-clients/shared/host-update";
@@ -201,6 +201,38 @@ describe("parkedActivationRelaunchable", () => {
       parkedActivationRelaunchable("production", attemptRecord({})),
     ).resolves.toBe(false);
   });
+
+  // `readHostInstallRecord` throws `HOST_INSTALL_RECORD_INVALID` for a
+  // present-but-malformed `install.json`; `parkedActivationRelaunchable`
+  // catches exactly that code and answers `null` rather than propagating, so
+  // an observational caller (`host status`) does not die on it.
+  it("null when the install record file is present but malformed JSON", async () => {
+    // No `writeInstallRecord()` call - the file at
+    // `hostInstallRecordPath("production")` does not exist yet on a fresh
+    // temp HOME, so its parent directory is created explicitly before the
+    // malformed bytes are written there.
+    const { hostInstallRecordPath } = await import("../../store/paths");
+    const path = hostInstallRecordPath("production");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "{ not json", "utf8");
+    const { parkedActivationRelaunchable } =
+      await import("../parked-activation-relaunch");
+
+    await expect(
+      parkedActivationRelaunchable(
+        "production",
+        attemptRecord({
+          claim: {
+            installedVersion: "1.7.0",
+            installGeneration: "id:parked-relaunch-attestation-install",
+            stageFingerprint: null,
+            allowDowngrade: false,
+            acceptStoreFormatLoss: false,
+          },
+        }),
+      ),
+    ).resolves.toBeNull();
+  });
 });
 
 // `describeNonterminalRecordRecovery` is the ONE writer of the "what now"
@@ -264,6 +296,44 @@ describe("describeNonterminalRecordRecovery", () => {
     expect(sentence).toContain("retire the stale record");
     expect(sentence).toContain("'traycer host ensure' to start the host");
     // The overpromise this replaces: never claim the resume brings it back.
+    expect(sentence).not.toContain("also starts the host");
+  });
+
+  // `waiting-for-work` is the busy-before-apply checkpoint: no bytes are
+  // placed, so the resume compares nothing and always proceeds, regardless
+  // of whatever `parkMatchesInstall` the caller passes in - the predicate
+  // answers `false` for this phase by design (it admits only a claimed
+  // `waiting-to-activate` park), and that `false` must not read as "stale".
+  it("a waiting-for-work park with a claim resumes the same way even when parkMatchesInstall is false", async () => {
+    const { describeNonterminalRecordRecovery } =
+      await import("../parked-activation-relaunch");
+    const sentence = describeNonterminalRecordRecovery(
+      attemptRecord({
+        phase: "waiting-for-work",
+        continuation: "resume-apply",
+        claim,
+      }),
+      false,
+    );
+    expect(sentence).toContain("run 'traycer host update' to resume it");
+    expect(sentence).toContain("starts the host if none is running");
+    expect(sentence).not.toContain("traycer host ensure");
+    expect(sentence).not.toContain("installed host no longer matches");
+  });
+
+  // `null`: the install record could not be read at all, so neither "still
+  // matches" nor "no longer matches" is true - the record itself is the
+  // thing to repair first, via `traycer host doctor`.
+  it("a claimed waiting-to-activate park whose install record could not be read: names 'traycer host doctor'", async () => {
+    const { describeNonterminalRecordRecovery } =
+      await import("../parked-activation-relaunch");
+    const sentence = describeNonterminalRecordRecovery(
+      attemptRecord({ claim }),
+      null,
+    );
+    expect(sentence).toContain("install record could not be read");
+    expect(sentence).toContain("'traycer host doctor'");
+    expect(sentence).not.toContain("installed host no longer matches");
     expect(sentence).not.toContain("also starts the host");
   });
 });

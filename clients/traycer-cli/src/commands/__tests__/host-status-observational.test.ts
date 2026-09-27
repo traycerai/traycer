@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
 import { noopLogger } from "../../logger";
@@ -8,6 +11,8 @@ import type {
   HostUpdateAttemptRead,
   HostUpdateAttemptRecord,
 } from "@traycer-clients/shared/host-update";
+import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
+import type { HostInstallRecord } from "../../manifest/host-install";
 
 // CLI-001: `host status` reads state, it never provisions. This used to call
 // `maybeAutoBootstrap` first, so asking a clean machine for its status could
@@ -32,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   provisionHostMock: vi.fn(),
   createServiceControllerMock: vi.fn(),
   readUpdateAttemptRecordMock: vi.fn(),
+  hostInstallRecordPathValue: "/tmp/test-host-home/absent-install.json",
 }));
 
 vi.mock("../../host/pid-metadata", async () => {
@@ -62,6 +68,11 @@ vi.mock("../../store/paths", async (importOriginal) => {
     ...actual,
     bootstrapLogPath: () => "/tmp/test-bootstrap.log",
     hostHomeDir: () => "/tmp/test-host-home",
+    // `manifest/host-install` resolves its own path through this helper, not
+    // through `hostHomeDir`; without the override these tests read the
+    // machine's REAL install record (CodeRabbit, traycer#2208). Overridden per
+    // test when a record is needed; the default is an absent file.
+    hostInstallRecordPath: () => mocks.hostInstallRecordPathValue,
   };
 });
 
@@ -170,6 +181,50 @@ function validRead(
   return { kind: "valid", value: attemptRecord(overrides), version: 2 };
 }
 
+// The default this file's `store/paths` mock resolves to when a test does
+// not point `hostInstallRecordPath` at a temp file - deliberately absent, so
+// `readHostInstallRecord` reads it as "no host installed" (ENOENT) rather
+// than the machine's real install record.
+const ABSENT_INSTALL_RECORD_PATH = "/tmp/test-host-home/absent-install.json";
+
+// Mirrors `host-restart.test.ts`'s `writeInstallRecordForAttestation` fixture
+// shape - only the fields these tests override differ per case.
+function installRecordFixture(
+  overrides: Partial<HostInstallRecord>,
+): HostInstallRecord {
+  return {
+    installId: "host-status-observational-install",
+    version: "2.0.0",
+    runtimeVersion: null,
+    platform: "darwin",
+    arch: "arm64",
+    installedAt: "2026-01-01T00:00:00.000Z",
+    source: { kind: "registry", value: "2.0.0" },
+    archiveSha256: "a".repeat(64),
+    signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+    signatureKeyId: "test-key",
+    sizeBytes: 1,
+    executablePath: "/tmp/test-host-home/host/traycer-host",
+    executableSha256: null,
+    ...overrides,
+  };
+}
+
+// Per-test temp dir for a written install record, torn down in `afterEach`.
+// `hostInstallRecordPathValue` is reset to the absent default in the SAME
+// `beforeEach` so a test that does not call this leaves the mock exactly
+// where it started.
+let installRecordTmpDir: string | null = null;
+
+function pointInstallRecordAtTempFile(contents: string): void {
+  installRecordTmpDir = mkdtempSync(
+    join(tmpdir(), "traycer-host-status-install-"),
+  );
+  const path = join(installRecordTmpDir, "install.json");
+  writeFileSync(path, contents, "utf8");
+  mocks.hostInstallRecordPathValue = path;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.readHostPidMetadataMock.mockResolvedValue(null);
@@ -179,6 +234,14 @@ beforeEach(() => {
   // No update attempt record by default - most of these tests are about the
   // pre-existing payload shape and must not gain a hidden dependency on it.
   mocks.readUpdateAttemptRecordMock.mockResolvedValue({ kind: "absent" });
+  mocks.hostInstallRecordPathValue = ABSENT_INSTALL_RECORD_PATH;
+});
+
+afterEach(() => {
+  if (installRecordTmpDir !== null) {
+    rmSync(installRecordTmpDir, { recursive: true, force: true });
+    installRecordTmpDir = null;
+  }
 });
 
 describe("hostStatusCommand - observational (CLI-001)", () => {
@@ -347,6 +410,147 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
       });
       expect(result.human).not.toContain("traycer host update");
       expect(result.human).not.toContain("traycer host ensure");
+    });
+
+    // `waiting-for-work` is the busy-before-apply checkpoint: no bytes are
+    // placed yet, so the resume compares nothing and always proceeds -
+    // `parkedActivationRelaunchable` answers `false` for it by design (it
+    // admits only a claimed `waiting-to-activate` park), and `host status`
+    // must not report that `false` as `null`-worthy "stale". A claim on the
+    // record must not change that (traycer#2208 review).
+    it("a waiting-for-work parked record with a claim while not running: parkMatchesInstall is null, hint is resumable", async () => {
+      mocks.readHostPidMetadataMock.mockResolvedValue(null);
+      mocks.isProcessAliveMock.mockReturnValue(false);
+      mocks.readUpdateAttemptRecordMock.mockResolvedValue(
+        validRead({
+          attemptId: "attempt-waiting-for-work",
+          targetVersion: "2.0.0",
+          phase: "waiting-for-work",
+          execution: "parked",
+          continuation: "resume-apply",
+          claim: {
+            installedVersion: "1.7.0",
+            installGeneration: "id:some-install",
+            stageFingerprint: null,
+            allowDowngrade: false,
+            acceptStoreFormatLoss: false,
+          },
+        }),
+      );
+
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+      expect(result.data).toMatchObject({
+        updateAttempt: { parkMatchesInstall: null },
+      });
+      expect(result.human).toContain("run 'traycer host update' to resume it");
+      expect(result.human).not.toContain("no longer matches");
+      expect(result.human).not.toContain("traycer host ensure");
+    });
+
+    // A malformed `install.json` makes `readHostInstallRecord` throw
+    // `HOST_INSTALL_RECORD_INVALID`; `parkedActivationRelaunchable` turns
+    // that into `null` rather than propagating, and `host status` (an
+    // OBSERVATIONAL read, CLI-001) must resolve rather than die on it.
+    it("a claimed waiting-to-activate park whose install record is malformed JSON: command resolves, parkMatchesInstall null, hint names 'traycer host doctor'", async () => {
+      mocks.readHostPidMetadataMock.mockResolvedValue(null);
+      mocks.isProcessAliveMock.mockReturnValue(false);
+      pointInstallRecordAtTempFile("{ not json");
+      mocks.readUpdateAttemptRecordMock.mockResolvedValue(
+        validRead({
+          attemptId: "attempt-parked-unreadable-install",
+          targetVersion: "2.0.0",
+          phase: "waiting-to-activate",
+          execution: "parked",
+          continuation: "activate",
+          claim: {
+            installedVersion: "2.0.0",
+            installGeneration: "id:whatever-install",
+            stageFingerprint: null,
+            allowDowngrade: false,
+            acceptStoreFormatLoss: false,
+          },
+        }),
+      );
+
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+      expect(result.exitCode).toBe(0);
+      expect(result.data).toMatchObject({
+        running: false,
+        updateAttempt: { parkMatchesInstall: null },
+      });
+      expect(result.human).toContain("install record could not be read");
+      expect(result.human).toContain("'traycer host doctor'");
+    });
+
+    it("a claimed waiting-to-activate park whose claim matches a temp install record: parkMatchesInstall true, resumable hint", async () => {
+      mocks.readHostPidMetadataMock.mockResolvedValue(null);
+      mocks.isProcessAliveMock.mockReturnValue(false);
+      const installed = installRecordFixture({
+        installId: "host-status-matching-install",
+        version: "2.0.0",
+      });
+      pointInstallRecordAtTempFile(JSON.stringify(installed));
+      mocks.readUpdateAttemptRecordMock.mockResolvedValue(
+        validRead({
+          attemptId: "attempt-parked-matching-install",
+          targetVersion: "2.0.0",
+          phase: "waiting-to-activate",
+          execution: "parked",
+          continuation: "activate",
+          claim: {
+            installedVersion: "2.0.0",
+            installGeneration: encodeInstallGeneration(installed),
+            stageFingerprint: null,
+            allowDowngrade: false,
+            acceptStoreFormatLoss: false,
+          },
+        }),
+      );
+
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+      expect(result.data).toMatchObject({
+        updateAttempt: { parkMatchesInstall: true },
+      });
+      expect(result.human).toContain("run 'traycer host update' to resume it");
+      expect(result.human).not.toContain("no longer matches");
+    });
+
+    it("a claimed waiting-to-activate park whose claim mismatches a temp install record: parkMatchesInstall false, stale hint", async () => {
+      mocks.readHostPidMetadataMock.mockResolvedValue(null);
+      mocks.isProcessAliveMock.mockReturnValue(false);
+      const installed = installRecordFixture({
+        installId: "host-status-mismatching-install",
+        version: "2.0.0",
+      });
+      pointInstallRecordAtTempFile(JSON.stringify(installed));
+      mocks.readUpdateAttemptRecordMock.mockResolvedValue(
+        validRead({
+          attemptId: "attempt-parked-mismatching-install",
+          targetVersion: "2.0.0",
+          phase: "waiting-to-activate",
+          execution: "parked",
+          continuation: "activate",
+          claim: {
+            // Disagrees with `installed.version` ("2.0.0") above.
+            installedVersion: "1.6.0",
+            installGeneration: encodeInstallGeneration(installed),
+            stageFingerprint: null,
+            allowDowngrade: false,
+            acceptStoreFormatLoss: false,
+          },
+        }),
+      );
+
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+      expect(result.data).toMatchObject({
+        updateAttempt: { parkMatchesInstall: false },
+      });
+      expect(result.human).toContain("installed host no longer matches");
+      expect(result.human).toContain("'traycer host ensure' to start the host");
     });
   });
 });

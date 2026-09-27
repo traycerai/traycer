@@ -127,6 +127,7 @@ export function buildHostFreePortAndRestartCommand(
       restarted,
       deferredForParkedActivation,
       record,
+      parkMatchesInstall,
       attestation,
     } = await withCliUpdateContenderContext(
       contenderOptions,
@@ -166,6 +167,15 @@ export function buildHostFreePortAndRestartCommand(
         }
         const controller = createServiceController();
         const stopOnly = contenderContext.recoveryAction === "stop-only";
+        // Compared for every stop-only record, deferred ones included, so the
+        // guidance below describes THIS record (`host restart` has the same
+        // reasoning; traycer#2208 review).
+        const parkMatchesInstall = stopOnly
+          ? await parkedActivationRelaunchable(
+              ctx.runtime.environment,
+              contenderContext.activeAttempt,
+            )
+          : false;
         // Classified under the same lock acquisition that guards the action
         // below. Refusing beats stopping for a caller whose intent is "make
         // this host reachable again": the port is already freed above, and
@@ -176,6 +186,7 @@ export function buildHostFreePortAndRestartCommand(
             restarted: false,
             deferredForParkedActivation: true,
             record: contenderContext.activeAttempt,
+            parkMatchesInstall,
             attestation: await attestInstallRuntime(ctx.runtime.environment),
           };
         }
@@ -183,12 +194,7 @@ export function buildHostFreePortAndRestartCommand(
         // claim matches the installed bytes is continued by the ordinary
         // restart, which IS its activation restart; stopping instead left
         // the machine hostless (`host/parked-activation-relaunch.ts`).
-        const restart =
-          !stopOnly ||
-          (await parkedActivationRelaunchable(
-            ctx.runtime.environment,
-            contenderContext.activeAttempt,
-          ));
+        const restart = !stopOnly || parkMatchesInstall === true;
         ctx.progress({
           stage: restart ? "service-restart" : "service-stop",
           message: restart
@@ -220,6 +226,7 @@ export function buildHostFreePortAndRestartCommand(
           restarted: restart,
           deferredForParkedActivation: false,
           record: contenderContext.activeAttempt,
+          parkMatchesInstall,
           attestation: await attestInstallRuntime(ctx.runtime.environment),
         };
       },
@@ -228,12 +235,12 @@ export function buildHostFreePortAndRestartCommand(
     // the other deliberately left it alone. Reporting them with one sentence
     // would tell a user their host is down when it is still running.
     // Same rule as `host restart`: the sentence describes the record the
-    // stop-only decision was made from, and a park this command declined to
-    // relaunch is one the install no longer matches.
+    // stop-only decision was made from, with the install comparison made
+    // against it under the same lock.
     const recovery =
       restarted || record === null
         ? ""
-        : `: ${describeNonterminalRecordRecovery(record, false)}`;
+        : `: ${describeNonterminalRecordRecovery(record, parkMatchesInstall)}`;
     const noRelaunch = deferredForParkedActivation
       ? `left '${label.id}' untouched because a packaged update is waiting for its explicit activation${recovery}`
       : `stopped '${label.id}' without activating parked update bytes; the host is now down${recovery}`;

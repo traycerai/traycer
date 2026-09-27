@@ -508,6 +508,47 @@ describe("buildHostRestartCommand", () => {
         restarted: false,
         deferredForParkedActivation: true,
       });
+      // The install comparison runs for a DEFERRED record too (traycer#2208
+      // review): a deferred park that still matches the install must not be
+      // called stale - Desktop's own activation is what resumes it next.
+      expect(result.human).toContain("run 'traycer host update' to resume it");
+      expect(result.human).not.toContain("no longer matches");
+    });
+
+    it("--defer-if-parked over a MISMATCHING park: still defers, but the human text calls it stale, not resumable", async () => {
+      const installed = await writeInstallRecordForAttestation();
+      await writeAttemptRecordForEnvironment("production", {
+        targetVersion: "1.7.0",
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+        claim: {
+          // The claim names a DIFFERENT installed version than what is
+          // actually on disk (still "1.7.0", from
+          // `writeInstallRecordForAttestation`).
+          installedVersion: "1.6.0",
+          installGeneration: encodeInstallGeneration(installed),
+          stageFingerprint: null,
+          allowDowngrade: false,
+          acceptStoreFormatLoss: false,
+        },
+      });
+      const { buildHostRestartCommand } = await import("../host-restart");
+      const command = buildHostRestartCommand({
+        ifIdle: false,
+        force: false,
+        deferIfParked: true,
+      });
+      const result = await command(fakeCtx());
+
+      // Still deferred - `--defer-if-parked` is decided BEFORE the match is
+      // examined, so the service is never touched here either.
+      expect(mocks.controllerCalls).toEqual([]);
+      expect(result.data).toMatchObject({
+        restarted: false,
+        deferredForParkedActivation: true,
+      });
+      expect(result.human).toContain("installed host no longer matches");
     });
 
     it("a claim whose installedVersion disagrees with the installed bytes stays stop-only", async () => {

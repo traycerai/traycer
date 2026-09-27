@@ -59,10 +59,13 @@ export interface HostStatusUpdateAttempt {
   readonly execution: HostUpdateAttemptRecord["execution"];
   readonly continuation: HostUpdateAttemptRecord["continuation"];
   /**
-   * For a park: whether the installed host is still the one the park's claim
-   * names, which is what decides whether `host update` resumes it in one step
-   * or retires it as stale. `null` for a non-parked record, where the question
-   * does not arise.
+   * For a claimed `waiting-to-activate` park: whether the installed host is
+   * still the one the park's claim names, which is what decides whether `host
+   * update` resumes it in one step or retires it as stale. `null` when no
+   * comparison applies or could run: a non-parked record, a `waiting-for-work`
+   * park (no bytes placed; it always resumes), a claim-less park, or an
+   * install record that could not be read - a status read never fails over
+   * that, it reports it (the human hint says which).
    */
   readonly parkMatchesInstall: boolean | null;
 }
@@ -85,8 +88,14 @@ async function readNonterminalUpdateAttempt(
     return null;
   }
   const record = read.value;
+  // Only an ACTIVATION park with a claim is compared: `waiting-for-work` has
+  // placed no bytes and resumes regardless, and the relaunch predicate answers
+  // `false` for it by design (it admits only `waiting-to-activate`), which is
+  // not "stale" (traycer#2208 review).
   const parkMatchesInstall =
-    record.execution === "parked"
+    record.execution === "parked" &&
+    record.phase === "waiting-to-activate" &&
+    record.claim !== undefined
       ? await parkedActivationRelaunchable(environment, record)
       : null;
   return {
@@ -98,10 +107,7 @@ async function readNonterminalUpdateAttempt(
       continuation: record.continuation,
       parkMatchesInstall,
     },
-    recovery: describeNonterminalRecordRecovery(
-      record,
-      parkMatchesInstall === true,
-    ),
+    recovery: describeNonterminalRecordRecovery(record, parkMatchesInstall),
   };
 }
 

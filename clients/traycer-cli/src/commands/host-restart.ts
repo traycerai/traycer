@@ -141,18 +141,22 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
           await assertHostNotBusy(ctx.runtime.environment);
         }
         const stopOnly = contenderContext.recoveryAction === "stop-only";
-        // `--defer-if-parked` is decided BEFORE the park is examined: that
+        // Compared for EVERY stop-only record, deferred ones included: the
+        // guidance rendered below describes this record, and a deferred park
+        // that matches the install must not be called stale (traycer#2208
+        // review). `null` is an unreadable install record; it acts as "not
+        // relaunchable" and reads as "unknown".
+        const parkMatchesInstall = stopOnly
+          ? await parkedActivationRelaunchable(
+              ctx.runtime.environment,
+              contenderContext.activeAttempt,
+            )
+          : false;
+        // `--defer-if-parked` is decided BEFORE the match is acted on: that
         // caller (Desktop's force-restart) runs its own activation once this
         // command reports `deferred`, so a matching park must still defer
         // rather than be activated here behind its back.
-        if (
-          stopOnly &&
-          !args.deferIfParked &&
-          (await parkedActivationRelaunchable(
-            ctx.runtime.environment,
-            contenderContext.activeAttempt,
-          ))
-        ) {
+        if (stopOnly && !args.deferIfParked && parkMatchesInstall === true) {
           // A matching park: fall through to the ordinary restart below, which
           // IS the activation restart the park is waiting for (see
           // `host/parked-activation-relaunch.ts` for why a park, and only a
@@ -172,6 +176,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             return {
               kind: "deferred-for-parked-activation" as const,
               record: contenderContext.activeAttempt,
+              parkMatchesInstall,
               attestation: await attestInstallRuntime(ctx.runtime.environment),
             };
           }
@@ -201,6 +206,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
           return {
             kind: "stopped-for-parked-activation" as const,
             record: contenderContext.activeAttempt,
+            parkMatchesInstall,
             attestation: await attestInstallRuntime(ctx.runtime.environment),
           };
         }
@@ -238,14 +244,18 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
     // now down" from "your host is still up, activation is pending".
     const deferredForParkedActivation =
       locked.kind === "deferred-for-parked-activation";
-    // The record the stop-only classification was made from, so the guidance
-    // is about THAT record: a park this command declined to relaunch did not
-    // match the install (a matching one took the restart above), and an
+    // The record the stop-only classification was made from, and the install
+    // comparison made against it under the same lock, so the guidance is about
+    // THAT record: a deferred park may still match (Desktop activates it), a
+    // stopped one did not (a matching one took the restart above), and an
     // active record is a different sentence again.
     const recovery =
       locked.kind === "restarted" || locked.record === null
         ? null
-        : describeNonterminalRecordRecovery(locked.record, false);
+        : describeNonterminalRecordRecovery(
+            locked.record,
+            locked.parkMatchesInstall,
+          );
     return {
       data: {
         restarted,

@@ -677,6 +677,50 @@ describe("buildHostFreePortAndRestartCommand", () => {
         restartedLabel: null,
         deferredForParkedActivation: true,
       });
+      // The install comparison runs for a DEFERRED record too (traycer#2208
+      // review): a deferred park that still matches the install must not be
+      // called stale.
+      expect(result.human).toContain("run 'traycer host update' to resume it");
+      expect(result.human).not.toContain("no longer matches");
+    });
+
+    it("--defer-if-parked over a MISMATCHING park: still defers, but the human text calls it stale, not resumable", async () => {
+      mocks.controllerCalls = [];
+      mocks.lockCalls = [];
+      mocks.killCalls = [];
+      const installed = await writeInstallRecordForAttestation();
+      await writeAttemptRecordForEnvironment("production", {
+        targetVersion: "1.7.0",
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+        claim: {
+          // The claim names a DIFFERENT installed version than what is
+          // actually on disk (still "1.7.0", from
+          // `writeInstallRecordForAttestation`).
+          installedVersion: "1.6.0",
+          installGeneration: encodeInstallGeneration(installed),
+          stageFingerprint: null,
+          allowDowngrade: false,
+          acceptStoreFormatLoss: false,
+        },
+      });
+
+      const { buildHostFreePortAndRestartCommand } =
+        await import("../host-free-port-and-restart");
+      const command = buildHostFreePortAndRestartCommand({
+        pid: null,
+        port: null,
+        deferIfParked: true,
+      });
+      const result = await command(fakeCtx());
+
+      expect(mocks.controllerCalls).toEqual([]);
+      expect(result.data).toMatchObject({
+        restartedLabel: null,
+        deferredForParkedActivation: true,
+      });
+      expect(result.human).toContain("installed host no longer matches");
     });
 
     it("an ACTIVE record (preparing/activate) stays stop-only regardless of a matching claim", async () => {
