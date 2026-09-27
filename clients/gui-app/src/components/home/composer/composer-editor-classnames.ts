@@ -25,8 +25,8 @@ export const COMPOSER_EDITOR_CLASSNAME = cn(
  * down the 15rem ceiling is what binds. Only below `md`. The landing and chat
  * editors take it; the surfaces without the pull gesture (the
  * new-conversation modal, the in-place message edit) keep the ceilings they
- * set. Once the draft outgrows this cap the grabber appears, and pulling the
- * card open into its sheet (`composer-shell.tsx`) lifts the cap.
+ * set. Pulling the card open into its sheet (`composer-shell.tsx`) lifts the
+ * cap.
  */
 export const PHONE_COMPOSER_EDITOR_CAP_CLASSNAME =
   "max-md:max-h-[min(calc(var(--spacing-safe-dvh)*0.3),15rem)]";
