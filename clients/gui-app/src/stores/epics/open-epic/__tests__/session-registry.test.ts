@@ -1042,9 +1042,71 @@ describe("unknown activity grace applies only to epic cap eviction", () => {
       registry.acquire("crossing-second", () => h(second));
 
       let clockReads = 0;
-      const clock = vi.spyOn(Date, "now").mockImplementation(() => {
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => {
         clockReads += 1;
         return clockReads <= 4 ? graceMs - 1 : graceMs;
+      });
+      try {
+        registry.prune();
+        expect(registry.size()).toBe(2);
+        expect(vi.getTimerCount()).toBeGreaterThan(0);
+        vi.advanceTimersByTime(0);
+        expect(first.disposed).toBe(true);
+        expect(registry.size()).toBe(1);
+      } finally {
+        clock.mockRestore();
+      }
+    } finally {
+      registry.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("evicts after the grace duration elapses across a backward wall-clock jump", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    try {
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+      });
+      const first = buildTestHandle("backward-clock-first", false);
+      const second = buildTestHandle("backward-clock-second", false);
+      registry.acquire("backward-clock-first", () => h(first));
+      registry.acquire("backward-clock-second", () => h(second));
+
+      // The grace timer is already armed for graceMs of elapsed time.
+      vi.setSystemTime(-60_000);
+      vi.advanceTimersByTime(graceMs);
+
+      expect(first.disposed).toBe(true);
+      expect(second.disposed).toBe(false);
+      expect(registry.size()).toBe(1);
+    } finally {
+      registry.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports unsynced edits when grace expires during exemption diagnostics", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const debug = vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+    try {
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "closed",
+      });
+      const dirty = buildTestHandle("crossing-dirty", true);
+      const clean = buildTestHandle("crossing-clean", false);
+      registry.acquire("crossing-dirty", () => h(dirty));
+      registry.acquire("crossing-clean", () => h(clean));
+      debug.mockClear();
+
+      let clockReads = 0;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => {
+        clockReads += 1;
+        return clockReads <= 5 ? graceMs - 1 : graceMs;
       });
       try {
         registry.prune();
@@ -1052,13 +1114,23 @@ describe("unknown activity grace applies only to epic cap eviction", () => {
         clock.mockRestore();
       }
 
+      expect(registry.capExemptionTelemetry().current).toMatchObject({
+        "unsynced-edits": 1,
+        "agent-working": 0,
+      });
+      expect(debug.mock.calls).toContainEqual([
+        "[open-epic-session-registry] cap exemption",
+        {
+          epic: "crossing-dirty",
+          reason: "unsynced-edits",
+          resident: 2,
+          cap: 1,
+        },
+      ]);
       expect(registry.size()).toBe(2);
-      expect(vi.getTimerCount()).toBeGreaterThan(0);
-      vi.setSystemTime(graceMs);
-      vi.advanceTimersByTime(0);
-      expect(first.disposed).toBe(true);
-      expect(registry.size()).toBe(1);
+      expect(dirty.disposed).toBe(false);
     } finally {
+      debug.mockRestore();
       registry.disposeAll();
       vi.useRealTimers();
     }

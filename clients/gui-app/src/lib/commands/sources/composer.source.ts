@@ -310,10 +310,9 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
   );
   // `"cached-only"`: opening a palette subpage must not cold-start every
   // provider on the focused composer's host. The subpages list what the host's
-  // cache already holds - on the default host that is the prefetcher's full
-  // fill; on a cold remote host it is at least the focused composer's selected
-  // harness, which its own picker's standalone query warms on mount, growing
-  // as the user browses providers in that picker.
+  // cache already holds: at least the focused composer's selected harness,
+  // which its toolbar query warms on mount, growing as the user browses
+  // providers in that picker.
   return useGuiHarnessCatalogForClient(
     entry === null ? defaultClient : entry.hostClient,
     null,

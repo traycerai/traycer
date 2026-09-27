@@ -6,12 +6,14 @@ import {
   createSessionRegistry,
   type SessionRegistry,
   type SessionDisposeCause,
-  type RuntimeEnvironment,
   type RuntimeTimer,
   type WarmCapBlocker,
   type WarmCapEvaluation,
 } from "@traycer-clients/shared/replica-runtime";
-import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
+import {
+  createRendererRuntimeEnvironment,
+  type RendererRuntimeEnvironment,
+} from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { appLogger } from "@/lib/logger";
 import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 import { epicHoldsUnsavedDraft } from "@/lib/epics/epic-draft-guard";
@@ -240,7 +242,7 @@ export interface OpenEpicSessionRegistryOptions {
 interface EpicRegistrySession {
   readonly epicId: string;
   readonly handle: OpenEpicStoreHandle;
-  /** Starts on the first unknown frame and survives repeated acquires. */
+  /** Monotonic elapsed-time origin; survives repeated acquires and re-points. */
   unknownActivitySinceMs: number | null;
   /**
    * Unsubscribe from the handle's unsynced-queue signal. Reaped on
@@ -415,6 +417,7 @@ function epicBusyReason(
 type EpicCapUnknownReason = "activity-plane-blind" | "host-uncovered";
 
 export interface EpicCapActivityWindow {
+  /** Both timestamps use the same monotonic clock, never the wall clock. */
   readonly unknownSinceMs: number | null;
   readonly nowMs: number;
   readonly graceMs: number;
@@ -465,15 +468,14 @@ function epicCapExemptionReason(
       },
     );
     if (reason !== null) return reason;
-    // A concurrent plane change may remove the reason between the cap's
-    // first gate and this diagnostic read. Keep the conservative label.
-    return "agent-working";
+    // Grace can expire between the cap walk and this read. Classify the
+    // present data-loss guard instead of inventing a reported turn.
   }
   const state = session.handle.store.getState();
   if (state.isDirty) return "unsynced-edits";
   if (state.writeCommands.length > 0) return "unflushed-writes";
   if (state.unsyncedQueueSize > 0) return "unsynced-queue";
-  return "not-evictable";
+  return blocker === "active-work" ? "eligible-after-walk" : "not-evictable";
 }
 
 /**
@@ -682,7 +684,7 @@ function findMergeTarget(
  *     active entries.
  */
 export class OpenEpicSessionRegistry {
-  private readonly environment: RuntimeEnvironment =
+  private readonly environment: RendererRuntimeEnvironment =
     createRendererRuntimeEnvironment();
   private readonly sessions: SessionRegistry<EpicRegistrySession>;
   private capExemptionEpisodes = new Map<string, EpicCapExemptionReason>();
@@ -692,6 +694,7 @@ export class OpenEpicSessionRegistry {
   >();
   private readonly capExemptionOccurrences = emptyCapExemptionCounts();
   private capGraceTimer: RuntimeTimer | null = null;
+  /** Deadline on the renderer's monotonic clock. */
   private capGraceDeadlineMs: number | null = null;
   private releaseListener: ((epicId: string) => void) | null = null;
   /**
@@ -851,7 +854,7 @@ export class OpenEpicSessionRegistry {
   ): "agent-working" | EpicCapUnknownReason | null {
     return epicCapActivityBlocker(session.epicId, session.handle.hostId, {
       unknownSinceMs: session.unknownActivitySinceMs,
-      nowMs: this.environment.clock.now(),
+      nowMs: this.environment.clock.monotonicNow(),
       graceMs: getRetentionProfile().unknownActivityCapGraceMs,
     });
   }
@@ -934,12 +937,12 @@ export class OpenEpicSessionRegistry {
     evaluation: WarmCapEvaluation<EpicRegistrySession>,
   ): void {
     const next = new Map<string, EpicCapExemptionReason>();
-    const nowMs = this.environment.clock.now();
     const graceMs = getRetentionProfile().unknownActivityCapGraceMs;
     let nextDeadlineMs: number | null = null;
     let becameEligibleDuringWalk = false;
     for (const entry of evaluation.blocked) {
       const eligibleNow = this.isEligibleForCapEviction(entry.key);
+      const nowMs = this.environment.clock.monotonicNow();
       const reason = eligibleNow
         ? "eligible-after-walk"
         : epicCapExemptionReason(entry.session, entry.blocker, nowMs, graceMs);
@@ -948,7 +951,7 @@ export class OpenEpicSessionRegistry {
       // A grace deadline can pass after candidate selection, leaving a clean
       // entry eligible here even though the walk did not evict it. Retry once
       // through the normal safety gates instead of canceling its grace timer.
-      if (entry.blocker === "eligible-after-walk" || eligibleNow) {
+      if (reason === "eligible-after-walk" || eligibleNow) {
         becameEligibleDuringWalk = true;
       }
       if (
@@ -972,7 +975,9 @@ export class OpenEpicSessionRegistry {
     }
     this.capExemptionEpisodes = next;
     if (next.size === 0) this.capExemptionSeenReasons.clear();
-    if (becameEligibleDuringWalk) nextDeadlineMs = nowMs;
+    if (becameEligibleDuringWalk) {
+      nextDeadlineMs = this.environment.clock.monotonicNow();
+    }
     // An already armed grace timer may be the only event left to trigger a
     // recheck if the clock crosses its deadline during this report. Keep it
     // until it fires while the registry is still over cap.
@@ -985,7 +990,8 @@ export class OpenEpicSessionRegistry {
   private scheduleCapGraceRecheck(deadlineMs: number | null): void {
     if (
       deadlineMs === this.capGraceDeadlineMs &&
-      (deadlineMs === null || deadlineMs > this.environment.clock.now())
+      (deadlineMs === null ||
+        deadlineMs > this.environment.clock.monotonicNow())
     ) {
       return;
     }
@@ -994,12 +1000,12 @@ export class OpenEpicSessionRegistry {
     this.capGraceDeadlineMs = deadlineMs;
     if (deadlineMs === null) return;
     this.capGraceTimer = this.environment.scheduler.schedule(
-      Math.max(0, deadlineMs - this.environment.clock.now()),
+      Math.max(0, deadlineMs - this.environment.clock.monotonicNow()),
       () => {
         this.capGraceTimer = null;
         this.capGraceDeadlineMs = null;
-        // Re-read the wall clock and every safety gate. Early timers or a
-        // backward clock step simply re-arm for the remaining grace.
+        // Re-read elapsed time and every safety gate. An early timer simply
+        // re-arms for the remaining grace.
         this.sessions.pruneWarm();
       },
     );
@@ -1556,7 +1562,7 @@ export class OpenEpicSessionRegistry {
       unknownActivitySinceMs:
         epicCapUnknownReason(handle.hostId) === null
           ? null
-          : this.environment.clock.now(),
+          : this.environment.clock.monotonicNow(),
       unsubscribe: null,
       unsubscribeActivity: null,
       lastEligibilityKey: eligibilityKeyFor(epicId, handle),
@@ -1570,7 +1576,7 @@ export class OpenEpicSessionRegistry {
         // A fresh covering answer ends the episode, even if it reports a turn.
         session.unknownActivitySinceMs = null;
       } else if (session.unknownActivitySinceMs === null) {
-        session.unknownActivitySinceMs = this.environment.clock.now();
+        session.unknownActivitySinceMs = this.environment.clock.monotonicNow();
       }
       const nextKey = eligibilityKeyFor(epicId, handle);
       if (
