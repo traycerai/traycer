@@ -500,6 +500,42 @@ describe("optimistic activity history projection", () => {
     expect(result.current[0]?.recentAtMs).toBe(2_000);
   });
 
+  it("does not rehydrate an idle row after the list acknowledges its context key", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const userId = `list-ack-retirement-${crypto.randomUUID()}`;
+    const epicId = "list-ack-retirement-epic";
+    settleHistoryActivity(userId, [historyItem(epicId, 500, 500)]);
+    hookState.contexts.set(epicId, {
+      ...taskContext(epicId),
+      recentAt: 2_000,
+    });
+    const { result, rerender } = renderHook(
+      ({ items, revision }) => {
+        void revision;
+        return useOptimisticActivityHistoryItems({
+          items,
+          userId,
+          hostId: "host-list-ack-retirement",
+          enabled: true,
+          refetch: vi.fn(() => Promise.resolve()),
+        });
+      },
+      { initialProps: { items: [] as readonly HistoryItem[], revision: 0 } },
+    );
+
+    act(() => observeOwnHistoryRecordChange(userId, epicId, 1_000));
+    expect(result.current[0]?.recentAtMs).toBe(2_000);
+
+    rerender({
+      items: [historyItem(epicId, 2_000, 2_000)],
+      revision: 1,
+    });
+    rerender({ items: [], revision: 2 });
+
+    expect(result.current.map((item) => item.epicId)).not.toContain(epicId);
+  });
+
   it("refetches one cached context batch during off-page reconciliation", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -665,6 +701,101 @@ describe("optimistic activity history projection", () => {
     ).toBe(2);
     expect(hookState.contextRefetchBatches).toEqual([[epicId], [epicId]]);
     expect(second.result.current[0]?.recentAtMs).toBe(3_000);
+  });
+
+  it("refreshes distinct overlapping context batches once per surviving subscriber", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const userId = `overlapping-context-batches-${crypto.randomUUID()}`;
+    const ids = ["batch-a", "batch-b", "batch-c"];
+    for (const epicId of ids) {
+      settleHistoryActivity(userId, [historyItem(epicId, 500, 500)]);
+      hookState.cachedContexts.set(epicId, {
+        ...taskContext(epicId),
+        recentAt: 500,
+      });
+      hookState.contexts.set(epicId, {
+        ...taskContext(epicId),
+        recentAt: 2_000,
+      });
+    }
+    hookState.useCachedContexts = true;
+    const firstRefetch = vi.fn(() => Promise.resolve());
+    const secondRefetch = vi.fn(() => Promise.resolve());
+    const first = renderHook(
+      ({ items }) =>
+        useOptimisticActivityHistoryItems({
+          items,
+          userId,
+          hostId: "host-overlapping-context-batches",
+          enabled: true,
+          refreshScope: "recent:all",
+          refetch: firstRefetch,
+        }),
+      {
+        initialProps: {
+          items: [historyItem("batch-c", 500, 500)],
+        },
+      },
+    );
+    const second = renderHook(
+      ({ items }) =>
+        useOptimisticActivityHistoryItems({
+          items,
+          userId,
+          hostId: "host-overlapping-context-batches",
+          enabled: true,
+          refreshScope: "recent:all",
+          refetch: secondRefetch,
+        }),
+      {
+        initialProps: {
+          items: [historyItem("batch-a", 500, 500)],
+        },
+      },
+    );
+    act(() => {
+      for (const epicId of ids) {
+        observeOwnHistoryRecordChange(userId, epicId, 1_000);
+      }
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+
+    expect(
+      firstRefetch.mock.calls.length + secondRefetch.mock.calls.length,
+    ).toBe(1);
+    expect(hookState.contextRefetchBatches).toEqual([
+      ["batch-a", "batch-b"],
+      ["batch-b", "batch-c"],
+    ]);
+
+    second.rerender({ items: [historyItem("batch-a", 2_000, 2_000)] });
+    first.unmount();
+    hookState.contexts.set("batch-c", {
+      ...taskContext("batch-c"),
+      recentAt: 3_000,
+    });
+    act(() => observeOwnHistoryRecordChange(userId, "batch-c", 3_000));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+    second.rerender({ items: [historyItem("batch-a", 2_000, 2_000)] });
+
+    expect(
+      firstRefetch.mock.calls.length + secondRefetch.mock.calls.length,
+    ).toBe(2);
+    expect(hookState.contextRefetchBatches).toEqual([
+      ["batch-a", "batch-b"],
+      ["batch-b", "batch-c"],
+      ["batch-b", "batch-c"],
+    ]);
+    expect(
+      second.result.current.find((item) => item.epicId === "batch-c")
+        ?.recentAtMs,
+    ).toBe(3_000);
   });
 
   it("keeps an acknowledged context key until the page catches up", () => {
