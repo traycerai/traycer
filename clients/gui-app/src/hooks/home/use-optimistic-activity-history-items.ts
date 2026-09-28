@@ -27,6 +27,8 @@ interface ActivityStamp {
   readonly expiresAt: number;
   /** Durable key observed before this edge, in the server's clock domain. */
   readonly baselineAt: number | null;
+  /** The first durable key arrived while this stamp was already pending. */
+  readonly baselineFromPendingRead: boolean;
   /** Own-record timestamp from the host stream, when one is available. */
   readonly acceptedAt: number | null;
   /** A later turn still needs activity beyond this earlier accepted record. */
@@ -115,6 +117,8 @@ function stampActiveHistoryEdge(key: string, at: number): void {
     at: Math.max(previous?.at ?? 0, at),
     expiresAt: Math.max(previous?.expiresAt ?? 0, at + STAMP_TTL_MS),
     baselineAt: previous?.baselineAt ?? knownDurableAt.get(key) ?? null,
+    // A fresh turn makes any already-observed key its pre-edge baseline.
+    baselineFromPendingRead: false,
     acceptedAt,
     turnAfterAcceptedAt:
       acceptedAt === null
@@ -170,6 +174,7 @@ export function observeOwnHistoryRecordChange(
     at: Math.max(previous?.at ?? 0, at),
     expiresAt: Date.now() + STAMP_TTL_MS,
     baselineAt: previous?.baselineAt ?? knownDurableAt.get(key) ?? null,
+    baselineFromPendingRead: previous?.baselineFromPendingRead ?? false,
     acceptedAt: Math.max(previous?.acceptedAt ?? 0, at),
     turnAfterAcceptedAt:
       priorTurnBarrier !== null && at <= priorTurnBarrier
@@ -199,6 +204,25 @@ export function requestHistoryActivityRefresh(userId: string): void {
 }
 
 /** Settles in the durable clock domain; the browser clock only places the row. */
+function durableKeyCatchesUp(stamp: ActivityStamp, durableAt: number): boolean {
+  // A matching accepted record can confirm a key learned during this edge.
+  // An unchanged key already known before the edge cannot confirm it.
+  const exactAcceptedRecord =
+    stamp.acceptedAt !== null &&
+    stamp.turnAfterAcceptedAt === null &&
+    durableAt === stamp.acceptedAt &&
+    (stamp.baselineAt === null || stamp.baselineFromPendingRead);
+  if (stamp.baselineAt === null) return exactAcceptedRecord;
+  if (stamp.acceptedAt === null) return durableAt > stamp.baselineAt;
+  return (
+    exactAcceptedRecord ||
+    (durableAt >= stamp.acceptedAt &&
+      durableAt > stamp.baselineAt &&
+      (stamp.turnAfterAcceptedAt === null ||
+        durableAt > stamp.turnAfterAcceptedAt))
+  );
+}
+
 export function settleHistoryActivity(
   userId: string,
   items: readonly HistoryItem[],
@@ -212,31 +236,17 @@ export function settleHistoryActivity(
     const durableAt = item.recentAtMs;
     const stamp = stamps.get(key);
     if (stamp !== undefined) {
-      let caughtUp: boolean;
-      if (stamp.baselineAt === null) {
-        // An exact accepted record timestamp proves its write. Otherwise the
-        // first off-page key may predate this edge, even when it is ahead of
-        // the browser clock, so keep it as the baseline.
-        caughtUp =
-          stamp.acceptedAt !== null &&
-          stamp.turnAfterAcceptedAt === null &&
-          durableAt === stamp.acceptedAt;
-      } else if (stamp.acceptedAt !== null) {
-        caughtUp =
-          durableAt >= stamp.acceptedAt &&
-          durableAt > stamp.baselineAt &&
-          (stamp.turnAfterAcceptedAt === null ||
-            durableAt > stamp.turnAfterAcceptedAt);
-      } else {
-        caughtUp = durableAt > stamp.baselineAt;
-      }
-      if (caughtUp) {
+      if (durableKeyCatchesUp(stamp, durableAt)) {
         stamps.delete(key);
         removed = true;
       } else if (stamp.baselineAt === null) {
-        // Without an exact accepted match, establish the first returned key as
-        // the baseline; only a later change can settle the remaining edge.
-        stamps.set(key, { ...stamp, baselineAt: durableAt });
+        // The first off-page key may predate the edge even when its server
+        // clock is ahead of the browser. Only a later change can settle it.
+        stamps.set(key, {
+          ...stamp,
+          baselineAt: durableAt,
+          baselineFromPendingRead: true,
+        });
       }
     }
     rememberDurableKey(key, durableAt);
@@ -530,8 +540,9 @@ export function useOptimisticActivityHistoryItems(
     workingEpicIds,
   ]);
   useEffect(() => {
-    if (input.userId !== null) settleHistoryActivity(input.userId, input.items);
-  }, [input.items, input.userId]);
+    if (input.userId !== null)
+      settleHistoryActivity(input.userId, [...input.items, ...backfilled]);
+  }, [backfilled, input.items, input.userId]);
   useEffect(() => {
     if (!refreshEnabled || input.userId === null || stamps.size === 0) return;
     const earliestExpiry = Math.min(

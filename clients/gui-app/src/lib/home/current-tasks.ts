@@ -153,11 +153,11 @@ export function groupCurrentTasks(
 ): CurrentTaskGroups {
   const inProgress = items
     .filter((item) => workingEpicIds.has(item.epicId))
-    .sort(byUpdatedAtDescending);
+    .sort(byRecentAtDescending);
   const claimed = new Set(inProgress.map((item) => item.id));
   const pinned = items
     .filter((item) => item.isPinned && !claimed.has(item.id))
-    .sort(byUpdatedAtDescending);
+    .sort(byRecentAtDescending);
   for (const item of pinned) claimed.add(item.id);
   const byEpicId = new Map(
     items
@@ -173,6 +173,9 @@ export function groupCurrentTasks(
   return { inProgress, pinned, open };
 }
 
-function byUpdatedAtDescending(left: HistoryItem, right: HistoryItem): number {
-  return right.updatedAtMs - left.updatedAtMs;
+function byRecentAtDescending(left: HistoryItem, right: HistoryItem): number {
+  return (
+    (right.recentAtMs ?? right.updatedAtMs) -
+    (left.recentAtMs ?? left.updatedAtMs)
+  );
 }

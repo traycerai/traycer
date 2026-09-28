@@ -284,6 +284,46 @@ describe("optimistic activity history projection", () => {
     ).toBe(1_000);
   });
 
+  it("settles a baseline key when its own-record event arrives afterward", () => {
+    const userId = `page-before-own-record-${crypto.randomUUID()}`;
+    const epicId = "page-before-own-record-epic";
+    observeActiveHistoryEdges(userId, new Set([epicId]), 10_000);
+    const firstDurablePage = [historyItem(epicId, 3_000, 3_000)];
+    settleHistoryActivity(userId, firstDurablePage);
+
+    observeOwnHistoryRecordChange(userId, epicId, 3_000);
+    settleHistoryActivity(userId, firstDurablePage);
+
+    expect(
+      projectOptimisticHistoryItems(
+        userId,
+        [historyItem(epicId, 1_000, 1_000)],
+        [],
+        10_000,
+      )[0]?.recentAtMs,
+    ).toBe(1_000);
+  });
+
+  it("keeps an own-record stamp pending when the pre-edge baseline is unchanged", () => {
+    const userId = `pre-edge-baseline-${crypto.randomUUID()}`;
+    const epicId = "pre-edge-baseline-epic";
+    const baselinePage = [historyItem(epicId, 3_000, 3_000)];
+    settleHistoryActivity(userId, baselinePage);
+
+    observeActiveHistoryEdges(userId, new Set([epicId]), 10_000);
+    observeOwnHistoryRecordChange(userId, epicId, 3_000);
+    settleHistoryActivity(userId, baselinePage);
+
+    expect(
+      projectOptimisticHistoryItems(
+        userId,
+        [historyItem(epicId, 1_000, 1_000)],
+        [],
+        10_000,
+      )[0]?.recentAtMs,
+    ).toBe(10_000);
+  });
+
   it("does not settle a legacy row from updatedAt without durable recency", () => {
     const userId = `legacy-recency-${crypto.randomUUID()}`;
     const epicId = "legacy-recency-epic";
@@ -366,6 +406,44 @@ describe("optimistic activity history projection", () => {
       await vi.advanceTimersByTimeAsync(750);
     });
     expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles a stamped backfill when its durable key advances", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const userId = `backfill-catch-up-${crypto.randomUUID()}`;
+    const epicId = "backfill-catch-up-epic";
+    settleHistoryActivity(userId, [historyItem(epicId, 1_000, 1_000)]);
+    hookState.workingEpicIds = new Set([epicId]);
+    hookState.contexts.set(epicId, {
+      ...taskContext(epicId),
+      recentAt: 1_000,
+    });
+
+    const { result, rerender } = renderHook(
+      ({ revision }) => {
+        void revision;
+        return useOptimisticActivityHistoryItems({
+          items: [],
+          userId,
+          hostId: "host-backfill-catch-up",
+          enabled: true,
+          refetch: vi.fn(() => Promise.resolve()),
+        });
+      },
+      { initialProps: { revision: 0 } },
+    );
+
+    expect(result.current[0]?.epicId).toBe(epicId);
+    expect(result.current[0]?.recentAtMs).toBe(10_000);
+
+    hookState.contexts.set(epicId, {
+      ...taskContext(epicId),
+      recentAt: 2_000,
+    });
+    rerender({ revision: 1 });
+
+    expect(result.current[0]?.recentAtMs).toBe(2_000);
   });
 
   it("keeps an idle active row while the outbox is delayed, retries, then settles", async () => {
