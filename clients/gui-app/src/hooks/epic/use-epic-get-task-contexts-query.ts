@@ -24,10 +24,17 @@ import { useHostQueries } from "@/hooks/host/use-host-queries";
  */
 export const TASK_CONTEXT_TITLE_STALE_TIME_MS = 5 * 60_000;
 
+export interface EpicTaskContextRefetchBatch {
+  readonly taskIds: readonly string[];
+  readonly refetch: () => Promise<void>;
+}
+
 export interface EpicTaskContexts {
   readonly tasksById: ReadonlyMap<string, ListTaskLight>;
   /** Refreshes each mounted context batch once, including inside staleTime. */
   readonly refetch: () => Promise<void>;
+  /** Individual query batches so shared History scopes can dedupe by key. */
+  readonly refetchBatches: readonly EpicTaskContextRefetchBatch[];
   /**
    * The subset of `tasksById` the host marked local-homed - `@1.3`'s
    * `localHomedTaskIds` sibling.
@@ -46,6 +53,10 @@ export interface EpicTaskContexts {
   readonly isFetching: boolean;
   readonly error: Error | null;
 }
+
+type CombinedTaskContexts = Omit<EpicTaskContexts, "refetchBatches"> & {
+  readonly batchRefetches: readonly (() => Promise<void>)[];
+};
 
 export interface UseEpicGetTaskContextsOptions {
   /**
@@ -92,10 +103,10 @@ export function useEpicGetTaskContexts(
       })),
     [taskIds],
   );
-  return useHostQueries<
+  const combined = useHostQueries<
     HostRpcRegistry,
     "epic.getTaskContexts",
-    EpicTaskContexts
+    CombinedTaskContexts
   >({
     client,
     requests,
@@ -109,13 +120,23 @@ export function useEpicGetTaskContexts(
     },
     combine: combineTaskContextResults,
   });
+  return {
+    ...combined,
+    refetchBatches: requests.map((request, index) => ({
+      taskIds: request.params.taskIds,
+      refetch: combined.batchRefetches[index],
+    })),
+  };
 }
 
 function combineTaskContextResults(
   results: Array<UseQueryResult<GetTaskContextsResponse, HostRpcError>>,
-): EpicTaskContexts {
+): CombinedTaskContexts {
   const tasksById = new Map<string, ListTaskLight>();
   const localHomedTaskIds = new Set<string>();
+  const batchRefetches = results.map((result) => async () => {
+    await result.refetch();
+  });
   for (const result of results) {
     if (result.data === undefined) continue;
     for (const [taskId, resolution] of Object.entries(result.data.tasks)) {
@@ -136,8 +157,9 @@ function combineTaskContextResults(
   return {
     tasksById,
     refetch: async () => {
-      await Promise.all(results.map((result) => result.refetch()));
+      await Promise.all(batchRefetches.map((refetch) => refetch()));
     },
+    batchRefetches,
     localHomedTaskIds,
     isFetching: results.some((result) => result.isFetching),
     // Older host: method unsupported → degrade silently to an empty map.

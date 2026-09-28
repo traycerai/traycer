@@ -7,6 +7,8 @@ import {
   organizationRefreshUpgradeV10ToV11,
   organizationCommandV10,
   organizationHistoryV10,
+  organizationHistoryV11,
+  organizationHistoryUpgradeV10ToV11,
   organizationSubscribeV10,
   organizationSubscribeV11,
 } from "./organization/contracts";
@@ -5001,11 +5003,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "organization.history": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: organizationHistoryV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: organizationHistoryV11,
+          upgradeFromPreviousVersion: organizationHistoryUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

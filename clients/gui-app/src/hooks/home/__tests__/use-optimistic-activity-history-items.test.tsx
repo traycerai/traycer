@@ -18,6 +18,7 @@ const hookState = vi.hoisted(() => ({
   cachedContexts: new Map<string, ListTaskLight>(),
   useCachedContexts: false,
   contextRefetchCalls: 0,
+  contextRefetchBatches: [] as string[][],
 }));
 
 vi.mock("@/stores/use-own-turn-epic-ids", () => ({
@@ -36,6 +37,20 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
     const contexts = hookState.useCachedContexts
       ? hookState.cachedContexts
       : hookState.contexts;
+    const refetchIds = (taskIds: readonly string[]): Promise<void> => {
+      if (!hookState.useCachedContexts || taskIds.length === 0)
+        return Promise.resolve();
+      hookState.contextRefetchCalls += 1;
+      hookState.contextRefetchBatches.push([...taskIds]);
+      const refreshed = new Map(hookState.cachedContexts);
+      for (const id of taskIds) {
+        const task = hookState.contexts.get(id);
+        if (task === undefined) refreshed.delete(id);
+        else refreshed.set(id, task);
+      }
+      hookState.cachedContexts = refreshed;
+      return Promise.resolve();
+    };
     return {
       tasksById: new Map(
         ids.flatMap((id) => {
@@ -44,12 +59,11 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
         }),
       ),
       localHomedTaskIds: new Set<string>(),
-      refetch: () => {
-        if (!hookState.useCachedContexts) return Promise.resolve();
-        hookState.contextRefetchCalls += 1;
-        hookState.cachedContexts = new Map(hookState.contexts);
-        return Promise.resolve();
-      },
+      refetch: () => refetchIds(ids),
+      refetchBatches:
+        ids.length === 0
+          ? []
+          : [{ taskIds: [...ids], refetch: () => refetchIds(ids) }],
     };
   },
 }));
@@ -119,6 +133,7 @@ afterEach(() => {
   hookState.cachedContexts = new Map();
   hookState.useCachedContexts = false;
   hookState.contextRefetchCalls = 0;
+  hookState.contextRefetchBatches = [];
 });
 
 describe("optimistic activity history projection", () => {
@@ -526,6 +541,130 @@ describe("optimistic activity history projection", () => {
     expect(hookState.contextRefetchCalls).toBe(1);
     expect(hookState.contextRequests.at(-1)).toEqual([epicId]);
     expect(result.current[0]?.recentAtMs).toBe(2_000);
+  });
+
+  it("uses the injecting consumer context batch for a shared scope refresh", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const userId = `shared-injecting-context-${crypto.randomUUID()}`;
+    const epicId = "shared-injecting-context-epic";
+    settleHistoryActivity(userId, [historyItem(epicId, 500, 500)]);
+    hookState.useCachedContexts = true;
+    const staleContext = { ...taskContext(epicId), recentAt: 500 };
+    hookState.contexts.set(epicId, { ...taskContext(epicId), recentAt: 2_000 });
+    hookState.cachedContexts.set(epicId, staleContext);
+    const injectingRefetch = vi.fn(() => Promise.resolve());
+    const nonInjectingRefetch = vi.fn(() => Promise.resolve());
+    const { result: injectingResult, rerender: rerenderInjecting } = renderHook(
+      ({ revision }) => {
+        void revision;
+        return useOptimisticActivityHistoryItems({
+          items: [],
+          userId,
+          hostId: "host-shared-injecting-context",
+          enabled: true,
+          refreshEnabled: true,
+          refreshScope: "recent:all",
+          refetch: injectingRefetch,
+        });
+      },
+      { initialProps: { revision: 0 } },
+    );
+
+    act(() => observeOwnHistoryRecordChange(userId, epicId, 1_000));
+    const nonInjecting = renderHook(() =>
+      useOptimisticActivityHistoryItems({
+        items: [],
+        userId,
+        hostId: "host-shared-injecting-context",
+        enabled: false,
+        refreshEnabled: true,
+        refreshScope: "recent:all",
+        refetch: nonInjectingRefetch,
+      }),
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+    rerenderInjecting({ revision: 1 });
+
+    expect(
+      injectingRefetch.mock.calls.length +
+        nonInjectingRefetch.mock.calls.length,
+    ).toBe(1);
+    expect(hookState.contextRefetchBatches).toEqual([[epicId]]);
+    expect(injectingResult.current[0]?.recentAtMs).toBe(2_000);
+    nonInjecting.unmount();
+  });
+
+  it("deduplicates a shared context batch and keeps it after one consumer unmounts", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const userId = `overlapping-context-refresh-${crypto.randomUUID()}`;
+    const epicId = "overlapping-context-refresh-epic";
+    settleHistoryActivity(userId, [historyItem(epicId, 500, 500)]);
+    hookState.useCachedContexts = true;
+    hookState.cachedContexts.set(epicId, {
+      ...taskContext(epicId),
+      recentAt: 500,
+    });
+    hookState.contexts.set(epicId, {
+      ...taskContext(epicId),
+      recentAt: 2_000,
+    });
+    const firstRefetch = vi.fn(() => Promise.resolve());
+    const secondRefetch = vi.fn(() => Promise.resolve());
+    const first = renderHook(() =>
+      useOptimisticActivityHistoryItems({
+        items: [],
+        userId,
+        hostId: "host-overlapping-context-refresh",
+        enabled: true,
+        refreshScope: "recent:all",
+        refetch: firstRefetch,
+      }),
+    );
+
+    act(() => observeOwnHistoryRecordChange(userId, epicId, 1_000));
+    const second = renderHook(() =>
+      useOptimisticActivityHistoryItems({
+        items: [],
+        userId,
+        hostId: "host-overlapping-context-refresh",
+        enabled: true,
+        refreshScope: "recent:all",
+        refetch: secondRefetch,
+      }),
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+    second.rerender();
+
+    expect(
+      firstRefetch.mock.calls.length + secondRefetch.mock.calls.length,
+    ).toBe(1);
+    expect(hookState.contextRefetchBatches).toEqual([[epicId]]);
+    expect(second.result.current[0]?.recentAtMs).toBe(2_000);
+
+    first.unmount();
+    hookState.contexts.set(epicId, {
+      ...taskContext(epicId),
+      recentAt: 3_000,
+    });
+    act(() => observeOwnHistoryRecordChange(userId, epicId, 3_000));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+    second.rerender();
+
+    expect(
+      firstRefetch.mock.calls.length + secondRefetch.mock.calls.length,
+    ).toBe(2);
+    expect(hookState.contextRefetchBatches).toEqual([[epicId], [epicId]]);
+    expect(second.result.current[0]?.recentAtMs).toBe(3_000);
   });
 
   it("keeps an acknowledged context key until the page catches up", () => {

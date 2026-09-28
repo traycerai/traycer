@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import {
   buildHistoryItemsFromTasks,
@@ -12,7 +6,10 @@ import {
   sortHistoryItems,
   toHistoryRecencyBucket,
 } from "@/components/home/data/home-page.data";
-import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
+import {
+  useEpicGetTaskContexts,
+  type EpicTaskContextRefetchBatch,
+} from "@/hooks/epic/use-epic-get-task-contexts-query";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -54,13 +51,16 @@ const generations = new Map<string, number>();
 const ownerlessRefreshDeadlines = new Map<string, number>();
 const scheduledGenerations = new Map<string, number>();
 const settledGenerations = new Map<string, number>();
-const scopeSubscribers = new Map<string, number>();
+interface ScopeSubscriber {
+  listRefetch: () => Promise<unknown>;
+  contextBatches: readonly EpicTaskContextRefetchBatch[];
+}
+const scopeSubscribers = new Map<string, Map<symbol, ScopeSubscriber>>();
 interface RefreshState {
   readonly scope: string;
   readonly userId: string;
   timer: number | null;
   inFlight: boolean;
-  refetch: () => Promise<unknown>;
   attempts: number;
   deadline: number;
   ownerlessUntil: number;
@@ -274,11 +274,13 @@ function durableKeyCatchesUp(stamp: ActivityStamp, durableAt: number): boolean {
   );
 }
 
-export function settleHistoryActivity(
+function reconcileDurableHistoryActivity(
   userId: string,
   items: readonly HistoryItem[],
+  source: "list" | "context",
 ): void {
   let removed = false;
+  let acknowledged = false;
   for (const item of items) {
     // Older negotiated peers omit the activity key. An edit timestamp cannot
     // prove that the viewer's own chat or turn activity was persisted.
@@ -287,14 +289,33 @@ export function settleHistoryActivity(
     const durableAt = item.recentAtMs;
     const stamp = stamps.get(key);
     if (stamp !== undefined) {
-      if (
-        stamp.awaitingListAt !== null
-          ? durableAt >= stamp.awaitingListAt
-          : durableKeyCatchesUp(stamp, durableAt)
+      if (source === "list") {
+        if (
+          stamp.awaitingListAt !== null
+            ? durableAt >= stamp.awaitingListAt
+            : durableKeyCatchesUp(stamp, durableAt)
+        ) {
+          stamps.delete(key);
+          removed = true;
+        }
+      } else if (
+        stamp.awaitingListAt !== null &&
+        durableAt > stamp.awaitingListAt
       ) {
-        stamps.delete(key);
-        removed = true;
-      } else if (stamp.awaitingListAt === null && stamp.baselineAt === null) {
+        stamps.set(key, { ...stamp, awaitingListAt: durableAt });
+        acknowledged = true;
+      } else if (
+        stamp.awaitingListAt === null &&
+        durableKeyCatchesUp(stamp, durableAt)
+      ) {
+        stamps.set(key, { ...stamp, awaitingListAt: durableAt });
+        acknowledged = true;
+      }
+      if (
+        stamps.get(key) === stamp &&
+        stamp.awaitingListAt === null &&
+        stamp.baselineAt === null
+      ) {
         // The first off-page key may predate the edge even when its server
         // clock is ahead of the browser. Only a later change can settle it.
         stamps.set(key, {
@@ -307,6 +328,15 @@ export function settleHistoryActivity(
     rememberDurableKey(key, durableAt);
   }
   if (removed) changed(null);
+  else if (acknowledged) changed(userId);
+}
+
+/** A list key proves both timestamp and page membership. */
+export function settleHistoryActivity(
+  userId: string,
+  items: readonly HistoryItem[],
+): void {
+  reconcileDurableHistoryActivity(userId, items, "list");
 }
 
 /** A context key settles the timestamp but cannot prove page membership. */
@@ -314,33 +344,7 @@ function settleBackfilledHistoryActivity(
   userId: string,
   items: readonly HistoryItem[],
 ): void {
-  let acknowledged = false;
-  for (const item of items) {
-    if (item.recentAtMs === undefined) continue;
-    const key = keyFor(userId, item.epicId);
-    const durableAt = item.recentAtMs;
-    const stamp = stamps.get(key);
-    if (stamp !== undefined) {
-      if (stamp.awaitingListAt !== null && durableAt > stamp.awaitingListAt) {
-        stamps.set(key, { ...stamp, awaitingListAt: durableAt });
-        acknowledged = true;
-      } else if (
-        stamp.awaitingListAt === null &&
-        durableKeyCatchesUp(stamp, durableAt)
-      ) {
-        stamps.set(key, { ...stamp, awaitingListAt: durableAt });
-        acknowledged = true;
-      } else if (stamp.awaitingListAt === null && stamp.baselineAt === null) {
-        stamps.set(key, {
-          ...stamp,
-          baselineAt: durableAt,
-          baselineFromPendingRead: true,
-        });
-      }
-    }
-    rememberDurableKey(key, durableAt);
-  }
-  if (acknowledged) changed(userId);
+  reconcileDurableHistoryActivity(userId, items, "context");
 }
 
 interface ProjectedHistoryRow {
@@ -434,6 +438,30 @@ function hasUnsettledStamps(userId: string, now: number): boolean {
   return false;
 }
 
+/** One list read per scope plus each distinct, mounted context obligation. */
+async function refetchActivityScope(scope: string): Promise<void> {
+  const subscribers = scopeSubscribers.get(scope);
+  if (subscribers === undefined || subscribers.size === 0) return;
+  const eligible = [...subscribers.values()];
+  const listRefetch = eligible[0].listRefetch;
+  // Query caches are keyed by the exact request ids. Only identical batches
+  // share a cache entry; a partially overlapping batch must refresh its own.
+  const contextRefetches = new Map<string, () => Promise<void>>();
+  for (const subscriber of eligible) {
+    for (const batch of subscriber.contextBatches) {
+      if (batch.taskIds.length === 0) continue;
+      const key = JSON.stringify(batch.taskIds);
+      if (!contextRefetches.has(key)) contextRefetches.set(key, batch.refetch);
+    }
+  }
+  await Promise.all([
+    Promise.resolve().then(listRefetch),
+    ...[...contextRefetches.values()].map((refetch) =>
+      Promise.resolve().then(refetch),
+    ),
+  ]);
+}
+
 function scheduleActivityRefresh(state: RefreshState, delay: number): void {
   if (state.timer !== null || state.inFlight) return;
   state.timer = window.setTimeout(() => {
@@ -444,8 +472,7 @@ function scheduleActivityRefresh(state: RefreshState, delay: number): void {
     }
     state.inFlight = true;
     state.attempts += 1;
-    void state
-      .refetch()
+    void refetchActivityScope(state.scope)
       .catch(() => undefined)
       .finally(() => {
         state.inFlight = false;
@@ -478,11 +505,9 @@ function queueActivityRefresh(
   scope: string,
   userId: string,
   generation: number,
-  refetch: () => Promise<unknown>,
 ): void {
   const existing = refreshes.get(scope);
   if (existing !== undefined) {
-    existing.refetch = refetch;
     if (generation > (scheduledGenerations.get(scope) ?? 0)) {
       existing.deadline = Date.now() + STAMP_TTL_MS;
       existing.ownerlessUntil = Math.max(
@@ -506,7 +531,6 @@ function queueActivityRefresh(
     userId,
     timer: null,
     inFlight: false,
-    refetch,
     attempts: 0,
     deadline: Date.now() + STAMP_TTL_MS,
     ownerlessUntil: ownerlessRefreshDeadlines.get(userId) ?? 0,
@@ -538,8 +562,10 @@ export function useOptimisticActivityHistoryItems(
   input: OptimisticActivityHistoryInput,
 ): readonly HistoryItem[] {
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [subscriberId] = useState(() => Symbol("history-activity-subscriber"));
   const refreshEnabled = input.refreshEnabled ?? input.enabled;
   const refreshScope = input.refreshScope ?? "";
+  const scope = JSON.stringify([input.hostId, input.userId, refreshScope]);
   const workingEpicIds = useOwnTurnEpicIds(input.userId);
   const activitySnapshot = useSyncExternalStore(
     subscribe,
@@ -605,23 +631,21 @@ export function useOptimisticActivityHistoryItems(
     missing,
     nowMs,
   ]);
-  // The context batch has a five-minute title cache. Re-read its mounted
-  // batches with the list so an off-page activity key can actually catch up.
   const refetchList = input.refetch;
-  const refetchContexts = backfill.refetch;
-  const refetchActivity = useCallback(async () => {
-    await Promise.all([refetchList(), refetchContexts()]);
-  }, [refetchContexts, refetchList]);
+  const contextBatches = backfill.refetchBatches;
   useEffect(() => {
     if (!refreshEnabled || input.userId === null) return;
-    const scope = JSON.stringify([input.hostId, input.userId, refreshScope]);
-    scopeSubscribers.set(scope, (scopeSubscribers.get(scope) ?? 0) + 1);
+    const subscriber = subscriberId;
+    const subscribers =
+      scopeSubscribers.get(scope) ?? new Map<symbol, ScopeSubscriber>();
+    subscribers.set(subscriber, {
+      listRefetch: () => Promise.resolve(),
+      contextBatches: [],
+    });
+    scopeSubscribers.set(scope, subscribers);
     return () => {
-      const remaining = (scopeSubscribers.get(scope) ?? 1) - 1;
-      if (remaining > 0) {
-        scopeSubscribers.set(scope, remaining);
-        return;
-      }
+      subscribers.delete(subscriber);
+      if (subscribers.size > 0) return;
       scopeSubscribers.delete(scope);
       const state = refreshes.get(scope);
       const generation = scheduledGenerations.get(scope);
@@ -643,12 +667,25 @@ export function useOptimisticActivityHistoryItems(
       }
       refreshes.delete(scope);
     };
-  }, [input.hostId, refreshEnabled, refreshScope, input.userId]);
+  }, [refreshEnabled, scope, input.userId, subscriberId]);
+  useEffect(() => {
+    if (!refreshEnabled || input.userId === null) return;
+    const subscriber = scopeSubscribers.get(scope)?.get(subscriberId);
+    if (subscriber === undefined) return;
+    subscriber.listRefetch = refetchList;
+    subscriber.contextBatches = contextBatches;
+  }, [
+    refreshEnabled,
+    scope,
+    input.userId,
+    refetchList,
+    contextBatches,
+    subscriberId,
+  ]);
   useEffect(() => {
     if (input.userId === null) return;
     observeActiveHistoryEdges(input.userId, workingEpicIds, Date.now());
     if (!refreshEnabled) return;
-    const scope = JSON.stringify([input.hostId, input.userId, refreshScope]);
     const generation = generations.get(input.userId) ?? 0;
     const consumedGeneration = Math.max(
       scheduledGenerations.get(scope) ?? 0,
@@ -656,21 +693,9 @@ export function useOptimisticActivityHistoryItems(
     );
     if (generation > consumedGeneration) {
       settledGenerations.delete(scope);
-      queueActivityRefresh(scope, input.userId, generation, refetchActivity);
-    } else {
-      const state = refreshes.get(scope);
-      if (state !== undefined) state.refetch = refetchActivity;
+      queueActivityRefresh(scope, input.userId, generation);
     }
-  }, [
-    activitySnapshot,
-    input.enabled,
-    input.hostId,
-    refetchActivity,
-    refreshEnabled,
-    refreshScope,
-    input.userId,
-    workingEpicIds,
-  ]);
+  }, [activitySnapshot, refreshEnabled, scope, input.userId, workingEpicIds]);
   useEffect(() => {
     // A filtered page may contain the task while the unfiltered Recent page
     // still omits it; only the latter can retire an off-page context row.
