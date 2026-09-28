@@ -261,8 +261,9 @@ export interface ProviderProfileLoginFlow {
   /** Either of the flow's own mutations in flight. */
   readonly busy: boolean;
   /** `providers.startLogin` specifically - the "queued behind another
-   *  sign-in" wording only applies while this mutation, not `awaitLogin`,
-   *  is pending. */
+   *  sign-in" wording only applies while this request, not `awaitLogin`,
+   *  is pending. Read from the flow's `starting` state, not the mutation's
+   *  `isPending` (see the note above the return). */
   readonly startPending: boolean;
   readonly start: (options: {
     readonly label: string | null;
@@ -592,8 +593,24 @@ export function useProviderProfileLoginFlow(
       setAttemptId(thisAttemptId);
       setRestartNotice(notice);
       setState({ kind: "starting", cancelRequested: false });
-      startLogin.mutate(
-        {
+      // The outcome travels on `mutateAsync`'s promise, never on per-`mutate`
+      // callbacks. The Settings reauth panel starts this from a MOUNT effect,
+      // and under StrictMode (every dev build) that effect's setup -> cleanup
+      // -> setup unsubscribes the mutation's observer in between: TanStack
+      // then detaches the observer from the mutation already in flight and
+      // never re-attaches it. Its per-`mutate` callbacks are dropped and its
+      // `isPending` stays true for good, while the hook's own `onError` toast
+      // still fires - the dialog sat on "Opening the sign-in page…" under a
+      // "Couldn't start the sign-in flow" toast. The promise is the mutation's
+      // own `execute()`, which settles whatever its observer is doing.
+      //
+      // Per-`mutate` callbacks were also dropped once the caller unmounted,
+      // and a superseded attempt never heard its answer; the guard below keeps
+      // both of those, so an answer nobody is waiting for still stops here.
+      const startAbandoned = (): boolean =>
+        attemptIdRef.current !== thisAttemptId || unmountedRef.current;
+      void startLogin
+        .mutateAsync({
           providerId,
           profileId: existingProfileId,
           createProfile:
@@ -603,9 +620,10 @@ export function useProviderProfileLoginFlow(
                   shareSkillsAndPlugins: options.shareSkillsAndPlugins,
                 }
               : null,
-        },
-        {
-          onSuccess: (data) => {
+        })
+        .then(
+          (data) => {
+            if (startAbandoned()) return;
             // Reauth always awaits the profile it was invoked for - the
             // response never mints a different id for an existing profile.
             // Create has no id until this response supplies one.
@@ -719,15 +737,19 @@ export function useProviderProfileLoginFlow(
             };
             awaitOnce();
           },
-          onError: (error) => {
+          // Every rejection is consumed here, abandoned or not; the hook's own
+          // `onError` has already toasted it. The second argument of `then`,
+          // not a `catch`, so a throw in the success arm above is never
+          // misread as a refused start.
+          (error: unknown) => {
+            if (startAbandoned()) return;
             if (cancelRequestedRef.current) {
               finishCancellation(null);
               return;
             }
             fail(failureMessages.notStarted, analyticsBlockerFromError(error));
           },
-        },
-      );
+        );
     },
     [
       awaitLogin,
@@ -757,10 +779,10 @@ export function useProviderProfileLoginFlow(
       readonly label: string | null;
       readonly shareSkillsAndPlugins: boolean;
     }): void => {
+      // `starting`, not `startLogin.isPending`: see `busy` below.
       if (
         state.kind === "starting" ||
         state.kind === "waiting" ||
-        startLogin.isPending ||
         awaitLogin.isPending
       ) {
         return;
@@ -775,14 +797,7 @@ export function useProviderProfileLoginFlow(
       });
       beginLogin(options, null);
     },
-    [
-      awaitLogin.isPending,
-      beginLogin,
-      mode,
-      providerId,
-      startLogin.isPending,
-      state.kind,
-    ],
+    [awaitLogin.isPending, beginLogin, mode, providerId, state.kind],
   );
 
   const commitPending =
@@ -885,12 +900,17 @@ export function useProviderProfileLoginFlow(
   if (submitLoginCode.isPending) codePastePhase = "submitting";
   else if (commitPending) codePastePhase = "verifying";
 
+  // The start leg's pending flag is `starting`, never `startLogin.isPending`.
+  // `beginLogin` enters `starting` right before `mutateAsync`, and only that
+  // promise's answer leaves it (or a known-profile reauth cancel, which
+  // unmounts its panel with it). Where the observer was detached (see
+  // `beginLogin`), `isPending` instead stays true forever: it would pin the
+  // step on "Opening the sign-in page…" and keep Retry disabled.
   return {
     mode,
     state,
-    busy:
-      state.kind === "starting" || startLogin.isPending || awaitLogin.isPending,
-    startPending: state.kind === "starting" || startLogin.isPending,
+    busy: state.kind === "starting" || awaitLogin.isPending,
+    startPending: state.kind === "starting",
     start,
     cancel,
     cancelPending: cancelLogin.isPending,

@@ -101,9 +101,18 @@ vi.mock("@/lib/host/runtime", async (importActual) => {
     useHostBinding: () => ({ hostClient: { id: "real-client" } }),
   };
 });
+// The login flow starts through `mutateAsync` (its promise settles even where
+// StrictMode detached the observer); this adapts it onto the recorded
+// `(variables, { onSuccess, onError })` fake every test drives.
 vi.mock("@/hooks/providers/use-providers-start-login-mutation", () => ({
   useProvidersStartLogin: () => ({
-    mutate: mocks.startLoginMutate,
+    mutateAsync: (variables: unknown) =>
+      new Promise((resolve, reject) => {
+        mocks.startLoginMutate(variables, {
+          onSuccess: resolve,
+          onError: reject,
+        });
+      }),
     isPending: false,
   }),
 }));
@@ -196,6 +205,15 @@ function mockStartLoginAlwaysSucceeds(): void {
       });
     },
   );
+}
+
+/** Presses Authenticate and lets the start's answer land: the flow reads it
+ *  from `mutateAsync`'s promise, a microtask after the fake settles. */
+async function clickAuthenticate(): Promise<void> {
+  await act(() => {
+    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    return Promise.resolve();
+  });
 }
 
 function latestAwaitLoginCall(): readonly [
@@ -840,7 +858,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(mocks.refreshProviders).toHaveBeenCalled();
   });
 
-  it("awaits the login-completion edge on Authenticate (no polling)", () => {
+  it("awaits the login-completion edge on Authenticate (no polling)", async () => {
     mocks.startLoginMutate.mockImplementation(
       (
         _vars: { providerId: string },
@@ -872,7 +890,7 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    await clickAuthenticate();
     // Spinner shows, and we await the host's completion edge instead of a
     // 2s `forceAuthRefresh` poll.
     expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
@@ -882,7 +900,7 @@ describe("<ProviderReauthBanner />", () => {
     );
   });
 
-  it("does not show a code-paste field for a provider without the codePaste capability", () => {
+  it("does not show a code-paste field for a provider without the codePaste capability", async () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
@@ -897,12 +915,12 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    await clickAuthenticate();
     expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
     expect(screen.queryByLabelText("Paste the code")).toBeNull();
   });
 
-  it("expands into a compact code-paste row and submits with the ambient (null) profile id", () => {
+  it("expands into a compact code-paste row and submits with the ambient (null) profile id", async () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
@@ -917,7 +935,7 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    await clickAuthenticate();
     expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
 
     fireEvent.click(screen.getByRole("button", { name: /Open browser/ }));
@@ -938,7 +956,7 @@ describe("<ProviderReauthBanner />", () => {
     );
   });
 
-  it("offers Authenticate with a paste field on a remote host when codePaste is set", () => {
+  it("offers Authenticate with a paste field on a remote host when codePaste is set", async () => {
     mocks.hostKind = "remote";
     mockStartLoginAlwaysSucceeds();
     render(
@@ -954,7 +972,7 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    await clickAuthenticate();
     expect(screen.getByLabelText("Paste the code")).toBeDefined();
     expect(mocks.openLink).toHaveBeenCalledWith(
       "http://localhost:56988/callback",
@@ -963,7 +981,7 @@ describe("<ProviderReauthBanner />", () => {
     );
   });
 
-  it("surfaces device_auth_unavailable instead of provider-unavailable copy", () => {
+  it("surfaces device_auth_unavailable instead of provider-unavailable copy", async () => {
     mocks.startLoginMutate.mockImplementation(
       (
         _vars: unknown,
@@ -1006,12 +1024,12 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    await clickAuthenticate();
     expect(screen.getByText(/Device-code login is not enabled/)).toBeDefined();
     expect(screen.queryByText(/did not start/)).toBeNull();
   });
 
-  it("touches the keepalive with the ambient (null) profile id when the paste field is focused", () => {
+  it("touches the keepalive with the ambient (null) profile id when the paste field is focused", async () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
@@ -1026,7 +1044,7 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    await clickAuthenticate();
     fireEvent.focus(screen.getByLabelText("Paste the code"));
 
     expect(mocks.touchLoginMutate).toHaveBeenCalledWith({
@@ -1052,7 +1070,7 @@ describe("<ProviderReauthBanner />", () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+      await clickAuthenticate();
       await act(() => vi.advanceTimersByTimeAsync(181_000));
 
       expect(mocks.touchLoginMutate).toHaveBeenCalledTimes(3);
@@ -1093,7 +1111,7 @@ describe("<ProviderReauthBanner />", () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+      await clickAuthenticate();
       await act(() => vi.advanceTimersByTimeAsync(61_000));
       expect(mocks.touchLoginMutate).toHaveBeenCalledTimes(1);
 
@@ -1131,7 +1149,7 @@ describe("<ProviderReauthBanner />", () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+      await clickAuthenticate();
       await act(async () => {
         fireEvent.click(
           screen.getByRole("button", { name: "Copy sign-in link" }),
@@ -1159,7 +1177,7 @@ describe("<ProviderReauthBanner />", () => {
     }
   });
 
-  it("allows the fresh child's first keepalive immediately after an auto-restart", () => {
+  it("allows the fresh child's first keepalive immediately after an auto-restart", async () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
@@ -1174,13 +1192,14 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    await clickAuthenticate();
     fireEvent.focus(screen.getByLabelText("Paste the code"));
     expect(mocks.touchLoginMutate).toHaveBeenCalledTimes(1);
 
     const [, firstAwaitOptions] = latestAwaitLoginCall();
-    act(() => {
+    await act(() => {
       firstAwaitOptions.onSuccess({ codeRejected: true, state: undefined });
+      return Promise.resolve();
     });
     expect(mocks.startLoginMutate).toHaveBeenCalledTimes(2);
 
@@ -1188,7 +1207,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(mocks.touchLoginMutate).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps an authenticated ambient result terminal even when awaitLogin also reports codeRejected", () => {
+  it("keeps an authenticated ambient result terminal even when awaitLogin also reports codeRejected", async () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
@@ -1203,7 +1222,7 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    await clickAuthenticate();
     const [, awaitOptions] = latestAwaitLoginCall();
     act(() => {
       awaitOptions.onSuccess({
@@ -1220,7 +1239,7 @@ describe("<ProviderReauthBanner />", () => {
     ).toBeNull();
   });
 
-  it("auto-restarts with a fresh sign-in link when the submitted code is rejected, keeping the user in the banner", () => {
+  it("auto-restarts with a fresh sign-in link when the submitted code is rejected, keeping the user in the banner", async () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
@@ -1235,15 +1254,16 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    await clickAuthenticate();
     const input = screen.getByLabelText("Paste the code");
     fireEvent.paste(input, {
       clipboardData: { getData: () => "abc123#xyz789" },
     });
 
     const [, awaitOptions] = latestAwaitLoginCall();
-    act(() => {
+    await act(() => {
       awaitOptions.onSuccess({ codeRejected: true, state: undefined });
+      return Promise.resolve();
     });
 
     // The rejection triggered a fresh `startLogin` call and stayed in the
@@ -1259,7 +1279,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.getByLabelText("Paste the code")).toHaveProperty("value", "");
   });
 
-  it("restarts with a session-expired notice when awaitLogin resolves not-authenticated before a late noActiveLogin submit response arrives (fixup settlement join, ambient await-first ordering)", () => {
+  it("restarts with a session-expired notice when awaitLogin resolves not-authenticated before a late noActiveLogin submit response arrives (fixup settlement join, ambient await-first ordering)", async () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
@@ -1274,7 +1294,7 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    await clickAuthenticate();
     const input = screen.getByLabelText("Paste the code");
     fireEvent.paste(input, {
       clipboardData: { getData: () => "abc123#xyz789" },
@@ -1293,8 +1313,9 @@ describe("<ProviderReauthBanner />", () => {
 
     // The submit's verdict arrives late and must still settle the attempt.
     const [, submitOptions] = latestSubmitLoginCodeCall();
-    act(() => {
+    await act(() => {
       submitOptions.onSuccess({ outcome: "noActiveLogin" });
+      return Promise.resolve();
     });
 
     expect(mocks.startLoginMutate).toHaveBeenCalledTimes(2);
@@ -1303,7 +1324,7 @@ describe("<ProviderReauthBanner />", () => {
     ).toBeDefined();
   });
 
-  it("restarts with a session-expired notice when a noActiveLogin submit response is followed by a fulfilled-but-unauthenticated awaitLogin (fixup settlement join, ambient submit-first ordering)", () => {
+  it("restarts with a session-expired notice when a noActiveLogin submit response is followed by a fulfilled-but-unauthenticated awaitLogin (fixup settlement join, ambient submit-first ordering)", async () => {
     mockStartLoginAlwaysSucceeds();
     render(
       <ProviderReauthBanner
@@ -1318,7 +1339,7 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    await clickAuthenticate();
     const input = screen.getByLabelText("Paste the code");
     fireEvent.paste(input, {
       clipboardData: { getData: () => "abc123#xyz789" },
@@ -1333,11 +1354,12 @@ describe("<ProviderReauthBanner />", () => {
     // status is still not authenticated. Presence of a completed call is
     // not success; only an authenticated status is (fixup review finding 2).
     const [, awaitOptions] = latestAwaitLoginCall();
-    act(() => {
+    await act(() => {
       awaitOptions.onSuccess({
         codeRejected: false,
         state: { auth: { status: "unauthenticated" } },
       });
+      return Promise.resolve();
     });
 
     expect(mocks.startLoginMutate).toHaveBeenCalledTimes(2);
@@ -1346,7 +1368,7 @@ describe("<ProviderReauthBanner />", () => {
     ).toBeDefined();
   });
 
-  it("shows a verifying header and locks the field once the relay is accepted and the exchange is still pending (statefulness fixup)", () => {
+  it("shows a verifying header and locks the field once the relay is accepted and the exchange is still pending (statefulness fixup)", async () => {
     mockStartLoginAlwaysSucceeds();
     const view = render(
       <ProviderReauthBanner
@@ -1361,7 +1383,7 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    await clickAuthenticate();
     const input = screen.getByLabelText("Paste the code");
     fireEvent.paste(input, {
       clipboardData: { getData: () => "abc123#xyz789" },
@@ -1409,7 +1431,7 @@ describe("<ProviderReauthBanner />", () => {
     );
   });
 
-  it("shows the Cancel button's pending state per the AGENTS.md recipe (disabled, unchanged label, inline spinner)", () => {
+  it("shows the Cancel button's pending state per the AGENTS.md recipe (disabled, unchanged label, inline spinner)", async () => {
     mocks.cancelLoginPending = true;
     mockStartLoginAlwaysSucceeds();
     render(
@@ -1425,7 +1447,7 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    await clickAuthenticate();
 
     const cancelButton = screen.getByRole("button", { name: "Cancel" });
     expect(cancelButton.textContent).toContain("Cancel");
@@ -1465,7 +1487,7 @@ describe("<ProviderReauthBanner />", () => {
     );
   });
 
-  it("kills the login child on explicit Cancel but not on teardown", () => {
+  it("kills the login child on explicit Cancel but not on teardown", async () => {
     // Drive the OAuth flow into its awaiting state by completing startLogin.
     mocks.startLoginMutate.mockImplementation(
       (
@@ -1498,7 +1520,7 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    await clickAuthenticate();
     // Now waiting on the browser loopback; the child must stay alive.
     expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
 
@@ -1538,7 +1560,7 @@ describe("<ProviderReauthBanner />", () => {
         onContinueOnAmbient={null}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    await clickAuthenticate();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(mocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "claude-code",

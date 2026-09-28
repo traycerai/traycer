@@ -48,6 +48,12 @@ export const CLI_ERROR_CODES = {
 
   // --- Host supervisor + lifecycle ---
   HOST_NOT_RUNNING: "E_HOST_NOT_RUNNING",
+  // The host's process is there and its endpoint is published, but the
+  // connection to it failed or went quiet: the socket errored, closed before
+  // a frame, or a frame did not arrive inside its timeout. Distinct from
+  // HOST_NOT_RUNNING (nothing to dial) and from every code the host itself
+  // answers with - here nothing answered.
+  HOST_UNREACHABLE: "E_HOST_UNREACHABLE",
   // A running host reported (or, fail-safe, was assumed to have) work in
   // progress, so the CLI refused to reinstall/restart it. The desktop maps
   // this to its "host busy" flow (surface the host, run the renderer's
@@ -198,6 +204,7 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.AUTH_REJECTED,
     CLI_ERROR_CODES.AUTH_NETWORK,
     CLI_ERROR_CODES.HOST_NOT_RUNNING,
+    CLI_ERROR_CODES.HOST_UNREACHABLE,
     CLI_ERROR_CODES.HOST_BUSY,
     CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
     CLI_ERROR_CODES.HOST_ALREADY_RUNNING,

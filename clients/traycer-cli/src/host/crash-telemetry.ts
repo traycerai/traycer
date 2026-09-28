@@ -208,9 +208,181 @@ export function captureHostCrashEvent(event: HostCrashEvent): void {
 }
 
 /**
+ * The count for a run of crashes {@link HostCrashReportThrottle} held back.
+ * A `warning`, under its own fingerprint, so the run is one line beside the
+ * issue it belongs to rather than more events inside it.
+ */
+export function captureHostCrashSummary(
+  event: HostCrashEvent,
+  suppressedCount: number,
+  windowStartedAt: number,
+): void {
+  Sentry.withScope((scope) => {
+    scope.setLevel("warning");
+    scope.setFingerprint([...event.fingerprint, "repeated"]);
+    scope.setTags(event.tags);
+    scope.setExtras({ suppressedCount, windowStartedAt });
+    if (event.hostId !== null) {
+      scope.setUser({ id: event.hostId });
+    }
+    Sentry.captureMessage(`${event.message} (repeated)`, "warning");
+  });
+}
+
+/** Crashes of one kind reported in full before the throttle starts counting. */
+export const HOST_CRASH_REPORTS_BEFORE_THROTTLE = 3;
+
+/**
+ * How long a counting window runs before its summary is sent, and how long a
+ * kind must stay quiet before it is reported in full again.
+ */
+export const HOST_CRASH_SUMMARY_WINDOW_MS = 60 * 60 * 1000;
+
+export interface HostCrashReportThrottleDeps {
+  readonly now: () => number;
+  readonly capture: (event: HostCrashEvent) => void;
+  readonly captureSummary: (
+    event: HostCrashEvent,
+    suppressedCount: number,
+    windowStartedAt: number,
+  ) => void;
+  /** Runs `callback` once after `delayMs`; must not keep the process alive. */
+  readonly schedule: (callback: () => void, delayMs: number) => void;
+}
+
+interface HostCrashThrottleState {
+  /** Full reports sent; only a capture that returned counts. */
+  reported: number;
+  lastCrashAt: number;
+  /** Crashes held back since the last summary was sent. */
+  suppressedCount: number;
+  /** The most recent held-back crash, which the summary is sent as. */
+  lastSuppressed: HostCrashEvent | null;
+  /** When the first crash of the open window was held back. */
+  windowStartedAt: number;
+  /** Whether a summary is scheduled for the open window. */
+  summaryScheduled: boolean;
+}
+
+/**
+ * Bounds what one crash-looping host can report.
+ *
+ * The supervisor relaunches a crashed host and reports each crash. A host that
+ * cannot start crashes on every relaunch, for as long as the machine is on:
+ * one such host reported 7,023 crashes in four days. What those events say is
+ * carried by the first few and by how many followed, so that is what is sent:
+ * the first {@link HOST_CRASH_REPORTS_BEFORE_THROTTLE} crashes of a kind in
+ * full, then a count. The first held-back crash opens a window of
+ * {@link HOST_CRASH_SUMMARY_WINDOW_MS}, and when it ends one summary carries
+ * how many were held back in it, whether or not the host is still crashing.
+ * A kind that then stays quiet for a whole window is reported in full again
+ * on its next crash.
+ *
+ * Keyed by the event's fingerprint, the same (platform, kind) pair that groups
+ * the issue, so a host that starts dying a different way is reported in full
+ * again. The state lives in the supervisor process and ends with it: a count
+ * still open when the supervisor exits is not sent. A supervisor restart is
+ * rare and bounded, and is itself worth a fresh report.
+ */
+export class HostCrashReportThrottle {
+  private readonly deps: HostCrashReportThrottleDeps;
+  private readonly states = new Map<string, HostCrashThrottleState>();
+
+  constructor(deps: HostCrashReportThrottleDeps) {
+    this.deps = deps;
+  }
+
+  report(event: HostCrashEvent): void {
+    const key = event.fingerprint.join("|");
+    const at = this.deps.now();
+    const existing = this.states.get(key);
+    const state =
+      existing !== undefined && !this.hasGoneQuiet(existing, at)
+        ? existing
+        : undefined;
+    if (state === undefined) {
+      // Throws past here when the capture fails, before anything is
+      // recorded: a crash that was never sent does not spend a full report.
+      this.deps.capture(event);
+      this.states.set(key, {
+        reported: 1,
+        lastCrashAt: at,
+        suppressedCount: 0,
+        lastSuppressed: null,
+        windowStartedAt: at,
+        summaryScheduled: false,
+      });
+      return;
+    }
+    state.lastCrashAt = at;
+    if (state.reported < HOST_CRASH_REPORTS_BEFORE_THROTTLE) {
+      this.deps.capture(event);
+      state.reported += 1;
+      return;
+    }
+    state.suppressedCount += 1;
+    state.lastSuppressed = event;
+    if (state.summaryScheduled) {
+      return;
+    }
+    state.summaryScheduled = true;
+    state.windowStartedAt = at;
+    this.deps.schedule(() => {
+      this.sendSummary(state);
+    }, HOST_CRASH_SUMMARY_WINDOW_MS);
+  }
+
+  /**
+   * Quiet for a whole window with nothing left to send. A count whose summary
+   * failed is kept, so the next window's summary carries it.
+   */
+  private hasGoneQuiet(state: HostCrashThrottleState, at: number): boolean {
+    return (
+      !state.summaryScheduled &&
+      state.suppressedCount === 0 &&
+      at - state.lastCrashAt >= HOST_CRASH_SUMMARY_WINDOW_MS
+    );
+  }
+
+  private sendSummary(state: HostCrashThrottleState): void {
+    state.summaryScheduled = false;
+    if (state.suppressedCount === 0 || state.lastSuppressed === null) {
+      return;
+    }
+    try {
+      this.deps.captureSummary(
+        state.lastSuppressed,
+        state.suppressedCount,
+        state.windowStartedAt,
+      );
+    } catch {
+      // Runs from a timer, where a throw would be an uncaught exception in
+      // the supervisor. The count stays for the next window's summary.
+      return;
+    }
+    state.suppressedCount = 0;
+    state.lastSuppressed = null;
+  }
+}
+
+const hostCrashReportThrottle = new HostCrashReportThrottle({
+  now: () => Date.now(),
+  capture: captureHostCrashEvent,
+  captureSummary: (event, suppressedCount, windowStartedAt) => {
+    captureHostCrashSummary(event, suppressedCount, windowStartedAt);
+    retireStalledTransportAfterBudget();
+  },
+  schedule: (callback, delayMs) => {
+    const timer = setTimeout(callback, delayMs);
+    timer.unref?.();
+  },
+});
+
+/**
  * The default `reportHostCrash` dependency: bounded identity read, then one
- * event. Never throws - a telemetry failure on the exit path must not cost
- * the relaunch that follows it.
+ * event, or a count toward the next summary once this kind of crash is
+ * repeating (see {@link HostCrashReportThrottle}). Never throws - a telemetry
+ * failure on the exit path must not cost the relaunch that follows it.
  */
 export async function reportHostCrashToSentry(
   telemetry: HostCrashTelemetry,
@@ -233,7 +405,7 @@ export async function reportHostCrashToSentry(
     identity = null;
   }
   try {
-    captureHostCrashEvent(buildHostCrashEvent(telemetry, identity));
+    hostCrashReportThrottle.report(buildHostCrashEvent(telemetry, identity));
   } catch {
     // Intentionally silent: see the module comment.
     return;
