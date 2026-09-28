@@ -1,5 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { act, cleanup, render, renderHook, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  waitFor,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import type {
@@ -158,7 +164,7 @@ it("does not close and recreate the worktree subscription when live and predicte
   expect(acceptedSubscriptions).toHaveLength(1);
   expect(callerClosedSockets).toHaveLength(0);
 
-  client.close();
+  client.close("test-complete");
 });
 
 it("preserves negotiated-version object identity when a session closes to the same predicted version", async () => {
@@ -216,7 +222,7 @@ it("preserves negotiated-version object identity when a session closes to the sa
   act(() => session.close());
   expect(result.current).toBe(negotiatedVersion);
   expect(sockets[0]?.callerClose?.reason).toBe("closed-by-caller");
-  client.close();
+  client.close("test-complete");
 });
 
 it("paces rapid worktree stream replacements on a shared cursor from 250ms up to 5s", () => {
@@ -241,7 +247,14 @@ it("paces rapid worktree stream replacements on a shared cursor from 250ms up to
     onChanged: () => true,
     onConnectionStatus: () => undefined,
   };
-  const delays = [250, 500, 1_000, 2_000, 4_000, ...Array<number>(14).fill(5_000)];
+  const delays = [
+    250,
+    500,
+    1_000,
+    2_000,
+    4_000,
+    ...Array<number>(14).fill(5_000),
+  ];
   const admittedClients: WorktreeChangedStreamClient[] = [];
   const admit = (): WorktreeChangedStreamClient => {
     const client = new WorktreeChangedStreamClient({

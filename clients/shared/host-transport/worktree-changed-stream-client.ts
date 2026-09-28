@@ -84,9 +84,7 @@ export class WorktreeChangedStreamClient {
     }
     this.pacer = pacer;
     const elapsedSinceClose =
-      pacer.lastClosedAtMs === null
-        ? null
-        : Date.now() - pacer.lastClosedAtMs;
+      pacer.lastClosedAtMs === null ? null : Date.now() - pacer.lastClosedAtMs;
     if (
       elapsedSinceClose === null ||
       elapsedSinceClose < 0 ||

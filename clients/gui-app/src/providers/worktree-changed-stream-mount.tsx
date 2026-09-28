@@ -56,11 +56,7 @@ export function WorktreeChangedStreamMount(): ReactNode {
   } | null>(null);
 
   useEffect(() => {
-    if (
-      wsStreamClient === null ||
-      hostId === null ||
-      unsupported
-    ) {
+    if (wsStreamClient === null || hostId === null || unsupported) {
       return;
     }
     // The host's freshness sweep pushes one event per re-derived row; the
