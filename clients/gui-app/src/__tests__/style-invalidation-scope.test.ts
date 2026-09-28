@@ -64,7 +64,9 @@ function broadHasSelectors(css: string): string[] {
   const found: string[] = [];
   for (const match of flat.matchAll(/:has\(/g)) {
     const before = flat.slice(0, match.index);
-    const compound = /[^\s>+~,{}]*$/.exec(before)?.[0] ?? "";
+    // A bracketed attribute value may hold spaces (`[data-label="wide column"]`),
+    // so a whole `[...]` counts as one piece of the compound.
+    const compound = /(?:\[[^\]]*\]|[^\s>+~,{}])*$/.exec(before)?.[0] ?? "";
     if (compound === "" || BROAD_SUBJECT.test(compound)) {
       found.push(`${before.split("\n").length}: ${compound}:has(`);
     }
@@ -84,6 +86,9 @@ describe("broad :has() selectors", () => {
     expect(
       broadHasSelectors("[data-layout-column]:has([data-a]) { x: y }"),
     ).toHaveLength(1);
+    expect(
+      broadHasSelectors('body[data-label="wide column"]:has(.child) { x: y }'),
+    ).toHaveLength(1);
   });
 
   it("allows a :has() on a local component root, a :not(:has()) filter, and a commented mention", () => {
@@ -92,6 +97,7 @@ describe("broad :has() selectors", () => {
         ".group\\/tab:has(:focus-visible) .title { x: y }\n" +
           "#root:has(> [data-boot-ground]) { x: y }\n" +
           "[data-a] > :not(:has([data-b])) { x: y }\n" +
+          '.card[data-label="wide column"]:has(.child) { x: y }\n' +
           "/* :root:has([data-a]) */",
       ),
     ).toEqual([]);
