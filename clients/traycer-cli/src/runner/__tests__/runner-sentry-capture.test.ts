@@ -133,6 +133,37 @@ describe("runner Sentry capture", () => {
     expect(crumb.data.code).toBe("E_HOST_BUSY");
   });
 
+  // HOST_UNREACHABLE is a connection-failed-or-went-quiet state the command
+  // has already reported to the user (see mapHostRpcError's comment in
+  // host-rpc.ts), not a CLI defect - so it belongs in EXPECTED_CLI_ERROR_CODES
+  // and must not reach Sentry.captureException. Mirrors the HOST_BUSY case
+  // above: same envelope/exit-code contract, distinct expected code.
+  it("does not capture HOST_UNREACHABLE, leaves a breadcrumb naming it, and still answers the caller", async () => {
+    const { CLI_ERROR_CODES, CliError } = await import("../errors");
+
+    await runThrowing(
+      new CliError({
+        code: CLI_ERROR_CODES.HOST_UNREACHABLE,
+        message: "WebSocket frame timed out after 15000ms",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+
+    expect(sentryMocks.captureException).not.toHaveBeenCalled();
+    expect(sentryMocks.addBreadcrumb).toHaveBeenCalledTimes(1);
+    const crumb = sentryMocks.addBreadcrumb.mock.calls[0][0] as Breadcrumb;
+    expect(crumb.category).toBe("cli");
+    expect(crumb.data.code).toBe("E_HOST_UNREACHABLE");
+
+    const terminal = terminalEnvelope();
+    expect(terminal?.status).toBe("error");
+    expect((terminal?.error as Record<string, unknown>).code).toBe(
+      "E_HOST_UNREACHABLE",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
   it("captures a code that means the machine is broken", async () => {
     const { CLI_ERROR_CODES, CliError } = await import("../errors");
     const err = new CliError({
