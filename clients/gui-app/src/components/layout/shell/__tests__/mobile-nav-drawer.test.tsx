@@ -103,8 +103,8 @@ vi.mock("@/hooks/home/use-history-query", () => ({
 
 // Mock the shared activity projection inputs at their boundaries: turn ids
 // determine optimistic activity, and the by-id batch answers missing rows.
-vi.mock("@/stores/use-working-epic-ids", () => ({
-  useTurnEpicIds: (): ReadonlySet<string> => testState.workingEpicIds,
+vi.mock("@/stores/use-own-turn-epic-ids", () => ({
+  useOwnTurnEpicIds: (): ReadonlySet<string> => testState.workingEpicIds,
 }));
 
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({

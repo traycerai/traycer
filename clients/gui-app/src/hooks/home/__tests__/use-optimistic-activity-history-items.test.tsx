@@ -17,8 +17,8 @@ const hookState = vi.hoisted(() => ({
   contexts: new Map<string, ListTaskLight>(),
 }));
 
-vi.mock("@/stores/use-working-epic-ids", () => ({
-  useTurnEpicIds: () => hookState.workingEpicIds,
+vi.mock("@/stores/use-own-turn-epic-ids", () => ({
+  useOwnTurnEpicIds: () => hookState.workingEpicIds,
 }));
 
 vi.mock("@/stores/auth/auth-store", () => ({

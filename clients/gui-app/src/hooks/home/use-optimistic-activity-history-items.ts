@@ -11,7 +11,7 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
-import { useTurnEpicIds } from "@/stores/use-working-epic-ids";
+import { useOwnTurnEpicIds } from "@/stores/use-own-turn-epic-ids";
 
 const MAX_ACTIVE_ROWS = 64;
 const MAX_SETTLED_REFRESH_SCOPES = 64;
@@ -310,7 +310,7 @@ export function useOptimisticActivityHistoryItems(
   const [nowMs, setNowMs] = useState(() => Date.now());
   const refreshEnabled = input.refreshEnabled ?? input.enabled;
   const refreshScope = input.refreshScope ?? "";
-  const workingEpicIds = useTurnEpicIds();
+  const workingEpicIds = useOwnTurnEpicIds(input.userId);
   const activitySnapshot = useSyncExternalStore(
     subscribe,
     snapshot,

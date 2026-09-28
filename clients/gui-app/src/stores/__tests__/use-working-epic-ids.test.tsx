@@ -13,6 +13,8 @@ import {
   resetAgentActivity,
 } from "@/__tests__/agent-activity-harness";
 import { epicActivityStatusFromSources } from "@/hooks/epic/use-epic-activity-status";
+import type { ChatProjection } from "@/stores/epics/open-epic/types";
+import { useOwnTurnEpicIds } from "@/stores/use-own-turn-epic-ids";
 import {
   useTurnEpicIds,
   useWorkingEpicIds,
@@ -57,6 +59,22 @@ function registerSessionHoldingAgents(agentIds: readonly string[]) {
   );
   handle.store.setState({ chats: { allIds: [...agentIds], byId: {} } });
   return handle;
+}
+
+function chatProjection(id: string, userId: string): ChatProjection {
+  return {
+    id,
+    title: id,
+    parentId: null,
+    createdAt: 1,
+    updatedAt: 1,
+    userId,
+    hostId: "host-a",
+    isTitleEditedByUser: false,
+    docResident: false,
+    settings: null,
+    archivedAt: null,
+  };
 }
 
 function publishWorking(agentIds: readonly string[]): void {
@@ -167,6 +185,39 @@ describe("useTurnEpicIds", () => {
       publishWorking([AGENT_ID]);
     });
     expect(result.current.has(EPIC_ID)).toBe(true);
+  });
+});
+
+describe("useOwnTurnEpicIds", () => {
+  it("does not treat a collaborator's turn as the viewer's Recent activity", () => {
+    const handle = registerSessionHoldingAgents(["foreign", "mine"]);
+    handle.store.setState({
+      chats: {
+        allIds: ["foreign", "mine"],
+        byId: {
+          foreign: chatProjection("foreign", "collaborator"),
+          mine: chatProjection("mine", "viewer"),
+        },
+      },
+    });
+    const { result } = renderHook(() => useOwnTurnEpicIds("viewer"));
+
+    act(() => publishWorking(["foreign"]));
+    expect(result.current.has(EPIC_ID)).toBe(false);
+
+    // The epic was already active; the owner-specific subscription must still
+    // notice that one of this viewer's chats began a turn.
+    act(() => publishWorking(["foreign", "mine"]));
+    expect(result.current.has(EPIC_ID)).toBe(true);
+
+    act(() => publishWorking(["foreign"]));
+    expect(result.current.has(EPIC_ID)).toBe(false);
+  });
+
+  it("does not stamp a cold agent whose owner is unknown", () => {
+    const { result } = renderHook(() => useOwnTurnEpicIds("viewer"));
+    act(() => publishWorking([AGENT_ID]));
+    expect(result.current.has(EPIC_ID)).toBe(false);
   });
 });
 

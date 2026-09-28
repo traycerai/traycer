@@ -165,8 +165,8 @@ vi.mock("@/hooks/home/use-history-query", () => ({
 // real `useInProgressHistoryItems` / `withInProgressFirst` pair runs here: the
 // store says WHICH epics are running, and the by-id batch answers the running
 // epics no listed page carries.
-vi.mock("@/stores/use-working-epic-ids", () => ({
-  useTurnEpicIds: (): ReadonlySet<string> => testState.workingEpicIds,
+vi.mock("@/stores/use-own-turn-epic-ids", () => ({
+  useOwnTurnEpicIds: (): ReadonlySet<string> => testState.workingEpicIds,
 }));
 
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
