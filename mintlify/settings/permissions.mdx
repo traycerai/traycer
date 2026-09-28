@@ -20,6 +20,8 @@ For what each mode does in a conversation, see [Permissions](/panels/agents#perm
 
 You can still change the mode for any conversation from the composer.
 
+**Auto is experimental.** We’re still improving its reliability and speed. It appears last in the permission picker and carries an **Experimental** label in the picker and Permissions settings.
+
 This default applies only to conversations you start in the app. Agents created from the [CLI](/cli/commands) or by another agent start in **Full access** unless their creator passes `--permission-mode`.
 
 ## Judge
@@ -31,7 +33,7 @@ The judge is the model that reviews commands when a conversation runs in Auto mo
 | **Automatic**        | Traycer's hosted model when Traycer inference is available and uses Traycer credits. If it isn't available, the conversation's own provider reviews, billed to your account there. |
 | **A specific model** | The **Provider**, **Account**, and **Model** you choose. It is billed to that provider's account, on top of the conversation itself.                             |
 
-The Auto option in the composer picker shows which judge is active and how it is billed: the provider's icon and the model, for example **Sonnet 5 · Low**, followed by who pays, such as **Uses Traycer credits** or **Billed to your Grok account**. If no judge can run on the machine, it shows **No judge available on this machine · asks you instead**, and commands go to you for approval.
+Choose the reviewer and see its billing details under **Permissions → Judge**. The Auto option in the composer picker shows a short description without reviewer or model details. If no judge can run on the machine, it shows **No judge available on this machine · asks you instead**, and commands go to you for approval.
 
 ### Providers With A Built-In Reviewer
 

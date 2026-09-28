@@ -12,6 +12,7 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import { PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { useRunTargetHost } from "@/hooks/rate-limits/use-run-target-host";
 import type { HostRpcRegistry } from "@/lib/host";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 import {
   isRateLimitCapableProvider,
   isRateLimitProfileFetchEligible,
@@ -113,8 +114,11 @@ export function useProfileUsageComparison({
   // this hook's mount time. Mirrors `useTrayEpicsSource`'s `nowMs` pattern.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(id);
+    return startVisibleInterval({
+      tick: () => setNow(Date.now()),
+      intervalMs: 60_000,
+      fireOnShow: true,
+    });
   }, []);
 
   const requests = useMemo(() => {

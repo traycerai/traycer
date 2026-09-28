@@ -1,7 +1,7 @@
 /**
  * Mutation keys for the provider-fallback card actions.
  *
- * Keyed per CHAT, unlike most keys in this directory. These four verbs act on
+ * Keyed per CHAT, unlike most keys in this directory. These five verbs act on
  * one chat's traversal, and several chats can be holding a grace window at the
  * same moment (that is exactly what the card's "N other chats are also
  * switching" line is telling the user) - so a chat-blind key would let one
@@ -15,4 +15,5 @@ export const chatFallbackMutationKeys = {
     ["chat.fallback.runManualRung", chatId] as const,
   returnToPreferred: (chatId: string) =>
     ["chat.fallback.returnToPreferred", chatId] as const,
+  proceed: (chatId: string) => ["chat.fallback.proceed", chatId] as const,
 };

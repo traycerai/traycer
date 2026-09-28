@@ -12,7 +12,8 @@ import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  resetArtifactAttachmentHostSupportForTests,
+  resetArtifactAttachmentHostSupport,
+  resetEpicImageFetcherArmAbort,
   useEpicImageFetcher,
 } from "@/lib/attachments/use-attachment-blob-src";
 import {
@@ -30,13 +31,14 @@ const mocks = vi.hoisted(() => ({
  * The store surface `useEpicImageFetcher` actually consumes.
  *
  * `subscribe` is not decoration: the hook reads `installedArm` through
- * `useSyncExternalStore`, so a double offering only `getState` throws on mount
- * rather than failing an assertion - which is how four green-looking pins went
- * red at once. `epicId` backs the cache subject the fetcher is bundled with.
- * A no-op unsubscribe is honest here: `mocks.installedArm` is set before
- * render and never changes mid-test.
+ * `useSyncExternalStore`, and the arm-abort lease subscribes on the same
+ * handle so an arm change after unmount still cancels a retained fetch.
+ * One handle object for the suite so that lease is keyed on a stable
+ * identity across remounts.
  */
-function fakeHandle(): {
+const storeListeners = new Set<() => void>();
+
+const fakeHandle: {
   readonly epicId: string;
   readonly store: {
     readonly getState: () => {
@@ -44,19 +46,27 @@ function fakeHandle(): {
     };
     readonly subscribe: (onStoreChange: () => void) => () => void;
   };
-} {
-  return {
-    epicId: "epic-1",
-    store: {
-      getState: () => ({ installedArm: mocks.installedArm }),
-      subscribe: (_onStoreChange: () => void) => () => {},
+} = {
+  epicId: "epic-1",
+  store: {
+    getState: () => ({ installedArm: mocks.installedArm }),
+    subscribe: (onStoreChange: () => void) => {
+      storeListeners.add(onStoreChange);
+      return () => {
+        storeListeners.delete(onStoreChange);
+      };
     },
-  };
+  },
+};
+
+function notifyArmChange(next: typeof mocks.installedArm): void {
+  mocks.installedArm = next;
+  for (const listener of [...storeListeners]) listener();
 }
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
-  useMaybeOpenEpicHandle: () => fakeHandle(),
-  useOpenEpicHandle: () => fakeHandle(),
+  useMaybeOpenEpicHandle: () => fakeHandle,
+  useOpenEpicHandle: () => fakeHandle,
 }));
 
 vi.mock("@/lib/epic-replica-reads", () => ({
@@ -99,13 +109,15 @@ function wrapperFor(
 }
 
 beforeEach(() => {
-  resetArtifactAttachmentHostSupportForTests();
+  resetArtifactAttachmentHostSupport();
 });
 
 afterEach(() => {
   mocks.installedArm = "legacy";
   mocks.readEpicAttachmentBytes.mockReset();
   mocks.readHeldEpicAttachmentBytes.mockReset();
+  resetEpicImageFetcherArmAbort();
+  storeListeners.clear();
 });
 
 describe("useEpicImageFetcher - byte source per arm", () => {
@@ -209,5 +221,62 @@ describe("useEpicImageFetcher - byte source per arm", () => {
     expect(Array.from(resolved.bytes)).toEqual([7]);
     expect(mocks.readEpicAttachmentBytes).toHaveBeenCalledTimes(1);
     expect(requestWithSignal).not.toHaveBeenCalled();
+  });
+
+  it("aborts a retained legacy fetch when the arm changes after unmount", async () => {
+    mocks.installedArm = "legacy";
+    mocks.readEpicAttachmentBytes.mockImplementation(
+      (_handle: unknown, _hash: string, signal: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          const fail = (): void => {
+            reject(
+              new DOMException("The operation was aborted.", "AbortError"),
+            );
+          };
+          if (signal.aborted) {
+            fail();
+            return;
+          }
+          signal.addEventListener("abort", fail, { once: true });
+        }),
+    );
+    const { result, unmount } = renderHook(() => useEpicImageFetcher(), {
+      wrapper: wrapperFor(null),
+    });
+
+    const pending = result.current.fetch(HASH, new AbortController().signal);
+    let settled = false;
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await vi.waitFor(() => {
+      expect(mocks.readEpicAttachmentBytes).toHaveBeenCalledTimes(1);
+    });
+    unmount();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    notifyArmChange("lanes");
+    await expect(pending).rejects.toThrow(/abort|cancelled/i);
+    expect(settled).toBe(true);
+  });
+
+  it("rejects a fetch captured on the legacy arm if the store is lanes before it runs", async () => {
+    mocks.installedArm = "legacy";
+    mocks.readEpicAttachmentBytes.mockResolvedValue(new Uint8Array([7]));
+    const { result } = renderHook(() => useEpicImageFetcher(), {
+      wrapper: wrapperFor(null),
+    });
+    const captured = result.current.fetch;
+    notifyArmChange("lanes");
+    await expect(captured(HASH, new AbortController().signal)).rejects.toThrow(
+      /cancelled|abort/i,
+    );
+    expect(mocks.readEpicAttachmentBytes).not.toHaveBeenCalled();
   });
 });

@@ -11,7 +11,10 @@ import {
   AUTO_MID_TURN_UNRESOLVED_LOCK,
   type AutoJudgeBilling,
 } from "@/lib/auto-mode/auto-judge-billing";
-import type { PermissionMode } from "@/components/home/data/landing-options";
+import {
+  AUTO_JUDGE_UNAVAILABLE_DESCRIPTION,
+  type PermissionMode,
+} from "@/components/home/data/landing-options";
 
 afterEach(() => {
   cleanup();
@@ -195,14 +198,14 @@ describe("<PermissionsPicker /> - empty supportedPermissionModes means unconstra
 });
 
 describe("<PermissionsPicker /> - the four labels and one-line descriptions", () => {
-  it("shows every mode's label and description in menu order", () => {
+  it("shows every mode's label and description, in the picker's presentation order (Experimental Auto last)", () => {
     renderPicker({});
     openMenu();
 
     const items = screen.getAllByRole("menuitemradio");
     expect(
       items.map((item) => item.querySelector(".font-medium")?.textContent),
-    ).toEqual(["Supervised", "Auto-accept edits", "Auto", "Full access"]);
+    ).toEqual(["Supervised", "Auto-accept edits", "Full access", "Auto"]);
 
     expect(
       screen.getByText("Asks before every command and file change."),
@@ -219,20 +222,34 @@ describe("<PermissionsPicker /> - the four labels and one-line descriptions", ()
   });
 });
 
-/**
- * The Auto row's judge line as it reads, without the provider logo: a brand
- * icon carries an SVG `<title>` that `textContent` would splice into the text.
- */
-function metaText(): string {
-  const clone = screen.getByTestId("permission-option-meta").cloneNode(true);
-  if (!(clone instanceof HTMLElement))
-    throw new Error("meta is not an element");
-  for (const svg of clone.querySelectorAll("svg")) svg.remove();
-  return clone.textContent;
-}
+describe("<PermissionsPicker /> - Auto's Experimental badge and label", () => {
+  function menuItemFor(label: string): HTMLElement {
+    const item = screen
+      .getAllByRole("menuitemradio")
+      .find(
+        (option) => option.querySelector(".font-medium")?.textContent === label,
+      );
+    if (item === undefined) throw new Error(`${label} menu item not found`);
+    return item;
+  }
 
-describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
-  it("shows the traycer meta line naming the model", () => {
+  it("shows the Experimental badge on the Auto row only", () => {
+    renderPicker({});
+    openMenu();
+
+    expect(within(menuItemFor("Auto")).getByText("Experimental")).toBeTruthy();
+    expect(
+      within(menuItemFor("Supervised")).queryByText("Experimental"),
+    ).toBeNull();
+    expect(
+      within(menuItemFor("Auto-accept edits")).queryByText("Experimental"),
+    ).toBeNull();
+    expect(
+      within(menuItemFor("Full access")).queryByText("Experimental"),
+    ).toBeNull();
+  });
+
+  it("renders no reviewer/model/billing metadata on the Auto row, whatever judgeBilling names", () => {
     renderPicker({
       judgeBilling: {
         kind: "traycer",
@@ -242,98 +259,33 @@ describe("<PermissionsPicker /> - Auto meta line per billing kind", () => {
     });
     openMenu();
 
-    expect(metaText()).toBe("Sonnet 5 · Uses Traycer credits");
-  });
-
-  it("shows the provider-account meta line naming the model and the provider", () => {
-    renderPicker({
-      judgeBilling: {
-        kind: "provider",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
-        modelLabel: "Sonnet",
-        effortLabel: null,
-      },
-    });
-    openMenu();
-
-    const meta = screen.getByTestId("permission-option-meta");
-    expect(metaText()).toBe("Sonnet · Billed to your Claude Code account");
-    // The provider name is rendered in its own (emphasis) element, not just
-    // concatenated into the surrounding text.
-    expect(within(meta).getByText("Claude Code")).toBeTruthy();
-  });
-
-  it("shows the Copilot premium-request meta line and detail", () => {
-    renderPicker({
-      judgeBilling: {
-        kind: "provider",
-        harnessId: "copilot",
-        harnessLabel: "Copilot",
-        modelLabel: "GPT-5",
-        effortLabel: null,
-      },
-    });
-    openMenu();
-
-    const meta = screen.getByTestId("permission-option-meta");
-    expect(metaText()).toBe(
-      "GPT-5 · Billed to your Copilot accountUses premium requests: 60–350 per hour",
-    );
-    expect(
-      within(meta).getByText("Uses premium requests: 60–350 per hour"),
-    ).toBeTruthy();
-  });
-
-  it("shows the provider-native no-extra-cost meta line", () => {
-    renderPicker({
-      judgeBilling: {
-        kind: "provider-native",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
-      },
-    });
-    openMenu();
-
-    expect(metaText()).toBe(
-      "Claude Code's built-in classifier · No extra cost",
-    );
-  });
-
-  it("shows the blocked meta line when no judge can run", () => {
-    renderPicker({ judgeBilling: { kind: "blocked" } });
-    openMenu();
-
-    expect(screen.getByTestId("permission-option-meta").textContent).toBe(
-      "No judge available on this machine · asks you instead",
-    );
-  });
-
-  // A fallback-derived billing is, by the time it reaches the picker, just
-  // another `judge` target resolved to its harness's own account - proving
-  // the picker renders it identically to an explicit selection.
-  it("shows a fallback-derived provider billing the same as an explicit provider selection", () => {
-    renderPicker({
-      judgeBilling: {
-        kind: "provider",
-        harnessId: "codex",
-        harnessLabel: "Codex",
-        modelLabel: "codex-judge-default",
-        effortLabel: null,
-      },
-    });
-    openMenu();
-
-    expect(metaText()).toBe(
-      "codex-judge-default · Billed to your Codex account",
-    );
-  });
-
-  it("renders no meta line at all when judgeBilling is null", () => {
-    renderPicker({ judgeBilling: null });
-    openMenu();
-
+    const autoItem = menuItemFor("Auto");
+    // Not just the old "Reviewed by ..." phrasing: the fixture's own model
+    // and billing words must be absent too, so a differently-worded successor
+    // disclosure (e.g. a later `AutoJudgeLine`-style component) still fails
+    // this test rather than slipping past a pattern pinned to retired copy.
+    expect(within(autoItem).queryByText(/Reviewed by/)).toBeNull();
+    expect(within(autoItem).queryByText(/Sonnet 5/)).toBeNull();
+    expect(within(autoItem).queryByText(/uses credits/)).toBeNull();
+    // The old component's own hook: this testid no longer exists anywhere in
+    // the tree, not just off the Auto row.
     expect(screen.queryByTestId("permission-option-meta")).toBeNull();
+  });
+
+  it("names the trigger 'Auto — Experimental' for assistive tech and the tooltip when Auto is selected", () => {
+    renderPicker({ value: "auto" });
+
+    const trigger = screen.getByRole("button");
+    expect(trigger.getAttribute("aria-label")).toBe("Auto — Experimental");
+    expect(within(trigger).getByText("Experimental")).toBeTruthy();
+  });
+
+  it("leaves the trigger's accessible name unchanged for a non-Auto mode", () => {
+    renderPicker({ value: "full_access" });
+
+    const trigger = screen.getByRole("button");
+    expect(trigger.getAttribute("aria-label")).toBe("Full access");
+    expect(within(trigger).queryByText("Experimental")).toBeNull();
   });
 });
 
@@ -410,7 +362,7 @@ describe("<PermissionsPicker /> - mid-turn lock", () => {
     return item;
   }
 
-  it("disables the Auto item and shows the lock sentence, with no meta line or mid-turn notice, when billing is provider-native and a turn is active on a non-auto value", () => {
+  it("disables the Auto item and shows the lock sentence, with no mid-turn notice, when billing is provider-native and a turn is active on a non-auto value", () => {
     renderPicker({
       judgeBilling: PROVIDER_NATIVE_BILLING,
       turnActive: true,
@@ -423,7 +375,6 @@ describe("<PermissionsPicker /> - mid-turn lock", () => {
     expect(item.textContent).toContain(
       "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Providers ▸ Claude Code ▸ Permissions.",
     );
-    expect(screen.queryByTestId("permission-option-meta")).toBeNull();
     expect(
       screen.queryByTestId("permission-option-mid-turn-notice"),
     ).toBeNull();
@@ -455,7 +406,7 @@ describe("<PermissionsPicker /> - mid-turn lock", () => {
     expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
   });
 
-  it("does not lock Auto when no turn is active, and still shows the provider-native meta line", () => {
+  it("does not lock Auto when no turn is active, and shows its ordinary description", () => {
     renderPicker({
       judgeBilling: PROVIDER_NATIVE_BILLING,
       turnActive: false,
@@ -464,8 +415,57 @@ describe("<PermissionsPicker /> - mid-turn lock", () => {
     openMenu();
 
     expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
-    expect(metaText()).toBe(
-      "Claude Code's built-in classifier · No extra cost",
+    expect(autoMenuItem().textContent).toContain(
+      "A judge approves routine commands and asks you about risky ones.",
+    );
+  });
+
+  it("shows the no-judge description in place of the ordinary one when billing is blocked, with no lock", () => {
+    renderPicker({
+      judgeBilling: { kind: "blocked" },
+      turnActive: false,
+      value: "supervised",
+    });
+    openMenu();
+
+    const item = autoMenuItem();
+    expect(item.hasAttribute("data-disabled")).toBe(false);
+    expect(item.textContent).toContain(AUTO_JUDGE_UNAVAILABLE_DESCRIPTION);
+  });
+
+  it("keeps the no-judge description alongside the mid-turn notice for blocked billing during a turn", () => {
+    renderPicker({
+      judgeBilling: { kind: "blocked" },
+      turnActive: true,
+      value: "supervised",
+    });
+    openMenu();
+
+    const item = autoMenuItem();
+    // Blocked billing never locks the row (only `null` or provider-native
+    // billing does - see `autoModeMidTurnLock`), so both the substituted
+    // description and the notice below it are shown.
+    expect(item.hasAttribute("data-disabled")).toBe(false);
+    expect(item.textContent).toContain(AUTO_JUDGE_UNAVAILABLE_DESCRIPTION);
+    expect(
+      screen.getByTestId("permission-option-mid-turn-notice").textContent,
+    ).toBe("Switches now. Anything already waiting still asks you.");
+  });
+
+  it("lets an unsupported reason win over the blocked no-judge description", () => {
+    renderPicker({
+      judgeBilling: { kind: "blocked" },
+      supportedPermissionModes: null,
+      catalogSupportedModes: ["supervised", "auto_accept_edits", "full_access"],
+      hostKnowsAutoMode: false,
+    });
+    openMenu();
+
+    const item = autoMenuItem();
+    expect(item.hasAttribute("data-disabled")).toBe(true);
+    expect(item.textContent).not.toContain(AUTO_JUDGE_UNAVAILABLE_DESCRIPTION);
+    expect(item.textContent).toContain(
+      "Needs a newer Traycer on this machine.",
     );
   });
 

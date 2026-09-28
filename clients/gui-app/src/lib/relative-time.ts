@@ -1,4 +1,5 @@
-import { useLayoutEffect, useSyncExternalStore } from "react";
+import { useLayoutEffect, useState, useSyncExternalStore } from "react";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60_000;
@@ -77,7 +78,7 @@ interface SharedClock {
  */
 export function createSharedClock(intervalMs: number): SharedClock {
   let tick = 0;
-  let intervalHandle: number | null = null;
+  let stopVisible: (() => void) | null = null;
   // Sampled at construction so the first render of a consumer has a valid
   // value before `useSyncExternalStore`'s subscribe effect runs. Re-sampled on
   // every interval fire and whenever the clock is (re)started.
@@ -111,13 +112,17 @@ export function createSharedClock(intervalMs: number): SharedClock {
   };
 
   const startIfNeeded = (): void => {
-    if (intervalHandle !== null) return;
+    if (stopVisible !== null) return;
     sampledNow = Date.now();
-    intervalHandle = window.setInterval(() => {
-      tick += 1;
-      sampledNow = Date.now();
-      notifyListeners();
-    }, intervalMs);
+    stopVisible = startVisibleInterval({
+      tick: () => {
+        tick += 1;
+        sampledNow = Date.now();
+        notifyListeners();
+      },
+      intervalMs,
+      fireOnShow: true,
+    });
   };
 
   const stopIfIdle = (): void => {
@@ -125,9 +130,9 @@ export function createSharedClock(intervalMs: number): SharedClock {
     // A queued microtask cannot be cancelled. Invalidate its generation so it
     // cannot notify a later batch after this clock has stopped and restarted.
     pendingRefreshGeneration = null;
-    if (intervalHandle === null) return;
-    window.clearInterval(intervalHandle);
-    intervalHandle = null;
+    if (stopVisible === null) return;
+    stopVisible();
+    stopVisible = null;
   };
 
   return {
@@ -656,11 +661,45 @@ export function formatGraceCountdown(deadline: number, now: number): string {
  * with it.
  */
 export function useGraceCountdown(deadline: number | null): string | null {
-  const now = useSyncExternalStore(
+  const state = useGraceCountdownState(deadline);
+  return state === null ? null : state.label;
+}
+
+/** A grace countdown's label and how much of it is left, from one clock sample. */
+export interface GraceCountdownState {
+  /** {@link formatGraceCountdown}'s string for this sample. */
+  readonly label: string;
+  /** Milliseconds left at this sample, clamped at zero. */
+  readonly remainingMs: number;
+}
+
+/**
+ * {@link useGraceCountdown} with the number behind the label, for a surface
+ * that draws the countdown as well as saying it (the routing card's drain
+ * bar).
+ *
+ * Both halves come from the SAME `useSyncExternalStore` return, and that is
+ * the whole contract: a render-time read of the clock is memoized on the
+ * deadline under the React Compiler, so a bar sized from a second read would
+ * freeze at its first width while the label beside it kept ticking.
+ */
+export function useGraceCountdownState(
+  deadline: number | null,
+): GraceCountdownState | null {
+  const sampled = useSyncExternalStore(
     secondClock.subscribe,
     secondClock.sampledNow,
     secondClock.sampledNow,
   );
+  // The second clock is idle whenever no countdown is mounted, so a card's
+  // FIRST render reads the sample the last countdown (or module load) left
+  // behind - minutes old. `subscribe` corrects the label a render later, but
+  // the drain bar latches the largest remainder it sees as the window's
+  // length, so that one stale render sized a 15 s window at 377 s and the bar
+  // opened 4% full (seen live on every first countdown). No sample older than
+  // this hook's mount can be the present.
+  const [mountedAt] = useState(() => Date.now());
+  const now = Math.max(sampled, mountedAt);
   // A new deadline on a mounted card - the destination menu closing, a
   // re-armed window - would render against the last fire's sample, up to a
   // second old, until the next fire. Re-sampling in a LAYOUT effect wakes
@@ -672,5 +711,8 @@ export function useGraceCountdown(deadline: number | null): string | null {
     secondClock.resample();
   }, [deadline]);
   if (deadline === null) return null;
-  return formatGraceCountdown(deadline, now);
+  return {
+    label: formatGraceCountdown(deadline, now),
+    remainingMs: Math.max(0, deadline - now),
+  };
 }

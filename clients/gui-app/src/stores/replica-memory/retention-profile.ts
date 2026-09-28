@@ -24,8 +24,12 @@ import { EPIC_REPLICAS_MAX_LIVE } from "./budget-limits";
  * evaluation of the registries.
  */
 export interface RetentionProfile {
+  /** Calibrated managed-data allowance; count caps remain a backstop. */
+  readonly maxManagedDataBytes: number;
   /** Live epic sessions, mounted ones included (`OpenEpicSessionRegistry`). */
   readonly maxLiveEpics: number;
+  /** How long unknown agent activity may defer epic cap eviction. */
+  readonly unknownActivityCapGraceMs: number;
   /** Hidden top-level tabs kept mounted (`TopLevelTabHost`). */
   readonly retainedTopLevelSurfaces: number;
   /** Lease-free warm chat sessions (`ChatSessionRegistry`). */
@@ -34,24 +38,36 @@ export interface RetentionProfile {
   readonly maxLingeringPlainTerminals: number;
   /** Raw draft bytes the visible composer's idle prefetch may plan to warm. */
   readonly visibleDraftImagePrefetchBytes: number;
+  /**
+   * Decoded-byte budget for the renderer-side transcript image store
+   * (`lib/attachments/transcript-image-bytes-store.ts`). Chat and artifact
+   * attachments re-enter as unary `bytesBase64` on every relaunch without it.
+   */
+  readonly transcriptImageCacheBytes: number;
 }
 
 /** Electron desktop and the browser: the numbers the app has always run. */
 export const DESKTOP_RETENTION_PROFILE: RetentionProfile = Object.freeze({
+  maxManagedDataBytes: 160 * 1024 * 1024,
   maxLiveEpics: EPIC_REPLICAS_MAX_LIVE,
+  unknownActivityCapGraceMs: 60_000,
   retainedTopLevelSurfaces: 5,
   maxWarmChatSessions: 6,
   maxLingeringPlainTerminals: 6,
   visibleDraftImagePrefetchBytes: 16 * 1024 * 1024,
+  transcriptImageCacheBytes: 64 * 1024 * 1024,
 });
 
 /** The installed Capacitor app: a 2 GB process ceiling, one visible tab. */
 export const MOBILE_RETENTION_PROFILE: RetentionProfile = Object.freeze({
+  maxManagedDataBytes: 96 * 1024 * 1024,
   maxLiveEpics: 3,
+  unknownActivityCapGraceMs: 60_000,
   retainedTopLevelSurfaces: 2,
   maxWarmChatSessions: 3,
   maxLingeringPlainTerminals: 3,
   visibleDraftImagePrefetchBytes: 8 * 1024 * 1024,
+  transcriptImageCacheBytes: 16 * 1024 * 1024,
 });
 
 /**

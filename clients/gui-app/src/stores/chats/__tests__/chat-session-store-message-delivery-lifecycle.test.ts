@@ -22,6 +22,7 @@
  * that restores or acknowledges resets it in beforeEach/afterEach.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { BUDGET_PLANE_IDS } from "@traycer-clients/shared/replica-runtime";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
 import type {
@@ -42,6 +43,7 @@ import {
   writePersistedDeliveryRestoreAck,
 } from "@/lib/chats/delivery-restore-ack-persistence";
 import { deliveryRestoreAckKey } from "@/lib/persist";
+import { getProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
 
 const EPIC_ID = "epic-delivery-lifecycle";
 const CHAT_ID = "chat-delivery-lifecycle";
@@ -281,6 +283,14 @@ function sendPrompt(harness: Harness): {
 
 let harness: Harness | null = null;
 
+function settledChatBytes(): number {
+  const plane = getProcessMemoryRuntime()
+    .accountant.snapshot()
+    .planes.find((item) => item.planeId === BUDGET_PLANE_IDS.chatWindows);
+  if (plane === undefined) throw new Error("missing chat memory plane");
+  return plane.settledBytes;
+}
+
 beforeEach(() => {
   window.localStorage.clear();
 });
@@ -446,6 +456,35 @@ describe("chat-session-store messageDelivery: recovery suppressed (store level)"
 });
 
 describe("chat-session-store messageDelivery: take gates", () => {
+  it("charges watched and handled delivery IDs after the current view clears", () => {
+    harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, {});
+    const baseline = settledChatBytes();
+
+    for (let index = 0; index < 32; index += 1) {
+      const messageId = `delivery-ledger-${index}`;
+      emitMessageDeliveryChanged(
+        callbacks,
+        pendingDelivery(messageId, 1, "pending"),
+      );
+      emitMessageDeliveryChanged(
+        callbacks,
+        withdrawnDelivery(messageId, 2, {
+          restore: null,
+          restoreClaimed: false,
+        }),
+      );
+      expect(
+        harness.handle.store.getState().takeMessageDeliveryRestoration(),
+      ).toBeNull();
+      emitMessageDeliveryChanged(callbacks, null);
+    }
+
+    expect(harness.handle.store.getState().messageDelivery).toBeNull();
+    expect(settledChatBytes()).toBeGreaterThan(baseline + 1_000);
+  });
+
   it("returns null for a null view, and for an unresolved (pending/preparing) one", () => {
     harness = createHarness();
     const callbacks = harness.callbacks();

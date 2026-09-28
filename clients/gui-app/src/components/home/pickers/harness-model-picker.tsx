@@ -172,6 +172,42 @@ export interface HarnessModelPickerEmbedding {
   /** The picker fills this with a function that opens it, the same path a
    *  trigger click takes, and clears it on unmount. */
   readonly openRef: RefObject<(() => void) | null>;
+  /**
+   * The picker fills this with a function that closes it, and clears it on
+   * unmount; `null` for a surface that never closes it itself. A surface whose
+   * footer commits something (the routing chooser's confirm) closes the
+   * popover once that lands.
+   */
+  readonly closeRef: RefObject<(() => void) | null> | null;
+  /**
+   * The picker fills this with a function that moves its browsed rail - the
+   * provider and the account its profile dropdown names - to the store's
+   * current selection, and clears it on unmount. It touches nothing else: the
+   * search, the keyboard-active row and the list stay as they are, where
+   * `openRef` would start the popover over. For a surface whose store moves
+   * under an OPEN picker by something other than the picker's own clicks (the
+   * routing chooser following a late listing answer); a call while closed
+   * only sets what the next open copies from the selection anyway.
+   *
+   * `null` for a surface whose store only the picker moves while it is open;
+   * the picker then fills nothing. A composer passes no embedding at all, so
+   * it never reaches this.
+   */
+  readonly followSelectionRef: RefObject<(() => void) | null> | null;
+  /**
+   * Called with every change of the popover's VISIBLE open state - a trigger
+   * click, `openRef`, an outside click, Escape, the jump to provider settings,
+   * the surface going inactive. Not only the popover's own `onOpenChange`:
+   * several of those close through the reducer directly, and a surface that
+   * holds something while the picker is open (a routing hold) must hear every
+   * close. `null` when nothing listens.
+   */
+  readonly onOpenChange: ((open: boolean) => void) | null;
+  /**
+   * Rendered at the foot of the popover, under the effort footer; `null` for
+   * none. The popover grows by its height rather than taking it from the list.
+   */
+  readonly footer: ReactNode | null;
 }
 
 interface HarnessModelPickerProps {
@@ -367,6 +403,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     disabled,
   );
   useEmbeddingOpenHandle(embedding, handleOpenChange);
+  useEmbeddingCloseHandle(embedding, closeOnly);
+  useEmbeddingFollowSelectionHandle(embedding, store, setActiveRailEntry);
+  const seams = embeddingSeams(embedding);
+  useReportedOpenState(visibleOpen, seams.onOpenChange);
   const reasoningFooter = useMemo<ReasoningFooterConfig | null>(
     () =>
       buildReasoningFooter({
@@ -1176,9 +1216,22 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         createProfileDisabledReason={createProfileGate.reason}
         profileAdmission={profileAdmission}
         closeFocusesComposer={embedding === null}
+        footer={seams.footer}
       />
     </Popover>
   );
+}
+
+/**
+ * The embedding's optional seams, each `null` for a composer. Read in one
+ * place so the component body carries one branch for them, not two.
+ */
+function embeddingSeams(embedding: HarnessModelPickerEmbedding | null): {
+  readonly onOpenChange: ((open: boolean) => void) | null;
+  readonly footer: ReactNode | null;
+} {
+  if (embedding === null) return { onOpenChange: null, footer: null };
+  return { onOpenChange: embedding.onOpenChange, footer: embedding.footer };
 }
 
 /**
@@ -1232,6 +1285,80 @@ function useEmbeddingOpenHandle(
       handleOpenChange(true);
     },
     [handleOpenChange],
+  );
+}
+
+/** Fills an embedding's `closeRef` with the reducer's close; see its doc. */
+function useEmbeddingCloseHandle(
+  embedding: HarnessModelPickerEmbedding | null,
+  closeOnly: () => void,
+): void {
+  useImperativeHandle(
+    embedding === null ? null : embedding.closeRef,
+    () => closeOnly,
+    [closeOnly],
+  );
+}
+
+/**
+ * Fills an embedding's `followSelectionRef` with the rail move its doc
+ * describes. The selection is read from the store when called, not from this
+ * render, so a caller that runs after the store moved - the routing chooser's
+ * layout effect - gets the selection it just saw.
+ */
+function useEmbeddingFollowSelectionHandle(
+  embedding: HarnessModelPickerEmbedding | null,
+  store: ComposerToolbarStore,
+  setActiveRailEntry: (
+    providerId: ProviderId,
+    profileId: string | null,
+  ) => void,
+): void {
+  useImperativeHandle(
+    embedding === null ? null : embedding.followSelectionRef,
+    () => () => {
+      const { selection } = store.getState();
+      setActiveRailEntry(selection.harnessId, selection.profileId);
+    },
+    [setActiveRailEntry, store],
+  );
+}
+
+/**
+ * Reports the VISIBLE open state to an embedding on every change - see
+ * `HarnessModelPickerEmbedding.onOpenChange`. Read off `visibleOpen` rather
+ * than hooked into each writer, because the writers are many (the popover,
+ * the reducer's direct closes, a disabled surface) and a missed close would
+ * leave a hold taken on open with nobody to give it back. The ref starts at
+ * `false`, the reducer's initial state, so mounting closed says nothing.
+ *
+ * Unmounting while visibly open is a close too - the popover goes with the
+ * picker - so it is reported once, through the latest callback, exactly as
+ * any other close is. An embedding that also cleans up on its own unmount
+ * must make the two idempotent (the routing chooser pays its hold once).
+ */
+function useReportedOpenState(
+  visibleOpen: boolean,
+  onOpenChange: ((open: boolean) => void) | null,
+): void {
+  const reportedRef = useRef(false);
+  const onOpenChangeRef = useRef(onOpenChange);
+  useEffect(() => {
+    onOpenChangeRef.current = onOpenChange;
+  });
+  useEffect(() => {
+    if (onOpenChange === null) return;
+    if (reportedRef.current === visibleOpen) return;
+    reportedRef.current = visibleOpen;
+    onOpenChange(visibleOpen);
+  }, [onOpenChange, visibleOpen]);
+  useEffect(
+    () => () => {
+      if (!reportedRef.current) return;
+      reportedRef.current = false;
+      onOpenChangeRef.current?.(false);
+    },
+    [],
   );
 }
 

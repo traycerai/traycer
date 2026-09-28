@@ -5,6 +5,10 @@ import {
 import { portRepairFailure } from "../host/free-port-outcome";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
 import {
+  describeNonterminalRecordRecovery,
+  parkedActivationRelaunchable,
+} from "../host/parked-activation-relaunch";
+import {
   requireCliUpdateMutationCapability,
   withCliUpdateContenderContext,
 } from "../host/update-contender";
@@ -118,100 +122,128 @@ export function buildHostFreePortAndRestartCommand(
       pollIntervalMs: 100,
       admission: "recovery-maintenance",
     };
-    const { kill, restarted, deferredForParkedActivation, attestation } =
-      await withCliUpdateContenderContext(
-        contenderOptions,
-        async (capability, _cliLock, contenderContext) => {
-          let killInner: KillConflictingPortOwnerResult | null = null;
-          if (args.pid !== null && args.port !== null) {
-            ctx.progress({
-              stage: "kill-conflicting",
-              message: `sending SIGTERM to pid ${args.pid}`,
-              percent: null,
-              bytes: null,
-              totalBytes: null,
-              workUnits: null,
-            });
-            killInner = await killConflictingPortOwner({
-              pid: args.pid,
-              port: args.port,
-              commandName: "host free-port-and-restart",
-              verifyMutationCapability: () =>
-                requireCliUpdateMutationCapability(
-                  capability,
-                  contenderOptions,
-                ),
-            });
-            // Thrown from INSIDE the lock, before the restart below. Leaving
-            // the lock first would open a window for another actor to act on
-            // the state this failure is about, and - far more importantly -
-            // reaching the restart at all is the defect: a host restarted onto
-            // a port it cannot bind is strictly worse than a host left down,
-            // because the restart consumes the supervisor's backoff budget and
-            // erases the pid metadata Doctor reads to diagnose the conflict.
-            const failure = portRepairFailure({
-              result: killInner,
-              pid: args.pid,
-              port: args.port,
-              commandName: "host free-port-and-restart",
-              restartWasSkipped: true,
-            });
-            if (failure !== null) throw failure;
-          }
-          const controller = createServiceController();
-          const restart = contenderContext.recoveryAction === "restart-current";
-          // Classified under the same lock acquisition that guards the action
-          // below. Refusing beats stopping for a caller whose intent is "make
-          // this host reachable again": the port is already freed above, and
-          // stopping the service would add a down host to a parked update.
-          if (!restart && args.deferIfParked) {
-            return {
-              kill: killInner,
-              restarted: false,
-              deferredForParkedActivation: true,
-              attestation: await attestInstallRuntime(ctx.runtime.environment),
-            };
-          }
+    const {
+      kill,
+      restarted,
+      deferredForParkedActivation,
+      record,
+      parkMatchesInstall,
+      attestation,
+    } = await withCliUpdateContenderContext(
+      contenderOptions,
+      async (capability, _cliLock, contenderContext) => {
+        let killInner: KillConflictingPortOwnerResult | null = null;
+        if (args.pid !== null && args.port !== null) {
           ctx.progress({
-            stage: restart ? "service-restart" : "service-stop",
-            message: restart
-              ? `requesting restart for service '${label.id}'`
-              : `stopping service '${label.id}' without activating parked update bytes`,
+            stage: "kill-conflicting",
+            message: `sending SIGTERM to pid ${args.pid}`,
             percent: null,
             bytes: null,
             totalBytes: null,
             workUnits: null,
           });
-          if (restart) {
-            await restartHostServiceWithAttempt(
-              capability,
-              contenderOptions,
-              controller,
-              label,
-            );
-          } else {
-            await stopHostServiceWithAttempt(
-              capability,
-              contenderOptions,
-              controller,
-              label,
-              { force: false },
-            );
-          }
+          killInner = await killConflictingPortOwner({
+            pid: args.pid,
+            port: args.port,
+            commandName: "host free-port-and-restart",
+            verifyMutationCapability: () =>
+              requireCliUpdateMutationCapability(capability, contenderOptions),
+          });
+          // Thrown from INSIDE the lock, before the restart below. Leaving
+          // the lock first would open a window for another actor to act on
+          // the state this failure is about, and - far more importantly -
+          // reaching the restart at all is the defect: a host restarted onto
+          // a port it cannot bind is strictly worse than a host left down,
+          // because the restart consumes the supervisor's backoff budget and
+          // erases the pid metadata Doctor reads to diagnose the conflict.
+          const failure = portRepairFailure({
+            result: killInner,
+            pid: args.pid,
+            port: args.port,
+            commandName: "host free-port-and-restart",
+            restartWasSkipped: true,
+          });
+          if (failure !== null) throw failure;
+        }
+        const controller = createServiceController();
+        const stopOnly = contenderContext.recoveryAction === "stop-only";
+        // Compared for every stop-only record, deferred ones included, so the
+        // guidance below describes THIS record (`host restart` has the same
+        // reasoning; traycer#2208 review).
+        const parkMatchesInstall = stopOnly
+          ? await parkedActivationRelaunchable(
+              ctx.runtime.environment,
+              contenderContext.activeAttempt,
+            )
+          : false;
+        // Classified under the same lock acquisition that guards the action
+        // below. Refusing beats stopping for a caller whose intent is "make
+        // this host reachable again": the port is already freed above, and
+        // stopping the service would add a down host to a parked update.
+        if (stopOnly && args.deferIfParked) {
           return {
             kill: killInner,
-            restarted: restart,
-            deferredForParkedActivation: false,
+            restarted: false,
+            deferredForParkedActivation: true,
+            record: contenderContext.activeAttempt,
+            parkMatchesInstall,
             attestation: await attestInstallRuntime(ctx.runtime.environment),
           };
-        },
-      );
+        }
+        // Same rule as `host restart`: a `waiting-to-activate` park whose
+        // claim matches the installed bytes is continued by the ordinary
+        // restart, which IS its activation restart; stopping instead left
+        // the machine hostless (`host/parked-activation-relaunch.ts`).
+        const restart = !stopOnly || parkMatchesInstall === true;
+        ctx.progress({
+          stage: restart ? "service-restart" : "service-stop",
+          message: restart
+            ? `requesting restart for service '${label.id}'`
+            : `stopping service '${label.id}' without activating parked update bytes`,
+          percent: null,
+          bytes: null,
+          totalBytes: null,
+          workUnits: null,
+        });
+        if (restart) {
+          await restartHostServiceWithAttempt(
+            capability,
+            contenderOptions,
+            controller,
+            label,
+          );
+        } else {
+          await stopHostServiceWithAttempt(
+            capability,
+            contenderOptions,
+            controller,
+            label,
+            { force: false },
+          );
+        }
+        return {
+          kill: killInner,
+          restarted: restart,
+          deferredForParkedActivation: false,
+          record: contenderContext.activeAttempt,
+          parkMatchesInstall,
+          attestation: await attestInstallRuntime(ctx.runtime.environment),
+        };
+      },
+    );
     // Both no-relaunch outcomes need distinct copy: one stopped the service,
     // the other deliberately left it alone. Reporting them with one sentence
     // would tell a user their host is down when it is still running.
+    // Same rule as `host restart`: the sentence describes the record the
+    // stop-only decision was made from, with the install comparison made
+    // against it under the same lock.
+    const recovery =
+      restarted || record === null
+        ? ""
+        : `: ${describeNonterminalRecordRecovery(record, parkMatchesInstall)}`;
     const noRelaunch = deferredForParkedActivation
-      ? `left '${label.id}' untouched because a packaged update is waiting for its explicit activation`
-      : `stopped '${label.id}' without activating parked update bytes`;
+      ? `left '${label.id}' untouched because a packaged update is waiting for its explicit activation${recovery}`
+      : `stopped '${label.id}' without activating parked update bytes; the host is now down${recovery}`;
     // The kill sentence composes with whichever service action actually ran -
     // a stop-only or deferred outcome must not claim a restart was requested.
     const action = restarted

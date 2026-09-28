@@ -17,7 +17,7 @@ import {
 
 const CODE = "ABCDE-FGHJK";
 const NORMALIZED = "ABCDEFGHJK";
-const PAYLOAD = `https://platform.traycer.ai/link?code=${CODE}`;
+const PAYLOAD = `https://traycer.ai/link?code=${CODE}`;
 
 interface FakeApp {
   readonly plugin: AppPluginSlice;
@@ -123,8 +123,8 @@ describe("MobileLinkLoginDeepLinks", () => {
     // The device-approval page's return link, which fires on every browser
     // sign-in and carries no payload at all.
     app.open("traycer://auth/callback");
-    app.open("https://platform.traycer.ai/link");
-    app.open("https://platform.traycer.ai/settings?code=ABCDE-FGHJK");
+    app.open("https://traycer.ai/link");
+    app.open("https://traycer.ai/settings?code=ABCDE-FGHJK");
     app.open("not a url");
 
     expect(received).toEqual([]);
@@ -137,7 +137,7 @@ describe("MobileLinkLoginDeepLinks", () => {
     await flush();
 
     app.open(PAYLOAD);
-    app.open("https://platform.traycer.ai/link?code=22222-33333");
+    app.open("https://traycer.ai/link?code=22222-33333");
 
     const received: string[] = [];
     deepLinks.onLinkLoginCode((delivery) => received.push(delivery.code));

@@ -1884,11 +1884,9 @@ function TierStepHint({
   if (namesDestination) return null;
   return (
     <p className="text-ui-sm text-muted-foreground">
-      {/* The SAME sentence the error card prints when it withholds "Switch…",
-          from the same function, so a user who meets both is told one thing
-          once. What is added here is only the subject clause - Settings is
-          speaking about a model the user is not currently looking at, and a
-          bare claim would read as a claim about all of them. */}
+      {/* The sentence from the shared copy module, plus a subject clause -
+          Settings is speaking about a model the user is not currently looking
+          at, and a bare claim would read as a claim about all of them. */}
       {noSwitchDestinationText(
         fallbackProviderModelLabel(lastRun, modelLabelFor),
       )}{" "}

@@ -115,6 +115,16 @@ const buttonVariants = cva(
           "text-info-foreground hover:bg-info/15 active:press-scrim",
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/20 active:press-scrim focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
+        // A place on a routing card's route line that is ALSO the control
+        // that changes it: the destination a countdown is heading for, or the
+        // "Choose another model…" chip beside a wait. Outlined like the static
+        // `RouteChip` it sits next to (`ui/route-chip.tsx`), so the route
+        // reads as two places, and tinted with the primary so the one that
+        // opens a picker is told apart from the one that does not. Its icon
+        // slot takes the harness glyph and its trailing slot a chevron
+        // (`data-icon="inline-end"`); the `route-chip` size carries both.
+        "route-chip":
+          "border-primary/40 bg-primary/10 text-foreground hover:bg-primary/15 active:press-scrim aria-expanded:bg-primary/20",
         // Clickable overline heading; the focus/hover affordance stays a button.
         "section-label":
           "text-overline font-semibold tracking-wide text-muted-foreground uppercase hover:bg-foreground/5 hover:text-foreground active:press-scrim",
@@ -138,6 +148,16 @@ const buttonVariants = cva(
         inline: "h-auto gap-1 p-0",
         "inline-xs":
           "h-auto gap-1 p-0 text-ui-xs [&_svg:not([class*='size-'])]:size-3",
+        // `inline-xs` for a label that is a SENTENCE: a transcript notice's
+        // title-and-message toggle, which must wrap on a narrow tile rather
+        // than run off it. Body weight and start-aligned, because it reads as
+        // the line of text it is, with no box of its own. `whitespace-normal`
+        // alone does not wrap it: the base keeps every button `shrink-0` at
+        // its intrinsic width, so this size gives that back (`min-w-0
+        // max-w-full shrink`, as `section-label` does) and the sentence wraps
+        // at the tile's edge instead of running past it.
+        "inline-xs-wrap":
+          "h-auto min-w-0 max-w-full shrink gap-1 p-0 text-left text-ui-xs font-normal whitespace-normal [&_svg:not([class*='size-'])]:size-3",
         icon: "size-8",
         "icon-xs":
           "size-6 rounded-sm in-data-[slot=button-group]:rounded-md [&_svg:not([class*='size-'])]:size-3",
@@ -151,6 +171,18 @@ const buttonVariants = cva(
         // one call site.
         "card-row":
           "h-auto min-w-0 justify-start gap-3 rounded-xl px-4 py-3 text-left",
+        // The route chip's box: `RouteChip`'s geometry (`ui/route-chip.tsx`),
+        // so a trigger chip and a static one line up on the same route line.
+        // It WRAPS rather than truncating - the part of a destination that
+        // would be cut off is the part that changes - so it drops the fixed
+        // height and `whitespace-nowrap` every other size keeps, and body
+        // weight, because the chip's segments set their own emphasis. The
+        // segments are separate flex items, so wrapping takes `flex-wrap`
+        // (text wrapping cannot move an item to a new line) and `shrink`
+        // (the base's `shrink-0` would hold the chip at its one-line width),
+        // exactly as the static chip wraps.
+        "route-chip":
+          "h-auto min-h-7 min-w-0 max-w-full shrink flex-wrap justify-start gap-1.5 rounded-lg px-2.5 py-1 text-left text-ui-sm font-normal whitespace-normal has-data-[icon=inline-end]:pr-2 [&_svg:not([class*='size-'])]:size-3.5",
         // A multiline disclosure spanning one row of a divided settings list.
         "disclosure-row":
           "h-auto min-h-11 min-w-0 items-start justify-start gap-3 rounded-none px-4 py-4 text-left whitespace-normal",

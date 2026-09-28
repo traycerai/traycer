@@ -44,19 +44,51 @@ Switch models instantly within the same agent, orchestrate agent-to-agent commun
 
 See the [latest release](https://github.com/traycerai/traycer/releases/latest) for all available builds.
 
-## Coding Agents and Subscriptions
+## Bring Your Own Agent
 
-An **agent** is the durable session you create in a Task; you work with it through a **Chat** or **Terminal** interface. A **coding agent** is the underlying provider that powers it. Traycer connects seamlessly with the subscriptions you already own, rather than locking you into an isolated ecosystem. Supported coding agents currently include:
+Traycer connects to the subscriptions you already pay for instead of locking you into one ecosystem — or use Traycer's native inference subscription. Connect any of these coding agents:
 
-| Coding agent                                          | Status                        |
-| :---------------------------------------------------- | :---------------------------- |
-| [Claude Code](https://claude.com/product/claude-code) | Fully supported               |
-| [Codex](https://openai.com/codex)                     | Fully supported               |
-| [Cursor](https://cursor.com/)                         | Fully supported               |
-| [OpenCode](https://opencode.ai)                       | Fully supported               |
-| [Traycer](https://traycer.ai)                         | Native inference subscription |
+<div align="center">
+<table>
+  <tr>
+    <td align="center" width="150"><a href="https://claude.com/product/claude-code"><img src="assets/readme/agents/claude.svg" width="28" alt="Claude Code" /><br /><b>Claude Code</b></a></td>
+    <td align="center" width="150"><a href="https://openai.com/codex"><img src="assets/readme/agents/codex.svg" width="28" alt="Codex" /><br /><b>Codex</b></a></td>
+    <td align="center" width="150"><a href="https://cursor.com"><img src="assets/readme/agents/cursor.svg" width="28" alt="Cursor" /><br /><b>Cursor</b></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="150"><a href="https://opencode.ai"><img src="assets/readme/agents/opencode.svg" width="28" alt="OpenCode" /><br /><b>OpenCode</b></a></td>
+    <td align="center" width="150"><a href="https://traycer.ai"><img src="assets/readme/agents/traycer.svg" width="28" alt="Traycer" /><br /><b>Traycer</b></a></td>
+    <td align="center" width="150"><a href="https://x.ai"><img src="assets/readme/agents/grok.svg" width="28" alt="Grok" /><br /><b>Grok</b></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="150"><a href="https://github.com/features/copilot"><img src="assets/readme/agents/copilot.svg" width="28" alt="GitHub Copilot" /><br /><b>GitHub Copilot</b></a></td>
+    <td align="center" width="150"><a href="https://devin.ai"><img src="assets/readme/agents/devin.svg" width="28" alt="Devin" /><br /><b>Devin</b></a></td>
+    <td align="center" width="150"><a href="https://ampcode.com"><img src="assets/readme/agents/amp.svg" width="28" alt="Amp" /><br /><b>Amp</b></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="150"><a href="https://factory.ai"><img src="assets/readme/agents/droid.svg" width="28" alt="Droid" /><br /><b>Droid</b></a></td>
+    <td align="center" width="150"><a href="https://kiro.dev"><img src="assets/readme/agents/kiro.svg" width="28" alt="Kiro" /><br /><b>Kiro</b></a></td>
+    <td align="center" width="150"><a href="https://kilocode.ai"><img src="assets/readme/agents/kilocode.svg" width="28" alt="Kilo Code" /><br /><b>Kilo Code</b></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="150"><a href="https://kimi.com"><img src="assets/readme/agents/kimi.svg" width="28" alt="Kimi" /><br /><b>Kimi</b></a></td>
+    <td align="center" width="150"><a href="https://github.com/QwenLM/qwen-code"><img src="assets/readme/agents/qwen.svg" width="28" alt="Qwen Code" /><br /><b>Qwen Code</b></a></td>
+    <td align="center" width="150"><a href="https://openrouter.ai"><img src="assets/readme/agents/openrouter.svg" width="28" alt="OpenRouter" /><br /><b>OpenRouter</b></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="150"><a href="https://pi.dev"><img src="assets/readme/agents/pi.svg" width="28" alt="Pi" /><br /><b>Pi</b></a></td>
+    <td align="center" width="150"><a href="https://hermes-agent.nousresearch.com"><img src="assets/readme/agents/hermes.svg" width="28" alt="Hermes Agent" /><br /><b>Hermes Agent</b></a></td>
+    <td align="center" width="150"><a href="https://huggingface.co"><img src="assets/readme/agents/huggingface.svg" width="28" alt="Hugging Face" /><br /><b>Hugging Face</b></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="150"><a href="https://github.com/can1357/oh-my-pi"><img src="assets/readme/agents/omp.svg" width="28" alt="Oh My Pi" /><br /><b>Oh My Pi</b></a></td>
+    <td align="center" width="150"><a href="https://reasonix.io"><img src="assets/readme/agents/reasonix.svg" width="28" alt="Reasonix" /><br /><b>Reasonix</b></a></td>
+    <td align="center" width="150"><a href="https://antigravity.google"><img src="assets/readme/agents/antigravity.svg" width="28" alt="Antigravity" /><br /><b>Antigravity</b></a></td>
+  </tr>
+</table>
+</div>
 
-See [Coding Agents](https://docs.traycer.ai/agents-and-models/coding-agents) for setup commands and provider-specific configurations.
+Setup commands and provider-specific configuration: [Coding Agents docs](https://docs.traycer.ai/agents-and-models/coding-agents).
 
 ## Collaboration Features
 

@@ -1,4 +1,5 @@
 import { lexer, type MarkedToken, type Token, type Tokens } from "marked";
+import { segmentsShownInTranscript } from "@/stores/chats/hidden-transcript-notices";
 import {
   buildChatActivityTimeline,
   hidesSoleReasoningHeader,
@@ -104,12 +105,20 @@ export function buildChatFindRows(
    * wrong disclosure - matches counted but impossible to paint or navigate to.
    */
   promotedToolBlockIds: ReadonlySet<string>,
+  /**
+   * The chat's `ChatSessionState.queuePauseReasonProtocolSupported`, for the
+   * renderer's own hide (`hidden-transcript-notices.ts`): a row the timeline
+   * does not draw has no painted text, and a hit on it is one the user cannot
+   * find.
+   */
+  queuePauseReasonProtocolSupported: boolean | null,
 ): ReadonlyArray<ChatFindRow> {
   return messages.map((message) => {
     const units = chatFindUnitsForMessage(
       message,
       tileInstanceId,
       promotedToolBlockIds,
+      queuePauseReasonProtocolSupported,
     );
     return {
       messageId: message.id,
@@ -164,13 +173,25 @@ function chatFindUnitsForMessage(
   message: ChatMessageModel,
   tileInstanceId: string,
   promotedToolBlockIds: ReadonlySet<string>,
+  queuePauseReasonProtocolSupported: boolean | null,
 ): ReadonlyArray<ChatFindUnit> {
   if (message.role === "assistant") {
     const turnState = message.runState === null ? "complete" : "active";
-    return buildChatActivityTimeline(message.segments, {
+    const settled = settledCardSegmentIds(message);
+    // The renderer's own list: the hidden notices go before grouping, exactly
+    // as `AssistantMessageBody` drops them.
+    const shown = segmentsShownInTranscript(
+      message.segments,
+      queuePauseReasonProtocolSupported,
+    );
+    return buildChatActivityTimeline(shown, {
       turnState,
       promotedToolBlockIds,
-    }).flatMap((item) => timelineItemSearchUnits(item, tileInstanceId));
+    }).flatMap((item) =>
+      settled !== null && item.kind === "segment"
+        ? settledCardSearchUnits(item.segment, settled, tileInstanceId)
+        : timelineItemSearchUnits(item, tileInstanceId),
+    );
   }
 
   if (message.role === "user" && message.agentSenderInfo !== null) {
@@ -214,6 +235,47 @@ function chatFindUnitsForMessage(
       owningChain: [],
     }),
   ]);
+}
+
+/**
+ * The two segments a settled routing card paints as one, or `null` when the
+ * row has no such card (`ChatMessage.routingSettledNoticeId`, set only beside
+ * the anchor).
+ */
+function settledCardSegmentIds(
+  message: ChatMessageModel,
+): { readonly noticeId: string; readonly anchorId: string } | null {
+  const noticeId = message.routingSettledNoticeId ?? null;
+  const anchorId = message.manualRungAnchorId ?? null;
+  if (noticeId === null || anchorId === null) return null;
+  return { noticeId, anchorId };
+}
+
+/**
+ * Find units for a row whose settled card absorbs its notice and anchor error.
+ *
+ * The card paints the notice's title and message in the notice's own unit,
+ * and nothing of the error or the notice's detail rows - those travel only in
+ * the Report issue payload - so the notice indexes exactly those two strings
+ * and the error indexes nothing. Indexing either the way their standalone rows
+ * do would count matches the highlighter has no text to paint.
+ */
+function settledCardSearchUnits(
+  segment: MessageSegment,
+  settled: { readonly noticeId: string; readonly anchorId: string },
+  tileInstanceId: string,
+): ReadonlyArray<ChatFindUnit> {
+  if (segment.id === settled.anchorId) return [];
+  if (segment.id === settled.noticeId && segment.kind === "provider_notice") {
+    return compactUnits([
+      chatFindUnit({
+        unitId: chatFindSegmentUnitId(segment.id),
+        text: [segment.title, segment.message ?? ""].join(" "),
+        owningChain: [],
+      }),
+    ]);
+  }
+  return segmentSearchUnits(segment, tileInstanceId);
 }
 
 function timelineItemSearchUnits(
@@ -636,7 +698,13 @@ function providerNoticeSegmentSearchText(
     normalizeSearchableText(
       [
         segment.title,
-        segment.message ?? "",
+        // `fallback_applied` paints its title alone (`ProviderNoticeSegment`'s
+        // `inlineMessageFor`): its message is the raw route, which its From
+        // and To detail rows already carry. Indexing it would count matches
+        // the highlighter has no text to paint.
+        segment.noticeKind === "fallback_applied"
+          ? ""
+          : (segment.message ?? ""),
         ...segment.details.flatMap((detail) => [detail.label, detail.value]),
       ].join(" "),
     ),

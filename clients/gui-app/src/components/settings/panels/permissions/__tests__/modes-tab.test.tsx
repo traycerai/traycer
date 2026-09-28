@@ -103,4 +103,20 @@ describe("ModesTab", () => {
     }
     expect(screen.getAllByTestId(/^permission-mode-card-/)).toHaveLength(4);
   });
+
+  it("badges only the Auto card as Experimental, with its explanatory note", () => {
+    renderTab();
+
+    const autoCard = screen.getByTestId("permission-mode-card-auto");
+    expect(within(autoCard).getByText("Experimental")).not.toBeNull();
+    expect(
+      within(autoCard).getByText(/Auto mode is experimental/),
+    ).not.toBeNull();
+
+    for (const id of ["supervised", "auto_accept_edits", "full_access"]) {
+      const card = screen.getByTestId(`permission-mode-card-${id}`);
+      expect(within(card).queryByText("Experimental")).toBeNull();
+      expect(within(card).queryByText(/Auto mode is experimental/)).toBeNull();
+    }
+  });
 });

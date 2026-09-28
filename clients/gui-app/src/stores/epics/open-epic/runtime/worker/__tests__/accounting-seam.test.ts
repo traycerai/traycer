@@ -41,6 +41,7 @@ function createSource(
   return {
     materializedRoomIds: () => ["room-a"],
     measureRootBytes: () => 1024,
+    measureReplicaDataBytes: () => ({ rawBytes: 0, estimatedHeapBytes: 0 }),
     projectionCounts: () => COUNTS,
     demoteColdestUnpinned: () => PINNED,
     ...overrides,

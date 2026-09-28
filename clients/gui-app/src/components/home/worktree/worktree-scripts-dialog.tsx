@@ -12,6 +12,7 @@ import type {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useWorktreeHostListingForClient } from "@/hooks/worktree/use-worktree-host-listing";
 import { useWorktreeSetRepoScriptsFor } from "@/hooks/worktree/use-worktree-set-repo-scripts-mutation";
 import { ScriptsReviewDialog } from "@/components/workspaces/scripts-review-dialog";
 import { type RepoScriptsSeed } from "@/components/workspaces/repo-scripts-form";
@@ -151,32 +152,17 @@ function WorktreeScriptsDialogBody(props: {
   // An existing worktree prefills from ITS OWN env file - the same host-wide
   // source Settings reads (shared query key, so this is a warm cache hit once
   // the picker has fetched it, not a new round-trip).
-  const hostWorktreesQuery = useHostQuery<
-    HostRpcRegistry,
-    "worktree.listAllForHost"
-  >({
-    cacheKeyIdentity: undefined,
-    client: context.hostClient,
-    method: "worktree.listAllForHost",
-    // Whole-list mode (no per-viewport selection); base fields only.
-    params: {
-      includeActivity: false,
-      activityPaths: null,
-      cursor: null,
-      limit: null,
-      // A background read: serve the host's TTL-cached view. Only the
-      // Settings toolbar's explicit Refresh forces a disk recompute.
-      forceRefresh: false,
-    },
-    options: { enabled: resolved.kind === "existing-worktree" },
-  });
+  const hostWorktrees = useWorktreeHostListingForClient(
+    context.hostClient,
+    resolved.kind === "existing-worktree",
+  );
   const worktreeOwnScripts = useMemo<RepoScriptsSeed | null>(() => {
     if (resolved.kind !== "existing-worktree") return null;
-    const match = (hostWorktreesQuery.data?.worktrees ?? []).find(
+    const match = hostWorktrees.worktrees.find(
       (entry) => entry.worktreePath === resolved.worktreePath,
     );
     return match?.scripts ?? null;
-  }, [hostWorktreesQuery.data, resolved]);
+  }, [hostWorktrees.worktrees, resolved]);
 
   // A new/checkout worktree forks from a SOURCE ref, so it inherits that ref's
   // committed `.traycer/environment.json` - NOT the primary checkout's on-disk
@@ -284,7 +270,7 @@ function WorktreeScriptsDialogBody(props: {
     resolved,
     workspacePath,
     sourceRef,
-    worktreeScriptsResolved: hostWorktreesQuery.isSuccess,
+    worktreeScriptsResolved: hostWorktrees.isSuccess,
     branchScriptsResolved: branchReadSettled,
   });
 

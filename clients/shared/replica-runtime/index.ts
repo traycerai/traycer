@@ -127,6 +127,9 @@ export type {
   SessionRegistry,
   SessionRegistryOptions,
   SessionRegistryPolicy,
+  WarmCapBlockedEntry,
+  WarmCapBlocker,
+  WarmCapEvaluation,
   WarmCapScope,
 } from "./session-registry";
 export {

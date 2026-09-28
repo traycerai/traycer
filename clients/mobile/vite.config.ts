@@ -8,6 +8,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig, type Connect, type Plugin, type UserConfig } from "vite";
+import { asciiOnlyOutput } from "../gui-app/vite/ascii-only-output";
 import { pdfjsAssets } from "../gui-app/vite/pdfjs-assets";
 import { sanitizeDevDesktopSlot } from "../shared/platform/dev-desktop-slot";
 import { devRelayBaseUrlFromEnv } from "../shared/platform/dev-backend-urls";
@@ -46,12 +47,12 @@ const RELAY_BASE_URL = "wss://relay.traycer.ai/attach";
 const SHIPPED_ENVIRONMENTS = {
   staging: {
     authnBaseUrl: "https://authn.dev.traycer.ai",
-    cloudUiBaseUrl: "https://platform.dev.traycer.ai",
+    cloudUiBaseUrl: "https://dev.traycer.ai",
     relayBaseUrl: "wss://relay.dev.traycer.ai/attach",
   },
   production: {
     authnBaseUrl: "https://authn.traycer.ai",
-    cloudUiBaseUrl: "https://platform.traycer.ai",
+    cloudUiBaseUrl: "https://traycer.ai",
     relayBaseUrl: RELAY_BASE_URL,
   },
 } as const;
@@ -422,6 +423,9 @@ export default defineConfig(async (): Promise<UserConfig> => {
       react(),
       tailwindcss(),
       pdfjsAssets(),
+      // Emitted JS as pure ASCII: one character above U+00FF makes the engine
+      // keep a whole chunk's source as UTF-16 (see the plugin).
+      asciiOnlyOutput(),
       babel({ presets: [reactCompilerPreset()] }).then((plugin) => ({
         ...plugin,
         enforce: "post" as const,
@@ -443,6 +447,11 @@ export default defineConfig(async (): Promise<UserConfig> => {
             }),
           ]),
     ],
+    // Worker bundles are separate builds that do not see `plugins`, and each
+    // worker keeps its own copy of its source - the epic runtime runs several.
+    worker: {
+      plugins: () => [asciiOnlyOutput()],
+    },
     resolve: {
       alias: {
         "@traycer/protocol/utils": resolve(protocolRoot, "utils"),

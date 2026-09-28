@@ -12,6 +12,7 @@ import {
   CHAT_FIND_INDEX_ABSENT,
   ChatFindIndexDemandSource,
   type ChatFindIndexAnswer,
+  type ChatFindIndexRead,
   type ChatFindTranscriptPlacement,
 } from "@/components/chat/chat-find-index";
 import {
@@ -23,6 +24,7 @@ import {
   selectActiveUserMessageId,
   type ChatTimelineNavigationLocation,
 } from "@/components/chat/chat-messages-scroll-helpers";
+import { useTranscriptQueuePauseReasonSupport } from "@/components/chat/use-transcript-queue-pause-reason-support";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import {
   useChatFindActiveTargetClearEpoch,
@@ -81,11 +83,22 @@ interface ChatFindControllerArgs {
   readonly getFindPlacement: () => ChatFindTranscriptPlacement;
   /** Hydrate and land an older message by a row or message id (the tile's jump). */
   readonly requestIndexJump: (target: string) => void;
+  /**
+   * Hydrate a candidate older message's row without moving the viewport, so
+   * the client scan can confirm it before it is counted; `null` ends the read.
+   */
+  readonly requestIndexRead: (read: ChatFindIndexRead | null) => void;
   readonly rowIndexByKeyRef: RefObject<ReadonlyMap<string, number>>;
   readonly getScroller: () => HTMLElement | null;
   readonly scrollToLocation: (location: ChatTimelineNavigationLocation) => void;
   /** Manual-navigation cancel (decision #21: find performs it first). */
   readonly cancelManualNavigation: () => void;
+  /**
+   * `ChatMessages`' reader-navigation generation: a reader gesture or a
+   * navigation bumps it - find's own scroll too, through
+   * `cancelManualNavigation`.
+   */
+  readonly getNavigationGeneration: () => number;
   readonly setScrolledActiveUserMessageIdIfChanged: (
     next: string | null,
   ) => void;
@@ -105,6 +118,8 @@ interface ChatFindController {
     rowMessageId: string,
     outcome: ChatFindLandingOutcome,
   ) => void;
+  /** A candidate's read could not be placed; see `notifyIndexReadFailed`. */
+  readonly onIndexReadFailed: (messageId: string) => void;
 }
 
 /**
@@ -126,10 +141,12 @@ export function useChatFindController(
     getFindCoverageMessage,
     getFindPlacement,
     requestIndexJump,
+    requestIndexRead,
     rowIndexByKeyRef,
     getScroller,
     scrollToLocation,
     cancelManualNavigation,
+    getNavigationGeneration,
     setScrolledActiveUserMessageIdIfChanged,
   } = args;
 
@@ -140,19 +157,39 @@ export function useChatFindController(
   // the adapter - which would drop the search it is holding.
   const getFindPlacementRef = useRef(getFindPlacement);
   const requestIndexJumpRef = useRef(requestIndexJump);
+  const requestIndexReadRef = useRef(requestIndexRead);
+  const getNavigationGenerationRef = useRef(getNavigationGeneration);
+  // How much of that generation find's own scrolls account for: the rest is
+  // the reader moving, which a read in flight has to yield to.
+  const findNavigationBumpsRef = useRef(0);
   // The last answer, so an adapter created later (a re-registration) starts
   // from it rather than waiting for the index to answer again.
   const indexAnswerRef = useRef<ChatFindIndexAnswer>(CHAT_FIND_INDEX_ABSENT);
   useLayoutEffect(() => {
     getFindPlacementRef.current = getFindPlacement;
     requestIndexJumpRef.current = requestIndexJump;
-  }, [getFindPlacement, requestIndexJump]);
+    requestIndexReadRef.current = requestIndexRead;
+    getNavigationGenerationRef.current = getNavigationGeneration;
+  }, [
+    getFindPlacement,
+    getNavigationGeneration,
+    requestIndexJump,
+    requestIndexRead,
+  ]);
 
   const setFindForcedOpen = useSetChatFindForcedOpen();
   const setFindActiveTarget = useSetChatFindActiveTarget();
   const reconcileFindActiveTarget = useReconcileChatFindActiveTarget();
   const activeTargetClearEpoch = useChatFindActiveTargetClearEpoch();
   const tileFindContext = use(TileFindContext);
+  // The renderer's answer for which notices it hides, read through a ref like
+  // the messages: the adapter reads rows lazily, and re-registering it on a
+  // change would drop the search it holds.
+  const queuePauseReasonSupport = useTranscriptQueuePauseReasonSupport();
+  const queuePauseReasonSupportRef = useRef(queuePauseReasonSupport);
+  useLayoutEffect(() => {
+    queuePauseReasonSupportRef.current = queuePauseReasonSupport;
+  }, [queuePauseReasonSupport]);
 
   const chatFindAdapterRef = useRef<ChatFindAdapter | null>(null);
   const activeFindRevealRef = useRef<ChatFindRevealTarget | null>(null);
@@ -216,7 +253,11 @@ export function useChatFindController(
 
   const scrollToMessageForFind = useCallback(
     (messageId: string): void => {
+      const generationBefore = getNavigationGenerationRef.current();
       cancelManualNavigation();
+      // Find's own scroll is not the reader moving.
+      findNavigationBumpsRef.current +=
+        getNavigationGenerationRef.current() - generationBefore;
       setScrolledActiveUserMessageIdIfChanged(
         selectActiveUserMessageId(messagesRef.current, messageId, false),
       );
@@ -460,7 +501,7 @@ export function useChatFindController(
 
   useLayoutEffect(() => {
     chatFindAdapterRef.current?.notifyRowsChanged();
-  }, [backgroundToolBlockIds, messages]);
+  }, [backgroundToolBlockIds, messages, queuePauseReasonSupport]);
 
   useLayoutEffect(() => {
     if (tileFindContext === null) return undefined;
@@ -472,11 +513,16 @@ export function useChatFindController(
           messagesRef.current,
           instanceId,
           backgroundToolBlockIdsRef.current,
+          queuePauseReasonSupportRef.current,
         ),
       getCoverageMessage: getFindCoverageMessage,
       getPlacement: () => getFindPlacementRef.current(),
+      getQueuePauseReasonSupport: () => queuePauseReasonSupportRef.current,
+      getReaderNavigationGeneration: () =>
+        getNavigationGenerationRef.current() - findNavigationBumpsRef.current,
       indexDemand,
       jumpToIndexHit: (target) => requestIndexJumpRef.current(target),
+      readIndexHit: (read) => requestIndexReadRef.current(read),
       revealMatch: requestFindReveal,
       reconcileMatch: requestFindReconcile,
       clearReveal: clearFindReveal,
@@ -523,6 +569,10 @@ export function useChatFindController(
     [],
   );
 
+  const onIndexReadFailed = useCallback((messageId: string): void => {
+    chatFindAdapterRef.current?.notifyIndexReadFailed(messageId);
+  }, []);
+
   const onRenderedDataChange = useCallback((): void => {
     const activeReveal = activeFindRevealRef.current;
     if (activeReveal !== null) {
@@ -541,5 +591,6 @@ export function useChatFindController(
     indexDemand,
     setIndexAnswer,
     onTranscriptLandingSettled,
+    onIndexReadFailed,
   };
 }

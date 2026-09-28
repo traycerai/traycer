@@ -24,7 +24,7 @@ import {
 import type { ImageBytesResult } from "@/lib/attachments/image-blob-cache";
 import {
   READ_CHAT_ATTACHMENT_LOCAL_ONLY_MINOR,
-  resetChatAttachmentHostSupportForTests,
+  resetChatAttachmentHostSupport,
   useChatAttachmentByteReader,
   useChatImageFetcher,
 } from "@/lib/attachments/use-chat-image-fetcher";
@@ -204,7 +204,7 @@ beforeEach(() => {
   useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
   docMocks.durabilityStatus = null;
   docMocks.retainedDurabilityStatus = null;
-  resetChatAttachmentHostSupportForTests();
+  resetChatAttachmentHostSupport();
   request.mockReset();
   requestFloor.mockReset();
   resetNegotiatedManifests();

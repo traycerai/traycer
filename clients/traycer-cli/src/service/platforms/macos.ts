@@ -2669,9 +2669,19 @@ async function forceStopCliOwnedHost(
     case "no-host":
       return;
     case "no-metadata":
+      // A restart's stop half. Nothing is published, so there is nothing to
+      // kill - and the caller relaunches by RECYCLING the job (`kickstart
+      // -k`, see `stopServiceForRestart`), which acts on the process launchd
+      // tracks and never on a pid.json pid, so it is correct whether a host
+      // is mid-boot, already gone, or was never there. The Desktop-managed
+      // path reads the same outcome the same way (`standDownDesktopManagedHost`
+      // reports `forcedRecycle`). Throwing here instead turned `host restart
+      // --force` on a machine whose host had already exited into a refusal
+      // that named no working command (the 2026-09-27 staging outage).
+      if (operation === "restart") return;
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: `host ${operation} --force: no host endpoint is published for '${label.id}' (pid metadata is missing or unreadable), so there is no process to kill. If the host is starting, retry in a moment; if it is wedged, run 'traycer host service uninstall' and then 'traycer host service install'.`,
+        message: `host stop --force: no host endpoint is published for '${label.id}' (pid metadata is missing or unreadable), so there is no process to kill. If the host is starting, retry in a moment. If it is simply not running there is nothing to stop: 'traycer host status' shows its state, and 'traycer host service start' (or 'traycer host update', when an update attempt is parked) starts it. If it is wedged, run 'traycer host service uninstall' and then 'traycer host service install'.`,
         details: { label: label.id },
         exitCode: 1,
       });

@@ -104,9 +104,14 @@ function PermissionModeCard(props: {
       className="flex min-w-0 flex-col gap-1.5 rounded-lg border border-border/60 bg-card/40 px-4 py-3"
       data-testid={`permission-mode-card-${option.id}`}
     >
-      <div className="flex min-w-0 items-center gap-2 font-medium text-foreground">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 font-medium text-foreground">
         <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         <span className="min-w-0 truncate">{option.label}</span>
+        {option.id === "auto" ? (
+          <Badge variant="muted" size="xs">
+            Experimental
+          </Badge>
+        ) : null}
       </div>
       <p className="text-ui-sm text-muted-foreground">{option.description}</p>
       <ul
@@ -122,6 +127,12 @@ function PermissionModeCard(props: {
           </li>
         ))}
       </ul>
+      {option.id === "auto" ? (
+        <p className="mt-1.5 border-t border-border/60 pt-2.5 text-ui-sm text-muted-foreground">
+          Auto mode is experimental. We’re still improving its reliability and
+          speed.
+        </p>
+      ) : null}
     </li>
   );
 }

@@ -434,7 +434,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
           if (runtime === null) {
             return;
           }
-          runtime.hostClient.invalidateHostScopeUnannounced(hostId);
+          runtime.hostClient.invalidateHostScopeAfterKeyRotation(hostId);
         },
       });
       const rotationSweepSubscription = directory.onChange(

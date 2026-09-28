@@ -49,8 +49,8 @@
    for minutes of real work. A motionless indeterminate bar would be that same
    claim in a new costume. (Under reduced motion a full-width line IS what the
    syncing strip falls back to - see `.stream-syncing-sweep` - but there it is
-   not a progress claim: it carries no percentage semantics and the word
-   "Syncing…" beside it is what the reader is actually reading.)
+   not a progress claim: it carries no percentage semantics, and it is gone the
+   moment the stream is back, so a still line only ever means "not yet".)
 
    `transform` only, so it composites without laying out - on the host-update bar
    this runs for minutes. */
@@ -95,7 +95,9 @@
    translated clean off the track, so the bar would simply be missing. Travel is
    therefore replaced by PRESENCE: a full-width line at low alpha. It reads as
    "this strip is here", not as "finished", because the strip carries no
-   percentage and the "Syncing…" beside it is the actual claim.
+   percentage and unmounts when the sync completes - there is no finished
+   state for a still line to be mistaken for. (The artifact tile's strip has no
+   visible caption at all; the session strip keeps its words.)
 
    `width` is restated here rather than left to the utility: the segment's
    fractional width only means something while it is travelling. */

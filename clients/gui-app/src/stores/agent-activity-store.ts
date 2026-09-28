@@ -596,6 +596,19 @@ function hostSliceCoversItsOwnHost(host: HostAgentActivity): boolean {
   return host.servedBy === "local" || hostActivityAnswers(host);
 }
 
+/** A turn in a currently attested slice, excluding rows retained across reconnects. */
+export function agentActivityPlaneReportsEpicTurn(epicId: string): boolean {
+  for (const host of useAgentActivityStore.getState().byHost.values()) {
+    if (
+      hostSliceCoversItsOwnHost(host) &&
+      (host.byEpic.get(epicId)?.turn.size ?? 0) > 0
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function selectPlaneAnswers(
   byHost: ReadonlyMap<string, HostAgentActivity>,
 ): boolean {
@@ -682,6 +695,46 @@ export function agentActivityPlaneCoversHost(hostId: string): boolean {
       hostId,
     ) === "covered"
   );
+}
+
+/**
+ * A turn verdict for one host-bound agent, or `null` when no current activity
+ * frame covers that host. GUI agents are registered under their chat ids, so
+ * the chat retention gate can read its host's turn tier here.
+ *
+ * Prefer the host's own local frame over a fleet union: chat ids are minted
+ * per host and can collide after a host clone. A cloud union can only name the
+ * id, so a collision may conservatively retain the other host's chat; it can
+ * never make a running chat look idle. Read one store snapshot throughout so
+ * coverage and membership cannot come from different stream epochs.
+ */
+export function agentActivityTurnForHost(
+  epicId: string,
+  agentId: string,
+  hostId: string,
+): boolean | null {
+  const byHost = useAgentActivityStore.getState().byHost;
+  const own = byHost.get(hostId);
+  const ownCovered = own !== undefined && hostSliceCoversItsOwnHost(own);
+  if (ownCovered) {
+    if (own.byEpic.get(epicId)?.turn.has(agentId)) return true;
+    if (own.servedBy === "local") return false;
+  }
+
+  let fleetCovered = false;
+  for (const host of byHost.values()) {
+    if (
+      !hostActivityAnswers(host) ||
+      host.servedBy !== "cloud" ||
+      host.cloudSyncStatus !== "connected"
+    ) {
+      continue;
+    }
+    fleetCovered = true;
+    if (host.byEpic.get(epicId)?.turn.has(agentId)) return true;
+  }
+  if (fleetCovered || ownCovered) return false;
+  return null;
 }
 
 /**
