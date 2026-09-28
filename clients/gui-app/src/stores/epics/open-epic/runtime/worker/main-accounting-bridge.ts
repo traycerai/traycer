@@ -60,6 +60,8 @@ const EMPTY_PROJECTION_COUNTS: EpicReplicaProjectionCounts = {
 const NO_SNAPSHOT: RuntimeAccountingSnapshot = {
   materializedRoomIds: [],
   rootBytes: 0,
+  replicaDataRawBytes: 0,
+  replicaDataEstimatedHeapBytes: 0,
   protectedBytesByKind: [],
   projectionCounts: null,
 };
@@ -127,6 +129,10 @@ export function createMainAccountingBridge(options: {
             options.port.registerBooks({
               materializedRoomIds: () => cache.materializedRoomIds,
               measureRootBytes: () => cache.rootBytes,
+              measureReplicaDataBytes: () => ({
+                rawBytes: cache.replicaDataRawBytes,
+                estimatedHeapBytes: cache.replicaDataEstimatedHeapBytes,
+              }),
               projectionCounts: () =>
                 narrowProjectionCounts(cache.projectionCounts),
               demoteColdestUnpinned: (overBytes): HotDocEvictionOutcome => {
@@ -197,6 +203,15 @@ export function createMainAccountingBridge(options: {
           switch (settlement.kind) {
             case "root":
               options.port.settleRootBytes(settlement.bytes);
+              return true;
+            case "root-provisional":
+              options.port.chargeRootProvisional(settlement.bytes);
+              return true;
+            case "replica-data":
+              options.port.settleReplicaDataBytes(
+                settlement.rawBytes,
+                settlement.estimatedHeapBytes,
+              );
               return true;
             case "cold-room":
               options.port.settleColdRoomBytes(

@@ -54,6 +54,25 @@ export function createRecordingAccountingPort(): RecordingAccountingPort {
       settleRootBytes(bytes): void {
         record("settleRootBytes", null, bytes);
       },
+      chargeRootProvisional(bytes): void {
+        record("chargeRootProvisional", null, bytes);
+      },
+      settleReplicaDataBytes(rawBytes, estimatedHeapBytes): void {
+        record("settleReplicaDataBytes.raw", null, rawBytes);
+        record(
+          "settleReplicaDataBytes.estimatedHeap",
+          null,
+          estimatedHeapBytes,
+        );
+      },
+      settleMainProjectionBytes(rawBytes, estimatedHeapBytes): void {
+        record("settleMainProjectionBytes.raw", null, rawBytes);
+        record(
+          "settleMainProjectionBytes.estimatedHeap",
+          null,
+          estimatedHeapBytes,
+        );
+      },
       settleColdRoomBytes(artifactRoomId, bytes): void {
         record("settleColdRoomBytes", artifactRoomId, bytes);
       },

@@ -163,12 +163,27 @@ export interface ArtifactBodyLeaseBridge {
    * `docGuid: null` on the lane arm is forward-only, which is un-demotable.
    * The second `body/materialize` answers with the full identity.
    *
-   * The readiness predicate is the CALLER's, over doc keys, because the
+   * The readiness answer is the CALLER's, over doc keys, because the
    * projection is main's and there must be one reader of it - the same reason
    * `dropBodiesWhoseRoomIsGone` computes its ready set in the store and this
    * module never touches a slice.
+   *
+   * It answers WHICH ARTIFACT to ask with, not just whether to ask: `null` for
+   * a doc key whose room is not ready, otherwise an artifact the projection
+   * currently files under that key - `preferredArtifactId` (the one this body
+   * was acquired or installed through) while it still is. The distinction is
+   * `@1`'s, where a doc key is a ROOM hosting several artifacts: a body that
+   * `forget` sent back to wait carries whichever artifact installed it, and if
+   * that artifact has since left the room while another still holds the body,
+   * asking with it re-resolves to no doc key and the retry stalls. On the lane
+   * arm the key is the artifact, so the answer is always the preferred one.
    */
-  retryAwaitingBodies(isReadyDocKey: (docKey: string) => boolean): void;
+  retryAwaitingBodies(
+    readyArtifactFor: (
+      docKey: string,
+      preferredArtifactId: string,
+    ) => string | null,
+  ): void;
   /**
    * Re-post every demote that was posted but never acknowledged.
    *
@@ -181,13 +196,19 @@ export interface ArtifactBodyLeaseBridge {
   /** Doc keys posted for demotion and not yet settled. A test seam. */
   unacknowledgedDemoteKeys(): readonly string[];
   /**
-   * Forget every entry WITHOUT posting anything.
+   * Retire a resident body whose room the projection no longer calls ready,
+   * WITHOUT posting a demote.
    *
-   * For a binding-epoch advance, which means the worker destroyed its room
-   * replicas: there is nothing on the far side to settle bytes back INTO, so a
-   * demote would be answered `not-held` and the entry would sit pending
-   * forever. Distinct from `flushLingering`, which posts because the far side
-   * is still there.
+   * The worker destroyed the room's replica: there is nothing on the far side
+   * to settle bytes back INTO, so a demote would be answered `not-held` and the
+   * entry would sit pending forever. Distinct from `flushLingering`, which
+   * posts because the far side is still there.
+   *
+   * The worker's DEMAND is another matter - it outlives the replica - so the
+   * body's hold is not simply dropped. A body some holder still has mounted
+   * goes back to awaiting with its lease count, and the ready edge
+   * re-materializes it into those same holders; one nobody holds posts its
+   * release. See the implementation for why both halves were needed.
    *
    * The caller drops the live docs. That discards main-side edits which were
    * never sent - and that is the honest outcome rather than a loss this
@@ -209,6 +230,20 @@ export interface ArtifactBodyLeaseBridge {
 
 interface BodyEntry {
   leases: number;
+  /**
+   * The artifact whose materialize installed this doc.
+   *
+   * Carried for ONE reader: `forget` turning a still-held entry back into an
+   * awaiting body, whose retry re-materializes by artifact id because
+   * `body/materialize` is addressed that way. Held rather than derived from the
+   * doc key for the reason {@link AwaitingBody.artifactId} states: the two are
+   * equal on the lane arm and not on `@1`, where the key is a room id.
+   *
+   * Only the retry's STARTING preference: `retryAwaitingBodies` swaps it for an
+   * artifact the projection still files under the key, because on `@1` the
+   * installer may have left the room while another artifact holds the body.
+   */
+  readonly artifactId: string;
   /**
    * What this doc was materialized at; sent back on every demote.
    *
@@ -265,10 +300,16 @@ interface AwaitingBody {
    * The artifact the retry re-materializes.
    *
    * Held rather than derived from the doc key: the two are equal on the lane
-   * arm and NOT on `@1`, where the key is a room id - and `@1` never awaits, so
-   * a reader could "simplify" this away and be right in every case it tested.
+   * arm and NOT on `@1`, where the key is a room id - and `@1` awaits only on
+   * its rarer paths (a room reassignment mid-seed, a `forget` of a still-held
+   * body), so a reader could "simplify" this away and be right in every case
+   * it tested.
+   *
+   * MUTABLE: each ready-edge retry re-reads it from the projection
+   * (`retryAwaitingBodies`), so on `@1` it follows whichever artifact still
+   * names the room rather than the one that happened to acquire it first.
    */
-  readonly artifactId: string;
+  artifactId: string;
   leases: number;
   /** A retry is in flight; a second projection push must not start another. */
   retrying: boolean;
@@ -829,14 +870,27 @@ export function createArtifactBodyLeaseBridge(options: {
     // Stranded is therefore `@1`'s normal state, not a hazard this side
     // introduces. Refusing here would mean no `@1` body ever reaches an
     // editor, which is the whole arm going dark.
+    // Bytes for a key that is ALREADY AWAITING under other holders - an earlier
+    // acquire answered byteless, or `forget` sent a still-held body back to
+    // wait - and this call's answer is the first to carry them. Those holders
+    // are mounted and owe releases too, so they join this install rather than
+    // standing beside it: `awaiting` and `entries` are disjoint by contract,
+    // and a retry still in flight for them would otherwise `installGranted`
+    // over this entry with only its own count, demoting a doc this call's
+    // holders are bound to. Deleting the awaiting record here is what makes
+    // that retry stand down (`stillAwaiting === undefined`), and their
+    // `releaseAwaitingFor` closures fall through to this entry.
+    const waiting = awaiting.get(docKey);
+    if (waiting !== undefined) awaiting.delete(docKey);
     installGranted({
       docKey,
+      artifactId,
       update: answer.update,
       docGuid: answer.docGuid,
       seedMode: answer.seedMode,
       hostStateVector: answer.hostStateVector,
       awarenessFrames: answer.awarenessFrames,
-      leases: holders,
+      leases: holders + (waiting?.leases ?? 0),
     });
     return { kind: "resident", docKey };
   }
@@ -900,7 +954,7 @@ export function createArtifactBodyLeaseBridge(options: {
       inFlight.set(artifactId, record);
       return grantFor(await record.answer, retention);
     },
-    retryAwaitingBodies(isReadyDocKey): void {
+    retryAwaitingBodies(readyArtifactFor): void {
       // A COPY of the keys: each iteration can resolve an entry and delete it,
       // and mutating the map mid-iteration is how a body gets skipped and left
       // waiting for a push that already happened.
@@ -909,7 +963,9 @@ export function createArtifactBodyLeaseBridge(options: {
         // what keeps this loop bounded: it runs once per delivered projection,
         // never on a timer, and does nothing at all for a body whose room is
         // still not ready.
-        if (!isReadyDocKey(docKey)) continue;
+        const artifactId = readyArtifactFor(docKey, held.artifactId);
+        if (artifactId === null) continue;
+        held.artifactId = artifactId;
         startAwaitingRetry(docKey, held);
       }
     },
@@ -931,6 +987,34 @@ export function createArtifactBodyLeaseBridge(options: {
       if (entry === undefined) return;
       cancelLinger(entry);
       entries.delete(docKey);
+      // WHAT HAPPENS TO THE HOLD, which this method used to leave to nobody.
+      //
+      // The main-side doc is gone - the caller drops it - but the worker's
+      // demand for this body is NOT: `heldLeases` is released only by an
+      // accepted settle or a `body/release`, and a room leaving `ready`
+      // (`tier.invalidate`) discards the replica while keeping the lease, so
+      // the next snapshot re-materializes it. Deleting the entry and posting
+      // nothing therefore stranded that demand twice over:
+      //
+      //   - STILL HELD: the mounted editor's `release` closure found no entry
+      //     and returned, so the worker kept the demand (on the lane arm, the
+      //     subscription) after the tile unmounted - and nothing here asked
+      //     for the body again when its room came back, because
+      //     `retryAwaitingBodies` only walks `awaiting`. The tile sat on
+      //     "Reconnecting to this document…" until it was remounted.
+      //   - LINGERING (no holder left): nothing would ever post for it again,
+      //     so the demand stayed for the session.
+      //
+      // A held body therefore goes back to AWAITING with its lease count
+      // whole, which is exactly the state a cold open is in: the demand is
+      // held, and the ready edge re-materializes it into the same holders.
+      // An unheld one releases, through the same refusal-aware path an
+      // awaiting holder's last release uses.
+      if (entry.leases > 0) {
+        holdAwaiting(docKey, entry.artifactId, entry.leases);
+      } else {
+        releaseDemandOnceAcquiresSettle(docKey);
+      }
       // The hot charge is LOCAL and still has to come back. The doc-comment
       // argument for this method - "there is nothing on the far side to settle
       // bytes back INTO" - is about the WORKER: it justifies not posting a
@@ -1158,6 +1242,7 @@ export function createArtifactBodyLeaseBridge(options: {
           // let the first unmount demote a doc the others hold.
           installGranted({
             docKey: activeKey,
+            artifactId: activeAwaiting.artifactId,
             update: answer.update,
             docGuid: answer.docGuid,
             seedMode: answer.seedMode,
@@ -1238,6 +1323,7 @@ export function createArtifactBodyLeaseBridge(options: {
    */
   function installGranted(input: {
     readonly docKey: string;
+    readonly artifactId: string;
     readonly update: Uint8Array;
     readonly docGuid: string | null;
     readonly seedMode: ArtifactBodySeedMode;
@@ -1263,6 +1349,7 @@ export function createArtifactBodyLeaseBridge(options: {
     }
     entries.set(input.docKey, {
       leases: input.leases,
+      artifactId: input.artifactId,
       generation: 1,
       docGuid: input.docGuid,
       demotingGeneration: null,
@@ -1298,22 +1385,76 @@ export function createArtifactBodyLeaseBridge(options: {
       if (!live) return;
       live = false;
       const docKey = currentKeyFor(capturedKey);
-      const held = awaiting.get(docKey);
-      if (held === undefined) {
-        // Resolved while this holder was mounted - its lease was carried into
-        // the resident entry, so that is where the decrement belongs.
-        releaseFor(docKey, retention)();
+      if (awaiting.has(docKey)) {
+        releaseOneAwaiting(docKey);
         return;
       }
-      held.leases -= 1;
-      if (held.leases > 0) return;
-      awaiting.delete(docKey);
-      postAwaitingRelease(docKey);
+      // Resolved while this holder was mounted - its lease was carried into
+      // the resident entry, so that is where the decrement belongs.
+      releaseFor(docKey, retention)();
     };
   }
 
   /**
+   * Take one holder off an awaiting body, posting the worker release at zero.
+   *
+   * Shared by BOTH release closures, because a lease can be in `awaiting` under
+   * either kind of grant: an awaiting grant's, before its retry installs the
+   * doc, and a GRANTED one's after `forget` moved a still-held resident body
+   * back to awaiting. One decrement path is what keeps the two from disagreeing
+   * about when the worker's single demand comes off.
+   */
+  function releaseOneAwaiting(docKey: string): void {
+    const held = awaiting.get(docKey);
+    if (held === undefined) return;
+    held.leases -= 1;
+    if (held.leases > 0) return;
+    awaiting.delete(docKey);
+    releaseDemandOnceAcquiresSettle(docKey);
+  }
+
+  /**
+   * Release the worker's demand for a body nobody on this side holds - but
+   * not while an acquire that may resolve to it is still in flight.
+   *
+   * The worker keeps ONE demand per doc key and folds every later materialize
+   * into it (`holdAwaitingDemand` / `holdResidentLease` release the newcomer's
+   * lease when one is already held). So an acquire posted BEFORE this release
+   * was answered as sharing the existing demand, and the release, arriving
+   * second, then drops that demand out from under it: the acquire's holder is
+   * handed an awaiting or granted body the worker no longer backs, with no
+   * subscription and no observer. The last holder leaving while another tile
+   * mounts the same artifact is the ordinary way to get there, and a body that
+   * `forget` sent back to wait makes it easy - every mount goes through
+   * `body/materialize` again.
+   *
+   * Every in-flight acquire is waited on, not only the one named by this key:
+   * on `@1` the key is a room, and an acquire for a different artifact can
+   * resolve to it. Once they settle, the bookkeeping they did is re-read - an
+   * acquire that joined this key made it held again, and its own release will
+   * post when it goes - and only an unheld key is released. Acquires are single
+   * round trips, so this defers a release by at most that long, and it
+   * re-checks for acquires that started meanwhile rather than racing them.
+   */
+  function releaseDemandOnceAcquiresSettle(docKey: string): void {
+    if (inFlight.size === 0) {
+      postAwaitingRelease(docKey);
+      return;
+    }
+    const pending = [...inFlight.values()].map((record) => record.answer);
+    void Promise.allSettled(pending).then(() => {
+      const current = currentKeyFor(docKey);
+      if (awaiting.has(current) || entries.has(current)) return;
+      releaseDemandOnceAcquiresSettle(current);
+    });
+  }
+
+  /**
    * Post an awaiting body's release, and keep asking if the worker refuses.
+   *
+   * Also the release for a resident body `forget` retired with no holder left:
+   * that body has no entry and no bytes to settle either, so it is in exactly
+   * an awaiting body's position - demand held on the far side, nothing here.
    *
    * The refusal is real rather than defensive: the last awaiting holder can
    * unmount AFTER the worker has materialized the room into a PINNED state - a
@@ -1435,7 +1576,10 @@ export function createArtifactBodyLeaseBridge(options: {
         // held again and its own release will post when it unmounts. Posting
         // here would drop a body someone is using.
         if (awaiting.has(current) || entries.has(current)) return;
-        postAwaitingRelease(current);
+        // Through the same in-flight check as a last release: this re-post is
+        // one too, and an acquire started inside the window is folded into the
+        // demand it would drop.
+        releaseDemandOnceAcquiresSettle(current);
       }),
     );
   }
@@ -1457,7 +1601,14 @@ export function createArtifactBodyLeaseBridge(options: {
       // can be the pre-move one too.
       const docKey = currentKeyFor(capturedKey);
       const entry = entries.get(docKey);
-      if (entry === undefined) return;
+      if (entry === undefined) {
+        // Not resident any more. When `forget` dropped this body while it was
+        // still held, its leases moved to `awaiting`, and this holder's share
+        // is counted there: decrementing nothing would leave the worker's
+        // demand - on the lane arm, the subscription - up for the session.
+        releaseOneAwaiting(docKey);
+        return;
+      }
       entry.leases -= 1;
       if (entry.leases > 0) return;
       // Already on its way out - a second release before the ack must not post

@@ -1217,7 +1217,7 @@ export const browserSessionsClientFrameV20Schema = lazySchema(() =>
       .strict(),
   ]),
 );
-export const browserSessionsClientFrameSchema = lazySchema(() =>
+export const browserSessionsClientFrameV21Schema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     ...browserSessionsClientFrameV20Schema.options,
     z
@@ -1256,6 +1256,24 @@ export const browserSessionsClientFrameSchema = lazySchema(() =>
             .object({ ok: z.literal(false), message: z.string().max(2048) })
             .strict(),
         ]),
+      })
+      .strict(),
+  ]),
+);
+export const browserSessionsClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...browserSessionsClientFrameV21Schema.options,
+    z
+      .object({ kind: z.literal("requestSnapshot"), ...textFrameFields })
+      .strict(),
+    // Automatic preparation may place new/dormant tabs, but must not turn
+    // arrival of a route into relocation of an unrelated live headless tab.
+    z
+      .object({
+        kind: z.literal("electronTabLifecycleReadyOnDemand"),
+        ...textFrameFields,
+        coLocatedHostId: z.string(),
+        desktopWindowId: z.string(),
       })
       .strict(),
   ]),
@@ -1399,6 +1417,14 @@ export const browserSessionsV20 = defineStreamRpcContract({
 export const browserSessionsV21 = defineStreamRpcContract({
   method: "browser.sessions",
   schemaVersion: { major: 2, minor: 1 } as const,
+  openRequestSchema: browserSessionsOpenRequestSchema,
+  serverFrameSchema: browserSessionsServerFrameSchema,
+  clientFrameSchema: browserSessionsClientFrameV21Schema,
+});
+
+export const browserSessionsV22 = defineStreamRpcContract({
+  method: "browser.sessions",
+  schemaVersion: { major: 2, minor: 2 } as const,
   openRequestSchema: browserSessionsOpenRequestSchema,
   serverFrameSchema: browserSessionsServerFrameSchema,
   clientFrameSchema: browserSessionsClientFrameSchema,

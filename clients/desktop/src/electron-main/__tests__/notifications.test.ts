@@ -5,6 +5,8 @@ type NotificationEventName = "close" | "click";
 class FakeNotification {
   static supported = true;
   static instances: FakeNotification[] = [];
+  static constructed: Array<{ readonly title: string; readonly body: string }> =
+    [];
 
   readonly close = vi.fn();
   readonly show = vi.fn();
@@ -13,7 +15,11 @@ class FakeNotification {
     Array<() => void>
   >();
 
-  constructor(_options: { readonly title: string; readonly body: string }) {
+  constructor(options: { readonly title: string; readonly body: string }) {
+    FakeNotification.constructed.push({
+      title: options.title,
+      body: options.body,
+    });
     FakeNotification.instances.push(this);
   }
 
@@ -65,6 +71,7 @@ beforeEach(() => {
   FakeBrowserWindow.windows = [];
   FakeNotification.supported = true;
   FakeNotification.instances = [];
+  FakeNotification.constructed = [];
   vi.useFakeTimers();
 });
 
@@ -288,6 +295,240 @@ describe("showNativeNotification", () => {
 
     expect(showNativeNotification(options)).toBe("undeliverable");
     expect(showNativeNotification(options)).toBe("duplicate");
+    expect(FakeNotification.instances).toHaveLength(0);
+  });
+});
+
+function occurrence(
+  key: string,
+  overrides: {
+    readonly feedSource?: "host" | "cloud";
+    readonly replaceKey?: string;
+  },
+) {
+  return {
+    key,
+    title: `title-${key}`,
+    body: `body-${key}`,
+    payload: { target: key },
+    replaceKey: overrides.replaceKey ?? `replace-${key}`,
+    feedSource: overrides.feedSource ?? ("host" as const),
+    originHostId: "host-1",
+    epicId: `epic-${key}`,
+    chatId: `chat-${key}`,
+    chimeEventType: "done" as const,
+    userId: null,
+  };
+}
+
+describe("showNativeFeedNotification", () => {
+  it("shows one native notification for the same occurrence from host and cloud", async () => {
+    const { showNativeFeedNotification } = await loadNotifications();
+
+    const first = showNativeFeedNotification(
+      [occurrence("A", { feedSource: "host" })],
+      vi.fn(),
+      vi.fn(),
+    );
+    const second = showNativeFeedNotification(
+      [occurrence("A", { feedSource: "cloud" })],
+      vi.fn(),
+      vi.fn(),
+    );
+
+    expect(first).toMatchObject({
+      kind: "feed",
+      outcome: "presented",
+      display: { feedOccurrences: [occurrence("A", { feedSource: "host" })] },
+    });
+    expect(second).toBe("duplicate");
+    expect(FakeNotification.instances).toHaveLength(1);
+    expect(FakeNotification.instances[0]?.show).toHaveBeenCalledOnce();
+  });
+
+  it("shows nothing for individual A/B after batch A/B", async () => {
+    const { showNativeFeedNotification } = await loadNotifications();
+
+    showNativeFeedNotification(
+      [occurrence("A", {}), occurrence("B", {})],
+      vi.fn(),
+      vi.fn(),
+    );
+    showNativeFeedNotification([occurrence("A", {})], vi.fn(), vi.fn());
+    showNativeFeedNotification([occurrence("B", {})], vi.fn(), vi.fn());
+
+    expect(FakeNotification.instances).toHaveLength(1);
+    expect(FakeNotification.instances[0]?.show).toHaveBeenCalledOnce();
+  });
+
+  it("shows nothing for batch A/B after individual A/B", async () => {
+    const { showNativeFeedNotification } = await loadNotifications();
+
+    showNativeFeedNotification([occurrence("A", {})], vi.fn(), vi.fn());
+    showNativeFeedNotification([occurrence("B", {})], vi.fn(), vi.fn());
+    const outcome = showNativeFeedNotification(
+      [occurrence("A", {}), occurrence("B", {})],
+      vi.fn(),
+      vi.fn(),
+    );
+
+    expect(outcome).toBe("duplicate");
+    expect(FakeNotification.instances).toHaveLength(2);
+  });
+
+  it("projects only the unseen occurrence when a batch follows individual A", async () => {
+    const { showNativeFeedNotification } = await loadNotifications();
+    const onClick = vi.fn();
+
+    showNativeFeedNotification([occurrence("A", {})], vi.fn(), vi.fn());
+    const result = showNativeFeedNotification(
+      [occurrence("A", {}), occurrence("B", {})],
+      onClick,
+      vi.fn(),
+    );
+
+    expect(result).toMatchObject({
+      kind: "feed",
+      outcome: "presented",
+      display: { title: "title-B", feedOccurrences: [occurrence("B", {})] },
+    });
+    expect(FakeNotification.instances).toHaveLength(2);
+    const second = FakeNotification.instances[1];
+    expect(second?.show).toHaveBeenCalledOnce();
+    expect(FakeNotification.constructed[1]).toEqual({
+      title: "title-B",
+      body: "body-B",
+    });
+    second?.emit("click");
+    expect(onClick).toHaveBeenCalledWith({ target: "B" });
+  });
+
+  it("does not lose new rows in overlapping or reordered batches", async () => {
+    const { showNativeFeedNotification } = await loadNotifications();
+    const onClick = vi.fn();
+
+    showNativeFeedNotification(
+      [occurrence("A", {}), occurrence("B", {})],
+      vi.fn(),
+      vi.fn(),
+    );
+    const result = showNativeFeedNotification(
+      [occurrence("B", {}), occurrence("A", {}), occurrence("C", {})],
+      onClick,
+      vi.fn(),
+    );
+
+    expect(result).toMatchObject({
+      kind: "feed",
+      outcome: "presented",
+      display: { feedOccurrences: [occurrence("C", {})] },
+    });
+    expect(FakeNotification.instances).toHaveLength(2);
+    expect(FakeNotification.constructed[1]).toEqual({
+      title: "title-C",
+      body: "body-C",
+    });
+    FakeNotification.instances[1]?.emit("click");
+    expect(onClick).toHaveBeenCalledWith({ target: "C" });
+  });
+
+  it("keeps origin-specific distinct keys separate", async () => {
+    const { showNativeFeedNotification } = await loadNotifications();
+
+    showNativeFeedNotification(
+      [occurrence("host:A", { feedSource: "host" })],
+      vi.fn(),
+      vi.fn(),
+    );
+    showNativeFeedNotification(
+      [occurrence("cloud:A", { feedSource: "cloud" })],
+      vi.fn(),
+      vi.fn(),
+    );
+
+    expect(FakeNotification.instances).toHaveLength(2);
+  });
+
+  it("does not burn receipts when the foreground relay fails, so retry works", async () => {
+    const { showNativeFeedNotification } = await loadNotifications();
+    FakeBrowserWindow.windows = [{ destroyed: false, focused: true }];
+
+    expect(() =>
+      showNativeFeedNotification([occurrence("A", {})], vi.fn(), () => {
+        throw new Error("focused renderer unavailable");
+      }),
+    ).toThrow("focused renderer unavailable");
+
+    const relay = vi.fn();
+    const outcome = showNativeFeedNotification(
+      [occurrence("A", {})],
+      vi.fn(),
+      relay,
+    );
+
+    // Foreground relay owns presentation: no display for the caller to render.
+    expect(outcome).toEqual({
+      kind: "feed",
+      outcome: "presented",
+      display: null,
+    });
+    expect(relay).toHaveBeenCalledOnce();
+  });
+
+  it("returns the filtered display when notifications are unsupported", async () => {
+    const { showNativeFeedNotification } = await loadNotifications();
+    FakeNotification.supported = false;
+
+    const outcome = showNativeFeedNotification(
+      [occurrence("B", {}), occurrence("C", {})],
+      vi.fn(),
+      vi.fn(),
+    );
+
+    expect(outcome).toMatchObject({
+      kind: "feed",
+      outcome: "undeliverable",
+      display: { feedOccurrences: [occurrence("B", {}), occurrence("C", {})] },
+    });
+    expect(FakeNotification.instances).toHaveLength(0);
+  });
+
+  it("relays only the filtered feedOccurrences to the foreground renderer", async () => {
+    const { showNativeFeedNotification } = await loadNotifications();
+    const relay = vi.fn();
+    showNativeFeedNotification([occurrence("A", {})], vi.fn(), vi.fn());
+    FakeBrowserWindow.windows = [{ destroyed: false, focused: true }];
+
+    showNativeFeedNotification(
+      [occurrence("A", {}), occurrence("B", { feedSource: "cloud" })],
+      vi.fn(),
+      relay,
+    );
+
+    expect(relay).toHaveBeenCalledOnce();
+    const display = relay.mock.calls[0]?.[0];
+    expect(display.feedOccurrences).toEqual([
+      occurrence("B", { feedSource: "cloud" }),
+    ]);
+    expect(display.title).toBe("title-B");
+    expect(display.foregroundAppLocal).toBeNull();
+  });
+
+  it("does not duplicate after a supported foreground relay", async () => {
+    const { showNativeFeedNotification } = await loadNotifications();
+    const relay = vi.fn();
+    FakeBrowserWindow.windows = [{ destroyed: false, focused: true }];
+
+    showNativeFeedNotification([occurrence("A", {})], vi.fn(), relay);
+    FakeBrowserWindow.windows = [{ destroyed: false, focused: false }];
+    const outcome = showNativeFeedNotification(
+      [occurrence("A", { feedSource: "cloud" })],
+      vi.fn(),
+      relay,
+    );
+
+    expect(outcome).toBe("duplicate");
+    expect(relay).toHaveBeenCalledOnce();
     expect(FakeNotification.instances).toHaveLength(0);
   });
 });

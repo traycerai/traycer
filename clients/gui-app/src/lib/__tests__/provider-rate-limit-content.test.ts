@@ -488,4 +488,26 @@ describe("resolveProviderPlanLabel", () => {
       }),
     ).toBeNull();
   });
+
+  it("returns Antigravity's planName verbatim (already display-ready)", () => {
+    expect(
+      resolveProviderPlanLabel({
+        provider: "antigravity",
+        available: true,
+        planName: "Google AI Pro",
+        groups: [],
+      }),
+    ).toBe("Google AI Pro");
+  });
+
+  it("is null when Antigravity did not report a planName", () => {
+    expect(
+      resolveProviderPlanLabel({
+        provider: "antigravity",
+        available: true,
+        planName: null,
+        groups: [],
+      }),
+    ).toBeNull();
+  });
 });

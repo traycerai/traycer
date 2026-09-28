@@ -25,11 +25,14 @@ export const tabCustomizationSchema = z.object({
   color: colorSchema.nullable(),
   icon: z.string().max(32).nullable(),
   groupId: z.string().max(128).nullable(),
+  pendingGroupId: z.string().max(128).nullable().optional(),
+  organizationOwnerId: z.string().nullable().optional(),
 });
 export const tabGroupSchema = z.object({
   name: z.string().max(80),
   color: colorSchema,
   collapsed: z.boolean(),
+  organizationOwnerId: z.string().nullable().optional(),
 });
 export type TabCustomization = z.infer<typeof tabCustomizationSchema>;
 export type TabGroup = z.infer<typeof tabGroupSchema>;
@@ -66,18 +69,23 @@ export function setLayoutTabGroup(
   ref: TabRef,
   groupId: string | null,
 ): PersistedTabStripLayout {
-  if (groupId !== null && layout.groups?.[groupId] === undefined) return layout;
+  const group = groupId === null ? undefined : layout.groups?.[groupId];
+  if (groupId !== null && group === undefined) return layout;
   const item = findStripItemForRef(layout, ref);
   if (item === null) return layout;
   const customizations = { ...layout.customizations };
   for (const member of flattenStripItemRefs(item)) {
     const key = tabRefKey(member);
-    customizations[key] = {
-      ...(customizations[key] ?? DEFAULT_TAB_CUSTOMIZATION),
-      groupId,
-    };
+    const current = layout.customizations?.[key] ?? DEFAULT_TAB_CUSTOMIZATION;
+    customizations[key] = { ...current, groupId };
+    if (member.kind === "draft")
+      customizations[key] = {
+        ...current,
+        groupId,
+        pendingGroupId: groupId,
+        organizationOwnerId: group?.organizationOwnerId,
+      };
   }
-  const group = groupId === null ? undefined : layout.groups?.[groupId];
   return {
     ...layout,
     customizations,
@@ -97,7 +105,13 @@ export function inheritTabGroup(
     layout.customizations?.[tabRefKey(sourceRef)] ?? DEFAULT_TAB_CUSTOMIZATION;
   const key = tabRefKey(targetRef);
   const target = layout.customizations?.[key] ?? DEFAULT_TAB_CUSTOMIZATION;
-  if (source.groupId === target.groupId) return layout;
+  if (
+    source.groupId === target.groupId ||
+    source.organizationOwnerId ||
+    target.organizationOwnerId ||
+    source.pendingGroupId
+  )
+    return layout;
   return {
     ...layout,
     customizations: {
@@ -146,19 +160,17 @@ function collectItemCustomizations(
   customizations: Record<string, TabCustomization>,
   groups: Record<string, TabGroup>,
 ): void {
-  const refs = flattenStripItemRefs(item);
-  const groupId = stripItemGroupId(item, layout.customizations);
-  const group = groupId === null ? undefined : layout.groups?.[groupId];
-  if (groupId !== null && group !== undefined) groups[groupId] = group;
-  for (const ref of refs) {
+  for (const ref of flattenStripItemRefs(item)) {
     const key = tabRefKey(ref);
-    const existing = layout.customizations?.[key];
-    if (existing !== undefined || group !== undefined) {
-      const current = existing ?? DEFAULT_TAB_CUSTOMIZATION;
-      customizations[key] = {
-        ...current,
-        groupId: group === undefined ? null : groupId,
-      };
-    }
+    const current = layout.customizations?.[key];
+    if (current === undefined) continue;
+    const group =
+      current.groupId === null ? undefined : layout.groups?.[current.groupId];
+    if (current.groupId !== null && group !== undefined)
+      groups[current.groupId] = group;
+    customizations[key] = {
+      ...current,
+      groupId: group === undefined ? null : current.groupId,
+    };
   }
 }

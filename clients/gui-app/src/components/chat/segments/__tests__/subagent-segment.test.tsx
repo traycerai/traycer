@@ -934,6 +934,7 @@ describe("<SubagentSegment /> promoted feed", () => {
           {
             id: "notice-1",
             kind: "provider_notice",
+            receipt: null,
             status: "completed",
             noticeKind: "model_rerouted",
             tone: "warning",
@@ -1124,6 +1125,7 @@ function noticeChild(id: string): SubagentChildSegment {
     title: "Model changed",
     message: null,
     details: [],
+    receipt: null,
     parentId: "conv",
   };
 }

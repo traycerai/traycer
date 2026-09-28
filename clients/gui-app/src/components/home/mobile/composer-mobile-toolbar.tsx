@@ -146,6 +146,10 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
     ),
   );
   const PermissionIcon = permissionOption.icon;
+  const permissionLabel =
+    permissionOption.id === "auto"
+      ? `${permissionOption.label} — Experimental`
+      : permissionOption.label;
 
   // While dictation is active the whole row becomes the recording strip, as on
   // desktop - the controls return on stop.
@@ -181,7 +185,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
           either - this is also the only route to the agent-mode rows, which
           must stay reachable; the sheet's own rows carry the lock. */}
       <ToolbarPillButton
-        aria-label={`Permissions: ${permissionOption.label}`}
+        aria-label={`Permissions: ${permissionLabel}`}
         data-testid="composer-mobile-options-trigger"
         className="size-8 shrink-0 justify-center px-0"
         onClick={() => {
@@ -207,6 +211,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
           // Model name only: the row has room for it, but the thinking-effort
           // suffix the desktop pill adds reads as clutter at this width.
           labelDisplay="model-only"
+          embedding={null}
         />
         {dictation !== null ? <ComposerMicButton control={dictation} /> : null}
         {dictation === null && dictationPreparing !== null ? (

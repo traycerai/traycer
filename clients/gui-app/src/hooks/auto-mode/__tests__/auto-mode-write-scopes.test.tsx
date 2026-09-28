@@ -162,10 +162,20 @@ describe("useAutoJudgeSetMutation - client-side write ordering", () => {
     // down (its key is `[hostId, userId, method, params]`), which is why
     // only a client-side scope can still order them.
     const selectionA = {
-      selection: { harnessId: "claude", model: "model-a", profileId: null },
+      selection: {
+        harnessId: "claude",
+        model: "model-a",
+        profileId: null,
+        reasoningEffort: null,
+      },
     };
     const selectionB = {
-      selection: { harnessId: "codex", model: "model-b", profileId: null },
+      selection: {
+        harnessId: "codex",
+        model: "model-b",
+        profileId: null,
+        reasoningEffort: null,
+      },
     };
 
     result.current.mutate(selectionA);
@@ -179,7 +189,12 @@ describe("useAutoJudgeSetMutation - client-side write ordering", () => {
     expect(mocks.request).toHaveBeenCalledWith("autoJudge.set", selectionA);
 
     const responseA: AutoJudgeSetResponse = {
-      selection: { harnessId: "claude", model: "model-a", profileId: null },
+      selection: {
+        harnessId: "claude",
+        model: "model-a",
+        profileId: null,
+        reasoningEffort: null,
+      },
     };
     first.resolve(responseA);
 
@@ -195,7 +210,12 @@ describe("useAutoJudgeSetMutation - client-side write ordering", () => {
     );
 
     const responseB: AutoJudgeSetResponse = {
-      selection: { harnessId: "codex", model: "model-b", profileId: null },
+      selection: {
+        harnessId: "codex",
+        model: "model-b",
+        profileId: null,
+        reasoningEffort: null,
+      },
     };
     second.resolve(responseB);
 

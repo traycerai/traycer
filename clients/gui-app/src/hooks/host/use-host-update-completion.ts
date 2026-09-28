@@ -5,12 +5,18 @@ import {
   useHostUpdateBannerStore,
 } from "@/stores/settings/host-update-banner-store";
 
-interface HostUpdateCompletion {
+export interface HostUpdateCompletion {
   readonly dismissed: boolean;
   readonly dismiss: (() => void) | null;
 }
 
-/** Dismiss and auto-collapse successful update notices in host Settings. */
+/**
+ * Dismiss and auto-collapse successful update notices in host Settings.
+ *
+ * The Overview calls this once, at PANEL level, and hands the answer to its
+ * update card. The card unmounts whenever the view goes quiet or the host goes
+ * offline, so a timer that lived in it would restart each time it came back.
+ */
 export function useHostUpdateCompletion(
   view: FleetUpdateView,
 ): HostUpdateCompletion {

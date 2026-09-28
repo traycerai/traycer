@@ -96,10 +96,11 @@ import { HostSettingsPanel } from "@/components/settings/panels/host-settings-pa
 import { VERSION_LIST_PREVIEW } from "@/components/settings/panels/host-settings-panel-model";
 import {
   buildOverviewHostFixture,
-  openHostOverviewAdvanced,
   openHostOverviewMenu,
+  selectHostOverviewTab,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
+import { hostQueryKeys } from "@/lib/query-keys";
 import {
   useHostOverviewUpdates,
   type HostOverviewUpdatesState,
@@ -624,12 +625,13 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     // The summary answers on its own — no longer an invitation to go ask.
     await screen.findByText("v1.7.0 is available.");
     expect(screen.queryByText(/Ask this host which versions/)).toBeNull();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     await waitFor(() => {
       const rows = within(screen.getByTestId("host-version-rows"));
       expect(rows.getByText("v1.7.0")).toBeTruthy();
@@ -683,7 +685,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     // in-flight one is a matter of timing, and the assertion below passes on
     // only one of those. That the list arrives at all without a click is the
     // behaviour this line now also pins.
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     // ABSENT, not `false`. The first load states no override at all, which is
     // what lets the host derive inclusion from its own installed version; a
     // `false` here would be an explicit exclusion nobody asked for, and would
@@ -739,11 +741,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await waitForButton("Check now"));
-    // The list moved into the Advanced disclosure, which Radix does not mount
-    // while closed — so this is the difference between "no rows" and "no drawer".
-    await openHostOverviewAdvanced();
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     expect(rows).toHaveLength(3);
@@ -843,7 +843,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const rows = await screen.findByTestId("host-version-rows");
     const row = within(rows).getByRole("listitem");
     fireEvent.click(within(row).getByRole("button", { name: "Install 1.3.0" }));
@@ -1130,9 +1130,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await waitForButton("Check now"));
-    await openHostOverviewAdvanced();
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     const downgrade = within(rowFor(rows, "1.2.0")).getByRole("button", {
@@ -1184,7 +1184,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const rows = within(await screen.findByTestId("host-version-rows"));
     expect(
       within(rowFor(rows.getAllByRole("listitem"), "1.4.0"))
@@ -1226,7 +1226,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const rows = within(await screen.findByTestId("host-version-rows"));
     const equalRow = rowFor(rows.getAllByRole("listitem"), "1.2.0+build.2");
     const equal = within(equalRow);
@@ -1272,7 +1272,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const rows = within(await screen.findByTestId("host-version-rows"));
     expect(
       within(rowFor(rows.getAllByRole("listitem"), "1.4.0"))
@@ -1320,6 +1320,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     // The summary tells the truth instead of advertising a version the CLI
     // would refuse: no plain "available", no Update now.
@@ -1329,7 +1330,6 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     expect(screen.queryByText("v1.7.0 is available.")).toBeNull();
     expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
 
-    await openHostOverviewAdvanced();
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     expect(
@@ -1363,13 +1363,13 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(
       "v1.7.0 is available, but host-a can't install it.",
     );
     expect(screen.queryByText("v1.7.0 is available.")).toBeNull();
 
-    await openHostOverviewAdvanced();
     const picker = await screen.findByTestId("host-version-rows");
     await waitFor(() => {
       const rows = within(picker).getAllByRole("listitem");
@@ -1413,9 +1413,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       }),
     };
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText("v1.7.0 is available.");
-    await openHostOverviewAdvanced();
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     expect(
@@ -1450,16 +1450,21 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    await openHostOverviewAdvanced();
-    // Grab the Install button BEFORE the dialog opens: Radix marks the page
+    // The version picker (Updates) and the service deregister control
+    // (Installation) now live on two different tabs. Visit Updates first and
+    // grab the Install button BEFORE the dialog opens — Radix marks the page
     // behind an open dialog aria-hidden, which removes the rows from the
-    // accessibility tree that role queries search.
+    // accessibility tree that role queries search — then switch to
+    // Installation: the dialog it opens is panel-level, so it stays open
+    // across the tab switch exactly as it would in the app.
+    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     const installButton = within(rowFor(rows, "1.6.0")).getByRole("button", {
       name: "Install 1.6.0",
     });
 
+    await selectHostOverviewTab("installation");
     fireEvent.click(
       await screen.findByTestId("host-overview-service-deregister"),
     );
@@ -1506,7 +1511,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       ).toBe(false);
     });
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     fireEvent.click(
@@ -1556,7 +1561,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       ).toBe(false);
     });
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     fireEvent.click(
@@ -1620,7 +1625,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     });
     const statusCallsBeforeInstall = fixture.hostStatusCalls();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     fireEvent.click(
@@ -1676,11 +1681,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await waitForButton("Check now"));
-    // The list moved into the Advanced disclosure, which Radix does not mount
-    // while closed — so this is the difference between "no rows" and "no drawer".
-    await openHostOverviewAdvanced();
     const picker = await screen.findByTestId("host-version-rows");
     expect(within(picker).getAllByRole("listitem")).toHaveLength(
       VERSION_LIST_PREVIEW,
@@ -1743,7 +1746,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     await waitFor(() => expect(requests).toEqual([undefined]));
 
     const checkbox = await screen.findByRole("checkbox", {
@@ -1800,7 +1803,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom(hostId, fixture);
       renderPanel();
-      await openHostOverviewAdvanced();
+      await selectHostOverviewTab("updates");
     }
 
     await renderWithSource("installed-rc", "host-a");
@@ -1849,6 +1852,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await waitFor(() => {
       expect(screen.getByText("v2.0.0 is available.")).toBeTruthy();
@@ -1902,7 +1906,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     scopeOverrides.current = scopeFrom("host-a", hostA);
     const view = renderPanel();
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("updates");
     await waitFor(() =>
       expect(requestsByHost).toEqual([
         { hostId: "host-a", includePreReleases: undefined },
@@ -1959,6 +1963,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await waitFor(() => {
       expect(
@@ -1972,7 +1977,6 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     expect(summary.textContent).toContain("won't update to it automatically");
 
     // The manual route stays open: the newer row is present and installable.
-    await openHostOverviewAdvanced();
     const rows = within(await screen.findByTestId("host-version-rows"));
     const row = rowFor(rows.getAllByRole("listitem"), "2.1.0");
     expect(
@@ -2003,6 +2007,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await waitFor(() => {
       expect(
@@ -2047,6 +2052,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await waitFor(() => {
       expect(screen.getByText("v2.0.0-rc.3 is available.")).toBeTruthy();
@@ -2081,6 +2087,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await waitFor(() => {
       expect(
@@ -2091,7 +2098,6 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
 
     // The RC the user asked to see is still there and still installable — the
     // gate changes the sentence, never the manual route.
-    await openHostOverviewAdvanced();
     const rows = within(await screen.findByTestId("host-version-rows"));
     const row = rowFor(rows.getAllByRole("listitem"), "2.0.0-rc.1");
     expect(
@@ -2128,6 +2134,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(
       "First update Traycer's command-line tools on host-a. Open a terminal on that machine and run the copied command. When it finishes, come back here: this page rechecks while it is open, and Update now appears once the host accepts the update.",
@@ -2166,6 +2173,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(
       "Traycer's command-line tools on host-a were updated, but the host is still using an older copy. Run the command again: First update Traycer's command-line tools on host-a. Open a terminal on that machine and run the copied command. When it finishes, come back here: this page rechecks while it is open, and Update now appears once the host accepts the update.",
@@ -2202,11 +2210,15 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText("v1.2.1 is installed — restart host to finish.");
     // Removing the activation-debt arm from describeCheckState would let the
     // remedy sentence win; this negative precedence pin must turn RED under
-    // that concrete ablation while the remedy action remains available.
+    // that concrete ablation while the remedy action remains available. The
+    // CLI-tools fix is not held to the in-flight rule at all — it shows
+    // whenever `summary.remedy !== null`, debt or no debt — so Copy command
+    // stays beside the debt sentence.
     expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
   });
 
@@ -2230,6 +2242,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(
       "Traycer couldn't determine how its command-line tools were installed on host-a.",
@@ -2298,6 +2311,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
     await screen.findByText(
       "v1.3.0 is available, but host-a can't install it.",
     );
@@ -2346,6 +2360,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(
       "v1.3.0 is available, but host-a can't install it.",
@@ -2388,6 +2403,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(yankedLatestFixture.client);
     scopeOverrides.current = scopeFrom("host-a", yankedLatestFixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(
       "v1.3.0 is available, but host-a can't install it.",
@@ -2401,7 +2417,7 @@ describe("Overview updates — CLI floor remedy", () => {
     expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
   });
 
-  it("rechecks a repaired manifest and reveals Update now without a click", async () => {
+  it("rechecks a repaired manifest and reveals Force update… again without a click, in flight throughout", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let checks = 0;
     const installCalls: Array<{ version: string; force: boolean }> = [];
@@ -2438,14 +2454,19 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const { queryClient } = renderPanel();
+    await selectHostOverviewTab("updates");
 
+    // checks=1 (mount): the asset is AVAILABLE (`floorManifest`'s second
+    // argument), so the staged version carries no floor and Force update is
+    // offerable (`stagedEntryOfferable`).
     await screen.findByTestId("host-overview-operation-force-update");
     fireEvent.click(screen.getByTestId("host-overview-operation-force-update"));
     await screen.findByTestId("host-busy-force-defer-dialog");
     // The confirmation re-asks before dispatch so this rendered panel records
     // a real refusal against the exact staged version, rather than a synthetic
-    // hook state. The repair below must come only from the Overview's own
-    // floor recheck (`useHostOverviewUpdates`), never from a click.
+    // hook state. checks=2: the asset is now unavailable - the staged version
+    // is floor-blocked, so the CLI-tools fix appears (it is not held to the
+    // in-flight rule) and Force update withdraws.
     await act(async () => {
       await queryClient.invalidateQueries();
     });
@@ -2453,8 +2474,13 @@ describe("Overview updates — CLI floor remedy", () => {
     fireEvent.click(screen.getByTestId("host-busy-force"));
     await waitFor(() => {
       expect(installCalls).toEqual([]);
+      // The answer sentence is the catalog's remedy sentence again (the
+      // failure-first arm is gone — `describeCheckState` never returns a
+      // refusal as the answer); the refusal itself is the separate line
+      // below it. The remedy being on screen is what keeps `role="status"`
+      // present at all while the park is in flight.
       expect(screen.getByRole("status").textContent).toContain(
-        "v1.3.0 needs Traycer CLI 1.3.0 or newer on host-a.",
+        "First update Traycer's command-line tools on host-a.",
       );
       expect(
         screen.getByTestId("host-overview-update-attempt-failed").textContent,
@@ -2463,23 +2489,29 @@ describe("Overview updates — CLI floor remedy", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(30_000);
     });
-    await screen.findByRole("button", { name: "Update now" });
+    // checks=3: the recheck (armed only while the floor is on screen) finds
+    // the asset available again. The floored fix leaves, the staged Force
+    // update… becomes offerable once more, and the failed line clears — the
+    // park is still in flight throughout (busy stays true), so neither
+    // Update now nor a bare answer sentence with no fix ever appears.
+    await screen.findByTestId("host-overview-operation-force-update");
     const checksAfterRecovery = checks;
     // Removing the Overview's floor recheck (`useHostOverviewUpdates`), or
     // raising `CLI_FLOOR_RECHECK_MS` above 30s, would leave this refusal
     // visible and fail the assertion above.
     expect(checksAfterRecovery).toBeGreaterThan(1);
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
     // Removing describeUpdateFailure's live-descriptor condition and returning
     // stored refusal text whenever refusal exists would keep both stale
     // surfaces visible after repair; these negative recovery pins must RED.
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toBe(
-        "v1.3.0 is available.",
-      );
+      expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
       expect(
         screen.queryByTestId("host-overview-update-attempt-failed"),
       ).toBeNull();
     });
+    // With no floor and no remedy on screen, the recheck lane has nothing to
+    // watch for: `floorRecheckArmed` reads `false` and the interval clears.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(31_000);
     });
@@ -2491,20 +2523,22 @@ describe("Overview updates — CLI floor remedy", () => {
       await queryClient.invalidateQueries();
     });
     await waitFor(() => expect(checks).toBeGreaterThan(checksBeforeFailure));
-    // Deleting only the guarded checkRefutesForceRefusal/setForceRefusal(null)
-    // retirement block would keep every earlier repair assertion green but
-    // revive the old floor text after this later failed check; these negative
-    // current-failure pins must turn RED under that concrete ablation.
+    // checks=4: the check itself now fails (`cli-failed`), so there is no
+    // manifest to derive a remedy or an offer from — no floor, no fix, and
+    // (still in flight, no debt) no `role="status"` answer at all. Only the
+    // failed line is assertable here; deleting only the guarded
+    // checkRefutesForceRefusal/setForceRefusal(null) retirement block would
+    // keep every earlier repair assertion green but revive the old floor
+    // text on this later failed check, so this negative current-failure pin
+    // must turn RED under that concrete ablation.
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toBe(
-        "host-a's Traycer CLI couldn't complete the request.",
-      );
       const notice = screen.getByTestId("host-overview-update-attempt-failed");
       expect(notice.textContent).toBe(
         "host-a's Traycer CLI couldn't complete the request.",
       );
       expect(notice.textContent).not.toContain("needs Traycer CLI");
     });
+    expect(screen.queryByRole("status")).toBeNull();
     expect(installCalls).toEqual([]);
   });
 
@@ -2558,6 +2592,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     // The catalog answered. The installed line (1.3.0) has no matching stable
     // and no later RC, so the summary walk names nothing and no remedy
@@ -2634,6 +2669,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     // The floored latest renders the remedy: the recheck is armed.
     await screen.findByRole("button", { name: "Copy command" });
@@ -2641,7 +2677,6 @@ describe("Overview updates — CLI floor remedy", () => {
 
     // An install of the lower installable row discovers the host is
     // externally managed; the region retires behind its notice.
-    await openHostOverviewAdvanced();
     fireEvent.click(await waitForButton("Install 1.2.5"));
     await screen.findByTestId("host-overview-updates-degraded");
     expect(screen.queryByRole("button", { name: "Copy command" })).toBeNull();
@@ -2973,6 +3008,7 @@ describe("Overview updates — CLI floor remedy", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     const sentence =
       "On host-a, run this command to prepare the host update: npm install -g @traycerai/cli@1.3.0-rc.4. This page rechecks while it is open, and Update now appears once the host accepts the update.";
@@ -2982,6 +3018,136 @@ describe("Overview updates — CLI floor remedy", () => {
     // not expose Update now. This visible npm-floor pin must turn RED.
     expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+  });
+});
+
+// T2 fixup 1: a FIRST `host.update.check` that settles with no catalog and a
+// failure (`cli-failed` / `invalid-output`) is a SETTLED answer, not a still-
+// pending one. `describeCheckState` used to fall through this exact input
+// shape (`manifest: null`, `checking: false`, `unreachable: false`, failure
+// set) to its "no answer yet" arm, so the card showed "Checking for
+// updates…" and the "Checking…" tag forever, beside a failure line, with
+// nothing running. The settled cases below anchor on the query cache
+// reaching `status: "success"` for `host.update.check` (never on absent
+// text, which a still-loading frame would also satisfy), then read the
+// card. The control is a check that never settles, to pin the genuine
+// first-load arm this fix must leave alone.
+describe("Overview updates — a settled first check with no catalog (T2 fixup 1)", () => {
+  async function waitForCheckSettled(
+    queryClient: QueryClient,
+    hostId: string,
+  ): Promise<void> {
+    await waitFor(() => {
+      const queries = queryClient.getQueryCache().findAll({
+        queryKey: hostQueryKeys.methodScope(hostId, "host.update.check"),
+      });
+      expect(queries.some((query) => query.state.status === "success")).toBe(
+        true,
+      );
+    });
+    await act(async () => {});
+  }
+
+  it("a first check answering invalid-output settles as check-failed, not Checking…", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({ outcome: "invalid-output" as const }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const { queryClient } = renderPanel();
+    await selectHostOverviewTab("updates");
+
+    await waitForCheckSettled(queryClient, "host-a");
+
+    const card = await screen.findByTestId("host-overview-version-card");
+    expect(screen.getByRole("status").textContent).toBe(
+      "Couldn't check for updates on host-a.",
+    );
+    expect(screen.queryByTestId("host-overview-version-tag")).toBeNull();
+    expect(card.textContent).not.toMatch(/Checking/);
+    const failures = screen.getAllByTestId(
+      "host-overview-update-attempt-failed",
+    );
+    expect(failures).toHaveLength(1);
+    expect(failures[0].textContent).toBe(
+      "host-a's Traycer CLI answered in a format this app doesn't understand. It's probably a different version than this app expects.",
+    );
+    expect(screen.getByRole("status").textContent).not.toContain(
+      "doesn't understand",
+    );
+    const checkNow = screen.getByTestId("host-overview-update-check");
+    expect(checkNow.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("a first check answering cli-failed settles as check-failed, not Checking…", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({ outcome: "cli-failed" as const }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const { queryClient } = renderPanel();
+    await selectHostOverviewTab("updates");
+
+    await waitForCheckSettled(queryClient, "host-a");
+
+    const card = await screen.findByTestId("host-overview-version-card");
+    expect(screen.getByRole("status").textContent).toBe(
+      "Couldn't check for updates on host-a.",
+    );
+    expect(screen.queryByTestId("host-overview-version-tag")).toBeNull();
+    expect(card.textContent).not.toMatch(/Checking/);
+    const failures = screen.getAllByTestId(
+      "host-overview-update-attempt-failed",
+    );
+    expect(failures).toHaveLength(1);
+    expect(failures[0].textContent).toBe(
+      "host-a's Traycer CLI couldn't complete the request.",
+    );
+    expect(screen.getByRole("status").textContent).not.toContain(
+      "couldn't complete",
+    );
+    const checkNow = screen.getByTestId("host-overview-update-check");
+    expect(checkNow.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("control: a genuine first load with no failure still reads Checking for updates… with the checking tag", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.2.0",
+      overrideHandlers: {
+        // Never settles — the panel is asserted on before any answer arrives,
+        // pinning the genuine "first load, nothing wrong yet" arm untouched
+        // by this fix.
+        "host.update.check": () => new Promise(() => undefined),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+    await selectHostOverviewTab("updates");
+
+    expect(await screen.findByRole("status")).toHaveProperty(
+      "textContent",
+      "Checking for updates…",
+    );
+    const tag = screen.getByTestId("host-overview-version-tag");
+    expect(tag.getAttribute("data-tag")).toBe("checking");
   });
 });
 
@@ -3498,16 +3664,23 @@ describe("Overview updates — activation debt", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    await screen.findByText(
-      "v1.3.0-rc.3 is installed — restart host to finish.",
+    // T2: the debt is an in-flight park (`waiting-to-activate`), so it is the
+    // notices strip's operation card that carries the sentence now - the
+    // version card withholds its own tag and answer for any in-flight kind
+    // (see host-overview-notices.test.tsx's duplication regression), so
+    // asserting the installed-version text there would just find nothing.
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain(
+      "Update installed — restart host to finish",
     );
     // Falsification: comparing the catalog against the RUNNING version
     // (1.3.0-rc.2) instead of the installed one would offer "Update now" for
     // the very version already sitting on disk.
+    await selectHostOverviewTab("updates");
     expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
   });
 
-  it("the debt sentence stays, and Update now DOES appear when the catalog has something newer than the installed version", async () => {
+  it("the debt sentence stays, and Update now stays withheld even when the catalog has something newer than the installed version", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -3532,11 +3705,18 @@ describe("Overview updates — activation debt", () => {
     renderPanel();
 
     // Debt outranks the catalog sentence even though there IS something to
-    // offer - see `describeCheckState`'s ordering comment.
-    await screen.findByText(
-      "v1.3.0-rc.3 is installed — restart host to finish.",
+    // offer - see `describeCheckState`'s ordering comment. Activation debt is
+    // itself an in-flight park (`waiting-to-activate`), and T2's version card
+    // withholds Update now and Check now for every in-flight kind - the debt
+    // sentence stays (it is about the wait itself, and now lives on the
+    // notices strip's operation card, not the version card), but there is no
+    // button to press until the restart resolves the debt.
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toContain(
+      "Update installed — restart host to finish",
     );
-    await screen.findByRole("button", { name: "Update now" });
+    await selectHostOverviewTab("updates");
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
   });
 
   it("host.getInstallationInfo's poll refreshes the debt card live, with no remount", async () => {
@@ -3621,22 +3801,34 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     const { queryClient } = renderPanel();
 
     // Live debt: the record (rc.3) is ahead of the running host (rc.2), and
-    // the catalog's rc.3 is what is installed - no offer, a restart.
+    // the catalog's rc.3 is what is installed - no offer, a restart. T2's
+    // notices strip carries this while it is live (the version card
+    // withholds its own answer for any in-flight kind - see
+    // host-overview-notices.test.tsx's duplication regression), and its
+    // Restart control lives there too.
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toBe(
-        "v1.3.0-rc.3 is installed — restart host to finish.",
-      );
+      expect(
+        screen.getByTestId("host-overview-operation-card").textContent,
+      ).toContain("Update installed — restart host to finish");
     });
-    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
     await screen.findByTestId("host-overview-operation-restart");
+    await selectHostOverviewTab("updates");
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
 
     // The record poll fails while the status read keeps succeeding beside
-    // it. The debt is retained as EVIDENCE (the comparison baseline), said
-    // as last known; the controls that would dispatch on it are withdrawn.
+    // it. `legacyFacts` (the live-gated leg the notices strip's park reads)
+    // drops out entirely, so the strip's operation card disappears along
+    // with its Restart control - but `legacyFactsRead` (the catalog's
+    // baseline, qualified by liveness rather than erased by it) still holds
+    // the debt, no longer in-flight from the panel's own perspective, so the
+    // version card picks the answer back up, said as last known.
     await act(async () => {
       await queryClient.invalidateQueries();
     });
     await waitFor(() => expect(installationCalls).toBe(2));
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-notices")).toBeNull();
+    });
     await waitFor(() => {
       expect(screen.getByRole("status").textContent).toBe(
         "v1.3.0-rc.3 is installed (last known) — restart host to finish.",
@@ -3645,15 +3837,16 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
     expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
 
-    // The next successful read restores the live sentence and its control.
+    // The next successful read restores the live sentence, back on the
+    // notices strip, and its control.
     await act(async () => {
       await queryClient.invalidateQueries();
     });
     await waitFor(() => expect(installationCalls).toBe(3));
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toBe(
-        "v1.3.0-rc.3 is installed — restart host to finish.",
-      );
+      expect(
+        screen.getByTestId("host-overview-operation-card").textContent,
+      ).toContain("Update installed — restart host to finish");
     });
     await screen.findByTestId("host-overview-operation-restart");
   });
@@ -3709,21 +3902,32 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const { queryClient } = renderPanel();
 
+    // Live, on the notices strip - the version card withholds its own
+    // answer for any in-flight kind (see host-overview-notices.test.tsx's
+    // duplication regression).
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toBe(
-        "v1.3.0-rc.3 is installed — restart host to finish.",
-      );
+      expect(
+        screen.getByTestId("host-overview-operation-card").textContent,
+      ).toContain("Update installed — restart host to finish");
     });
 
+    // A failed status read demotes the shared observation itself (the same
+    // "Last seen: …" mechanism host-overview-lifecycle-gate.test.tsx pins at
+    // the model level) - unlike the record-read failure above, this leaves
+    // `usable` and the notices strip itself untouched, so the card stays and
+    // is what carries the qualifier, not `role="status"` on the version card
+    // (which the strip's in-flight card keeps suppressed throughout).
     await act(async () => {
       await queryClient.invalidateQueries();
     });
     await waitFor(() => expect(statusCalls).toBe(2));
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toBe(
-        "v1.3.0-rc.3 is installed (last known) — restart host to finish.",
-      );
+      expect(
+        screen.getByTestId("host-overview-operation-card").textContent,
+      ).toBe("Last seen: Update installed — restart host to finish");
     });
+    expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
+    await selectHostOverviewTab("updates");
     expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
   });
 
@@ -3778,6 +3982,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     // Help on screen, no command - and no recheck behind it.
     await waitFor(() => expect(checks).toBe(1));
@@ -3819,6 +4024,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     // Falsification: drop the `!isValidHostVersion(declaredFloor)` arm from
     // `describeForceUpdateRefusal` and the first absence goes RED.
     let declaredFloor = "v1.3.0";
+    let checks = 0;
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -3831,6 +4037,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
       ),
       overrideHandlers: {
         "host.update.check": () => {
+          checks += 1;
           const cleared = floorManifest("1.3.0", true);
           return Promise.resolve({
             outcome: "ok" as const,
@@ -3850,25 +4057,45 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    const { queryClient } = renderPanel();
 
     const card = await screen.findByTestId("host-overview-operation-card");
     expect(card.textContent).toContain("Update waits for 1 session to finish");
-    // The check has answered (the region left "Checking…") before the
-    // absence is read, so this is the gate's decision, not a loading frame.
+    // The asset itself reports available (`floorManifest("1.3.0", true)`), so
+    // this park earns no CLI-floor remedy at all - and with no remedy and no
+    // debt, T2's version card shows no `role="status"` answer while in
+    // flight. The check having ANSWERED is read off the query cache's OWN
+    // settled state rather than a rendered sentence (no region may be on
+    // screen to read one off), and NOT off the handler's call count: a count
+    // can pass during the still-loading frame, before the negative
+    // assertions below have anything to be negative about.
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).not.toBe(
-        "Checking for updates…",
+      const queries = queryClient.getQueryCache().findAll({
+        queryKey: hostQueryKeys.methodScope("host-a", "host.update.check"),
+      });
+      expect(queries.some((query) => query.state.status === "success")).toBe(
+        true,
       );
     });
+    await act(async () => {});
     expect(
       screen.queryByTestId("host-overview-operation-force-update"),
     ).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    // T2's version card also withholds Check now while an update is in
+    // flight - the recheck below therefore goes through the query client
+    // directly rather than a click, the same seam the "rechecks a repaired
+    // manifest" suite uses.
+    expect(screen.queryByRole("button", { name: "Check now" })).toBeNull();
 
     // Positive control: the same entry with a readable floor the asset
     // clears offers Force.
     declaredFloor = "1.3.0";
-    fireEvent.click(await waitForButton("Check now"));
+    const checksBeforeRecheck = checks;
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() => expect(checks).toBeGreaterThan(checksBeforeRecheck));
     await screen.findByTestId("host-overview-operation-force-update");
   });
 });

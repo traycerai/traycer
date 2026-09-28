@@ -1,0 +1,60 @@
+/*
+ * The INSTALLED APP's stylesheet: the shared entry, plus the CSS half of the
+ * one decision that is true only of a native install - the app is a
+ * phone-layout product on every device it ships to, tablets included.
+ *
+ * `main.tsx` loads this when `Capacitor.isNativePlatform()` is true, the same
+ * check that sets `setPhoneLayoutOnly(true)` so `useIsMobileViewport()` says
+ * phone at every width; a browser tab loads `index.css` alone and keeps the
+ * real breakpoints. The two have to move together: JS mounting the phone
+ * shell at every width while `md:` and `lg:` utilities still turn on would
+ * paint desktop controls over it on an iPad.
+ */
+@import "./index.css";
+
+/*
+ * NO RESPONSIVE BREAKPOINTS IN THE INSTALLED APP.
+ *
+ * A sentinel width rather than `--breakpoint-*: initial`, deliberately.
+ * Removing the tokens would drop the `max-*` variants too - and those are
+ * phone styling across the shared GUI that must keep applying. Pushing the
+ * bound out of reach instead keeps both halves right by construction: `md:`
+ * compiles to a minimum-width query that never matches, `max-md:` to its
+ * negation, which always does. Grep the built CSS for the number rather than
+ * for a particular spelling - Tailwind writes range syntax and the minifier
+ * downlevels it.
+ *
+ * `@theme` (not `inline`) after the import, so these win over the shared
+ * stylesheet's own breakpoints.
+ */
+@theme {
+  --breakpoint-sm: 999999px;
+  --breakpoint-md: 999999px;
+  --breakpoint-lg: 999999px;
+  --breakpoint-xl: 999999px;
+  --breakpoint-2xl: 999999px;
+}
+
+/* The first-task coachmark's phone type scale, applied at every width.
+ *
+ * `first-task-guide.css` puts this one step up the scale behind
+ * `@media (max-width: 767px)`, on the reasoning that on a phone the coachmark
+ * card is the only thing the user is being asked to read. That is just as true
+ * on an iPad here, because the installed app runs the phone shell at every
+ * width - but a hand-written width query is not a Tailwind variant, so the
+ * breakpoint sentinel above cannot reach it and the tier simply never fires
+ * above 767px. The coachmark is on the installed app's path (the welcome run
+ * hands off to the first-task guide), so a tablet would read it a step small.
+ *
+ * Here rather than in gui-app because the condition is "the installed app",
+ * which is what this file is. Values mirror that tier; if it moves, move
+ * these. */
+.traycer-mobile-client .first-task-coachmark-title {
+  font-size: 1.0625rem;
+  line-height: 1.3;
+}
+
+.traycer-mobile-client .first-task-coachmark-body {
+  font-size: 0.9375rem;
+  line-height: 1.45;
+}

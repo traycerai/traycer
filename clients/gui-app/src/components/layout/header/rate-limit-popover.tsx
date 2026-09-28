@@ -1010,10 +1010,12 @@ function RateLimitHostPickerRow({
             // The displayed host travels with the jump - one rule, one
             // implementation, shared with the provider CTAs.
             carryViewedHostIntoSettingsScope(scope.hostId);
+            // Named rather than left null: an Overview already open on
+            // another tab comes back to Updates, as every host link does.
             openSettings({
               section: "host",
               resetToGeneral: false,
-              tab: null,
+              tab: "updates",
               draft: null,
               hostId: null,
             });

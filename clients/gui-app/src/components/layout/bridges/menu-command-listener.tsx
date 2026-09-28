@@ -296,6 +296,7 @@ export function MenuCommandListener() {
         forceLabel={
           busy?.continuation === "activate" ? "Force restart" : "Force update"
         }
+        forceDestructive
         onForce={() => {
           if (busy === null) return;
           if (busy.continuation === "activate") {

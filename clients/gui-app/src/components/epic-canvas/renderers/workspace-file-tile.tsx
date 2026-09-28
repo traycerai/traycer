@@ -90,6 +90,7 @@ import {
   ImagePreview,
 } from "@/components/epic-canvas/image-preview/image-preview";
 import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
+import { MissingFilePlaceholder } from "@/components/epic-canvas/missing-file-placeholder";
 import { useEffectiveDefaultEditor } from "@/hooks/editor/use-effective-default-editor";
 import { useDocumentOpenExternallyTarget } from "@/hooks/editor/use-document-open-target";
 import { useWorkspaceFileOpenExternally } from "@/hooks/editor/use-workspace-file-open-externally";
@@ -320,14 +321,18 @@ function WorkspaceImageFileTile(props: {
           openExternally={null}
         />
         <div className="min-h-0 flex-1">
-          <BinaryPlaceholder
-            fileName={node.name}
-            sizeBytes={assetState.totalBytes}
-            reason={assetState.reason}
-            onOpenExternally={handleOpenExternally}
-            openExternallyOpening={openExternallyOpening}
-            compact={false}
-          />
+          {assetState.missing ? (
+            <MissingFilePlaceholder fileName={node.name} />
+          ) : (
+            <BinaryPlaceholder
+              fileName={node.name}
+              sizeBytes={assetState.totalBytes}
+              reason={assetState.reason}
+              onOpenExternally={handleOpenExternally}
+              openExternallyOpening={openExternallyOpening}
+              compact={false}
+            />
+          )}
         </div>
       </div>
     );
@@ -427,14 +432,18 @@ function WorkspaceDocumentFileTile(props: {
           openExternally={null}
         />
         <div className="min-h-0 flex-1">
-          <BinaryPlaceholder
-            fileName={node.name}
-            sizeBytes={assetState.totalBytes}
-            reason={viewerUnavailable ? unavailableReason : assetState.reason}
-            onOpenExternally={handleOpenExternally}
-            openExternallyOpening={openExternallyOpening}
-            compact={false}
-          />
+          {assetState.missing ? (
+            <MissingFilePlaceholder fileName={node.name} />
+          ) : (
+            <BinaryPlaceholder
+              fileName={node.name}
+              sizeBytes={assetState.totalBytes}
+              reason={viewerUnavailable ? unavailableReason : assetState.reason}
+              onOpenExternally={handleOpenExternally}
+              openExternallyOpening={openExternallyOpening}
+              compact={false}
+            />
+          )}
         </div>
       </div>
     );

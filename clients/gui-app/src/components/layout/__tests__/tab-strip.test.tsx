@@ -129,10 +129,12 @@ const pinTestState = vi.hoisted(
         options: TestSetPinnedOptions | undefined,
       ) => void
     >;
+    retryUnansweredTaskPinReading: Mock<(epicId: string) => void>;
   } => ({
     pinnedByEpicId: new Map(),
     pendingEpicIds: new Set(),
     mutate: vi.fn(),
+    retryUnansweredTaskPinReading: vi.fn(),
   }),
 );
 
@@ -150,6 +152,8 @@ const toastTestState = vi.hoisted(
 
 vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
   useEpicTaskPinnedStates: () => pinTestState.pinnedByEpicId,
+  useRetryUnansweredTaskPinReading: () =>
+    pinTestState.retryUnansweredTaskPinReading,
 }));
 
 vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", async (importOriginal) => {
@@ -321,6 +325,34 @@ function registerEpicHeader(
   __getOpenEpicRegistryForTests().acquire(tab.id, () =>
     buildHeaderEpicHandle(tab, permissionRole, []),
   );
+}
+
+/**
+ * Same lightweight handle as {@link registerEpicHeader}, with the store's
+ * projected state carrying the preserved-orphan pause reason
+ * `isPreservedOrphanEpic` reads (`preserved-orphan-epic.ts`). Composed over
+ * `buildHeaderEpicHandle` rather than threading a new parameter through it -
+ * every other call site in this file wants the plain handle, and the pause
+ * reason is a fact about ONE test's fixture, not a fourth argument every
+ * caller would have to pass `undefined`/`null` for.
+ */
+function registerPreservedOrphanEpicHeader(
+  tab: EpicTab,
+  permissionRole: PermissionRole,
+): void {
+  __getOpenEpicRegistryForTests().acquire(tab.id, () => {
+    const handle = buildHeaderEpicHandle(tab, permissionRole, []);
+    const state = {
+      ...handle.store.getState(),
+      durabilityPauseReason: "orphaned-local-edits-after-cloud-delete" as const,
+    };
+    const storeCallable = (_selector: unknown): unknown => state;
+    const storeBase: unknown = Object.assign(storeCallable, {
+      getState: () => state as never,
+      subscribe: () => () => undefined,
+    });
+    return { ...handle, store: storeBase as OpenEpicStoreHandle["store"] };
+  });
 }
 
 /**
@@ -655,6 +687,7 @@ describe("<TabStrip />", () => {
         options: TestSetPinnedOptions | undefined,
       ) => options?.onSuccess(),
     );
+    pinTestState.retryUnansweredTaskPinReading.mockReset();
     toastTestState.messages.length = 0;
     toastTestState.actionLabel = null;
     toastTestState.undo = null;
@@ -1648,6 +1681,102 @@ describe("<TabStrip />", () => {
     fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
 
     expect(await screen.findByText("Unpin Task in History")).toBeDefined();
+  });
+
+  it("re-asks for a tab's pin reading when its context menu opens with no answer yet", async () => {
+    // No entry at all for EPIC_A in `pinnedByEpicId` - the batch never
+    // resolved it (absent, still "in flight" from the strip's point of view).
+    // Opening the menu is exactly when `useRetryUnansweredTaskPinReading`
+    // (wired through `onTaskPinMenuOpen`) is supposed to re-ask for it.
+    openEpicFixture(EPIC_A);
+    registerEpicHeader(EPIC_A, "owner");
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+    await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`);
+
+    expect(pinTestState.retryUnansweredTaskPinReading).toHaveBeenCalledWith(
+      EPIC_A.id,
+    );
+  });
+
+  it("re-asks for a tab's pin reading when the batch settled without answering it", async () => {
+    // Present, but as an UNANSWERED filler (`pinnedKnown: false`) rather than
+    // absent - the settled-miss case the fix introduced. This must re-ask
+    // exactly like the absent case above.
+    pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+      pinned: false,
+      home: undefined,
+      hostId: null,
+      pinnedKnown: false,
+    });
+    openEpicFixture(EPIC_A);
+    registerEpicHeader(EPIC_A, "owner");
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+    await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`);
+
+    expect(pinTestState.retryUnansweredTaskPinReading).toHaveBeenCalledWith(
+      EPIC_A.id,
+    );
+  });
+
+  it("does not re-ask for a tab's pin reading once it is already known", async () => {
+    pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+      pinned: false,
+      home: undefined,
+      hostId: null,
+      pinnedKnown: true,
+    });
+    openEpicFixture(EPIC_A);
+    registerEpicHeader(EPIC_A, "owner");
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+    await screen.findByText("Pin Task in History");
+
+    expect(pinTestState.retryUnansweredTaskPinReading).not.toHaveBeenCalled();
+  });
+
+  it("does not re-ask for a tab's pin reading when it is local-homed with no serving host", async () => {
+    // A local-homed row's owning host is who could actually answer it; with
+    // no serving host there is nobody to ask, and the window's batch cannot
+    // resolve an epic it does not own either. Re-asking here would just
+    // repeat the same unanswered result forever.
+    pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+      pinned: false,
+      home: "local",
+      hostId: null,
+      pinnedKnown: false,
+    });
+    openEpicFixture(EPIC_A);
+    registerEpicHeader(EPIC_A, "owner");
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+    await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`);
+
+    expect(pinTestState.retryUnansweredTaskPinReading).not.toHaveBeenCalled();
+  });
+
+  it("does not re-ask for a tab's pin reading when the epic is a preserved orphan", async () => {
+    // Its cloud row is gone for good, so a re-ask can only ever come back
+    // the same way - the menu item already says "task deleted" regardless of
+    // what a retry would return.
+    openEpicFixture(EPIC_A);
+    registerPreservedOrphanEpicHeader(EPIC_A, "owner");
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+    await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`);
+
+    expect(pinTestState.retryUnansweredTaskPinReading).not.toHaveBeenCalled();
   });
 
   it("refuses the cloud-only pin action on a local-home epic tab", async () => {

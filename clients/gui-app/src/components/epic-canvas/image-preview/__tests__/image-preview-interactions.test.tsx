@@ -390,6 +390,7 @@ function readyAsset(url: string): UseFileAssetResult {
     url,
     meta: META,
     reason: null,
+    missing: false,
     totalBytes: 2048,
     servedFromCache: false,
     reportDecodeFailure: vi.fn(),
@@ -473,6 +474,20 @@ describe("image preview interactions", () => {
 
     expect(fitButton.getAttribute("aria-pressed")).toBe("false");
     expect(actualButton.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("reflects the live scale in the Zoom level readout after a zoom-in click", () => {
+    renderPreview(false);
+
+    const readout = screen.getByLabelText("Zoom level");
+    const fittedPercent = Number.parseInt(readout.textContent, 10);
+    expect(Number.isNaN(fittedPercent)).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+
+    const zoomedPercent = Number.parseInt(readout.textContent, 10);
+    expect(Number.isNaN(zoomedPercent)).toBe(false);
+    expect(zoomedPercent).toBeGreaterThan(fittedPercent);
   });
 
   it("disables zoom controls at the minimum and maximum boundaries", () => {

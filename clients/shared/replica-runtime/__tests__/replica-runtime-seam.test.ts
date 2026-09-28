@@ -33,6 +33,7 @@ import {
   type SessionRegistryPolicy,
   type SessionDisposeCause,
   type SessionDisposeVerdict,
+  type WarmCapEvaluation,
   type WarmCapScope,
 } from "../session-registry";
 import type {
@@ -688,6 +689,9 @@ function createFakeSessionPolicy(): SessionRegistryPolicy<FakeSession> {
     hasActiveWork(session: FakeSession): boolean {
       return session.busy;
     },
+    activeWorkReason(): string {
+      return "busy";
+    },
     isEvictable(session: FakeSession): boolean {
       return session.clean;
     },
@@ -805,6 +809,9 @@ function createTrackedPolicy(config: PolicyConfig): TrackedPolicy {
     hasActiveWork(session: RegSession): boolean {
       return session.busy;
     },
+    activeWorkReason(): string {
+      return "busy";
+    },
     isEvictable(session: RegSession): boolean {
       return session.evictable;
     },
@@ -827,6 +834,74 @@ function createTrackedPolicy(config: PolicyConfig): TrackedPolicy {
 }
 
 describe("createSessionRegistry", () => {
+  it("keeps cap enforcement independent of a failing observation sink", () => {
+    const environment = createFakeEnvironment();
+    const policy = {
+      ...createTrackedPolicy({
+        ...defaultPolicyConfig(),
+        maxWarm: 1,
+        warmCapScope: "all-entries" as const,
+      }),
+      onWarmCapEvaluated: () => {
+        throw new Error("observer failed");
+      },
+    };
+    const registry = createSessionRegistry({ environment, policy });
+    const first = makeSession("first");
+    const second = makeSession("second");
+    registry.acquire("first", "scope", () => first);
+    registry.acquire("second", "scope", () => second);
+
+    expect(() => registry.pruneWarm()).not.toThrow();
+    expect(registry.size()).toBe(2);
+    expect(environment.logger.warn).toHaveBeenCalledWith(
+      "[session-registry] cap observation failed",
+      { cap: 1, population: 2 },
+    );
+  });
+
+  it("reports each remaining cap blocker after partial eviction and clears the report when pressure resolves", () => {
+    const environment = createFakeEnvironment();
+    const events: WarmCapEvaluation<RegSession>[] = [];
+    const policy = {
+      ...createTrackedPolicy({
+        ...defaultPolicyConfig(),
+        maxWarm: 1,
+        warmCapScope: "all-entries" as const,
+        idleTtlMs: null,
+      }),
+      onWarmCapEvaluated: (evaluation: WarmCapEvaluation<RegSession>) => {
+        events.push(evaluation);
+      },
+    };
+    const registry = createSessionRegistry({ environment, policy });
+    const held = makeSession("held");
+    const busy = makeSession("busy");
+    busy.busy = true;
+    const idle = makeSession("idle");
+
+    registry.acquire("held", "scope", () => held);
+    registry.acquire("busy", "scope", () => busy);
+    registry.release("busy", "warm");
+    registry.acquire("idle", "scope", () => idle);
+    registry.release("idle", "warm");
+
+    expect(idle.disposed).toBe(true);
+    expect(events.at(-1)).toEqual({
+      cap: 1,
+      population: 2,
+      blocked: [
+        { key: "held", session: held, blocker: "demand" },
+        { key: "busy", session: busy, blocker: "active-work" },
+      ],
+    });
+
+    busy.busy = false;
+    registry.pruneWarm();
+    expect(busy.disposed).toBe(true);
+    expect(events.at(-1)).toEqual({ cap: 1, population: 1, blocked: [] });
+  });
+
   describe("warmCapScope", () => {
     it('"demand-free" excludes held sessions from the cap entirely — N held + 1 warm evicts nothing under maxWarm 1', () => {
       const environment = createFakeEnvironment();
@@ -1558,6 +1633,33 @@ describe("createSessionRegistry", () => {
   });
 });
 
+describe("createSessionRegistry.evictOldestEligible", () => {
+  it("preserves demanded entries and evicts the least-recent warm eligible entry", () => {
+    const environment = createFakeEnvironment();
+    const policy = createTrackedPolicy(defaultPolicyConfig());
+    const registry = createSessionRegistry({ environment, policy });
+    const demanded = makeSession("demanded");
+    const olderWarm = makeSession("older-warm");
+    const newerWarm = makeSession("newer-warm");
+
+    registry.acquire("demanded", "scope", () => demanded);
+    registry.acquire("older", "scope", () => olderWarm);
+    registry.release("older", "warm");
+    registry.acquire("newer", "scope", () => newerWarm);
+    registry.release("newer", "warm");
+
+    expect(registry.evictOldestEligible(() => true)).toBe(true);
+
+    expect(registry.peek("older")).toBeNull();
+    expect(registry.peek("newer")).toBe(newerWarm);
+    expect(registry.peek("demanded")).toBe(demanded);
+    expect(registry.peekEntry("demanded")?.demand).toBe(1);
+    expect(policy.disposeSpy).toHaveBeenCalledWith("older-warm");
+    expect(policy.disposeSpy).not.toHaveBeenCalledWith("demanded");
+    expect(policy.disposeSpy).not.toHaveBeenCalledWith("newer-warm");
+  });
+});
+
 // ─── LeaseMaterializer conformance ──────────────────────────────────────────
 
 function createFakeLeaseMaterializer(): LeaseMaterializer<{ bytes: number }> & {
@@ -1677,6 +1779,7 @@ function createFakeDocReplica(planeId: string): Replica<
         }
         case "doc-awareness":
         case "doc-ready":
+        case "doc-body-sync":
           return { kind: "applied", cursor: null };
         case "doc-unavailable": {
           if (event.code === "stale-authority-epoch") {

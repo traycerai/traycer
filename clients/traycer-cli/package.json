@@ -15,10 +15,11 @@
   "type": "module",
   "scripts": {
     "traycer": "bun run src/index.ts",
-    "compile": "tsgo --noEmit",
+    "compile": "tsgo --noEmit --singleThreaded --incremental --tsBuildInfoFile node_modules/.tmp/compile.tsbuildinfo",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "lint": "oxlint -c oxlint.config.ts --fix --deny-warnings .",
+    "lint": "bun run lint:files .",
+    "lint:files": "oxlint -c oxlint.config.ts --fix --deny-warnings --no-error-on-unmatched-pattern",
     "test": "vitest run --config vitest.config.ts",
     "build": "bun run --cwd ../../protocol validate:registries && node scripts/build-cli-npm.cjs",
     "prepack": "bun run build",

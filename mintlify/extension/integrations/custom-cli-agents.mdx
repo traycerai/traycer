@@ -1,0 +1,639 @@
+---
+title: "Custom CLI Agents"
+description: "Create custom CLI agents with custom arguments and permissions for any CLI-based coding agent."
+keywords: ['custom cli agents', 'cli agents', 'claude code', 'dangerous flag', 'template tags', 'bash', 'powershell', 'batch', 'shell scripts', 'elevated permissions', 'custom arguments']
+---
+
+## Overview
+
+Traycer allows you to create custom CLI agent with custom arguments and permissions for any CLI-based coding agent. This powerful feature enables you to pass special flags and create platform-specific configurations tailored to your workflow.
+
+## What are Custom CLI Agents?
+
+Custom CLI agents allow you to:
+
+- Execute any CLI-based coding agent with custom arguments.
+- Pass special flags like `--dangerous` or `--force` for elevated permissions.
+- Create platform-specific CLI agent for different environments.
+
+## Available Template Tags
+
+Custom CLI agents support the following environment variables set by Traycer at runtime:
+
+| Variable | Bash / Git Bash | PowerShell |
+|----------|-----------------|------------|
+| `TRAYCER_PROMPT` | `"$TRAYCER_PROMPT"` | `"$env:TRAYCER_PROMPT"` |
+| `TRAYCER_PROMPT_TMP_FILE` | `"$TRAYCER_PROMPT_TMP_FILE"` | `"$env:TRAYCER_PROMPT_TMP_FILE"` |
+| `TRAYCER_PHASE_ID` | `"$TRAYCER_PHASE_ID"` | `"$env:TRAYCER_PHASE_ID"` |
+| `TRAYCER_PHASE_BREAKDOWN_ID` | `"$TRAYCER_PHASE_BREAKDOWN_ID"` | `"$env:TRAYCER_PHASE_BREAKDOWN_ID"` |
+| `TRAYCER_TASK_ID` | `"$TRAYCER_TASK_ID"` | `"$env:TRAYCER_TASK_ID"` |
+| `TRAYCER_SYSTEM_PROMPT` | `"$TRAYCER_SYSTEM_PROMPT"` | `"$env:TRAYCER_SYSTEM_PROMPT"` |
+
+<ParamField query="TRAYCER_PROMPT" type="placeholder" required>
+  The prompt content. At least one of `TRAYCER_PROMPT` or `TRAYCER_PROMPT_TMP_FILE` must be referenced in your CLI agent template.
+</ParamField>
+
+<ParamField query="TRAYCER_PROMPT_TMP_FILE" type="placeholder">
+  Temporary file path containing the prompt content. Ideal for large prompts that exceed environment variable size limits.
+  Use commands like `cat "$TRAYCER_PROMPT_TMP_FILE"` (Bash) or `Get-Content -Raw "$env:TRAYCER_PROMPT_TMP_FILE"` (PowerShell) to read and pass the prompt content to the CLI agent at runtime.
+  The temporary file is automatically cleaned up by Traycer after 30 seconds.
+</ParamField>
+
+<ParamField query="TRAYCER_PHASE_ID" type="placeholder">
+  Per-phase identifier for maintaining session across plan and verification.
+</ParamField>
+
+<ParamField query="TRAYCER_PHASE_BREAKDOWN_ID" type="placeholder">
+  Phase breakdown identifier for maintaining session across current phase list.
+</ParamField>
+
+<ParamField query="TRAYCER_TASK_ID" type="placeholder">
+  Task identifier for maintaining session across all phase iterations, plans, and verification execution
+</ParamField>
+
+<ParamField query="TRAYCER_SYSTEM_PROMPT" type="placeholder">
+  System prompt to append to the CLI agent (environment variable set by Traycer at runtime). Use this with --append-system-prompt or equivalent flag to pass trusted instructions at the system level.
+</ParamField>
+
+## Creating Custom CLI Agents
+
+<Frame>
+<img src="/images/add-custom-cli.gif" alt="Custom CLI Agents" />
+</Frame>
+
+<Steps>
+<Step title="1. Open Manage CLI Agents">
+Click the three dots on the top of the sidebar to open the context menu, then click "Manage CLI Agents".
+</Step>
+
+<Step title="2. Click Add CLI Agent">
+Click "Add CLI Agent" to add a new custom CLI agent.
+</Step>
+
+<Step title="3. Choose scope">
+Select either **User** (personal CLI agents available across all projects) or **Workspace** (project-specific CLI agents stored in workspace settings).
+</Step>
+
+<Step title="4. CLI Agent Name">
+Provide a descriptive name for your custom CLI agent and click "Create CLI Agent".
+</Step>
+
+<Step title="5. Add CLI Agent Command">
+Add your custom command to the created file and save it.
+</Step>
+</Steps>
+
+## Template Scopes
+
+Custom CLI agents can be created in two different scopes:
+
+- **User scope**: Personal CLI agents that are available across all your projects. These are stored in the home directory under `.traycer/cli-agents` and travel with you.
+- **Workspace scope**: Project-specific CLI agents that are stored in your workspace root under `.traycer/cli-agents`. These are ideal for team-shared configurations or project-specific agent setups.
+
+## Popular CLI Agents
+
+Here are some popular CLI-based coding agents you can set up:
+
+<Tabs>
+<Tab title="Claude Code CLI">
+
+The following are frequently used arguments. For more details, visit the [official documentation](https://docs.claude.com/en/docs/claude-code/cli-reference?ref=traycer.ai).
+
+**Basic**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+claude "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+claude "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+claude "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+**Verbose**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+claude --verbose "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+claude --verbose "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+claude --verbose "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+**Dangerous Mode**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+claude --dangerously-skip-permissions "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+claude --dangerously-skip-permissions "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+claude --dangerously-skip-permissions "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+</Tab>
+
+<Tab title="Codex CLI">
+
+The following are frequently used arguments. For more details, visit the [official documentation](https://developers.openai.com/codex/cli?ref=traycer.ai).
+
+**Auto-approve**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+codex --full-auto "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+codex --full-auto "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+codex --full-auto "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+**With Model**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+codex --full-auto --model <MODEL> "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+codex --full-auto --model <MODEL> "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+codex --full-auto --model <MODEL> "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+**With Local OSS Model**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+codex --full-auto --oss "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+codex --full-auto --oss "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+codex --full-auto --oss "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+</Tab>
+
+<Tab title="Gemini CLI">
+
+The following are frequently used arguments. For more details, visit the [official documentation](https://geminicli.com/docs/cli/?ref=traycer.ai).
+
+**Debug Mode**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+gemini --debug "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+gemini --debug "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+gemini --debug "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+**YOLO Mode**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+gemini --yolo "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+gemini --yolo "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+gemini --yolo "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+</Tab>
+
+<Tab title="Cline CLI">
+
+The following are frequently used arguments. For more details, visit the [official documentation](https://docs.cline.bot/cline-cli/overview?ref=traycer.ai).
+
+**Basic**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+cline "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+cline "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+cline "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+**Verbose Mode**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+cline --verbose "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+cline --verbose "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+cline --verbose "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+**YOLO Mode**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+cline --yolo "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+cline --yolo "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+cline --yolo "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+</Tab>
+
+<Tab title="Factory Droid CLI">
+
+The following are frequently used arguments. For more details, visit the [official documentation](https://docs.factory.ai/cli/getting-started/overview?ref=traycer.ai).
+
+**Basic**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+droid --file "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+droid --file "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+droid --file "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+**Auto-run Mode**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+droid exec --auto <level> --file "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+droid exec --auto <level> --file "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+droid exec --auto <level> --file "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+**Specification Mode**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+droid exec --skip-permissions-unsafe --file "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+droid exec --skip-permissions-unsafe --file "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+droid exec --skip-permissions-unsafe --file "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+</Tab>
+
+<Tab title="Cursor CLI">
+
+The following are frequently used arguments. For more details, visit the [official documentation](https://cursor.com/docs/cli/overview?ref=traycer.ai).
+
+**Basic**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+echo $TRAYCER_PROMPT | cursor-agent
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+echo $TRAYCER_PROMPT | cursor-agent
+```
+
+```powershell Windows (PowerShell)
+echo "$env:TRAYCER_PROMPT" | cursor-agent
+```
+
+</CodeGroup>
+
+**Force Mode**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+echo $TRAYCER_PROMPT | cursor-agent --force
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+echo $TRAYCER_PROMPT | cursor-agent --force
+```
+
+```powershell Windows (PowerShell)
+echo "$env:TRAYCER_PROMPT" | cursor-agent --force
+```
+
+</CodeGroup>
+
+**Background Mode**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+echo $TRAYCER_PROMPT | cursor-agent --background
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+echo $TRAYCER_PROMPT | cursor-agent --background
+```
+
+```powershell Windows (PowerShell)
+echo "$env:TRAYCER_PROMPT" | cursor-agent --background
+```
+
+</CodeGroup>
+
+</Tab>
+
+<Tab title="Aider">
+
+The following are frequently used arguments. For more details, visit the [official documentation](https://aider.chat/docs/usage.html?ref=traycer.ai).
+
+**Auto-approve**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+aider --yes-always "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+aider --yes-always "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+aider --yes-always "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+**With Git Auto-commit**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+aider --yes-always --auto-commits "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+aider --yes-always --auto-commits "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+aider --yes-always --auto-commits "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+**Verbose Mode**
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+aider --yes-always --verbose "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+aider --yes-always --verbose "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+aider --yes-always --verbose "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+</Tab>
+</Tabs>
+
+## Using Custom Paths
+
+If your CLI agent is installed at a custom location, you can specify the full path in your template:
+
+<CodeGroup>
+
+```bash Linux/macOS
+#!/bin/sh
+/usr/local/bin/claude --verbose "$TRAYCER_PROMPT"
+```
+
+```bash Windows (Git Bash)
+#!/bin/sh
+"/c/Program Files/Claude/claude.exe" --verbose "$TRAYCER_PROMPT"
+```
+
+```powershell Windows (PowerShell)
+& "C:\Program Files\Claude\claude.exe" --verbose "$env:TRAYCER_PROMPT"
+```
+
+</CodeGroup>
+
+<Warning>
+  Flags like `--dangerous` grant elevated permissions to the agent. Always review what permissions you're granting to CLI agents.
+</Warning>
+
+## Use Cases
+
+Custom CLI agents are particularly useful for:
+
+- Passing dangerous/elevated permissions flags.
+- Using custom model configurations.
+- Setting specific output formats.
+- Creating environment-specific agent configurations.
+
+## FAQ
+
+<AccordionGroup>
+<Accordion title="Can I pass dangerous or elevated permission flags?">
+  Yes, you can pass any flags supported by your CLI agent, including `--dangerous`, `--force`, or other elevated permission flags. However, be cautious as these flags grant the agent more control over your system. Always understand what permissions you're granting before using such flags.
+</Accordion>
+
+<Accordion title="How do I share custom CLI agents with my team?">
+  You can share custom CLI agents with your team by creating them in **Workspace scope**. Workspace-scoped CLI agents are stored in your project's workspace root under `.traycer/cli-agents`, which can be committed to your repository. When team members pull the latest changes, they'll automatically have access to the shared custom CLI agents. This approach ensures consistent agent configurations across your entire team.
+</Accordion>
+
+<Accordion title="What's the difference between User and Workspace scope?">
+  User scope CLI agents are stored in your personal settings and available across all projects. Workspace scope CLI agents are project-specific and stored in the workspace settings, making them ideal for team collaboration.
+</Accordion>
+
+<Accordion title="Can I edit an existing CLI agent?">
+  Yes, you can modify any custom CLI agent by clicking on it within the Custom CLI Agents section of Traycer settings. This will open the file for editing.
+</Accordion>
+
+<Accordion title="What's the difference between Bash and PowerShell syntax for environment variables?">
+  Bash (Linux/macOS/Git Bash) and PowerShell (Windows) use different syntax to reference environment variables:
+
+  | Shell | Syntax | Example |
+  |-------|--------|---------|
+  | Bash / Git Bash | `"$VARIABLE_NAME"` | `claude "$TRAYCER_PROMPT"` |
+  | PowerShell | `"$env:VARIABLE_NAME"` | `claude "$env:TRAYCER_PROMPT"` |
+
+  **Key differences:**
+  - **Bash** uses `$` followed by the variable name directly (e.g., `$TRAYCER_PROMPT`)
+  - **PowerShell** uses `$env:` prefix before the variable name (e.g., `$env:TRAYCER_PROMPT`)
+  - Double quotes are recommended in both shells to handle prompts containing spaces or special characters
+
+  Choose the appropriate syntax based on which shell your CLI agent script will run in. Git Bash on Windows uses Bash syntax, not PowerShell syntax.
+</Accordion>
+
+<Accordion title="What happens if I don't include the $TRAYCER_PROMPT or $TRAYCER_PROMPT_TMP_FILE environment variable?">
+  The CLI agent validation will fail because at least one of `$TRAYCER_PROMPT` or `$TRAYCER_PROMPT_TMP_FILE` must be referenced in your CLI agent template to pass the task instructions to the agent.
+</Accordion>
+
+<Accordion title="When should I use TRAYCER_PROMPT_TMP_FILE instead of TRAYCER_PROMPT?">
+  `TRAYCER_PROMPT` is the recommended default for most use cases. Use `TRAYCER_PROMPT_TMP_FILE` when:
+  - Dealing with very large prompts (multiple files, extensive context)
+  - Encountering environment variable size limits (Windows: ~32KB, Linux/macOS: varies)
+  - Experiencing prompt truncation issues
+
+  Both variables are always available. Use `TRAYCER_PROMPT_TMP_FILE` directly in your commands just like `TRAYCER_PROMPT` - no need for file reading commands.
+</Accordion>
+
+<Accordion title="How does TRAYCER_PROMPT_TMP_FILE work internally?">
+  Traycer creates a temporary file containing the prompt content and sets `TRAYCER_PROMPT_TMP_FILE` to the file path. When you reference `$TRAYCER_PROMPT_TMP_FILE` in your template, you need to read the file content using commands like `cat "$TRAYCER_PROMPT_TMP_FILE"` (bash/sh) or `Get-Content -Raw "$env:TRAYCER_PROMPT_TMP_FILE"` (PowerShell). This approach bypasses environment variable size limits that can cause issues with very large prompts. The temporary file is automatically cleaned up by Traycer after 30 seconds.
+</Accordion>
+
+<Accordion title="Can I use custom CLI agents with YOLO Mode?">
+  Yes, custom CLI agents work with YOLO Mode for automated execution.
+</Accordion>
+
+<Accordion title="Can I have multiple versions of the same agent?">
+  Yes, you can create multiple custom CLI agents with different names that use the same underlying CLI tool. For example, you could have "Claude Verbose", "Claude Dangerous", and "Claude Standard" - each with different flags but all calling the same `claude` CLI agent.
+</Accordion>
+
+<Accordion title="What if the CLI tool isn't installed on my system?">
+  Traycer does not install CLI agents for you. You must install the CLI tool separately before creating a custom CLI agent. We recommend testing the CLI command in your terminal first to ensure it works correctly before adding it to an agent.
+</Accordion>
+</AccordionGroup>

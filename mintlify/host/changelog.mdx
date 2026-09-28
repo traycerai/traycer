@@ -1,0 +1,181 @@
+---
+title: "Host Changelog"
+sidebarTitle: "Host"
+description: "Track the latest updates and improvements to the Traycer Host."
+rss: true
+---
+
+<Update label="v1.4.0">
+Model routing, Auto mode, agents that work across your machines, Antigravity, and rebuilt storage.
+
+* **Model routing** — when a turn fails on a usage limit, a sign-out, a billing problem, or an unavailable provider or model, the Host can move the chat to a model in the same tier. For a usage limit, a sign-out or a billing problem it can also switch to another account for the same provider, and for a usage limit it can wait for the reset and retry. After a switch, it asks you, or switches back on its own if you choose, once your preferred account or model is available again. Tiers match models by name pattern.
+* **Auto mode** — a judge reviews commands before they run and asks you about the ones it won't approve; edits to sensitive files such as git config and hooks still ask you. By default the judge runs on Traycer Inference and falls back to the conversation's own provider and account, and Claude Code conversations can use Claude Code's own classifier instead. A repository's `.traycer/auto-policy.md` can add restrictions but never loosen yours, and the Host keeps a log of recent decisions.
+* **Your machines, working together** — agents can list your machines, create and message agents on them, run a command on another machine, copy files between machines, and forward a port between their own machine and another of yours. A remote agent's browser can open in the desktop app you messaged it from.
+* **Across Tasks** — agents can list your Tasks, message and manage agents in your other Tasks, and search your chat history on their machine.
+* **Chat search** — the Host indexes the prompts, agent replies, and notices of your chats on it, across Tasks, for full-text search. Terminal-agent chats, reasoning, and tool output are not indexed.
+* **Remote sign-in** — sign a remote Host in to Codex, Grok, or Kimi with a sign-in link and a one-time code, or to Claude Code by pasting a code, from the machine you're using. Signing in to an account no longer interrupts chats already running on it.
+* **Antigravity** — Google's Antigravity coding agent runs through its official ACP server. Models are read live from your account, effort levels are grouped under one model, and, with a Google sign-in, 5-hour and weekly limits are reported for each model group. It is not available on Intel Macs.
+* **Storage** — database work runs asynchronously instead of blocking the Host, and chats are stored as rows instead of one document that is rewritten whole. The Host also holds less in memory, and on macOS it no longer holds on to freed large memory blocks.
+* **Version history** — the Host keeps version history for specs, stories, tickets, and reviews. It is on by default and stored separately from checkpoint snapshots, so clearing those doesn't affect it.
+* **Labels** — Task labels are saved to the cloud, with edits queued across restarts and retried. Earlier imports the Host still has a record of also get the **Imported** label.
+* **Worktrees** — optional automatic cleanup, off by default: once a day the Host deletes worktrees that have been inactive longer than the limit you set and whose work is merged, pushed, or never moved from its starting commit, with no uncommitted changes, open PR, or active session. Anything it can't verify is skipped. Deleting a worktree also says why a busy agent is holding it.
+* **Grok** — editing or forking from an earlier message now continues Grok's own session instead of starting a new one, plus image attachments and permission prompts that go through Traycer.
+* **Fixes** — an open chat reconnects on its own through a planned Host restart, Stop can now end a turn whose provider has stopped answering, terminal agents' launch arguments on Windows keep their backslashes and quotes, shell commands agents run on a Windows Host actually run, and a terminal whose folder was deleted reopens in your home folder.
+</Update>
+
+<Update label="v1.3.1">
+* **Cursor** — Composer no longer always runs in fast mode; the fast setting is applied per run.
+</Update>
+
+<Update label="v1.3.0">
+Agent-controlled browsers, session import, and much faster Tasks.
+
+* **Browser sessions** — agents can open and drive browser sessions, with sign-ins stored encrypted and carried across Hosts.
+* **Session import** — bring Claude Code, Codex, and OpenCode sessions into Traycer.
+* **Mobile app** — the Host serves the Traycer mobile app.
+* **Faster Tasks** — Tasks open from local data in a fraction of the time, long chats load in windows, and memory use is reported accurately.
+* **Comments as files** — agents read comment threads as files beside each artifact and resolve them by editing their status.
+* **Worktrees** — deleting a worktree first stops whatever is using it, sweeps ask for consent before tearing anything down, and deletion rows say why they failed.
+* **Providers** — the Reasonix coding agent is now available; OpenCode reaches parity with Claude; Copilot, Qwen, Grok, and the OpenCode family can be steered mid-turn; Grok gets background work and managed profiles; and sign-in terminals launch the CLI for Qwen, Droid, OMP, and OpenCode.
+* **Harness enablement** — harnesses are enabled once you are signed in, then stay on or off as you set them.
+* **Shells** — choose per command whether it relaunches when the Host restarts.
+* **Updates** — updates are tracked through to completion, and explicit downgrades are supported.
+* **Reliability** — fixes for artifacts lost after a storage replacement, a slow git process taking down a Task, and a Windows Host crash.
+</Update>
+
+<Update label="v1.2.0">
+Remote hosts, chats backed up to the cloud, and usage analytics.
+
+* **Remote hosts** — a Host can run on another machine and be reached through Traycer's relay.
+* **Chat sync** — chats live on the Host, are backed up to the cloud, sync across Hosts, and can be shared or kept private.
+* **Communication Graph** — messages between agents are recorded and streamed for each Task.
+* **Usage analytics** — cost, tokens, and tool calls are captured and priced per turn.
+* **Shells** — agents can run long-running commands that notify them, including in the middle of a turn.
+* **Providers** — Hugging Face and OpenCode model providers are available, provider CLI versions can be chosen, provider CLIs are downloaded on demand, and Cursor and OpenCode Go usage limits are reported.
+* **Terminals** — terminals are owned by the Host and persist across windows and Hosts. Agents can read a terminal's output.
+* **Agents** — fork an agent, stop its whole runtime rather than just the turn, and create agents without a folder.
+* **Skills** — imported skills are stored once and shared across providers.
+* **Git** — edit files in place from the diff, and read GitHub pull requests and issues for mentions.
+* **Worktrees** — branch prefixes can be set per repository, and recent workspace folders are remembered.
+* **Fixes** — Claude profiles no longer sign themselves out, idle Hosts stay quiet, and restart checks ignore idle terminals.
+</Update>
+
+<Update label="v1.1.10">
+Epic Mode removed, and a steadier Host under load.
+
+* **Epic Mode removed** — agents no longer carry an Epic or Regular mode, and the Traycer system prompt is shorter.
+* **Agents** — archive an agent from another agent, stop an agent with `traycer_stop_agent`, and working agents can no longer be archived.
+* **Agent-to-agent** — agents created by other agents run with full access.
+* **Pull requests** — the PR view is back, fetches each PR once per Host, and finds PRs from the branch actually checked out.
+* **Terminals** — terminal titles show the live working directory.
+* **Git status** — a bounded file watcher on Linux, with its health reported to the app.
+* **Grok** — change reasoning effort mid-session.
+* **Fixes** — Claude sessions survive pressing Stop during background work, Copilot starts on the default model, Pi reports its real failure reason, model catalogs no longer flood the Host with requests, and Windows provider CLIs launch directly.
+</Update>
+
+<Update label="v1.1.9">
+The Oh My Pi coding agent, agent roles, and installs that recover instead of leaving you stuck.
+
+* **Oh My Pi** — the Oh My Pi coding agent is now available.
+* **Agent roles** — an agent can carry a role.
+* **Steer a running agent** — supported coding agents can take a message while their turn is still running. Others queue it for afterwards.
+* **Grok profiles** — use several Grok accounts with isolated sessions and usage limits.
+* **Search** — artifacts and workspaces can be searched within a chosen scope, and a workspace's file list keeps up as files change.
+* **Artifacts** — the Host reports when artifacts have finished syncing, rather than assuming they have.
+* **Notifications** — an agent that stops because it ran out of context, or because its request was refused, now reports which. Terminal agents get their own indicators, and notifications resume after a terminal closes.
+* **Archiving** — chats can be archived.
+* **Install and update** — a failure now offers a way forward instead of leaving you stuck. On macOS, the Host no longer runs slowed down in the background.
+</Update>
+
+<Update label="v1.1.8">
+The Hermes coding agent, a rebuilt notification center, and downloads that resume.
+
+* **Hermes** — the Hermes coding agent from Nous Research is now available.
+* **Rate limits** — Grok account usage is now reported.
+* **Notifications** — rebuilt, with a clear way to dismiss anything needing attention and consistent wording wherever a notification appears.
+* **Agents** — conversations are treated as agents.
+* **Agent messages** — control over what an agent is allowed to do.
+* **Resources** — an agent and everything it started can be stopped together.
+* **Updates** — large downloads resume where they left off.
+* **Sign-in** — the Host, CLI, and desktop app share one sign-in.
+* **Reliability** — repeated requests are coordinated, and retries slow down while waiting on background work.
+</Update>
+
+<Update label="v1.1.7">
+Several accounts per provider, two new coding agents, and terminals that run outside a Task.
+
+* **Several accounts per provider** — use more than one Claude or Codex account, including choosing which one an agent uses when agents message each other.
+* **Devin and Pi** — both coding agents are now available.
+* **Terminals** — terminal sessions can run outside a Task.
+* **Fork a question** — branch a chat from a question.
+* **Claude sign-in** — paste an OAuth code when the browser redirect cannot complete.
+* **Resource tracking** — counts every process running under the Host.
+* **Git status** — updates when files change, rather than on a timer.
+* **Worktrees** — status is kept current without repeatedly reading from Git, and setup failures are reported and recoverable.
+* **Notifications** — hooks that call a URL or run a command, filtered by severity, plus alerts when a workspace fails.
+* **Background work** — background tasks report elapsed time and results, and an agent doing background work is reported as such rather than as mid-turn.
+* **Rate limits** — the composer banner matches the model actually selected.
+* **Performance** — the provider list no longer re-checks in tight bursts.
+</Update>
+
+<Update label="v1.1.6">
+* **Fork a pending question** — fork a chat while a question is still waiting for an answer, leaving the original untouched.
+* **Compatibility** — newer clients stay connected to older Hosts; anything unavailable falls back where it can, or asks for an update.
+</Update>
+
+<Update label="v1.1.5">
+The Amp coding agent, Windows support, and per-process resource tracking.
+
+* **Amp** — the Amp coding agent from Sourcegraph is now available.
+* **Windows** — the Host runs on Windows, powering the new Windows builds of Traycer Desktop and the CLI.
+* **Resource tracking** — CPU and memory for everything the Host runs, feeding the app's resource monitor.
+* **Nested agents** — Claude subagents and parallel groups are reported as a tree.
+* **Worktrees** — listings page as they grow, and show which worktrees are stale or already merged.
+* **Terminal agents** — Claude and OpenCode keep the correct session when it changes.
+* **Start without a folder** — supported end to end.
+</Update>
+
+<Update label="v1.1.4">
+* **Scheduled wake-ups** — Claude's background work is reported as a tree, including scheduled wake-ups.
+* **Git diffs** — changes made inside Git submodules now appear.
+* **Usage limits** — recover after a temporary failure.
+* Terminal agents no longer die quietly when the connection drops.
+</Update>
+
+<Update label="v1.1.3">
+* **Account usage** — reported for Codex, Claude Code, OpenRouter, and Kilo Code.
+* **Named agents** — a name given at creation is kept.
+* **Terminals** — heavy output is faster and more reliable.
+* Provider lists load reliably when the CLI and Host are on different versions.
+</Update>
+
+<Update label="v1.1.2">
+* **Model picker** — Traycer models being retired now carry a notice.
+</Update>
+
+<Update label="v1.1.1">
+* **Background work** — chats stay visibly active while background work continues after the main reply finishes.
+</Update>
+
+<Update label="v1.1.0">
+Eight new coding agents, and providers that no longer hold up a fresh install.
+
+* **Eight new coding agents** — Grok (xAI), Qwen, Kiro, Kilo Code, Copilot, Kimi, Droid, and OpenRouter.
+* **Faster first launch** — providers appear as they finish loading, so a new install no longer waits for all of them.
+* **Background Claude subagents** — progress keeps updating after the main reply ends.
+* **Diagnostics** — Host logs can be filtered by how much detail you want.
+* **Sign-in** — long-running connections accept a refreshed sign-in without reconnecting.
+</Update>
+
+<Update label="v1.0.0">
+First public release of the Traycer Host — the local runtime that powers Traycer. It runs the coding agents, terminals, and Tasks behind Traycer Desktop, entirely on your machine. You do not install the Host directly; the Traycer CLI downloads, verifies, and supervises it for you.
+
+* **Runs agents locally** — executes your chosen coding agents directly on the repositories you are working in.
+* **Local storage** — stores Tasks, conversations, plans, and history in a local SQLite database.
+* **Terminals, files, and worktrees** — manages terminals, files, and git worktrees, and exposes a versioned protocol that Traycer Desktop connects to.
+* **Managed service** — registers with your OS service manager (launchd on macOS, systemd user on Linux), starting with your session and supervised automatically.
+* **Agent backends** — Claude (Claude Code), OpenAI Codex (with reasoning depth and optional Fast tier), Cursor, OpenCode, and Traycer Inference, selectable per Task.
+* **Skills** — ships Traycer's versioned, integrity-checked workflows for brief, plan, breakdown, execution, and review.
+* **Privacy** — does not log secrets or source code.
+* **Platforms** — macOS (Apple Silicon and Intel) and Linux (x64), delivered as a signed single-file runtime with no separate Node or Bun install. Builds are verified by SHA-256 checksum and minisign signature before installation.
+</Update>

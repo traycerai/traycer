@@ -52,20 +52,62 @@ export function WindowsBridgeAuthSessionBridge(
 
     let projectingInbound = false;
     let lastWrittenSerialized: string | null = null;
+    let lastLocalRestoreSerialized: string | null = null;
+
+    const restoreLocal = (snapshot: AuthSessionSnapshot): void => {
+      if (
+        bridge.authSession.restoreLocal === undefined ||
+        snapshot.token === null ||
+        snapshot.profile === null
+      ) {
+        return;
+      }
+      const expected = {
+        userId: snapshot.profile.userId,
+        token: snapshot.token,
+      };
+      const serialized = JSON.stringify(expected);
+      if (lastLocalRestoreSerialized === serialized) return;
+      lastLocalRestoreSerialized = serialized;
+      void bridge.authSession.restoreLocal(expected).then(
+        (result) => {
+          if (result === "restored") return;
+          if (lastLocalRestoreSerialized === serialized) {
+            lastLocalRestoreSerialized = null;
+          }
+          if (result === "unavailable") {
+            authSessionRefusedToast.warning(
+              "Traycer could not read your local session. Reload the window to try again.",
+            );
+          }
+        },
+        () => {
+          if (lastLocalRestoreSerialized === serialized) {
+            lastLocalRestoreSerialized = null;
+          }
+          appLogger.warn(
+            "[auth] could not restore the desktop local session",
+            {},
+          );
+          authSessionRefusedToast.warning(
+            "Traycer could not restore your local session. Reload the window to try again.",
+          );
+        },
+      );
+    };
 
     const writeOutbound = (snapshot: AuthSessionSnapshot): void => {
       if (projectingInbound) return;
-      // An `unverified` session is NOT a cross-window session transition: it
-      // is this window's local statement that it could not reach authn, and
-      // every sibling window reaches the same conclusion independently from
-      // the same credentials file via its own `start()`. Projecting it would
-      // mean flattening it to the nearest desktop status - `signed-out` - and
-      // an inbound `signed-out` is applied unconditionally
-      // (`applyExternalSession`), so a sibling that was quietly working
-      // offline would be signed out by this window's failure to validate.
-      // Publishing nothing leaves the last real transition standing, which is
-      // the truthful projection: no session transition has occurred.
-      if (snapshot.status === "unverified") return;
+      if (snapshot.status === "unverified") {
+        // Main needs a local identity to select the already-running host.
+        // It reads that identity from disk rather than trusting this profile;
+        // siblings still derive their own offline session independently.
+        // Clear the verified echo latch so a same-token promotion is published.
+        lastWrittenSerialized = null;
+        restoreLocal(snapshot);
+        return;
+      }
+      lastLocalRestoreSerialized = null;
       const desktopSnapshot = toDesktopSnapshot(snapshot);
       const serialized = serializeDesktopSnapshot(desktopSnapshot);
       if (serialized === lastWrittenSerialized) {
@@ -102,6 +144,9 @@ export function WindowsBridgeAuthSessionBridge(
     };
 
     const ingestInbound = (snapshot: DesktopAuthSessionSnapshot): void => {
+      // Main's local selection identity is neither a cloud verdict nor a
+      // sign-out. Each window restores it through its own AuthService.
+      if (snapshot.status === "unverified") return;
       const serialized = serializeDesktopSnapshot(snapshot);
       if (serialized === lastWrittenSerialized) {
         return;
@@ -115,9 +160,9 @@ export function WindowsBridgeAuthSessionBridge(
     };
 
     const inboundSubscription = bridge.authSession.onChange(ingestInbound);
-    // The one `unverified` main must hear about: a TERMINAL verdict loss.
-    // `writeOutbound` publishes no `unverified` (above) and the status it
-    // would flatten to signs siblings out, so this travels on its own
+    // A TERMINAL verdict loss also needs an explicit revocation.
+    // Local restoration above grants no cloud verdict and does not demote
+    // an existing main session, so terminal revocation travels on its own
     // channel. Main drops its verification of the session it holds - what the
     // jar plane's principal reads - and fans the session back out UNCHANGED,
     // which every window's latch reads as an echo. The latch here stays put

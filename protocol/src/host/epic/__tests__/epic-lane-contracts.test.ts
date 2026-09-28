@@ -31,10 +31,12 @@ import {
   epicSubscribeV16,
 } from "@traycer/protocol/host/epic/subscribe";
 import {
+  ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR,
   artifactSubscribeClientFrameSchemaV10,
   artifactSubscribeOpenRequestSchemaV10,
   artifactSubscribeSeedOfferSchema,
   artifactSubscribeServerFrameSchemaV10,
+  artifactSubscribeServerFrameSchemaV11,
   artifactSubscribeUnavailableCodeSchema,
 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import {
@@ -72,14 +74,14 @@ import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-flo
 
 describe("registry shape: the epic lane surface installs at the versions the split promised", () => {
   it("installs epic.state.subscribe / epic.status.subscribe / artifact.subscribe at major 1, each with a @1.0 line", () => {
-    // `epic.state.subscribe` grew `@1.1` (tombstones carry artifact metadata)
-    // and `epic.status.subscribe` grew `@1.1` after `@1.0` shipped in 1.3.0;
-    // the artifact lane is still at its first minor. All three keep `@1.0`
-    // installed for released peers.
+    // `epic.state.subscribe` grew `@1.1` (tombstones carry artifact metadata),
+    // `epic.status.subscribe` grew `@1.1` after `@1.0` shipped in 1.3.0, and
+    // `artifact.subscribe` grew `@1.1` for the `bodySync` frame. All three keep
+    // `@1.0` installed for released peers.
     for (const [method, latestMinor] of [
       ["epic.state.subscribe", 1],
       ["epic.status.subscribe", 1],
-      ["artifact.subscribe", 0],
+      ["artifact.subscribe", 1],
     ] as const) {
       const majorLine = hostStreamRpcRegistry[method][1];
       expect(majorLine.latestMinor).toBe(latestMinor);
@@ -96,6 +98,9 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     // line's top rather than a flat `latestMinor: 0`.
     expect(hostStreamRpcRegistry["epic.status.subscribe"][1].latestMinor).toBe(
       EPIC_STATUS_DURABILITY_LEGS_MINOR,
+    );
+    expect(hostStreamRpcRegistry["artifact.subscribe"][1].latestMinor).toBe(
+      ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR,
     );
   });
 
@@ -1584,5 +1589,115 @@ describe("epic.state.subscribe@1.1: tombstones carry artifact metadata; @1.0 sta
       artifactTombstones: [ticketWithoutStatus],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("artifact.subscribe@1.1 bodySync frame (O1)", () => {
+  const bodySyncBase = {
+    kind: "bodySync" as const,
+    authorityEpoch: "epoch-1",
+    artifactId: "artifact-1",
+    hasBinaryPayload: false as const,
+  };
+
+  it.each(["syncing", "synced"] as const)(
+    "@1.1 accepts bodySync state %s",
+    (state) => {
+      expect(
+        artifactSubscribeServerFrameSchemaV11.safeParse({
+          ...bodySyncBase,
+          state,
+        }).success,
+      ).toBe(true);
+    },
+  );
+
+  it.each(["syncing", "synced"] as const)(
+    "@1.0 rejects bodySync state %s: the frame does not exist on the frozen line",
+    (state) => {
+      expect(
+        artifactSubscribeServerFrameSchemaV10.safeParse({
+          ...bodySyncBase,
+          state,
+        }).success,
+      ).toBe(false);
+    },
+  );
+
+  it("rejects hasBinaryPayload: true", () => {
+    expect(
+      artifactSubscribeServerFrameSchemaV11.safeParse({
+        ...bodySyncBase,
+        state: "syncing",
+        hasBinaryPayload: true,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects an unknown state", () => {
+    expect(
+      artifactSubscribeServerFrameSchemaV11.safeParse({
+        ...bodySyncBase,
+        state: "stale",
+      }).success,
+    ).toBe(false);
+  });
+
+  describe("V11 is a strict superset of every @1.0 server frame kind", () => {
+    const base = { authorityEpoch: "epoch-1", artifactId: "artifact-1" };
+    // One valid fixture per @1.0 kind. The kind list below is checked against
+    // the V10 union itself, so a kind added to @1.0 without a fixture here
+    // fails that test rather than going unexercised.
+    const fixtures = {
+      doc: {
+        kind: "doc",
+        ...base,
+        docGuid: "guid-1",
+        stateVectorBase64: "AQ==",
+        hasBinaryPayload: true,
+      },
+      docUpdate: {
+        kind: "docUpdate",
+        ...base,
+        docGuid: "guid-1",
+        hasBinaryPayload: true,
+      },
+      docAck: {
+        kind: "docAck",
+        ...base,
+        docGuid: "guid-1",
+        coverageStateVectorBase64: "AQ==",
+        hasBinaryPayload: false,
+      },
+      awareness: { kind: "awareness", ...base, hasBinaryPayload: true },
+      unavailable: {
+        kind: "unavailable",
+        ...base,
+        code: "bodyUnavailable",
+        reason: "retrying",
+        terminal: false,
+        hasBinaryPayload: false,
+      },
+      pong: { kind: "pong", hasBinaryPayload: false },
+    };
+
+    it("has a fixture for exactly the kinds the V10 union declares", () => {
+      const declared = artifactSubscribeServerFrameSchemaV10.options
+        .map((option) => option.shape.kind.value)
+        .sort();
+      expect(Object.keys(fixtures).sort()).toEqual(declared);
+    });
+
+    it.each(Object.entries(fixtures))(
+      "%s parses under both V10 and V11",
+      (_kind, fixture) => {
+        expect(
+          artifactSubscribeServerFrameSchemaV10.safeParse(fixture).success,
+        ).toBe(true);
+        expect(
+          artifactSubscribeServerFrameSchemaV11.safeParse(fixture).success,
+        ).toBe(true);
+      },
+    );
   });
 });

@@ -10,11 +10,15 @@ import type {
   SettingsDefinition,
   SettingsSearchEntry,
 } from "@/lib/settings-search/settings-definitions";
+import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import {
   SETTINGS_SEARCH_COLLECTIONS,
   SETTINGS_SEARCH_ENTRIES,
 } from "@/lib/settings-search/settings-search-entries";
-import { settingsSearchResultKey } from "@/lib/settings-search/settings-search";
+import {
+  searchSettings,
+  settingsSearchResultKey,
+} from "@/lib/settings-search/settings-search";
 import {
   SETTINGS_SECTIONS,
   type SettingsSectionId,
@@ -54,7 +58,24 @@ const indexedAnchors = SETTINGS_SEARCH_ENTRIES.flatMap((entry) =>
   entry.anchor === null ? [] : [entry.anchor],
 );
 
+const NO_BRIDGES: SettingsAvailabilityContext = {
+  runnerHost: null,
+  featureSettings: null,
+  mobileApp: false,
+  mobileFooter: false,
+};
+
 describe("settings search index", () => {
+  it("routes the former Data & migration wording to the Data tab", () => {
+    const [first] = searchSettings("data & migration", NO_BRIDGES);
+
+    expect(first.entry).toMatchObject({
+      section: "host",
+      label: "Data",
+      anchor: "host-overview-tab-data",
+    });
+  });
+
   it("gives every entry a section that exists", () => {
     const sectionIds = new Set(SETTINGS_SECTIONS.map((section) => section.id));
     const unknown = SETTINGS_SEARCH_ENTRIES.filter(

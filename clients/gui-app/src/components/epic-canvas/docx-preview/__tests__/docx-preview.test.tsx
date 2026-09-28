@@ -385,6 +385,24 @@ describe("<DocxPreview />", () => {
     expect(screen.getByLabelText("Zoom level").textContent).toBe("200%");
   });
 
+  it("shows 100% in the Zoom level readout and marks Actual size pressed after clicking it", async () => {
+    mockRenderAsyncWith([{ widthPx: 400, paragraphs: [["Page one"]] }]);
+
+    render(<DocxPreview {...baseProps({})} />);
+    setScrollContainerWidth(832);
+
+    await waitForReady(1);
+    const actualSizeButton = screen.getByRole("button", {
+      name: "Actual size",
+    });
+    expect(actualSizeButton.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(actualSizeButton);
+
+    expect(screen.getByLabelText("Zoom level").textContent).toBe("100%");
+    expect(actualSizeButton.getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("calls onRenderFailure and logs a warning when renderAsync rejects", async () => {
     state.renderAsync.mockRejectedValueOnce(new Error("docx-preview blew up"));
     const onRenderFailure = vi.fn();

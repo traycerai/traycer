@@ -105,6 +105,15 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-a",
 }));
 
+// The layout signal, faked per test. Real module spread back in so everything
+// else it exports keeps working. Mirrors the mocking approach used in
+// composer-shell.test.tsx.
+const viewportMock = vi.hoisted(() => ({ phone: false }));
+vi.mock("@/hooks/ui/use-mobile-viewport", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/ui/use-mobile-viewport")>()),
+  useIsMobileViewport: (): boolean => viewportMock.phone,
+}));
+
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
@@ -1077,6 +1086,89 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
           !call.options.enabled,
       ),
     ).toBe(true);
+  });
+
+  describe("phone layout", () => {
+    afterEach(() => {
+      viewportMock.phone = false;
+    });
+
+    it("covers the tile with only the list showing on a phone viewport", () => {
+      viewportMock.phone = true;
+      state.historyEntries = [observation("observation-a", "Originating chat")];
+      openHistory();
+
+      const panel = screen.getByTestId("artifact-version-history-panel");
+      const panelClasses = panel.className.split(/\s+/);
+      expect(panelClasses).toContain("absolute");
+      expect(panelClasses).toContain("inset-0");
+
+      const list = screen.getByTestId("artifact-version-history-list");
+      expect(list.className.split(/\s+/)).not.toContain("hidden");
+      expect(
+        screen.getByTestId("artifact-version-observation-observation-a"),
+      ).toBeTruthy();
+      expect(screen.queryByTestId("artifact-version-history-back")).toBeNull();
+      expect(
+        screen.queryByTestId("artifact-version-history-maximize"),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId("artifact-version-history-resize-handle"),
+      ).toBeNull();
+    });
+
+    it("hides the list behind the detail pane on selection and restores it on Back", () => {
+      viewportMock.phone = true;
+      state.historyEntries = [observation("observation-a", "Originating chat")];
+      state.blobByObservationId.set("observation-a", {
+        contentHash: HASH_A,
+        markdown: "body",
+      });
+      openHistory();
+
+      fireEvent.click(
+        screen.getByTestId("artifact-version-observation-observation-a"),
+      );
+
+      const list = screen.getByTestId("artifact-version-history-list");
+      expect(list.className.split(/\s+/)).toContain("hidden");
+      const back = screen.getByTestId("artifact-version-history-back");
+      expect(back.getAttribute("aria-label")).toBe("Back to versions");
+      expect(
+        screen.getByRole("button", { name: "Restore this version" }),
+      ).toBeTruthy();
+
+      fireEvent.click(back);
+
+      expect(
+        screen
+          .getByTestId("artifact-version-history-list")
+          .className.split(/\s+/),
+      ).not.toContain("hidden");
+      expect(screen.queryByTestId("artifact-version-history-back")).toBeNull();
+    });
+
+    it("keeps both panes visible on desktop, with no back button", () => {
+      state.historyEntries = [observation("observation-a", "Originating chat")];
+      state.blobByObservationId.set("observation-a", {
+        contentHash: HASH_A,
+        markdown: "body",
+      });
+      openHistory();
+
+      expect(
+        screen
+          .getByTestId("artifact-version-history-list")
+          .className.split(/\s+/),
+      ).not.toContain("hidden");
+      expect(
+        screen.getByRole("button", { name: "Restore this version" }),
+      ).toBeTruthy();
+      expect(screen.queryByTestId("artifact-version-history-back")).toBeNull();
+      expect(
+        screen.getByTestId("artifact-version-history-maximize"),
+      ).toBeTruthy();
+    });
   });
 });
 

@@ -8,7 +8,7 @@ import type {
   HostServiceStatusResponse,
 } from "@traycer/protocol/host/maintenance/index";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
-import type { OsServiceSectionProps } from "@/components/settings/panels/host-overview-advanced";
+import type { OsServiceSectionProps } from "@/components/settings/panels/host-overview-os-service-section";
 import type { OverviewDegradeReason } from "@/components/settings/panels/host-overview-model";
 import {
   useHostServiceDeregister,

@@ -404,44 +404,72 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   }),
 }));
 
-vi.mock("@/components/ui/dropdown-menu", () => ({
-  DropdownMenu: (props: { readonly children: ReactNode }) => props.children,
-  DropdownMenuTrigger: (props: { readonly children: ReactNode }) =>
-    props.children,
-  DropdownMenuContent: (props: { readonly children: ReactNode }) => (
-    <div>{props.children}</div>
-  ),
-  // Forwards `aria-disabled` as well as `disabled`: real Radix renders a
-  // `<div role="menuitem" aria-disabled>`, and an entry that carries a
-  // disabled-reason is soft-disabled through ARIA alone (so it stays
-  // keyboard-reachable). A mock that dropped it would report every such entry
-  // as ENABLED and quietly invert the assertions that depend on it.
-  DropdownMenuItem: (props: {
-    readonly children: ReactNode;
-    readonly onSelect: () => void;
-    readonly "data-testid": string;
-    readonly disabled: boolean;
-    // `undefined` is not padding: a HARD-disabled entry OMITS the key entirely
-    // so Radix's own derived `aria-disabled` survives, and only a soft-disabled
-    // one spreads `true`. Declaring it as a required boolean would describe a
-    // shape the production component never emits.
-    readonly "aria-disabled": boolean | undefined;
-    readonly "aria-describedby": string | undefined;
-  }) => (
-    <button
-      type="button"
-      role="menuitem"
-      data-testid={props["data-testid"]}
-      disabled={props.disabled}
-      aria-disabled={props["aria-disabled"]}
-      aria-describedby={props["aria-describedby"]}
-      onClick={props.onSelect}
-    >
-      {props.children}
-    </button>
-  ),
-  DropdownMenuSeparator: () => null,
-}));
+// Pass-through by default, so every entry is in the DOM without opening its
+// menu. The overflow-to-search focus tests switch to the real Radix menu: what
+// they pin is where focus lands once the menu closes, and only Radix's own
+// close handling can move it.
+const dropdownMenuMode = vi.hoisted(() => ({ real: false }));
+
+interface PassThroughMenuItemProps {
+  readonly children: ReactNode;
+  readonly onSelect: () => void;
+  readonly "data-testid": string;
+  readonly disabled: boolean;
+  // `undefined` is not padding: a HARD-disabled entry OMITS the key entirely
+  // so Radix's own derived `aria-disabled` survives, and only a soft-disabled
+  // one spreads `true`. Declaring it as a required boolean would describe a
+  // shape the production component never emits.
+  readonly "aria-disabled": boolean | undefined;
+  readonly "aria-describedby": string | undefined;
+}
+
+vi.mock("@/components/ui/dropdown-menu", async (importOriginal) => {
+  const realMenu =
+    await importOriginal<typeof import("@/components/ui/dropdown-menu")>();
+  return {
+    DropdownMenu: (props: { readonly children: ReactNode }) =>
+      dropdownMenuMode.real ? (
+        <realMenu.DropdownMenu {...props} />
+      ) : (
+        props.children
+      ),
+    DropdownMenuTrigger: (props: { readonly children: ReactNode }) =>
+      dropdownMenuMode.real ? (
+        <realMenu.DropdownMenuTrigger {...props} />
+      ) : (
+        props.children
+      ),
+    DropdownMenuContent: (props: { readonly children: ReactNode }) =>
+      dropdownMenuMode.real ? (
+        <realMenu.DropdownMenuContent {...props} />
+      ) : (
+        <div>{props.children}</div>
+      ),
+    // Forwards `aria-disabled` as well as `disabled`: real Radix renders a
+    // `<div role="menuitem" aria-disabled>`, and an entry that carries a
+    // disabled-reason is soft-disabled through ARIA alone (so it stays
+    // keyboard-reachable). A mock that dropped it would report every such entry
+    // as ENABLED and quietly invert the assertions that depend on it.
+    DropdownMenuItem: (props: PassThroughMenuItemProps) =>
+      dropdownMenuMode.real ? (
+        <realMenu.DropdownMenuItem {...props} />
+      ) : (
+        <button
+          type="button"
+          role="menuitem"
+          data-testid={props["data-testid"]}
+          disabled={props.disabled}
+          aria-disabled={props["aria-disabled"]}
+          aria-describedby={props["aria-describedby"]}
+          onClick={props.onSelect}
+        >
+          {props.children}
+        </button>
+      ),
+    DropdownMenuSeparator: () =>
+      dropdownMenuMode.real ? <realMenu.DropdownMenuSeparator /> : null,
+  };
+});
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: (props: { readonly children: ReactNode }) => props.children,
@@ -2303,29 +2331,56 @@ describe("epic sidebar selection mode", () => {
     ).toBeNull();
   });
 
-  it("moves focus from the Agents overflow menu into chat search", async () => {
-    seedChatTree();
+  describe("overflow menu search entry, through the real menu", () => {
+    beforeEach(() => {
+      dropdownMenuMode.real = true;
+    });
 
-    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    afterEach(() => {
+      dropdownMenuMode.real = false;
+    });
 
-    fireEvent.click(screen.getByRole("menuitem", { name: "Search agents" }));
+    // Selects the entry the way a click does, then lets Radix finish closing:
+    // it hands focus back on a timer after the menu content unmounts, so an
+    // assertion made before that timer would pass on a focus that is about to
+    // be taken away.
+    async function selectOverflowEntry(
+      triggerLabel: string,
+      entryLabel: string,
+    ): Promise<void> {
+      fireEvent.pointerDown(
+        screen.getByRole("button", { name: triggerLabel }),
+        { button: 0, ctrlKey: false },
+      );
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: entryLabel }),
+      );
+      await waitFor(() => {
+        expect(screen.queryByRole("menu")).toBeNull();
+      });
+      await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    }
 
-    await waitFor(() => {
+    it("moves focus from the Agents overflow menu into chat search", async () => {
+      seedChatTree();
+
+      render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+      await selectOverflowEntry("More agent actions", "Search agents");
+
       expect(document.activeElement).toBe(
         screen.getByRole("textbox", { name: "Search agents" }),
       );
     });
-  });
 
-  it("moves focus from the Artifacts overflow menu into artifact search", async () => {
-    seedArtifactTree();
-    testState.activePanelId = "artifacts";
+    it("moves focus from the Artifacts overflow menu into artifact search", async () => {
+      seedArtifactTree();
+      testState.activePanelId = "artifacts";
 
-    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+      render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    fireEvent.click(screen.getByRole("menuitem", { name: "Search artifacts" }));
+      await selectOverflowEntry("More artifact actions", "Search artifacts");
 
-    await waitFor(() => {
       expect(document.activeElement).toBe(
         screen.getByRole("combobox", { name: "Search artifacts" }),
       );

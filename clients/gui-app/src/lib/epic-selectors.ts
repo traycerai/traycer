@@ -1960,6 +1960,24 @@ export function useEpicArtifactBodyAvailability(
 }
 
 /**
+ * Whether the host is serving `artifactId`'s body from its local copy while it
+ * reconciles that copy with the cloud (`artifact.subscribe@1.1`'s `bodySync`).
+ *
+ * `true` only for a `ready` body: the runtime drops the entry on every reseed
+ * and every non-ready transition. `false` covers synced AND unknown - a `@1`
+ * arm, an older host, a body with no cloud side - because the only thing a
+ * reader does with this is decide whether to draw the non-blocking "Syncing…"
+ * affordance, and "nothing to show" is the right answer to all of them.
+ */
+export function useEpicArtifactBodySyncing(artifactId: string | null): boolean {
+  const handle = useOpenEpicHandle();
+  return useStore(handle.store, (s) => {
+    if (artifactId === null) return false;
+    return Object.hasOwn(s.artifactRooms.bodySyncingByArtifactId, artifactId);
+  });
+}
+
+/**
  * Whether the body plane has said ANYTHING about `artifactId` yet.
  *
  * ## Why this is not the same question as `useEpicArtifactBodyAvailability`

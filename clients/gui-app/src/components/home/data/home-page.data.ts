@@ -1,3 +1,7 @@
+import {
+  taskOrganizationSchema,
+  type TaskOrganization,
+} from "@traycer/protocol/host/organization/schemas";
 import type {
   PermissionRole,
   ListTaskLight,
@@ -31,6 +35,7 @@ const BUCKET_ORDER: Record<HistoryRecencyBucket, number> = {
 };
 
 export interface HistoryItem {
+  organization?: TaskOrganization;
   id: string;
   epicId: string;
   taskType: HistoryItemTaskType;
@@ -184,6 +189,20 @@ export function buildHistoryItemsFromTasks(
   });
 }
 
+// date-fns' under-a-minute phrase is the longest label it produces, and the
+// History row reserves its timestamp column at the longest label a row can
+// show. "just now" keeps a phrase that lives for seconds from setting the
+// width of every row.
+const UNDER_A_MINUTE_LABELS = new Set([
+  "less than a minute ago",
+  "in less than a minute",
+]);
+
+function formatUpdatedLabel(updatedAtMs: number): string {
+  const label = formatDistanceToNow(updatedAtMs, { addSuffix: true });
+  return UNDER_A_MINUTE_LABELS.has(label) ? "just now" : label;
+}
+
 function buildHistoryItem(args: {
   light: { id: string; title: string; updatedAt: number; createdBy: string };
   taskType: "epic" | "phase";
@@ -212,6 +231,10 @@ function buildHistoryItem(args: {
   } = args;
   const ownership = light.createdBy === userId ? "mine" : "shared";
   return {
+    organization:
+      "organization" in task
+        ? taskOrganizationSchema.safeParse(task.organization).data
+        : undefined,
     id: itemId(light.id, taskType, index),
     epicId: light.id,
     taskType,
@@ -224,7 +247,7 @@ function buildHistoryItem(args: {
       taskType === "epic" ? light.title : displayTitle(light.title, "phase"),
     initialUserPrompt,
     updatedAtMs: light.updatedAt,
-    updatedLabel: formatDistanceToNow(light.updatedAt, { addSuffix: true }),
+    updatedLabel: formatUpdatedLabel(light.updatedAt),
     updatedBucket: toHistoryRecencyBucket(light.updatedAt, nowMs),
     linkedRepos: readTaskRepos(task),
     linkedWorkspaces: readTaskWorkspaces(task),

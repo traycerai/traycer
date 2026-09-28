@@ -10,13 +10,39 @@
  * owns its own typed-draft lifecycle independent of the viewer's own
  * `pageNumber` prop. One suite covers both viewers because they render the
  * exact same component.
+ *
+ * Zoom itself is the shared `ZoomControls` cluster; this file only checks
+ * how the toolbar wires the `zoom` prop through and folds the cluster's
+ * group wrappers - `stepGroupClassName="@max-sm:hidden"` on the zoom-out/
+ * level/zoom-in group, `anchorGroupClassName="@max-lg:hidden"` on the
+ * divider and the fit/actual-size group - since those fold classes now live
+ * on the wrapper `<div>`s the cluster renders, not on the individual
+ * buttons.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ZoomControlsModel } from "@/components/epic-canvas/zoom-controls/zoom-controls";
 import {
   DocumentPreviewToolbar,
   type DocumentPreviewToolbarProps,
 } from "../document-preview-toolbar";
+
+function baseZoom(overrides: Partial<ZoomControlsModel>): ZoomControlsModel {
+  return {
+    ready: true,
+    scalePercent: 125,
+    canZoomIn: true,
+    canZoomOut: true,
+    onZoomIn: vi.fn(),
+    onZoomOut: vi.fn(),
+    fitKind: "width",
+    fitActive: false,
+    onFit: vi.fn(),
+    actualSizeActive: false,
+    onActualSize: vi.fn(),
+    ...overrides,
+  };
+}
 
 function baseProps(
   overrides: Partial<DocumentPreviewToolbarProps>,
@@ -30,10 +56,7 @@ function baseProps(
     pageNumber: 2,
     pageCount: 5,
     onGoToPage: vi.fn(),
-    scalePercent: 125,
-    onZoomIn: vi.fn(),
-    onZoomOut: vi.fn(),
-    onFitWidth: vi.fn(),
+    zoom: baseZoom({}),
     onRotate: vi.fn(),
     outline: { open: false, onToggle: vi.fn() },
     searchSupported: true,
@@ -79,8 +102,12 @@ describe("<DocumentPreviewToolbar />", () => {
       expect(
         screen.getByRole("button", { name: "Document outline" }).className,
       ).toContain("@max-lg:hidden");
+      // Fit to width now sits inside the zoom cluster's anchor-group
+      // wrapper, which carries the fold class - the button itself no
+      // longer does.
       expect(
-        screen.getByRole("button", { name: "Fit to width" }).className,
+        screen.getByRole("button", { name: "Fit to width" }).parentElement
+          ?.className,
       ).toContain("@max-lg:hidden");
       expect(
         screen.getByRole("button", { name: "Rotate" }).className,
@@ -99,19 +126,17 @@ describe("<DocumentPreviewToolbar />", () => {
     it("folds zoom out/level/in and their separator under @max-sm, but never page nav", () => {
       renderToolbar({});
 
-      expect(
-        screen.getByRole("button", { name: "Zoom out" }).className,
-      ).toContain("@max-sm:hidden");
-      expect(screen.getByLabelText("Zoom level").className).toContain(
-        "@max-sm:hidden",
-      );
-      expect(
-        screen.getByRole("button", { name: "Zoom in" }).className,
-      ).toContain("@max-sm:hidden");
+      const zoomOut = screen.getByRole("button", { name: "Zoom out" });
+      const zoomIn = screen.getByRole("button", { name: "Zoom in" });
+      const zoomLevel = screen.getByLabelText("Zoom level");
 
-      const zoomSeparator = screen.getByRole("button", {
-        name: "Zoom out",
-      }).previousElementSibling;
+      // The fold class lives on the step-group wrapper the cluster renders
+      // around zoom-out/level/zoom-in, not on the individual controls.
+      expect(zoomOut.parentElement?.className).toContain("@max-sm:hidden");
+      expect(zoomLevel.parentElement?.className).toContain("@max-sm:hidden");
+      expect(zoomIn.parentElement?.className).toContain("@max-sm:hidden");
+
+      const zoomSeparator = zoomOut.parentElement?.previousElementSibling;
       expect(zoomSeparator?.getAttribute("aria-hidden")).toBe("true");
       expect(zoomSeparator?.className).toContain("@max-sm:hidden");
 
@@ -133,9 +158,9 @@ describe("<DocumentPreviewToolbar />", () => {
   });
 
   describe("More actions menu", () => {
-    it("wires Zoom in to onZoomIn", () => {
+    it("wires Zoom in to zoom.onZoomIn", () => {
       const onZoomIn = vi.fn();
-      renderToolbar({ onZoomIn });
+      renderToolbar({ zoom: baseZoom({ onZoomIn }) });
 
       openMoreActionsMenu();
       fireEvent.click(screen.getByText("Zoom in"));
@@ -143,9 +168,9 @@ describe("<DocumentPreviewToolbar />", () => {
       expect(onZoomIn).toHaveBeenCalledTimes(1);
     });
 
-    it("wires Zoom out to onZoomOut", () => {
+    it("wires Zoom out to zoom.onZoomOut", () => {
       const onZoomOut = vi.fn();
-      renderToolbar({ onZoomOut });
+      renderToolbar({ zoom: baseZoom({ onZoomOut }) });
 
       openMoreActionsMenu();
       fireEvent.click(screen.getByText("Zoom out"));
@@ -153,14 +178,24 @@ describe("<DocumentPreviewToolbar />", () => {
       expect(onZoomOut).toHaveBeenCalledTimes(1);
     });
 
-    it("wires Fit to width to onFitWidth", () => {
-      const onFitWidth = vi.fn();
-      renderToolbar({ onFitWidth });
+    it("wires Fit to width to zoom.onFit", () => {
+      const onFit = vi.fn();
+      renderToolbar({ zoom: baseZoom({ onFit }) });
 
       openMoreActionsMenu();
       fireEvent.click(screen.getByText("Fit to width"));
 
-      expect(onFitWidth).toHaveBeenCalledTimes(1);
+      expect(onFit).toHaveBeenCalledTimes(1);
+    });
+
+    it("wires Actual size to zoom.onActualSize", () => {
+      const onActualSize = vi.fn();
+      renderToolbar({ zoom: baseZoom({ onActualSize }) });
+
+      openMoreActionsMenu();
+      fireEvent.click(screen.getByText("Actual size"));
+
+      expect(onActualSize).toHaveBeenCalledTimes(1);
     });
 
     it("wires Rotate 90° to onRotate", () => {
@@ -191,6 +226,21 @@ describe("<DocumentPreviewToolbar />", () => {
       fireEvent.click(screen.getByText("Search document"));
 
       expect(onToggleSearch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("the inline Actual size button", () => {
+    it("calls zoom.onActualSize and reflects actualSizeActive via aria-pressed", () => {
+      const onActualSize = vi.fn();
+      renderToolbar({
+        zoom: baseZoom({ onActualSize, actualSizeActive: true }),
+      });
+
+      const button = screen.getByRole("button", { name: "Actual size" });
+      expect(button.getAttribute("aria-pressed")).toBe("true");
+
+      fireEvent.click(button);
+      expect(onActualSize).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -375,7 +425,12 @@ describe("<DocumentPreviewToolbar />", () => {
   });
 
   it("disables zoom, fit-width, rotate, search and the page field while the document is not ready", () => {
-    renderToolbar({ documentReady: false, pageNumber: 1, pageCount: 0 });
+    renderToolbar({
+      documentReady: false,
+      pageNumber: 1,
+      pageCount: 0,
+      zoom: baseZoom({ ready: false, canZoomIn: false, canZoomOut: false }),
+    });
 
     for (const name of [
       "Zoom out",

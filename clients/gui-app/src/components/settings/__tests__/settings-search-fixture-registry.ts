@@ -231,6 +231,21 @@ export const SETTINGS_SEARCH_FIXTURES = [
     hostScope: "connecting",
     shells: [{ name: "a host still connecting", context: NO_BRIDGES }],
   },
+  // The Overview is host-scoped too, and its header and tab bar render for
+  // every host in every state: each tab body decides for itself what it can
+  // show, so the five triggers land while the host is still connecting - the
+  // state where no body can read anything. The page reads the runner host for
+  // its local-only doctor repairs, hence the one it is mounted with.
+  {
+    section: "host",
+    hostScope: "connecting",
+    shells: [
+      {
+        name: "a host still connecting",
+        context: { ...NO_BRIDGES, runnerHost: createFakeRunnerHost({}) },
+      },
+    ],
+  },
 ] as const satisfies ReadonlyArray<SettingsSearchFixture>;
 
 /** The sections the executor must know how to mount. */

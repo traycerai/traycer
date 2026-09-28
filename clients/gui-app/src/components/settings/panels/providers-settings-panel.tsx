@@ -83,10 +83,7 @@ import {
   profileCommitId,
 } from "@/components/providers/provider-profile-model";
 import { providerPackPreparingForProvider } from "@/components/providers/provider-pack-readiness";
-import {
-  providerCanStartProfileOauth,
-  providerSignInUnavailableHint,
-} from "@/components/providers/provider-signin-availability";
+import { providerCanStartProfileOauth } from "@/components/providers/provider-signin-availability";
 import { ProviderApiKeySection } from "./provider-api-key-section";
 import { ProviderRailControls } from "./provider-rail-controls";
 import {
@@ -1487,10 +1484,7 @@ function ProviderTabBody({
           <ProviderProfileScopedSection
             state={state}
             {...profileTab}
-            signInUnavailableHint={providerSignInUnavailableHint(
-              state,
-              profileTab.isSelectedHostLocal,
-            )}
+            onOpenCliSettings={() => onActiveTabChange("general")}
           />
           <div
             className={cn(

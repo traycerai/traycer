@@ -401,6 +401,27 @@ describe("<ComposerSlotApprovalQueue /> approval text", () => {
     expect(within(row).getAllByText(`${shared} # tidy`)).toHaveLength(1);
     expect(row.textContent).toContain("…");
   });
+
+  it("opens the whole command from a cut summary", () => {
+    const command = `cd /Users/someone/${"w".repeat(90)} && ls`;
+    const row = renderOne({
+      toolName: "Bash",
+      input: { command },
+      description: "List the worktree",
+    });
+    expect(row.textContent).not.toContain("&& ls");
+    fireEvent.click(within(row).getByRole("button", { name: "Full command" }));
+    expect(row.textContent).toContain(command);
+  });
+
+  it("offers no input toggle when the card already shows the whole command", () => {
+    const row = renderOne({
+      toolName: "Bash",
+      input: { command: "git status" },
+      description: "Show working tree status",
+    });
+    expect(within(row).queryByTestId("approval-input-toggle")).toBeNull();
+  });
 });
 
 describe("<ComposerSlotApprovalQueue /> tier line", () => {

@@ -1,3 +1,5 @@
+import { OrganizationSyncNote } from "@/components/organization/organization-metadata";
+import { useOrganization } from "@/hooks/organization/organization-context";
 import type { CSSProperties } from "react";
 import { useState } from "react";
 import { ChevronRight, Plus, Ungroup, X } from "lucide-react";
@@ -23,11 +25,46 @@ export function TabGroupChip(props: {
   readonly onClose: (groupId: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const organization = useOrganization();
+  const cloudGroup = organization?.view?.groups.groups.find(
+    (group) => group.groupId === props.groupId,
+  );
+  const [name, setName] = useState(props.group.name);
+  const saveGroup = (nextName: string, color: string) => {
+    if (cloudGroup && organization) {
+      if (!nextName.trim()) {
+        setName(props.group.name);
+        return;
+      }
+      void organization
+        .command({
+          kind: "groups",
+          operations: [
+            {
+              operation: "update",
+              groupId: props.groupId,
+              name: nextName.trim(),
+              color,
+            },
+          ],
+        })
+        .catch(() => undefined);
+    } else
+      useTabsStore
+        .getState()
+        .updateGroup(props.groupId, { name: nextName, color });
+  };
   const navigate = useNavigate();
   const { group, groupId } = props;
   const actions = useTabsStore.getState();
   return (
-    <Popover open={editing} onOpenChange={setEditing}>
+    <Popover
+      open={editing}
+      onOpenChange={(open) => {
+        if (open) setName(group.name);
+        setEditing(open);
+      }}
+    >
       <PopoverTrigger asChild>
         <TooltipWrapper
           label="Right-click to edit group"
@@ -47,6 +84,7 @@ export function TabGroupChip(props: {
             }}
             onContextMenu={(event) => {
               event.preventDefault();
+              setName(group.name);
               setEditing(true);
             }}
             onKeyDown={(event) => {
@@ -56,6 +94,7 @@ export function TabGroupChip(props: {
                 (event.shiftKey && event.key === "F10")
               ) {
                 event.preventDefault();
+                setName(group.name);
                 setEditing(true);
               }
             }}
@@ -83,19 +122,24 @@ export function TabGroupChip(props: {
           aria-label="Group name"
           placeholder="Name this group"
           maxLength={80}
-          value={group.name}
-          onChange={(event) =>
-            actions.updateGroup(groupId, { name: event.target.value })
-          }
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          onBlur={() => {
+            if (name !== group.name) saveGroup(name, group.color);
+          }}
           onKeyDown={(event) => {
-            if (event.key === "Enter") setEditing(false);
+            if (event.key === "Enter") {
+              if (name !== group.name) saveGroup(name, group.color);
+              setEditing(false);
+            }
           }}
         />
         <TabColorPicker
           menu={false}
           color={group.color}
-          onChange={(color) => actions.updateGroup(groupId, { color })}
+          onChange={(color) => saveGroup(name, color)}
         />
+        <OrganizationSyncNote taskId={null} labels={[]} includeGroups />
         <div className="flex flex-col border-t pt-2">
           <Button
             variant="ghost"
@@ -128,7 +172,14 @@ export function TabGroupChip(props: {
             className="justify-start"
             onClick={() => {
               setEditing(false);
-              actions.ungroup(groupId);
+              if (cloudGroup && organization)
+                void organization
+                  .command({
+                    kind: "groups",
+                    operations: [{ operation: "delete", groupId }],
+                  })
+                  .catch(() => undefined);
+              else actions.ungroup(groupId);
             }}
           >
             <Ungroup />

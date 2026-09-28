@@ -494,6 +494,13 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       expect(await editNameDisabled()).toBe(true);
     });
     expect(await restartMenuAriaDisabled()).toBe("true");
+    // The scope stays USABLE throughout this test (only the read itself goes
+    // unhealthy below), so the notices strip's operation card stays on
+    // screen the whole time — unlike (c2), where the scope itself goes
+    // unusable and the offline notice replaces it instead.
+    expect(
+      (await screen.findByTestId("host-overview-operation-phase")).textContent,
+    ).toBe("Downloading update to v2.1.0");
     // Close the menu before advancing time — leaving a Radix dropdown open
     // across an unrelated state change is not part of what this test proves.
     fireEvent.keyDown(document.body, { key: "Escape", code: "Escape" });
@@ -514,6 +521,16 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       expect(await editNameDisabled()).toBe(false);
     });
     expect(await restartMenuAriaDisabled()).not.toBe("true");
+    // THE DISCRIMINATING CHECK, now visible on the card itself rather than on
+    // a since-deleted header pill: the retained view genuinely demoted to
+    // `kind: "unknown"` — `describeUpdateOperation`'s phrase table marks a
+    // demoted view "Last seen: …", which is a DIFFERENT sentence than the
+    // live one above, not merely the same words re-rendered. A view that
+    // stayed (wrongly) "live" here would still read "Downloading update to
+    // v2.1.0" with no "Last seen:" prefix.
+    expect(
+      screen.getByTestId("host-overview-operation-phase").textContent,
+    ).toBe("Last seen: Downloading update to v2.1.0");
 
     // Open the restart confirmation NOW THAT the gate has released, and prove
     // it STAYS open — the render-time close at `anyPending && !ownDispatch`
@@ -544,17 +561,21 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     // is no surface here that is gated by `holdsLifecycleGate` alone without
     // also being gated by `usable`.
     //
-    // What DOES stay reachable independent of `usable` is
-    // `HostOverviewOperationCard` (`host-overview-panel.tsx:920`,
-    // `operationView === null ? null : (<HostOverviewOperationCard .../>)`) —
-    // gated only on the retained data existing at all, never on the scope's
-    // usability. Its phase sentence is exactly `holdsLifecycleGate`'s input
-    // wired through `describeUpdateOperation`, so this is the assertion that
-    // isolates the wiring gap the coordinator flagged: if `hasLiveSource`
-    // were hard-coded `true` at the `observationFromCanonicalRead` call site
-    // instead of carrying `usable`, this card would go on reading "Downloading
-    // update to v2.1.0" (LIVE) forever, on a host the scope has already
-    // given up on.
+    // T2 changed WHERE this shows up, not whether it is guarded: the notices
+    // strip only draws `HostOverviewOperationCard` while `!offline`
+    // (`host-overview-panel.tsx`'s `operationShown`), and `offline` follows
+    // `!usable` directly — so once the scope goes unusable the card is
+    // withdrawn OUTRIGHT and the offline notice becomes the strip's only
+    // wording, carrying the same retained phase itself
+    // (`describeHostOfflineNotice`). That withdrawal is unconditional on
+    // `usable` alone, which is what isolates the wiring gap the coordinator
+    // flagged: if `hasLiveSource` were hard-coded `true` at the
+    // `observationFromCanonicalRead` call site instead of carrying `usable`,
+    // the demotion below would silently fail — but the operation card would
+    // still be gone either way, because THIS gate never looked at the
+    // observation's liveness in the first place. The assertion that isolates
+    // the wiring gap is therefore the offline notice's own text below, not a
+    // side-by-side card comparison.
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -595,17 +616,38 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
 
     // THE FIX: the retained attempt demotes to "last known" the moment the
     // scope stops being usable, exactly as it does when the READ itself turns
-    // unhealthy in (c) — same predicate, different input.
+    // unhealthy in (c) — same predicate, different input. T2's Status tab
+    // withholds the update card entirely once the host can't be reached (the
+    // offline notice is the tab's ONLY unreachable wording then, and it
+    // carries the retained phase itself), so the retained "Last seen: …"
+    // sentence now lives there rather than on `host-overview-operation-card`.
     await waitFor(() => {
       expect(
-        screen.getByTestId("host-overview-operation-phase").textContent,
-      ).toBe("Last seen: Downloading update to v2.1.0");
+        screen.getByTestId("host-overview-offline-notice").textContent,
+      ).toContain(
+        "Can't reach host-a — last seen while downloading update to v2.1.0.",
+      );
     });
+    expect(screen.queryByTestId("host-overview-operation-phase")).toBeNull();
 
     // And the orthogonal rule holds too: an unusable scope withdraws the
     // controls rather than merely disabling them.
     expect(screen.queryByTestId("host-overview-edit-name")).toBeNull();
     expect(screen.queryByTestId("host-overview-menu")).toBeNull();
+
+    // `describeLastSeenUpdateClause` (the offline notice's clause) reads the
+    // live kind OR a retained `lastKnownKind` through the identical phrase
+    // table, so its text alone does not distinguish a genuinely demoted view
+    // from one that stayed live — and the surface that USED to make that
+    // distinction (the header pill's own table, "Last seen: updating" vs.
+    // "Downloading…") no longer exists: T2 deleted the pill outright, and the
+    // operation card that still carries a demoted-vs-live table is itself
+    // withdrawn here by the `offline` gate above. The demotion mechanism
+    // itself stays covered independent of this scenario — see
+    // `deriveHostOverviewVersionTag`'s and `inFlightUpdateKind`'s retained-view
+    // cases in `host-overview-notices.test.tsx`, and (c) above, where the
+    // scope stays usable and the operation card's own "Last seen: …" phrasing
+    // is directly visible.
   });
 
   it("(c3) an open restart confirmation CLOSES when the scope turns unusable — the withdrawal of the Restart control, one commit late", async () => {
@@ -789,6 +831,24 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
       scopeOverrides.current = {
         ...scopeFrom("host-a", fixture),
         status: "unreachable",
+        // T2's Status tab withholds the offline notice (and shows the update
+        // card instead) only while the health word already reads
+        // "Restarting…" - the same word this scope's own restart is
+        // narrating. Without this the default fixture health ("online") made
+        // the tab treat this restart as an ordinary disconnect and draw the
+        // offline notice over the operation card this pin is about.
+        host: hostScopeOptionFixture({
+          hostId: "host-a",
+          isLocalMachine: true,
+          connectable: true,
+          health: {
+            state: "restarting",
+            label: "Restarting…",
+            detail: "Expected restart — reconnecting.",
+            tone: "idle",
+            live: false,
+          },
+        }),
       };
       const livenessObservedAtMs = Date.now();
       const management = buildOverviewManagement({

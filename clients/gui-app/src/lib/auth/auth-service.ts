@@ -883,27 +883,11 @@ export class AuthService {
       if (!this.isIdentityCurrent(generation)) {
         return;
       }
-      // STALE-BASELINE FENCE (cold review P1-1). An inbound `signed-out` may
-      // not clear a locally-`unverified` session.
-      //
-      // The bridge deliberately never PUBLISHES `unverified` - it is this
-      // window's local statement that it could not reach authn, and the desktop
-      // snapshot has no member for it. The consequence is the defect: on a cold
-      // desktop start where `start()` lands on `unverified`, nothing is ever
-      // written outbound, so the main process still holds the `signed-out` its
-      // constructor initialised it to. The bridge's delayed `authSession.get()`
-      // then reads that INITIALISER - not a sibling's decision - and, because no
-      // identity transition happened in between, the generation fence above lets
-      // it through and it tears down the plane this ticket just admitted.
-      //
-      // Withholding is safe because no sibling can ever have MEANT this: a
-      // window that genuinely signed out advances identity generation and
-      // publishes a real transition, and a real sign-out also DELETES the shared
-      // credentials file - which retires the plane through the reconcile watcher
-      // and the recovery loop's `no-stored-session` arm, neither of which
-      // consults this projection. The file is the authority for "there is no
-      // session"; this channel only carries "a sibling changed session", and an
-      // unwritten baseline carries nothing at all.
+      // A delayed projection can carry main's initial signed-out baseline,
+      // especially with an older shell that cannot restore a local identity.
+      // It must not erase the session this window restored from disk. A real
+      // sign-out deletes the shared credentials; the reconcile watcher and
+      // recovery loop retire that session independently of this projection.
       if (useAuthStore.getState().status === "unverified") {
         appLogger.debug(
           "[auth] withholding an inbound signed-out from an unverified session",

@@ -669,6 +669,40 @@ describe("bodies.materialize — the lease it stands on", () => {
 
     expect(rig.releases).toEqual([]);
   });
+
+  it("rebinds the doc observer on a second materialize with bytes, detaching the first binding before the second bind", async () => {
+    // `attachBodyObserver` runs on EVERY materialize that hands bytes over,
+    // not only the first - a room leaving `ready` destroys the tier's replica
+    // while a lease survives it, and the next materialize hands over a NEW
+    // `Y.Doc` under the SAME docKey. Before the fix, an early return on an
+    // existing `bodyObservers` entry kept the observer bound to the destroyed
+    // doc, so the re-materialized body's updates never reached main. This rig
+    // gives `observeBodyDoc` a distinct, COUNTED detach per call, which is
+    // the only way to see the ORDER these two things happen in rather than
+    // only that both happened.
+    const events: string[] = [];
+    let observeCount = 0;
+    const rig = leasedSource({
+      observeBodyDoc: () => {
+        const index = observeCount;
+        observeCount += 1;
+        events.push(`observe:${String(index)}`);
+        return () => {
+          events.push(`detach:${String(index)}`);
+        };
+      },
+    });
+    const ports = buildPorts(rig.source);
+
+    await ports.bodies.materialize("art-1");
+    await ports.bodies.materialize("art-1");
+
+    // THE REDDENING ASSERTION pre-fix: an early return on an existing binding
+    // would produce `["observe:0"]` and stop there - a SECOND materialize
+    // would never even ask to observe the new doc, let alone detach the old
+    // one first.
+    expect(events).toEqual(["observe:0", "detach:0", "observe:1"]);
+  });
 });
 
 describe("bodies.materialize — forward-only vs not-held", () => {

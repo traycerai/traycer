@@ -30,34 +30,23 @@ import {
 import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
 
 /**
- * `general-settings-panel.test.tsx` used to carry the ONLY test that enforced
- * the no-silent-fallback invariant for this row — "must not silently fall back
- * to reading/writing through the active host", asserting the query client was
- * null once the picked host vanished. The row moved here during the host-scope
- * overhaul and that test was deleted with its old home, replacing nothing.
- *
- * These restore it, and add the guard the old row did not have: a destructive
- * action captures its target when ARMED, so a scope that moves while the
- * confirmation is open cannot re-point the wipe at another host.
+ * Installation's Danger zone holds only host removal actions: removing this
+ * computer's install locally, or removing a remote host from the account.
+ * File edit snapshots live on Data and their host-bound clear behavior is
+ * covered by `host-overview-data-tab.test.tsx`.
  */
 
 // `vi.hoisted` so the values exist when the hoisted `vi.mock` factory below
 // runs; the binding is annotated (matching `runnerHostMock`) rather than cast,
 // since this file deliberately carries no `as` at all.
 const {
-  mutateSpy,
-  capturedQueryClients,
   removeFromAccountSpy,
   removeFromAccountHostIds,
 }: {
-  readonly mutateSpy: Mock;
-  readonly capturedQueryClients: Array<HostClient<HostRpcRegistry> | null>;
   readonly removeFromAccountSpy: Mock;
   /** Which host id the account-removal hook was BOUND to, per render. */
   readonly removeFromAccountHostIds: string[];
 } = vi.hoisted(() => ({
-  mutateSpy: vi.fn(),
-  capturedQueryClients: [],
   removeFromAccountSpy: vi.fn(),
   removeFromAccountHostIds: [],
 }));
@@ -71,16 +60,6 @@ vi.mock("@/hooks/auth/use-deregister-host-mutation", () => ({
     removeFromAccountHostIds.push(hostId);
     return { mutate: removeFromAccountSpy, isPending: false };
   },
-}));
-
-vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: (args: {
-    readonly client: HostClient<HostRpcRegistry> | null;
-  }) => {
-    capturedQueryClients.push(args.client);
-    return { data: undefined, isPending: false, isError: false };
-  },
-  useHostMutation: () => ({ mutate: mutateSpy, isPending: false }),
 }));
 
 // Mutable so a test can put this shell on the desktop branch. `RemoveTraycerRow`
@@ -116,11 +95,6 @@ vi.mock("@/hooks/runner/use-runner-uninstall-traycer-mutation", () => ({
   }),
 }));
 
-vi.mock("@tanstack/react-query", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
-  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
-}));
-
 // A real client over a mock messenger, not a chained assertion — the repo's
 // lint forbids `as unknown as` in tests too, and rightly: a cast here would
 // also hide the day this component starts calling something the stub lacks.
@@ -144,8 +118,6 @@ function remoteHost(hostId: string): HostScopeOption {
 }
 
 beforeEach(() => {
-  mutateSpy.mockClear();
-  capturedQueryClients.length = 0;
   removeFromAccountSpy.mockClear();
   removeFromAccountHostIds.length = 0;
   runnerHostMock.hostManagement = null;
@@ -154,9 +126,8 @@ beforeEach(() => {
   uninstallMock.mutate.mockClear();
 });
 
-// Explicit: without it a previous test's tree stays mounted and `getByTestId`
-// finds two Clear buttons, which fails as "multiple elements" rather than as
-// the behaviour under test.
+// Explicit so a previous test's dialog cannot leave its portal mounted while
+// the next test asks about a removal action.
 afterEach(cleanup);
 
 describe("HostDangerZone", () => {
@@ -175,26 +146,39 @@ describe("HostDangerZone", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("never reads through a client once the scoped host has vanished", () => {
-    // The assertion the deleted test made, restored — and now satisfied a
-    // stronger way. The snapshots row is host RPC, so an unusable scope does
-    // not mount it at all rather than mounting it with a null client. Either
-    // way the guarantee is the one that matters: nothing here can reach the
-    // previously-active host.
-    render(
+  it("renders no empty Danger zone for an unregistered remote host", () => {
+    const { container } = render(
       <HostDangerZone
         scope={hostScopeFixture({
-          host: remoteHost("host-b"),
-          status: "vanished",
-          vanishedHostId: "host-b",
+          host: hostScopeOptionFixture({
+            hostId: "host-b",
+            name: "host-b",
+            isLocalMachine: false,
+            registered: false,
+          }),
+          status: "unreachable",
           client: null,
         })}
       />,
     );
-    expect(
-      screen.queryByTestId("settings-clear-file-edit-snapshots"),
-    ).toBeNull();
-    expect(capturedQueryClients).toHaveLength(0);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("renders no empty Danger zone for this computer without its uninstall bridge", () => {
+    const { container } = render(
+      <HostDangerZone
+        scope={hostScopeFixture({
+          host: hostScopeOptionFixture({
+            hostId: "host-local",
+            name: "This Mac",
+            isLocalMachine: true,
+          }),
+          status: "ready",
+          client: SOME_CLIENT,
+        })}
+      />,
+    );
+    expect(container.firstChild).toBeNull();
   });
 
   it("keeps Remove Traycer reachable while this computer's host is down", () => {
@@ -221,15 +205,10 @@ describe("HostDangerZone", () => {
 
     const removeRow = screen.getByTestId("settings-remove-traycer");
     expect(isConcealed(removeRow)).toBe(false);
-    // ...while the genuinely RPC-backed row stays behind the gate — concealed
-    // (the gate preserves it hidden through the outage) or absent — and the
-    // gate says why instead of the region just disappearing. Query hooks may
-    // render under the concealed row, but every one of them sees a NULL
-    // client: nothing here can reach the previously-active host.
-    const clearRow = screen.queryByTestId("settings-clear-file-edit-snapshots");
-    expect(clearRow === null || isConcealed(clearRow)).toBe(true);
-    expect(capturedQueryClients.every((client) => client === null)).toBe(true);
-    expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
+    expect(screen.getByTestId("host-danger-zone")).not.toBeNull();
+    expect(
+      screen.queryByTestId("settings-clear-file-edit-snapshots"),
+    ).toBeNull();
   });
 
   it("offers retry when the service is positively retained", () => {
@@ -267,11 +246,7 @@ describe("HostDangerZone", () => {
     expect(screen.queryByTestId("settings-retry-uninstall")).toBeNull();
   });
 
-  it("explains the missing rows for an unreachable host that is not this one", () => {
-    // The counterweight to loosening the gate: a host with no route and no
-    // local bridge must not silently drop the region — that reads as "there is
-    // nothing to do here" rather than "this host cannot be reached".
-    runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
+  it("keeps remote account removal available while the host is unreachable", () => {
     render(
       <HostDangerZone
         scope={hostScopeFixture({
@@ -281,98 +256,13 @@ describe("HostDangerZone", () => {
         })}
       />,
     );
-    expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
-    const clearRow = screen.queryByTestId("settings-clear-file-edit-snapshots");
-    expect(clearRow === null || isConcealed(clearRow)).toBe(true);
+    expect(
+      screen.getByTestId("settings-remove-host-from-account"),
+    ).not.toBeNull();
     expect(screen.queryByTestId("settings-remove-traycer")).toBeNull();
-  });
-
-  it("destroys the armed confirmation when the scope moves to another host", () => {
-    const scopeB = hostScopeFixture({
-      host: remoteHost("host-b"),
-      status: "ready",
-      client: SOME_CLIENT,
-    });
-    const { rerender } = render(<HostDangerZone scope={scopeB} />);
-
-    // Arm against host-b.
-    fireEvent.click(screen.getByRole("button", { name: "Clear snapshots" }));
-    expect(screen.getByRole("dialog")).not.toBeNull();
-
-    // The scope moves underneath the open dialog — another window changed the
-    // active host, or the sidebar picked a different one.
-    rerender(
-      <HostDangerZone
-        scope={hostScopeFixture({
-          host: remoteHost("host-c"),
-          status: "ready",
-          client: SOME_CLIENT,
-        })}
-      />,
-    );
-
-    // Destroyed, not retargeted: the gate keys this subtree by host, so the
-    // switch unmounts the dialog with everything else. A confirmation the
-    // user gave about host-b cannot be re-aimed to wipe host-c's snapshots.
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(mutateSpy).not.toHaveBeenCalled();
-  });
-
-  it("clears when the scoped host is still the armed one", () => {
-    // The counterpart: the guard must not be so broad that it blocks the
-    // ordinary path, which is how an "always safe" guard becomes dead weight.
-    const scope = hostScopeFixture({
-      host: remoteHost("host-b"),
-      status: "ready",
-      client: SOME_CLIENT,
-    });
-    render(<HostDangerZone scope={scope} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Clear snapshots" }));
-    fireEvent.click(
-      within(screen.getByRole("dialog")).getByRole("button", {
-        name: "Clear snapshots",
-      }),
-    );
-
-    expect(mutateSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("names the host and states what survives in the snapshots-clear confirmation", () => {
-    // Pinned DIRECTLY here because nothing else can reach it. The Overview's
-    // parity comparison reads the panel's rendered prose, and Radix renders
-    // dialogs through a portal — outside that subtree — so a copy regression in
-    // any confirmation is invisible to it. Dialog copy is therefore pinned in
-    // the suite that owns the dialog, which is this one.
-    //
-    // Two claims, both load-bearing for a destructive action:
-    //
-    //  - it NAMES the host. This row's whole history is a destructive control
-    //    taking its target from somewhere the user could not see; a dialog that
-    //    said "this host" would put that ambiguity back at the last moment.
-    //  - it separates what is LOST from what SURVIVES. "Cleared snapshots
-    //    cannot be restored" is the irreversibility; "conversation history and
-    //    checkpoint records stay visible" is the reassurance that makes the
-    //    action legible. Dropping the second half would read as a history wipe
-    //    and is the more likely regression, because it is the part that sounds
-    //    optional.
-    render(
-      <HostDangerZone
-        scope={hostScopeFixture({
-          host: remoteHost("host-b"),
-          status: "ready",
-          client: SOME_CLIENT,
-        })}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Clear snapshots" }));
-    const copy = screen.getByRole("dialog").textContent;
-
-    expect(copy).toContain("host-b");
-    expect(copy).toMatch(/cannot be restored/i);
-    expect(copy).toMatch(/conversation history and checkpoint records stay/i);
-    expect(copy).toMatch(/undo is disabled for past turns/i);
+    expect(
+      screen.queryByTestId("settings-clear-file-edit-snapshots"),
+    ).toBeNull();
   });
 
   it("keeps uninstall reachable in the empty-account recovery state", () => {
@@ -385,11 +275,8 @@ describe("HostDangerZone", () => {
     render(<LocalRecoveryDangerZone />);
     expect(screen.getByTestId("host-danger-zone")).not.toBeNull();
     expect(screen.getByTestId("settings-remove-traycer")).not.toBeNull();
-    // No host means no RPC row — nothing to clear, and nothing that could
-    // read through an ambient client.
-    expect(
-      screen.queryByTestId("settings-clear-file-edit-snapshots"),
-    ).toBeNull();
+    // Recovery contains only the local uninstall row; snapshots now live on
+    // the Data tab for a host that can answer their RPCs.
   });
 
   it("renders no recovery zone at all without the local bridge", () => {
@@ -421,7 +308,7 @@ describe("HostDangerZone", () => {
     // an account write that needs no route to the machine.
     //
     // The copy rule is not a style preference. This app already says
-    // "Deregister" one card away in the Advanced disclosure, for OS-SERVICE
+    // "Deregister" in the Installation group on the same tab, for OS-SERVICE
     // deregistration — a machine-local repair with nothing in common with
     // ending a host's membership of an account. Two destructive controls
     // sharing a verb is how someone reaches for the wrong one.

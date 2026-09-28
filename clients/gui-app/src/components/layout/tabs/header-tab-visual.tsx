@@ -1,3 +1,4 @@
+import { OrganizationDetails } from "@/components/organization/organization-metadata";
 import type { CSSProperties } from "react";
 import type { ReactNode } from "react";
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
@@ -72,7 +73,14 @@ export function HeaderTabVisual(props: HeaderTabVisualProps) {
                   </span>
                 </span>
               </TooltipTrigger>
-              <TooltipContent>{props.displayName}</TooltipContent>
+              <TooltipContent>
+                <div className="space-y-2">
+                  <p>{props.displayName}</p>
+                  {epicId ? (
+                    <OrganizationDetails taskId={epicId} fallback={undefined} />
+                  ) : null}
+                </div>
+              </TooltipContent>
             </Tooltip>
             {props.trailingControl}
           </span>

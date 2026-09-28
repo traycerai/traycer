@@ -11,8 +11,9 @@
   },
   "scripts": {
     "cn:build": "cn build --full --config cn.config.mjs -o src/lib/cn-tables.ts",
-    "compile": "tsgo -b",
-    "lint": "oxlint -c oxlint.config.ts --fix --deny-warnings . && NODE_OPTIONS=--max-old-space-size=6144 eslint . --cache --fix --max-warnings 0",
+    "compile": "tsgo -p tsconfig.app.json --incremental --singleThreaded && tsgo -p tsconfig.node.json --incremental --singleThreaded",
+    "lint": "bun run lint:files .",
+    "lint:files": "bun scripts/lint-files.mjs",
     "react-doctor": "npx -y react-doctor@latest . --verbose --offline --blocking warning",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",

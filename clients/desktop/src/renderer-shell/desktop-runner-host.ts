@@ -1,3 +1,4 @@
+import type { NotificationFeedOccurrence } from "@traycer-clients/shared/notifications/feed-delivery";
 import type { DesktopMenuSnapshot } from "../ipc-contracts/window-types";
 import type {
   ActivateInstalledOk,
@@ -233,6 +234,7 @@ export interface DesktopPreloadBridge {
       deliveryKey: string | null,
       feedSource: NotificationFeedSource | null,
       foregroundAppLocal: NotificationForegroundAppLocal | null,
+      feedOccurrences: ReadonlyArray<NotificationFeedOccurrence> | null,
     ): Promise<NotificationShowOutcome>;
     onClick(handler: (payload: unknown) => void): { dispose: () => void };
     onForegroundDisplay(
@@ -807,6 +809,7 @@ export class DesktopRunnerHost implements IRunnerHost {
         deliveryKey,
         feedSource,
         foregroundAppLocal,
+        feedOccurrences,
       ) =>
         this.bridge.notifications.show(
           title,
@@ -816,6 +819,7 @@ export class DesktopRunnerHost implements IRunnerHost {
           deliveryKey,
           feedSource,
           foregroundAppLocal,
+          feedOccurrences,
         ),
       onClick: (handler) =>
         toDisposable(this.bridge.notifications.onClick(handler)),

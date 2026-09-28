@@ -356,6 +356,8 @@ vi.mock("@/lib/notifications/notification-display", async (importActual) => {
     >();
   return {
     ...actual,
+    // The real function is async; the provider attaches a rejection handler
+    // to its promise, so the stub must resolve rather than return nothing.
     displayHostChannelEmission: (
       _entries: unknown,
       target: {
@@ -366,9 +368,10 @@ vi.mock("@/lib/notifications/notification-display", async (importActual) => {
         }) => void;
       },
       originHostId: string | null,
-    ) => {
+    ): Promise<void> => {
       lastHostDisplay.originHostId = originHostId;
       lastHostDisplay.onToastClick = target.onToastClick;
+      return Promise.resolve();
     },
   };
 });

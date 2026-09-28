@@ -16,6 +16,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { z } from "zod";
+import { deflateSync } from "fflate";
 import {
   defineFallbackMethodDegrade,
   defineFloorAwareVersionedRpcRegistry,
@@ -2265,14 +2266,15 @@ describe("RemoteSession reconnect ladder accounting", () => {
         expect(line).toBeDefined();
         const total = Number(/reattached in (\d+)ms/.exec(line ?? "")?.[1]);
         const wait = Number(/wait=(\d+)ms/.exec(line ?? "")?.[1]);
-        // `wait` is the difference between integer-millisecond `Date.now()`
-        // stamps, while the real timer may be armed from the event loop's
-        // clock sample taken one tick before the loss handler's stamp. A
-        // genuine 1,000ms timer can therefore log 999ms; one millisecond is
-        // the full possible skew because both printed stamps have 1ms units.
-        // The exact 1,000ms arm is asserted above, independently of this
-        // observation boundary.
-        expect(wait).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS - 1);
+        // `wait` is the production's own wall-clock delta between two
+        // `Date.now()` stamps, while the real timer runs on the event loop's
+        // cached clock, which can be several milliseconds staler than either
+        // stamp: a correct 1,000ms timer can log well under 1,000ms, so no
+        // fixed millisecond tolerance is sound. The regression this guards (the
+        // backoff excluded from the clock) logs a few milliseconds, and half
+        // the rung still separates the two by about 500ms. The exact 1,000ms
+        // arm is asserted above.
+        expect(wait).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS / 2);
         expect(total).toBeGreaterThanOrEqual(wait);
       } finally {
         session.close();
@@ -6508,6 +6510,109 @@ describe("RemoteSession per-stream inbound error routing", () => {
     TEST_BUDGET_MS,
   );
 
+  it(
+    "fails the SESSION, not the stream, on a compressed frame that inflates past its declaration",
+    async () => {
+      // The other half of the asymmetry the neighbour above closes. Both
+      // frames are flagged compressed and both fail to decode, but they are
+      // NOT the same fault: the neighbour's payload is bytes `inflateSync`
+      // cannot decode at all ("failed to inflate"), which stays per-stream.
+      // This one decodes CLEANLY but produces far more plaintext than its
+      // own declared length promised - the one inbound fault
+      // `failStreamOnInboundError` does NOT route per-stream
+      // (`MuxFrameOverExpansionError`, chunking.ts), because by the time it
+      // is caught the receiver has already paid for the whole real
+      // expansion once. The caller re-throws, and the inbound IIFE's
+      // `.catch` sends it through `handleConnectionLost(..., "inbound-decode
+      // -failed", "host-transport-plane")` - a full connection drop and
+      // redial, not a per-stream fatal.
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const streamA = session.subscribe("cursor.subscribe", { cursor: null });
+      const streamB = session.subscribe("cursor.subscribe", { cursor: null });
+      let streamAClosedReason: StreamCloseReason | null = null;
+      streamA.onStatusChange((status, reason) => {
+        if (status === "closed") {
+          streamAClosedReason = reason;
+        }
+      });
+      let streamBClosedReason: StreamCloseReason | null = null;
+      streamB.onStatusChange((status, reason) => {
+        if (status === "closed") {
+          streamBClosedReason = reason;
+        }
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const [streamIdA] = relay.subscribeStreamIds;
+
+        // A frame FLAGGED compressed whose declared plaintext length clears
+        // BOTH bound checks in `inflateFramePayload` - well under
+        // `BULK_CHUNK_SIZE_BYTES`, and strictly larger than the compressed
+        // payload's own byte length, so a genuine-looking header - but whose
+        // REAL inflated size is the whole megabyte of zeros this deflates:
+        // ~1000x the declaration. Highly compressible input keeps the
+        // compressed bytes tiny so the forged declared length can stay small
+        // too; only the genuine inflate exposes the mismatch.
+        const deflated = deflateSync(new Uint8Array(1024 * 1024), {
+          level: 6,
+        });
+        const declaredPlainLength = 4 + deflated.length + 1;
+        const overExpandingPayload = new Uint8Array(4 + deflated.length);
+        new DataView(overExpandingPayload.buffer).setUint32(
+          0,
+          declaredPlainLength,
+        );
+        overExpandingPayload.set(deflated, 4);
+        const overExpandingFrame: EncodeMuxFrameInput = {
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: streamIdA,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: overExpandingPayload,
+        };
+        relay.deliverToClient(await relay.encryptFrame(overExpandingFrame));
+
+        // The connection-lost path, observed the way this suite observes it
+        // elsewhere (the availability-recovered reconnect case above): a
+        // redial puts a SECOND bearer on `openBearers`. Nothing routes this
+        // per-stream - if this stayed at 1 the production change had
+        // regressed to the neighbour's per-stream route instead.
+        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), WAIT);
+        expect(relay.openBearers).toEqual(["valid-token", "valid-token"]);
+
+        // Neither logical stream was condemned - it is the SHARED CONNECTION
+        // that dropped and redialled, not stream A specifically (which is
+        // what the neighbour's per-stream routing would have done instead).
+        expect(streamAClosedReason).toBeNull();
+        expect(streamBClosedReason).toBeNull();
+        expect(session.isClosed()).toBe(false);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        streamA.close();
+        streamB.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
   // An "over-cap sequence via a shrunk-cap reassembler" sub-case
   // (`MuxMessageSizeError` routing) is intentionally NOT covered here.
   // `RemoteSession` constructs the client-side `ActiveConnection.reassembler`
@@ -7715,6 +7820,12 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
     const lease = new MutableBearerLease("valid-token", "user-1");
     let firstDialTaken = false;
     const redialTimestamps: number[] = [];
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    // The delays armed since the drop (or the previous redial), one list per
+    // redial. Asserted where the timer is armed: a wall-clock gap between two
+    // dials is measured on a different clock than the one the timer runs on.
+    const armedBeforeRedial: (number | undefined)[][] = [];
+    let armedSince = 0;
     const succeedOnceThenFail: IStreamWebSocketFactory = {
       create: (url: string, priority: DialPriority): StreamWebSocketLike => {
         if (!firstDialTaken) {
@@ -7722,6 +7833,10 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
           return relay.factory.create(url, priority);
         }
         redialTimestamps.push(Date.now());
+        armedBeforeRedial.push(
+          setTimeoutSpy.mock.calls.slice(armedSince).map((call) => call[1]),
+        );
+        armedSince = setTimeoutSpy.mock.calls.length;
         const socket = new FakeSocket(
           () => undefined,
           () => undefined,
@@ -7743,6 +7858,10 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
         interval: 20,
       });
 
+      // Marked at the drop: the ready boundary armed a 30s probation timer,
+      // which is not the reconnect timer under test.
+      setTimeoutSpy.mockClear();
+      armedSince = 0;
       const droppedAt = Date.now();
       relay.dropCurrentConnection();
       await vi.waitFor(
@@ -7750,22 +7869,23 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
         { timeout: 8_000, interval: 20 },
       );
 
+      // Rung 0 armed a 0ms timer and did not wait the backoff.
+      expect(armedBeforeRedial[0]).toContain(0);
+      expect(armedBeforeRedial[0]).not.toContain(RECONNECT_INITIAL_BACKOFF_MS);
+      // Rung 1: the real INITIAL_BACKOFF_MS, exactly once, proving the rung-0
+      // special case does not leak into later rungs.
+      expect(
+        armedBeforeRedial[1].filter(
+          (delay) => delay === RECONNECT_INITIAL_BACKOFF_MS,
+        ),
+      ).toHaveLength(1);
+      expect(armedBeforeRedial[1]).not.toContain(0);
       // Rung 0: the redial after losing a HEALTHY session is immediate -
       // allow scheduling jitter, not a full second.
       expect(redialTimestamps[0] - droppedAt).toBeLessThan(200);
-      // Rung 1: the real INITIAL_BACKOFF_MS, proving the rung-0 special
-      // case does not leak into later rungs.
-      const secondGap = redialTimestamps[1] - redialTimestamps[0];
-      // 1 ms below the backoff is allowed: both stamps are whole-millisecond
-      // `Date.now()` reads, while the timer runs on the event loop's own
-      // truncated clock, so a 1000 ms timer can measure as 999 here. The
-      // point is that this rung waits the backoff rather than 0 ms.
-      expect(secondGap).toBeGreaterThanOrEqual(
-        RECONNECT_INITIAL_BACKOFF_MS - 1,
-      );
-      expect(secondGap).toBeLessThan(RECONNECT_INITIAL_BACKOFF_MS + 300);
     } finally {
       session.close();
+      setTimeoutSpy.mockRestore();
     }
   }, 12_000);
 
@@ -7777,25 +7897,50 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
     // that reads those attempts. Two evidence-classification tests in this
     // file fail if this regresses, which is the coupling that makes this
     // behaviour load-bearing rather than cosmetic.
+    //
+    // The delay is asserted where it is ARMED, not measured between two dials:
+    // Node arms a timer from libuv's cached loop time, which can be several
+    // milliseconds staler than a `Date.now()` stamped in the dial hook, so a
+    // correct 1000ms timer can fire 999ms or less after the previous stamp. The
+    // armed delay is the same number the timer was given, and no tolerance
+    // constant is needed.
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("valid-token", "user-1");
-    const createTimestamps: number[] = [];
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    // The delays armed since the previous dial, one list per dial.
+    const armedBeforeDial: (number | undefined)[][] = [];
+    let armedSince = 0;
     const session = new RemoteSession({
       ...buildSessionOptions(relay, lease, null),
       webSocketFactory: alwaysFailFactory(() => {
-        createTimestamps.push(Date.now());
+        armedBeforeDial.push(
+          setTimeoutSpy.mock.calls.slice(armedSince).map((call) => call[1]),
+        );
+        armedSince = setTimeoutSpy.mock.calls.length;
       }),
     });
     try {
       session.start();
       await vi.waitFor(
-        () => expect(createTimestamps.length).toBeGreaterThanOrEqual(2),
+        () => expect(armedBeforeDial.length).toBeGreaterThanOrEqual(2),
         { timeout: 8_000, interval: 20 },
       );
-      const firstGap = createTimestamps[1] - createTimestamps[0];
-      expect(firstGap).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS);
+      // The premise: the claim is "not 0ms", which means nothing if the
+      // initial backoff is itself 0.
+      expect(RECONNECT_INITIAL_BACKOFF_MS).toBeGreaterThan(0);
+      // Between dial 1 and dial 2 the reconnect timer was armed with the
+      // initial backoff, exactly once.
+      expect(
+        armedBeforeDial[1].filter(
+          (delay) => delay === RECONNECT_INITIAL_BACKOFF_MS,
+        ),
+      ).toHaveLength(1);
+      // ...and no immediate (0ms) arm sits beside it: the first failure of a
+      // never-ready session does not take the immediate rung.
+      expect(armedBeforeDial[1]).not.toContain(0);
     } finally {
       session.close();
+      setTimeoutSpy.mockRestore();
     }
   }, 10_000);
   it("the ladder resets to rung 0 only after RECONNECT_STABLE_RESET_MS of sustained ready - a session that already climbed the ladder once and drops again soon after reaching ready does NOT get rung 0 a second time", async () => {

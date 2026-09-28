@@ -14,6 +14,7 @@ import type { ComposerPickerStore } from "@/components/chat/composer/picker/comp
 import type { UseComposerPasteResult } from "@/hooks/composer/use-composer-paste";
 import type { ComposerDictationControl } from "@/components/home/toolbar/composer-mic-button";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
+import type { ComposerExpansion } from "@/components/home/composer/composer-shell";
 import { ComposerShell } from "@/components/home/composer/composer-shell";
 import { ComposerMobileToolbar } from "@/components/home/mobile/composer-mobile-toolbar";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
@@ -61,6 +62,8 @@ export interface ComposerBodyProps {
    * only the landing composer asks for `"collapsed"`, and only below `md`.
    */
   readonly toolbarLayout: "full" | "collapsed";
+  /** Forwarded to `ComposerShell`; see its prop of the same name. */
+  readonly expansion: ComposerExpansion | null;
   readonly draftsControl: ReactNode;
   readonly attachmentsStrip: ReactNode;
   readonly workspaceControls: ReactNode;
@@ -128,6 +131,7 @@ export function ComposerBody({
   header,
   topBanner,
   toolbarLayout,
+  expansion,
   draftsControl,
   attachmentsStrip,
   workspaceControls,
@@ -190,6 +194,7 @@ export function ComposerBody({
         // both modes. The attachments strip below stays chat-only - the
         // terminal launcher has no attachments.
         utilityRail={draftsControl}
+        expansion={expansion}
         attachmentsStrip={composerMode === "chat" ? attachmentsStrip : null}
         editor={
           <>

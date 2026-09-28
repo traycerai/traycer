@@ -185,6 +185,7 @@ vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   useLandingComposerActions: () => ({
     submit: vi.fn(),
     selectTerminalAgent: vi.fn(),
+    attachmentUpload: null,
   }),
 }));
 

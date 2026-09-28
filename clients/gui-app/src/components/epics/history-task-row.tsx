@@ -1,4 +1,9 @@
 import {
+  OrganizationMetadata,
+  TaskPersonalDecoration,
+  HistoryImportedStatus,
+} from "@/components/organization/organization-metadata";
+import {
   type FocusEvent,
   type ReactNode,
   useCallback,
@@ -50,9 +55,13 @@ import {
 } from "@/stores/auth/auth-store";
 
 const ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE = "data-history-row-target-own-tooltip";
+// The widest label `formatUpdatedLabel` produces for any task younger than
+// two years, measured in the UI font.
+const WIDEST_UPDATED_LABEL = "updated about 23 hours ago";
 
 export interface HistoryTaskRowProps {
   readonly item: HistoryItem;
+  readonly organization: { readonly canEdit: boolean } | null;
   readonly selectionMode: boolean;
   readonly selectionDisabled: boolean;
   readonly selectedForDelete: boolean;
@@ -142,6 +151,12 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
           </HistoryRowStatusSlot>
           {props.renameEditor ?? (
             <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+              {props.organization === null ? null : (
+                <TaskPersonalDecoration
+                  taskId={props.item.epicId}
+                  fallback={props.item.organization}
+                />
+              )}
               <span className="truncate font-medium text-foreground">
                 {historyItemDisplayTitle(props.item)}
               </span>
@@ -149,7 +164,11 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
                 id={importedDescriptionId}
                 rowFocusSession={null}
               >
-                <ImportedUnseenDot epicId={props.item.epicId} />
+                {props.organization === null ? (
+                  <ImportedUnseenDot epicId={props.item.epicId} />
+                ) : (
+                  <HistoryImportedStatus item={props.item} />
+                )}
               </HistoryRowStatusSlot>
               {props.showOpenBadge ? (
                 <HistoryOpenBadge
@@ -170,6 +189,13 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
             </span>
           )}
         </span>
+        {props.organization === null ? null : (
+          <OrganizationMetadata
+            taskId={props.item.epicId}
+            canEdit={props.organization.canEdit}
+            fallback={props.item.organization}
+          />
+        )}
         <HistoryRowTrailingMetadata
           epicId={props.item.epicId}
           selectionMode={props.selectionMode}
@@ -224,6 +250,15 @@ function HistoryRowTrailingMetadata(props: {
     !props.selectionMode && worktreePrReferences(props.worktrees).length > 0;
   return (
     <span className="grid shrink-0 items-center justify-items-end text-ui-xs max-md:flex max-md:min-w-0 max-md:gap-2 max-md:pl-6">
+      {/* Holds the cell at the widest updated label, so every row's trailing
+          block is the same width and the organization labels sitting against
+          it line up down the list. */}
+      <span
+        aria-hidden
+        className="invisible col-start-1 row-start-1 whitespace-nowrap max-md:hidden"
+      >
+        {WIDEST_UPDATED_LABEL}
+      </span>
       <span
         className={cn(
           "col-start-1 row-start-1 text-muted-foreground",
@@ -245,12 +280,16 @@ function HistoryRowTrailingMetadata(props: {
           </span>
         )}
       </span>
+      {/* The pills swap in over the timestamp on hover and must fit inside
+          the cell the timestamp sizes: `md:w-0 md:min-w-full` keeps them out
+          of the cell's width while still filling it, and a single pill plus
+          the overflow control is what fits without cutting a PR number. */}
       {hasPrPills ? (
         <WorktreePrPills
           worktrees={props.worktrees}
           detailOnHover
-          maximumVisible={2}
-          className="pointer-events-none col-start-1 row-start-1 max-w-[min(36vw,22rem)] overflow-hidden opacity-0 transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100 has-data-[state=open]:pointer-events-auto has-data-[state=open]:opacity-100 max-md:pointer-events-auto max-md:max-w-full max-md:opacity-100"
+          maximumVisible={1}
+          className="pointer-events-none col-start-1 row-start-1 justify-end overflow-hidden opacity-0 md:w-0 md:min-w-full transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100 has-data-[state=open]:pointer-events-auto has-data-[state=open]:opacity-100 max-md:pointer-events-auto max-md:max-w-full max-md:opacity-100"
           testId={`task-history-prs-${props.epicId}`}
           openPrInApp={null}
         />

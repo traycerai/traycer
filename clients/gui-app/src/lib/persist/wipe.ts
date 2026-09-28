@@ -33,21 +33,29 @@ import { appLogger, describeLogError } from "@/lib/logger";
 import { FILE_EDIT_RECOVERY_DB_SUFFIX } from "@/lib/workspace/file-edit-recovery-store";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import { STASH_DB_NAME } from "@/lib/drafts/stash-migration";
+import {
+  TRANSCRIPT_IMAGE_DB_SUFFIX,
+  TRANSCRIPT_IMAGE_META_DB_SUFFIX,
+  transcriptImageDbName,
+  transcriptImageMetaDbName,
+} from "@/lib/attachments/transcript-image-bytes-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 // The `:` boundary is load-bearing: a bare `startsWith(PERSIST_PREFIX)` would
 // also sweep a hypothetical `traycer-gui-appX:foo` key. Anchoring on the colon
 // keeps the sweep to exactly the `traycer-gui-app:` namespace.
 const PERSIST_KEY_BOUNDARY = `${PERSIST_PREFIX}:`;
 
-// Landing-image IndexedDB databases are named
-// `traycer-gui-app:<partition>:landing-images` (one per runtime partition —
-// `landingImagePartition()` in `lib/composer/landing-image-store.ts`). The
-// suffix below pins the db namespace so the wipe only drops image partitions,
-// never any other future `traycer-gui-app:`-prefixed db.
+// Renderer IndexedDB partitions are named
+// `traycer-gui-app:<partition>:<suffix>`. The suffixes below pin the wipe to
+// those stores: landing draft images, file-edit recovery, and transcript
+// chat/artifact image bytes. Other `traycer-gui-app:`-prefixed dbs survive.
 const LANDING_IMAGE_DB_SUFFIX = ":landing-images";
 const RENDERER_DB_SUFFIXES = [
   LANDING_IMAGE_DB_SUFFIX,
   FILE_EDIT_RECOVERY_DB_SUFFIX,
+  TRANSCRIPT_IMAGE_DB_SUFFIX,
+  TRANSCRIPT_IMAGE_META_DB_SUFFIX,
 ] as const;
 
 function sweepStorage(storage: Storage): number {
@@ -143,6 +151,11 @@ async function deleteRendererDatabases(): Promise<void> {
   names.add(STASH_DB_NAME);
   names.add(persistKey("tab-recovery"));
   names.add(APPEARANCE_DB_NAME);
+  const accountId = useAuthStore.getState().contextMetadata?.userId ?? null;
+  names.add(transcriptImageDbName(null));
+  names.add(transcriptImageMetaDbName(null));
+  names.add(transcriptImageDbName(accountId));
+  names.add(transcriptImageMetaDbName(accountId));
   // Recovery history must actually be deleted before reload. Other partitions
   // remain best-effort: a single db whose delete errors must not abort
   // the rest of the wipe or - critically - the reload (step 4), which is the

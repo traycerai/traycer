@@ -8,6 +8,7 @@ import {
   chatSubscribeV115,
   chatSubscribeV116,
   chatSubscribeV117,
+  chatSubscribeV118,
   chatSubscribeV119,
   chatSubscribeWindowedClientFrameSchema,
   chatSubscribeWindowedServerFrameSchema,
@@ -41,18 +42,26 @@ const PRE_KEY_LINES = [
   { label: "1.16", contract: chatSubscribeV116 },
 ] as const;
 
-describe("chat.subscribe registry: 1.17 installed below the 1.19 head, 1.16 still installed", () => {
+describe("chat.subscribe registry: 1.17 installed below the 1.18 and 1.19 lines, 1.16 still installed", () => {
   it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.19", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
     expect(line.latestMinor).toBe(19);
     expect(line.versions[19].contract).toBe(chatSubscribeV119);
+    expect(line.versions[18].contract).toBe(chatSubscribeV118);
     expect(line.versions[17].contract).toBe(chatSubscribeV117);
     expect(line.versions[16].contract).toBe(chatSubscribeV116);
   });
 
-  it("1.17 keeps the live client frames and a frozen server frame since 1.19 opened above it", () => {
-    // `1.19` adds nothing a client sends, so both lines bind the live client
-    // schema; its server frames are host-authored, so `1.17`'s froze.
+  it("1.17 and 1.18 keep the live client frames and frozen server frames since 1.19 opened above them", () => {
+    // Neither `1.18` nor `1.19` adds anything a client sends, so every line
+    // from `1.17` binds the live client schema; their server frames are
+    // host-authored, so `1.17`'s and `1.18`'s froze.
+    expect(chatSubscribeV118.clientFrameSchema).toBe(
+      chatSubscribeWindowedClientFrameSchema,
+    );
+    expect(chatSubscribeV118.serverFrameSchema).not.toBe(
+      chatSubscribeWindowedServerFrameSchema,
+    );
     expect(chatSubscribeV117.clientFrameSchema).toBe(
       chatSubscribeWindowedClientFrameSchema,
     );

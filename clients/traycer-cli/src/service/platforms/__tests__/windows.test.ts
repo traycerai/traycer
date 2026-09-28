@@ -129,6 +129,23 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 const mocks = vi.hoisted(() => ({
   readHostPidMetadata: vi.fn(),
   removeHostPidMetadata: vi.fn(),
+  // The cooperative-shutdown RPC has its own suite (`desktop-agent-shutdown`);
+  // here it is a seam so the controller tests pin the ROUTING without dialing
+  // a WebSocket. Defaults to "no host to ask", which leaves every ordinary
+  // stop fixture on the existing task-end and process-scan logic.
+  requestCooperativeShutdown: vi.fn(
+    async (
+      _environment: unknown,
+      _operation: unknown,
+      _intent: unknown,
+      _onHostAddressed: (() => void) | null,
+    ): Promise<{ kind: string }> => ({ kind: "no-host" }),
+  ),
+}));
+
+// A WHOLE-MODULE factory: `windows.ts` imports only the reporting variant.
+vi.mock("../desktop-agent-shutdown", () => ({
+  requestCooperativeShutdownReporting: mocks.requestCooperativeShutdown,
 }));
 
 vi.mock("../../../host/pid-metadata", () => ({
@@ -5104,6 +5121,191 @@ describe("Windows controller — installService launcher-restore behavior", () =
     expect(stillThere.toString("utf8")).toBe("leftover-launcher");
     await rm(launcherPath, { force: true });
   });
+});
+
+describe("Windows cooperative stop", () => {
+  const label = serviceLabelFor("staging");
+
+  beforeEach(() => {
+    mocks.readHostPidMetadata.mockReset();
+    mocks.readHostPidMetadata.mockResolvedValue(null);
+    mocks.removeHostPidMetadata.mockReset();
+    mocks.removeHostPidMetadata.mockResolvedValue(undefined);
+    mocks.requestCooperativeShutdown.mockReset();
+    mocks.requestCooperativeShutdown.mockResolvedValue({ kind: "no-host" });
+    setWindowsStartEvidenceDepsForTests(null);
+    setWindowsTaskInstallDepsForTests(null);
+  });
+
+  afterEach(() => {
+    setWindowsStartEvidenceDepsForTests(null);
+    setWindowsTaskInstallDepsForTests(null);
+  });
+
+  function idleController() {
+    const { runner, calls } = convergingTableRunner([]);
+    return {
+      calls,
+      controller: createWindowsController(runner, noTimingDeps),
+    };
+  }
+
+  // A stopped host is not there to ask; the ordinary path only sweeps the
+  // task and any survivors, and a stop with no metadata must stay idempotent.
+  const OUTCOMES_THAT_FALL_BACK_TO_THE_EXISTING_STOP = [
+    { kind: "stopped" },
+    { kind: "no-host" },
+    { kind: "no-metadata" },
+    { kind: "unreachable", cause: "dial failed" },
+    { kind: "hung", pid: 4242 },
+  ] as const;
+
+  it("asks the host to shut down before the first OS mutation, and mutates only once that settles", async () => {
+    const outcome = (() => {
+      let resolve: (value: { kind: string }) => void = () => undefined;
+      const promise = new Promise<{ kind: string }>((done) => {
+        resolve = done;
+      });
+      return { promise, resolve };
+    })();
+    mocks.requestCooperativeShutdown.mockReturnValueOnce(outcome.promise);
+    const { controller, calls } = idleController();
+
+    const stopping = controller.stop(label, { force: false });
+    for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
+
+    expect(mocks.requestCooperativeShutdown).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual([]);
+
+    outcome.resolve({ kind: "stopped" });
+    await stopping;
+
+    expect(calls[0]).toMatchObject({
+      command: "schtasks",
+      args: ["/End", "/TN", "\\Traycer\\Host-Staging"],
+    });
+    expect(calls.some((call) => isScanCall(call.command, call.args))).toBe(
+      true,
+    );
+  });
+
+  it("tells the host whether this is a plain stop or the stop half of a restart", async () => {
+    const { controller } = idleController();
+
+    await controller.stop(label, { force: false });
+    await controller.stopForRestart(label, { force: false });
+
+    expect(
+      mocks.requestCooperativeShutdown.mock.calls.map(
+        ([, operation, intent]) => [operation, intent],
+      ),
+    ).toEqual([
+      ["stop", "shutdown"],
+      ["restart", "restart"],
+    ]);
+  });
+
+  it("forwards the helper's host-addressed report to the caller exactly once", async () => {
+    mocks.requestCooperativeShutdown.mockImplementationOnce(
+      async (_environment, _operation, _intent, onHostAddressed) => {
+        onHostAddressed?.();
+        return { kind: "stopped" };
+      },
+    );
+    const onHostAddressed = vi.fn();
+    const { controller } = idleController();
+
+    await controller.stop(label, { force: false, onHostAddressed });
+
+    expect(onHostAddressed).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["stop", "restart"] as const)(
+    "%s: a busy host refuses with E_HOST_BUSY before any OS mutation",
+    async (operation) => {
+      mocks.requestCooperativeShutdown.mockResolvedValue({ kind: "busy" });
+      const { controller, calls } = idleController();
+
+      const attempt =
+        operation === "stop"
+          ? controller.stop(label, { force: false })
+          : controller.stopForRestart(label, { force: false });
+
+      await expect(attempt).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+      });
+      expect(calls).toEqual([]);
+      expect(mocks.removeHostPidMetadata).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["stop", "restart"] as const)(
+    "%s: losing service mutation authority during the cooperative request aborts with no OS command and no forced cleanup",
+    async (operation) => {
+      const lost = new ServiceMutationAuthorityError(new Error("revoked"));
+      mocks.requestCooperativeShutdown.mockRejectedValue(lost);
+      const { controller, calls } = idleController();
+
+      const attempt =
+        operation === "stop"
+          ? controller.stop(label, { force: false })
+          : controller.stopForRestart(label, { force: false });
+
+      await expect(attempt).rejects.toBe(lost);
+      expect(calls).toEqual([]);
+      expect(mocks.removeHostPidMetadata).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(OUTCOMES_THAT_FALL_BACK_TO_THE_EXISTING_STOP)(
+    "stop and restart both continue into the existing verified stop when the cooperative outcome is $kind",
+    async (outcome) => {
+      for (const operation of ["stop", "restart"] as const) {
+        mocks.requestCooperativeShutdown.mockResolvedValue(outcome);
+        const { runner, calls } = convergingTableRunner([
+          { processId: 401, parentProcessId: 1, slot: true },
+        ]);
+        const controller = createWindowsController(runner, noTimingDeps);
+
+        if (operation === "stop") {
+          await controller.stop(label, { force: false });
+        } else {
+          await expect(
+            controller.stopForRestart(label, { force: false }),
+          ).resolves.toEqual({ forcedRecycle: false });
+        }
+
+        expect(calls[0]).toMatchObject({
+          command: "schtasks",
+          args: ["/End", "/TN", "\\Traycer\\Host-Staging"],
+        });
+        expect(killedPids(calls)).toEqual([401]);
+      }
+    },
+  );
+
+  it.each(["stop", "restart"] as const)(
+    "%s with force never asks the host and goes straight to the task end and kill",
+    async (operation) => {
+      const { runner, calls } = convergingTableRunner([
+        { processId: 401, parentProcessId: 1, slot: true },
+      ]);
+      const controller = createWindowsController(runner, noTimingDeps);
+
+      if (operation === "stop") {
+        await controller.stop(label, { force: true });
+      } else {
+        await controller.stopForRestart(label, { force: true });
+      }
+
+      expect(mocks.requestCooperativeShutdown).not.toHaveBeenCalled();
+      expect(calls[0]).toMatchObject({
+        command: "schtasks",
+        args: ["/End", "/TN", "\\Traycer\\Host-Staging"],
+      });
+      expect(killedPids(calls)).toEqual([401]);
+    },
+  );
 });
 
 describe("Windows controller — spawn-edge placement", () => {

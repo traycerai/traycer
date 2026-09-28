@@ -9,6 +9,7 @@ import {
   currentTaskPinsStatus,
   groupCurrentTasks,
   pinScanDecision,
+  withInProgressFirst,
   PIN_TAIL_PAGE_CAP,
 } from "@/lib/home/current-tasks";
 
@@ -195,5 +196,51 @@ describe("groupCurrentTasks", () => {
       "pinned-old",
     ]);
     expect(groups.open.map(({ id }) => id)).toEqual(["open-b", "open-a"]);
+  });
+});
+
+describe("withInProgressFirst", () => {
+  it("prepends a running task the feed never listed", () => {
+    const feed = [item("a", 3, false), item("b", 2, false)];
+
+    expect(
+      withInProgressFirst([item("z", 1, false)], feed).map((row) => row.id),
+    ).toEqual(["z", "a", "b"]);
+  });
+
+  it("lifts a listed running task out of the feed rather than copying it", () => {
+    const feed = [
+      item("a", 3, false),
+      item("b", 2, false),
+      item("c", 1, false),
+    ];
+
+    expect(withInProgressFirst([feed[2]], feed).map((row) => row.id)).toEqual([
+      "c",
+      "a",
+      "b",
+    ]);
+  });
+
+  it("matches on the epic, not the row id, so a backfilled row is not a second copy", () => {
+    // The feed's row and the by-id backfill's row for one epic can differ in
+    // `id` - `itemId` folds the row's index into it - so an id-keyed dedup
+    // would render the same task twice.
+    const listed = { ...item("c", 1, false), id: "c#2" };
+    const lifted = { ...item("c", 1, false), id: "c#0" };
+
+    expect(
+      withInProgressFirst([lifted], [item("a", 3, false), listed]).map(
+        (row) => row.id,
+      ),
+    ).toEqual(["c#0", "a"]);
+  });
+
+  it("hands the feed straight back when nothing is running", () => {
+    const feed = [item("a", 3, false)];
+
+    // Identity, not just equality: an untouched list must not re-render the
+    // always-mounted drawer on every page update.
+    expect(withInProgressFirst([], feed)).toBe(feed);
   });
 });

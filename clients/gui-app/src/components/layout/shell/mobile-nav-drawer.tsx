@@ -27,9 +27,8 @@ import { MobileNavDrawerSurface } from "@/components/layout/shell/mobile-nav-dra
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { isMobileApp } from "@/lib/mobile-app";
 import { computeInitials } from "@/lib/auth/compute-initials";
-import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
+import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { useOpenLink } from "@/lib/links/open-link";
-import { useRunnerHost } from "@/providers/use-runner-host";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { openEpicFromList } from "@/lib/commands/actions/open-epic-from-list";
 import {
@@ -41,6 +40,9 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import { cn } from "@/lib/utils";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { useAmbientHistorySearchState } from "@/hooks/home/use-history-search-state";
+import { useInProgressHistoryItems } from "@/hooks/home/use-in-progress-history-items";
+import { hasActiveHistoryFilters } from "@/lib/history-search";
+import { withInProgressFirst } from "@/lib/home/current-tasks";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
@@ -75,7 +77,7 @@ export function MobileNavDrawer(): ReactNode {
   const navigate = useNavigate();
   const profile = useAuthStore((state) => state.profile);
   const { openSettings } = useSystemTabModalActions();
-  const runnerHost = useRunnerHost();
+  const billingUrl = usePlatformBillingUrl();
   const openLink = useOpenLink();
   const [signOutOpen, setSignOutOpen] = useState(false);
   const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
@@ -113,11 +115,7 @@ export function MobileNavDrawer(): ReactNode {
   };
   const handleManageSubscription = () => {
     close();
-    void openLink(
-      resolvePlatformBaseUrl(runnerHost.signInUrl),
-      "account",
-      null,
-    );
+    void openLink(billingUrl, "account", null);
     Analytics.getInstance().track(AnalyticsEvent.SubscriptionManagementOpened, {
       source: "direct_ui",
     });
@@ -363,10 +361,33 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     hasNextPage,
     isFetchingNextPage,
     cloudPagePending,
+    currentUserId,
   } = useHistoryQuery({ search, nowMs: null });
   // Memoized so the id list below only changes when the page does, not on
   // every render's fresh empty array.
-  const items = useMemo(() => data?.items ?? [], [data]);
+  const pageItems = useMemo(() => data?.items ?? [], [data]);
+  // The drawer is the phone's only always-reachable task list, and it renders
+  // the feed's order - pinned first, then epic `updatedAt` descending. Agent
+  // activity never touches `updatedAt`, so the task the user is watching right
+  // now can sit below tasks they last opened weeks ago, or past the loaded
+  // page entirely. Desktop never has this problem: Home's "In progress" group
+  // holds those rows, and Home is not mounted on a phone. Lift them here
+  // instead - same rows, same semantics, no second section in a drawer whose
+  // whole list is already one caption.
+  //
+  // Stands down under any narrowing (`hasActiveHistoryFilters`, which the
+  // ambient state shares with History): a search's ranking is the answer the
+  // user asked for, and a filtered feed must not have a row backfilled into it
+  // that the filter would have excluded.
+  const inProgress = useInProgressHistoryItems({
+    items: pageItems,
+    userId: currentUserId,
+    enabled: !hasActiveHistoryFilters(search),
+  });
+  const items = useMemo(
+    () => withInProgressFirst(inProgress, pageItems),
+    [inProgress, pageItems],
+  );
 
   // The rows' status indicator reads notification state from context, and the
   // drawer is mounted by the shell outside the providers the tab strip and the

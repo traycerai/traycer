@@ -11,15 +11,31 @@ interface ActiveTabGeometry {
   readonly visible: boolean;
 }
 
+interface HiddenTabKeys {
+  readonly left: ReadonlyArray<string>;
+  readonly right: ReadonlyArray<string>;
+}
+
+interface HiddenTabsState {
+  readonly hiddenTabKeys: HiddenTabKeys;
+  readonly hasOverflow: boolean;
+}
+
 /** Observe the rendered tabs, including split members, but not collapsed groups. */
 export function useHiddenHeaderTabs(layout: TaskTabLayout) {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
-  const [hiddenTabKeys, setHiddenTabKeys] = useState<ReadonlyArray<string>>([]);
+  const [{ hiddenTabKeys, hasOverflow }, setHiddenTabs] =
+    useState<HiddenTabsState>({
+      hiddenTabKeys: { left: [], right: [] },
+      hasOverflow: false,
+    });
   const activeGeometry = useRef<ActiveTabGeometry | null>(null);
 
   const measure = useCallback(
     (preserveVisibility: boolean) => {
-      const hidden: string[] = [];
+      const left: string[] = [];
+      const right: string[] = [];
+      let overflowing = false;
       if (element !== null) {
         const viewport = element.getBoundingClientRect();
         activeGeometry.current = preserveActiveTabVisibility(
@@ -28,35 +44,39 @@ export function useHiddenHeaderTabs(layout: TaskTabLayout) {
           activeGeometry.current,
           preserveVisibility,
         );
-        const control = element.parentElement?.querySelector<HTMLElement>(
+        // Both edge slots stay mounted during overflow, even when one has no
+        // hidden tabs. Add both widths back so the slots cannot keep themselves
+        // mounted after a resize makes the tabs fit without them.
+        let availableWidth = element.clientWidth;
+        const controls = element.parentElement?.querySelectorAll<HTMLElement>(
           "[data-hidden-tabs-control]",
         );
-        // Test against the space available WITHOUT the count control. Otherwise
-        // the control can keep itself visible after a resize makes every tab fit.
-        const availableWidth =
-          element.clientWidth + (control?.offsetWidth ?? 0);
-        if (element.scrollWidth > availableWidth + PIXEL_TOLERANCE) {
+        for (const control of controls ?? []) {
+          availableWidth += control.offsetWidth;
+        }
+        overflowing = element.scrollWidth > availableWidth + PIXEL_TOLERANCE;
+        if (overflowing) {
           for (const tab of element.querySelectorAll<HTMLElement>(
             TAB_SELECTOR,
           )) {
             const key = tab.dataset.headerTabKey;
             const rect = readHeaderStripLayoutRect(tab);
-            if (
-              key !== undefined &&
-              rect.width > 0 &&
-              (rect.left < viewport.left - PIXEL_TOLERANCE ||
-                rect.right > viewport.right + PIXEL_TOLERANCE)
-            ) {
-              hidden.push(key);
+            if (key === undefined || rect.width <= 0) continue;
+            if (rect.left < viewport.left - PIXEL_TOLERANCE) {
+              left.push(key);
+            }
+            if (rect.right > viewport.right + PIXEL_TOLERANCE) {
+              right.push(key);
             }
           }
         }
       }
-      setHiddenTabKeys((previous) =>
-        previous.length === hidden.length &&
-        previous.every((key, index) => key === hidden[index])
+      setHiddenTabs((previous) =>
+        previous.hasOverflow === overflowing &&
+        sameKeys(previous.hiddenTabKeys.left, left) &&
+        sameKeys(previous.hiddenTabKeys.right, right)
           ? previous
-          : hidden,
+          : { hiddenTabKeys: { left, right }, hasOverflow: overflowing },
       );
     },
     [element],
@@ -113,7 +133,22 @@ export function useHiddenHeaderTabs(layout: TaskTabLayout) {
     [element],
   );
 
-  return { setScrollElement: setElement, hiddenTabKeys, revealTab };
+  return {
+    setScrollElement: setElement,
+    hiddenTabKeys,
+    hasOverflow,
+    revealTab,
+  };
+}
+
+function sameKeys(
+  previous: ReadonlyArray<string>,
+  next: ReadonlyArray<string>,
+): boolean {
+  return (
+    previous.length === next.length &&
+    previous.every((key, index) => key === next[index])
+  );
 }
 
 function preserveActiveTabVisibility(
@@ -126,9 +161,9 @@ function preserveActiveTabVisibility(
     `${TAB_SELECTOR}[aria-selected="true"]`,
   );
   const activeKey = activeTab?.dataset.headerTabKey ?? null;
-  // A newly inserted count control or a window resize may clip a tab that
+  // Newly inserted edge slots or a window resize may clip a tab that
   // was visible. Preserve that visibility, but never undo a user's scroll
-  // toward other tabs/groups just because it makes the count appear.
+  // toward other tabs/groups just because it makes an edge menu appear.
   if (
     preserveVisibility &&
     previous?.visible === true &&

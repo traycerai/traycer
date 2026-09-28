@@ -39,6 +39,7 @@ import type {
   AgentFailure,
   ProviderNoticeDetail,
   ProviderNoticeKind,
+  ProviderNoticeReceipt,
   ProviderNoticeTone,
   ToolCallManagedCommand,
   ToolInputDetail,
@@ -209,10 +210,11 @@ export interface ProviderNoticeSegment {
   kind: "provider_notice";
   status: "streaming" | "completed" | "errored";
   // WHICH notice this is, carried straight off the block's `providerNotice`.
-  // Dropped here until the provider-fallback surfaces needed it: the three
-  // fallback arms render differently from the harness ones - a settings link in
-  // their details, and the resumed-turn marker for `fallback_wait_resumed` -
-  // and none of that can be inferred from a tone and a title.
+  // Dropped here until the provider-fallback surfaces needed it: the fallback
+  // arms render differently from the harness ones - `fallback_applied` prints
+  // its title without its message, a receipt-carrying `fallback_settled` is
+  // absorbed into the settled card, and the live announcer speaks only the
+  // fallback kinds - and none of that can be inferred from a tone and a title.
   noticeKind: ProviderNoticeKind;
   /** Local display choice for a transient Codex retry; never persisted. */
   presentation?: "retry";
@@ -220,6 +222,22 @@ export interface ProviderNoticeSegment {
   title: string;
   message: string | null;
   details: ReadonlyArray<ProviderNoticeDetail>;
+  /**
+   * The settled routing account (`chat.subscribe@1.18`), or `null`.
+   *
+   * Non-null on exactly one notice per ended traversal - the `fallback_settled`
+   * notice the host writes onto the latest attempt's row - and that is what
+   * composes the settled card (`routingSettledNoticeId`). `null` covers both
+   * "recorded, no receipt" (every superseded settlement notice) and "never
+   * recorded" (an older host, whose key is absent): both stay dividers, so the
+   * projection folds the wire's absent key with `?? null` rather than carrying
+   * the distinction.
+   *
+   * Required rather than optional so every builder of this segment states it:
+   * the wire key is optional, and a copy that picks fields instead of spreading
+   * them drops it without the compiler noticing.
+   */
+  receipt: ProviderNoticeReceipt | null;
   // Owning subagent block id when this notice arrived on a subagent's thread
   // (nests under that subagent block). Null for a top-level notice.
   parentId: string | null;
@@ -775,6 +793,22 @@ export interface ChatMessage {
    */
   manualRungAnchorId?: string;
   /**
+   * The settled routing notice this row's recovery card absorbs, or absent.
+   *
+   * Set only beside {@link manualRungAnchorId}, and only when the SAME row also
+   * carries a top-level provider notice with a non-null `receipt` - the one
+   * notice a failure settlement writes onto the latest attempt's row. The row
+   * then renders ONE settled card where the anchor error was (headline, receipt,
+   * actions) and the notice renders nothing of its own; without it the notice
+   * stays a divider and the error card keeps its actions, which is what an
+   * older host's transcript gets.
+   *
+   * Stamped by the same pass as the anchor (`withManualRungAnchor`) and for the
+   * same reason: a turn split by a steer is several rows, and the pairing is a
+   * fact about the row that holds both halves.
+   */
+  routingSettledNoticeId?: string;
+  /**
    * Whether this completed row should render the elapsed footer. `false` for
    * a background-completion notification that no provider turn adopted; its
    * non-null `completedAt` still records terminal state for transcript
@@ -803,6 +837,15 @@ export interface ChatMessage {
    */
   pausedSinceMs?: number | null;
   persistentMessageId: string | null;
+  /**
+   * Every persisted record this assistant row's turn folds, in fold order,
+   * when there is more than one. A turn split across several records
+   * (subagent flows, legacy and migrated snapshots) renders under ONE
+   * `persistentMessageId` - the last record's - so a reference that starts
+   * from an earlier record (a History hit, a find index hit) resolves here.
+   * Absent on a single-record turn and on every other row.
+   */
+  turnMessageIds?: ReadonlyArray<string>;
   senderLabel: string | null;
   assistantMeta: AssistantTurnMeta | null;
   statusLabel: string | null;

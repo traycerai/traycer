@@ -361,6 +361,19 @@ export interface ArtifactRoomsSlice {
   readonly stateByArtifactId: Readonly<
     Record<string, EpicArtifactRoomAvailability>
   >;
+  /**
+   * Artifacts whose `ready` body the host is still reconciling with the cloud
+   * (`artifact.subscribe@1.1`'s `bodySync: "syncing"`). Only ever a SUBSET of
+   * the `ready` keys above: the entry is dropped when the body is reseeded or
+   * leaves `ready`, and the host re-states it after the next seed.
+   *
+   * Beside availability, never a fourth member of it, and the difference is
+   * the whole feature: a syncing body is served and editable, so the tile
+   * keeps its editor mounted and shows a non-blocking affordance over it. An
+   * absent key means "nothing to show" - synced, or a host or arm that does
+   * not report it - and must never be read as a claim that the body is synced.
+   */
+  readonly bodySyncingByArtifactId: Readonly<Record<string, true>>;
 }
 
 /**
@@ -403,6 +416,7 @@ export const EMPTY_ARTIFACT_ROOMS_SLICE: ArtifactRoomsSlice = Object.freeze({
   stateByArtifactId: Object.freeze(
     {} as Record<string, EpicArtifactRoomAvailability>,
   ),
+  bodySyncingByArtifactId: Object.freeze({} as Record<string, true>),
 });
 
 /**

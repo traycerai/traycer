@@ -9,8 +9,13 @@ import {
   hostGetRateLimitUsageDowngradeV4ToV1,
   hostGetRateLimitUsageDowngradeV4ToV2,
   hostGetRateLimitUsageDowngradeV4ToV3,
+  hostGetRateLimitUsageDowngradeV5ToV1,
+  hostGetRateLimitUsageDowngradeV5ToV2,
+  hostGetRateLimitUsageDowngradeV5ToV3,
+  hostGetRateLimitUsageDowngradeV5ToV4,
   hostGetRateLimitUsageUpgradeV21ToV30,
   hostGetRateLimitUsageUpgradeV30ToV40,
+  hostGetRateLimitUsageUpgradeV40ToV50,
   hostGetRateLimitUsageV12,
   hostGetRateLimitUsageV20,
   hostGetRateLimitUsageV21,
@@ -30,6 +35,7 @@ import {
   rateLimitUsageResponseSchemaV21,
   rateLimitUsageResponseSchemaV30,
   rateLimitUsageResponseSchemaV40,
+  rateLimitUsageResponseSchemaV50,
 } from "@traycer/protocol/host/rate-limit/schemas";
 
 describe("providers.consumeRateLimitResetCredit schemas", () => {
@@ -1522,5 +1528,261 @@ describe("cursor rate-limit arm", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.providerRateLimits).toEqual(cursorUnsupported);
+  });
+});
+
+// `host.getRateLimitUsage` major 5.0 - adds the antigravity available arm.
+// 4.0 is FROZEN on `providerRateLimitsSchemaV80` (no antigravity arm at all,
+// not even as an unavailable-provider id), so unlike every earlier arm there
+// is no degrade-to-unsupported_provider fallback: the 5 -> 4/3/2/1 bridges
+// all REFUSE an antigravity reading with DOWNGRADE_UNSUPPORTED instead of
+// mis-decoding it.
+describe("host.getRateLimitUsage v5.0 antigravity arm + downgrade bridges", () => {
+  const antigravityAvailable = {
+    provider: "antigravity" as const,
+    available: true as const,
+    planName: "Google AI Pro",
+    groups: [
+      {
+        displayName: "Gemini Models",
+        description: "Gemini 3 Pro and Gemini 3 Flash",
+        windows: [
+          {
+            usedPercent: 12,
+            resetsAt: 1_735_689_600_000,
+            durationMinutes: 300,
+            bucketId: "gemini-5h",
+            windowKind: "5h",
+          },
+          {
+            usedPercent: 40,
+            resetsAt: 1_736_294_400_000,
+            durationMinutes: 10_080,
+            bucketId: "gemini-weekly",
+            windowKind: "weekly",
+          },
+        ],
+      },
+      {
+        displayName: "Claude and GPT models",
+        description: null,
+        windows: [
+          {
+            usedPercent: 8,
+            resetsAt: 1_735_689_600_000,
+            durationMinutes: 300,
+            bucketId: "3p-5h",
+            windowKind: "5h",
+          },
+        ],
+      },
+    ],
+  };
+
+  const codexAvailable = {
+    provider: "codex" as const,
+    available: true as const,
+    planType: "plus",
+    limitId: "plus-primary",
+    limitName: "Plus",
+    primary: {
+      usedPercent: 42,
+      resetsAt: 1735689600000,
+      durationMinutes: 300,
+    },
+    secondary: null,
+    extraWindows: [],
+    credits: null,
+    individualLimit: null,
+    resetCredits: null,
+    rateLimitReachedType: null,
+  };
+
+  const DOWNGRADE_UNSUPPORTED_ERROR = {
+    code: "DOWNGRADE_UNSUPPORTED" as const,
+    message:
+      "Reading this provider's rate limits requires a newer Traycer client.",
+  };
+
+  it("parses an antigravity arm on the live union and on the live 5.0 line, and rejects it on the frozen 4.0 line", () => {
+    expect(providerRateLimitsSchema.parse(antigravityAvailable)).toEqual(
+      antigravityAvailable,
+    );
+    expect(
+      rateLimitUsageResponseSchemaV50.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: antigravityAvailable,
+      }),
+    ).toMatchObject({ providerRateLimits: antigravityAvailable });
+    // The freeze itself: 4.0 must REJECT the arm the live union accepts.
+    expect(() =>
+      rateLimitUsageResponseSchemaV40.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: antigravityAvailable,
+      }),
+    ).toThrow();
+  });
+
+  it("upgrades a v4.0 response to v5.0 as the identity", () => {
+    const response = rateLimitUsageResponseSchemaV40.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: codexAvailable,
+    });
+    const upgraded =
+      hostGetRateLimitUsageUpgradeV40ToV50.upgradeResponse(response);
+    expect(upgraded).toEqual(response);
+    expect(rateLimitUsageResponseSchemaV50.parse(upgraded)).toEqual(response);
+  });
+
+  it("refuses to downgrade an antigravity-available reading on every 5.0 -> N bridge", () => {
+    const response = rateLimitUsageResponseSchemaV50.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: antigravityAvailable,
+    });
+    for (const bridge of [
+      hostGetRateLimitUsageDowngradeV5ToV4,
+      hostGetRateLimitUsageDowngradeV5ToV3,
+      hostGetRateLimitUsageDowngradeV5ToV2,
+      hostGetRateLimitUsageDowngradeV5ToV1,
+    ]) {
+      expect(bridge.downgradeResponse(response)).toEqual({
+        ok: false,
+        error: DOWNGRADE_UNSUPPORTED_ERROR,
+      });
+    }
+  });
+
+  it("refuses the antigravity downgrade through the host registry major 5 -> 4 / 3 / 2 / 1 paths", () => {
+    const response = rateLimitUsageResponseSchemaV50.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: antigravityAvailable,
+    });
+    const registry = hostRpcRegistry["host.getRateLimitUsage"];
+    for (const toMajor of [4, 3, 2, 1] as const) {
+      expect(
+        downgradeResponseAcrossMajors(registry, 5, toMajor, response),
+      ).toEqual({ ok: false, error: DOWNGRADE_UNSUPPORTED_ERROR });
+    }
+  });
+
+  it("passes a codex reading through the 5.0 -> 4.0 bridge unchanged, and still degrades correctly on 5.0 -> 3.0", () => {
+    const response = rateLimitUsageResponseSchemaV50.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: codexAvailable,
+    });
+
+    const toV4 =
+      hostGetRateLimitUsageDowngradeV5ToV4.downgradeResponse(response);
+    expect(toV4).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: codexAvailable,
+      },
+    });
+
+    // 5.0 -> 3.0 composes the same non-antigravity degrades the 4.0 -> 3.0
+    // bridge already applies (see the Hugging Face / OpenCode / Cursor block
+    // above) - a codex reading has none of those arms to degrade, so it
+    // passes through unchanged exactly as it did before antigravity existed.
+    const toV3 =
+      hostGetRateLimitUsageDowngradeV5ToV3.downgradeResponse(response);
+    expect(toV3).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: codexAvailable,
+      },
+    });
+  });
+
+  it("registers host.getRateLimitUsage major 5.0 in the host registry", () => {
+    expect(
+      hostRpcRegistry["host.getRateLimitUsage"][5].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 5, minor: 0 });
+    expect(
+      Object.keys(
+        hostRpcRegistry["host.getRateLimitUsage"][5]
+          .downgradePathsFromLatest as Record<string, unknown>,
+      ).sort(),
+    ).toEqual(["1", "2", "3", "4"]);
+  });
+
+  // The tests above cover only the AVAILABLE antigravity arm. The
+  // `available: false` arm is a separate code path: none of
+  // `degradeProviderRateLimitsToV30/V21/V12` touch it (their available-arm
+  // maps never match a `provider: "antigravity"` row), so it is never
+  // rewritten to `unsupported_provider` the way an available cursor/grok/
+  // Hugging-Face/OpenCode row is. The v4.0 frozen union
+  // (`providerRateLimitsSchemaV80`) pins `provider` to the pre-Antigravity
+  // enum, so it refuses an unavailable antigravity row exactly like the
+  // available one above - it has no way to name the provider at all. But the
+  // v3.0/v2.1/v1.2 lines' unavailable arm (`unavailableProviderRateLimitsSchemaV2`
+  // / `V1`) tags `provider` with the LIVE, ever-growing `providerIdSchema`
+  // enum rather than a frozen one, so `{ provider: "antigravity", available:
+  // false, ... }` parses cleanly there even though those lines predate
+  // Antigravity entirely. The bridges therefore check the provider id before
+  // parsing (`namesProviderNewerThanV40`); these tests pin that refusal on
+  // every line - without the check, 5 -> 3/2/1 passed the row through with
+  // `ok: true`.
+  describe("the antigravity UNAVAILABLE arm on the 5.0 -> N bridges", () => {
+    const antigravityUnavailable = {
+      provider: "antigravity" as const,
+      available: false as const,
+      reason: "timeout" as const,
+    };
+
+    it("refuses on the 5.0 -> 4.0 bridge", () => {
+      const response = rateLimitUsageResponseSchemaV50.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: antigravityUnavailable,
+      });
+      expect(
+        hostGetRateLimitUsageDowngradeV5ToV4.downgradeResponse(response),
+      ).toEqual({ ok: false, error: DOWNGRADE_UNSUPPORTED_ERROR });
+    });
+
+    it("refuses on the 5.0 -> 3.0 bridge", () => {
+      const response = rateLimitUsageResponseSchemaV50.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: antigravityUnavailable,
+      });
+      expect(
+        hostGetRateLimitUsageDowngradeV5ToV3.downgradeResponse(response),
+      ).toEqual({ ok: false, error: DOWNGRADE_UNSUPPORTED_ERROR });
+    });
+
+    it("refuses on the 5.0 -> 2.1 bridge", () => {
+      const response = rateLimitUsageResponseSchemaV50.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: antigravityUnavailable,
+      });
+      expect(
+        hostGetRateLimitUsageDowngradeV5ToV2.downgradeResponse(response),
+      ).toEqual({ ok: false, error: DOWNGRADE_UNSUPPORTED_ERROR });
+    });
+
+    it("refuses on the 5.0 -> 1.2 bridge", () => {
+      const response = rateLimitUsageResponseSchemaV50.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: antigravityUnavailable,
+      });
+      expect(
+        hostGetRateLimitUsageDowngradeV5ToV1.downgradeResponse(response),
+      ).toEqual({ ok: false, error: DOWNGRADE_UNSUPPORTED_ERROR });
+    });
   });
 });

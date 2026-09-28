@@ -258,6 +258,7 @@ function inputFor(
     canModifyMessages: true,
     canAct: true,
     messageDelivery: null,
+    setupCardShown: false,
     interviewDeliveryRetryProtocolSupported: true,
     currentComposerSettings: SETTINGS,
     editSettings: SETTINGS,

@@ -94,8 +94,8 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import {
   buildOverviewHostFixture,
   buildOverviewManagement,
-  openHostOverviewAdvanced,
   openHostOverviewMenu,
+  selectHostOverviewTab,
   updateCheckManifest,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
@@ -1367,9 +1367,9 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
         </RunnerHostProvider>
       </QueryClientProvider>,
     );
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await waitForButton("Check now"));
-    await openHostOverviewAdvanced();
     fireEvent.click(await waitForButton(/^Install \d/));
 
     // The whole REGION retires, not just the install button. This test used to
@@ -1425,7 +1425,7 @@ describe("<HostSettingsPanel /> Overview OS service externally-managed outcome",
       </QueryClientProvider>,
     );
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("installation");
     const description = await screen.findByTestId(
       "host-overview-service-description",
     );

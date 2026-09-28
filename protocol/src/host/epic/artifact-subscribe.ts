@@ -331,3 +331,78 @@ export const artifactSubscribeV10 = defineStreamRpcContract({
   serverFrameSchema: artifactSubscribeServerFrameSchemaV10,
   clientFrameSchema: artifactSubscribeClientFrameSchemaV10,
 });
+
+// ─── `artifact.subscribe@1.1` - additive: the `bodySync` frame ────────────
+//
+// A host serves an artifact body from its local copy the moment that copy is
+// hydrated, and reconciles it with the cloud behind the editor. `@1.0` could
+// not say which of the two the body in front of the reader is: a body the
+// host held but had not yet synced was reported `unavailable / retrying` for
+// the whole cloud sync, and the tile showed "Reconnecting to this document…"
+// over a document the host already had. `@1.1` adds one frame that says it,
+// so the tile can show the editor and a "Syncing…" affordance beside it.
+//
+// @1.0 stays installed and FROZEN: a peer that negotiated it never receives
+// `bodySync`, and the host gates on the negotiated minor rather than assuming
+// the peer will tolerate an unknown frame kind.
+
+/**
+ * Where the body the host is serving stands against the cloud.
+ *
+ * - `syncing` - served from the host's local copy; the cloud has not yet
+ *   reconciled with it. Edits are accepted and durable on the host, and reach
+ *   the cloud when the sync completes.
+ * - `synced` - the host's copy has completed its sync with the cloud.
+ *
+ * A host whose body has no cloud side at all (a local-only epic) sends
+ * neither, and ABSENCE is the only honest reading then: it is not a claim of
+ * either state. Later connection drops are the epic-level
+ * `cloudSyncStatus`'s to report on `epic.status.subscribe`, not this frame's;
+ * `synced` is not withdrawn by a socket flap.
+ */
+export const artifactBodySyncStateSchema = lazySchema(() =>
+  z.enum(["syncing", "synced"]),
+);
+export type ArtifactBodySyncState = z.infer<typeof artifactBodySyncStateSchema>;
+
+/**
+ * The body's sync state, sent after each `doc` frame and again whenever it
+ * changes. It describes the body the most recent `doc` frame seeded: a client
+ * forgets it on every `doc` and every `unavailable` frame, and the host
+ * re-sends it after the next `doc`.
+ */
+const artifactSubscribeBodySyncFrameSchemaV11 = lazySchema(() =>
+  z.object({
+    kind: z.literal("bodySync"),
+    ...epicLaneEpochFrameFields,
+    ...artifactSubscribeAddressFields,
+    state: artifactBodySyncStateSchema,
+    hasBinaryPayload: z.literal(false),
+  }),
+);
+
+export const artifactSubscribeServerFrameSchemaV11 = lazySchema(() =>
+  // Read inside the thunk: a module-scope `.options` read builds `@1.0`'s
+  // union at import.
+  z.discriminatedUnion("kind", [
+    ...artifactSubscribeServerFrameSchemaV10.options,
+    artifactSubscribeBodySyncFrameSchemaV11,
+  ]),
+);
+export type ArtifactSubscribeServerFrameV11 = z.infer<
+  typeof artifactSubscribeServerFrameSchemaV11
+>;
+
+/**
+ * The minor at which `bodySync` exists. A producer gates on it per
+ * subscription; a consumer on a lower minor never sees the frame.
+ */
+export const ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR = 1;
+
+export const artifactSubscribeV11 = defineStreamRpcContract({
+  method: "artifact.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: artifactSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: artifactSubscribeServerFrameSchemaV11,
+  clientFrameSchema: artifactSubscribeClientFrameSchemaV10,
+});

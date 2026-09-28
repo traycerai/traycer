@@ -102,7 +102,7 @@ export interface TabsStoreState extends PersistedTabsStoreState {
   reorderItem: (args: ReorderItemArgs) => void;
   setTabCustomization: (
     ref: TabRef,
-    patch: Partial<Pick<TabCustomization, "color" | "icon">>,
+    patch: Partial<Pick<TabCustomization, "color" | "icon" | "pendingGroupId">>,
   ) => void;
   createGroup: (ref: TabRef) => string | null;
   setTabGroup: (ref: TabRef, groupId: string | null) => void;

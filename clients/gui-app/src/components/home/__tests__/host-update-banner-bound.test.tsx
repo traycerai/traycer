@@ -1019,6 +1019,10 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
           onRestart={null}
           onForceUpdate={null}
           cliFloorBlocked={false}
+          // Panel-level in production (`useHostUpdateCompletion`); this
+          // failed attempt is not dismissed, which is the only half of the
+          // completion the card itself reads (`completion.dismissed`).
+          completion={{ dismissed: false, dismiss: null }}
         />,
       );
       const card = screen.getByTestId("host-overview-operation-card");

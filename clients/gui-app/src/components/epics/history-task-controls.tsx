@@ -1,3 +1,4 @@
+import { OrganizationHistoryOverflow } from "@/components/organization/organization-history-controls";
 import { useCallback, type ReactNode } from "react";
 import { ListChecks, Paintbrush, Trash2, X } from "lucide-react";
 import { RefreshIcon } from "@/components/refresh-icon";
@@ -89,6 +90,7 @@ export function HistoryTaskControls(
         // gaps are both gap-1, so the one-line rendering is unchanged.
         <>
           <div className="flex shrink-0 items-center gap-1">
+            {props.showSelection ? <OrganizationHistoryOverflow /> : null}
             <EpicsSortMenu value={props.sort} onChange={props.onSortChange} />
             <EpicsFilterPopover
               availableRepos={props.availableRepos}

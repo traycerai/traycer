@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
 import type { AuthSessionSnapshot } from "@/lib/auth/auth-service";
 import type {
+  DesktopLocalAuthSessionRestoreResult,
   DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
 } from "@/lib/windows/types";
@@ -30,15 +31,27 @@ const SIGNED_IN_SNAPSHOT: AuthSessionSnapshot = {
   contextMetadata: null,
 };
 
+const UNVERIFIED_SNAPSHOT: AuthSessionSnapshot = {
+  ...SIGNED_IN_SNAPSHOT,
+  status: "unverified",
+};
+
 const SIGNED_OUT_DESKTOP_SNAPSHOT: DesktopAuthSessionSnapshot = {
   status: "signed-out",
   token: null,
   profile: null,
 };
 
+const UNVERIFIED_DESKTOP_SNAPSHOT: DesktopAuthSessionSnapshot = {
+  status: "unverified",
+  token: SIGNED_IN_TOKEN,
+  profile: SIGNED_IN_SNAPSHOT.profile,
+};
+
 type RenderWithFakesOptions = {
   readonly replayOutboundSnapshot?: AuthSessionSnapshot;
   readonly deferSet?: boolean;
+  readonly omitRestoreLocal?: boolean;
 };
 
 type AuthSessionSetResolution =
@@ -51,6 +64,12 @@ interface AuthSessionBridgeTestHarness {
   readonly emitRevoked: (token: string) => void;
   readonly get: Mock<() => Promise<DesktopAuthSessionSnapshot>>;
   readonly ingest: Mock<(snapshot: AuthSessionSnapshot) => Promise<void>>;
+  readonly restoreLocal: Mock<
+    (expected: {
+      readonly userId: string;
+      readonly token: string;
+    }) => Promise<DesktopLocalAuthSessionRestoreResult>
+  >;
   readonly inboundDispose: Mock<() => void>;
   readonly outboundDispose: Mock<() => void>;
   readonly resolveSet: (resolution: AuthSessionSetResolution) => void;
@@ -143,11 +162,16 @@ function renderWithFakes(
     });
   });
   const get = vi.fn(() => Promise.resolve(mainSnapshot));
+  const restoreLocal = vi.fn(
+    (_expected: { readonly userId: string; readonly token: string }) =>
+      Promise.resolve("restored" as const),
+  );
   mockUseWindowsBridge.mockReturnValue({
     authSession: {
       get,
       set,
       revoke,
+      ...(options.omitRestoreLocal === true ? {} : { restoreLocal }),
       onChange: (handler: (snapshot: DesktopAuthSessionSnapshot) => void) => {
         inboundListener = handler;
         return { dispose: inboundDispose };
@@ -164,6 +188,7 @@ function renderWithFakes(
   return {
     get,
     ingest,
+    restoreLocal,
     inboundDispose,
     outboundDispose,
     resolveSet: (resolution) => {
@@ -217,9 +242,10 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
     });
 
     // The revoke, and ONLY the revoke: no `signed-out` (which siblings apply
-    // unconditionally) and no `unverified` (which main has no shape for).
-    // It names the rejected bearer, which is main's fence against a revoke
-    // that lands after a sibling window's fresh sign-in.
+    // unconditionally) and no published `unverified` transition. Local
+    // unverified restoration uses its separate file-backed IPC path.
+    // Revoke names the rejected bearer, which is main's fence against a
+    // revoke that lands after a sibling window's fresh sign-in.
     expect(revoke).toHaveBeenCalledTimes(1);
     expect(revoke).toHaveBeenCalledWith(SIGNED_IN_TOKEN);
     expect(set).toHaveBeenCalledTimes(1);
@@ -356,6 +382,84 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
       await drainMicrotasks();
     });
 
+    expect(harness.ingest).not.toHaveBeenCalled();
+  });
+
+  it("asks main to restore this window's unverified local identity without publishing a session transition", async () => {
+    const harness = renderWithFakes(
+      { outcome: "accepted" },
+      { replayOutboundSnapshot: UNVERIFIED_SNAPSHOT },
+    );
+
+    await act(async () => {
+      await drainMicrotasks();
+    });
+
+    expect(harness.restoreLocal).toHaveBeenCalledOnce();
+    expect(harness.restoreLocal).toHaveBeenCalledWith({
+      userId: "u1",
+      token: SIGNED_IN_TOKEN,
+    });
+    expect(harness.set).not.toHaveBeenCalled();
+    expect(harness.ingest).not.toHaveBeenCalled();
+  });
+
+  it("publishes the same bearer again when local restoration is promoted", async () => {
+    const harness = renderWithFakes({ outcome: "accepted" }, {});
+
+    await act(async () => {
+      harness.emitOutbound(SIGNED_IN_SNAPSHOT);
+      await drainMicrotasks();
+    });
+    expect(harness.set).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      harness.emitOutbound(UNVERIFIED_SNAPSHOT);
+      await drainMicrotasks();
+    });
+    expect(harness.restoreLocal).toHaveBeenCalledWith({
+      userId: "u1",
+      token: SIGNED_IN_TOKEN,
+    });
+
+    await act(async () => {
+      harness.emitOutbound(SIGNED_IN_SNAPSHOT);
+      await drainMicrotasks();
+    });
+
+    expect(harness.set).toHaveBeenCalledTimes(2);
+    expect(harness.set).toHaveBeenLastCalledWith({
+      status: "signed-in",
+      token: SIGNED_IN_TOKEN,
+      profile: SIGNED_IN_SNAPSHOT.profile,
+    });
+  });
+
+  it("ignores an inbound unverified snapshot from another window", async () => {
+    const harness = renderWithFakes({ outcome: "accepted" }, {});
+
+    harness.emitInbound(UNVERIFIED_DESKTOP_SNAPSHOT);
+    await act(async () => {
+      await drainMicrotasks();
+    });
+
+    expect(harness.ingest).not.toHaveBeenCalled();
+  });
+
+  it("keeps old shells without local restore support on the existing unverified path", async () => {
+    const harness = renderWithFakes(
+      { outcome: "accepted" },
+      {
+        replayOutboundSnapshot: UNVERIFIED_SNAPSHOT,
+        omitRestoreLocal: true,
+      },
+    );
+
+    await act(async () => {
+      await drainMicrotasks();
+    });
+
+    expect(harness.set).not.toHaveBeenCalled();
     expect(harness.ingest).not.toHaveBeenCalled();
   });
 

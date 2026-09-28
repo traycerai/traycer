@@ -131,6 +131,16 @@ The start page offers the checklist through a persistent, dismissible toast once
 the first-task guide ends. Dismissing it is remembered locally across reloads;
 the checklist remains available in Settings. Completed checklists hide the toast.
 
+The Home tab draws the checklist itself, above its task sections
+(`home-focus/home-getting-started-section.tsx`), from the same cards
+(`onboarding/getting-started-cards.tsx`) and the same count
+(`onboarding/getting-started-checklist.ts`) as this panel. The Home copy is
+denser, steps between whole rows (4 / 2×2 / 1) off its own container width,
+omits a guide the shell can never offer, and carries no search anchors, so the
+reveal still lands on the Settings card when both are mounted. While anything
+is left it is open; once every offered guide is complete it folds into one row,
+closed by default each time Home mounts.
+
 ## Search
 
 The rail's first control is a search box (`settings-search-box.tsx`), rendered
@@ -235,13 +245,15 @@ predicates; it never imports the assembled index or the search consumer.
 | Every rendered anchor is an indexed anchor of that section                                                                                                               | reverse membership inside `assertSettingsSearchTargets`                                                                                                                                                                                                                                                               |
 | Every contributor's words reach an entry                                                                                                                                 | the coverage test: its label and keywords appear in its target entry's document; no dangling, self or contributor target                                                                                                                                                                                              |
 | Every member has exactly one placement                                                                                                                                   | `CheckedSectionInput` rejects a `search` with both; the index test checks the input member by member                                                                                                                                                                                                                  |
-| No host-GATED element carries an anchor                                                                                                                                  | an exhaustive index test: an anchor on a host-scoped section is legal only when that section is registered with `hostScope: "connecting"`, so the executor proves every anchor it indexes lands while the host has no usable client (today: Permissions' tab bar and its Modes row)                                   |
+| No host-GATED element carries an anchor                                                                                                                                  | an exhaustive index test: an anchor on a host-scoped section is legal only when that section is registered with `hostScope: "connecting"`, so the executor proves every anchor it indexes lands while the host has no usable client (today: Permissions' tab bar and its Modes row, and the host Overview's tab bar)  |
 
 **Not guaranteed:**
 
 - A bespoke `<div>` that uses no primitive and writes no anchor is invisible to
-  all of this. Providers, Worktrees and the Host overview's own cards are
-  indexed at page and region level for that reason.
+  all of this. Providers and Worktrees are indexed at page and region level
+  for that reason, and the host Overview at page and TAB level: its tab
+  triggers are destinations, and every card inside a tab body folds into the
+  page.
 - TypeScript is structural: the types enforce a definition's SHAPE; the
   collection, reference and DOM tests establish COVERAGE. Types are not
   provenance — nothing stops a panel rendering another section's definition.
@@ -318,13 +330,13 @@ different answers:
   in a narrow window, because no predicate can see a width. Placement was
   anchored until it started hiding below `md`; searching it in a narrow
   desktop window then landed on an empty page. A row whose drawing condition
-  mentions the viewport at all belongs here. Permissions' tab triggers are
-  the one anchored element a viewport redraws, and they stay indexed because
-  the landing never depends on the width: on a phone viewport the tab bar
-  becomes one Select whose trigger carries the ACTIVE tab's anchor, and the
-  panel switches to the landed tab (during render, from `pendingReveal`)
-  before the reveal's first poll, so the anchor asked for is always the one
-  drawn.
+  mentions the viewport at all belongs here. Tab triggers - Permissions' and
+  the host Overview's - are the one anchored element a viewport redraws, and
+  they stay indexed because the landing never depends on the width: on a
+  phone viewport the tab bar becomes one Select whose trigger carries the
+  ACTIVE tab's anchor, and the panel switches to the landed tab (during
+  render, from `pendingReveal`) before the reveal's first poll, so the anchor
+  asked for is always the one drawn.
   A subgroup IS indexed, anchored on its inset card, so a result for one of
   its rows lands on the switch that reveals the row.
 - **Gated on DATA** ("Detected dev origins" and its Browser card, which render
@@ -366,22 +378,27 @@ different answers:
   notice; the bodies of Permissions' Judge, Rules and Activity tabs, which a
   host that predates `autoJudge.get` / `autoPolicy.get` /
   `autoJudge.listRecent` has no notion of at all; and
-  the Overview's Installation and Danger zone cards themselves,
-  which the page drops for an unresolved or vanished host) — not indexed. A
+  every card inside the Overview's tab bodies - Installation and Danger zone
+  among them - which come and go with the host's state and which the page
+  drops for an unresolved or vanished host) — not indexed. A
   shell-level context cannot decide selected-host identity or a capability
   negotiated over host RPC, and a predicate that pretended to would be a
   second, wrong model of the panel. The rule is **stable destinations**: index
   an element that renders whatever state the selected host is in — the PAGE,
   or an element the page draws OUTSIDE its `HostScopeGate` — and let every
   definition inside the gate contribute to it, so its label folds into that
-  entry's keywords. "uninstall", "snapshots", "import", "installation", "log
-  level", "startup flags" and "wsl" land on their page; "judge", "policy",
-  "allow rule" and "activity" land on the Permissions tab trigger that opens
-  them. The invariant that follows: **no host-GATED element carries an
-  anchor.** Permissions is the one host-scoped page that anchors anything, and
-  only what sits outside its gate: the tab bar (a trigger is never gated —
-  `HostScopeGate` wraps the three host-backed tab BODIES) and the Modes row,
-  which is application-scoped. The index test enforces it mechanically: an
+  entry's keywords. "log level", "startup flags" and "wsl" land on their
+  page; "judge", "policy", "allow rule" and "activity" land on the
+  Permissions tab trigger that opens them; "uninstall", "snapshots",
+  "import", "installation" and "port forward" land on the Overview tab
+  trigger that opens them. The invariant that follows: **no host-GATED
+  element carries an anchor.** Two host-scoped pages anchor anything, and
+  only what sits outside their gates. Permissions: the tab bar (a trigger is
+  never gated — `HostScopeGate` wraps the three host-backed tab BODIES) and
+  the Modes row, which is application-scoped. The Overview: its tab bar,
+  which renders for every host in every state above bodies that each gate
+  themselves; everything inside a body folds into the PAGE, whose own
+  vocabulary is split across the five triggers. The index test enforces it mechanically: an
   anchored entry on a `group: "host"` section is legal only when that section
   is registered with `hostScope: "connecting"`, so the executor has proved the
   anchor lands while the host has no usable client.
@@ -419,8 +436,9 @@ never renders passes too. A fixture's `hostScope` is `null` for an
 application page and `"connecting"` for a host-scoped one: the executor mocks
 `useHostScope` to a connecting scope for it, so every body behind
 `HostScopeGate` is concealed and only the anchors outside the gate can be
-found. Permissions is the only host-scoped page registered; every other host
-page anchors nothing, so it has nothing to prove.
+found. Permissions and the host Overview are the host-scoped pages
+registered; every other host page anchors nothing, so it has nothing to
+prove.
 
 **Reveal.** A click arms the store, then navigates through
 `lib/settings-navigation.ts` (surface-agnostic — the modal deliberately uses no
@@ -954,13 +972,14 @@ styles on purpose because its regions sit on three different capability planes:
   `vanished`. The reason is the one that motivates the gate at all: a `null`
   scoped host that defaulted to "local" once put this computer's service
   console under a host that no longer exists.
-- **Installation** is pure host RPC, so it mounts the gate itself and the gate
-  says why it is missing. The status card's ACTIONS (Restart / Run doctor / Use
+- the **install record and OS service** (Installation tab) are pure host RPC,
+  so without a route they are withheld and one line says they need a
+  connection. The status card's ACTIONS (Restart / Run doctor / Use
   in this window), the rename pencil, and the host's own update check are
   withheld outright without a route rather than rendered disabled - "disabled"
   would read as a capability verdict when the fact is connectivity.
-- the **account-backed** half - update policy, drain-gate force, and Remove
-  from account - needs no route and keeps rendering for a host that cannot be
+- the **account-backed** half - update policy, drain-gate force, About this
+  host, and Remove from account - needs no route and keeps rendering for a host that cannot be
   reached, which is a common moment to want exactly those. The danger zone
   gates its own rows for the same reason. The version PIN used to sit here and
   no longer does: picking a version means picking one the host listed, so it
@@ -1229,12 +1248,11 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     library - selection, editing, import/export - lives in `ThemeGallery`,
     backed by `stores/settings/theme-library-store.ts` and applied by
     `lib/theme-applier.ts`. `themePreset` remains the built-in-palette
-    fallback the gallery clears on a custom selection. See
-    `docs/theme-customization.md`. Anything that bakes theme colours into a
-    non-CSS surface (a canvas, xterm, a worker) subscribes to
-    `useThemeRevision()` (`providers/use-theme-revision.ts`) rather than to
-    the mode/preset fields, because a custom theme repaints the cascade
-    without changing either.
+    fallback the gallery clears on a custom selection. Anything that bakes
+    theme colours into a non-CSS surface (a canvas, xterm, a worker)
+    subscribes to `useThemeRevision()` (`providers/use-theme-revision.ts`)
+    rather than to the mode/preset fields, because a custom theme repaints
+    the cascade without changing either.
     Shared menu, dialog and composer surfaces use solid theme fills.
     Background opacity remains retired after reproduced renderer flickering;
     old saved opacity values are ignored when the theme library is read.
@@ -2630,7 +2648,11 @@ browsers` is omitted at zero for a sharper reason still: that plane is
       than enabled-but-partial.
     - **Coverage moves under the host that earned it.** `coverage.activity` is
       still the worst slice's verdict for the page, and
-      `coverage.degradedHostIds` is the per-host breakdown behind it. When the
+      `coverage.degradedHosts` is the per-host breakdown behind it, each host
+      with the link that is down (`focusActivityDegradedReason`: this
+      client's stream lost or reconnecting, or that host's cloud link down or
+      reconnecting). The page-wide banner prints one line per host naming it
+      and that reason, worst first. When the
       page is grouped and EVERY degraded host has a group to carry it, the
       notice renders under those subheadings and the page-wide banner stands
       down - saying "some activity may be missing" over a page that names WHICH
@@ -2790,7 +2812,7 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       what the rename fixes.
       **`usage`'s label is PER-PROVIDER** (`providerTabLabel`): that tab holds
       managed profiles and usage limits, but managed profiles exist for
-      `claude-code`, `codex`, and `grok` only — so on the other providers the fixed
+      `claude-code`, `codex`, `grok` and `antigravity` only — so on the other providers the fixed
       label promised a section that is not there. Elsewhere it reads
       **"Usage limits"**, which is the panel's own words for what remains (the
       section inside is headed exactly that). The ID never varies; this is
@@ -2904,22 +2926,30 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     rather than after CLI & Args so it cannot become a provider's default tab:
     amp and cursor advertise `env` without `general`, and a tab every provider
     gets must not displace the one the provider asked for.
-    The body is one card: the heading "Who reviews {provider}'s commands", then
+    The body is one card: the heading "Who reviews {provider}'s commands"
+    with Auto mode's muted xs **Experimental** badge, then
     `ProviderJudgeSwitch` (`panels/permissions/provider-judge-switch.tsx`),
     then an "All permission settings" link to Permissions ▸ Judge. The link
     passes `hostId: null` because Settings is already scoped to the machine
-    this tab shows. The switch is the SAME component Permissions ▸ Judge lists
-    under "Providers with a built-in reviewer", so the two surfaces cannot
-    disagree. Only the switch is per provider. Which model Traycer's judge
+    this tab shows. **This tab is the switch's only home.** Permissions ▸
+    Judge used to mirror it in a "Providers with a built-in reviewer" card,
+    so one setting had two places to change it; that card is gone, and the
+    Judge tab keeps only a pointer line that links here (see Permissions ▸
+    Judge). Only the switch is per provider. Which model Traycer's judge
     runs on, and the rules it follows, belong to one machine and one account,
     so they live on the Permissions page and this card only links there.
     Labelled by provider because THIS is the choice that wins
     (`isProviderJudgedExecution` reads the provider's own `autoJudge` alone);
     the provider name is interpolated, which renders "Who reviews Claude
     Code's commands" today and does not lie if a second provider ever reports
-    `nativeAutoJudge`. That choosing the classifier skips Traycer's judge AND
-    your rules is said once, in the Judge tab's "Providers with a built-in
-    reviewer" description, where both reviewers are in view.
+    `nativeAutoJudge`. The switch also carries what choosing the classifier
+    costs, since no other surface says it any more (see the `Select` rendering
+    below).
+    Settings search reaches this tab through the Providers page's own
+    keywords ("classifier", "who reviews commands", "built-in reviewer", "own
+    classifier"), and lands at the top of that page like every per-provider
+    concept, because the per-provider tabs exist only once a host answers.
+    The Judge tab's pointer line is the direct route to one provider's tab.
     The switch has four renderings, each a line of its own:
     - A provider whose `useGuiHarnessesQuery` row does not report
       `nativeAutoJudge` gets "Reviewed by Traycer's judge. Change it under
@@ -2940,6 +2970,10 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       as `autoJudge` in `provider-overrides.json`, beside `terminalAgentArgs`,
       so it takes that neighbour's scoping and invalidation (`providers.list`
       only; a judge choice cannot change availability).
+      Under it, whatever is selected, one line says what the classifier costs:
+      "Faster and free, but your rules don't apply to it, and it replaces
+      Traycer's judge for this provider's conversations." Only this rendering
+      has it, and only a `nativeAutoJudge` provider reaches this rendering.
       Nothing renders until the catalog and the setter's handshake have
       answered, so a read-only line never flashes at a provider about to get the
       switch. Drawing the switch is not the same as the provider judging: the
@@ -3003,9 +3037,10 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     plus the Bundle bar. The extension's live "Artifact Used" bar is omitted -
     `totalTokens`/`remainingTokens` come from the inference `GetRateLimitUsage`
     gRPC, which the gui-app/daemon stack doesn't expose. Also a "Manage
-    subscription" link (opens the platform URL via
-    `resolvePlatformBaseUrl(runnerHost.signInUrl)`, reused from
-    `user-menu.tsx`), and a refresh icon. A global account-context selector
+    subscription" link (opens the Billing page of the selected account via
+    `resolvePlatformBillingUrl` - `/team/<slug>/billing` for a team,
+    `/billing` otherwise - the same page `user-menu.tsx` opens), and a
+    refresh icon. A global account-context selector
     (Personal / each Team, shown only when the user has `teamSubscriptions`)
     chooses which subscription is displayed - the selection persists in the
     `account-context-store` (localStorage), defaulting to Personal when nothing
@@ -3884,113 +3919,356 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       `sessionImport.run`'s own negotiated line.
     - Below the row, one card per mode lists what it runs without asking, from
       `PERMISSION_MODE_DETAILS`, the same data as the picker's descriptions.
-  - **Judge** (`judge-tab.tsx`, `judge-model-field.tsx`) - **Auto mode judge**:
-    Automatic, or A specific model, over `autoJudge.get` / `autoJudge.set`
-    (`~/.traycer/host/config/auto-judge.json`, `selection: null` = Automatic).
-    Two readers share one cache entry with the composer's meta line, and the
-    harness catalog invalidates it when the Traycer row's enabled / available
-    / auth facts change (see `auto-judge-billing.ts`). The save invalidates it
-    too, after writing its echo.
+    - **Auto is experimental.** Its picker option, expanded selected control,
+      and mode card carry a muted xs **Experimental** badge. A compact picker
+      includes the status in its tooltip and accessible name. The mode card
+      adds: "Auto mode is experimental. We’re still improving its reliability
+      and speed."
+    - Desktop and mobile pickers show **Supervised**, **Auto-accept edits**,
+      **Full access**, then **Auto**, using `PERMISSION_PICKER_OPTIONS`. The
+      safety order in `PERMISSION_OPTIONS` stays separate and unchanged, as do
+      compatibility fallbacks. The Auto row has the same label-and-description
+      shape as its peers; reviewer/model/billing metadata is shown in Judge
+      settings, not the picker. Availability reasons and mid-turn notices stay.
+  - **Judge** (`judge-tab.tsx`, with `judge-tile-state.ts`,
+    `use-judge-toolbar-store.ts`, `judge-model-face.tsx` and
+    `judge-status-lines.tsx`) - **Auto mode judge**: which model checks each
+    command in Auto mode on this machine, over `autoJudge.get` /
+    `autoJudge.set` (`~/.traycer/host/config/auto-judge.json`,
+    `selection: null` = Automatic). The heading carries an **Experimental**
+    badge. Two readers share one cache entry with the composer's mid-turn
+    availability check, and the harness catalog invalidates it when the
+    Traycer row's enabled / available / auth facts change (see
+    `auto-judge-billing.ts`). The save invalidates it too, after writing its
+    echo.
     - The SELECTION comes from `useAutoJudgeQuery`, at Settings' 60 s
-      `staleTime`. It seeds the controls and is what a pick hands off to, so
-      an aged or invalidated copy still shows what is stored.
+      `staleTime`. It seeds the tiles and is what a pick hands off to, so an
+      aged or invalidated copy still shows what is stored.
+    - **The tab re-reads the machine whenever the window gains focus**, and
+      each time it opens, even while its copy is fresh, so an open tab
+      follows a judge changed in another window or on another device. It
+      listens for the window's own `focus` event: TanStack's focus manager
+      follows `visibilitychange`, which never fires when focus moves between
+      two visible windows. It is a plain refetch, never an invalidation, so
+      the verdict line stays up until the new answer replaces it. A pick made
+      on the card still wins until its save settles: the tiles present it over
+      the record, and the save cancels a read in flight before writing its
+      echo. Only this tab does it; the composer's readers re-read on mount.
     - The VERDICT (`effective`, `blocked`) comes from `useAutoJudgeVerdict`,
       the composer's own rule (`useAutoJudgeVerdictForClient`, which
-      `use-auto-judge-billing.ts` reads too). A
-      record the host has invalidated, or one never answered, is withheld
-      until a CURRENT read succeeds, and a failed re-read keeps it withheld.
-      `staleTime: Infinity`, so age alone hides nothing. An availability
-      transition, or a save whose echo the next read replaces, therefore
-      shows no Automatic status line and no warning line until the host has
-      answered again. Neither ever claims a verdict the host has since
-      withdrawn.
-    - **Automatic** shows what it resolves to NOW, from the host's `effective`:
-      - `null` → "No judge can run here · Auto mode asks you"
-      - `fallback` → "Now: the conversation's own provider · your account"
-      - `default` → "Now: {model} on Traycer · uses credits", where the model
-        is the catalog label for the slug when one exists
-        A host too old to report `effective` gets no status line. When Copilot
-        is enabled, a hint quotes Traycer's own measured rate (60–350 premium
-        requests per hour of Auto mode), which cannot go stale when GitHub
-        reprices. The figure is `COPILOT_PREMIUM_REQUESTS_PER_HOUR`
-        (`lib/auto-mode/auto-judge-billing.ts`). The composer's meta line
-        quotes the same constant, so the two cannot drift.
-    - **A specific model** is three fields: Provider, Account (drawn only for
-      more than one profile) and Model. Model is a searchable combobox, not a
-      menu, because a catalog can be long.
-      - A provider that cannot judge is listed as a disabled option with its
-        reason ("Turned off", "Signed out", "Not installed", "Not available").
-        A listbox holds options and nothing else, so no control sits inside
-        it.
-      - While the DISPLAYED provider is a blocked one, a single "Open
-        Providers" link under the Provider field focuses that provider's
-        page. It is left out when the warning line below already carries a
-        Providers link (a stored blocked provider), so the fix is never
-        offered twice.
-      - A blocked provider that is not chosen offers no fix link of its own.
-        Providers is one click away in the sidebar.
-      - An account is disabled with "Turned off" or "No API key".
-      - Choosing a provider commits its `judgeDefaultModel`, else its first
-        catalog model.
-      - If only the catalog knows, the pick waits on screen UNCOMMITTED (model
-        `""`) until the catalog answers.
-        - It is never sent: the contract refuses an empty model.
-        - Choosing an account for it keeps it uncommitted.
-        - One line under the fields says why it is stuck. An empty catalog
-          gives "{Provider} offers no models on this machine. Pick another
-          provider." A failed read gives "Couldn't load {Provider}'s models.
-          Reopen Settings to try again, or pick another provider." Reopening
-          works because an errored query refetches on its next mount.
-      - The Model list says the same two things. It shows "Loading models…"
-        only while the read is pending, and "No matching models." only for a
-        search that matches nothing in a non-empty catalog.
-      - Its rows are labelled with `modelDisplayLabel`, the composer picker's
-        own label.
-      - The description states the billing: "Billed to that provider's
-        account, on top of the conversation itself." Copilot also gets the
-        rate.
-    - **Nothing is disabled while a write is in flight.** `autoJudgeWriteScope`
-      orders the writes. What the old disable stood in for is that the controls
-      must not re-seed from the record mid-write, and they do not: they present
-      the latest pick until ITS write settles, and TanStack runs per-call
-      callbacks only for the latest `mutate`, so an earlier write landing
-      cannot snap them back. A refused write clears the pick, and that is the
-      rollback. Only an unloaded record, or a host that cannot store a
-      selection (`autoJudge.set` unsupported, stated in one line), disables the
-      controls.
-    - **A failed read says so, one line each**, above the options: "Couldn't
+      `use-auto-judge-billing.ts` reads too). A record the host has
+      invalidated, or one never answered, is withheld until a CURRENT read
+      succeeds, and a failed re-read keeps it withheld. `staleTime: Infinity`,
+      so age alone hides nothing. An availability transition, or a save whose
+      echo the next read replaces, therefore shows no status line until the
+      host has answered again. No line ever claims a verdict the host has
+      since withdrawn.
+    - **The card** opens with one lead line, the group's description
+      ("Checks each command before it runs in Auto mode."), and a muted xs
+      "This machine" `Badge`, the one the Modes tab uses for "All machines".
+      The scope badge stays on the lead line; the **Experimental** badge sits
+      beside the group's heading through `SettingsGroup.titleStatus`.
+    - **Two tiles, one radio group**: "✦ Automatic" (with an outline
+      "Recommended" badge) and "◎ A model you pick". They sit side by side
+      while the card is at least `@lg` wide (a container query on the card)
+      and stack, Automatic first, below that.
+      - Each tile is a `ChoiceTile` (`components/ui/choice-tile.tsx`). Its
+        chosen, focused and disabled looks are read off the `RadioGroupItem`
+        it holds, so the tile can never say "chosen" while the radio does
+        not. The radio is labelled by the tile's title and described by its
+        description.
+      - The tile body is a pointer convenience: clicking it does what
+        choosing the tile does. Clicks on the radio (which answers through
+        `onValueChange`), on a link, or on an ENABLED model control belong to
+        those. Clicks from the picker's panel, which is portaled away but
+        bubbles through React, are ignored.
+      - Nothing interactive is nested inside the radio. The model control is
+        its sibling.
+    - **The model control is the composer's `HarnessModelPicker`**, minus its
+      Fast footer (`withServiceTier` off). It is the composer's picker in
+      behaviour: a click on a provider, an account or a model saves at once
+      and keeps the panel open, and only an outside click or Esc closes it.
+      The rail commits only a provider that can run here. One that cannot
+      shows its sign-in or install steps and saves nothing.
+      - **Its effort footer is the judge's Effort control** (`withReasoning`
+        on while the host's negotiated `autoJudge.set` is `1.3` or later,
+        `autoJudgeSetStoresReasoningEffort`, AND the seed is the pick on
+        show, `judgeSelectionMarked`). It is hidden below that line, where
+        the request upgrade would reset the effort anyway and every write
+        then carries `reasoningEffort: null`; and it is hidden in the rows
+        whose seed is not a pick - "Choose a model", a last pick that cannot
+        run, a stored harness this build does not know - because a footer
+        change saves the store's selection, and there that would save the
+        placeholder, or a pick with an account the provider no longer has,
+        as the judge. Once a pick made in the panel lands, the row is Picked
+        and the footer appears. The footer shows the level the host RUNS:
+        the stored effort while the model still advertises it, else the
+        lowest the model advertises by the canonical ladder
+        (`effectiveJudgeReasoningEffort`, the host's own rule, so the two
+        cannot disagree). That is the store's `reasoningFallback: "lowest"`
+        (`normalizeReasoningForModel`): a composer's store restores the
+        vendor's default for an effort the model does not carry, and Grok's
+        default is High, the level a stage-1 verdict measured 14.4 s at
+        against 8 s at Low - the reason the judge has an effort at all. A
+        model that advertises no efforts disables the footer, as in the
+        composer, and its pick carries `null`. Changing the footer saves at
+        once, like every other click in the panel. A fresh pick - another
+        model, or a provider switch - saves the new model's lowest, as the
+        spec rules for a pick with no effort of its own; the footer's level
+        is kept only while the (provider, model) pair is unchanged: a
+        re-click of the checked row, a same-provider rail click that keeps
+        the model, an account change. That is the `"setting"` store's own
+        rule in `applyComposerSelection`: it ignores the effort the picker's
+        funnel (`commitSelection`) passes in, because that funnel reads
+        composer memory, which the judge must not inherit. The catalog
+        `hostId` is `null`, but the memory store's pre-host `legacy` tier
+        still answers a `null` host, so an old composer effort for the same
+        model would otherwise move the judge on a click that changed
+        nothing. The stored value is explicit, so a later catalog change to
+        the model's ladder is resolved by the host's rule above rather than
+        by whatever the file happens to say.
+      - The face names the effort after the model - "Grok 4.7 Build Fast ·
+        Low" - and the Automatic tile's "Now:" line names it in parentheses,
+        both only on a host whose `autoJudge.get` is `1.3` or later
+        (`autoJudgeGetKnowsReasoningEffort`): an older host runs the model's
+        own default, and no label may name an effort the host does not
+        apply. The composer's Auto row follows the same rule.
+      - It is hosted through the picker's `embedding` prop. The card draws
+        the face, so the picker draws no chip and no tooltip. A provider
+        switch (rail click, ⌘-digit, an account on another provider) commits
+        `judgeSwitchModel`: the row's `judgeDefaultModel` (only Claude Code
+        names one), else `""`, meaning that provider's first catalog model
+        once it loads, as in the composer. A click on the provider already
+        selected is not a switch: it keeps the model on show, as the
+        composer's same click restores that provider's remembered model, so
+        it saves nothing. It stops keeping it only once that provider's
+        catalog has loaded without listing it (`selectionCatalogConfirmed`
+        false on a loaded catalog): a model the machine no longer offers is
+        not one to keep, and keeping it would save a judge that cannot run,
+        so the click lands on the recommended model instead, as a real switch
+        does. While the catalog is still loading, nothing yet says the model
+        is gone, so the click keeps it and saves nothing; otherwise the
+        store's `""` would resolve to the catalog's default on arrival and
+        overwrite a listed pick. `selectionMarked` is true only while a pick this
+        build can name is on screen (`judgeSelectionMarked`), so nothing is
+        checked before a first pick, and a stored harness this build does not
+        know - whose store holds the unpicked seed - checks no unrelated row.
+        Closing returns focus to the face, never to a composer.
+      - `runTargetHostId` and `createProfileHostId` are both the gate's
+        `hostId`. It is concrete whenever Settings is scoped to a machine, so
+        the catalog reads and "Create new profile" (which mounts outside the
+        Settings binding) both reach that machine. It is `null` only while
+        Settings follows the effective host, where the two are the same
+        machine. `registerActivation` is false: the model-picker shortcut and
+        the palette's "Change model…" belong to the chat behind Settings.
+      - Its store (`useJudgeToolbarStore`) is built with
+        `createComposerToolbarStore`, never `useComposerToolbarStore`, whose
+        recording wrapper writes composer memory. `purpose: "setting"`: an
+        unavailable provider stays selected and a delisted slug is held as
+        stored, with the status line explaining it rather than a substitute,
+        and a provider switch tracks no `HarnessChanged`. Its catalog
+        `hostId` is `null`, so no composer-memory write lands and no host's
+        memory bucket is read: a judge pick never becomes the next chat's
+        model on that provider. It is fed the scoped host's harness list and
+        the models of the STORE's own harness, read only while that harness
+        is available. Its writer, installed through `setOnSettingsChange`,
+        is `useJudgePick`'s `request`, and it never sends `model: ""`. It
+        also sends nothing that names the pick already on show at the effort
+        the host already runs for it, so a re-commit of the same selection
+        is a no-op, as in the composer, whether or not the footer has been
+        touched; a footer change on the pick on show is a write. The
+        comparison is against the level the host RUNS, not the file's raw
+        value: choosing Low in the footer while the file names a level the
+        model no longer advertises (so the footer already shows Low) is the
+        same no-op, and the file keeps its stale value, which the host
+        resolves to Low by the same rule until that provider advertises the
+        level again. Before the store's provider catalog has answered, the
+        store emits the stored effort unclamped and the no-op compares
+        against that same value, so a same-provider rail click while the
+        catalog loads writes nothing.
+      - The seed key is `[row, seed selection, stored effort]`, where the
+        row is the tile state below. A re-seed from what is saved while the
+        seed itself has not changed (dropping a switch, settling a close)
+        applies a key of its own, since re-applying an unchanged key is a
+        no-op.
+    - **Tile states** (`judgeTileState`). The card is Loading until the
+      machine has answered: the record, the harness list and the providers
+      list, each with data or an error. Before then a last pick that cannot
+      run would read as runnable, and a click would save it. `displayed` is
+      the latest pick, else the record's selection. `last` is the pick being
+      cleared while the latest pick is a switch to Automatic, as that switch
+      recorded it when it was chosen - the pick on screen then, which may
+      itself still be saving - so the cleared pick shows dimmed at once,
+      instead of the cached `lastSelection` from before the save. Otherwise
+      it is the record's `lastSelection`, where absent and `null` both mean
+      none. `last` can run when `judgeWarningCause` over it, with
+      `blocked: null`, finds nothing. Two findings that check cannot make
+      before a save, and the save's echo corrects both in one round trip with
+      its amber line: the host's own `unsupported-harness` verdict, which the
+      host computes only for the stored selection; and a model the machine
+      no longer offers, known only once that provider's models load, which
+      the card does not wait on before it can be clicked.
+      - A host that cannot store a selection (`autoJudge.set` unsupported,
+        said in one line) shows its row's face at full opacity, inert, with
+        the picker disabled.
+      - The picker's own `disabled` is on in Loading, read-only and "last
+        pick runs", so it can never open there. The two rows that open it
+        keep it enabled, because a disabled picker force-closes.
+      - An inert face is never natively `disabled`. The composer's chip is a
+        plain `<button>`, which eats the click when disabled. It carries
+        `aria-disabled`, `tabIndex={-1}` and a `pointer-events-none` wrapper,
+        so a click on the dimmed chip lands on the tile and restores the last
+        pick. The dimming is the wrapper's opacity, lifted while the picker
+        is open from it.
+      - The face for a pick is `HarnessModelTrigger`: the provider icon, the
+        model's catalog label (else its slug), the effort the host runs it at
+        (above), and the account (name and accent dot) only when that
+        provider has more than one here, as the composer's chip. "Choose a model" is a `muted-outline` `Button` with
+        a chevron. A harness id this build does not know has no icon, so its
+        face is the text alone.
+      - With no last pick, the store is seeded with Traycer on
+        `effective.model` when `effective.source` is `default`, else the
+        first provider that can run here with `""`. That only decides where
+        the picker opens; nothing saves until a provider, account or model
+        in it is clicked, and the effort footer is not drawn until then.
+
+      The rows:
+
+      | Row              | When                        | Selected            | Face                                | Clicking "A model you pick" |
+      | ---------------- | --------------------------- | ------------------- | ----------------------------------- | --------------------------- |
+      | Loading          | the machine hasn't answered | neither; both inert | none                                | nothing                     |
+      | Picked           | `displayed` set             | ◎                   | the pick                            | nothing                     |
+      | Last pick runs   | Automatic, `last` runs      | ✦                   | `last`, dimmed, inert               | restores `last`             |
+      | Last pick broken | Automatic, `last` can't run | ✦                   | `last` + why ("Signed out"), dimmed | opens the picker            |
+      | No last pick     | Automatic, no `last`        | ✦                   | "Choose a model", dimmed            | opens the picker            |
+
+    - **The last pick lives on the machine** (`lastSelection` on
+      `autoJudge.get` / `autoJudge.set@1.2`), beside the judge itself, so
+      every device showing that machine dims the same model and account, and
+      it survives closing Settings and restarting the app. A host older than
+      `1.2` reports none, and Automatic's second tile then says "Choose a
+      model"; everything else works.
+    - **A pending provider switch.** A provider click whose model is not
+      known yet (every provider but Claude Code, until its catalog answers)
+      leaves the store holding the switch, unsaved. The second tile's foot
+      reports it whichever tile is selected, because the pending pick belongs
+      to it:
+      - a spinner while that provider's models load. Closing the picker
+        keeps the switch, and it saves the moment they land;
+      - "{Provider} offers no models on this machine. Pick another provider."
+        when they load empty, and "Couldn't load {Provider}'s models. Reopen
+        Settings to try again, or pick another provider." when they fail.
+      - A switch that can no longer save - its models came back empty or
+        failed, or its provider stopped being available - is settled
+        whenever the picker is closed: at the close, or later, when a switch
+        left loading behind a closed picker stops loading. It re-seeds from
+        what is saved, so the tile describes the machine's judge again and
+        the next open starts from it.
+      - Choosing a different outcome ends the switch first: Automatic,
+        even one already on and wherever on its tile (the body, the checked
+        circle, or Space on it), or bringing the last pick back, whether by
+        click or by arrow. The latest click wins, so the switch cannot land
+        after it. In Picked, the waiting switch is itself the second tile's
+        choice (flow 1 has it land even after the panel closed), so a second
+        click on that tile is not a new choice and the switch survives it,
+        as it survives opening the picker.
+      - A switch dropped for having no models, or failing to load them,
+        leaves its sentence on the second tile as display state, above
+        whatever the tile now describes, so the tile still says why nothing
+        was saved. It no longer holds the store, and it clears when the
+        picker next opens or a tile is chosen.
+      - While the switch waits, a re-derived seed (a harness list or verdict
+        settling on a cold host) does not replace it: it is a pick made on
+        this card that has not settled.
+      - Outside a pending switch, a close whose store differs from the seed
+        re-seeds too, so the next open starts from the machine's judge.
+    - **Keyboard.** The radio group is one Tab stop, and the model control is
+      another whenever it is enabled (Picked, and the two rows that open the
+      picker).
+      - Arrow keys move between the tiles, and Radix checks the radio they
+        land on. Arriving on ✦ switches to Automatic; arriving on ◎ in "last
+        pick runs" restores the last pick, as a click does.
+      - In the two rows that open the picker, arriving on ◎ only moves focus:
+        the controlled value stays ✦, and ◎ is announced as not checked.
+        Space or Enter there opens the picker through the item's `onKeyDown`
+        (and the embedding's `openRef`). Arrow keys never open it: the tab
+        tells an arrow's synthesized click from a real one by the same
+        held-arrow signal Radix uses.
+      - Esc closes the picker and returns focus to the face.
+      - Each foot is an `aria-live="polite"` region, so a status line is
+        announced when it changes.
+    - **Status lines.** Only the selected tile shows one (the pending switch
+      above is the exception).
+      - ✦, from the current `effective`:
+        - `default` → "Now: **{model} on Traycer** · uses Traycer credits",
+          where the model is the catalog label for the slug when one exists;
+        - `fallback` → "Now: **each conversation's own model** · on your
+          account there";
+        - `null` → "No judge can run here · Auto mode asks you";
+        - a host too old to report `effective` gets no line.
+        - While Copilot is enabled on this machine, the first two add
+          "Copilot conversations use premium requests when Traycer can't
+          answer: 60–350 per hour." The figure is
+          `COPILOT_PREMIUM_REQUESTS_PER_HOUR`
+          (`lib/auto-mode/auto-judge-billing.ts`), which the composer's meta
+          line quotes too, so the two cannot drift.
+      - ◎, when the stored pick can run: "Billed to your **{Provider}**
+        account ({Account})", naming the account only when the provider has
+        more than one. A Copilot pick adds "Uses premium requests: 60–350 per
+        hour of Auto mode."
+      - ◎, when it cannot: **one amber line**, the first thing wrong with the
+        STORED record, one sentence, one fix. `judgeWarningCause`
+        (`auto-judge-selection.ts`) decides. Nothing past the host's own
+        `blocked` verdict is reported until the harness catalog answers: an
+        unanswered read is never evidence that something is gone. The line
+        also waits for a CURRENT verdict, since `blocked` is checked first.
+        The checks run in this order:
+        - `blocked.reason`
+        - a harness this build does not know
+        - an unusable provider (one sentence per blocker, with a Providers
+          link, then "Until then, Auto mode asks you.")
+        - a model no longer offered
+        - a removed account
+    - **Nothing is disabled while a write is in flight.**
+      `autoJudgeWriteScope` orders the writes. The tiles present the latest
+      pick until ITS write settles, and TanStack runs per-call callbacks only
+      for the latest `mutate`, so an earlier write landing cannot snap them
+      back. Meanwhile the selected tile's foot shows only a spinner, since
+      any line would describe the choice being replaced. A refused write
+      clears the pick, which is the rollback: the tiles snap back to what the
+      machine holds, and the mutation's toast says it was not saved.
+    - **A failed read says so, one line each**, above the tiles: "Couldn't
       read this machine's judge. Reopen Settings to try again." for the
       record, and "Couldn't load this machine's providers. Reopen Settings to
-      try again." for the harness catalog. Without the catalog the Provider
-      field stays disabled, and the warning line below waits on it; an
-      errored query refetches on its next mount.
-    - **At most one warning line** under the fields: the first thing wrong
-      with the STORED record, one sentence, one fix. The checks run in this
-      order:
-      - `blocked.reason`
-      - a harness this build does not know
-      - an unusable provider (one sentence per blocker, with a Providers link)
-      - a model no longer offered
-      - a removed account
-        `judgeWarningCause` (`auto-judge-selection.ts`) decides and returns
-        the cause; the tab only picks the sentence. Nothing past the host's
-        own `blocked` verdict is reported until the harness catalog answers:
-        an unanswered read is never evidence that something is gone. The line
-        also waits for a CURRENT verdict (see above), since `blocked` is
-        checked first. The line
-        is silent while a pick is on screen, since the record is about to
-        change or is not what the controls show. An uncommitted pick's own
-        line (above) is the one shown then. The line is also silent under
-        Automatic, whose status line speaks for it.
-    - **Providers with a built-in reviewer** has one row per catalog row that
-      reports `nativeAutoJudge`: "Reviews with {provider}'s classifier, inside
-      the conversation." beside the same `ProviderJudgeSwitch` the provider's
-      own Permissions tab renders (see Providers). The group's description is
-      where the precedence is said: the built-in reviewer wins over the judge
-      above, and your rules don't apply to it. The group is omitted when no such
-      provider exists here.
+      try again." for the harness catalog. An errored query refetches on its
+      next mount.
+    - **The built-in reviewer pointer** (`built-in-reviewer-pointer.tsx`) is
+      one line under the judge card. The tab has no reviewer switch of its
+      own: the per-provider switch lives only on Providers ▸ {provider} ▸
+      Permissions (see Providers), which also says what choosing it costs.
+      - It names each provider set to review its own commands: catalog rows
+        with `nativeAutoJudge` whose `providers.list` state reads
+        `"provider"` through `providerAutoJudgeFor`, the switch's own read
+        path and value.
+      - It is gated like the switch and never states a guess. It renders
+        nothing while either list is loading, and nothing while the negotiated
+        `providers.list` line cannot report `autoJudge`
+        (`providersListReportsAutoJudge` false), where every provider would
+        read `"traycer"` whatever is stored.
+      - One provider: "{Provider} conversations are checked by {owner}'s own
+        reviewer, not this judge." The owner is "Claude" for Claude Code, else
+        the provider's label. Two or more: "{A} and {B} conversations are
+        checked by their own reviewers, not this judge."
+      - Then one "Change in Providers ▸ {Provider}" link per provider. A link
+        sets the providers focus store's `focusHarnessId` to that provider and
+        its `focusTab` to `"permissions"`, then opens Providers with
+        `hostId: null`, since Settings is already scoped to this machine. The
+        Providers page consumes both once on mount, and has the Permissions
+        tab whenever this line can render.
   - **Rules** (`rules-tab.tsx`) edits the ACCOUNT's Auto mode policy in place,
-    over `autoPolicy.get` / `autoPolicy.set`. It shows four sections in
+    over `autoPolicy.get` / `autoPolicy.set`. Its **Auto mode rules** heading
+    carries the muted xs **Experimental** badge, including on direct navigation.
+    It shows four sections in
     Traycer's order (Environment, Always allow, Ask first, Never allow), plus
     **Notes** for text under none of them. Each section has its tagline,
     description, a monospace textarea, and the built-in rules it extends.
@@ -4331,111 +4609,253 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     buttons are disabled at that boundary so a refused move is never offered as
     an active control. Neither can fire on a ladder this panel wrote, where
     `notify` is last and every movable row is above it.
-  - **The Advanced per-failure matrix is collapsed by default and derived, not
-    written out.** Its rows are `HOST_NOTIFICATION_STOPPED_REASONS` minus
-    `EXCLUDED_FALLBACK_REASONS`, so a new failure reason gets a row the day it
-    is added rather than silently missing one. Each row has three chips
-    (`notify` has no column - it is eligible everywhere, so the column would
-    carry no information) in three states: **runs**, **off**, and
-    **impossible**, the last rendered as a non-interactive `<span>` carrying
-    its own reason inline. That third state is why the eligibility table
-    `REASON_ELIGIBLE_RUNGS` had to move into `@traycer/protocol` (it was
-    host-private): the matrix must distinguish "you turned this off" from
-    "this cannot help that failure", and a second copy GUI-side would have
-    drawn a policy the engine does not execute the first time a row moved.
-    A write from this matrix carries `notify` through explicitly and takes its
-    order from the editor's four-row display order, never from the chips on
-    screen; an override that ends up equal to the base ladder is **removed**
-    rather than stored, so a later change to the main order keeps applying to
-    that failure. The excluded reasons collapse into one read-only line -
-    exclusion is not a preference - and `Reset overrides only` clears
-    `reasonOverrides` alone, leaving the ladder and Behavior untouched.
-    **What the matrix cannot express, disclosed rather than left to be
-    discovered (RF5, D142/D146).** Turning every override chip off leaves the
-    brief retry that outages and connection failures start with, and the
-    notification at the end - but **no cancellation window**: the all-off shape
-    arms no grace hold, so there is no countdown to cancel. Settings does not
-    author the wire's per-reason `off` value, and Notify stays last. That is
-    `FALLBACK_OVERRIDES_DISCLOSURE`'s promise in substance, and the two are
-    meant to stay in step. The
-    wire schema permits both - `reasonOverrides` accepts the literal `"off"`,
-    and `fallbackLadderSchema` checks length and uniqueness only, so an early
-    `notify` is a valid stored ladder - and the panel deliberately writes
-    neither. D142 and D146 settled that (the user fixed both); the sentence
-    above is the disclosure obligation those decisions carry, and it lives in
-    the panel's own help copy as well as here.
+  - **Overrides is a responsive list of problems with one inline editor open
+    at a time.** Every row starts collapsed and shows its configured behavior
+    and whether it follows the main plan or has a saved custom rule. Expansion
+    is local UI state, never a policy write. Eligible actions are checkboxes;
+    unavailable actions are explained in a disclosure, never disabled controls.
+    Rows and eligibility are derived from the protocol taxonomy. Connection
+    failures and excluded reasons have read-only summaries, with a per-reason
+    reset when a stored override exists.
+    The preview respects the stored order and stops at the first `notify`;
+    selected actions after it are marked as unreachable. A transient retry is
+    shown only when the narrowed sequence is nonempty. Explicit `"off"`, empty
+    sequences and sequences with only ineligible actions do not promise retries.
+    With automatic routing off, summaries describe what the settings would do
+    when it is enabled. Billing's notification and confirmed-sign-out gating
+    remain disclosed, and switch choices explain the fresh session.
+    Writes still use the existing four-row display order, carry terminal
+    `notify` through, and remove an override only when its FULL sequence equals
+    the base plan. Disabled checkboxes keep their place when that order agrees
+    with the saved sequence; viewing an older custom sequence never rewrites it.
+    **Use main plan** removes one override; **Reset all to main plan** removes
+    all overrides without touching other policy fields. Undo is an inverse of
+    that reset, held by the parent editor so it survives a tab change. It waits
+    for a confirmed current view, is unavailable for unknown/refused saves,
+    preserves unrelated fields, and expires on the next policy edit, full reset,
+    group restore, or device/editor remount.
+    Save feedback sits above the collapsible list. Unknown request IDs retain
+    their originating row so a collapsed row can say **Check save** without
+    treating the most recently edited row as the failed request. Existing
+    tab-level attention and the parent reducer's save/reconciliation rules
+    remain authoritative. Quiet save confirmation requires the submitted policy
+    to match the current confirmed view; a read-back that restores older values
+    cannot claim the change was saved. Undo and read-only reset restore focus to
+    stable labels. No new policy storage or recovery engine behavior.
   - **Equivalent models** is the user's statement about which models are
     interchangeable, and the only thing that makes the "equivalent model" step
     possible - the host will not move a chat between a standard and a frontier
-    model on its own guess. Each row is **provider + model + optional
-    effort**, and **both Model and Effort are selects over the provider's
-    catalog**, not free text: an unrestricted input whose only hint was a
-    placeholder made the user guess a provider-specific spelling, and a typo was
-    accepted, saved as policy, and then silently dropped or unmatched at
-    resolution - so the value on screen did not mean what the fallback would
-    run. Model lists the catalog by label (the composer picker's own models)
-    and stores the SLUG; a stored value that is not a catalog slug - the
-    seeded family names (`opus`), or a retired slug - is pinned as the first
-    option and stays selected, tagged "family" once the catalog has answered.
-    The row's verdict line renders only when it adds something: a family's
-    "matches Claude Opus 5 today", or a problem. Effort offers the chosen
-    model's own `supportedReasoningEfforts` when Model names a slug and the
-    union across the harness's models when it names a family (the effort
-    applies to whichever model the family resolves to at hop time); the
-    catalogs come from `agent.gui.listModels`, read once per DISTINCT harness
-    in the draft through the same cache-only slots the model pickers use and
-    gated on availability (`fallback-catalog-options.ts`). Changing a row's
-    provider clears its model and effort, since both are one catalog's
-    vocabulary. **A default group** (`defaultTierGroupId`, one select above the
-    list, a `Default` pill on the card) is the group the step uses for a model
-    in NO group - a configuration the user makes, never seeded; "None" keeps
-    the old behaviour, where the step is skipped for an unlisted model. The
-    editor carries the marker through a rename, clears it on a delete and
-    restores it on that delete's Undo; the schema refuses a default naming no
-    group. The per-row preview cannot
-    supply this: with no failed tuple the engine's walk stops at the resolved
-    slug and never reaches effort normalisation, so it returns no effort
-    information and no warnings. A stored value outside the set keeps an option
-    of its own and stays selected, marked as not offered - the same range-render
-    rule the provider select and the timings use. When nothing answers (an older
-    host, a harness the user no longer has, a cold slot) the text input stands,
-    because a select built from nothing would take away a level the user can
-    legitimately type. The provider select offers the GUI-capable harnesses only - the
-    rung skips anything else with `harness-not-gui`, so a terminal-only vendor
-    here would be a row the user can choose and the engine will never walk - and
-    a stored id outside that set still gets an option of its own, under the same
-    range-render rule the timings use.
-    Candidate ORDER inside a group is load-bearing (the rung walks it and takes
-    the first usable target) so rows carry ▲▼; GROUP order is not (D128 routes
-    by most-specific family match, not position), so there is deliberately no
-    group reordering - a control that changed nothing would be worse than none.
-    There is deliberately **no drag surface here**: the step editor stays the
-    only one, because a candidate list is unbounded and nested inside a
-    scrolling pane, which is where drag is worst, and ▲▼ is the keyboard and
-    touch path either way.
+    model on its own guess. The vocabulary is **tier**: the seed is three tiers,
+    **Frontier**, **Flagship** and **Standard**, and each tier is a list of rows
+    tried top to bottom. Each row is **provider + model or pattern + optional
+    effort**, with a `#` rank in front of it.
+    **The Model cell is a combobox over the provider's catalog**
+    (`fallback-model-pattern-combobox.tsx`, composed from `command.tsx` and
+    `popover.tsx`) on a host whose `providers.fallbackPolicy.get` line is 1.1 or
+    later - read off the NEGOTIATED line (`useFallbackPolicyPatternLines`),
+    never inferred from a preview response carrying `matches`, which the
+    1.0 → 1.1 upgrade synthesises. What it saves depends on what was typed:
+    an exact model id or label puts that model first and picking it stores its
+    SLUG; three or more other characters make the first option **Any model
+    containing "…"**, which saves `*text*`; and a typed `*` builds the pattern
+    as written (`*` is the only wildcard, matched case-insensitively against
+    slug and label by the protocol's `modelMatchesPattern`). A bare `*` is
+    named **Any <provider> model** ("Any Codex model") in the option, the
+    cell and its accessible name, beside the mono `*`, so the row says it
+    claims the whole provider. The models the pattern reaches are numbered in
+    the order they would be tried, and while a pattern is being typed the
+    input row counts how many it reaches. A pattern row wears the `*` badge
+    (text alternative "pattern") where the old "family" tag was, and the
+    trigger's pill - "2 models", or "1 conflict" - is part of the trigger's
+    accessible name. The trigger declares `aria-haspopup="dialog"`: what opens
+    is the popover, which holds the list's own combobox input and listbox.
+    A catalog that answers while the list is open re-seeds the highlight as a
+    fresh open would, so Enter on an exact pick still picks the model.
+    **A model can be in only one tier.** A model another tier already owns is
+    listed as **in <tier>** and cannot be picked; a pattern that would reach
+    one is offered disabled, with the reason ("GPT-6-Astra is in frontier and
+    GPT-6-Sol is in flagship") as its description, and Enter on it announces
+    that reason through the editor's `role="status"` region rather than
+    saving; its hint suggests a narrower pattern that is free (for example
+    `*gpt-6-luna*`). The keyboard reaches refused options - the list drives its
+    own arrows, since cmdk's skip `aria-disabled` items - so a refusal can be
+    heard. A stored policy that breaks the rule anyway (written by an older
+    client, or by an edit elsewhere) is RENDERED, never refused: both rows get a
+    red **conflict block** naming the other tier, saying the first tier
+    handles the model because it is listed first, with **Edit pattern** (or
+    **Change model** on an exact-pick row) and **Go to the <tier> row**. The
+    block is `role="alert"` only on the conflict's FIRST appearance in the
+    panel (`fallback-conflict-announcements.tsx`, keyed by harness, model slug
+    and the set of tier ids, and held for the policy editor's lifetime): the
+    Equivalent models tab unmounts when left, and a permanent alert re-read
+    every conflict on every visit. **Go to the <tier> row** moves focus to that
+    row's Model cell, addressed by the row's draft key like the removal
+    handoff below. Conflicts are computed draft state
+    (`fallbackTierConflicts` over `findTierConflicts` and the catalogs the
+    editor already holds), never a validation error: **there is no save gate
+    anywhere** - the master switch, the timings and every other tier still
+    commit while a conflict stands, and an Undo that brings one back is not
+    refused.
+    **Each row's status line** comes from the preview's `matches[]`, falling
+    back to `resolvedModel`: "Tries A → B → …" in try order, a match the walk
+    would skip struck through with an amber `warning` pill, "No <provider>
+    model matches <pattern>" in red for a pattern that matches nothing, and
+    "Can't check right now: …" in neutral when the check itself was skipped
+    for an environmental reason. An exact pick that resolves to itself says
+    nothing - the line appears only when it adds something.
+    Effort offers the picked model's own `supportedReasoningEfforts` for an
+    exact pick, the UNION over the pattern's matches for a pattern, and the
+    union across the harness's models when the pattern matches nothing yet
+    (the effort applies to whichever model the hop takes); the catalogs come
+    from `agent.gui.listModels`, read once per DISTINCT harness in the draft
+    through the same cache-only slots the model pickers use and gated on
+    availability (`fallback-catalog-options.ts`). Changing a row's provider
+    clears its model and effort, since both are one catalog's vocabulary.
+    **On a 1.0 host the Model cell is the old select**, unchanged: it lists
+    the catalog by label and stores the slug, a stored value that is not a
+    catalog slug is pinned as the first option and tagged "family", and no
+    conflict is drawn - "one model, one tier" is a pattern-era rule a 1.0
+    host's word matcher does not apply. The try line renders on both.
+    **The preview** is asked only for the tiers on screen. On a
+    `previewTierGroups` 1.1 line a blank draft row travels in the request and
+    comes back as a skipped row, so adding a row no longer blanks every other
+    row's line; on 1.0 a blank row still closes the gate, since the 1.0
+    request cannot encode one.
+    **The default tier** ("For a model not in any tier", one select above the
+    list, a `Default` pill on the card) is the tier the step uses for a model
+    in NO tier. The seed sets it to **flagship**, so an unlisted light model
+    (a Haiku, a mini) is now tried against Flagship models rather than skipped;
+    "None - skip this step" keeps the old behaviour. The editor carries the
+    marker through a rename, clears it on a delete and restores it on that
+    delete's Undo; the schema refuses a default naming no tier. The Ladder
+    tab's step hint asks the same question the error card's verdict does
+    (`tierGroupsNameDestinationFor`), over the DRAFT and the editor's cached
+    catalog for the last-run harness. On a 1.0 host it asks the released
+    rule instead (`fallback-legacy-family-routing.ts`), because that host
+    reads a row as a family word: a whole word in the model's ID (never its
+    name), the longest family deciding the tier, then the default tier. The
+    pattern answer there would tell a user whose `gpt` row routes
+    `gpt-6-sol` to a Claude model that nothing is set up. The per-row preview cannot supply
+    effort normalisation: with no failed tuple the engine's walk stops at the
+    resolved slug and never reaches it, so it returns no effort information.
+    A stored effort outside the offered set keeps an option of its own and
+    stays selected, marked as not offered - the same range-render rule the
+    provider select and the timings use. Effort is ALWAYS a select - there is
+    no free-text effort input. When nothing is offered (an older host, a
+    harness the user no longer has, a cold slot) it still renders: disabled
+    on "Any effort" when that is the stored value, since there is nothing to
+    pick, and enabled when a value IS stored, so the one edit still possible -
+    clearing it back to "Any effort" - stays possible. The provider select offers the GUI-capable
+    harnesses only - the rung skips anything else with `harness-not-gui` - and
+    a stored id outside that set still gets an option of its own.
+    **Test a model** (`fallback-test-model-panel.tsx`, pure half in
+    `fallback-test-model.ts`) is a button in the section header that opens an
+    INLINE panel under it - not a dialog, so the tiers it tests stay on screen.
+    It reads "If <provider> <model> is blocked by <a rate limit | another
+    error> …", with the account (that provider's last-used, checked against its
+    live accounts, else the first account listed - never a disabled Terminal
+    account; no control for a provider with none) and the permission mode (the
+    user's default, clamped to what the provider honours) beneath. This picker
+    uses the shared presentation order, with Auto last and its **Experimental**
+    badge on both the option and selected value. Agent mode
+    and fast mode are carried from the defaults, as the new-conversation modal
+    seeds them. A model catalog that fails to load says so in the Model picker
+    and offers "Try again". It answers for the DRAFT, blank rows and an unsaved
+    default tier included. The tier comes from the protocol's
+    `routeTierGroupForFailedTuple` with the editor's cached catalog - the
+    readable-catalog answer - as "Traycer uses the <tier> tier · <model> is in
+    it through <pattern> (row n)"; the "(row n)" lookup uses the router's own
+    identity (`failedModelRoutingIdentity`). Every row of that tier follows
+    with each match in try order, from `previewTierGroups`@1.1 called with
+    `blocked` set to the tuple, so the host runs the live walk (same-as-failed,
+    permission-mode fit, the sibling rule after a rate limit): **switches
+    here** (`success`), **then**, and **skipped · …** - neutral for the blocked
+    model itself and a blank row ("blank, skipped"), amber `warning` for the
+    world, red for a pattern that matches nothing. The wireframe's own words
+    where it names one ("the blocked model"), the host's label otherwise. At
+    phone width a pill drops under its model and wraps inside itself (`Badge
+wrap`). Each row names the account its first usable match runs on, the
+    Terminal account included. The walk is asked about the tiers as last
+    COMMITTED (the draft reducer's `committedTiers`), so a tier rename typed
+    into the name field sends nothing until it commits on blur, while the
+    header follows the live draft at once. When the walk comes back without
+    the routed tier's rows - the host read the model's name from its own
+    catalog and routed it elsewhere - one line says which tier the host would
+    use, never a named tier over empty rows. Below the rows, "If none of these
+    work: …" is the draft's steps after the equivalent-model step for that
+    failure. "Another error" stands for every failure other than a rate limit
+    that can reach the equivalent-model step (auth, billing, model
+    unavailable, provider unavailable), each on its own effective ladder (its
+    override, else the main order, narrowed to the steps that failure can
+    take): when they agree the line says so, and when they differ it says
+    "depends on the error; see Overrides". Three footers cover what the header
+    alone would hide: a model in no tier goes to the default tier; with the
+    default set to None there is no equivalent-model step and it goes straight
+    to the next step; a model in two tiers is handled by the first-listed, with
+    a red **fix** that moves focus to that tier's row (the conflict block's
+    go-to-row). A failure whose steps leave out the equivalent-model step (or
+    turn them all off) says so in one line, naming the step it goes straight
+    to, instead of a tier that never runs. With **Route automatically** off the
+    host arms nothing, so the verdict leads with "Route automatically is off,
+    so nothing switches on its own. With it on:" and still shows the dry run.
+    Escape and ✕ close the panel and return focus to the button. The verdict
+    is announced as ONE sentence through a visually hidden polite status
+    mounted with the panel (the tier, and where the chat switches to); the
+    visible rows and pills are not a live region. It is offered only on a
+    `get`@1.1 host, since its router reads rows as patterns, and the dry run is
+    asked only on a host whose negotiated `previewTierGroups` line is 1.1 or
+    later - gated in the hook itself, and read off the line, never off whether
+    `matches` is present. Below it the walk cannot be asked for, so the panel
+    shows the tier verdict and each row's first match from the editor's own
+    preview, with "This host can't simulate the walk; showing what your tiers
+    say."
+    Row ORDER inside a tier is load-bearing (the rung walks it and takes the
+    first usable target) so rows carry ▲▼. TIER order is not a routing
+    control: a model belongs to one tier, and when a draft breaks that rule the
+    fix is the pattern, not the order - so there is deliberately no tier
+    reordering, and the conflict block's "listed first" is a description of
+    what happens until the fix, not an invitation to reorder. There is
+    deliberately **no drag surface here**: the step editor stays the only one,
+    because a row list is unbounded and nested inside a scrolling pane, which is
+    where drag is worst, and ▲▼ is the keyboard and touch path either way.
+    **Narrow panes stack each row** (the editor is an `@container`; below
+    `@2xl` a row is rank · provider · effort on one line, then the Model cell,
+    the status line and the row actions), with fluid sizing only.
     Empty is a state a user can REACH, and it is not the same as never having
-    had groups: the host seeds on first read and marks the user, so the empty
-    state offers **Restore the default groups**, which calls the RESTORE op
+    had tiers: the host seeds on first read and marks the user, so the empty
+    state offers **Restore the default tiers**, which calls the RESTORE op
     rather than saving a client-built list - only the host can build the seed a
-    first read would have produced. Deleting a group or a row offers **Undo**,
+    first read would have produced - and on a `get`@1.1 host the restore also
+    writes the default tier (`flagship`). On a `get`@1.1 host the same control
+    also sits in the footer beside **Add tier** while tiers exist, behind the
+    shared destructive confirm ("Replace your N tiers with the default
+    Frontier, Flagship and Standard tiers? This also sets the default tier to
+    flagship."), since there it replaces work and has no Undo; focus returns
+    to the button once the restore settles. A 1.0 host gets no footer
+    restore, as in the released editor: its restore writes its own older
+    seed and keeps the current default, so that confirm would be untrue, and
+    it refuses the restore outright when the default names a tier of the
+    user's own. The empty state's button restores directly on every host -
+    there is nothing to lose, and no tier is left for a default to name. Deleting a
+    tier or a row offers **Undo**,
     and undo dispatches the INVERSE of that one removal into the current draft -
     not the policy as it stood when the toast was raised. A toast outlives its
     render, so a captured snapshot also reverted every unrelated setting changed
     since it appeared (the maximum wait adjusted while the toast was still up),
     and an older toast's Undo resurrected a row deleted after it. The inverse
-    carries the removed group or row WITH its identity and its index, so undo
+    carries the removed tier or row WITH its identity and its index, so undo
     brings back the same row rather than a lookalike, at the position it held -
     position being the one thing a user cannot retype - and answers "already
-    back" or "its group is gone" by doing nothing.
+    back" or "its tier is gone" by doing nothing.
     **Removal hands the keyboard on.** Filtering out the focused button's own
     subtree left focus on `document.body`: a keyboard user was returned to the
     top of the page and a screen-reader user was told nothing, after a gesture
     they made deliberately. `useRemovalFocus` takes an ordered list of selectors
     and focuses the first that exists once the removal has rendered - the row
     that takes the removed one's place, its neighbour if it was last, then the
-    `Add` control. Rows are addressed by their draft key, never by a group's
-    editable name. A new row's family starts
-    EMPTY (invalid until typed, so an invented default is never saved as a
+    `Add` control. Rows are addressed by their draft key, never by a tier's
+    editable name. A new row's model or pattern starts
+    EMPTY (invalid until chosen, so an invented default is never saved as a
     choice) while its provider is SEEDED - a closed union with a control right
     there is a starting point, not a fabricated answer.
     **Candidate rows carry a client-side identity** (`fallback-tier-group-keys.ts`),
@@ -4492,14 +4912,16 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     underlying reason, so the guard makes its reason explicit instead of
     incidental.
   - **When an edit is SAVED depends on the control kind.** Switches, selects,
-    ▲▼ and buttons produce a complete value per interaction and commit
-    immediately. **Text fields (group name, model family, and the effort input
-    where no catalog levels are available) commit on BLUR or Enter**, because
-    their intermediate states are not values anyone means: "opus" passes through "o", "op", "opu", and a save per character
-    persists three model families nobody chose and spends a catalog read per
-    candidate previewing each. Local validation still runs per keystroke, so the
-    inline message under a blank family appears as it goes blank rather than
-    when the field is left. Enter does not also blur - the field is not a form.
+    ▲▼, buttons and the Model combobox (a value is saved only when an option is
+    picked - typing into its search saves nothing) produce a complete value per
+    interaction and commit immediately. **The one text field, the tier name,
+    commits on BLUR or Enter**, because its intermediate states are not
+    values anyone means:
+    "fast" passes through "f", "fa", "fas", and a save per character persists
+    three tier names nobody chose and spends a catalog read per candidate
+    previewing each. Local validation still runs per keystroke, so the inline
+    message under a blank tier name appears as it goes blank rather than when
+    the field is left. Enter does not also blur - the field is not a form.
   - **A save's echo cannot overwrite a newer draft, and TWO saves cannot be
     confused.** Every edit bumps a `revision`; every dispatched save gets a
     request id minted at the call site (the reducer has not run yet, so the
@@ -5378,6 +5800,219 @@ set-state-in-effect` forbids the effect form, and an effect would also
   sidebar switcher is the collection, and every lifecycle verb lives on the
   Overview of the host it describes.
 
+  **A pinned host header, a notices strip, and four tabs**
+  (`host-overview-tabs.tsx`; core flows: the `host-overview-tabs` epic
+  artifact). The header is the identity part of `HostIdentityCard` - name and
+  rename, the Local/Remote tag, Activate, the `⋯` menu, the health line, the
+  working chip - and it never moves, so switching tabs never hides Restart or
+  Activate. Under it, the notices strip (below), then in this order:
+  **Installation · Updates · Data · Ports**, a `TabsList variant="line"`.
+  There is no Status tab any more: it repeated the header's facts and stated
+  one update three times (the update card, the version card's tag, and its
+  answer), so its update card, wait and offline notice moved into the strip,
+  where they are on every tab, and its version card leads Updates.
+  - **Frame.** The header, the notices strip, the tab bar and the active body
+    share one card. On desktop the page takes `SettingsPanelShell`'s
+    `fillHeight` (the Providers model) with a transparent body card: the
+    header, the strip and the bar are pinned, only the active tab's body
+    scrolls, and the card is only as tall as its content up to the pane. The
+    `md:` classes on the tab frame are that whole model. On a phone
+    (`useIsMobileViewport`) nothing is a scroll container and the page
+    scrolls as one, header and strip included; the bar becomes a section
+    `Select` (built like `PermissionsTabSelect`) whose trigger carries the
+    ACTIVE tab's search anchor, and Activate moves into the `⋯` menu as its
+    first item (with its reason written under it). The phone's name row never
+    wraps (`HostIdentityCard`'s `nameRowWraps`): the name truncates, and the
+    pencil, the tag and the `⋯` keep their space.
+  - **Every tab, every state.** All four render for every host in every
+    state - connecting, restarting to finish an update, unreachable,
+    stopped, not installed, update required - so the header, the strip and
+    the bar sit outside anything that withholds a body, and each body decides
+    what it can show (the per-region `usable` gates it carried before the
+    split). While the host connects, Updates shows the version list's loading
+    shape (`HostScopeConnecting`) with no version card above it - unless an
+    update is retained, when the version card shows. The header's own states
+    are unchanged: this computer's host down gets Run doctor (and Reinstall
+    Traycer after a removal), an unreachable host gets no Activate or `⋯`.
+    The two page states with NO header and no tabs are unchanged too - a host
+    removed from the account while you look at it, and an account with no
+    host but Traycer installed (`LocalRecoveryDangerZone`).
+  - **Tab state.** The page opens on Installation
+    (`DEFAULT_HOST_OVERVIEW_TAB`, the first of `HOST_OVERVIEW_TABS`).
+    `OpenSettingsModalOpts.tab` opens the named tab (read through
+    `useSettingsOpenIntent("host")`, acknowledged with
+    `acknowledgeSettingsOpenIntent`, and its `hostId` carried into the
+    Settings scope before paint, as Permissions does); a tab this page does
+    not have is ignored, except a RETIRED name, which selects its replacement
+    (`hostOverviewTabForIntent`: `"status"` opens Updates). The four links
+    into `section: "host"` (the resource monitor's and the rate-limit
+    popover's Manage hosts, the composer's host section, the chat tile's host
+    update) name `tab: "updates"`, so an Overview already open on another tab
+    comes back to the version and the update answer, on the same host or a
+    new one - a link with no tab arms no intent and would leave the tab where
+    it was. A settings-search landing on a tab's anchor switches to it during
+    render (`hostOverviewTabForAnchor`); a page result moves nothing. Nothing
+    switches tabs by itself, and nothing inside the page selects a tab: the
+    strip is on every tab, and the version list is directly under the version
+    card. The selected tab is held by `HostSettingsPanel`
+    (`useHostOverviewTabSelection`, in `host-overview-tab-state.ts` beside
+    the components' `host-overview-tabs.tsx`, so both keep Fast Refresh)
+    ABOVE its per-host remount (`key={scopeKey}`), so a switch of host in
+    the sidebar picker keeps the tab while the remount still closes an open
+    confirmation, the rename field and the Doctor panel of the previous
+    host. A VISITED tab stays mounted, hidden while inactive (the Rules-tab
+    rule), so a half-typed retention limit survives a look at Updates; an
+    unvisited one is never mounted, and visited tabs reset when the page
+    closes or the host changes.
+  - **The notices strip, top to bottom, drawing only what applies**
+    (`host-overview-notices.tsx`, between the header and the tab bar; its
+    decisions are in `host-overview-status-model.ts`, and the panel resolves
+    each piece). At rest - a reachable host with no update in flight and no
+    wait - it draws nothing, and the header sits directly on the tab bar.
+    1. **The offline notice**, while the host can't be reached for a reason
+       other than a restart (`!usable`, not connecting, the health word not
+       "Restarting…"): "Can't reach build-box — last seen 3h ago, while
+       downloading update to v1.5.1. Auto-update settings still apply at its
+       next check-in; everything else here needs a connection."
+       (`describeHostOfflineNotice`). The phase clause comes from
+       `describeLastSeenUpdateClause` and drops when no update was in flight;
+       the last-seen half drops when the account holds no check-in; the
+       auto-update half drops for a host the account does not know. It is the
+       strip's ONLY unreachable wording, so the update card is withheld under
+       it and its retained "Last seen: …" rides in the clause instead.
+    2. **The update card** (`HostOverviewOperationCard`), the host's own
+       report: progress with measured bytes, the restart phases, a wait on
+       work, failure, success. Info while it runs, warning while it waits on
+       someone, destructive on failure, success when done, neutral for a view
+       the page can no longer vouch for (a retained failure stays red). Its one
+       control is Restart, Force update… or Force restart…. Success reads
+       "Updated to v1.5.1" and collapses after 8 s or on dismiss; the
+       acknowledgement (`useHostUpdateCompletion`) runs at PANEL level, so the
+       card's own mount and unmount never restart its timer. It is the page's
+       ONLY report of an update in flight: the header carries no update pill,
+       and the version card goes quiet while it shows.
+    3. **The account's wait** (`HostUpdateDrainGateRow`: "Waiting for 2
+       agents", Apply now — ends 2 agents), a warning callout. **One wait on
+       screen**: it is withheld once the host's update view is
+       `waiting-for-work` (retained phase included), where the update card
+       says it with Force update…, and while the host can't be reached,
+       because it names live work. Its confirm and its refusal when the work
+       changes under the open dialog are unchanged.
+  - **The destructive rule.** Force update…, Force restart… and Apply now end
+    running work, so they are destructive-styled wherever they appear: the
+    update card, the drain-gate row, and the busy dialogs
+    (`HostBusyForceDeferDialog`'s required `forceDestructive`, true at every
+    caller but the bound activation offer, whose button is "Restart host").
+    Restart and Update now stay ordinary buttons. Every confirmation still
+    names the count.
+  - **Updates ▸ Version card** (`HostOverviewVersionCard` in
+    `host-overview-updates.tsx`), first on Updates, always - except while the
+    scope connects with no update retained. The running version at the
+    name's size (`text-title-sm`), one tag (Latest · Update available ·
+    Checking… · Restart to finish · Needs newer CLI tools · Last reported;
+    `deriveHostOverviewVersionTag`), the answer in today's words, and Update
+    now (only when installable) / Check now.
+    - **In flight, quiet.** While an update runs, waits or restarts
+      (`inFlightUpdateKind`, retained phase included) the card is its version
+      alone: no tag, no answer, and Update now and Check now HIDDEN, not
+      disabled; all come back when the update finishes or fails. The update
+      card in the strip is on screen for exactly that span (an in-flight kind
+      is never a quiet view, and an offline host wears "Last reported"
+      instead), so it is the one place that describes the update: the
+      catalog's "v1.5.1 is available." mid-download would contradict it, and
+      activation debt's "Restart to finish" tag and "v1.5.1 is installed —
+      restart host to finish." answer would repeat it. Outside flight the
+      answer still decides the tag, so a pre-@1.3 host's activation debt,
+      which has no update card, keeps both.
+    - **The command-line-tools fix** (Copy command, Show installation help,
+      or the Desktop steps) replaces Update now here and nowhere else, and is
+      NOT held to the in-flight rule - it keeps its sentence too: it is a fix
+      for the tools rather than a control over the update, a work park can be
+      waiting on exactly it (the update card's floor sentence points at its
+      Show installation help), and the page's 30 s floor recheck runs for as
+      long as a floor applies, which is only honest while the fix it is for
+      is on screen.
+    - **A refused or failed attempt** is ONE line under the answer
+      (`failureDescription`), clearing on the next try. It is no longer the
+      answer too: `describeCheckState` lost its failure-first arm, so the
+      answer beside it is what the catalog still says. It is not held to the
+      in-flight rule: a refused Force update… is answered during the very
+      park that counts as in flight, and its dialog closes on the refusal
+      expecting this line to say why.
+    - **A check that settled with no catalog** (the host's CLI failed, or
+      answered in a format this app can't read) answers "Couldn't check for
+      updates on build-box." with no tag and Check now, and the line under
+      it carries the reason. It never falls through to "Checking for
+      updates…", which is the first load's alone: that sentence and its
+      Checking… tag would stay with nothing running.
+    - **The stranded answer** ends "…Pick it from the versions below to
+      move.", plain text: the version list it points at is on the same tab,
+      under the card.
+    - **Not manageable here** (too old, no Traycer CLI, managed outside
+      Traycer): one sentence in place of the buttons, no tag. The version
+      list under it is withheld and does not repeat the sentence.
+    - **No auto-update caption.** The switch is the next row on the same tab
+      and states the policy itself.
+  - **The restart offer** that opens by itself (`deriveActivationAutoOpen`)
+    stays at panel level, so it opens over whichever tab is showing.
+  - **One component per tab**, each drawing what the panel hands it; the
+    queries, the mutations and every dialog stay in `host-overview-panel.tsx`,
+    so the update card in the strip, the version card and the version list
+    on Updates are still one `useHostOverviewUpdates` instance. The dialogs
+    open over whichever tab is showing: the restart confirm, the three "Host
+    is busy" force-or-defer dialogs (restart, staged-update force, bound
+    dispatch), the restart offer that opens by itself after an update started
+    here has installed, and the Doctor sheet. The trigger and phone-`Select`
+    badges (the Ports count, the Installation dot) hang on `HostOverviewTabs`'
+    `badges`.
+
+    | Tab          | File                                 | What lives there                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+    | ------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | Installation | `host-overview-installation-tab.tsx` | About this host (`host-overview-about-this-host.tsx`, from the account's record, so it reads offline), the Install record shown open (`host-settings-installation-details.tsx`), OS service (`host-overview-os-service-section.tsx`) - both replaced by one needs-a-connection line when unreachable - then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last |
+    | Updates      | `host-overview-updates-tab.tsx`      | The version card (`host-overview-updates.tsx`: version and tag, the update answer, Update now / Check now or the command-line-tools fix, the failed-attempt line), a single-row auto-update group without a drawn label, then Pick a different version (`host-overview-version-picker.tsx`) with its release-candidate choice, version list and inline refusal                                                                                                  |
+    | Data         | `host-overview-data-tab.tsx`         | Import & migration (`HostImportMigrationSection`), Version history (`ArtifactVersionSettingsSection`), then an unlabeled File edit snapshots group (`HostFileEditSnapshotsSection`); one disk connection line replaces all groups when unreachable                                                                                                                                                                                                              |
+    | Ports        | `host-overview-ports-tab.tsx`        | `HostPortForwardsCard`, on every host: one sentence when there is no list (connecting, unreachable, older host, failed read, nothing forwarded), else Forwards on this host and Ports other machines hold here, then Refresh; the trigger's count                                                                                                                                                                                                               |
+
+  - **Ports is on every host, in every state.** There used to be a card that
+    was absent whenever nothing was forwarded and on hosts without port
+    forwarding. That rule is gone: the tab always has a body, and it says what
+    it can't show. `useHostPortForwards` (`host-port-forwards-state.ts`)
+    resolves one view in this order: the scope is connecting or the host is
+    restarting → the loading shape (`HostScopeConnecting`); the host can't be
+    reached → "Port forwards run on build-box, so they need a connection to
+    it."; the handshake lacks `portForward.listForHost` → the page's standard
+    `describeOverviewDegrade("unsupported")` sentence; the last settled read
+    failed → "Couldn't read build-box's port forwards." with Refresh below it;
+    nothing is forwarded or held → "Nothing is forwarded through build-box.
+    When an agent forwards a port on this host, or another machine holds one
+    of its ports, it shows up here so you can stop or cut it."; otherwise two
+    groups. **Forwards on this host** (`owned`) lists description, port, state
+    and route with the counters: Forwarding or Binding → Stop, Interrupted or
+    Stopped → Clear. **Ports other machines hold here** (`held`) shows
+    "Listening for laptop" or "Reached by laptop", the open connections and
+    Cut, confirmed with the same dialog as before. A group with no rows isn't
+    drawn. **Refresh** sits below the lists and re-reads them at once. The
+    Stop and Cut mutations and the Cut confirm stay in the card, where they
+    were before: the Cut confirm is modal, so no tab switch can happen under
+    it.
+    - **The count.** The Ports trigger and the phone dropdown's Ports item
+      carry owned plus held (`HostOverviewPortsCount`) when there is at least
+      one. There is no count at zero, on a host too old for port forwarding,
+      or while the list can't be read (connecting, restarting, unreachable, a
+      failed read).
+    - **One read, re-read every 15 seconds.** The panel reads
+      `portForward.listForHost` ONCE, for both the body and the count, so the
+      read starts with the page rather than at the tab's first visit. The read
+      keeps today's gates: nothing while the host is unusable or before its
+      handshake names the method. The host has no change signal for port
+      forwards, so the count would go stale without polling. The cadence is
+      the method's `HOST_METHOD_POLL_TABLE` entry (`fixed`, 15 s; the user's
+      call), which `usePortForwardListFor`'s required `poll` opts into. It
+      runs only while the window is visible, never in the background. A
+      forward that stops therefore drops out of the count within 15 seconds.
+      Window focus, Refresh and a Stop, Clear or Cut still re-read it
+      immediately.
+
   **The page reads the scoped host's OWN RPC** (`host-overview-panel.tsx`):
   `host.status` for what it is running, `host.identity.get` for what it is
   called, `host.getInstallationInfo` for how it was installed; buttons are
@@ -5462,10 +6097,25 @@ set-state-in-effect` forbids the effect form, and an effect would also
     lost ack idempotent instead of a busy refusal. `{outcome:"busy"}` is NOT an
     error: the host closed session admission, found work in flight and reopened
     it, so it renders as an amber notice with a Try again, never a red toast.
-  - **Updates**: one card, both halves. The host's own "Check now" and the
-    VERSION LIST it reveals (`host.update.*`) sit above the account registry's
-    auto-update policy and drain-gate force (`HostRegistryUpdates`, keyed by
-    `hostId`, controls capture their target when armed).
+  - **Updates**: one hook, two places. The drain-gate force sits in the
+    notices strip above the tab bar; the host's own answer and "Check now"
+    (`host.update.*`) in the version card, the VERSION LIST and the account
+    registry's auto-update policy sit on Updates
+    (`HostAutoUpdateRow`, keyed by `hostId`, controls capture their target when
+    armed). The auto-update switch is a single-row group with no group label:
+    its row title says Auto-update, and the Updates search entry remains on the
+    tab trigger. Its pending tag says only "Update pending", with no version.
+    The row works while the host is unreachable because it writes the account,
+    and says the setting is applied at the host's next check-in (within about
+    10 minutes, when no sessions are running).
+    - **Pick a different version** is a separate group. Its introduction says
+      it can install a release candidate, hotfix or earlier release; the
+      Include release candidates checkbox re-asks the host and explains when
+      the host chose inclusion from its installed release-candidate line.
+      Above older rows that cannot open newer chat stores, it warns about the
+      access lost until this host updates again. The list can say it is asking,
+      say no versions are available, or say the host returned no list; the
+      last state offers Check now through the same action as the version card.
     - **The version list replaced a free-text pin.** `host.update.check` returns
       the whole manifest, not just `latest`, so the Overview renders the same
       per-row-Install list the local recovery console has always had - for a
@@ -5502,9 +6152,9 @@ set-state-in-effect` forbids the effect form, and an effect would also
       pinned; the auto-update policy beside it still works without a route.
       `isValidHostVersion` (the client mirror of authn-v3's server-side regex)
       went with the input it validated.
-    - Check stays a MUTATION, not a query: it spawns a process on the host and
-      reaches the registry, so it runs when someone asks and not because a
-      settings pane mounted.
+    - Check is one shared query for the version card's answer and the version
+      list. It populates on its own; Check now in either place forces a
+      refetch.
     - The RPC half degrades away WHOLE - Check-now and the list with it,
       leaving the auto-update policy as the only update control, plus one line
       saying why - without the methods, without a
@@ -5516,7 +6166,18 @@ set-state-in-effect` forbids the effect form, and an effect would also
       the one action the host has just said can never lead anywhere.
       `cli-failed` / `invalid-output` are deliberately NOT sticky - one attempt
       going wrong with the mechanism intact - so the controls stay and an inline
-      `host-overview-update-attempt-failed` notice clears on the next try.
+      `host-overview-update-attempt-failed` notice clears on the next try. A
+      transient refused Install appears under the list and under the version
+      card's answer, both on Updates, from that one failure state; the version rows
+      unfreeze and the page stays on Updates. A structural refusal (for
+      example, a CLI that disappeared after the list was read) withdraws the
+      list and the inline refusal with it; the version card above states the
+      not-manageable reason once.
+      Connecting or restarting shows a loading shape in the list's place.
+      An unreachable host keeps the auto-update row and says "Connect to
+      <host name> to choose a version." A structurally unmanageable host
+      (too old, no CLI, or managed outside Traycer) also keeps the auto-update
+      row and shows its reason in the list's place.
       Progress after an accepted install comes from `host.status.updateProgress`,
       not from the install response, because the swap is detached and outlives
       it.
@@ -5883,10 +6544,16 @@ set-state-in-effect` forbids the effect form, and an effect would also
       (`host-settings-package-manager-upgrade-hint.tsx`) pins the version
       Desktop bundles, the answer to "your npm CLI is older than Desktop's";
       this remedy pins the host's required floor, the answer to "this host
-      refuses the CLI it has". Advanced rows retain their reasons.
-      Sentence precedence preserves the record-derived parks: **failure →
-      activation debt → CLI remedy → checking → unreachable → no manifest →
-      stranded on its release line / up to date → unavailable / available**.
+      refuses the CLI it has". Version rows on Updates retain their reasons.
+      Sentence precedence preserves the record-derived parks: **activation
+      debt → CLI remedy → checking → unreachable → check failed → no
+      manifest → stranded on its release line / up to date → unavailable /
+      available**. A failed or refused attempt is not in this chain: it is the
+      one line under the answer (`failureDescription`), so the answer beside
+      it stays what the catalog says instead of repeating the failure. "Check
+      failed" is the chain's one step about a failure, and only as a fact
+      about the catalog: the check settled with none, so the step says so and
+      leaves the reason to that line.
       A failed catalog read drops the remedy along with the actionable catalog.
 
     - **Repair rechecks while the Overview is open.** The Overview re-asks
@@ -5929,11 +6596,49 @@ set-state-in-effect` forbids the effect form, and an effect would also
       than disabled, since the card reports the park and the header's menu
       item carries the reason - and an open confirm closes when its method
       is withdrawn or its region retires.
-  - **Installation** reads `host.getInstallationInfo`. `unmanaged` is a real
-    state, not an error - a host run from a checkout has no install record - and
-    it says so rather than claiming nothing is installed.
-  - **Data & migration** (`panels/host-import-migration-section.tsx`), between
-    Installation and the danger zone: **Import your work** (opens the session
+  - **Installation**, top to bottom: About this host, Install record, OS
+    service, Command-line tools, Danger zone.
+    - **About this host** (`host-overview-about-this-host.tsx`) reads the
+      ACCOUNT's host record - the `HostListItem` the panel already holds
+      (`scope.host.item`), never a host RPC - so it reads the same while the
+      host connects or cannot be reached, which is when people come for the
+      host id. Rows: Host ID (shortened, with copy; Copy host ID stays in the
+      `⋯` menu too), Added to account (`createdAt`), Last seen, Last reported
+      version (`status.appVersion`) and Platform (`formatPlatform` plus the
+      architecture, as the header words it). Last seen reads "Online now"
+      while the header's live evidence holds (`health.live`); otherwise
+      `status.lastSeenAt` on the header's own ladder and clock
+      (`formatElapsed`, `scope.nowMs`), so the two never disagree on one
+      screen. A host the account has no record of gets no group, as it gets
+      no Danger zone.
+    - **Install record** (`host-settings-installation-details.tsx`) is shown
+      open - it was a collapsed "Installation details" disclosure - and reads
+      `host.getInstallationInfo`: Version, Build (only when it differs),
+      Source, Installed, Verification, SHA-256 (shortened, with copy),
+      Platform. `unmanaged` is a real state, not an error - a host run from a
+      checkout has no install record - and it says so rather than claiming
+      nothing is installed; a failed read and an unsupported host each keep
+      their own sentence.
+    - **OS service** (`host-overview-os-service-section.tsx`) is its own
+      group: the registration sentence and manifest line, Re-register and
+      Deregister with their confirms. A host that cannot report its service
+      gets the standard unsupported sentence in place of the group's
+      contents, under its label.
+    - Those two are the tab's host reads. While the host connects they are
+      the loading shape; when it cannot be reached one line replaces both -
+      "The install record and OS service are read from <host>, so they need
+      a connection." - and About this host, Command-line tools and the Danger
+      zone stay.
+    - **Command-line tools** (this computer only, behind the panel's
+      `hasLocalBridge`) is the package-manager upgrade hint with its command
+      and a copy button. The tab trigger and the phone Select's Installation
+      item carry a warning dot (`LocalPackageManagerUpgradeDot`, hung on
+      `badges`) that reads the SAME query as the hint -
+      `useRunnerHostCliManifestQuery` (`runnerQueryKeys.hostCliManifest`) -
+      under the same gate, so the dot and the group appear together and clear
+      together, on the read that finds the tools current.
+  - **Import & migration** (`panels/host-import-migration-section.tsx`), on the
+    Data tab above Version history: **Import your work** (opens the session
     import wizard for the sessions on THIS host's disk) and **Data migration**
     (retry moving this host's local SQLite tasks and epics to cloud). Both came
     off General for the reason that section now states - they move one
@@ -5956,6 +6661,13 @@ set-state-in-effect` forbids the effect form, and an effect would also
       context, so the row cannot offer an import host A negotiated and submit
       it to host B. An empty titled card reads as a page that failed to load,
       which is why the whole group goes rather than its contents.
+  - **File edit snapshots** (`panels/host-file-edit-snapshots-section.tsx`) is
+    the single-row group after Version history, without a repeated group
+    label. Its host RPC reads the stored size and clears snapshots behind the
+    existing confirmation. While the host connects or restarts, Data shows
+    `HostScopeConnecting`; if it cannot be reached, the tab replaces all three
+    groups with "These live on <host name>'s disk, so they need a connection to
+    it."
   - **Doctor** (`host-doctor-rpc-card.tsx`) has the host shell its own CLI. Two
     things make the report trustworthy over a connection, and both come from the
     host: the structured failure arms (`cli-unavailable` / `cli-failed` /
@@ -5973,12 +6685,12 @@ set-state-in-effect` forbids the effect form, and an effect would also
     to the copy-command affordance for a remote host. That is not a missing RPC:
     they repair a host that is typically not answering RPCs at all, so remote
     verbs for them were dropped from the plan on purpose.
-  - **Danger zone** (`host-scope/host-danger-zone.tsx`), three planes, each
-    gating itself: File edit snapshots (host RPC, behind the scope gate), Remove
-    Traycer (local CLI bridge, local host only, never gated on reachability), and
-    **Remove from account** (an account write, remote + registered only). That
-    last one is NEVER called "deregister" in copy - this app already uses that
-    word for OS-SERVICE deregistration in the Advanced disclosure one card away,
+  - **Danger zone** (`host-scope/host-danger-zone.tsx`) contains only removal:
+    Remove Traycer (local CLI bridge, local host only, never gated on
+    reachability), or **Remove from account** (an account write, remote +
+    registered only). Without an available removal action, the group is absent.
+    The account removal action is NEVER called "deregister" in copy - this app
+    already uses that word for OS-SERVICE deregistration on the same tab,
     and two destructive controls sharing a verb is how someone reaches for the
     wrong one. Its confirmation is written against what the route actually does:
     `POST /api/v3/hosts/:id/deregister` stamps `deregisteredAt` and clears the

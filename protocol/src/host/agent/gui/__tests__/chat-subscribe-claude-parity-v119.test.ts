@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   chatSubscribeV116,
   chatSubscribeV117,
+  chatSubscribeV118,
   chatSubscribeV119,
   chatThinkingTokensEstimateSchema,
   backgroundItemSchema,
@@ -208,11 +209,13 @@ describe("chat.subscribe@1.19 accepts every Claude-parity addition", () => {
   });
 });
 
-// `1.16` and `1.17` both sit below the parity line; `1.17` differs from
-// `1.16` only by the sender host on the queued prompt item.
+// `1.16`, `1.17` and `1.18` all sit below the parity line; `1.17` differs
+// from `1.16` only by the sender host on the queued prompt item, and `1.18`
+// from `1.17` only by the model-routing keys.
 describe.each([
   { label: "1.16", frozen: chatSubscribeV116.serverFrameSchema },
   { label: "1.17", frozen: chatSubscribeV117.serverFrameSchema },
+  { label: "1.18", frozen: chatSubscribeV118.serverFrameSchema },
 ])(
   "chat.subscribe@$label (frozen) cannot carry the additions",
   ({ frozen }) => {

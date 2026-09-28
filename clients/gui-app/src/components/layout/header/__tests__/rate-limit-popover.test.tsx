@@ -3737,6 +3737,21 @@ describe("<RateLimitPopover /> host picker", () => {
     expect(setHostId).toHaveBeenCalledWith("host-b");
     expect(makeActive).not.toHaveBeenCalled();
   });
+
+  it("'Manage hosts…' opens the Overview on Updates, not the retired Status tab", () => {
+    renderPopoverWithScope(twoHostScope({}), false);
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher-manage"));
+
+    expect(mocks.openSettings).toHaveBeenCalledWith({
+      section: "host",
+      resetToGeneral: false,
+      tab: "updates",
+      draft: null,
+      hostId: null,
+    });
+  });
 });
 
 describe("<RateLimitPopover /> unusable explicit host pick", () => {

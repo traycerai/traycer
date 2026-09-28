@@ -311,7 +311,17 @@ function rowOrdinalByMessageId(
   return found;
 }
 
-function blockIdForLocator(
+/**
+ * The block a non-`message` locator names, searched over `messages` in their
+ * order: the id itself for `block`, and the matching rule of each other kind.
+ *
+ * Exported for a reader that holds only the messages that CAN match - a store
+ * that keys them by receiver, receipt or approval - so it applies this rule
+ * to them rather than restating it. Handed a subset, it answers as over the
+ * whole transcript exactly when the subset holds every message that carries a
+ * candidate block, in the transcript's order.
+ */
+export function transcriptLocatorBlockId(
   messages: readonly Message[],
   locator: Exclude<TranscriptRowLocator, { kind: "message" }>,
 ): string | null {
@@ -347,7 +357,7 @@ export function locateTranscriptRowOrdinal(
   if (locator.kind === "message") {
     return rowOrdinalByMessageId(transcript.rows, locator.messageId);
   }
-  const blockId = blockIdForLocator(transcript.messages, locator);
+  const blockId = transcriptLocatorBlockId(transcript.messages, locator);
   if (blockId === null) return null;
   return rowOrdinalByBlockId(transcript.rows).get(blockId) ?? null;
 }

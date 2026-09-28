@@ -1,5 +1,6 @@
 import { Settings } from "lucide-react";
 import { SettingsModalContent } from "@/components/settings/settings-modal-content";
+import { consumeSettingsEscape } from "@/components/settings/settings-escape-consumers";
 import { isSettingsSearchActive } from "@/lib/settings-search/settings-search";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { resolveSettingsTabIntent } from "@/lib/commands/actions/open-system-tab";
@@ -21,9 +22,12 @@ export const settingsOverlayModule: SystemOverlayModule<"settings"> = {
       resetToGeneral: false,
     }),
   isOverlayPath: (pathname) => isSettingsPath(pathname),
-  // A running search is the innermost thing Escape can mean: the first press
+  // A body control that owns Escape while the keyboard is in it (Fallback's
+  // Test a model panel) comes first: it is where the user is. Then a running
+  // search, the innermost thing Escape can otherwise mean: the first press
   // clears it, and only the next one closes Settings.
   consumeEscape: () => {
+    if (consumeSettingsEscape()) return true;
     const { query, setQuery } = useSettingsSearchStore.getState();
     if (!isSettingsSearchActive(query)) return false;
     setQuery("");

@@ -124,7 +124,14 @@ export interface PerWindowStatePatch {
 export type DesktopAuthSessionStatus =
   | "signed-out"
   | "signing-in"
-  | "signed-in";
+  | "signed-in"
+  | "unverified";
+
+/** Local restoration reads main's credentials file and grants no cloud verdict. */
+export type DesktopLocalAuthSessionRestoreResult =
+  | "restored"
+  | "superseded"
+  | "unavailable";
 
 export interface DesktopAuthSessionProfile {
   readonly userId: string;

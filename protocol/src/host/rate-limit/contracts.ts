@@ -20,6 +20,7 @@ import {
   rateLimitUsageResponseSchemaV21,
   rateLimitUsageResponseSchemaV30,
   rateLimitUsageResponseSchemaV40,
+  rateLimitUsageResponseSchemaV50,
   mapCursorAvailableToUnavailable,
   mapGrokAvailableToUnavailable,
   mapHuggingFaceAvailableToUnavailable,
@@ -56,6 +57,62 @@ function mapUsageFetchFailedToNotAvailable(
     return { ...providerRateLimits, reason: "rate_limits_not_available" };
   }
   return providerRateLimits;
+}
+
+// The frozen-line degrades a 4.0-or-later snapshot needs on its way down, one
+// per target line. Shared by the 4 -> N and 5 -> N bridges so the two fans can
+// never apply different maps to the same arm. Each list is every available arm
+// the target union lacks; the reason degrade runs last on the v1.2 path so a
+// genuinely available snapshot never lands on the usage-fetch-failed branch.
+function degradeProviderRateLimitsToV30(
+  providerRateLimits: ProviderRateLimits | null,
+): ProviderRateLimits | null {
+  return mapCursorAvailableToUnavailable(
+    mapHuggingFaceAvailableToUnavailable(
+      mapOpenCodeAvailableToUnavailable(providerRateLimits),
+    ),
+  );
+}
+
+function degradeProviderRateLimitsToV21(
+  providerRateLimits: ProviderRateLimits | null,
+): ProviderRateLimits | null {
+  return mapGrokAvailableToUnavailable(
+    degradeProviderRateLimitsToV30(providerRateLimits),
+  );
+}
+
+function degradeProviderRateLimitsToV12(
+  providerRateLimits: ProviderRateLimits | null,
+): ProviderRateLimits | null {
+  return mapUsageFetchFailedToNotAvailable(
+    degradeProviderRateLimitsToV21(providerRateLimits),
+  );
+}
+
+// A 5.0 snapshot no older line can represent at all. There is no degrade for
+// an Antigravity row, on either arm: every released client's provider enum
+// predates the id, so even an `unsupported_provider` row naming it fails the
+// client's own parse. The 5 -> N bridges therefore refuse such a read rather
+// than mis-decode it - the same fail-closed shape
+// `agent.getProviderProfileRateLimits@6 -> 5` uses. The refusal checks the
+// provider id itself (`namesProviderNewerThanV40`) rather than leaving it to
+// the older line's parse: v4.0 pins `providerIdSchemaV80`, but the v3.0, v2.1
+// and v1.2 unavailable arms still name the LIVE enum, so an unavailable
+// Antigravity row would parse there and pass. In practice it is unreachable:
+// an older client never requests `antigravity`, which is not in its
+// rate-limit-capable set. The message names no provider so it stays honest as
+// the enum grows.
+const RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT = {
+  code: "DOWNGRADE_UNSUPPORTED" as const,
+  message:
+    "Reading this provider's rate limits requires a newer Traycer client.",
+};
+
+function namesProviderNewerThanV40(
+  providerRateLimits: ProviderRateLimits | null,
+): boolean {
+  return providerRateLimits?.provider === "antigravity";
 }
 
 export const providersConsumeRateLimitResetCreditV10 = defineRpcContract({
@@ -353,9 +410,11 @@ export const hostGetRateLimitUsageV40 = defineRpcContract({
 
 // A v3.0 request upgrades unchanged: `force` is optional on the v4.0 line and
 // its ABSENCE means force, which is exactly what a v3.0 caller gets from a
-// host that has always passed `force: true`. Every frozen v3.0 response arm is
-// a valid v4.0 arm (the v4.0 union is a strict superset), so that upgrade is
-// the identity too.
+// host that has always passed `force: true`. Every v3.0 response a released
+// 3.0 host emits is a valid v4.0 one, but the response is re-parsed rather
+// than passed through: the frozen v3.0 union's unavailable arm names the LIVE
+// provider enum while v4.0's is pinned to `providerIdSchemaV80`, so the two
+// types differ by ids (Antigravity) no 3.0 host can produce.
 export const hostGetRateLimitUsageUpgradeV30ToV40 = defineUpgradePath<
   typeof hostGetRateLimitUsageV30,
   typeof hostGetRateLimitUsageV40
@@ -363,7 +422,8 @@ export const hostGetRateLimitUsageUpgradeV30ToV40 = defineUpgradePath<
   from: hostGetRateLimitUsageV30.schemaVersion,
   to: hostGetRateLimitUsageV40.schemaVersion,
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) =>
+    rateLimitUsageResponseSchemaV40.parse(response),
 });
 
 // Downgrade bridge 4.0 -> 3.0: the request drops `force` (see `dropForce`), so
@@ -387,10 +447,8 @@ export const hostGetRateLimitUsageDowngradeV4ToV3 = defineDowngradePath<
     ok: true,
     value: rateLimitUsageResponseSchemaV30.parse({
       ...response,
-      providerRateLimits: mapCursorAvailableToUnavailable(
-        mapHuggingFaceAvailableToUnavailable(
-          mapOpenCodeAvailableToUnavailable(response.providerRateLimits),
-        ),
+      providerRateLimits: degradeProviderRateLimitsToV30(
+        response.providerRateLimits,
       ),
     }),
   }),
@@ -411,12 +469,8 @@ export const hostGetRateLimitUsageDowngradeV4ToV2 = defineDowngradePath<
     ok: true,
     value: rateLimitUsageResponseSchemaV21.parse({
       ...response,
-      providerRateLimits: mapGrokAvailableToUnavailable(
-        mapCursorAvailableToUnavailable(
-          mapHuggingFaceAvailableToUnavailable(
-            mapOpenCodeAvailableToUnavailable(response.providerRateLimits),
-          ),
-        ),
+      providerRateLimits: degradeProviderRateLimitsToV21(
+        response.providerRateLimits,
       ),
     }),
   }),
@@ -439,15 +493,133 @@ export const hostGetRateLimitUsageDowngradeV4ToV1 = defineDowngradePath<
     ok: true,
     value: rateLimitUsageResponseSchemaV12.parse({
       ...response,
-      providerRateLimits: mapUsageFetchFailedToNotAvailable(
-        mapGrokAvailableToUnavailable(
-          mapCursorAvailableToUnavailable(
-            mapHuggingFaceAvailableToUnavailable(
-              mapOpenCodeAvailableToUnavailable(response.providerRateLimits),
-            ),
-          ),
-        ),
+      providerRateLimits: degradeProviderRateLimitsToV12(
+        response.providerRateLimits,
       ),
     }),
   }),
+});
+
+// v5.0 adds the Antigravity available arm (see `rateLimitUsageResponseSchemaV50`).
+// A major, not a 4.1: 4.0 is in the released baseline, a new available arm is
+// not strippable by the within-major skew handler, and the frozen 4.0 union
+// (`providerRateLimitsSchemaV80`) has no arm - and no provider id - for it. The
+// request is unchanged from 4.0, `force` included.
+export const hostGetRateLimitUsageV50 = defineRpcContract({
+  method: "host.getRateLimitUsage",
+  schemaVersion: { major: 5, minor: 0 } as const,
+  requestSchema: rateLimitUsageRequestSchemaV40,
+  responseSchema: rateLimitUsageResponseSchemaV50,
+});
+
+// Every frozen 4.0 arm is a valid 5.0 arm (the live union is a strict superset
+// of `providerRateLimitsSchemaV80`), and the request is the same schema, so the
+// upgrade is the identity both ways.
+export const hostGetRateLimitUsageUpgradeV40ToV50 = defineUpgradePath<
+  typeof hostGetRateLimitUsageV40,
+  typeof hostGetRateLimitUsageV50
+>({
+  from: hostGetRateLimitUsageV40.schemaVersion,
+  to: hostGetRateLimitUsageV50.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// Downgrade bridge 5.0 -> 4.0: the request is identical (both carry `force`).
+// An Antigravity reading, on either arm, is refused (see
+// `namesProviderNewerThanV40`); every other snapshot is already valid 4.0 and
+// passes the parse unchanged.
+export const hostGetRateLimitUsageDowngradeV5ToV4 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV50,
+  typeof hostGetRateLimitUsageV40
+>({
+  from: hostGetRateLimitUsageV50.schemaVersion,
+  to: hostGetRateLimitUsageV40.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    if (namesProviderNewerThanV40(response.providerRateLimits)) {
+      return { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+    }
+    const parsed = rateLimitUsageResponseSchemaV40.safeParse(response);
+    return parsed.success
+      ? { ok: true, value: parsed.data }
+      : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+  },
+});
+
+// Downgrade bridge 5.0 -> 3.0: an Antigravity reading is refused first - the
+// v3.0 unavailable arm names the live enum, so the parse alone would pass an
+// unavailable one - then the 4.0 -> 3.0 degrades and the v3.0 parse.
+export const hostGetRateLimitUsageDowngradeV5ToV3 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV50,
+  typeof hostGetRateLimitUsageV30
+>({
+  from: hostGetRateLimitUsageV50.schemaVersion,
+  to: hostGetRateLimitUsageV30.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
+  downgradeResponse: (response) => {
+    if (namesProviderNewerThanV40(response.providerRateLimits)) {
+      return { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+    }
+    const parsed = rateLimitUsageResponseSchemaV30.safeParse({
+      ...response,
+      providerRateLimits: degradeProviderRateLimitsToV30(
+        response.providerRateLimits,
+      ),
+    });
+    return parsed.success
+      ? { ok: true, value: parsed.data }
+      : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+  },
+});
+
+// Downgrade bridge 5.0 -> 2.1: an Antigravity reading is refused first (as on
+// 5.0 -> 3.0), then the 4.0 -> 2.1 degrades and the v2.1 parse.
+export const hostGetRateLimitUsageDowngradeV5ToV2 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV50,
+  typeof hostGetRateLimitUsageV21
+>({
+  from: hostGetRateLimitUsageV50.schemaVersion,
+  to: hostGetRateLimitUsageV21.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
+  downgradeResponse: (response) => {
+    if (namesProviderNewerThanV40(response.providerRateLimits)) {
+      return { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+    }
+    const parsed = rateLimitUsageResponseSchemaV21.safeParse({
+      ...response,
+      providerRateLimits: degradeProviderRateLimitsToV21(
+        response.providerRateLimits,
+      ),
+    });
+    return parsed.success
+      ? { ok: true, value: parsed.data }
+      : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+  },
+});
+
+// Downgrade bridge 5.0 -> 1.2: an Antigravity reading is refused first (as on
+// 5.0 -> 3.0), then the 4.0 -> 1.2 degrades and the v1.2 parse (which also
+// strips v2.1 reset-credit detail).
+export const hostGetRateLimitUsageDowngradeV5ToV1 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV50,
+  typeof hostGetRateLimitUsageV12
+>({
+  from: hostGetRateLimitUsageV50.schemaVersion,
+  to: hostGetRateLimitUsageV12.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
+  downgradeResponse: (response) => {
+    if (namesProviderNewerThanV40(response.providerRateLimits)) {
+      return { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+    }
+    const parsed = rateLimitUsageResponseSchemaV12.safeParse({
+      ...response,
+      providerRateLimits: degradeProviderRateLimitsToV12(
+        response.providerRateLimits,
+      ),
+    });
+    return parsed.success
+      ? { ok: true, value: parsed.data }
+      : { ok: false, error: RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
+  },
 });

@@ -125,6 +125,8 @@ vi.mock(
       ...actual,
       useFallbackCatalogOptions: () => ({
         modelsFor: () => [],
+        catalogFor: () => null,
+        catalogsByHarness: new Map(),
         effortsFor: () => [],
       }),
     };

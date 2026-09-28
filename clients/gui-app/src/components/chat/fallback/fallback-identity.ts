@@ -10,7 +10,6 @@ import type {
   PendingFallback,
   PendingReturn,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { FallbackModelTarget } from "@traycer/protocol/host/chat-fallback";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
@@ -133,35 +132,24 @@ export function fallbackProviderLabelFor(providerId: string): string {
 }
 
 /**
- * A known harness, from the open `harnessId` string a destination row carries.
+ * The harness behind a provider DISPLAY NAME, or `null`.
  *
- * `fallbackModelTargetSchema.harnessId` is `z.string()` on the wire - the same
- * deliberate openness the reason and provider fields have - so it cannot be
- * handed to anything typed `GuiHarnessId` without the cast the type-safety
- * table forbids. Resolving it through `ORDERED_PROVIDERS` returns the TYPED id
- * when the harness is one this build knows, which is what lets a row render the
- * provider glyph, and `null` when it is not.
- *
- * A caller that only needs the words uses {@link fallbackHarnessLabelFor},
- * which degrades to the id itself: a row saying `some-new-harness · sonnet` is
- * recognisable, and a row with a blank where the provider goes is not.
+ * For the settled receipt, whose steps carry host-rendered strings and no ids:
+ * `providerLabel` is `PROVIDER_DISPLAY_NAMES`' own word ("Claude Code"), and
+ * the step's `modelLabel` is the raw slug the host did not resolve (it does not
+ * read the catalogue on the settle path). Naming that slug the way every other
+ * routing surface does needs the harness whose catalogue to ask, and the
+ * display name is the only key the step has. An unrecognised name - a provider
+ * this build does not know - answers `null`, and the slug stays a slug.
  */
-export function fallbackKnownHarnessFor(
-  harnessId: string,
+export function fallbackHarnessForProviderLabel(
+  providerLabel: string,
 ): FallbackTupleIdentity["harnessId"] | null {
   return (
-    ORDERED_PROVIDERS.find((provider) => provider.harnessId === harnessId)
-      ?.harnessId ?? null
+    ORDERED_PROVIDERS.find(
+      (provider) => providerDisplayName(provider.providerId) === providerLabel,
+    )?.harnessId ?? null
   );
-}
-
-export function fallbackHarnessLabelFor(harnessId: string): string {
-  const known = ORDERED_PROVIDERS.find(
-    (provider) => provider.harnessId === harnessId,
-  );
-  return known === undefined
-    ? harnessId
-    : providerDisplayName(known.providerId);
 }
 
 /**
@@ -184,24 +172,20 @@ function fallbackProviderLabelForHarness(harnessId: GuiHarnessId): string {
 /**
  * "Claude Code · default" - a chat's provider and model, and nothing else.
  *
- * The subject of every sentence about what a chat IS rather than where it is
- * going: the error card's explanation of a withheld switch, and the destination
- * menu's empty state. Deliberately WITHOUT the account and without the effort
- * that {@link fallbackDestinationRowTitle} and
- * {@link fallbackDestinationSentence} carry - "No other model is set up for
- * Claude Code · opus · high on work" reads as a claim about that account at
- * that effort, when the fact is about the model.
- *
- * One function for both surfaces on purpose. They are explaining one host
- * verdict, and the rule this file exists to enforce is that two surfaces
- * describing one thing must not describe it in two ways.
+ * The subject of a sentence about what a chat IS rather than where it is
+ * going. One surface uses it now: the Model routing settings page's line for
+ * a model with nothing set up ("No other model is set up for …"). The
+ * failed-turn card's explanation of a withheld switch was the other, and is
+ * gone (clutter cuts, 2026-09-27). Deliberately WITHOUT the account and
+ * without the effort that {@link fallbackDestinationSentence} carries - "No
+ * other model is set up for Claude Code · opus · high on work" reads as a
+ * claim about that account at that effort, when the fact is about the model.
  *
  * `modelLabelFor` is REQUIRED rather than optional, and that is the whole point
  * of the parameter: an optional resolver is a raw slug by default, and the
- * default is what every call site quietly took. The sentence this builds sits
- * beside cards that already resolve their models
- * ({@link fallbackTupleIdentity}), so a chat named "Claude Fable" on the card
- * and "claude-fable-5-1[1m]" in the menu underneath it is exactly the
+ * default is what every call site quietly took. Every routing card resolves
+ * its models ({@link fallbackTupleIdentity}), so a model named "Claude Fable"
+ * on a card and "claude-fable-5-1[1m]" on the settings page is exactly the
  * disagreement this module exists to prevent.
  */
 export function fallbackProviderModelLabel(
@@ -720,17 +704,8 @@ export interface FallbackDestinationDescription {
   readonly providerLabel: string;
   /** The profile's label, "Terminal account", or a short id prefix. */
   readonly profileLabel: string;
-  /** The RESOLVED slug when the host resolved one; the family when it did not. */
+  /** The model's label, resolved through the catalogue. */
   readonly modelLabel: string;
-  /**
-   * Whether {@link modelLabel} is a family rather than a resolved slug.
-   *
-   * Carried rather than inferred from the string, because the two are
-   * indistinguishable by inspection - `gpt-5`'s family is `gpt-5` - and a
-   * surface that wanted to qualify an unresolved name would have no way to
-   * know it needed to.
-   */
-  readonly modelIsFamily: boolean;
   /** The effort as it was configured, or `null` when the tuple carries none. */
   readonly effortLabel: string | null;
 }
@@ -754,9 +729,7 @@ function normalizedEffort(reasoningEffort: string | null): string | null {
  * A committed run tuple as a destination - the card's and the announcer's side.
  *
  * A tuple's `model` IS resolved by construction: it is what the engine will
- * launch. So `modelIsFamily` is always false here, and the asymmetry with
- * {@link fallbackDestinationOfModelTarget} is the point rather than an
- * oversight - only a menu candidate can still be unresolved.
+ * launch.
  */
 export function fallbackDestinationOfTuple(
   tuple: ChatRunSettings,
@@ -768,69 +741,8 @@ export function fallbackDestinationOfTuple(
     providerLabel: identity.providerLabel,
     profileLabel: identity.profileLabel,
     modelLabel: identity.model,
-    modelIsFamily: false,
     effortLabel: normalizedEffort(tuple.reasoningEffort),
   };
-}
-
-/**
- * A `listTargets` equivalent-model row as a destination - the menu's side.
- *
- * Prefers the resolved `model` and falls back to `modelFamily`, which is the
- * whole of F7's rule: the row used to title itself with the family
- * unconditionally, so a group named `gpt` resolving to `gpt-6-astra` offered a
- * click whose model the user never saw. Effort comes from the row's own
- * `reasoningEffort`, which the engine re-derived against the DESTINATION's
- * catalog - never from the failed tuple, which may not have an equivalent
- * there at all.
- *
- * `modelLabelFor` resolves the CONCRETE model and nothing else. The family arm
- * is deliberately left raw: `modelFamily` is an equivalence-GROUP name the user
- * typed into Settings, not a catalogue slug, and the two are not
- * interchangeable even when they happen to spell the same string. Passing a
- * family through a slug resolver would relabel `gpt-5` - a family that is also
- * a slug - as that model's catalogue label, and the row would then claim to
- * name a model the host explicitly could not resolve. {@link
- * FallbackDestinationDescription.modelIsFamily} keeps its meaning for the same
- * reason: it says which of the two arms produced the label, and the resolver
- * changes neither arm's identity.
- */
-export function fallbackDestinationOfModelTarget(
-  target: FallbackModelTarget,
-  labelFor: FallbackProfileLabelResolver,
-  modelLabelFor: FallbackModelLabelResolver,
-): FallbackDestinationDescription {
-  const model = target.model;
-  return {
-    providerLabel: fallbackHarnessLabelFor(target.harnessId),
-    profileLabel: labelFor(target.profileId),
-    modelLabel:
-      model === null
-        ? target.modelFamily
-        : modelLabelFor(target.harnessId, model),
-    modelIsFamily: model === null,
-    effortLabel: normalizedEffort(target.reasoningEffort),
-  };
-}
-
-/**
- * "Codex · gpt-6-astra · high" - a destination menu row's title.
- *
- * The provider is always named here even though the section heading groups
- * these rows, because the heading says "Equivalent models" and not which
- * provider each one lives on; two rows from two providers are otherwise
- * distinguishable only by their glyph, which is decorative.
- */
-export function fallbackDestinationRowTitle(
-  destination: FallbackDestinationDescription,
-): string {
-  return [
-    destination.providerLabel,
-    destination.modelLabel,
-    destination.effortLabel,
-  ]
-    .filter((part): part is string => part !== null)
-    .join(" · ");
 }
 
 /**
@@ -956,6 +868,23 @@ export function pendingFallbackResumesFailedTuple(
     destination.harnessId === failed.harnessId &&
     destination.model === failed.model &&
     destination.profileId === failed.profileId
+  );
+}
+
+/**
+ * Whether the countdown's refusal is "Sign in instead" rather than a plain
+ * "Don't switch".
+ *
+ * Only a signed-out traversal, and only one that HAS somewhere to sign in: a
+ * harness with no provider-CLI account (`providerCliIdForHarness` → `null`)
+ * would cancel the switch and then open nothing. One predicate for the card
+ * that draws the button and the announcer that names it, so the spoken
+ * instruction can never point at a button the card does not have.
+ */
+export function pendingFallbackOffersSignIn(pending: PendingFallback): boolean {
+  return (
+    pending.reason === "auth" &&
+    providerCliIdForHarness(pending.failedTuple.harnessId) !== null
   );
 }
 

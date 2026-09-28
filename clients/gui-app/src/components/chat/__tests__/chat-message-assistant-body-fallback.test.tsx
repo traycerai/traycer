@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
@@ -26,6 +26,7 @@ function renderBody(ui: ReactNode) {
 const WAIT_RESUMED: MessageSegment = {
   id: "seg-wait-resumed",
   kind: "provider_notice",
+  receipt: null,
   status: "completed",
   noticeKind: "fallback_wait_resumed",
   tone: "info",
@@ -38,6 +39,7 @@ const WAIT_RESUMED: MessageSegment = {
 const FALLBACK_APPLIED: MessageSegment = {
   id: "seg-applied",
   kind: "provider_notice",
+  receipt: null,
   status: "completed",
   noticeKind: "fallback_applied",
   tone: "info",
@@ -52,33 +54,54 @@ describe("AssistantMessageBody fallback notice frames", () => {
     cleanup();
   });
 
-  // The two frames are rendered in SEPARATE bodies, one segment each, and the
-  // divider count is taken over the whole document rather than over an ancestor
-  // reached with `closest`. That is not fastidiousness: the marker's own
-  // wrapper is `div.w-full.max-w-[…]` and not `div.flex.w-full.flex-col`, so a
-  // `closest` from its title climbs PAST it into the container both notices
-  // share - which is how the first version of this test read the divider-rule
-  // notice's two hairlines as the marker's own. Isolating the render is the
-  // only scoping that makes the negative mean what it says.
-  it("renders fallback_wait_resumed as the resumed-turn marker, with no divider rule", () => {
-    renderBody(<Body segments={[WAIT_RESUMED]} />);
+  // Clutter cuts (2026-09-27): `fallback_wait_resumed` is the same one-line
+  // hairline divider as `fallback_applied`, not the bordered SegmentCard marker
+  // it used to be. Each is rendered in its own body so the rule count is read
+  // over the whole document, not over an ancestor.
+  it.each([
+    ["fallback_wait_resumed", WAIT_RESUMED, "Resumed after waiting"],
+    ["fallback_applied", FALLBACK_APPLIED, "Switched providers"],
+  ] as const)(
+    "renders %s as the hairline divider, with its details under a chevron",
+    (_kind, segment, title) => {
+      renderBody(<Body segments={[segment]} />);
 
-    expect(screen.getByText("Resumed after waiting")).not.toBeNull();
-    // Falsification: point the `fallback_wait_resumed` arm in
-    // `chat-message-assistant-body.tsx` at `ProviderNoticeSegment` (drop the
-    // `FallbackWaitResumedMarker` branch) and this assertion must go red - that
-    // component renders exactly two `span.h-px` hairlines around its label.
-    expect(document.querySelectorAll("span.h-px")).toHaveLength(0);
+      expect(screen.getByText(title)).not.toBeNull();
+      // Two aria-hidden rule spans, one each side of the label.
+      const rules = document.querySelectorAll("span.h-px");
+      expect(rules).toHaveLength(2);
+      for (const rule of rules) {
+        expect(rule.getAttribute("aria-hidden")).toBe("true");
+      }
+      // The details make the label a chevron button.
+      const chevron = screen.getByRole("button");
+      expect(chevron.getAttribute("aria-expanded")).toBe("false");
+      expect(chevron.textContent).toContain(title);
+      fireEvent.click(chevron);
+      expect(chevron.getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByText("via:")).not.toBeNull();
+      // Exactly one button: no "Model routing" action under the details.
+      expect(screen.getAllByRole("button")).toHaveLength(1);
+    },
+  );
+
+  it("renders a fallback_wait_resumed notice with no details as the divider without a button", () => {
+    renderBody(<Body segments={[{ ...WAIT_RESUMED, details: [] }]} />);
+
+    expect(screen.getByText(/Resumed after waiting/)).not.toBeNull();
+    expect(document.querySelectorAll("span.h-px")).toHaveLength(2);
+    expect(screen.queryByRole("button")).toBeNull();
   });
 
-  // The positive CONTROL for the assertion above: the same query, on the frame
-  // that is supposed to have the rule. Without it, a marker that rendered
-  // nothing at all would satisfy the negative.
-  it("renders fallback_applied as the divider-rule notice", () => {
-    renderBody(<Body segments={[FALLBACK_APPLIED]} />);
+  // The old marker was a SegmentCard: a bordered, rounded, full-width box with
+  // its own expander. None of that shape may come back for the resumed notice.
+  it("does not render fallback_wait_resumed as the old bordered marker card", () => {
+    const { container } = renderBody(<Body segments={[WAIT_RESUMED]} />);
 
-    expect(screen.getByText("Switched providers")).not.toBeNull();
-    expect(document.querySelectorAll("span.h-px").length).toBeGreaterThan(0);
+    expect(container.querySelector("[class*='border-border']")).toBeNull();
+    // The divider's label sits between the two rules in one flex row.
+    const label = screen.getByText(/Resumed after waiting/);
+    expect(label.closest("div.flex.items-center.gap-3")).not.toBeNull();
   });
 });
 
@@ -112,6 +135,7 @@ function Body({
       nextStepActions={null}
       forkAction={null}
       interviewDeliveryRetry={null}
+      routingSettledNoticeId={null}
     />
   );
 }

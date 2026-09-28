@@ -102,6 +102,7 @@ import type {
 } from "@/stores/composer/chat-store";
 import type { AgentSenderDisplay } from "@/lib/chat/sender-display";
 import { manualRungAnchorSegmentId } from "@/stores/chats/manual-rung-anchor";
+import { routingSettledNoticeSegmentId } from "@/stores/chats/routing-settled-notice";
 import type {
   LiveAssistantMessage,
   PendingUserMessage,
@@ -350,9 +351,10 @@ function errorBlockContentVersion(
  * usually move with it and hide the miss, which is exactly why the kind cannot
  * be left to them: two upserts inside one millisecond at an unchanged status
  * leave every hashed field equal and the turn serves its cached segment. The
- * projected kind is what `isFallbackNoticeKind` reads to offer the fallback
- * settings link, so a stale one drops that affordance silently — e.g. a block
- * re-upserted as `fallback_wait_resumed` still rendering the previous kind.
+ * projected kind decides how the row paints — `fallback_applied` prints its
+ * title without its message — so a stale one paints the wrong row silently:
+ * e.g. a block re-upserted from `fallback_applied` to another kind still
+ * hiding the message it now has to show.
  */
 function textBlockContentVersion(
   block: Extract<ContentBlock, { type: "text" }>,
@@ -369,10 +371,16 @@ function textBlockContentVersion(
   hash = hashStringField(hash, notice.tone);
   hash = hashStringField(hash, notice.title);
   hash = hashStringField(hash, notice.message ?? "");
-  return notice.details.reduce((next, detail) => {
+  hash = notice.details.reduce((next, detail) => {
     const withLabel = hashStringField(next, detail.label);
     return hashStringField(withLabel, detail.value);
   }, hash);
+  // The receipt is a rendered field too, and the one that turns a divider into
+  // the settled card: a re-upsert that only ADDS it (or clears it, when a
+  // later settlement supersedes this one) must not serve the cached segment.
+  // JSON rather than a field walk: every value in it is a rendered string or
+  // a timestamp, and its shape is the protocol's to grow.
+  return hashStringField(hash, JSON.stringify(notice.receipt ?? null));
 }
 
 function planBlockContentVersion(
@@ -1682,6 +1690,20 @@ function withoutWithdrawnUserRow(
   );
 }
 
+/**
+ * Whether the rendered transcript carries a worktree setup card, in any state.
+ * While it does, an unstarted opening prompt drops its own "Setting up" status:
+ * the card, or the pre-turn "Working…" row once the card is no longer in flight
+ * (`setupGating` above), already shows that wait.
+ */
+export function transcriptShowsSetupCard(
+  rows: ReadonlyArray<ChatMessageModel>,
+): boolean {
+  return rows.some((row) =>
+    row.segments.some((segment) => segment.kind === "setup-card"),
+  );
+}
+
 function projectActiveTurn(
   activeTurn: ChatActiveTurn | null,
   profileLabelsByTurnKey: ReadonlyMap<string, string>,
@@ -1979,15 +2001,21 @@ function buildAutoJudgeUnattendedDenialMessages(
 }
 
 /**
- * Project an auto-mode judge notice: the line the host owes the user when the
- * judge could not run, a policy file is not the one deciding, or Automatic
- * moved the judge's billing to the conversation's own provider.
+ * Project a LEGACY auto-mode judge notice row.
  *
- * The host journals each as a `permission.blocked` event and nothing else, so
- * without this row the notice reached the chat store and was drawn nowhere.
- * Filtered and identified THROUGH the projection's own helper, like the
- * refusal row above - the host numbers this row's ordinal from
- * `autoJudgeNoticeRowSource`.
+ * Hosts used to journal a `permission.blocked` event carrying a notice (the
+ * judge could not run, a policy file was not wholly applied, Automatic moved
+ * the judge's billing to the conversation's provider). They no longer write
+ * one, but rows already on disk keep their ordinal: the host still numbers
+ * them from `autoJudgeNoticeRowSource`, so this list enumerates them too -
+ * the row-projection equivalence suite holds it to the host's list, row for
+ * row. Filtered and identified THROUGH the projection's own helper, like the
+ * refusal row above.
+ *
+ * Nothing draws the row. The chat tile withholds it before the list is built
+ * (`withholdUnpaintedRows` in `chat-special-segment.ts`), and
+ * `transcriptListRows` then omits its ordinal the way it omits a row the
+ * pinned-todo pass withholds.
  */
 function buildAutoJudgeNoticeMessages(
   events: ReadonlyArray<ChatEvent>,
@@ -2075,6 +2103,12 @@ function pendingTurnMeta(
 
 interface AssistantTurnAccumulator {
   messageId: string;
+  /**
+   * Every contributing record's id once a second record folds in, `null`
+   * while the turn has one: the common turn allocates nothing for it. See
+   * `ChatMessage.turnMessageIds`.
+   */
+  turnMessageIds: string[] | null;
   /**
    * The record's OWN `turnId`, not this turn's accumulator key.
    *
@@ -2735,11 +2769,16 @@ function addAssistantMessageToAccumulator(
     // which may be processed after an earlier sibling. Take the LATEST non-null
     // (last-wins) so the final cumulative cost is not pinned to a stale partial.
     existing.costUsd = message.usage?.costUsd ?? existing.costUsd;
+    existing.turnMessageIds = [
+      ...(existing.turnMessageIds ?? [existing.messageId]),
+      message.messageId,
+    ];
     existing.messageId = message.messageId;
     return;
   }
   const created: AssistantTurnAccumulator = {
     messageId: message.messageId,
+    turnMessageIds: null,
     turnId: message.turnId,
     sender: message.sender,
     startedAt: message.startedAt,
@@ -3192,6 +3231,11 @@ function renderAssistantTurnRows(
  * `chat-stable-rows.ts` compares `manualRungAnchorId` like every other field,
  * and handing back a fresh object for a row whose answer is "not you" would
  * churn a row per projection to say nothing.
+ *
+ * The anchor's row also learns whether it holds the settled routing notice
+ * (`routingSettledNoticeSegmentId`, asked of that ROW only): the settled card
+ * is the anchor's card with the notice folded in, so the two stamps are made
+ * together and cannot name different rows.
  */
 function withManualRungAnchor(
   rows: ReadonlyArray<ChatMessageModel>,
@@ -3199,12 +3243,22 @@ function withManualRungAnchor(
   const anchorId = manualRungAnchorSegmentId(assistantTurnSegments(rows));
   // The common case by a wide margin: a turn with no error segment at all.
   if (anchorId === null) return rows;
-  return rows.map((row) =>
-    row.role === "assistant" &&
-    row.segments.some((segment) => segment.id === anchorId)
+  return rows.map((row) => {
+    if (
+      row.role !== "assistant" ||
+      !row.segments.some((segment) => segment.id === anchorId)
+    ) {
+      return row;
+    }
+    const settledId = routingSettledNoticeSegmentId(row.segments);
+    return settledId === null
       ? { ...row, manualRungAnchorId: anchorId }
-      : row,
-  );
+      : {
+          ...row,
+          manualRungAnchorId: anchorId,
+          routingSettledNoticeId: settledId,
+        };
+  });
 }
 
 /**
@@ -3512,6 +3566,9 @@ function renderAssistantTurnSlice(
     pausedDurationMs: input.pause.pausedDurationMs,
     pausedSinceMs: input.pause.pausedSinceMs,
     persistentMessageId: input.acc.messageId,
+    ...(input.acc.turnMessageIds === null
+      ? {}
+      : { turnMessageIds: input.acc.turnMessageIds }),
     // Spread rather than set: `turnId` is absent when the record carries none,
     // and an explicit `undefined` would be a present key whose value is the
     // one thing a reader must not treat as an identity.
@@ -3823,6 +3880,7 @@ function renderLiveAssistant(
   }
   const acc: AssistantTurnAccumulator = {
     messageId: transientLiveAssistantMessageId(liveAssistant.turnId),
+    turnMessageIds: null,
     // The live row always has a real turn id - it is what the host is
     // streaming against - so no `ts:` synthetic can reach here.
     turnId: liveAssistant.turnId,
@@ -4087,6 +4145,7 @@ function buildAssistantSegments(
         title: codexRetryTitle(block.message),
         message: null,
         details: [{ label: "Reported by Codex", value: block.message }],
+        receipt: null,
         parentId: block.parentBlockId ?? null,
       });
       continue;
@@ -4807,6 +4866,9 @@ const BLOCK_HANDLERS: {
         title: notice.title,
         message: notice.message,
         details: notice.details,
+        // Absent (an older host, or a notice persisted before the key) and
+        // `null` (a superseded settlement) are one answer here: a divider.
+        receipt: notice.receipt ?? null,
         parentId: block.parentBlockId ?? null,
       };
     }

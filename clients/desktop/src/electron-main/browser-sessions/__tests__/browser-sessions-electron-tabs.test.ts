@@ -100,6 +100,7 @@ function setup(
     sendFrame: (frame) => sent.push(frame),
     onTabBound: (capability) => bound.push(capability),
     onTabReleased: (capability) => released.push(capability),
+    onDemandChanged: () => undefined,
   });
   activeElectronTabs.add(electronTabs);
   return { sent, bound, released, electronTabs };

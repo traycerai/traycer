@@ -1,0 +1,130 @@
+---
+title: 'Phases Mode'
+description: 'Structured, multi-phase development for complex projects. Break goals into iterative phases with validation between steps.'
+keywords: ['phases mode', 'multi-phase development', 'complex projects', 'iterative phases', 'validation', 'phase generation', 'phase planning', 'intent clarification', 'sequential breakdown', 'scope definition', 'managing phases', 'adding phases', 're-arranging phases', 'drag and drop', 'phase progression', 'context preservation']
+---
+
+<Frame>
+<iframe
+  className="w-full aspect-video rounded-xl"
+  src="https://www.youtube.com/embed/1tPbWsT5npU?rel=0&cc_load_policy=1&cc_lang_pref=en&start=67"
+  title="Phases mode"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allowFullScreen
+></iframe>
+</Frame>
+
+<Steps>
+  <Step title="1. User Query">
+    State your goal, expected outcome, and constraints.
+
+    <Accordion title="What context can I provide?">
+      Optional context:
+
+      - **Files**: Source files, config files, documentation, test files.
+      - **Folders**: Component directories, feature folders, asset directories.
+      - **Images**: UI mockups, error screenshots.
+      - **Git**:
+        - **Diff against uncommitted changes**: Changes that haven't been committed yet.
+        - **Diff against 'main'**: Changes compared to the main/default branch.
+        - **Diff against branch**: Changes compared to a specific branch of your choice.
+        - **Diff against commit**: Changes compared to a specific commit.
+    </Accordion>
+
+  </Step>
+
+<Step title="2. Intent Clarification (if needed)">
+Traycer asks strategic questions to refine scope:
+
+- Business goals and user flows.
+- Architecture and integration needs.
+- Performance, security, and scalability requirements.
+</Step>
+
+<Step title="3. Phase Generation">
+Traycer structures work into manageable phases:
+
+- **Phase identification**: Clear milestones and outcomes.
+- **Sequential breakdown**: Logical progression from start to finish.
+- **Scope definition**: Well-defined boundaries for each phase.
+
+Learn more about [managing phases](/extension/tasks/phases#managing-phases).
+</Step>
+<Step title="4. Phase Planning">
+Traycer creates a detailed plan for each phase:
+
+- **Objectives** and deliverables.
+- **File changes** with exact edits.
+- **Architecture** and approach.
+
+Learn more about [plan](/extension/tasks/plan) for each phase.
+</Step>
+
+<Step title="5. Hand off to Agent">
+Execute the generated plan with your AI coding assistant. See [supported agents](/extension/integrations/agents).
+</Step>
+
+<Step title="6. Verification with Traycer">
+Validate each phase before moving on:
+
+- Compares agent's implementation against your original plan to ensure requirements.
+- Categorizes verification review comments by severity - Critical, Major, Minor, Outdated.
+
+Learn more about [verification](/extension/tasks/verification).
+</Step>
+
+<Step title="7. Next Phase">
+Advance with preserved context:
+
+- Carry forward decisions and mappings.
+- Clear progress tracking.
+- Plans adapt based on learnings.
+</Step>
+</Steps>
+
+## Automating phases with YOLO Mode
+
+<Card title="YOLO Mode" icon="robot" href="/extension/tasks/yolo-mode">
+  **Fully automated workflow.** Configure once and let Traycer automatically orchestrate planning, coding, and verification across all phases without manual handoff clicks.
+</Card>
+
+## Managing phases
+
+After Traycer creates your initial phases, you have full control over the phase structure and can modify it as your project evolves.
+
+### Phase selection mode
+
+You can select multiple phases at once and refer to them in chat or merge them into a single phase using AI.
+
+<Frame>
+<iframe
+  className="w-full aspect-video rounded-xl"
+  src="https://www.youtube.com/embed/FDX7CNIp0ek?rel=0&cc_load_policy=1&cc_lang_pref=en&start=67"
+  title="Phase selection mode"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allowFullScreen
+></iframe>
+</Frame>
+
+### Adding more phases
+
+<Frame>
+<img src="/images/add-phase.gif" alt="Phases add" />
+</Frame>
+
+You can add additional phases at any point in your project:
+
+- **Insert new phases**: Add phases between existing ones or at the end.
+- **Address new requirements**: Add phases for features or changes discovered during development.
+- **Refinement phases**: Add phases for optimization, testing, or documentation.
+
+### Re-arranging phase order
+
+<Frame>
+<img src="/images/phase-rearrange.gif" alt="Phases rearrange" />
+</Frame>
+
+Traycer allows you to re-arrange the order of phases to optimize your development process:
+
+- **Drag and drop**: Simply drag phases to reorder them in the sequence.
+- **Flexible sequencing**: Change the order based on new insights or changing priorities.

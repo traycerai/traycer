@@ -230,6 +230,25 @@ export function providerSignInUnavailableHint(
   state: ProviderCliState,
   isSelectedHostLocal: boolean,
 ): string | null {
+  const reason = providerSignInUnavailableReason(state, isSelectedHostLocal);
+  if (reason?.kind === "pack") {
+    return providerPackPreparingLabel(
+      reason.preparing,
+      providerDisplayName(state.providerId),
+    );
+  }
+  return reason?.hint ?? null;
+}
+
+type ProviderSignInUnavailableReason =
+  | { readonly kind: "other"; readonly hint: string }
+  | { readonly kind: "pack"; readonly preparing: ProviderPackPreparing };
+
+/** Lets Profiles link to CLI setup without repeating its installation progress. */
+export function providerSignInUnavailableReason(
+  state: ProviderCliState,
+  isSelectedHostLocal: boolean,
+): ProviderSignInUnavailableReason | null {
   if (providerSupportsTerminalLogin(state.loginCapability)) {
     // A permanent provider property, so it outranks every situational reason
     // below - and it has to precede the "no browser sign-in" branch too: a
@@ -239,9 +258,12 @@ export function providerSignInUnavailableHint(
     // It is also FALSE for the host check: a device flow needs no loopback,
     // so terminal login works on a remote host.
     const hint = `${providerDisplayName(state.providerId)} is signed in from a terminal. Open its model picker in a chat or on the start page and use the terminal sign-in there.`;
-    return state.apiKey.supported
-      ? `${hint} Or set an API key on the Account tab.`
-      : hint;
+    return {
+      kind: "other",
+      hint: state.apiKey.supported
+        ? `${hint} Or set an API key on the Account tab.`
+        : hint,
+    };
   }
   const oauthArgs = state.loginCapability?.oauthArgs ?? null;
   // `null` alone, NOT `null || length === 0`. An EMPTY argv is a real headless
@@ -266,15 +288,24 @@ export function providerSignInUnavailableHint(
     // tab after the providers tab split, not above this hint.
     const name = providerDisplayName(state.providerId);
     if (state.providerId === "traycer") {
-      return `${name} does not support browser sign-in.`;
+      return {
+        kind: "other",
+        hint: `${name} does not support browser sign-in.`,
+      };
     }
-    return `${name} does not support browser sign-in. Authenticate with its own CLI, or set an API key on the Account tab.`;
+    return {
+      kind: "other",
+      hint: `${name} does not support browser sign-in. Authenticate with its own CLI, or set an API key on the Account tab.`,
+    };
   }
   if (
     !isSelectedHostLocal &&
     !providerLoginIsRemoteSafe(state.loginCapability)
   ) {
-    return "Signing in opens a browser on the machine running Traycer, so it is only available on a local host.";
+    return {
+      kind: "other",
+      hint: "Signing in opens a browser on the machine running Traycer, so it is only available on a local host.",
+    };
   }
   const packPreparing = providerPackPreparingForProvider(state);
   // Blocking, not merely preparing: a login spawns whatever the resolver
@@ -282,10 +313,7 @@ export function providerSignInUnavailableHint(
   // binary takes nothing away. Withholding Sign in there would strand a user
   // whose CLI works, on a screen that shows them it works.
   if (packPreparing !== null && providerPackBlocksExecution(packPreparing)) {
-    return providerPackPreparingLabel(
-      packPreparing,
-      providerDisplayName(state.providerId),
-    );
+    return { kind: "pack", preparing: packPreparing };
   }
   return null;
 }

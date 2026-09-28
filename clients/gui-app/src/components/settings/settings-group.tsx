@@ -23,6 +23,8 @@ interface SettingsGroupProps {
    * orientation.
    */
   readonly showTitle: boolean;
+  /** Optional status beside the title, separate from its searchable label. */
+  readonly titleStatus?: ReactNode;
   readonly tone: "default" | "danger";
   readonly dataTestId: string | undefined;
   readonly children: ReactNode;
@@ -47,7 +49,8 @@ interface SettingsGroupProps {
  * tone for Danger Zone instead of a separate component.
  */
 export function SettingsGroup(props: SettingsGroupProps): ReactNode {
-  const { group, showTitle, tone, dataTestId, children, fill } = props;
+  const { group, showTitle, titleStatus, tone, dataTestId, children, fill } =
+    props;
   const compact = useSettingsDensity() === "compact";
   return (
     <section
@@ -61,9 +64,11 @@ export function SettingsGroup(props: SettingsGroupProps): ReactNode {
             compact ? "mb-1" : "mb-1.5",
             tone === "danger" && "text-destructive/80",
             fill && "shrink-0",
+            titleStatus !== undefined && "flex flex-wrap items-center gap-2",
           )}
         >
           {group.label}
+          {titleStatus}
         </h2>
       ) : null}
       <div

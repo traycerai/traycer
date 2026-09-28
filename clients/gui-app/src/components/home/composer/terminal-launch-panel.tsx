@@ -205,6 +205,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
           runTargetHostId={hostId}
           terminalLoginSurface={terminalLoginSurface}
           profileAdmission={null}
+          embedding={null}
         />
         <Input
           aria-label="Terminal interface CLI arguments"

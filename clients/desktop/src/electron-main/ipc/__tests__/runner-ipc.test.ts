@@ -136,6 +136,7 @@ vi.mock("electron", () => ({
   },
   BrowserWindow: {
     fromWebContents: vi.fn(() => null),
+    getAllWindows: vi.fn(() => []),
   },
   Notification: {
     isSupported: (): boolean => false,
@@ -655,6 +656,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.authSessionGet,
           RunnerHostInvoke.authSessionSet,
           RunnerHostInvoke.authSessionRevoke,
+          RunnerHostInvoke.authSessionRestoreLocal,
           RunnerHostInvoke.supportSaveDiagnosticBundle,
           RunnerHostInvoke.supportDiscardFrozenEvidence,
           RunnerHostInvoke.supportFreezeEvidence,
@@ -4341,6 +4343,200 @@ describe("RunnerIpcBridge", () => {
       false,
     );
     expect(destroyedFocusedWindow.sentMessages).toEqual([]);
+    bridge.dispose();
+  });
+
+  it("forwards feed occurrences unchanged in a foreground notification relay", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const focusedWindow = buildWindow();
+    const backgroundWindow = buildWindow();
+    registry.add("window-focused", 101, focusedWindow);
+    registry.add("window-background", 202, backgroundWindow);
+    focusedWindow.setFocused(true);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    const occurrence = {
+      key: "notification:B",
+      title: "B",
+      body: "body B",
+      payload: { epicId: "epic-b" },
+      replaceKey: "replace-B",
+      feedSource: "cloud" as const,
+      originHostId: null,
+      epicId: "epic-b",
+      chatId: "chat-b",
+      chimeEventType: "done" as const,
+      userId: null,
+    };
+    const display = {
+      title: "B",
+      body: "body B",
+      payload: occurrence.payload,
+      replaceKey: "replace-B",
+      deliveryKey: '["notification:B"]',
+      feedSource: "cloud" as const,
+      feedOccurrences: [occurrence],
+      foregroundAppLocal: null,
+    };
+
+    expect(bridge.deliverForegroundNotificationDisplay(202, display)).toBe(
+      true,
+    );
+
+    expect(focusedWindow.sentMessages).toEqual([
+      {
+        channel: RunnerHostEvent.notificationForegroundDisplay,
+        payload: display,
+      },
+    ]);
+
+    // Structured feed displays reach the focused renderer even when it is the
+    // sender (its structured path awaits the result and never pre-renders).
+    expect(bridge.deliverForegroundNotificationDisplay(101, display)).toBe(
+      true,
+    );
+    expect(focusedWindow.sentMessages).toHaveLength(2);
+    expect(focusedWindow.sentMessages[1]).toEqual({
+      channel: RunnerHostEvent.notificationForegroundDisplay,
+      payload: display,
+    });
+    bridge.dispose();
+  });
+
+  it("notificationShow validates and routes the eighth feedOccurrences argument", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    registry.add("window-a", 101, buildWindow());
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const handler = ipcMainState.handlers.get(
+      RunnerHostInvoke.notificationShow,
+    );
+    if (handler === undefined) throw new Error("notificationShow missing");
+    const webContents = Object.assign(new EventEmitter(), { id: 101 });
+    const event = { sender: webContents, senderFrame: { parent: null } };
+    const occurrence = (key: string) => ({
+      key,
+      title: `t-${key}`,
+      body: `b-${key}`,
+      payload: { key },
+      replaceKey: `r-${key}`,
+      feedSource: "host" as const,
+      originHostId: "host-1",
+      epicId: `epic-${key}`,
+      chatId: null,
+      chimeEventType: "done" as const,
+      userId: null,
+    });
+    const show = (feedOccurrences: unknown) =>
+      handler(
+        event,
+        "Traycer",
+        "body",
+        null,
+        null,
+        null,
+        "host",
+        null,
+        feedOccurrences,
+      );
+    // Old preload: only the seven legacy arguments, eighth truly omitted.
+    const showLegacy = () =>
+      handler(event, "Traycer", "body", null, null, null, "host", null);
+
+    // Valid batch takes the feed path: receipts make a replay a duplicate
+    // (notifications are unsupported in this harness, so the first is
+    // "undeliverable").
+    expect(
+      await show([occurrence("ipc-A"), occurrence("ipc-B")]),
+    ).toMatchObject({
+      kind: "feed",
+      outcome: "undeliverable",
+      display: {
+        feedOccurrences: [occurrence("ipc-A"), occurrence("ipc-B")],
+      },
+    });
+    expect(await show([occurrence("ipc-A")])).toBe("duplicate");
+    expect(await show([occurrence("ipc-B")])).toBe("duplicate");
+    // A batch with one unseen row is not swallowed.
+    const partial = await show([occurrence("ipc-A"), occurrence("ipc-C")]);
+    expect(partial).toMatchObject({
+      kind: "feed",
+      outcome: "undeliverable",
+      display: { feedOccurrences: [occurrence("ipc-C")] },
+    });
+
+    // Malformed batches are rejected.
+    await expect(show([])).rejects.toThrow();
+    await expect(show("nope")).rejects.toThrow();
+    await expect(show([{ ...occurrence("ipc-D"), key: "" }])).rejects.toThrow();
+    await expect(
+      show([{ ...occurrence("ipc-D"), feedSource: "app-local" }]),
+    ).rejects.toThrow();
+    await expect(show([{ key: "ipc-D" }])).rejects.toThrow();
+    await expect(
+      show([{ ...occurrence("ipc-D"), originHostId: 1 }]),
+    ).rejects.toThrow();
+    await expect(
+      show([{ ...occurrence("ipc-D"), chatId: undefined }]),
+    ).rejects.toThrow();
+    await expect(
+      show([{ ...occurrence("ipc-D"), userId: 7 }]),
+    ).rejects.toThrow();
+    await expect(
+      show([{ ...occurrence("ipc-D"), userId: undefined }]),
+    ).rejects.toThrow();
+    await expect(
+      show([{ ...occurrence("ipc-D"), chimeEventType: "loud" }]),
+    ).rejects.toThrow();
+    await expect(
+      show([{ ...occurrence("ipc-D"), chimeEventType: undefined }]),
+    ).rejects.toThrow();
+    // Feed batches cannot be mixed with app-local delivery metadata.
+    await expect(
+      handler(
+        event,
+        "Traycer",
+        "body",
+        null,
+        null,
+        null,
+        "host",
+        { userId: "u", entry: { id: "x", updatedAt: 1 } },
+        [occurrence("ipc-E")],
+      ),
+    ).rejects.toThrow();
+
+    // Old callers omit the argument (undefined) or pass null: legacy path.
+    expect(await showLegacy()).toBe("undeliverable");
+    expect(await show(null)).toBe("undeliverable");
+    expect(await show(undefined)).toBe("undeliverable");
     bridge.dispose();
   });
 

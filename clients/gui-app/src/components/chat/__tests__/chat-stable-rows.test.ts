@@ -44,6 +44,31 @@ describe("computeStableChatTimelineRows", () => {
     expect(afterRebuild.result[1]).not.toBe(rebuilt[1]);
   });
 
+  it("compares a folded turn's record ids by content, since every pass rebuilds them", () => {
+    const original: ChatMessage = {
+      ...makeMessage(0, "assistant"),
+      turnMessageIds: ["a-first", "a-last"],
+    };
+    const state = computeStableChatTimelineRows(
+      [original],
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+    );
+
+    const rebuilt: ChatMessage = {
+      ...cloneMessage(original),
+      turnMessageIds: ["a-first", "a-last"],
+    };
+    expect(computeStableChatTimelineRows([rebuilt], state).result[0]).toBe(
+      original,
+    );
+
+    const grown: ChatMessage = {
+      ...cloneMessage(original),
+      turnMessageIds: ["a-first", "a-last", "a-next"],
+    };
+    expect(computeStableChatTimelineRows([grown], state).result[0]).toBe(grown);
+  });
+
   it("produces a new object for a message whose tracked fields changed", () => {
     const original = makeMessage(0, "assistant");
     const state = computeStableChatTimelineRows(

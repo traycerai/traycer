@@ -7,10 +7,12 @@ import {
 } from "@traycer-clients/shared/replica-runtime";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { DESKTOP_RETENTION_PROFILE } from "@/stores/replica-memory/retention-profile";
+import { agentActivityTurnForHost } from "@/stores/agent-activity-store";
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import {
-  isChatRunInProgress,
-  type ChatSessionStoreHandle,
-} from "@/stores/chats/chat-session-store";
+  chatActivityIndicator,
+  composerTurnStatus,
+} from "@/stores/chats/chat-run-activity";
 import {
   acceptedActionIsUnsettled,
   noticeCarriesOnlyCopy,
@@ -106,6 +108,13 @@ export interface ChatSessionRegistryOptions {
  */
 export class ChatSessionRegistry {
   private readonly sessions: SessionRegistry<ChatSessionStoreHandle>;
+  // The shared policy receives a handle, not its key. Keep the acquire-time
+  // host beside that handle so the activity verdict cannot use another host's
+  // narrow union for a same-id chat. Weak keys do not extend handle lifetime.
+  private readonly hostIdByHandle = new WeakMap<
+    ChatSessionStoreHandle,
+    string
+  >();
 
   constructor(options: ChatSessionRegistryOptions) {
     this.sessions = createSessionRegistry<ChatSessionStoreHandle>({
@@ -132,7 +141,11 @@ export class ChatSessionRegistry {
         // unreattachable state.
         retainWhenIdle: () => true,
         hasActiveWork: (handle) =>
-          hasActiveChatWork(handle) || holdsUnrecordedPrompt(handle),
+          chatCapHasActiveWork(handle, this.hostIdByHandle.get(handle) ?? null),
+        activeWorkReason: (handle) =>
+          hasActiveChatWork(handle, this.hostIdByHandle.get(handle) ?? null)
+            ? "chat-work"
+            : "unrecorded-prompt",
         // NOTHING is gated here, and that is the correction rather than an
         // omission. This read `!holdsUnrecordedPrompt(handle)`, on the premise
         // that the two eviction routes do not share a gate - the warm-cap walk
@@ -268,6 +281,11 @@ export class ChatSessionRegistry {
     return this.sessions.subscribe(listener);
   }
 
+  /** The host bound to this handle from its acquisition onward. */
+  hostIdForHandle(handle: ChatSessionStoreHandle): string | null {
+    return this.hostIdByHandle.get(handle) ?? null;
+  }
+
   acquire(
     target: ChatSessionTarget,
     factory: (epicId: string, chatId: string) => ChatSessionStoreHandle,
@@ -276,7 +294,11 @@ export class ChatSessionRegistry {
     return this.sessions.acquire(
       chatSessionKey(epicId, chatId, hostId),
       scopeKey,
-      () => factory(epicId, chatId),
+      () => {
+        const handle = factory(epicId, chatId);
+        this.hostIdByHandle.set(handle, hostId);
+        return handle;
+      },
     );
   }
 
@@ -299,6 +321,17 @@ export class ChatSessionRegistry {
 
   forceRelease(epicId: string, chatId: string, hostId: string): void {
     this.sessions.forceRelease(chatSessionKey(epicId, chatId, hostId));
+  }
+
+  /** Byte pressure uses the same active-work hold as the count cap. */
+  evictOldestEligibleForByteBudget(): boolean {
+    return this.sessions.evictOldestEligible(
+      (entry) =>
+        !chatCapHasActiveWork(
+          entry.session,
+          this.hostIdByHandle.get(entry.session) ?? null,
+        ),
+    );
   }
 
   /**
@@ -392,7 +425,9 @@ function chatSessionKeyHostId(key: SessionKey): string {
  * for a reason that belongs only to parking.
  */
 function hasUnsettledChatWork(handle: ChatSessionStoreHandle): boolean {
-  if (hasActiveChatWork(handle)) return true;
+  // The epic registry checks the activity plane with each chat host before it
+  // parks. This independent local read protects chat-owned actions and prompts.
+  if (hasActiveChatWork(handle, null)) return true;
   const state = handle.store.getState();
   if (Object.keys(state.pendingActions).length > 0) return true;
   // AN ACTION LEAVING `pendingActions` IS AN ACKNOWLEDGEMENT, NOT A
@@ -512,18 +547,66 @@ function holdsUnrecordedPrompt(handle: ChatSessionStoreHandle): boolean {
   );
 }
 
-function hasActiveChatWork(handle: ChatSessionStoreHandle): boolean {
+/** Shared warm-cap hold for chat count and byte eviction callers. */
+export function chatCapHasActiveWork(
+  handle: ChatSessionStoreHandle,
+  hostId: string | null,
+): boolean {
+  return hasActiveChatWork(handle, hostId) || holdsUnrecordedPrompt(handle);
+}
+
+function hasActiveChatWork(
+  handle: ChatSessionStoreHandle,
+  hostId: string | null,
+): boolean {
   const state = handle.store.getState();
   // A chat parked on a human gate (interview / command approval / file-edit
   // approval) is in progress - the turn is blocked on the user, not finished.
   // Count it as active work so the warm-chat idle TTL and the warm-overflow cap
   // do not dispose its `chat.subscribe` stream while the user is still expected
   // to answer (the host holds its session alive in the same situation).
-  return (
+  //
+  // The run arm is the AGENT working - a turn active or activating, a runnable
+  // queue, a detached subagent or workflow - and not raw `runStatus`, which the
+  // host also holds at "running" for as long as a background shell, monitor or
+  // wake outlives the turn. That can be hours for a dev server, and releasing
+  // this renderer's stream stops none of it on the host: the shell keeps
+  // running, and a re-lease reconnects to its current state. Counting it here
+  // pinned a finished chat warm past the TTL and the cap, refused its epic's
+  // park, and kept it awake on the app's background edge.
+  //
+  // The host's activity plane can distinguish those cases where it covers
+  // this chat's host. Without an attested covering frame, an older chat host
+  // with no `turnInProgress` still needs raw runStatus: its local heuristic
+  // cannot distinguish an activating turn from background work.
+  const legacyHostRunning =
+    state.turnInProgress === undefined &&
+    composerTurnStatus(state.runStatus) !== null;
+  if (
     state.activeTurn !== null ||
-    isChatRunInProgress(state.runStatus) ||
+    // A chat frame can reach this store before the separate activity stream's
+    // turn-start frame. Preserve its explicit active-turn claim in that gap.
+    state.turnInProgress === true ||
+    // A pre-turn activation on an older chat host has no explicit turn bit.
+    // Its raw running status must survive a covered but lagging activity frame.
+    legacyHostRunning ||
     state.pendingApprovals.length > 0 ||
     state.pendingFileEditApprovals.length > 0 ||
     state.pendingInterviews.length > 0
+  ) {
+    return true;
+  }
+  // A queue or native item can appear in chat.subscribe before the activity
+  // stream's coalesced replacement frame lands. Its positive signal must keep
+  // the stream warm even when the last attested activity frame was negative.
+  // In the stale-session retry gap, this local indicator instead reads
+  // background; the activity plane's turn set supplies the missing positive.
+  if (chatActivityIndicator(state) === "turn") return true;
+  // A shared viewer's activity stream is scoped to the viewer, while this
+  // chat's activity registration belongs to its owner. Its silence says
+  // nothing about the owner's turn, even when it covers the same host.
+  if (hostId === null || state.access?.role !== "owner") return false;
+  return (
+    agentActivityTurnForHost(handle.epicId, handle.chatId, hostId) === true
   );
 }

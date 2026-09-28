@@ -1,3 +1,7 @@
+/**
+ * Docs: see ../SETTINGS.md (Host ▸ Overview ▸ Ports).
+ * Update that file whenever this settings surface changes.
+ */
 import { useState, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import type {
@@ -12,11 +16,14 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
+import { describeOverviewDegrade } from "@/components/settings/panels/host-overview-model";
+import type {
+  HostPortForwards,
+  HostPortForwardsView,
+} from "@/components/settings/panels/host-port-forwards-state";
+import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
-import { HostOverviewNotice } from "@/components/settings/panels/host-overview-status-card";
 import { formatByteSize } from "@/lib/format-byte-size";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
-import { usePortForwardListFor } from "@/hooks/port-forward/use-port-forward-list-for-query";
 import {
   usePortForwardCutLeaseFor,
   usePortForwardStopFor,
@@ -27,24 +34,27 @@ function connectionsLabel(open: number): string {
 }
 
 /**
- * A host's two port-forward tables, shown as they are: the forwards its agents
- * OWN, and the ports other machines HOLD on it.
+ * Overview ▸ Ports' body: a host's two port-forward tables, shown as they
+ * are - the forwards its agents OWN, and the ports other machines HOLD on it.
  *
  * It exists for the second table. A forward's owner sees it in the agent's
  * chat; the machine on the other end - the one whose port is being listened on
  * or reached - has no chat for it and no other place to find out. This is that
  * place, and Cut is that machine's one control.
  *
- * It renders nothing at all on a host that does not serve
- * `portForward.listForHost` (the method is optional, so an older host
- * negotiates it away), while the host is not usable, and while there is
- * nothing in either table - an empty card on every host's page would be a
- * feature announcing itself to people who never asked for it.
+ * Present on every host, in every state, with one sentence where there is no
+ * list to draw: connecting (the loading shape), unreachable, too old for port
+ * forwarding, a read that failed, or nothing forwarded or held. A group with
+ * no rows is not drawn.
  *
- * It does not poll; see {@link usePortForwardListFor}. The counters are as of
- * the last read, which is why Refresh is on the card.
+ * The lists are the panel's one read (`useHostPortForwards`), shared with the
+ * count on the tab's trigger and re-read every 15 seconds while the page is
+ * open. Refresh re-reads them at once, as it always has, and a Stop or Cut
+ * re-reads them when it lands.
  */
 export function HostPortForwardsCard(props: {
+  readonly ports: HostPortForwards;
+  /** Stop, Clear and Cut dispatch through it. */
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
   readonly hostName: string;
@@ -54,86 +64,63 @@ export function HostPortForwardsCard(props: {
    * on its scope, not on the data sources the scope composes.
    */
   readonly hosts: readonly HostScopeOption[];
-  readonly usable: boolean;
 }): ReactNode {
-  const supported = useHostSupportsMethod(
-    props.hostId,
-    "portForward.listForHost",
-  );
-  const enabled = props.usable && supported;
-  const list = usePortForwardListFor(props.client, enabled);
+  const { ports, hostName } = props;
   const stop = usePortForwardStopFor(props.client);
   const cut = usePortForwardCutLeaseFor(props.client);
   const [cutting, setCutting] = useState<HeldPortForwardLease | null>(null);
+  // An armed Cut confirmation belongs to the list it was opened from. When
+  // that list goes away - the host can't be reached, the method is withdrawn,
+  // a read fails or comes back empty - the confirmation closes, as it did when
+  // the whole card unmounted in those states. A Cut already in flight keeps
+  // it until the mutation settles. A single lease leaving a list that still
+  // has rows is not this case: confirming it is an idempotent `cut: false`.
+  const listHasRows =
+    ports.view.kind === "listed" &&
+    ports.view.owned.length + ports.view.held.length > 0;
+  if (cutting !== null && !listHasRows && !cut.isPending) setCutting(null);
   const machine = (hostId: string): string => {
-    if (hostId === props.hostId) return props.hostName;
+    if (hostId === props.hostId) return hostName;
     return (
       props.hosts.find((host) => host.hostId === hostId)?.name ??
       "another machine"
     );
   };
-
   const stoppingForwardId = stop.isPending ? stop.variables.forwardId : null;
 
-  if (!enabled) return null;
-  const owned = list.data?.owned ?? [];
-  const held = list.data?.held ?? [];
-  if (list.data !== undefined && owned.length === 0 && held.length === 0) {
-    return null;
-  }
-  // A first read that failed has nothing to show and nothing to hide behind:
-  // say so rather than rendering an empty card or no card.
-  if (list.data === undefined && !list.isError) return null;
-
   return (
-    <SettingsGroup
-      group={HOST_OVERVIEW.definitions.portForwards}
-      showTitle
-      tone="default"
-      dataTestId="host-port-forwards"
-      fill={false}
-    >
-      {list.data === undefined ? (
-        <HostOverviewNotice testId="host-port-forwards-unreadable">
-          {`Couldn't read ${props.hostName}'s port forwards.`}
-        </HostOverviewNotice>
-      ) : (
-        <ul className="m-0 flex list-none flex-col divide-y divide-border/50 p-0">
-          {owned.map((forward) => (
-            <OwnedForwardRow
-              key={forward.forwardId}
-              forward={forward}
-              machine={machine}
-              pending={stoppingForwardId === forward.forwardId}
-              disabled={stop.isPending}
-              onStop={() => {
-                stop.mutate({ forwardId: forward.forwardId });
-              }}
-            />
-          ))}
-          {held.map((lease) => (
-            <HeldLeaseRow
-              key={lease.leaseId}
-              lease={lease}
-              machine={machine}
-              disabled={cut.isPending}
-              onCut={() => {
-                setCutting(lease);
-              }}
-            />
-          ))}
-        </ul>
-      )}
-      <RefreshFooter
-        fetching={list.isFetching}
-        onRefresh={() => {
-          void list.refetch();
-        }}
+    <>
+      <HostPortForwardsBody
+        ports={ports}
+        hostName={hostName}
+        renderOwned={(forward) => (
+          <OwnedForwardRow
+            key={forward.forwardId}
+            forward={forward}
+            machine={machine}
+            pending={stoppingForwardId === forward.forwardId}
+            disabled={stop.isPending}
+            onStop={() => {
+              stop.mutate({ forwardId: forward.forwardId });
+            }}
+          />
+        )}
+        renderHeld={(lease) => (
+          <HeldLeaseRow
+            key={lease.leaseId}
+            lease={lease}
+            machine={machine}
+            disabled={cut.isPending}
+            onCut={() => {
+              setCutting(lease);
+            }}
+          />
+        )}
       />
       <CutLeaseDialog
         lease={cutting}
         machine={machine}
-        hostName={props.hostName}
+        hostName={hostName}
         pending={cut.isPending}
         onClose={() => {
           setCutting(null);
@@ -149,16 +136,163 @@ export function HostPortForwardsCard(props: {
           );
         }}
       />
-    </SettingsGroup>
+    </>
   );
 }
 
-function RefreshFooter(props: {
+/** One of the rows above, drawn by the card with its mutations in hand. */
+type RenderRow<T> = (row: T) => ReactNode;
+
+/** The states table: one sentence, or the two groups and Refresh. */
+function HostPortForwardsBody(props: {
+  readonly ports: HostPortForwards;
+  readonly hostName: string;
+  readonly renderOwned: RenderRow<OwnedPortForward>;
+  readonly renderHeld: RenderRow<HeldPortForwardLease>;
+}): ReactNode {
+  const { ports, hostName } = props;
+  const { view } = ports;
+  const refresh = (
+    <RefreshRow fetching={ports.fetching} onRefresh={ports.refresh} />
+  );
+  if (view.kind !== "listed") {
+    return (
+      <PortsWithoutList
+        kind={view.kind}
+        hostName={hostName}
+        refresh={refresh}
+      />
+    );
+  }
+  const { owned, held } = view;
+  if (owned.length === 0 && held.length === 0) {
+    return (
+      <PortsNote testId="host-port-forwards-empty">
+        {`Nothing is forwarded through ${hostName}. When an agent forwards a port on this host, or another machine holds one of its ports, it shows up here so you can stop or cut it.`}
+      </PortsNote>
+    );
+  }
+  return (
+    <>
+      {owned.length === 0 ? null : (
+        <SettingsGroup
+          group={HOST_OVERVIEW.definitions.portForwardsOwned}
+          showTitle
+          tone="default"
+          dataTestId="host-port-forwards-owned"
+          fill={false}
+        >
+          <PortsList>
+            {owned.map((forward) => props.renderOwned(forward))}
+          </PortsList>
+        </SettingsGroup>
+      )}
+      {held.length === 0 ? null : (
+        <SettingsGroup
+          group={HOST_OVERVIEW.definitions.portForwardsHeld}
+          showTitle
+          tone="default"
+          dataTestId="host-port-forwards-held"
+          fill={false}
+        >
+          <PortsList>{held.map((lease) => props.renderHeld(lease))}</PortsList>
+        </SettingsGroup>
+      )}
+      {refresh}
+    </>
+  );
+}
+
+/** Every row of the states table that has no list to draw. */
+function PortsWithoutList(props: {
+  readonly kind: Exclude<HostPortForwardsView["kind"], "listed">;
+  readonly hostName: string;
+  readonly refresh: ReactNode;
+}): ReactNode {
+  const { hostName } = props;
+  switch (props.kind) {
+    case "connecting":
+      return <HostScopeConnecting hostName={hostName} />;
+    case "unreachable":
+      return (
+        <PortsNote testId="host-port-forwards-unreachable">
+          {`Port forwards run on ${hostName}, so they need a connection to it.`}
+        </PortsNote>
+      );
+    case "unsupported":
+      return (
+        <PortsNote testId="host-port-forwards-unsupported">
+          {describeOverviewDegrade("unsupported", hostName)}
+        </PortsNote>
+      );
+    case "loading":
+      return <PortsLoading hostName={hostName} />;
+    case "unreadable":
+      return (
+        <>
+          <PortsNote testId="host-port-forwards-unreadable">
+            {`Couldn't read ${hostName}'s port forwards.`}
+          </PortsNote>
+          {props.refresh}
+        </>
+      );
+  }
+  const unreachableKind: never = props.kind;
+  return unreachableKind;
+}
+
+function PortsList(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <ul className="m-0 flex list-none flex-col divide-y divide-border/50 p-0">
+      {props.children}
+    </ul>
+  );
+}
+
+/**
+ * The tab's one sentence when there is no list to draw - the core flows'
+ * Empty and Older host tiles, which the unreachable and unreadable lines
+ * share so the tab reads the same whatever it cannot show.
+ */
+function PortsNote(props: {
+  readonly testId: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <p
+      className="m-0 rounded-lg border border-dashed border-border/60 px-4 py-3.5 text-ui-xs text-muted-foreground"
+      data-testid={props.testId}
+    >
+      {props.children}
+    </p>
+  );
+}
+
+/** A reachable host whose first answer has not arrived yet. */
+function PortsLoading(props: { readonly hostName: string }): ReactNode {
+  return (
+    <div
+      className="flex items-center gap-2 px-1 text-ui-xs text-muted-foreground"
+      data-testid="host-port-forwards-loading"
+    >
+      <AgentSpinningDots
+        testId={undefined}
+        variant="orbit"
+        className={undefined}
+        tone="muted"
+      />
+      {`Reading ${props.hostName}'s port forwards…`}
+    </div>
+  );
+}
+
+/** Below the lists, as today: re-reads them at once. */
+function RefreshRow(props: {
   readonly fetching: boolean;
   readonly onRefresh: () => void;
 }): ReactNode {
   return (
-    <div className="flex items-center justify-end border-t border-border/50 px-3 py-1.5">
+    <div className="flex justify-end">
       <Button
         type="button"
         variant="ghost"

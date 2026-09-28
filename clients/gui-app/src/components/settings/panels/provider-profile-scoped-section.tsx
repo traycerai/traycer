@@ -21,6 +21,7 @@ import {
   ProfileDropdown,
   type ProfileDropdownShortcutHint,
 } from "@/components/providers/profile-dropdown";
+import { providerSignInUnavailableReason } from "@/components/providers/provider-signin-availability";
 import {
   EmbeddedProviderRateLimitForProvider,
   ProviderProfilesRefreshButton,
@@ -63,13 +64,7 @@ interface ProviderProfileScopedSectionProps {
    *  only when it is not, or when the child printed a device code. */
   readonly isSelectedHostLocal: boolean;
   readonly canAddProfile: boolean;
-  /**
-   * Why sign-in is unavailable, or null when it is available. Supplied rather
-   * than reconstructed here: the panel owns the three facts that decide it
-   * (host locality, browser-sign-in capability, managed-pack readiness), and a
-   * second derivation is how the previous hardcoded sentence went stale.
-   */
-  readonly signInUnavailableHint: string | null;
+  readonly onOpenCliSettings: () => void;
   readonly startInReauth: boolean;
   readonly failedAttempt: FailedProviderProfileAttempt | null;
   readonly onAddProfile: () => void;
@@ -92,6 +87,7 @@ interface ProviderProfileScopedSectionProps {
 function ProfileScopedSectionMessages(props: {
   readonly addProfileDisabled: boolean;
   readonly addProfileDisabledReason: string | null;
+  readonly onOpenCliSettings: (() => void) | null;
   readonly failedAttempt: FailedProviderProfileAttempt | null;
   readonly onAddProfile: () => void;
   readonly onDismissFailedAttempt: () => void;
@@ -102,6 +98,19 @@ function ProfileScopedSectionMessages(props: {
       {props.addProfileDisabled ? (
         <p className="text-ui-xs text-muted-foreground">
           {props.addProfileDisabledReason}
+          {props.onOpenCliSettings !== null ? (
+            <>
+              {" "}
+              <Button
+                type="button"
+                variant="link"
+                size="inline-xs"
+                onClick={props.onOpenCliSettings}
+              >
+                CLI &amp; Args
+              </Button>
+            </>
+          ) : null}
         </p>
       ) : null}
       {props.failedAttempt !== null ? (
@@ -168,7 +177,7 @@ export function ProviderProfileScopedSection(
     hostId,
     isSelectedHostLocal,
     canAddProfile,
-    signInUnavailableHint,
+    onOpenCliSettings,
     startInReauth,
     failedAttempt,
     onAddProfile,
@@ -195,6 +204,14 @@ export function ProviderProfileScopedSection(
     ) ?? profiles[0];
   const providerLabel = PROVIDER_DISPLAY_NAMES[state.providerId];
   const addProfileDisabled = !canAddProfile;
+  const signInUnavailable = providerSignInUnavailableReason(
+    state,
+    isSelectedHostLocal,
+  );
+  const signInUnavailableHint =
+    signInUnavailable?.kind === "pack"
+      ? "Sign-in is unavailable until CLI setup is complete."
+      : (signInUnavailable?.hint ?? null);
   // `TooltipWrapper` degrades to a passthrough Slot for both `null` and
   // `undefined` labels; `null` here is just the plainer of the two spellings.
   const addProfileDisabledReason = addProfileDisabled
@@ -341,6 +358,9 @@ export function ProviderProfileScopedSection(
         <ProfileScopedSectionMessages
           addProfileDisabled={addProfileDisabled}
           addProfileDisabledReason={addProfileDisabledReason}
+          onOpenCliSettings={
+            signInUnavailable?.kind === "pack" ? onOpenCliSettings : null
+          }
           failedAttempt={failedAttempt}
           onAddProfile={onAddProfile}
           onDismissFailedAttempt={onDismissFailedAttempt}

@@ -34,11 +34,38 @@ import { DocumentPreviewToolbar } from "@/components/epic-canvas/document-previe
 import { DocxFindEngine } from "./docx-find";
 import { registerTileSelectionRoot } from "@/lib/commands/tile-select-all";
 import { currentPageAmong, scrollTopForPage } from "./docx-page-position";
+import { documentPointUnder, scrollOffsetPlacing } from "./docx-zoom-anchor";
 import { useOpenLink } from "@/lib/links/open-link";
+import { usePinchZoom, type PinchFocal } from "@/hooks/ui/use-pinch-zoom";
 
 const ZOOM_STEP = 1.1;
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 5;
+
+function clampScale(scale: number): number {
+  return Math.min(Math.max(scale, MIN_SCALE), MAX_SCALE);
+}
+
+/**
+ * A pinch in flight. The zoom is CSS `zoom`, which reflows the whole
+ * document, too slow to run on every finger move, so the gesture previews as
+ * a transform on the shadow host (a paint) and commits the real zoom once
+ * the fingers lift. `origin*` pins the transform to the content point that
+ * was under the fingers, `document*` is that same point in document units so
+ * the commit can scroll it back under the fingers after the reflow.
+ */
+interface DocxPinch {
+  readonly startScale: number;
+  readonly originX: number;
+  readonly originY: number;
+  readonly documentX: number;
+  readonly documentY: number;
+  ratio: number;
+  lastFocal: PinchFocal;
+}
+
+/** `"page-width"` while the automatic fit is in force, `null` once the user has zoomed by hand. */
+type ScaleMode = "page-width" | null;
 
 /** Gutter around the pages, in CSS px - what fit-to-width leaves on each side. */
 const PAGE_GUTTER_PX = 16;
@@ -120,8 +147,15 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
 
   // Which automatic scale mode is in force: `"page-width"` until the user
   // zooms manually, then `null`. A resize observer re-applies the mode so
-  // fit-to-width survives tile resizes.
-  const scaleModeRef = useRef<"page-width" | null>("page-width");
+  // fit-to-width survives tile resizes. Held twice on purpose: the ref is
+  // what the observer callback reads, the state is what presses the
+  // toolbar's fit button.
+  const scaleModeRef = useRef<ScaleMode>("page-width");
+  const [scaleMode, setScaleModeState] = useState<ScaleMode>("page-width");
+  const setScaleMode = useCallback((mode: ScaleMode): void => {
+    scaleModeRef.current = mode;
+    setScaleModeState(mode);
+  }, []);
   const scaleRef = useRef(1);
 
   const onRenderFailureRef = useRef(props.onRenderFailure);
@@ -137,7 +171,7 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
   const applyScale = useCallback((scale: number) => {
     const rendered = renderedRef.current;
     if (rendered === null) return;
-    const clamped = Math.min(Math.max(scale, MIN_SCALE), MAX_SCALE);
+    const clamped = clampScale(scale);
     scaleRef.current = clamped;
     // `zoom` (not `transform`) so the layout size scales with the pages and
     // the scroll container measures the zoomed document.
@@ -302,16 +336,96 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
 
   const zoomBy = useCallback(
     (factor: number) => {
-      scaleModeRef.current = null;
+      setScaleMode(null);
       applyScale(scaleRef.current * factor);
     },
-    [applyScale],
+    [applyScale, setScaleMode],
   );
 
   const handleFitWidth = useCallback(() => {
-    scaleModeRef.current = "page-width";
+    setScaleMode("page-width");
     applyFitWidth();
-  }, [applyFitWidth]);
+  }, [applyFitWidth, setScaleMode]);
+
+  const handleActualSize = useCallback(() => {
+    setScaleMode(null);
+    applyScale(1);
+  }, [applyScale, setScaleMode]);
+
+  const pinchRef = useRef<DocxPinch | null>(null);
+  usePinchZoom(scrollContainerRef, {
+    onPinchStart: (focal) => {
+      const host = hostRef.current;
+      const container = scrollContainerRef.current;
+      if (host === null || container === null || renderedRef.current === null) {
+        return;
+      }
+      const hostRect = host.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const startScale = scaleRef.current;
+      pinchRef.current = {
+        startScale,
+        originX: focal.clientX - hostRect.left,
+        originY: focal.clientY - hostRect.top,
+        documentX: documentPointUnder(
+          container.scrollLeft,
+          focal.clientX - containerRect.left,
+          host.offsetLeft,
+          startScale,
+        ),
+        documentY: documentPointUnder(
+          container.scrollTop,
+          focal.clientY - containerRect.top,
+          host.offsetTop,
+          startScale,
+        ),
+        ratio: 1,
+        lastFocal: focal,
+      };
+      setScaleMode(null);
+    },
+    onPinchMove: (update) => {
+      const pinch = pinchRef.current;
+      const host = hostRef.current;
+      const container = scrollContainerRef.current;
+      if (pinch === null || host === null || container === null) return;
+      // Two fingers drag the document the way one does; the transform rides
+      // along with the host, so the anchored point keeps following them.
+      container.scrollLeft -= update.focalDeltaX;
+      container.scrollTop -= update.focalDeltaY;
+      const target = clampScale(pinch.startScale * update.ratio);
+      pinch.ratio = target / pinch.startScale;
+      pinch.lastFocal = update.focal;
+      host.style.transformOrigin = `${pinch.originX}px ${pinch.originY}px`;
+      host.style.transform = `scale(${pinch.ratio})`;
+      // The readout follows the fingers, not the commit.
+      setScalePercent(Math.round(target * 100));
+    },
+    onPinchEnd: () => {
+      const pinch = pinchRef.current;
+      const host = hostRef.current;
+      const container = scrollContainerRef.current;
+      pinchRef.current = null;
+      if (pinch === null || host === null || container === null) return;
+      host.style.transform = "";
+      host.style.transformOrigin = "";
+      const scale = clampScale(pinch.startScale * pinch.ratio);
+      applyScale(scale);
+      const containerRect = container.getBoundingClientRect();
+      container.scrollLeft = scrollOffsetPlacing(
+        pinch.documentX,
+        scale,
+        host.offsetLeft,
+        pinch.lastFocal.clientX - containerRect.left,
+      );
+      container.scrollTop = scrollOffsetPlacing(
+        pinch.documentY,
+        scale,
+        host.offsetTop,
+        pinch.lastFocal.clientY - containerRect.top,
+      );
+    },
+  });
 
   // Live search, debounced, the way every findbar behaves; an emptied query
   // clears the highlights. Enter stays "next match" via `stepMatch`.
@@ -392,10 +506,19 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
         pageNumber={pageNumber}
         pageCount={pageCount}
         onGoToPage={goToPage}
-        scalePercent={scalePercent}
-        onZoomIn={handleZoomIn}
-        onZoomOut={handleZoomOut}
-        onFitWidth={handleFitWidth}
+        zoom={{
+          ready: documentReady,
+          scalePercent,
+          canZoomIn: scalePercent === null || scalePercent < MAX_SCALE * 100,
+          canZoomOut: scalePercent === null || scalePercent > MIN_SCALE * 100,
+          onZoomIn: handleZoomIn,
+          onZoomOut: handleZoomOut,
+          fitKind: "width",
+          fitActive: scaleMode === "page-width",
+          onFit: handleFitWidth,
+          actualSizeActive: scalePercent === 100,
+          onActualSize: handleActualSize,
+        }}
         onRotate={null}
         outline={null}
         searchSupported={searchSupported}

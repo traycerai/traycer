@@ -8,7 +8,10 @@ import type { BrowserScreencastServerFrame } from "@traycer/protocol/host/browse
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { DesktopNotificationForegroundDisplay } from "../../ipc-contracts/notification-types";
-import type { DesktopMenuSnapshot } from "../../ipc-contracts/window-types";
+import type {
+  DesktopLocalAuthSessionRestoreResult,
+  DesktopMenuSnapshot,
+} from "../../ipc-contracts/window-types";
 
 /**
  * Preload replay-safety tests. The preload module wires `ipcRenderer.on` and
@@ -135,6 +138,10 @@ interface PreloadBridge {
     };
     authSession: {
       get(): Promise<unknown>;
+      restoreLocal(expected: {
+        readonly userId: string;
+        readonly token: string;
+      }): Promise<DesktopLocalAuthSessionRestoreResult>;
       set(snapshot: unknown): Promise<void>;
       onChange(handler: (snapshot: unknown) => void): { dispose: () => void };
     };
@@ -840,6 +847,9 @@ describe("preload new-capability wiring", () => {
       if (channel === RunnerHostInvoke.authSessionGet) {
         return { status: "signed-out", token: null, profile: null };
       }
+      if (channel === RunnerHostInvoke.authSessionRestoreLocal) {
+        return "restored";
+      }
       if (channel === RunnerHostInvoke.windowsRequestOpenEpicInNewWindow) {
         return { result: "moved", windowId: "new-window" };
       }
@@ -883,6 +893,12 @@ describe("preload new-capability wiring", () => {
       token: null,
       profile: null,
     });
+    await expect(
+      bridge.windows.authSession.restoreLocal({
+        userId: "test-user",
+        token: "jwt",
+      }),
+    ).resolves.toBe("restored");
     await bridge.windows.authSession.set({
       status: "signed-in",
       token: "jwt",
@@ -961,6 +977,10 @@ describe("preload new-capability wiring", () => {
         email: "user@example.com",
       },
     });
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.authSessionRestoreLocal,
+      { userId: "test-user", token: "jwt" },
+    );
   });
 
   it("round-trips the saved-logins pref through ipcRenderer.invoke", async () => {

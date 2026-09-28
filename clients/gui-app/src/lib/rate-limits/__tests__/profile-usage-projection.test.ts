@@ -168,6 +168,31 @@ function cursor(
   };
 }
 
+type AntigravityRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "antigravity"; available: true }
+>;
+
+function antigravityWindow(
+  usedPercent: number,
+  durationMinutes: number | null,
+  resetsAt: number | null,
+  bucketId: string,
+): AntigravityRateLimits["groups"][number]["windows"][number] {
+  return { usedPercent, durationMinutes, resetsAt, bucketId, windowKind: null };
+}
+
+function antigravity(
+  groups: AntigravityRateLimits["groups"],
+): AntigravityRateLimits {
+  return {
+    provider: "antigravity",
+    available: true,
+    planName: null,
+    groups,
+  };
+}
+
 function envelope(
   data: Extract<ProviderRateLimits, { available: true }>,
   lastGoodAt: number,
@@ -596,6 +621,118 @@ describe("projectProfileUsage", () => {
       severity: "unknown",
       reason: "fetch_failed",
       compactWindow: null,
+    });
+  });
+
+  it("names Antigravity's first group's windows primary/secondary with no name, and a later window in that same group extra with no name too", () => {
+    // Codex's shape: only the first group is the unqualified base pair. A
+    // third window IN THAT SAME GROUP still reads unqualified ("5h" beside
+    // "Weekly"), while every window of a LATER group is named for its group
+    // ("Claude and GPT models · 5h") so it can't be confused with the base
+    // pair it shares a duration with. Both extras are put at running-low
+    // usage so the healthy-extra filter (covered separately below) does not
+    // remove either one from the list this assertion reads.
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(
+        antigravity([
+          {
+            displayName: "Gemini Models",
+            description: null,
+            windows: [
+              antigravityWindow(10, 300, NOW + 1, "gemini-5h"),
+              antigravityWindow(20, 10_080, NOW + 1, "gemini-weekly"),
+              antigravityWindow(85, 300, NOW + 1, "gemini-extra"),
+            ],
+          },
+          {
+            displayName: "Claude and GPT models",
+            description: null,
+            windows: [antigravityWindow(82, 300, NOW + 1, "3p-5h")],
+          },
+        ]),
+        NOW,
+      ),
+      false,
+    );
+    expect(
+      projection.windows.map((entry) => [entry.id, entry.role, entry.name]),
+    ).toEqual([
+      ["bucket:gemini-5h", "primary", null],
+      ["bucket:gemini-weekly", "secondary", null],
+      ["bucket:gemini-extra", "extra", null],
+      ["bucket:3p-5h", "extra", "Claude and GPT models"],
+    ]);
+  });
+
+  it("keeps a healthy Antigravity extra out of the window list but a running-low one in", () => {
+    const projection = project(
+      "near_limit",
+      NOW - 1_000,
+      envelope(
+        antigravity([
+          {
+            displayName: "Gemini Models",
+            description: null,
+            windows: [
+              antigravityWindow(30, 300, NOW + 1, "gemini-5h"),
+              antigravityWindow(96, 10_080, NOW + 1, "gemini-weekly"),
+            ],
+          },
+          {
+            displayName: "Healthy group",
+            description: null,
+            windows: [antigravityWindow(20, 300, NOW + 1, "healthy-extra")],
+          },
+          {
+            displayName: "Running-low group",
+            description: null,
+            windows: [antigravityWindow(85, 300, NOW + 1, "low-extra")],
+          },
+        ]),
+        NOW - 1_000,
+      ),
+      false,
+    );
+    expect(projection.windows.map((entry) => entry.id)).toEqual([
+      "bucket:gemini-5h",
+      "bucket:gemini-weekly",
+      "bucket:low-extra",
+    ]);
+    expect(projection.compactWindow?.id).toBe("bucket:gemini-weekly");
+  });
+
+  it("projects an Antigravity snapshot whose groups all report no windows as unmeasured, not unavailable", () => {
+    // Upstream allows a purely informational group, so a snapshot of only
+    // those is a reachable account with nothing metered - not a failed read.
+    expect(
+      project(
+        "ok",
+        NOW,
+        envelope(
+          antigravity([
+            {
+              displayName: "Gemini Models",
+              description: null,
+              windows: [],
+            },
+            {
+              displayName: "Claude and GPT models",
+              description: "info only",
+              windows: [],
+            },
+          ]),
+          NOW,
+        ),
+        false,
+      ),
+    ).toEqual({
+      kind: "not_checked",
+      severity: "unknown",
+      compactWindow: null,
+      windows: [],
+      checkedAt: null,
     });
   });
 });

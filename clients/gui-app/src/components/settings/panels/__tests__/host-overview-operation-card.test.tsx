@@ -83,6 +83,7 @@ import type {
   HostStagedRecord,
 } from "@traycer/protocol/config/installation-records";
 import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
 import {
@@ -93,6 +94,7 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
   buildOverviewHostFixture,
+  selectHostOverviewTab,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
@@ -609,8 +611,17 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
     // the absence is asserted only after a render derived from the status
     // reply is on screen. (The fixture's own call counter is bypassed by an
     // overridden handler, and a counted call proves the request, not the
-    // render.)
-    await screen.findByText(/1\.5\.0-live/);
+    // render.) T2's version card now ALSO states the running version, so the
+    // header's health line is no longer the only element carrying it -
+    // anchor on the version card's own testid instead of the ambiguous text.
+    // The version card leads Updates now, not the page's default (Installation)
+    // tab, so this reads there.
+    await selectHostOverviewTab("updates");
+    await waitFor(() => {
+      expect(screen.getByTestId("host-overview-version").textContent).toBe(
+        "v1.5.0-live",
+      );
+    });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     expect(screen.queryByText(/Host is up to date/i)).toBeNull();
   });
@@ -1122,6 +1133,10 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
+    // The remedy sentence is the version card's own answer, on Updates; the
+    // operation card itself lives in the notices strip and is on screen on
+    // every tab regardless.
+    await selectHostOverviewTab("updates");
     await screen.findByText(
       "Traycer couldn't determine how its command-line tools were installed on host-a.",
     );
@@ -1158,7 +1173,6 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
   });
 
   it("hides both force controls when the staged version is absent from the check manifest", async () => {
-    let checkCalls = 0;
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -1170,28 +1184,39 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       overrideHandlers: {
         "host.status": () =>
           statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
-        "host.update.check": () => {
-          checkCalls += 1;
-          return {
-            outcome: "ok" as const,
-            effectiveIncludePreReleases: true,
-            includePreReleasesSource: "explicit-include" as const,
-            manifest: {
-              ...clearStagedManifest("1.3.0-rc.2"),
-              latest: "1.3.0-rc.2",
-            },
-          };
-        },
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          manifest: {
+            ...clearStagedManifest("1.3.0-rc.2"),
+            latest: "1.3.0-rc.2",
+          },
+        }),
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    const queryClient = renderPanel();
 
     await screen.findByTestId("host-overview-operation-card");
-    await screen.findByText("This host is running the latest version.");
-    await waitFor(() => expect(checkCalls).toBeGreaterThan(0));
+    // T2's version card withholds its own answer sentence while an update is
+    // in flight (this park has neither a CLI-floor remedy nor activation
+    // debt to except it), so "This host is running the latest version." does
+    // not render here any more. The settled-render anchor is the check's
+    // OWN answer landing in the cache — not merely REQUESTED
+    // (`checkCalls > 0` can pass during the still-loading frame, before the
+    // negative assertions below have anything to be negative ABOUT).
+    await waitFor(() => {
+      const queries = queryClient.getQueryCache().findAll({
+        queryKey: hostQueryKeys.methodScope("host-a", "host.update.check"),
+      });
+      expect(queries.some((query) => query.state.status === "success")).toBe(
+        true,
+      );
+    });
+    await act(async () => {});
     // Same anchor as above: the absent controls must be absent FROM the
     // staged-wait card, not from some other view.
     expect(
@@ -1246,6 +1271,10 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const queryClient = renderPanel();
+    // The failure line lands on the version card's own answer, on Updates;
+    // the force control that triggers it is the notices strip's operation
+    // card, which is on screen on every tab regardless.
+    await selectHostOverviewTab("updates");
 
     const forceButton = await screen.findByTestId(
       "host-overview-operation-force-update",
@@ -1304,6 +1333,8 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const queryClient = renderPanel();
+    // The failure line lands on the version card's own answer, on Updates.
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(
       await screen.findByTestId("host-overview-operation-force-update"),
@@ -1347,8 +1378,12 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     // Wait for a render derived from the status/installation reply before
     // asserting absence, exactly as the sibling "no coarse marker" test above
     // does - otherwise the assertion would pass vacuously during the loading
-    // frame.
-    await screen.findByText(/1\.5\.0/);
+    // frame. T2's version card now ALSO carries the running version, so
+    // "1.5.0" is no longer unique on screen - anchor on the version card's
+    // own testid instead. The version card leads Updates, not the page's
+    // default (Installation) tab.
+    await selectHostOverviewTab("updates");
+    await screen.findByTestId("host-overview-version");
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
   });
 
@@ -1391,7 +1426,13 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     await screen.findByTestId("host-overview-operation-restart");
 
     // Nothing about the read changes - only the scope stops being usable,
-    // the way a negotiated peer going unreachable would leave it.
+    // the way a negotiated peer going unreachable would leave it. The
+    // notices strip's `!offline` gate (`host-overview-panel.tsx`'s
+    // `operationShown`) withholds the operation card entirely once the scope
+    // is unusable — the offline notice is the strip's only wording then, and
+    // it carries the retained phase clause itself — so the qualification
+    // this pin is about now shows there instead of on
+    // `host-overview-operation-phase`.
     scopeOverrides.current = {
       ...scopeFrom("host-a", fixture),
       status: "unreachable",
@@ -1400,10 +1441,25 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId("host-overview-operation-phase").textContent,
-      ).toBe("Last seen: Update installed — restart host to finish");
+        screen.getByTestId("host-overview-offline-notice").textContent,
+      ).toContain("with v1.3.0-rc.3 installed and waiting for a restart");
     });
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
+
+    // The offline notice's clause alone does not prove demotion: a live
+    // `waiting-to-activate` view prints the identical "with vX installed and
+    // waiting for a restart" phrase, since `describeLastSeenUpdateClause`'s
+    // table is keyed on the phase, not on `qualified`. The surface that used
+    // to make that distinction (the header pill's own table) is gone along
+    // with the pill, and the operation card that still carries a
+    // demoted-vs-live phrase table is itself withdrawn here by the same
+    // `!offline` gate. The demotion mechanism stays covered independent of
+    // this unusable-scope scenario — see the retained-bytes test above
+    // (a genuine live-to-demoted transition on a scope that stays USABLE,
+    // where the card is still on screen to show it) and the
+    // `deriveHostOverviewVersionTag`/`inFlightUpdateKind` retained-view cases
+    // in `host-overview-notices.test.tsx`.
   });
 
   it("staged wait: an UNUSABLE scope keeps the sentence (qualified as retained) but withdraws Force update…", async () => {
@@ -1451,14 +1507,26 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     };
     panel.rerender();
 
+    // The notices strip's `!offline` gate withholds the operation card
+    // entirely once the scope is unusable (the offline notice is the
+    // strip's only wording then, and it carries the retained phase clause
+    // itself).
     await waitFor(() => {
       expect(
-        screen.getByTestId("host-overview-operation-phase").textContent,
-      ).toMatch(/^Last seen: Update waits for/);
+        screen.getByTestId("host-overview-offline-notice").textContent,
+      ).toMatch(/waited for work to finish/);
     });
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     expect(
       screen.queryByTestId("host-overview-operation-force-update"),
     ).toBeNull();
+
+    // Same as the activation-debt pin above: a live `waiting-for-work` view
+    // prints the identical "waited for work to finish" phrase, so the
+    // offline notice's clause alone cannot prove demotion, and the surface
+    // that used to prove it (the header pill) is gone along with the card
+    // it would have discriminated against. See that pin's comment for where
+    // the demotion mechanism stays covered.
   });
 
   it("(c4) an OPEN force-update offer CLOSES when the scope turns unusable — the withdrawal of the Force update… control, one commit late", async () => {
@@ -1597,15 +1665,27 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
-    // Baseline: install matches the running rc.2 - no debt.
-    await screen.findByText(/1\.3\.0-rc\.2/);
+    // Baseline: install matches the running rc.2 - no debt. T2's version
+    // card also carries the running version now, so anchor on its own
+    // testid rather than the no-longer-unique text.
+    await waitFor(() => {
+      expect(screen.getByTestId("host-overview-version").textContent).toBe(
+        "v1.3.0-rc.2",
+      );
+    });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
 
     // Advance past the 10s `host.status` poll: the host reports rc.3, and the
-    // installation query re-keys onto a fresh, still-pending read.
+    // installation query re-keys onto a fresh, still-pending read. Anchor on
+    // the version card's own testid - the text is no longer unique on screen.
     await vi.advanceTimersByTimeAsync(11_000);
-    await screen.findByText(/1\.3\.0-rc\.3/);
+    await waitFor(() => {
+      expect(screen.getByTestId("host-overview-version").textContent).toBe(
+        "v1.3.0-rc.3",
+      );
+    });
     // AT LEAST two, not exactly two: the installation query's own 10 s poll
     // and the status poll that re-keys it fire from the same tick, and their
     // order is not this pin's to assume - when the installation poll lands
@@ -2214,7 +2294,9 @@ describe("HostOverviewOperationCard — a work park under an unmet CLI floor", (
     // Wait for the REGION to have found the floor before reading the card:
     // the remedy row is the observable that says the summary walk finished and
     // `updates.cliFloor` is populated, and until it is the card is legitimately
-    // still showing the count.
+    // still showing the count. The remedy row and its "Show installation
+    // help" button are the version card's, on Updates.
+    await selectHostOverviewTab("updates");
     await screen.findByText(
       "Traycer couldn't determine how its command-line tools were installed on host-a.",
     );
@@ -2320,6 +2402,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
       ALL_OVERVIEW_METHODS.filter((method) => method !== "host.update.install"),
     );
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByTestId("host-overview-updates-degraded");
     // The floor really was read — otherwise this pin would pass for the
@@ -2360,6 +2443,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
     });
     bindFixture(fixture, ALL_OVERVIEW_METHODS);
     const panel = renderPanelPersistent();
+    await selectHostOverviewTab("updates");
 
     // Healthy first: the substitution is on, and its button is really there.
     await waitFor(() => {
@@ -2384,12 +2468,18 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
         screen.queryByRole("button", { name: "Show installation help" }),
       ).toBeNull();
     });
-    // Retained, and WITHOUT the clause that names a button nobody can see.
-    const phase = screen.getByTestId(
-      "host-overview-operation-phase",
+    // T2's Status tab withholds the update card entirely once the host
+    // can't be reached - the offline notice is the tab's only unreachable
+    // wording then, and its clause (`describeLastSeenUpdateClause`) never
+    // names the CLI-floor fix at all (it is built with `cliFloorBlocked:
+    // false` unconditionally) - so there is no route left to a "Last seen: …
+    // — see installation help" sentence with no button anywhere on the page.
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    const notice = screen.getByTestId(
+      "host-overview-offline-notice",
     ).textContent;
-    expect(phase).toContain("Last seen:");
-    expect(phase).not.toContain("installation help");
+    expect(notice).toContain("waited for work to finish");
+    expect(notice).not.toContain("installation help");
   });
 
   // ── J2: the floor named must be the PARK's, not the summary walk's ───────
@@ -2419,6 +2509,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
     });
     bindFixture(fixture, ALL_OVERVIEW_METHODS);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     // The walk DID find a floor — the remedy row is on screen. Without this
     // the pin would pass on a page with no floor anywhere.
@@ -2451,6 +2542,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
     });
     bindFixture(fixture, ALL_OVERVIEW_METHODS);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByRole("button", { name: "Show installation help" });
     await waitFor(() => {
@@ -2532,6 +2624,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
     });
     bindFixture(fixture, [...ALL_OVERVIEW_METHODS, "host.update.continue"]);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByRole("button", { name: "Show installation help" });
     await waitFor(() => {
@@ -2574,6 +2667,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
     });
     bindFixture(fixture, ALL_OVERVIEW_METHODS);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByRole("button", { name: "Show installation help" });
     await waitFor(() => {
@@ -2731,8 +2825,12 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
     bindComplete("attempt-old-settings");
     renderPanel();
     // Wait for a render derived from the status reply before asserting
-    // absence, same as the sibling "no coarse marker" test above.
-    await screen.findByText(/1\.5\.0/);
+    // absence, same as the sibling "no coarse marker" test above. T2's
+    // version card also carries the running version, so anchor on its own
+    // testid rather than the no-longer-unique text. The version card now
+    // leads the Updates tab, so visit it first.
+    await selectHostOverviewTab("updates");
+    await screen.findByTestId("host-overview-version");
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
 
     // A NEWER attempt id on the same host is not pre-dismissed.
@@ -2843,7 +2941,15 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
       };
     }
 
-    it("a retained (stale) completed attempt can still be manually dismissed", async () => {
+    it("a completed attempt is dismissible while reachable; once the scope goes unusable the offline notice takes over and the card (with it) withdraws", async () => {
+      // T2 changes what "retained" MEANS for this card: the Status tab now
+      // withholds the update card entirely while the host can't be reached
+      // (`offline`) and shows the ONE offline notice in its place — carrying
+      // whatever phase clause applies, which for `complete` is none (see
+      // `LAST_SEEN_CLAUSE.complete === null` in `host-update-operation-copy.ts`).
+      // So a stale completed attempt is no longer dismissible from a scope
+      // that has gone unusable; dismissing it is still live right up to that
+      // point, which is what this pin now proves.
       const { disconnect } = bindDisconnectable(
         completeOperation("attempt-retained-dismiss"),
       );
@@ -2856,14 +2962,6 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
         ).toBe("Updated to v2.1.0");
       });
 
-      disconnect();
-      panel.rerender();
-      await waitFor(() => {
-        expect(
-          screen.getByTestId("host-overview-operation-phase").textContent,
-        ).toBe("Last seen: Updated to v2.1.0");
-      });
-
       fireEvent.click(
         await screen.findByTestId("host-overview-operation-dismiss"),
       );
@@ -2873,6 +2971,13 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
       expect(
         useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
       ).toContain("attempt-retained-dismiss");
+
+      // Going unusable afterward is a no-op for the (already dismissed) card:
+      // the offline notice is the tab's only unreachable wording now.
+      disconnect();
+      panel.rerender();
+      await screen.findByTestId("host-overview-offline-notice");
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     });
 
     it("a FRESH dismissal stays hidden once the view demotes to retained/stale — it does not reappear on disconnect", async () => {
@@ -2896,9 +3001,14 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
       expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     });
 
-    it("a retained (stale) FAILED attempt stays visible with no dismiss offered", async () => {
+    it("a FAILED attempt shows with no dismiss offered while reachable; once the scope goes unusable the offline notice replaces the card", async () => {
       // A terminal `failed` phase: staleness retains the raw phase, so only
-      // a phase that already IS "failed" retains as failed.
+      // a phase that already IS "failed" retains as failed. T2's Status tab
+      // withholds the update card entirely once the host can't be reached —
+      // the offline notice is the tab's only unreachable wording then — so
+      // the retained "Last seen: Update failed" sentence this pin used to
+      // read off the card now lives there instead (with no phase clause:
+      // `LAST_SEEN_CLAUSE.failed === null`).
       const { disconnect } = bindDisconnectable(
         attemptOperation({
           attemptId: "attempt-retained-failed",
@@ -2915,21 +3025,26 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
           screen.getByTestId("host-overview-operation-phase").textContent,
         ).toBe("Update failed");
       });
-
-      disconnect();
-      panel.rerender();
-      await waitFor(() => {
-        expect(
-          screen.getByTestId("host-overview-operation-phase").textContent,
-        ).toBe("Last seen: Update failed");
-      });
-      expect(screen.getByTestId("host-overview-operation-card")).toBeTruthy();
       expect(
         screen.queryByTestId("host-overview-operation-dismiss"),
       ).toBeNull();
+
+      disconnect();
+      panel.rerender();
+      await screen.findByTestId("host-overview-offline-notice");
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     });
 
     it("a fresh success that demotes to retained mid-window still auto-collapses at the original deadline, not a restarted one", async () => {
+      // The timer this pin is about (`useHostUpdateCompletion`) lives at
+      // PANEL level, not on the card, specifically so it keeps running
+      // whatever the card is showing — see that hook's own doc comment. Once
+      // the scope goes unusable T2's Status tab withholds the card in favor
+      // of the offline notice, which makes `host-overview-operation-card`
+      // absent from the moment of disconnect regardless of the timer — so
+      // this pin now reads the timer's effect off the STORE it writes to,
+      // the one observable that still distinguishes "still counting down"
+      // from "fired".
       vi.useFakeTimers({ shouldAdvanceTime: true });
       const { disconnect } = bindDisconnectable(
         completeOperation("attempt-deadline"),
@@ -2944,11 +3059,8 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
       );
       disconnect();
       panel.rerender();
-      await waitFor(() => {
-        expect(
-          screen.getByTestId("host-overview-operation-phase").textContent,
-        ).toBe("Last seen: Updated to v2.1.0");
-      });
+      await screen.findByTestId("host-overview-offline-notice");
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
       expect(
         useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
       ).not.toContain("attempt-deadline");
@@ -2957,11 +3069,10 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
         HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS / 2 + 100,
       );
       await waitFor(() => {
-        expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+        expect(
+          useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+        ).toContain("attempt-deadline");
       });
-      expect(
-        useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
-      ).toContain("attempt-deadline");
     });
   });
 });

@@ -358,6 +358,22 @@ export class ChatStreamClient {
   }
 
   /**
+   * Whether THIS session's negotiated line publishes why its queue is paused
+   * (`queue.pausedReason`, `chat.subscribe@1.18`).
+   *
+   * Asked of the session for the reason {@link autoPermissionModeProtocolSupported}
+   * gives: `chat.subscribe` is a stream method, so the unary manifest cannot
+   * answer it. A host on an older line still writes the transcript's
+   * queue-pause notice and sends no reason, so the notice is the only place
+   * that line's user learns why the queue stopped - which is what the answer
+   * decides.
+   */
+  queuePauseReasonProtocolSupported(): boolean {
+    const version = this.session.getNegotiatedSchemaVersion();
+    return version !== null && version.major === 1 && version.minor >= 18;
+  }
+
+  /**
    * Ask for a span of bodies. No-op off the windowed line.
    *
    * A READ, so it deliberately does not go through `sendAction`: it carries no

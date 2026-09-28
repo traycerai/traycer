@@ -70,6 +70,13 @@ export type ChatTranscriptJumpTarget =
 export interface ChatTranscriptJumpRequest {
   readonly target: ChatTranscriptJumpTarget;
   readonly requestId: number;
+  /**
+   * The one tile of the chat this jump is for, or `null` for every tile of it.
+   * A jump from another surface names the chat; find inside a tile names the
+   * tile, because the same chat can be open in two and only the one the
+   * reader is searching should move.
+   */
+  readonly tileInstanceId: string | null;
 }
 
 interface ChatTranscriptJumpStore {
@@ -79,6 +86,13 @@ interface ChatTranscriptJumpStore {
   readonly requestJump: (
     hostId: string,
     chatId: string,
+    target: ChatTranscriptJumpTarget,
+  ) => void;
+  /** {@link requestJump}, for one tile of the chat only. */
+  readonly requestTileJump: (
+    hostId: string,
+    chatId: string,
+    tileInstanceId: string,
     target: ChatTranscriptJumpTarget,
   ) => void;
   readonly consumeJump: (
@@ -92,6 +106,16 @@ export function chatTranscriptJumpKey(hostId: string, chatId: string): string {
   return JSON.stringify([hostId, chatId]);
 }
 
+/** The parked request as the tile `tileInstanceId` sees it. */
+export function chatTranscriptJumpForTile(
+  request: ChatTranscriptJumpRequest | undefined,
+  tileInstanceId: string,
+): ChatTranscriptJumpRequest | undefined {
+  if (request === undefined) return undefined;
+  if (request.tileInstanceId === null) return request;
+  return request.tileInstanceId === tileInstanceId ? request : undefined;
+}
+
 /**
  * Re-exported, not restated: the host builds this same id when it numbers a
  * notification-anchor row's ordinal, so the string lives in the shared row
@@ -102,33 +126,49 @@ export { chatTranscriptEventRowId } from "@traycer/protocol/persistence/chat-tra
 let nextRequestId = 0;
 
 export const useChatTranscriptJumpStore = create<ChatTranscriptJumpStore>(
-  (set) => ({
-    requestsByChatId: {},
-    requestJump: (hostId, chatId, target) => {
+  (set) => {
+    const park = (
+      hostId: string,
+      chatId: string,
+      tileInstanceId: string | null,
+      target: ChatTranscriptJumpTarget,
+    ): void => {
       nextRequestId += 1;
       const request: ChatTranscriptJumpRequest = {
         target,
         requestId: nextRequestId,
+        tileInstanceId,
       };
       const key = chatTranscriptJumpKey(hostId, chatId);
       set((state) => ({
         requestsByChatId: { ...state.requestsByChatId, [key]: request },
       }));
-    },
-    consumeJump: (hostId, chatId, requestId) =>
-      set((state) => {
-        const key = chatTranscriptJumpKey(hostId, chatId);
-        const current = state.requestsByChatId[key];
-        // Only the exact request that was handled is cleared: a newer jump
-        // issued while the tile was mounting must survive.
-        if (current === undefined || current.requestId !== requestId) {
-          return state;
-        }
-        return {
-          requestsByChatId: Object.fromEntries(
-            Object.entries(state.requestsByChatId).filter(([id]) => id !== key),
-          ),
-        };
-      }),
-  }),
+    };
+    return {
+      requestsByChatId: {},
+      requestJump: (hostId, chatId, target) => {
+        park(hostId, chatId, null, target);
+      },
+      requestTileJump: (hostId, chatId, tileInstanceId, target) => {
+        park(hostId, chatId, tileInstanceId, target);
+      },
+      consumeJump: (hostId, chatId, requestId) =>
+        set((state) => {
+          const key = chatTranscriptJumpKey(hostId, chatId);
+          const current = state.requestsByChatId[key];
+          // Only the exact request that was handled is cleared: a newer jump
+          // issued while the tile was mounting must survive.
+          if (current === undefined || current.requestId !== requestId) {
+            return state;
+          }
+          return {
+            requestsByChatId: Object.fromEntries(
+              Object.entries(state.requestsByChatId).filter(
+                ([id]) => id !== key,
+              ),
+            ),
+          };
+        }),
+    };
+  },
 );

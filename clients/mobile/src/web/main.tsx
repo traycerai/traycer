@@ -28,7 +28,6 @@ import {
   registerDevicePushTokenViaHttp,
   removeDevicePushTokenViaHttp,
 } from "@traycer-clients/shared/auth/push-token-fetcher";
-import "./index.css";
 import { startNativeKeyboardBridge } from "./native-keyboard-bridge";
 import { AuthSession, MobileAuthSheet } from "../auth-sheet";
 import { MobileRunnerHost } from "../mobile-runner-host";
@@ -173,14 +172,13 @@ function bootstrap(): void {
     initSentry(sentryOptions);
   }
   document.documentElement.classList.add("traycer-mobile-client");
-  // LAYOUT policy, and UNCONDITIONAL on purpose - the one call here that must
-  // not be gated on `isNativePlatform()`. It is a fact about the BUNDLE, not
-  // the runtime: `src/web/index.css` disables every Tailwind breakpoint for
-  // everything this entry serves, so all of it is painted in the phone layout
-  // and JS has to say the same. The dev browser tab described below is one of
-  // those surfaces, which is why gating this the way the flag under it is
-  // gated would be wrong.
-  setPhoneLayoutOnly(true);
+  // LAYOUT policy: the installed app runs the phone layout at every width, an
+  // iPad's included, while the dev browser tab described below keeps deciding
+  // by width like any other window. The stylesheet has to say the same, so
+  // `mount` loads `index.native.css` or `index.css` off this same check: JS
+  // mounting the phone shell while `md:` utilities still turn on would paint
+  // desktop controls over it.
+  setPhoneLayoutOnly(Capacitor.isNativePlatform());
   // PRODUCT flag, not layout: unlocks mobile-app-only UX policy such as the
   // single-composer draft model and the link-code sign-in entry. See gui-app's
   // `src/lib/mobile-app.ts` for how this differs from the viewport signal.
@@ -265,6 +263,13 @@ async function mount(input: {
   readonly linkLoginDeepLinks: MobileLinkLoginDeepLinks | null;
 }): Promise<void> {
   const { pushRegistration, linkLoginDeepLinks } = input;
+  // The stylesheet that matches `setPhoneLayoutOnly` above: the installed
+  // app's disables every Tailwind breakpoint, the browser tab's keeps them.
+  // Started here so it loads alongside the probe below, and awaited before
+  // the first render so nothing is ever painted in the other layout.
+  const stylesheet = Capacitor.isNativePlatform()
+    ? import("./index.native.css")
+    : import("./index.css");
   // Asked once, before the host exists, because `IFileSaveHost.downloadFile`
   // is read synchronously at render time - a capability that resolved later
   // would leave a Download control on screen that the shell cannot honour.
@@ -345,6 +350,7 @@ async function mount(input: {
   // listeners attach now so a cold-start tap is captured before the GUI
   // mounts.
   pushRegistration?.start(host.tokenStore, host);
+  await stylesheet;
   const container = document.getElementById("root");
   if (container === null) {
     throw new Error("#root element not found in index.html");

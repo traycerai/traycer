@@ -1,11 +1,17 @@
 /**
- * Typed wrapper over the doc lane, `artifact.subscribe@1.0` - one artifact
+ * Typed wrapper over the doc lane, `artifact.subscribe@1` - one artifact
  * body, bidirectionally synced, opened per open tile and closed with it.
  *
  * The only lane that carries binary payloads. Three server frames arrive with
- * bytes (`doc`, `docUpdate`, `awareness`) and two without (`docAck`,
- * `unavailable`); the contract declares which per frame, and a payload that
- * contradicts the declaration is dropped rather than reinterpreted.
+ * bytes (`doc`, `docUpdate`, `awareness`) and three without (`docAck`,
+ * `unavailable`, and `@1.1`'s `bodySync`); the contract declares which per
+ * frame, and a payload that contradicts the declaration is dropped rather than
+ * reinterpreted.
+ *
+ * Frames are parsed with the `@1.1` union whatever minor the connection
+ * negotiated. That is safe in the one direction it has to be: `@1.1` is a
+ * strict superset of `@1.0`, and a host on `@1.0` simply never sends the
+ * frame the wider union adds.
  *
  * ## The attach is bound to ONE authority epoch, for life
  *
@@ -31,10 +37,10 @@
  * attach.
  */
 import {
-  artifactSubscribeServerFrameSchemaV10,
+  artifactSubscribeServerFrameSchemaV11,
   type ArtifactSubscribeClientFrameV10,
   type ArtifactSubscribeSeedOffer,
-  type ArtifactSubscribeServerFrameV10,
+  type ArtifactSubscribeServerFrameV11,
 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -47,14 +53,15 @@ import type { IStreamClient } from "./i-stream-client";
 
 export const ARTIFACT_SUBSCRIBE_METHOD = "artifact.subscribe";
 
-type ArtifactServerFrame<Kind extends ArtifactSubscribeServerFrameV10["kind"]> =
-  Extract<ArtifactSubscribeServerFrameV10, { readonly kind: Kind }>;
+type ArtifactServerFrame<Kind extends ArtifactSubscribeServerFrameV11["kind"]> =
+  Extract<ArtifactSubscribeServerFrameV11, { readonly kind: Kind }>;
 
 export type ArtifactDocFrame = ArtifactServerFrame<"doc">;
 export type ArtifactDocUpdateFrame = ArtifactServerFrame<"docUpdate">;
 export type ArtifactDocAckFrame = ArtifactServerFrame<"docAck">;
 export type ArtifactAwarenessFrame = ArtifactServerFrame<"awareness">;
 export type ArtifactUnavailableFrame = ArtifactServerFrame<"unavailable">;
+export type ArtifactBodySyncFrame = ArtifactServerFrame<"bodySync">;
 
 export interface ArtifactStreamCallbacks {
   /**
@@ -76,6 +83,13 @@ export interface ArtifactStreamCallbacks {
     bytes: Uint8Array,
   ) => void;
   readonly onUnavailable: (frame: ArtifactUnavailableFrame) => void;
+  /**
+   * Where the served body stands against the cloud (`@1.1`). Describes the
+   * body the latest `onDoc` seeded, and is forgotten with it: a consumer
+   * clears it on every `onDoc` and `onUnavailable`, and the host re-sends it
+   * after the next `doc`. Never delivered by a host on `@1.0`.
+   */
+  readonly onBodySync: (frame: ArtifactBodySyncFrame) => void;
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
@@ -166,7 +180,7 @@ export class ArtifactStreamClient {
     binaryPayload: Uint8Array | null,
   ): void {
     if (this.closed) return;
-    const parsed = artifactSubscribeServerFrameSchemaV10.safeParse(envelope);
+    const parsed = artifactSubscribeServerFrameSchemaV11.safeParse(envelope);
     if (!parsed.success) return;
     const frame = parsed.data;
     // The address invariant the contract STATES but cannot enforce: every
@@ -208,6 +222,11 @@ export class ArtifactStreamClient {
       case "unavailable": {
         if (binaryPayload !== null) return;
         this.callbacks.onUnavailable(frame);
+        return;
+      }
+      case "bodySync": {
+        if (binaryPayload !== null) return;
+        this.callbacks.onBodySync(frame);
         return;
       }
       case "pong":

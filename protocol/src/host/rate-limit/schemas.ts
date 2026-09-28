@@ -79,9 +79,9 @@ export type RateLimitUsageRequestV12 = z.infer<
 // read, or may be served from the host's per-`(provider, profile)` gauge cache
 // within that lane's cooldown floor. Every released version (1.2 / 2.0 / 2.1 /
 // 3.0) keeps `rateLimitUsageRequestSchemaV12` untouched, so no released peer's
-// request schema moves; `4` is the newest major and no peer in the field has
-// ever negotiated it (see `rateLimitUsageResponseSchemaV40`), which is why this
-// rides the live line instead of a further minor.
+// request schema moves; `4` was the newest major and no peer in the field had
+// negotiated it when this landed, which is why it rode that line instead of a
+// further minor. 4.0 has since shipped with it, and 5.0 reuses it unchanged.
 //
 // ABSENT means force. That is the released behavior this field carves an
 // opt-out from: the host resolver has always passed `force: true`, so a v3.0
@@ -95,8 +95,8 @@ export type RateLimitUsageRequestV12 = z.infer<
 // object, and a defaulted key would make an automatic pull and a manual refresh
 // address two different cache entries.
 //
-// Travelling down to a released peer (the 4->3/2/1 bridges in `contracts.ts`)
-// drops the key, so an old host still forces - a strictly safe degradation
+// Travelling down to a pre-4.0 peer (the 5->3/2/1 and 4->3/2/1 bridges in
+// `contracts.ts`) drops the key, so an old host still forces - a strictly safe degradation
 // (an extra spawn), never a stale read.
 export const rateLimitUsageRequestSchemaV40 = lazySchema(() =>
   rateLimitUsageRequestSchemaV12.extend({
@@ -135,6 +135,7 @@ export const rateLimitCapableProviderIdSchema = lazySchema(() =>
     "huggingface",
     "opencode",
     "cursor",
+    "antigravity",
   ]),
 );
 export type RateLimitCapableProviderId = z.infer<
@@ -455,6 +456,56 @@ const cursorRateLimitsSchema = lazySchema(() =>
     }),
 );
 
+// One Antigravity quota bucket: the shared window primitive plus Google's own
+// bucket identity. `bucketId` ("gemini-5h", "3p-weekly") is the only stable key
+// the payload carries, so the GUI's window catalog keys on it. `windowKind` is
+// Google's raw `window` token ("5h", "weekly") kept as a bare string rather than
+// an enum: Google owns that vocabulary, and an enum would reject a new window at
+// the wire boundary instead of rendering it - `durationMinutes` carries the
+// meaning consumers act on, and is null for a token the host does not know.
+const antigravityRateLimitWindowSchema = lazySchema(() =>
+  providerRateLimitWindowSchema.extend({
+    bucketId: z.string().min(1),
+    windowKind: z.string().nullable(),
+  }),
+);
+
+// Antigravity arm - httpFetch-class provider (a refresh-token exchange and two
+// POSTs to Google's Cloud Code Private API, no subprocess). The host reads
+// `v1internal:retrieveUserQuotaSummary`, the surface Antigravity's own quota
+// panel renders: named model groups ("Gemini Models", "Claude and GPT models"),
+// each with a 5-hour and a weekly window. The ACP server itself reports no
+// quota, and the per-model quota surfaces carry only the 5-hour window.
+//
+// Nested exactly as Google groups it, so a group Google adds or renames needs no
+// protocol change. Every window is account usage - none is scoped to the models
+// Traycer runs - so all of them feed the shared severity rollup. `planName` is
+// the subscription Google names for the account ("Google AI Pro"), null when it
+// names none. A group may legitimately carry no windows (Google marks such a
+// group purely informational).
+//
+// ORDER: groups keep Google's order (Gemini first). A group's windows are
+// shortest first, unknown lengths last - the host sorts them, because Google
+// lists the weekly bucket ahead of the 5-hour one - so a consumer may read a
+// group's first window as its session window.
+const antigravityRateLimitsSchema = lazySchema(() =>
+  z.object({
+    provider: z.literal(rateLimitCapableProviderIdSchema.enum.antigravity),
+    available: z.literal(true),
+    planName: z.string().nullable(),
+    groups: z.array(
+      z.object({
+        displayName: z.string(),
+        description: z.string().nullable(),
+        windows: z.array(antigravityRateLimitWindowSchema),
+      }),
+    ),
+  }),
+);
+export type AntigravityRateLimitWindow = z.infer<
+  typeof antigravityRateLimitWindowSchema
+>;
+
 // Closed, Traycer-owned set of reasons a provider pull can fail to report
 // rate limits - unlike a provider's own plan/reached-type tokens (owned by
 // that provider, legitimately forward-compat as a bare string), every one of
@@ -599,19 +650,17 @@ export const providerRateLimitsSchemaV21 = lazySchema(() =>
 );
 export type ProviderRateLimitsV21 = z.infer<typeof providerRateLimitsSchemaV21>;
 
-// Latest provider union, carried by `host.getRateLimitUsage@4.0` and
-// `agent.getProviderProfileRateLimits@4.0`. Both the Hugging Face and the
-// OpenCode Go available arms ride 4.0: neither had shipped when the release
-// collapsed them onto one major, so there is no peer that negotiated one
-// without the other. The unavailable arm's optional cache generation is
-// stripped naturally by older object schemas.
+// Latest provider union, carried by the unreleased heads
+// `host.getRateLimitUsage@5.0`, `agent.getProviderProfileRateLimits@6.0` and
+// `providers.refreshProfileStatus@2.0`. The unavailable arm's optional cache
+// generation is stripped naturally by older object schemas.
 //
-// A pre-collapse `providerRateLimitsSchemaV70` used to sit here as the frozen
-// pre-image these two lines parsed through. Nothing binds it now - 4.0 ranges
-// over this live union directly - so it was removed rather than left as an
-// unbound union documenting a freeze that no longer exists. Adding an arm here
-// therefore GROWS THE 4.0 WIRE immediately; the bridges below are what keep the
-// released 3.0/2.1/1.2 lines parsing.
+// Adding an arm here GROWS EVERY LINE THAT BINDS THIS UNION immediately, so
+// each of those three heads must still be unreleased when an arm lands; once a
+// tag ships one, freeze it against a snapshot (as `host.getRateLimitUsage@4.0`
+// is frozen against `providerRateLimitsSchemaV80`) and open the next major.
+// The Antigravity arm is the first added since `host.getRateLimitUsage@4.0`
+// entered the released baseline, which is why it opened 5.0.
 export const providerRateLimitsSchema = lazySchema(() =>
   z.union([
     codexRateLimitsSchema,
@@ -622,6 +671,7 @@ export const providerRateLimitsSchema = lazySchema(() =>
     huggingFaceRateLimitsSchema,
     openCodeRateLimitsSchema,
     cursorRateLimitsSchema,
+    antigravityRateLimitsSchema,
     unavailableProviderRateLimitsSchema,
   ]),
 );
@@ -936,12 +986,14 @@ const unavailableProviderRateLimitsSchemaV80 = lazySchema(() =>
  * Frozen provider union as the 1.3.0 tags shipped it - the live union with the
  * `available: false` arm's `provider` pinned to `providerIdSchemaV80`.
  *
- * Bound by `agent.getProviderProfileRateLimits@5.0` and
- * `providers.refreshProfileStatus@1.0`. Both lines used to range over the live
- * union on the reading that they were the newest majors and no released peer
- * had negotiated them - the sentence that stops being true the moment a tag
- * ships, exactly as the v4.0 block above records. Antigravity is the first id
- * added since 1.3.0.
+ * Bound by `agent.getProviderProfileRateLimits@5.0`,
+ * `providers.refreshProfileStatus@1.0` and `host.getRateLimitUsage@4.0`. All
+ * three used to range over the live union on the reading that they were the
+ * newest majors and no released peer had negotiated them - the sentence that
+ * stops being true the moment a tag ships, exactly as the v4.0 block above
+ * records. Antigravity is the first id added since 1.3.0, and the first
+ * available arm: `host.getRateLimitUsage@4.0` was the last of the three to be
+ * frozen here, when that arm opened 5.0.
  *
  * Every other arm is shared with the live union by reference: they carry no
  * provider-id enum, so there is nothing for them to drift on.
@@ -1023,25 +1075,39 @@ export type RateLimitUsageResponseV30 = z.infer<
   typeof rateLimitUsageResponseSchemaV30
 >;
 
-// v4.0 response - identical to v3.0 except the provider-account snapshot ranges
-// over the LIVE `providerRateLimitsSchema`, which adds the Hugging Face and
-// OpenCode Go available arms. Same reasoning as the v3.0 cut for grok: a new
-// available union arm is not strippable by the within-major skew handler, so it
-// needs an explicit downgrade bridge that degrades it to the unavailable
-// `unsupported_provider` shape. The request shape is unchanged from
-// v1.2/v2.x/v3.0.
+// v4.0 response - identical to v3.0 except the provider-account snapshot adds
+// the Hugging Face, OpenCode Go and Cursor available arms. Same reasoning as the
+// v3.0 cut for grok: a new available union arm is not strippable by the
+// within-major skew handler, so it needs an explicit downgrade bridge that
+// degrades it to the unavailable `unsupported_provider` shape.
 //
-// This is the LIVE line: it ranges over `providerRateLimitsSchema` rather than
-// a frozen snapshot, because `4` is the newest major and no released peer has
-// ever negotiated it (the newest released baseline tops out at `3`). Freezing
-// it costs a pre-image and buys nothing until it ships.
+// FROZEN on `providerRateLimitsSchemaV80`, the union the 1.3.0 tags shipped:
+// 4.0 is in the released baseline (canonical since `host-v1.2.0`), so it stops
+// tracking the live union. It ranged over the live union until the Antigravity
+// available arm was added, which is what opened 5.0 below.
 export const rateLimitUsageResponseSchemaV40 = lazySchema(() =>
   rateLimitUsageResponseSchema.extend({
-    providerRateLimits: providerRateLimitsSchema.nullable(),
+    providerRateLimits: providerRateLimitsSchemaV80.nullable(),
   }),
 );
 export type RateLimitUsageResponseV40 = z.infer<
   typeof rateLimitUsageResponseSchemaV40
+>;
+
+// v5.0 response - identical to v4.0 except the provider-account snapshot ranges
+// over the LIVE `providerRateLimitsSchema`, which adds the Antigravity available
+// arm. The request shape is unchanged from v4.0 (`rateLimitUsageRequestSchemaV40`,
+// `force` included).
+//
+// This is the LIVE line while `5` is unreleased. The moment a tag ships it,
+// freeze it against a snapshot union and open 6.0 for the next arm.
+export const rateLimitUsageResponseSchemaV50 = lazySchema(() =>
+  rateLimitUsageResponseSchema.extend({
+    providerRateLimits: providerRateLimitsSchema.nullable(),
+  }),
+);
+export type RateLimitUsageResponseV50 = z.infer<
+  typeof rateLimitUsageResponseSchemaV50
 >;
 
 /**

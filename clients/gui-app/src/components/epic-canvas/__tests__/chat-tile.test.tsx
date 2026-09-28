@@ -374,6 +374,7 @@ import * as Y from "yjs";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
+import * as chatPrewarmHandoff from "@/components/epic-canvas/chat-prewarm-handoff";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -976,6 +977,40 @@ function nextStepsAssistantMessage(): Message {
   };
 }
 
+/** One of several records one assistant turn folds together. */
+function foldedTurnRecord(messageId: string, timestamp: number): Message {
+  return {
+    role: "assistant",
+    messageId,
+    startedAt: timestamp,
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "text",
+        blockId: `text-${messageId}`,
+        text: `Output of ${messageId}`,
+        status: "completed",
+        timestamp,
+        providerNotice: null,
+      },
+    ],
+    timestamp,
+    turnId: "turn-folded",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    envCredentialVar: null,
+    imageResolutions: [],
+  };
+}
+
 function planAssistantMessage(): Message {
   return {
     role: "assistant",
@@ -1245,10 +1280,20 @@ function approvalState(
 }
 
 function renderChatTile() {
+  return renderChatTileWithNode(CHAT_ARTIFACT);
+}
+
+function renderChatTileWithNode(node: {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: "chat";
+  readonly name: string;
+  readonly hostId: string;
+}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(chatTileTestTree(queryClient, true, CHAT_ARTIFACT));
+  return render(chatTileTestTree(queryClient, true, node));
 }
 
 function renderSwitchableChatTile() {
@@ -1267,7 +1312,13 @@ function renderSwitchableChatTile() {
 function chatTileTestTree(
   queryClient: QueryClient,
   chatVisible: boolean,
-  node: typeof CHAT_ARTIFACT,
+  node: {
+    readonly id: string;
+    readonly instanceId: string;
+    readonly type: "chat";
+    readonly name: string;
+    readonly hostId: string;
+  },
 ) {
   return (
     <TestRouterProvider>
@@ -1541,6 +1592,33 @@ describe("<ChatTile />", () => {
     });
     await waitForChatTileLoaded();
     expect(screen.getByText("Host chat content")).not.toBeNull();
+  });
+
+  it("signals the hosted tile's instance ID, not the view tab ID, after acquiring its chat handle", async () => {
+    const handoffSpy = vi.spyOn(
+      chatPrewarmHandoff,
+      "notifyChatTileSessionAcquired",
+    );
+
+    renderChatTileWithNode({
+      ...CHAT_ARTIFACT,
+      instanceId: "actual-tile-instance",
+    });
+
+    await waitFor(() => {
+      expect(handoffSpy).toHaveBeenCalledWith(
+        EPIC_ID,
+        HOST_ID,
+        CHAT_ARTIFACT.id,
+        "actual-tile-instance",
+      );
+    });
+    expect(handoffSpy).not.toHaveBeenCalledWith(
+      EPIC_ID,
+      HOST_ID,
+      CHAT_ARTIFACT.id,
+      "tab-test",
+    );
   });
 
   it("stays gated for a record-less chat when the cloud row belongs to someone else", async () => {
@@ -4338,6 +4416,51 @@ describe("<ChatTile />", () => {
     });
   });
 
+  /**
+   * Find in one tile navigates THAT tile to an older hit through this same
+   * jump. The chat can be open in a second tile (`duplicateTab`), which must
+   * neither move nor swallow a jump addressed to the other.
+   */
+  it("leaves a jump addressed to another tile of the same chat to that tile", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    const key = chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id);
+
+    // Parked by find in the chat's other tile.
+    act(() => {
+      useChatTranscriptJumpStore.setState({
+        requestsByChatId: {
+          [key]: {
+            target: { kind: "end" },
+            requestId: 1_000,
+            tileInstanceId: "inst-chat-2",
+          },
+        },
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[key],
+    ).not.toBeUndefined();
+
+    // The same wait is enough for this tile to act on its own jump.
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestTileJump(HOST_ID, CHAT_ARTIFACT.id, CHAT_ARTIFACT.instanceId, {
+          kind: "end",
+        });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[key],
+    ).toBeUndefined();
+  });
+
   it("resolves a durable assistant message id to its projected transcript row", async () => {
     renderChatTile();
     await waitForChatTileLoaded();
@@ -4374,6 +4497,50 @@ describe("<ChatTile />", () => {
     });
     expect(
       document.querySelector('[data-message-id="assistant:turn-next-steps"]'),
+    ).not.toBeNull();
+  });
+
+  /**
+   * History's own case: a hit names the record it matched, and a turn folded
+   * from several records renders under the LAST one's id. A hit on an earlier
+   * record named no row, so the jump stayed parked until its TTL dropped it.
+   */
+  it("resolves an earlier record of a turn folded from several records", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    const key = chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id);
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "message",
+          messageId: "folded-first",
+        });
+    });
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [
+          hostUserMessage(),
+          foldedTurnRecord("folded-first", 2),
+          foldedTurnRecord("folded-last", 3),
+        ],
+        activeTurn: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[key],
+      ).toBeUndefined();
+    });
+    expect(
+      document.querySelector('[data-message-id="assistant:turn-folded"]'),
     ).not.toBeNull();
   });
 

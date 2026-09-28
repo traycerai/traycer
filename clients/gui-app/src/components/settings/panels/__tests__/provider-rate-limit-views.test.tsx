@@ -12,6 +12,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatResetFullDateTime } from "@/lib/relative-time";
 import { useLayoutStore } from "@/stores/settings/layout-store";
 import {
+  AntigravityRateLimitView,
   ClaudeRateLimitView,
   CodexRateLimitView,
   CursorRateLimitView,
@@ -49,6 +50,10 @@ type HuggingFaceRateLimits = Extract<
 type OpenCodeRateLimits = Extract<
   ProviderRateLimits,
   { provider: "opencode"; available: true }
+>;
+type AntigravityRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "antigravity" }
 >;
 
 const NOW = Date.now();
@@ -1125,6 +1130,124 @@ describe("OpenCodeRateLimitView", () => {
   });
 });
 
+describe("AntigravityRateLimitView", () => {
+  const antigravity: AntigravityRateLimits = {
+    provider: "antigravity",
+    available: true,
+    planName: "Google AI Pro",
+    groups: [
+      {
+        displayName: "Gemini Models",
+        description: "Gemini 3 Pro and Gemini 3 Flash",
+        windows: [
+          {
+            usedPercent: 12,
+            resetsAt: NOW + 60 * 60 * 1000,
+            durationMinutes: 300,
+            bucketId: "gemini-5h",
+            windowKind: "5h",
+          },
+          {
+            usedPercent: 40,
+            resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+            durationMinutes: 10_080,
+            bucketId: "gemini-weekly",
+            windowKind: "weekly",
+          },
+        ],
+      },
+      {
+        displayName: "Claude and GPT models",
+        description: null,
+        windows: [
+          {
+            usedPercent: 8,
+            resetsAt: null,
+            durationMinutes: null,
+            bucketId: "3p-mystery",
+            windowKind: "beta",
+          },
+        ],
+      },
+    ],
+  };
+
+  it("renders both group headings, the first group's caption, and one row per window labelled by duration", () => {
+    render(<AntigravityRateLimitView data={antigravity} variant="settings" />);
+    expect(screen.getByText("Gemini Models")).toBeTruthy();
+    expect(screen.getByText("Gemini 3 Pro and Gemini 3 Flash")).toBeTruthy();
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("40% used")).toBeTruthy();
+    expect(screen.getByText("Claude and GPT models")).toBeTruthy();
+    // A window with no duration falls back to Google's raw windowKind.
+    expect(screen.getByText("beta")).toBeTruthy();
+    expect(screen.getByText("8% used")).toBeTruthy();
+    // The plan is a header chip (resolveProviderPlanLabel), not part of this body.
+    expect(screen.queryByText("Google AI Pro")).toBeNull();
+  });
+
+  it("renders only the first group in the overview variant", () => {
+    render(
+      <AntigravityRateLimitView
+        data={antigravity}
+        variant="popover-overview"
+      />,
+    );
+    expect(screen.getByText("Gemini Models")).toBeTruthy();
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.queryByText("Claude and GPT models")).toBeNull();
+    expect(screen.queryByText("beta")).toBeNull();
+  });
+
+  it("renders a group with no windows as heading + caption only", () => {
+    const withEmptyGroup: AntigravityRateLimits = {
+      ...antigravity,
+      groups: [
+        ...antigravity.groups,
+        {
+          displayName: "Informational group",
+          description: "No windows reported for this group",
+          windows: [],
+        },
+      ],
+    };
+    render(
+      <AntigravityRateLimitView data={withEmptyGroup} variant="settings" />,
+    );
+    expect(screen.getByText("Informational group")).toBeTruthy();
+    expect(screen.getByText("No windows reported for this group")).toBeTruthy();
+  });
+
+  it("falls back to the bucket id when a window carries neither a duration nor a windowKind", () => {
+    const noKind: AntigravityRateLimits = {
+      provider: "antigravity",
+      available: true,
+      planName: null,
+      groups: [
+        {
+          displayName: "Gemini Models",
+          description: null,
+          windows: [
+            {
+              usedPercent: 5,
+              resetsAt: null,
+              durationMinutes: null,
+              bucketId: "gemini-mystery",
+              windowKind: null,
+            },
+          ],
+        },
+      ],
+    };
+    render(<AntigravityRateLimitView data={noKind} variant="settings" />);
+    expect(screen.getByText("gemini-mystery")).toBeTruthy();
+    expect(screen.getByText("5% used")).toBeTruthy();
+  });
+});
+
 describe("ProviderRateLimitDetail dispatch", () => {
   it("dispatches to the Hugging Face view", () => {
     render(
@@ -1246,6 +1369,37 @@ describe("ProviderRateLimitDetail dispatch", () => {
     );
     expect(screen.getByText("5-hour")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Manage Go" })).toBeTruthy();
+  });
+
+  it("dispatches to the Antigravity view", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={{
+          provider: "antigravity",
+          available: true,
+          planName: "Google AI Pro",
+          groups: [
+            {
+              displayName: "Gemini Models",
+              description: null,
+              windows: [
+                {
+                  usedPercent: 12,
+                  resetsAt: NOW + 60 * 60 * 1000,
+                  durationMinutes: 300,
+                  bucketId: "gemini-5h",
+                  windowKind: "5h",
+                },
+              ],
+            },
+          ],
+        }}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("Gemini Models")).toBeTruthy();
+    expect(screen.getByText("Current session")).toBeTruthy();
   });
 });
 

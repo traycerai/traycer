@@ -660,7 +660,7 @@ export const toolCallProgressEventSchema = lazySchema(() =>
 export type ToolCallProgressEvent = z.infer<typeof toolCallProgressEventSchema>;
 
 // Wire-freeze copy of `approval.requested` as every `chat.subscribe` line
-// through `@1.17` ships it: before the card's display facts, `cautious` and
+// through `@1.18` ships it: before the card's display facts, `cautious` and
 // `ruleForced` (`1.19`). Every frozen runtime-event union below binds this
 // copy; only the live union reaches the widened event. Hand-frozen, not
 // derived from the live shape.

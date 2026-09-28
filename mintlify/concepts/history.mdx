@@ -1,0 +1,61 @@
+---
+title: "History"
+description: "Find, filter, open, rename, and clean up previous Tasks."
+---
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Sort, filter, search, and open Task history">
+  <source src="https://assets.traycer.ai/docs/videos/history.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+History is the place to find Tasks you have worked on before. It is a Task-level view, not an agent transcript view.
+
+Open History when you want to return to earlier work, find a shared Task, or clean up Tasks you no longer need.
+
+## What History Shows
+
+Each History row represents a Task and shows a Task icon, title, and relative updated time. Hover a row to reveal pin, rename, and delete actions.
+
+Repositories, workspace folders, Hosts, and **Mine / Shared** ownership are filters inside the **Filter** popover; they are not row badges.
+
+Opening a row opens that Task.
+
+## Search, Filter, And Sort
+
+History has search and filters for narrowing long lists of Tasks.
+
+| Control | What it changes |
+|---|---|
+| **Search** | Finds Tasks by title, repository, branch, or PR number. |
+| **Ownership** | Filters between your Tasks and shared Tasks. |
+| **Repositories** | Filters by linked repo. |
+| **Workspaces** | Filters by linked workspace folder. |
+| **Hosts** | Filters by Host. |
+| **Sort** | Orders Tasks by most recent, last viewed, oldest, title, or relevance. |
+
+When search text is active, relevance can be used as the sort order.
+
+## Managing History
+
+History supports management actions for Tasks you can edit.
+
+| Action | What it does |
+|---|---|
+| **Open** | Opens the selected Task. |
+| **Rename** | Changes the Task title. |
+| **Select** | Enters selection mode for bulk actions. |
+| **Sweep Worktrees…** | Opens [Sweep](/concepts/sweep) to remove worktrees for one or more Tasks while keeping their conversations and artifacts. |
+| **Delete** | Deletes selected Tasks when your permission allows it. |
+| **Refresh** | Reloads the History list. |
+
+Viewer-only shared Tasks may not allow rename or delete actions.
+
+## What History Is Not
+
+History is not the same as the **Agents** panel.
+
+- Use **History** to find and open Tasks.
+- Use [Agents](/panels/agents) to continue an agent inside an open Task.
+- Use [Artifacts](/panels/artifacts) to find specs, tickets, stories, and reviews inside a Task.
+
+History helps you get back to the right Task. The Task's panels hold the actual work surfaces and documents.

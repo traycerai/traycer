@@ -1,6 +1,6 @@
 import { withoutTabRecovery } from "@/lib/tab-recovery/history";
 import { useCallback, useState } from "react";
-import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { FileDown, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -23,7 +23,9 @@ import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { CHAT_NOT_ADOPTED_COPY } from "@/stores/epics/open-epic/chat-write-routing";
 import { useEpicDeleteTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
+import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import { useEpicDeleteArtifact } from "@/hooks/epic/use-epic-node-mutations";
+import type { ArtifactExportFormat } from "@/lib/artifacts/artifact-export";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
@@ -52,18 +54,115 @@ const RENAME_TITLE: Record<SwitcherRowKind, string> = {
   terminal: "Rename terminal",
 };
 
+const EXPORT_LABELS: Record<ArtifactExportFormat, string> = {
+  markdown: "Export as Markdown",
+  pdf: "Export as PDF",
+};
+
+interface RowMenuInput {
+  readonly nodeId: string;
+  readonly kind: SwitcherRowKind;
+  readonly canMutate: boolean;
+  readonly chatWriteUnavailable: boolean;
+  readonly exportPending: boolean;
+  readonly closePending: boolean;
+  readonly onExport: (format: ArtifactExportFormat) => void;
+  readonly onRename: () => void;
+  readonly onDelete: () => void;
+}
+
+function rowMenuEntries(
+  input: RowMenuInput,
+): ReadonlyArray<SidebarRowMenuEntry> {
+  const { nodeId, kind, canMutate, chatWriteUnavailable } = input;
+  const isTerminal = kind === "terminal";
+  const disabledTooltip = chatWriteUnavailable ? CHAT_NOT_ADOPTED_COPY : null;
+  const exportEntry = (format: ArtifactExportFormat): SidebarRowMenuEntry => ({
+    kind: "item",
+    id: `export-${format}`,
+    label: EXPORT_LABELS[format],
+    icon: <FileDown className="size-3.5" />,
+    disabled: input.exportPending,
+    disabledTooltip: null,
+    variant: "default",
+    testIds: {
+      dropdown: `switcher-export-${format}-${nodeId}`,
+      context: `switcher-export-${format}-ctx-${nodeId}`,
+    },
+    onSelect: () => input.onExport(format),
+  });
+  return [
+    ...(kind === "artifact"
+      ? [
+          exportEntry("markdown"),
+          exportEntry("pdf"),
+          { kind: "separator" as const, id: "after-export" },
+        ]
+      : []),
+    {
+      kind: "item",
+      id: "rename",
+      label: "Rename",
+      icon: <Pencil className="size-3.5" />,
+      disabled: !canMutate || chatWriteUnavailable,
+      disabledTooltip,
+      variant: "default",
+      testIds: {
+        dropdown: `switcher-rename-${nodeId}`,
+        context: `switcher-rename-ctx-${nodeId}`,
+      },
+      onSelect: input.onRename,
+    },
+    { kind: "separator", id: "before-delete" },
+    {
+      kind: "item",
+      id: "delete",
+      label: isTerminal ? "Close" : "Delete",
+      icon: <Trash2 className="size-3.5" />,
+      disabled:
+        !canMutate || (isTerminal ? input.closePending : chatWriteUnavailable),
+      disabledTooltip,
+      variant: "destructive",
+      testIds: {
+        dropdown: `switcher-delete-${nodeId}`,
+        context: `switcher-delete-ctx-${nodeId}`,
+      },
+      onSelect: input.onDelete,
+    },
+  ];
+}
+
 /**
  * The per-row "…" actions for the switcher's flat lists: Rename + Delete for
  * agents/artifacts (delete confirmed), Rename + Close for PTY terminals (Close
- * is immediate, matching desktop parity). Reuses the exact desktop mutation
- * hooks and the shared row-menu item renderer; the whole affordance is
- * editor-gated (a viewer gets no menu at all, so no dead-end mutations). Delete
- * also closes the item's open canvas tile so the mobile view never lands on a
- * dead tile.
+ * is immediate, matching desktop parity), and Export ahead of those on an
+ * artifact row - the phone has no hover or right-click, so this menu is the
+ * only way to reach the desktop sidebar's export items. Reuses the exact
+ * desktop mutation hooks and the shared row-menu item renderer. Export is a
+ * read, so an artifact row keeps its menu for a viewer with Rename and Delete
+ * disabled, as the desktop row does; every other kind is editor-gated (a
+ * viewer gets no menu at all, so no dead-end mutations). Delete also closes
+ * the item's open canvas tile so the mobile view never lands on a dead tile.
  */
 export function SwitcherRowActions(props: SwitcherRowActionsProps) {
-  const { epicId, tabId, kind, nodeId, name, cascadeSummary } = props;
   const canMutate = isEditableRole(useEpicPermissionRole());
+  // Keyed on the role so a change of access remounts the body: a dialog opened
+  // as an editor is gone for good once access is lost, rather than staying
+  // submittable or reappearing on its own if access comes back.
+  return (
+    <SwitcherRowActionsBody
+      key={canMutate ? "editor" : "viewer"}
+      {...props}
+      canMutate={canMutate}
+    />
+  );
+}
+
+function SwitcherRowActionsBody(
+  props: SwitcherRowActionsProps & { readonly canMutate: boolean },
+) {
+  const { epicId, tabId, kind, nodeId, name, cascadeSummary, canMutate } =
+    props;
   const [renameOpen, setRenameOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -78,6 +177,7 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   const rename = useSwitcherRename(epicId, mutationHostId);
   const deleteTuiAgent = useEpicDeleteTuiAgent();
   const deleteArtifact = useEpicDeleteArtifact(nodeId);
+  const exportArtifacts = useEpicExportArtifacts();
   // The row's terminal lives on the host the switcher LISTS (the Epic
   // session's), so kill goes to that same client - never the ambient one.
   const killTerminal = useTerminalKillFor(
@@ -158,46 +258,31 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
     killTerminal.mutate({ sessionId: nodeId });
   }, [closeOpenTile, killTerminal, nodeId]);
 
-  if (!canMutate) return null;
+  if (!canMutate && kind !== "artifact") return null;
 
   const isTerminal = kind === "terminal";
-  const deleteLabel = isTerminal ? "Close" : "Delete";
   const deletePending =
     deleteChat.isPending ||
     deleteTuiAgent.isPending ||
     deleteArtifact.isPending;
 
-  const entries: ReadonlyArray<SidebarRowMenuEntry> = [
-    {
-      kind: "item",
-      id: "rename",
-      label: "Rename",
-      icon: <Pencil className="size-3.5" />,
-      disabled: chatWriteUnavailable,
-      disabledTooltip: chatWriteUnavailable ? CHAT_NOT_ADOPTED_COPY : null,
-      variant: "default",
-      testIds: {
-        dropdown: `switcher-rename-${nodeId}`,
-        context: `switcher-rename-ctx-${nodeId}`,
-      },
-      onSelect: () => setRenameOpen(true),
-    },
-    { kind: "separator", id: "before-delete" },
-    {
-      kind: "item",
-      id: "delete",
-      label: deleteLabel,
-      icon: <Trash2 className="size-3.5" />,
-      disabled: isTerminal ? killTerminal.isPending : chatWriteUnavailable,
-      disabledTooltip: chatWriteUnavailable ? CHAT_NOT_ADOPTED_COPY : null,
-      variant: "destructive",
-      testIds: {
-        dropdown: `switcher-delete-${nodeId}`,
-        context: `switcher-delete-ctx-${nodeId}`,
-      },
-      onSelect: isTerminal ? closeTerminal : () => setConfirmOpen(true),
-    },
-  ];
+  const entries = rowMenuEntries({
+    nodeId,
+    kind,
+    canMutate,
+    chatWriteUnavailable,
+    exportPending: exportArtifacts.isPending,
+    closePending: killTerminal.isPending,
+    onExport: (format) =>
+      exportArtifacts.mutate({
+        artifacts: [{ id: nodeId, title: name }],
+        format,
+        archive: false,
+        archiveTitle: null,
+      }),
+    onRename: () => setRenameOpen(true),
+    onDelete: isTerminal ? closeTerminal : () => setConfirmOpen(true),
+  });
 
   return (
     <>
@@ -214,7 +299,7 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
             <MoreHorizontal className="size-4" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
+        <DropdownMenuContent align="end" className="w-max">
           <SidebarDropdownMenuItems entries={entries} />
         </DropdownMenuContent>
       </DropdownMenu>

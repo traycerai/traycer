@@ -88,6 +88,8 @@ export function SubagentConversation(props: SubagentConversationProps) {
                 interviewDeliveryRetry={null}
                 harnessId={null}
                 turnId={null}
+                settledNotice={null}
+                settledNoticeFindUnitId={null}
               />
             </ChatBlockNavigationAnchor>
           );

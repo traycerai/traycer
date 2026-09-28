@@ -124,7 +124,13 @@ export function LandingDraftSurface() {
     <div
       ref={surfaceRef}
       data-home-touch-scope
-      className="relative flex min-h-0 flex-1 overflow-hidden bg-background text-foreground"
+      // `contain-layout`: this surface is its own layout root, as a canvas
+      // tile is (the tile host transforms it), so a `fixed` descendant fills
+      // the surface below the app header rather than the viewport. The phone
+      // composer sheet (`composer-shell.tsx`) relies on that being true on
+      // both surfaces that mount it. Nothing else in here positions against
+      // the viewport; the overlays that do are portalled out.
+      className="relative flex min-h-0 flex-1 overflow-hidden bg-background text-foreground contain-layout"
       data-primary-focus-scope="true"
       data-testid="landing-draft-surface"
     >

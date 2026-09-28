@@ -323,6 +323,7 @@ const RETAINED_BADGE_WORD: Record<FleetUpdateViewKind, string | null> = {
   unknown: null,
 };
 
+/** The picker's words for a retained phase ("Last seen: updating"). */
 function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
   return RETAINED_BADGE_WORD[kind];
 }

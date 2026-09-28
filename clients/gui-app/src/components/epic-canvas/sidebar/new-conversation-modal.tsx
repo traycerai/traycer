@@ -220,7 +220,13 @@ async function confirmCreateAttachmentHashes(input: {
    */
   readonly ownerUserId: string | null;
 }): Promise<ReadonlySet<string>> {
-  const confirmed = await confirmAttachmentsByHash(input);
+  // No progress surface here: the modal disables its own Send and shows the
+  // attachment strip, and a create from it carries far fewer images than a
+  // landing submit does.
+  const confirmed = await confirmAttachmentsByHash({
+    ...input,
+    onProgress: null,
+  });
   return confirmed.byHash;
 }
 
@@ -1801,6 +1807,9 @@ export function NewConversationModalBody(props: {
       // used to opt out and render the desktop row at any width, which made
       // one composer look like two depending on where it was opened from.
       toolbarLayout={isMobile ? "collapsed" : "full"}
+      // Already a sheet of its own; a second one over it would fight the
+      // dialog for the screen.
+      expansion={null}
       draftsControl={null}
       attachmentsStrip={
         <NewConversationModalAttachmentStrip

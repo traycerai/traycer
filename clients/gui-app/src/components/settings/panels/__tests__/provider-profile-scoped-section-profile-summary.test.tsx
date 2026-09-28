@@ -123,7 +123,7 @@ function renderSection(
           hostId="host-1"
           isSelectedHostLocal
           canAddProfile
-          signInUnavailableHint={null}
+          onOpenCliSettings={() => undefined}
           startInReauth={false}
           failedAttempt={null}
           onAddProfile={() => undefined}

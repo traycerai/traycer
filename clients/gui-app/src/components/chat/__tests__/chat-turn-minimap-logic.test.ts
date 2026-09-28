@@ -182,6 +182,7 @@ describe("chatTurnMinimapItems caching", () => {
       indexRevision: 1,
       indexRevisionRebuilding: false,
       skeleton: entries,
+      skeletonRevision: 0,
       skeletonComplete: true,
       // Fully delivered: the prefix reached the end of the index.
       skeletonStreamCoveredThrough: entries.length,

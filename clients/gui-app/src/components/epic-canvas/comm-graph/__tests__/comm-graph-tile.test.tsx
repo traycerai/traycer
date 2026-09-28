@@ -185,6 +185,7 @@ import type {
 } from "@/lib/comm-graph/office/office-types";
 import { useCommGraphAgents } from "@/components/epic-canvas/comm-graph/use-comm-graph-agents";
 import { __resetCommGraphCloudRegistryForTests } from "@/lib/comm-graph/comm-graph-cloud-registry";
+import { __setCommGraphDataCommitWindowMsForTests } from "@/lib/comm-graph/comm-graph-data-commit-window";
 
 /**
  * The Building's REAL planner, captured at import before any spy can replace
@@ -642,6 +643,9 @@ async function renderOfficeTile(): Promise<void> {
 }
 
 beforeEach(() => {
+  // Frames publish as they are applied: these cases read the snapshot in the
+  // tick they push in.
+  __setCommGraphDataCommitWindowMsForTests(0);
   openedByHost.clear();
   openRequests.length = 0;
   relayHandlers.current = null;
@@ -677,6 +681,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+  __setCommGraphDataCommitWindowMsForTests(null);
 });
 
 /**

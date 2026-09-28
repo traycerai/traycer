@@ -48,11 +48,11 @@ import {
 } from "@/lib/chats/resolve-steer-submit";
 import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
 import { ChatComposerFallbackBanners } from "@/components/chat/fallback/chat-composer-fallback-banners";
-import { composerRateLimitAdvisory } from "@/components/chat/fallback/fallback-return-low-usage";
 import {
   fallbackComposerCardVisible,
   type ChatProviderFallbackState,
 } from "@/components/chat/fallback/fallback-state";
+import { useComposerRateLimitAdvisory } from "@/components/chat/fallback/use-settled-routing-card-offers-switch";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
@@ -492,6 +492,20 @@ function ChatComposerImpl(props: ChatComposerProps) {
     active: focused,
     client: hostClient,
   });
+  // ONE value for both readers: the chain's `rateLimitVisible` below and the
+  // return banner, which OUTRANKS the advisory in that chain and so absorbs
+  // its sentence rather than silencing it (MF09, UX §2). Withheld while the
+  // settled routing card in the transcript draws its own "Switch to…" for this
+  // account (clutter cuts, 2026-09-27) - the live routing cards are already
+  // handled by the chain below; that card is the one that lives outside it.
+  const rateLimitAdvisory = useComposerRateLimitAdvisory({
+    epicId: currentEpicId,
+    chatId: taskId,
+    hostId: tabHostId,
+    account: { harnessId, profileId },
+    prompt: rateLimitPrompt,
+    signedOut: reauthGate.signedOut,
+  });
   // Keeps the switch prompt's own `providers.list` read converging with a
   // turn's passive rate-limit capture: without this, a turn that just pushed
   // this harness's profile into near/hard limit wouldn't surface the banner
@@ -645,15 +659,16 @@ function ChatComposerImpl(props: ChatComposerProps) {
     pastePending,
     annotationPreparationPending,
   );
-  const handleSubmitDraft = useCallback(
-    (source: ChatComposerSubmitSource): void => {
-      submitDraft(source);
-    },
-    [submitDraft],
+  // The phone sheet (`ComposerShell`'s `expansion`). The submit handlers
+  // below `canSubmit` drop it back to the compact card on a send.
+  const [composerExpanded, setComposerExpanded] = useState(false);
+  const composerExpansion = useMemo(
+    () => ({
+      expanded: composerExpanded,
+      onExpandedChange: setComposerExpanded,
+    }),
+    [composerExpanded, setComposerExpanded],
   );
-  const handleSubmitFromButton = useCallback((): void => {
-    handleSubmitDraft("enter");
-  }, [handleSubmitDraft]);
   // Whether a Cmd+Enter here would steer (vs queue), gating the discovery hints
   // (decisions 8, 9). Capability comes from the host; the setting is the opt-out.
   const steerHintActive = steerHintIsActive({
@@ -674,8 +689,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     // meaning "no offer", so a `"pendingReturn" in ...` test here would pin the
     // banner open for the life of the chat.
     fallbackReturnVisible: providerFallback.pendingReturn !== undefined,
-    rateLimitVisible:
-      !reauthGate.signedOut && rateLimitPrompt.kind === "visible",
+    rateLimitVisible: rateLimitAdvisory !== null,
   });
 
   const removeImage = useCallback((id: string) => {
@@ -712,19 +726,27 @@ function ChatComposerImpl(props: ChatComposerProps) {
     draftHasText,
     draftHasImages,
   });
+  // Sending drops the phone sheet back to the compact card: an empty
+  // full-screen editor over a reply that just started is the wrong thing to
+  // be looking at. Gated the way the send button is, so a submit the composer
+  // refuses outright leaves the draft where the user is looking at it.
+  const handleSubmitDraft = useCallback(
+    (source: ChatComposerSubmitSource): void => {
+      submitDraft(source);
+      if (canSubmit) setComposerExpanded(false);
+    },
+    [canSubmit, setComposerExpanded, submitDraft],
+  );
+  const handleSubmitFromButton = useCallback((): void => {
+    handleSubmitDraft("enter");
+  }, [handleSubmitDraft]);
 
   return (
     <>
       <ChatComposerFallbackBanners
         topBannerKind={topBannerKind}
         fallback={providerFallback}
-        // The return banner OUTRANKS the advisory in the chain above, so it
-        // absorbs its sentence rather than silencing it (MF09, UX §2). Same
-        // suppression as `rateLimitVisible`, from one helper.
-        rateLimitAdvisory={composerRateLimitAdvisory(
-          rateLimitPrompt,
-          reauthGate.signedOut,
-        )}
+        rateLimitAdvisory={rateLimitAdvisory}
         client={hostClient}
         chatId={taskId}
         epicId={currentEpicId}
@@ -817,6 +839,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 onDragLeave={onDragLeave}
                 dragOverlayVariant={dragOverlayVariant}
                 utilityRail={null}
+                expansion={composerExpansion}
                 attachmentsStrip={
                   <ChatComposerAttachmentsStrip
                     taskId={taskId}

@@ -79,6 +79,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 }));
 vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
   useEpicTaskPinnedStates: () => new Map(),
+  useRetryUnansweredTaskPinReading: () => () => undefined,
 }));
 
 vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({

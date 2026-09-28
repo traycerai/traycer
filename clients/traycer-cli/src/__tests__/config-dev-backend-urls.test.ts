@@ -14,7 +14,7 @@ describe("CLI config dev backend URL overrides", () => {
   it("keeps the committed production URLs when the env vars are unset", async () => {
     const { config } = await import("../config");
     expect(config.authnBaseUrl).toBe("https://authn.traycer.ai");
-    expect(config.cloudUiBaseUrl).toBe("https://platform.traycer.ai");
+    expect(config.cloudUiBaseUrl).toBe("https://traycer.ai");
   });
 
   it("honors loopback overrides and keeps the trust root baked", async () => {

@@ -68,6 +68,10 @@ import type {
  * a worker that connects and then quietly ignores half its traffic. The
  * handshake turns that into one loud error at startup.
  *
+ * **14** adds incremental replica-data settlements and provisional root
+ * updates. A v13 worker leaves lane rows and post-snapshot root growth
+ * invisible to the main accountant while the app appears to work.
+ *
  * **13** adds `apply-confirmed-chat-mutation`; an older worker cannot dispatch
  * the renderer-local archive/delete reconciliation command.
  *
@@ -143,7 +147,7 @@ import type {
  * that does not move with its contract is not a check; it is a comment that
  * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 13;
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 14;
 
 /**
  * The runtime facts main's books read between settlements.
@@ -163,6 +167,8 @@ export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 13;
 export interface RuntimeAccountingSnapshot {
   readonly materializedRoomIds: readonly string[];
   readonly rootBytes: number;
+  readonly replicaDataRawBytes: number;
+  readonly replicaDataEstimatedHeapBytes: number;
   /**
    * The tier's LAST KNOWN protected breakdown, and the reason this member
    * exists rather than being defaulted to empty on main.
@@ -186,6 +192,12 @@ export interface RuntimeAccountingSnapshot {
  */
 export type RuntimeAccountingSettlement =
   | { readonly kind: "root"; readonly bytes: number }
+  | { readonly kind: "root-provisional"; readonly bytes: number }
+  | {
+      readonly kind: "replica-data";
+      readonly rawBytes: number;
+      readonly estimatedHeapBytes: number;
+    }
   | {
       readonly kind: "cold-room";
       readonly artifactRoomId: string;

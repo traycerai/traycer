@@ -38,56 +38,90 @@ import {
 export function steeredMessageIdsFromEvents(
   events: ReadonlyArray<ChatEvent>,
 ): ReadonlySet<string> {
-  const steeredMessageIds = new Set<string>();
-  const steerRequestMessageIdsByQueueItemId = new Map<string, string>();
-  for (const event of events) {
-    if (event.type === "queue.steerRequested") {
-      if (
-        event.messageId !== null &&
-        event.queueItemId !== null &&
-        isInterruptRestartSteerRequest(event)
-      ) {
-        steeredMessageIds.add(event.messageId);
-        steerRequestMessageIdsByQueueItemId.set(
-          event.queueItemId,
-          event.messageId,
-        );
-      }
-      continue;
-    }
+  const fold = newSteerLifecycleFold();
+  for (const event of events) applySteerLifecycleEvent(fold, event);
+  return fold.steeredMessageIds;
+}
 
+/**
+ * The running state of {@link steeredMessageIdsFromEvents}, so a caller that
+ * persists it can continue the fold over later events instead of replaying the
+ * whole log. The fold is order-dependent - a retraction deletes what an earlier
+ * request added - so it can only be continued at the END of the log.
+ */
+export interface SteerLifecycleFold {
+  readonly steeredMessageIds: Set<string>;
+  readonly steerRequestMessageIdsByQueueItemId: Map<string, string>;
+}
+
+export function newSteerLifecycleFold(): SteerLifecycleFold {
+  return {
+    steeredMessageIds: new Set(),
+    steerRequestMessageIdsByQueueItemId: new Map(),
+  };
+}
+
+/** The event types that move {@link SteerLifecycleFold}. Every other type is a no-op. */
+export const STEER_LIFECYCLE_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> =
+  new Set([
+    "queue.steerRequested",
+    "queue.fallback",
+    "queue.resumed",
+    "queue.cancelled",
+    "queue.steerAborted",
+  ]);
+
+/** One step of {@link steeredMessageIdsFromEvents}, applied in place. */
+export function applySteerLifecycleEvent(
+  fold: SteerLifecycleFold,
+  event: ChatEvent,
+): void {
+  const { steeredMessageIds, steerRequestMessageIdsByQueueItemId } = fold;
+  if (event.type === "queue.steerRequested") {
     if (
-      event.type === "queue.fallback" ||
-      event.type === "queue.resumed" ||
-      event.type === "queue.cancelled" ||
-      event.type === "queue.steerAborted"
+      event.messageId !== null &&
+      event.queueItemId !== null &&
+      isInterruptRestartSteerRequest(event)
     ) {
-      if (event.messageId !== null) {
-        steeredMessageIds.delete(event.messageId);
+      steeredMessageIds.add(event.messageId);
+      steerRequestMessageIdsByQueueItemId.set(
+        event.queueItemId,
+        event.messageId,
+      );
+    }
+    return;
+  }
+
+  if (
+    event.type === "queue.fallback" ||
+    event.type === "queue.resumed" ||
+    event.type === "queue.cancelled" ||
+    event.type === "queue.steerAborted"
+  ) {
+    if (event.messageId !== null) {
+      steeredMessageIds.delete(event.messageId);
+    }
+    if (event.queueItemId !== null) {
+      const messageId = steerRequestMessageIdsByQueueItemId.get(
+        event.queueItemId,
+      );
+      if (messageId !== undefined) {
+        steeredMessageIds.delete(messageId);
+        steerRequestMessageIdsByQueueItemId.delete(event.queueItemId);
       }
-      if (event.queueItemId !== null) {
-        const messageId = steerRequestMessageIdsByQueueItemId.get(
-          event.queueItemId,
-        );
-        if (messageId !== undefined) {
-          steeredMessageIds.delete(messageId);
-          steerRequestMessageIdsByQueueItemId.delete(event.queueItemId);
-        }
+    }
+    for (const item of queueItemsFromEventMetadata(event.metadata)) {
+      if (queueItemHasActiveInterruptRestartSteer(item)) {
+        continue;
       }
-      for (const item of queueItemsFromEventMetadata(event.metadata)) {
-        if (queueItemHasActiveInterruptRestartSteer(item)) {
-          continue;
-        }
-        // Only prompt items map back to a rendered user message; a
-        // managed-command item has no message to un-badge.
-        if (item.kind === "prompt") {
-          steeredMessageIds.delete(item.messageId);
-        }
-        steerRequestMessageIdsByQueueItemId.delete(item.queueItemId);
+      // Only prompt items map back to a rendered user message; a
+      // managed-command item has no message to un-badge.
+      if (item.kind === "prompt") {
+        steeredMessageIds.delete(item.messageId);
       }
+      steerRequestMessageIdsByQueueItemId.delete(item.queueItemId);
     }
   }
-  return steeredMessageIds;
 }
 
 function isInterruptRestartSteerRequest(event: ChatEvent): boolean {

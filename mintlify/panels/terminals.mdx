@@ -1,0 +1,30 @@
+---
+title: "Terminals"
+description: "Use Terminals for plain shell sessions."
+---
+
+The **Terminals** panel is for plain terminal sessions. These are shells you run yourself, not coding agents.
+
+Terminal Agents do not live here. They live in [Agents](/panels/agents). For the full distinction, see [Terminal Agents VS Terminals](/concepts/terminal-agents-vs-terminals).
+
+## Controls
+
+Use the panel to:
+
+- create a terminal in a selected workspace folder
+- find an existing terminal session
+- rename a terminal
+- stop or delete a terminal session after it exits
+
+Traycer derives a terminal name from its custom title, current folder, shell command, or terminal id.
+
+<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Launch a terminal in a workspace folder and switch between terminals">
+  <source src="https://assets.traycer.ai/docs/videos/terminals-panel.mp4" type="video/mp4" />
+  Unable to load video.
+</video>
+
+Use terminal sessions for package scripts, tests, logs, local debugging, and one-off commands.
+
+Plain terminals do not receive Traycer's agent prompt, skills, artifact instructions, or agent-to-agent communication tools.
+
+Cross-host terminal behavior is covered in [Hosts](/concepts/hosts).

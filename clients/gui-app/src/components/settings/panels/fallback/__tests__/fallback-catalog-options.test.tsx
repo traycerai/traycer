@@ -71,6 +71,7 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 import {
   useFallbackCatalogOptions,
   catalogModelForFamily,
+  effortsForRowValue,
 } from "@/components/settings/panels/fallback/fallback-catalog-options";
 
 function harness(
@@ -303,6 +304,51 @@ describe("useFallbackCatalogOptions - modelsFor", () => {
     // the availability read never named.
     expect(result.current.modelsFor("claude")).toEqual([]);
     expect(fixture.capturedRequests).toHaveLength(0);
+  });
+});
+
+describe("effortsForRowValue (Pin 13)", () => {
+  // Falsifies `fallback-catalog-options.ts`'s `effortsForRowValue`: with the
+  // production body replaced by `return effortUnion(models);` unconditionally,
+  // every case below would collapse to the same harness-wide union and the
+  // exact-slug and pattern-scoped assertions would stop distinguishing
+  // anything.
+  const models = [
+    model("codex", "gpt-6-astra", [effort("high", "High")]),
+    model("codex", "gpt-6-sol", [effort("medium", "Medium")]),
+    model("codex", "gpt-6-luna", [
+      effort("low", "Low"),
+      effort("medium", "Medium (dup)"),
+    ]),
+  ];
+
+  it("a pattern unions the efforts of every model it matches, deduped by id", () => {
+    // "*luna*" matches only "gpt-6-luna" here, but that model alone already
+    // carries two distinct efforts - proving the union path (not a
+    // single-model shortcut) is what ran.
+    expect(
+      effortsForRowValue(models, "*luna*").map((option) => option.id),
+    ).toEqual(["low", "medium"]);
+  });
+
+  it("a pattern matching several models unions across all of them", () => {
+    // "*gpt-6*" matches all three models; "high" and "medium" each appear on
+    // more than one model and must be deduped rather than repeated.
+    expect(
+      effortsForRowValue(models, "*gpt-6*").map((option) => option.id),
+    ).toEqual(["high", "medium", "low"]);
+  });
+
+  it("a pattern matching nothing falls back to the harness-wide union", () => {
+    expect(
+      effortsForRowValue(models, "*nonexistent*").map((option) => option.id),
+    ).toEqual(["high", "medium", "low"]);
+  });
+
+  it("an exact catalog slug returns only that model's own efforts, not the union", () => {
+    expect(
+      effortsForRowValue(models, "gpt-6-sol").map((option) => option.id),
+    ).toEqual(["medium"]);
   });
 });
 

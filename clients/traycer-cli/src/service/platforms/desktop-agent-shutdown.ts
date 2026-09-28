@@ -19,6 +19,10 @@ import { getPublishedProcessIdentityVerdict } from "../../store/process-identity
 import { callHostRpcAtEndpoint } from "../../internal/host-rpc";
 import { createCliLogger, type ILogger } from "../../logger";
 import type { Environment } from "../../runner/environment";
+import {
+  isServiceMutationAuthorityError,
+  verifyServiceMutationAuthority,
+} from "../mutation-authority";
 
 // Cooperative shutdown of a Desktop-managed host, through the host's own
 // lifecycle-claim RPCs instead of launchd. Who registered the OS service is
@@ -161,6 +165,7 @@ export async function requestCooperativeShutdownReporting(
   // contract; not calling it is the bug.
   let grantedToken: string | null = null;
   try {
+    await verifyServiceMutationAuthority();
     const claimed = await callHostRpcAtEndpoint(
       "lifecycle.claimShutdown",
       { transitionId, ttl: CLAIM_TTL_MS, intent },
@@ -170,6 +175,7 @@ export async function requestCooperativeShutdownReporting(
       return { kind: "busy" };
     }
     grantedToken = claimed.granted.token;
+    await verifyServiceMutationAuthority();
     const committed = await callHostRpcAtEndpoint(
       "lifecycle.commitShutdown",
       { token: claimed.granted.token },
@@ -188,6 +194,9 @@ export async function requestCooperativeShutdownReporting(
   } catch (error) {
     const cause = error instanceof Error ? error.message : String(error);
     await releaseClaim(grantedToken);
+    // Losing the service mutation capability must abort the stop, never
+    // become an "unreachable" result that permits a forced OS fallback.
+    if (isServiceMutationAuthorityError(error)) throw error;
     logger.warn("Cooperative shutdown RPC failed", {
       environment,
       operation,

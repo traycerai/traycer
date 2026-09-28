@@ -34,7 +34,7 @@ import { useHostRegistryUpdateMutation } from "@/components/settings/host-scope/
  *
  * `HostRegistryUpdates` used to own both the policy switch and the drain gate
  * and to create the mutation itself. Those are now two components — the switch
- * lives behind Advanced, the gate stays on the identity card — and the caller
+ * lives on the Updates tab, the gate on Status — and the caller
  * owns the mutation. This stands in for that caller so every assertion below
  * still runs against the mocked mutation, unchanged.
  */

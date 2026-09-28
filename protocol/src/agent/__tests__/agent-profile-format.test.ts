@@ -245,6 +245,94 @@ describe("detailed rate-limit formatting", () => {
     expect(human).not.toContain("% used");
   });
 
+  it("renders Antigravity's plan line and one line per window, labelled by group and window kind", () => {
+    const response: AgentGetProviderProfileRateLimitsResponse = {
+      rateLimits: {
+        provider: "antigravity",
+        available: true,
+        planName: "Google AI Pro",
+        groups: [
+          {
+            displayName: "Gemini Models",
+            description: "Gemini 3 Pro and Gemini 3 Flash",
+            windows: [
+              {
+                usedPercent: 12,
+                resetsAt: CAPTURED_AT,
+                durationMinutes: 300,
+                bucketId: "gemini-5h",
+                windowKind: "5h",
+              },
+              {
+                usedPercent: 40,
+                resetsAt: CAPTURED_AT,
+                durationMinutes: 10_080,
+                bucketId: "gemini-weekly",
+                windowKind: "weekly",
+              },
+            ],
+          },
+          {
+            displayName: "Claude and GPT models",
+            description: null,
+            windows: [],
+          },
+        ],
+      },
+      usageUpdatedAt: CAPTURED_AT,
+    };
+
+    const human = formatAgentProviderProfileRateLimitsResponse(
+      { kind: "ambient" },
+      response,
+    );
+
+    expect(human).toContain("plan: Google AI Pro");
+    expect(human).toContain(
+      "Gemini Models 5h: 12% used, resets 2026-07-13T09:30:00.000Z, 300m window",
+    );
+    expect(human).toContain(
+      "Gemini Models weekly: 40% used, resets 2026-07-13T09:30:00.000Z, 10080m window",
+    );
+    // A group that reports no windows still gets a line, so it isn't
+    // silently dropped.
+    expect(human).toContain("Claude and GPT models: no limits reported");
+  });
+
+  it("falls back to the bucket id when a window's windowKind is null, and to 'unknown' for a missing plan", () => {
+    const response: AgentGetProviderProfileRateLimitsResponse = {
+      rateLimits: {
+        provider: "antigravity",
+        available: true,
+        planName: null,
+        groups: [
+          {
+            displayName: "Gemini Models",
+            description: null,
+            windows: [
+              {
+                usedPercent: 5,
+                resetsAt: null,
+                durationMinutes: null,
+                bucketId: "gemini-mystery",
+                windowKind: null,
+              },
+            ],
+          },
+        ],
+      },
+      usageUpdatedAt: null,
+    };
+
+    const human = formatAgentProviderProfileRateLimitsResponse(
+      { kind: "ambient" },
+      response,
+    );
+
+    expect(human).toContain("plan: unknown");
+    expect(human).toContain("Gemini Models gemini-mystery: 5% used");
+  });
+
   it("renders OpenCode Go windows with each upstream status", () => {
     const response: AgentGetProviderProfileRateLimitsResponse = {
       rateLimits: {
