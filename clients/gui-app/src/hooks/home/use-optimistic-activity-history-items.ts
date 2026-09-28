@@ -213,14 +213,16 @@ export function settleHistoryActivity(
     const stamp = stamps.get(key);
     if (stamp !== undefined) {
       let caughtUp: boolean;
-      if (stamp.acceptedAt !== null) {
+      if (stamp.baselineAt === null) {
+        // First sight of an off-page row can already be ahead of the browser
+        // clock. Record it as a baseline before inferring any persistence.
+        caughtUp = false;
+      } else if (stamp.acceptedAt !== null) {
         caughtUp =
           durableAt >= stamp.acceptedAt &&
-          (stamp.baselineAt === null || durableAt > stamp.baselineAt) &&
+          durableAt > stamp.baselineAt &&
           (stamp.turnAfterAcceptedAt === null ||
             durableAt > stamp.turnAfterAcceptedAt);
-      } else if (stamp.baselineAt === null) {
-        caughtUp = durableAt >= stamp.at;
       } else {
         caughtUp = durableAt > stamp.baselineAt;
       }

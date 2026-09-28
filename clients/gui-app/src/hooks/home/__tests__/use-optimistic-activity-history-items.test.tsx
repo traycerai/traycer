@@ -163,6 +163,17 @@ describe("optimistic activity history projection", () => {
     expect(projected[1].recentAtMs).toBe(300);
 
     settleHistoryActivity(userId, [historyItem("active-a", 100, 300)]);
+    const afterFirstKey = projectOptimisticHistoryItems(
+      userId,
+      pageItems,
+      backfilled,
+      300,
+    );
+    expect(
+      afterFirstKey.find((item) => item.epicId === "active-a")?.recentAtMs,
+    ).toBe(300);
+
+    settleHistoryActivity(userId, [historyItem("active-a", 100, 301)]);
     const afterCatchUp = projectOptimisticHistoryItems(
       userId,
       pageItems,
@@ -218,6 +229,45 @@ describe("optimistic activity history projection", () => {
       projectOptimisticHistoryItems(userId, [olderDurableRow], [], 21_000)[0]
         ?.recentAtMs,
     ).toBe(9_000);
+  });
+
+  it("uses the first off-page durable key as a baseline before settling", () => {
+    const userId = `off-page-baseline-${crypto.randomUUID()}`;
+    const epicId = "off-page-baseline-epic";
+    observeActiveHistoryEdges(userId, new Set([epicId]), 10_000);
+
+    settleHistoryActivity(userId, [historyItem(epicId, 20_000, 20_000)]);
+    const olderCachedRow = historyItem(epicId, 9_000, 9_000);
+    expect(
+      projectOptimisticHistoryItems(userId, [olderCachedRow], [], 20_000)[0]
+        ?.recentAtMs,
+    ).toBe(10_000);
+
+    settleHistoryActivity(userId, [historyItem(epicId, 21_000, 21_000)]);
+    expect(
+      projectOptimisticHistoryItems(userId, [olderCachedRow], [], 21_000)[0]
+        ?.recentAtMs,
+    ).toBe(9_000);
+  });
+
+  it("uses the first durable key as baseline after an own-record event", () => {
+    const userId = `own-off-page-baseline-${crypto.randomUUID()}`;
+    const epicId = "own-off-page-baseline-epic";
+    observeOwnHistoryRecordChange(userId, epicId, 3_000);
+    observeActiveHistoryEdges(userId, new Set([epicId]), 10_000);
+
+    settleHistoryActivity(userId, [historyItem(epicId, 20_000, 20_000)]);
+    const olderCachedRow = historyItem(epicId, 1_000, 1_000);
+    expect(
+      projectOptimisticHistoryItems(userId, [olderCachedRow], [], 20_000)[0]
+        ?.recentAtMs,
+    ).toBe(10_000);
+
+    settleHistoryActivity(userId, [historyItem(epicId, 21_000, 21_000)]);
+    expect(
+      projectOptimisticHistoryItems(userId, [olderCachedRow], [], 21_000)[0]
+        ?.recentAtMs,
+    ).toBe(1_000);
   });
 
   it("does not settle a legacy row from updatedAt without durable recency", () => {
@@ -545,6 +595,7 @@ describe("optimistic activity history projection", () => {
         }),
       );
 
+    settleHistoryActivity(userId, [historyItem("epic-a", 1, 21_000)]);
     observeOwnHistoryRecordChange(userId, "epic-a", 22_000);
     const first = renderScope();
     await act(async () => {

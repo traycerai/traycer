@@ -602,12 +602,23 @@ function projectHistoryItems(
 ): ReadonlyArray<HistoryItem> {
   const filtered = filterHistoryItemsLocally(items, search);
   const query = search.query.trim();
-  const searched =
-    query.length === 0
-      ? filtered
-      : new Fuse(filtered, LOCAL_FUSE_OPTIONS)
-          .search(query)
-          .map((result) => result.item);
+  let searched: ReadonlyArray<HistoryItem> = filtered;
+  if (query.length > 0) {
+    const matches = new Fuse(filtered, LOCAL_FUSE_OPTIONS)
+      .search(query)
+      .map((result) => result.item);
+    if (
+      search.sort === "recent" &&
+      filtered.some((item) => item.recentAtMs === undefined)
+    ) {
+      // Fuse supplies fuzzy membership while a previous page is displayed,
+      // but its relevance order must not replace the old peer's Recent order.
+      const matchIds = new Set(matches.map((item) => item.id));
+      searched = filtered.filter((item) => matchIds.has(item.id));
+    } else {
+      searched = matches;
+    }
+  }
   return sortProjectedHistoryItems(searched, search.sort, query);
 }
 

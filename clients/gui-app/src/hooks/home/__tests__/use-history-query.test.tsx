@@ -697,6 +697,40 @@ describe("useHistoryQuery", () => {
     ).toBe("server recent|server older activity");
   });
 
+  it("preserves pre-1.7 server Recent order during a fetching text search", async () => {
+    // Both rows match, but the exact title should win Fuse relevance and has
+    // the newer task edit time. The older peer's page order remains the
+    // authoritative activity order even while local filtering is active.
+    const serverFirst = taskLightWithUpdatedAt(
+      "server-first",
+      "matching result details",
+      "traycer/gui-app",
+      Date.parse("2026-04-22T10:00:00.000Z"),
+    );
+    const strongerMatch = taskLightWithUpdatedAt(
+      "stronger-match",
+      "match",
+      "traycer/server",
+      Date.parse("2026-04-22T11:00:00.000Z"),
+    );
+    testState.tasks = [serverFirst, strongerMatch];
+    testState.response = { tasks: testState.tasks, hasMore: false };
+    testState.isFetching = true;
+    const search = patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+      query: "match",
+      sort: "recent",
+      sortExplicit: true,
+    });
+
+    render(<HistoryQueryHarness search={search} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("status", { name: "History titles" }).textContent,
+      ).toBe("matching result details|match");
+    });
+  });
+
   it("dedups a task matched by both the cloud query and a local worktree string", () => {
     testState.worktreeIndex = [
       { ...worktreeWithPullRequest(84), branch: "beta-live" },
