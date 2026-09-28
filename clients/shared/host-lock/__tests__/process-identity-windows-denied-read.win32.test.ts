@@ -9,6 +9,10 @@ import {
   matchLiveProcessStartIdentity,
   readProcessStartIdentity,
 } from "../process-identity";
+import {
+  PRECONDITION_SAMPLE_ATTEMPTS,
+  samplePrecondition,
+} from "../../test-fixtures/precondition-sample";
 
 // The real thing, on a real Windows machine. Section A and the seam-based
 // sibling prove the mechanism against a scripted `tasklist` / `powershell`;
@@ -178,13 +182,32 @@ function spawnDeniedReadChild(): DeniedReadResult {
 // DenyQuery failed, 3 = StartTime still readable (the DACL did not bind),
 // 4 = the read failed with a code other than 5, 5 = WMI has no
 // CreationDate, null = the script could not run.
-function requireDeniedReadCandidate(): DeniedReadCandidate {
-  const owned = spawnDeniedReadChild();
-  if (owned.kind === "candidate") return owned.candidate;
-  const scanned = findDeniedReadCandidate();
-  if (scanned !== null) return scanned;
-  throw new Error(
-    `neither the DACL-deny child (exit=${String(owned.exitCode)}) nor the session-0 scan produced a candidate, with SeDebugPrivilege not held`,
+/**
+ * PRECONDITION: establishes a real process this test can prove a denied
+ * read against - the owned DACL-deny child first, then a scan of
+ * already-running processes. Not itself the subject of an assertion; the
+ * assertions below are about the production reader's behaviour against
+ * whichever candidate this resolves to. Only a deny script that could not
+ * run at all (a timeout or signal, `exitCode` null) is retried; a deny that
+ * ran and refused is a fact about this machine, reported unretried with its
+ * exit code.
+ */
+async function requireDeniedReadCandidate(): Promise<DeniedReadCandidate> {
+  return samplePrecondition(
+    "denied-read candidate (owned DACL-deny child or session-0 scan)",
+    PRECONDITION_SAMPLE_ATTEMPTS,
+    async () => {
+      const owned = spawnDeniedReadChild();
+      if (owned.kind === "candidate") return owned.candidate;
+      const scanned = findDeniedReadCandidate();
+      if (scanned !== null) return scanned;
+      if (owned.exitCode !== null) {
+        throw new Error(
+          `neither the DACL-deny child (exit=${String(owned.exitCode)}) nor the session-0 scan produced a candidate, with SeDebugPrivilege not held`,
+        );
+      }
+      return null;
+    },
   );
 }
 
@@ -214,12 +237,12 @@ function tokenFromUtcMicros(utcMicros: number, seventhDigit: string): string {
 describe.skipIf(process.platform !== "win32")(
   "matchLiveProcessStartIdentity: a real denied read on this Windows machine",
   () => {
-    it("resolves a real inaccessible process through WMI, and the exact reader stays primary-only", (ctx) => {
+    it("resolves a real inaccessible process through WMI, and the exact reader stays primary-only", async (ctx) => {
       const held = seDebugHeld();
       if (held && process.env.CI) throw new Error(SEDEBUG_HELD_REASON);
       ctx.skip(held, SEDEBUG_HELD_REASON);
       if (held) return;
-      const candidate = requireDeniedReadCandidate();
+      const candidate = await requireDeniedReadCandidate();
 
       const recordedToken = tokenFromUtcMicros(candidate.creationMicros, "5");
       expect(matchLiveProcessStartIdentity(candidate.pid, recordedToken)).toBe(
