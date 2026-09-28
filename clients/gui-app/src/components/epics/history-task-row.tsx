@@ -55,9 +55,9 @@ import {
 } from "@/stores/auth/auth-store";
 
 const ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE = "data-history-row-target-own-tooltip";
-// The widest label `formatUpdatedLabel` produces for any task younger than
-// two years, measured in the UI font.
-const WIDEST_UPDATED_LABEL = "updated about 23 hours ago";
+// The activity prefix plus the widest `formatUpdatedLabel` result for any
+// task younger than two years, measured in the UI font.
+const WIDEST_ACTIVITY_LABEL = "activity about 23 hours ago";
 
 export interface HistoryTaskRowProps {
   readonly item: HistoryItem;
@@ -257,7 +257,7 @@ function HistoryRowTrailingMetadata(props: {
         aria-hidden
         className="invisible col-start-1 row-start-1 whitespace-nowrap max-md:hidden"
       >
-        {WIDEST_UPDATED_LABEL}
+        {WIDEST_ACTIVITY_LABEL}
       </span>
       <span
         className={cn(

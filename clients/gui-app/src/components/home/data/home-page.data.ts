@@ -202,7 +202,7 @@ const UNDER_A_MINUTE_LABELS = new Set([
   "in less than a minute",
 ]);
 
-function formatUpdatedLabel(updatedAtMs: number): string {
+export function formatUpdatedLabel(updatedAtMs: number): string {
   const label = formatDistanceToNow(updatedAtMs, { addSuffix: true });
   return UNDER_A_MINUTE_LABELS.has(label) ? "just now" : label;
 }
@@ -255,7 +255,7 @@ function buildHistoryItem(args: {
     updatedLabel: formatUpdatedLabel(light.updatedAt),
     updatedBucket: toHistoryRecencyBucket(light.updatedAt, nowMs),
     recentAtMs: recentAt,
-    recentLabel: formatDistanceToNow(recentAt, { addSuffix: true }),
+    recentLabel: formatUpdatedLabel(recentAt),
     recentBucket: toHistoryRecencyBucket(recentAt, nowMs),
     linkedRepos: readTaskRepos(task),
     linkedWorkspaces: readTaskWorkspaces(task),

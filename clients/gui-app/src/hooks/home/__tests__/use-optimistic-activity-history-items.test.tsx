@@ -338,6 +338,53 @@ describe("optimistic activity history projection", () => {
     expect(refetch).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a new generation after the third in-flight request settles elsewhere", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(25_000);
+    const userId = `third-in-flight-${crypto.randomUUID()}`;
+    let requests = 0;
+    let resolveThird: (() => void) | undefined;
+    const refetch = vi.fn(() => {
+      requests += 1;
+      return requests === 3
+        ? new Promise<void>((resolve) => {
+            resolveThird = resolve;
+          })
+        : Promise.resolve();
+    });
+    renderHook(() =>
+      useOptimisticActivityHistoryItems({
+        items: [],
+        userId,
+        hostId: "host-third-in-flight",
+        enabled: false,
+        refreshEnabled: true,
+        refreshScope: "filtered-recent",
+        refetch,
+      }),
+    );
+
+    act(() => observeOwnHistoryRecordChange(userId, "changed-epic", 25_000));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750 + 2_000 + 5_000);
+    });
+    expect(refetch).toHaveBeenCalledTimes(3);
+    if (resolveThird === undefined)
+      throw new Error("third refetch did not start");
+
+    const newerAt = Date.now();
+    act(() => observeOwnHistoryRecordChange(userId, "changed-epic", newerAt));
+    act(() =>
+      settleHistoryActivity(userId, [historyItem("changed-epic", 1, newerAt)]),
+    );
+    await act(async () => {
+      resolveThird?.();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(refetch).toHaveBeenCalledTimes(4);
+  });
+
   it("keeps ownerless removal refreshes retrying until the bounded TTL", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(50_000);
@@ -419,6 +466,32 @@ describe("optimistic activity history projection", () => {
     expect(result.current[0]?.recentAtMs).toBe(1);
   });
 
+  it("does not renew an expired stamp while the same turn stays active", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(100);
+    const userId = `active-ttl-${crypto.randomUUID()}`;
+    hookState.workingEpicIds = new Set(["active-ttl-epic"]);
+    const { result } = renderHook(() =>
+      useOptimisticActivityHistoryItems({
+        items: [historyItem("active-ttl-epic", 1, undefined)],
+        userId,
+        hostId: "host-active-ttl",
+        enabled: true,
+        refetch: () => Promise.resolve(),
+      }),
+    );
+    expect(result.current[0]?.recentAtMs).toBe(100);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600_001);
+    });
+
+    expect(result.current[0]?.recentAtMs).toBe(1);
+    expect(
+      observeActiveHistoryEdges(userId, hookState.workingEpicIds, Date.now()),
+    ).toBe(false);
+  });
+
   it("refreshes when an own record delta arrives for an idle task", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(40_000);
@@ -437,6 +510,7 @@ describe("optimistic activity history projection", () => {
     act(() => observeOwnHistoryRecordChange(userId, "idle-epic", 40_000));
 
     expect(result.current[0]?.recentAtMs).toBe(40_000);
+    expect(result.current[0]?.recentLabel).toBe("just now");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(750);
     });

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { formatDistanceToNow } from "date-fns";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import {
   buildHistoryItemsFromTasks,
+  formatUpdatedLabel,
   sortHistoryItems,
   toHistoryRecencyBucket,
 } from "@/components/home/data/home-page.data";
@@ -75,7 +75,6 @@ function removeExpiredStamps(at: number): boolean {
   for (const [key, stamp] of stamps) {
     if (stamp.expiresAt > at) continue;
     stamps.delete(key);
-    activeSeen.delete(key);
     removed = true;
   }
   return removed;
@@ -184,7 +183,7 @@ export function projectOptimisticHistoryItems(
     return {
       ...item,
       recentAtMs,
-      recentLabel: formatDistanceToNow(recentAtMs, { addSuffix: true }),
+      recentLabel: formatUpdatedLabel(recentAtMs),
       recentBucket: toHistoryRecencyBucket(recentAtMs, nowMs),
     };
   });
@@ -223,16 +222,16 @@ function scheduleActivityRefresh(state: RefreshState, delay: number): void {
         const pending = hasUnsettledStamps(state.userId, now);
         // An ownerless removal has no durable watermark on the frozen stream
         // wire. Reconcile through its bounded window, including cloud retry.
+        if (state.newEdgeInFlight) {
+          state.newEdgeInFlight = false;
+          state.attempts = 1;
+        }
         if (
           now >= state.deadline ||
           (!pending && now >= state.ownerlessUntil && state.attempts >= 3)
         ) {
           refreshes.delete(state.scope);
           return;
-        }
-        if (state.newEdgeInFlight) {
-          state.newEdgeInFlight = false;
-          state.attempts = 1;
         }
         const retryIndex = Math.min(
           state.attempts - 1,

@@ -2551,10 +2551,10 @@ describe("<EpicsListPanel />", () => {
     ).not.toBeNull();
   });
 
-  it("keeps the updated timestamp visible when a task has no PR pills", async () => {
+  it("keeps the activity timestamp visible when a task has no PR pills", async () => {
     renderPanel("page", "/");
 
-    const updated = await screen.findByText("updated about 2 hours ago");
+    const updated = await screen.findByText("activity about 2 hours ago");
     expect(updated.className).not.toContain("group-hover/list-row:opacity-0");
     expect(updated.className).not.toContain(
       "group-focus-within/list-row:opacity-0",
@@ -2892,12 +2892,12 @@ describe("<EpicsListPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Select all" }));
 
     const checkboxes = screen.getAllByTestId("epics-list-row-select");
-    expect(checkboxes[0].getAttribute("aria-checked")).toBe("true");
-    expect(checkboxes[1].getAttribute("aria-checked")).toBe("false");
-    expect(checkboxes[1].getAttribute("aria-disabled")).toBe("true");
+    expect(checkboxes[0].getAttribute("aria-checked")).toBe("false");
+    expect(checkboxes[0].getAttribute("aria-disabled")).toBe("true");
+    expect(checkboxes[1].getAttribute("aria-checked")).toBe("true");
     expect(
       screen
-        .getAllByTestId("epics-list-row-card")[1]
+        .getAllByTestId("epics-list-row-card")[0]
         .getAttribute("data-selection-disabled"),
     ).toBe("true");
 
@@ -2959,7 +2959,7 @@ describe("<EpicsListPanel />", () => {
     }
     const [variables] = deleteCall;
     expect(variables).toEqual({
-      ids: ["epic-from-history", "epic-two"],
+      ids: ["epic-two", "epic-from-history"],
       worktreeCleanup: null,
     });
     // Deletion runs in the background off the mutation cache, like a Sweep:
@@ -3416,10 +3416,12 @@ describe("<EpicsListPanel />", () => {
     const input = await screen.findByRole("searchbox", {
       name: "Search tasks and messages",
     });
-    const first = screen.getByRole("link", {
+    // Equal activity keys use the same descending task-id tie-break as the
+    // paged Recent query. Walk the order the user actually sees.
+    const first = screen.getByRole("link", { name: "Open task Second match" });
+    const second = screen.getByRole("link", {
       name: "Open task Open from landing",
     });
-    const second = screen.getByRole("link", { name: "Open task Second match" });
     input.focus();
 
     fireEvent.keyDown(input, { key: "ArrowDown" });
