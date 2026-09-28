@@ -3,11 +3,17 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  Features,
+  transform,
+  type Selector,
+  type SelectorComponent,
+} from "lightningcss";
 import { describe, expect, it } from "vitest";
 
 /**
  * Selectors that make a style recalculation reach far past the element that
- * changed, kept out by reading the source text (jsdom cannot measure style
+ * changed, kept out by reading the source (jsdom cannot measure style
  * invalidation):
  *
  * - an unqualified `:has()`, or one on html / body / :root / .wco / the app
@@ -20,10 +26,11 @@ import { describe, expect, it } from "vitest";
  *   frame, the shell and the root route components. `group-has-*` on a tab or
  *   row host is a local group and stays allowed everywhere else.
  *
- * Limits, by design (no CSS parser here): the CSS check reads the plain
- * compound directly before each `:has(`. A nested `&:has(` and a subject
- * wrapped in `:is()` / `:where()` are not resolved, so a new one of those on
- * a document or app-column scope needs a human look.
+ * The CSS check reads selectors through lightningcss, so nesting, `:is()` /
+ * `:where()` / `:not()` wrappers and escaped identifiers are resolved for
+ * us. Reported lines are those of the normalized (nesting-flattened) source,
+ * not of the file. Not covered: `@custom-variant` preludes and selectors that
+ * are only ever built inside a Tailwind class string outside the TSX owners.
  */
 
 const SRC_DIR = path.resolve(
@@ -31,8 +38,6 @@ const SRC_DIR = path.resolve(
   "..",
 );
 
-const BROAD_SUBJECT =
-  /^(?:html|body|:root|\.wco)(?![\w-])|^\[data-layout-column\]/;
 /** Files whose classes style the whole window; a `has` variant here is app-scope. */
 const APP_SCOPE_TSX = [
   "components/layout/app-column-frame.tsx",
@@ -55,52 +60,203 @@ function sourceFiles(dir: string, extensions: ReadonlyArray<string>): string[] {
   });
 }
 
-/** `line: compound` for every `:has()` that is unqualified or on a broad subject. */
-function broadHasSelectors(css: string): string[] {
-  // Blank comments in place so reported line numbers stay true.
-  const flat = css.replace(/\/\*[\s\S]*?\*\//g, (comment) =>
-    comment.replace(/[^\n]/g, " "),
+interface Scope {
+  readonly broad: boolean;
+  readonly qualified: boolean;
+}
+
+/** The document or app-column scopes: html, body, :root, .wco, the column. */
+function isBroad(component: SelectorComponent): boolean {
+  switch (component.type) {
+    case "type":
+      return ["html", "body"].includes(component.name.toLowerCase());
+    case "class":
+      return component.name === "wco";
+    case "attribute":
+      return component.name === "data-layout-column";
+    case "pseudo-class":
+      return component.kind === "root";
+    default:
+      return false;
+  }
+}
+
+/** A simple selector that narrows the subject to something local. */
+function isQualifier(component: SelectorComponent): boolean {
+  return (
+    component.type === "class" ||
+    component.type === "id" ||
+    component.type === "attribute" ||
+    component.type === "type" ||
+    (component.type === "pseudo-class" && component.kind === "scope")
   );
-  const found: string[] = [];
-  for (const match of flat.matchAll(/:has\(/g)) {
-    const before = flat.slice(0, match.index);
-    // A bracketed attribute value may hold spaces (`[data-label="wide column"]`),
-    // so a whole `[...]` counts as one piece of the compound.
-    const compound = /(?:\[[^\]]*\]|[^\s>+~,{}])*$/.exec(before)?.[0] ?? "";
-    if (compound === "" || BROAD_SUBJECT.test(compound)) {
-      found.push(`${before.split("\n").length}: ${compound}:has(`);
+}
+
+function subjectOf(selector: Selector): SelectorComponent[] {
+  return selector.slice(
+    selector.findLastIndex((part) => part.type === "combinator") + 1,
+  );
+}
+
+/** What one compound selects: broad if any alternative can be, qualified only if all are. */
+function scopeOf(compound: SelectorComponent[]): Scope {
+  let broad = false;
+  let qualified = false;
+  for (const part of compound) {
+    if (isBroad(part)) {
+      broad = true;
+    } else if (
+      part.type === "pseudo-class" &&
+      (part.kind === "is" || part.kind === "where")
+    ) {
+      const alternatives = part.selectors.map((alt) => scopeOf(subjectOf(alt)));
+      broad ||= alternatives.some((alt) => alt.broad);
+      qualified ||= alternatives.every((alt) => alt.qualified);
+    } else if (isQualifier(part)) {
+      qualified = true;
     }
   }
+  return { broad, qualified };
+}
+
+/**
+ * Every `:has()` in `selector` whose compound is broad or unqualified. A
+ * qualified compound to its left bounds it (`[a] > :not(:has(...))`), and
+ * `:is` / `:where` / `:not` alternatives inherit the compound around them
+ * (`body:not(:has(...))` is broad, `.card:not(:has(...))` is local). The
+ * `:has()` argument is never read as a subject.
+ */
+function broadHasIn(selector: Selector, carried: Scope): string[] {
+  const found: string[] = [];
+  let ancestorQualified = carried.qualified;
+  let compound: SelectorComponent[] = [];
+  const flush = (): void => {
+    const own = scopeOf(compound);
+    const scope: Scope = {
+      broad: carried.broad || own.broad,
+      qualified: ancestorQualified || own.qualified,
+    };
+    for (const part of compound) {
+      if (part.type !== "pseudo-class") continue;
+      if (part.kind === "has") {
+        if (scope.broad || !scope.qualified) {
+          found.push(
+            `${scope.broad ? "broad" : "unqualified"} :has() in ${JSON.stringify(selector)}`,
+          );
+        }
+      } else if (
+        part.kind === "is" ||
+        part.kind === "where" ||
+        part.kind === "not"
+      ) {
+        for (const alt of part.selectors) found.push(...broadHasIn(alt, scope));
+      }
+    }
+    ancestorQualified = scope.qualified;
+    compound = [];
+  };
+  for (const part of selector) {
+    if (part.type === "combinator") flush();
+    else compound.push(part);
+  }
+  flush();
+  return found;
+}
+
+const AT_RULES = {
+  utility: { prelude: "<custom-ident>", body: "style-block" },
+  variant: { prelude: "<custom-ident>", body: "style-block" },
+} as const;
+
+/** `line: message` for every `:has()` that is unqualified or on a broad subject. */
+function broadHasSelectors(css: string): string[] {
+  // Flatten nesting first: the visitor then sees each rule's full selector.
+  const flat = transform({
+    filename: "scope.css",
+    code: Buffer.from(css),
+    include: Features.Nesting,
+    customAtRules: AT_RULES,
+  }).code;
+  const found: string[] = [];
+  transform({
+    filename: "scope.css",
+    code: flat,
+    customAtRules: AT_RULES,
+    visitor: {
+      Rule: {
+        style(rule) {
+          for (const selector of rule.value.selectors) {
+            for (const offence of broadHasIn(selector, {
+              broad: false,
+              qualified: false,
+            })) {
+              found.push(`${rule.value.loc.line + 1}: ${offence}`);
+            }
+          }
+          return undefined;
+        },
+      },
+    },
+  });
   return found;
 }
 
 describe("broad :has() selectors", () => {
-  it("flags an unqualified :has() and a :has() on a document or app-column subject", () => {
-    expect(
-      broadHasSelectors(":has([data-a]) > [data-b] { x: y }"),
-    ).toHaveLength(1);
-    expect(broadHasSelectors(":root:has([data-a]) { x: y }")).toHaveLength(1);
-    expect(
-      broadHasSelectors(".wco:has([data-a]) [data-layout-column] { x: y }"),
-    ).toHaveLength(1);
-    expect(
-      broadHasSelectors("[data-layout-column]:has([data-a]) { x: y }"),
-    ).toHaveLength(1);
-    expect(
-      broadHasSelectors('body[data-label="wide column"]:has(.child) { x: y }'),
-    ).toHaveLength(1);
+  it.each([
+    ":has([data-a]) > [data-b]",
+    ":root:has([data-a])",
+    ".wco:has([data-a]) [data-layout-column]",
+    "[data-layout-column]:has([data-a])",
+    'body[data-label="wide column"]:has(.child)',
+    // A `]` inside the quoted value, in each quote style and escaped.
+    'body[data-label="wide] column"]:has(.child)',
+    "body[data-label='wide] column']:has(.child)",
+    'body[data-label="a\\"] b"]:has(.child)',
+    // An escaped identifier is still body.
+    "\\62 ody:has(.child)",
+    "html :has(.child)",
+    ".wco :has(.child)",
+    // Wrapped subjects carry the compound around them.
+    "body:not(:has(.child))",
+    ":root:is(:has(.child))",
+    ":is(html, body):has(.child)",
+    ":where(.card, body):has(.child)",
+    ".card:is(html):has(.child)",
+    // Nested spellings.
+    "body { &:has(.child) { x: y } }",
+    "body { .card &:has(.child) { x: y } }",
+    ".wco { & > [data-layout-column]:has(.child) { x: y } }",
+  ])("flags %s", (selector) => {
+    const css = selector.includes("{") ? selector : `${selector} { x: y }`;
+    expect(broadHasSelectors(css)).toHaveLength(1);
   });
 
-  it("allows a :has() on a local component root, a :not(:has()) filter, and a commented mention", () => {
+  it.each([
+    ".group\\/tab:has(:focus-visible) .title",
+    "#root:has(> [data-boot-ground])",
+    "[data-a] > :not(:has([data-b]))",
+    '.card[data-label="wide column"]:has(.child)',
+    '.card[data-label="wide] column"]:has(.child)',
+    ".card:not(:has(.child))",
+    ".card:is(.a, .b):has(.child)",
+    ":is(.a, .b):has(.child)",
+    ".card:where(:has(.child))",
+    "body .card:has(.child)",
+    ".card { &:has(.child) { x: y } }",
+    ".card { .row:has(.child) & { x: y } }",
+    "/* :root:has([data-a]) */ .card { x: y }",
+  ])("allows %s", (selector) => {
+    const css = selector.includes("{") ? selector : `${selector} { x: y }`;
+    expect(broadHasSelectors(css)).toEqual([]);
+  });
+
+  it("reads Tailwind utility bodies, where the subject is the element itself", () => {
+    expect(broadHasSelectors("@utility a { &:has(.child) { x: y } }")).toEqual(
+      [],
+    );
     expect(
-      broadHasSelectors(
-        ".group\\/tab:has(:focus-visible) .title { x: y }\n" +
-          "#root:has(> [data-boot-ground]) { x: y }\n" +
-          "[data-a] > :not(:has([data-b])) { x: y }\n" +
-          '.card[data-label="wide column"]:has(.child) { x: y }\n' +
-          "/* :root:has([data-a]) */",
-      ),
-    ).toEqual([]);
+      broadHasSelectors("@utility a { body:has(.child) { x: y } }"),
+    ).toHaveLength(1);
   });
 
   it("appears in no stylesheet under src", () => {
