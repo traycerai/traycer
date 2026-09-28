@@ -243,7 +243,7 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   reasonix:
     "Reasonix - a coding CLI you point at your own model provider; keys live in Reasonix's own store, set up from its terminal wizard.",
   antigravity:
-    "Antigravity - Google's agent server via your Google account; Traycer can sign the terminal account in, but never signs it out or writes to its home.",
+    "Antigravity - Google's agent server via your Google account; Traycer can sign the terminal account in or switch its Google account, but never signs it out.",
 };
 
 function hasPendingProviderProbe(
