@@ -133,6 +133,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/shell": "Settings - Shell",
   "/settings/usage": "Settings - Usage",
   "/settings/worktrees": "Settings - Worktrees",
+  "/when-you-quit": "When you quit Traycer",
 };
 
 // Widened for runtime lookup: `ROUTE_TEMPLATE_LABELS` above is exhaustive

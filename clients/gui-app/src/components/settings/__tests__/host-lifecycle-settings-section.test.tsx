@@ -240,6 +240,17 @@ function makeQueryClient(): QueryClient {
 }
 
 function renderSection(runnerHost: IRunnerHost | null): void {
+  // The card's home is Settings > General, so it renders admitted; the
+  // signed-out gate has its own file (host-lifecycle-none-plan-gate-signed-out).
+  useAuthStore.getState().setSignedIn(
+    {
+      userId: "user-1",
+      userName: "Test User",
+      email: "user@example.invalid",
+    },
+    { userId: "user-1", username: "Test User" },
+    [],
+  );
   const tree: ReactNode =
     runnerHost === null ? (
       <HostLifecycleSettingsSection />
@@ -315,6 +326,7 @@ afterEach(() => {
   localHostQuitStatusMock.current = null;
   setMobileApp(false);
   useAuthStore.getState().setSubscriptionStatus(null);
+  useAuthStore.getState().setSignedOut();
   vi.mocked(toast.info).mockClear();
   vi.restoreAllMocks();
 });

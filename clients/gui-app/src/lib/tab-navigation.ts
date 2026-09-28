@@ -868,6 +868,16 @@ export class TabNavigationController {
     this.locationReader = reader;
   }
 
+  /**
+   * Whether this window's tabs have ever hydrated. Only
+   * `TabNavigationRouteBridge` sets it, and that bridge mounts only in an
+   * admitted shell, so `false` means this window has not been admitted since
+   * it loaded. It never goes back to `false` outside tests.
+   */
+  hasHydrated(): boolean {
+    return this.hydrationReady;
+  }
+
   setNavigator(navigate: NavigateFn | null): void {
     this.navigator = navigate;
   }
@@ -1549,6 +1559,10 @@ export class TabNavigationController {
       this.resolveDraftEntry(location, navigate);
       return;
     }
+    // The signed-out quit surface answers for itself: admitted, it hands off
+    // to Settings ▸ General through `activate`. A landing correction here
+    // would race that hand-off and mint a draft on the way.
+    if (location.pathname === "/when-you-quit") return;
     const routed = routedTabTarget(location.pathname);
     if (routed === null) {
       if (isLandingPath(location.pathname)) {

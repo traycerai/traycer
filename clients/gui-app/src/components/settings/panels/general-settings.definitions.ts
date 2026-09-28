@@ -101,7 +101,8 @@ export const GENERAL = defineSettingsSection("general", {
     ],
   },
   // Machine-local, so it lives here rather than under a host scope: it has to
-  // work signed out, before any host is installed, and with no local host.
+  // work before any host is installed and with no local host. Signed out this
+  // page is not reachable; the card renders on its own at `/when-you-quit`.
   hostLifecycle: {
     kind: "group",
     search: { anchor: "general-host-lifecycle" },

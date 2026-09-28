@@ -77,6 +77,7 @@ function renderProvider(runnerHost: MockRunnerHost): void {
               <HostRuntimeBootFallback
                 onConfigureShell={() => undefined}
                 onOpenSettings={() => undefined}
+                onMenuOpenSettings={() => undefined}
               />
             </div>
           }

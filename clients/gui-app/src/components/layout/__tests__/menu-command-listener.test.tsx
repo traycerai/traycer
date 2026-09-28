@@ -51,6 +51,7 @@ import type { DesktopMenuCommandPayload } from "@/lib/windows/types";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface CapturedNavigate {
   readonly to: string;
@@ -192,6 +193,7 @@ function openEpicFixture(tab: EpicTab): string {
 }
 
 function resetStores(): void {
+  useAuthStore.getState().setSignedOut();
   __resetTabNavigationControllerForTesting();
   setEpicCanvasDesktopProjectionBridge(null);
   setLandingDraftDesktopProjectionBridge(null);
@@ -339,6 +341,15 @@ describe("<MenuCommandListener />", () => {
   });
 
   it("dispatches native menu commands to renderer-owned actions", () => {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "user-1",
+        userName: "User One",
+        email: "user@example.com",
+      },
+      { userId: "user-1", username: "User One" },
+      [],
+    );
     const menu = createMenu();
     const runnerHost = createRunnerHost(menu);
 

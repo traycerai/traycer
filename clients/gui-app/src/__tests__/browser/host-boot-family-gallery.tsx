@@ -351,6 +351,7 @@ function Face(): ReactElement {
         <HostRuntimeBootFallback
           onConfigureShell={noop}
           onOpenSettings={noop}
+          onMenuOpenSettings={noop}
         />
       );
     case "attach":

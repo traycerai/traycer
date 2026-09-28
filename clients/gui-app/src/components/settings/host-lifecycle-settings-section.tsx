@@ -36,6 +36,7 @@ import {
   type HostLifecycleOptionCopy,
 } from "@/lib/host/host-lifecycle-copy";
 import { isForegroundHostRun } from "@/lib/host/host-foreground-run";
+import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
@@ -43,8 +44,11 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  * machine's host when the app quits.
  *
  * A machine-local desktop preference read and written through desktop main
- * (`runnerHost.hostLifecycle`), never a host RPC, so it renders signed out,
- * before any host exists, and in a launch with no local host at all.
+ * (`runnerHost.hostLifecycle`), never a host RPC, so it needs no host: it
+ * works before any host exists and in a launch with no local host at all.
+ * Signed in it sits in Settings → General. Signed out the settings shell is
+ * not reachable, so this card renders on its own at `/when-you-quit`, which
+ * is where the desktop's "Settings…" (menu, tray, jump list) goes then.
  */
 export function HostLifecycleSettingsSection(): ReactNode {
   const availability = useSettingsAvailabilityContext();
@@ -69,11 +73,14 @@ function HostLifecycleCard(): ReactNode {
   const viewQuery = useRunnerHostLifecycleQuery();
   const setMode = useRunnerHostLifecycleSetMutation();
   const subscriptionStatus = useAuthStore((state) => state.subscriptionStatus);
+  const admitted = useShellLocalPlaneAdmission().admitted;
   // Remote hosts are a paid feature, so on a plan without them "no host here"
-  // leaves nothing usable. `null` is an unknown plan (signed out, not yet
-  // read), which does not block.
+  // leaves nothing usable. Signed out there is no plan to offer them either,
+  // so `none` is held there too, with the same reason. Admitted, `null` is a
+  // plan not yet read, which does not block. A `none` already chosen stays
+  // selectable either way (`desired` below).
   const noneBlockedByPlan =
-    subscriptionStatus !== null && !isPaid(subscriptionStatus);
+    !admitted || (subscriptionStatus !== null && !isPaid(subscriptionStatus));
   const [confirmNone, setConfirmNone] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
   const view = viewQuery.data;
