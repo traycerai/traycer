@@ -16,6 +16,7 @@ vi.mock("electron-log", () => ({
   },
 }));
 
+import log from "electron-log";
 import {
   startHostHealthMonitor,
   type HostHealthMonitor,
@@ -693,6 +694,36 @@ describe("startHostHealthMonitor", () => {
 
     await ticks(3);
     expect(reload).toHaveBeenCalled();
+    monitor.dispose();
+  });
+
+  it("surfaces a host the watcher missed, without respawning, when the backstop reload finds one", async () => {
+    // The mirror of the test above: this time the backstop reload actually
+    // FINDS a published host - the one the lossy pid.json watcher never
+    // reported an edge for. This branch only lets the reload's own `change`
+    // event carry convergence; it must not itself decide to respawn, and the
+    // debug line it logs is a lost-edge counter, not an incident.
+    const reload = vi.fn(async () => SNAPSHOT);
+    const respawn = vi.fn(async () => {});
+    const monitor = startMonitor({
+      host: fakeHost({
+        getSnapshot: () => null,
+        reloadSnapshotFromDisk: reload,
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => null),
+      respawn,
+    });
+
+    await ticks(1);
+
+    expect(reload).toHaveBeenCalled();
+    expect(respawn).not.toHaveBeenCalled();
+    expect(vi.mocked(log.debug)).toHaveBeenCalledWith(
+      "[host-health] null-snapshot backstop surfaced a host the pid.json watcher missed",
+      { pid: SNAPSHOT.pid },
+    );
     monitor.dispose();
   });
 

@@ -61,8 +61,11 @@ import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
  *    over; resurrecting the host would fight the user.
  *
  * While the snapshot is null (host known-down, respawn/provision flows in
- * progress) the monitor idles - recovery ownership stays with those flows
- * and the lifecycle's own reachability retry ladder.
+ * progress) the monitor restarts nothing - recovery ownership stays with those
+ * flows and the lifecycle's own reachability retry ladder. It still re-reads
+ * pid.json every tick, because the pid-file watcher is a lossy edge source
+ * (see `HostLifecycle.installWatcher`) and a missed edge on a null snapshot has
+ * no other way back.
  *
  * ### Unreachable is not dead
  *
@@ -370,7 +373,15 @@ export function startHostHealthMonitor(
           // recovery OWNERSHIP still belongs to the flows this branch defers
           // to. Bounded at the tick cadence and cheap when there is no host
           // (one ENOENT read).
-          await deps.host.reloadSnapshotFromDisk();
+          const surfaced = await deps.host.reloadSnapshotFromDisk();
+          if (surfaced !== null) {
+            // A host the watcher never reported. Debug-only: this counts lost
+            // edges in field logs, it is not an incident.
+            log.debug(
+              "[host-health] null-snapshot backstop surfaced a host the pid.json watcher missed",
+              { pid: surfaced.pid },
+            );
+          }
           return;
         }
         // Throttled only after an `alive` denial (see
