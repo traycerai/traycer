@@ -817,6 +817,15 @@ function createXtermEntry(
   // `onContextLoss` recovery. Its throughput is a hair below WebGL only for
   // pathological full-screen scroll storms, which is not the TUI workload here.
   //
+  // The addon is patched (`patches/@xterm%2Faddon-canvas@*.patch`): its cursor
+  // layer paints from its own blink timer and cursor-move animation frame,
+  // bypassing the one place xterm gates painting on DEC 2026 synchronized
+  // output. A TUI that draws with the cursor shown (Codex's composer sparkle)
+  // then got a ghost cursor at whatever cell the frame had last painted, at a
+  // new column every blink. The patch skips those paints while the bracket is
+  // open; `xterm-canvas-cursor-synchronized-output-patch.test.ts` certifies
+  // the installed file still carries it.
+  //
   // The addon is NOT created here: its four full-size backing surfaces are the
   // GPU cost a kept-alive engine used to pay while off screen. The renderer
   // controller creates it on the first `present()` and drops it once the engine
