@@ -3417,6 +3417,80 @@ export type ProvidersStartLoginResponseV12 = z.infer<
 >;
 
 /**
+ * Why `started` is false when the sign-in has NOT failed: the host is still
+ * getting there, and asking again is the right move. Null on success and on
+ * every outcome that is final for this attempt.
+ *
+ * Deliberately not more members of `failure`. That field's contract is a
+ * reason the attempt is over, and a caller that renders it as an error is
+ * reading it correctly; these two are the opposite claim.
+ *
+ * `pack_preparing`: the provider's managed pack is queued or downloading, so
+ * there is no binary to spawn yet. Asking is what put it at the front of the
+ * queue; asking again reports how far it has got (`pack.percent`) and starts
+ * the sign-in once it has landed.
+ *
+ * `starting`: the login child is running and has not produced its sign-in URL
+ * within this call's wait. The host keeps the child alive, and a further
+ * `providers.startLogin` for the same target attaches to it rather than
+ * spawning another. Antigravity's server takes 36 to 42 s to answer
+ * `initialize` on Windows, which no single call inside the transport's
+ * response budget can wait out.
+ */
+export const providerLoginPendingSchema = lazySchema(() =>
+  z.enum(["pack_preparing", "starting"]),
+);
+export type ProviderLoginPending = z.infer<typeof providerLoginPendingSchema>;
+
+/**
+ * The provider's managed pack, as the sign-in found it, when the pack is the
+ * reason there was nothing to spawn. Null whenever a binary was resolved.
+ *
+ * `reason` decides which of two opposite things this says. Null: a transfer
+ * is queued or running, `percent` is how far it has got (null when the host
+ * cannot know - queued behind another pack, or fetched by a sibling host),
+ * and the response carries `pending: "pack_preparing"`. Non-null: the install
+ * FAILED, this attempt is over, and the value is the same reason the
+ * provider's `managedInstallState` reports on `providers.list` - repeated here
+ * because the caller is rendering the outcome of THIS call and its copy of
+ * the list may be a quarter of an hour old. `retryAtMs` is when the host
+ * tries again by itself; `providers.ensurePack` is how a user does it now.
+ *
+ * Every field degrades rather than throws. A reason this build has never
+ * heard of is still a failed install, so it reads as `unknown`, not as a
+ * download in progress.
+ */
+export const providerLoginPackSchema = lazySchema(() =>
+  z.object({
+    percent: z.number().min(0).max(100).nullable().catch(null),
+    reason: providerManagedInstallErrorReasonSchema.nullable().catch("unknown"),
+    retryAtMs: z.number().int().nonnegative().nullable().catch(null),
+  }),
+);
+export type ProviderLoginPack = z.infer<typeof providerLoginPackSchema>;
+
+/**
+ * `providers.startLogin@1.3` response - adds `pending` and `pack`. Request is
+ * unchanged from v1.1. Both are new KEYS, so a v1.2 caller loses them to its
+ * own schema's strip: it sees `started: false` with no failure, exactly what
+ * it saw before this minor, while the child it would have been told about
+ * stays alive for its next call to attach to.
+ *
+ * `.catch(null)` on both, which also covers a body that omits them. A value
+ * a later host adds to `pending` reads as null here - "not started", with no
+ * promise that asking again helps - rather than failing the whole response.
+ */
+export const providersStartLoginResponseSchemaV13 = lazySchema(() =>
+  providersStartLoginResponseSchemaV12.extend({
+    pending: providerLoginPendingSchema.nullable().catch(null),
+    pack: providerLoginPackSchema.nullable().catch(null),
+  }),
+);
+export type ProvidersStartLoginResponseV13 = z.infer<
+  typeof providersStartLoginResponseSchemaV13
+>;
+
+/**
  * `providers.awaitLogin@2.1` request. Blocks until an in-flight
  * `providers.startLogin` child finishes (the browser loopback completes or the
  * CLI exits), then returns the freshly re-probed state - the honest "did the

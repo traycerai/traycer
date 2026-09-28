@@ -1100,8 +1100,13 @@ function ProviderDetail({
   const anyProfileEnablementPending = state.profiles.some((profile) =>
     profileEnablementPending(profileCommitId(profile)),
   );
-  // Whether the detail pane below the header is inert - the Account and
-  // Profiles controls included.
+  // Whether the detail pane below the header is inert - the Account controls
+  // included. The Profiles tab is the one exception (`tab !== "usage"` below)
+  // and holds its own controls instead (`ProviderProfileScopedSection`),
+  // because one of them has to stay live while the provider is off: the host
+  // refuses to turn a provider on while none of its profiles is on, so with
+  // every profile off, turning one on is the step this pane's own switch is
+  // waiting for. An inert tab would leave that provider off for good.
   //
   // Keyed on the effective `enabled` flag, which is now the only thing it could
   // be keyed on. Not because `false` has a single cause - boot seeding leaves

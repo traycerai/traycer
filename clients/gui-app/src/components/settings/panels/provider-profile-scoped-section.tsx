@@ -21,7 +21,11 @@ import {
   ProfileDropdown,
   type ProfileDropdownShortcutHint,
 } from "@/components/providers/profile-dropdown";
-import { providerSignInUnavailableReason } from "@/components/providers/provider-signin-availability";
+import {
+  providerHostBlockLabel,
+  providerSignInUnavailableReason,
+} from "@/components/providers/provider-signin-availability";
+import { cn } from "@/lib/utils";
 import {
   EmbeddedProviderRateLimitForProvider,
   ProviderProfilesRefreshButton,
@@ -84,10 +88,58 @@ interface ProviderProfileScopedSectionProps {
   ) => void;
 }
 
+/**
+ * What holds this section's controls, read once for all of them.
+ *
+ * `signInUnavailableHint` is why a sign-in (Add profile, Sign in, Switch
+ * account, Retry) cannot start, or null. `cliSetupNeeded` says the reason is
+ * a CLI that is missing, still being looked for, or still downloading, which
+ * the CLI & Args tab is where to fix; a provider that is off is turned on by
+ * the switch in the header instead, so that reason does not link.
+ *
+ * `managementHeldReason` holds every profile control while the provider is
+ * off, whether or not the host could run its CLI: the sign-in controls fold
+ * it into `canAddProfile`, and the ones that need no CLI (Manage profile,
+ * refresh, usage) hold on this alone.
+ */
+function profileControlsHold(
+  state: ProviderCliState,
+  isSelectedHostLocal: boolean,
+): {
+  readonly signInUnavailableHint: string | null;
+  readonly cliSetupNeeded: boolean;
+  readonly managementHeldReason: string | null;
+} {
+  const providerLabel = PROVIDER_DISPLAY_NAMES[state.providerId];
+  const reason = providerSignInUnavailableReason(
+    state,
+    isSelectedHostLocal,
+    "sign-in",
+  );
+  let signInUnavailableHint: string | null = null;
+  if (reason?.kind === "host") {
+    signInUnavailableHint =
+      reason.block.kind === "pack"
+        ? "Sign-in is unavailable until CLI setup is complete."
+        : providerHostBlockLabel(reason.block, providerLabel);
+  } else if (reason !== null) {
+    signInUnavailableHint = reason.hint;
+  }
+  return {
+    signInUnavailableHint,
+    cliSetupNeeded: reason?.kind === "host" && reason.block.kind !== "disabled",
+    managementHeldReason: state.enabled
+      ? null
+      : providerHostBlockLabel({ kind: "disabled" }, providerLabel),
+  };
+}
+
 function ProfileScopedSectionMessages(props: {
   readonly addProfileDisabled: boolean;
   readonly addProfileDisabledReason: string | null;
   readonly onOpenCliSettings: (() => void) | null;
+  /** Retry starts the same sign-in Add profile does, so it is held with it. */
+  readonly retryDisabled: boolean;
   readonly failedAttempt: FailedProviderProfileAttempt | null;
   readonly onAddProfile: () => void;
   readonly onDismissFailedAttempt: () => void;
@@ -124,6 +176,7 @@ function ProfileScopedSectionMessages(props: {
               type="button"
               size="sm"
               variant="ghost"
+              disabled={props.retryDisabled}
               onClick={props.onAddProfile}
             >
               Retry
@@ -204,14 +257,8 @@ export function ProviderProfileScopedSection(
     ) ?? profiles[0];
   const providerLabel = PROVIDER_DISPLAY_NAMES[state.providerId];
   const addProfileDisabled = !canAddProfile;
-  const signInUnavailable = providerSignInUnavailableReason(
-    state,
-    isSelectedHostLocal,
-  );
-  const signInUnavailableHint =
-    signInUnavailable?.kind === "pack"
-      ? "Sign-in is unavailable until CLI setup is complete."
-      : (signInUnavailable?.hint ?? null);
+  const { signInUnavailableHint, cliSetupNeeded, managementHeldReason } =
+    profileControlsHold(state, isSelectedHostLocal);
   // `TooltipWrapper` degrades to a passthrough Slot for both `null` and
   // `undefined` labels; `null` here is just the plainer of the two spellings.
   const addProfileDisabledReason = addProfileDisabled
@@ -259,16 +306,25 @@ export function ProviderProfileScopedSection(
                 </Button>
               </span>
             </TooltipWrapper>
-            <ProviderProfilesRefreshButton
-              providerId={state.providerId}
-              profileId={profileCommitId(selectedProfile)}
-              usageUpdatedAt={selectedProfile.usageUpdatedAt}
-              fetchEligible={profileRateLimitFetchEligible(
-                state,
-                selectedProfile,
+            <span
+              className={cn(
+                "inline-flex",
+                managementHeldReason !== null &&
+                  "pointer-events-none opacity-50",
               )}
-              maintenanceAvailable={profileStatusRefreshAvailable}
-            />
+              {...(managementHeldReason !== null ? { inert: true } : {})}
+            >
+              <ProviderProfilesRefreshButton
+                providerId={state.providerId}
+                profileId={profileCommitId(selectedProfile)}
+                usageUpdatedAt={selectedProfile.usageUpdatedAt}
+                fetchEligible={profileRateLimitFetchEligible(
+                  state,
+                  selectedProfile,
+                )}
+                maintenanceAvailable={profileStatusRefreshAvailable}
+              />
+            </span>
           </div>
         </div>
         <ProfileDropdown
@@ -292,6 +348,7 @@ export function ProviderProfileScopedSection(
                   disabledReason: (profile) =>
                     profileEligibilityToggleDisabledReason(
                       state.enabled,
+                      providerLabel,
                       profile,
                       profiles,
                     ),
@@ -337,42 +394,60 @@ export function ProviderProfileScopedSection(
             </TooltipWrapper>
           ) : null}
           <TooltipWrapper
-            label="Change the profile name and accent color, sign in again, or remove this profile."
+            label={
+              managementHeldReason ??
+              "Change the profile name and accent color, sign in again, or remove this profile."
+            }
             side="bottom"
             sideOffset={6}
             align="end"
           >
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              className="shrink-0"
-              onClick={openProfileEditor}
-            >
-              <Settings2 data-icon="inline-start" />
-              Manage profile
-            </Button>
+            {/* Span for the same reason as Add profile above: a disabled
+                button emits no pointer events for the tooltip to see. */}
+            <span className="inline-flex">
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                className="shrink-0"
+                disabled={managementHeldReason !== null}
+                onClick={openProfileEditor}
+              >
+                <Settings2 data-icon="inline-start" />
+                Manage profile
+              </Button>
+            </span>
           </TooltipWrapper>
         </div>
 
         <ProfileScopedSectionMessages
           addProfileDisabled={addProfileDisabled}
           addProfileDisabledReason={addProfileDisabledReason}
-          onOpenCliSettings={
-            signInUnavailable?.kind === "pack" ? onOpenCliSettings : null
-          }
+          onOpenCliSettings={cliSetupNeeded ? onOpenCliSettings : null}
+          retryDisabled={addProfileDisabled}
           failedAttempt={failedAttempt}
           onAddProfile={onAddProfile}
           onDismissFailedAttempt={onDismissFailedAttempt}
           duplicateLabel={duplicateLabel}
         />
 
-        <EmbeddedProviderRateLimitForProvider
-          providerId={state.providerId}
-          profileId={profileCommitId(selectedProfile)}
-          usageUpdatedAt={selectedProfile.usageUpdatedAt}
-          fetchEligible={profileRateLimitFetchEligible(state, selectedProfile)}
-        />
+        <div
+          className={cn(
+            "flex flex-col",
+            managementHeldReason !== null && "pointer-events-none opacity-50",
+          )}
+          {...(managementHeldReason !== null ? { inert: true } : {})}
+        >
+          <EmbeddedProviderRateLimitForProvider
+            providerId={state.providerId}
+            profileId={profileCommitId(selectedProfile)}
+            usageUpdatedAt={selectedProfile.usageUpdatedAt}
+            fetchEligible={profileRateLimitFetchEligible(
+              state,
+              selectedProfile,
+            )}
+          />
+        </div>
       </div>
 
       <ProfileEditDialog
@@ -381,6 +456,7 @@ export function ProviderProfileScopedSection(
         profile={selectedProfile}
         profiles={profiles}
         canOauth={canAddProfile}
+        oauthUnavailableHint={signInUnavailableHint}
         startInReauth={editIntent === "sign-in"}
         isLocalHost={isSelectedHostLocal}
         open={editProfileOpen}

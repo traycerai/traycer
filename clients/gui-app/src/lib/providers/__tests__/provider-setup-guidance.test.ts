@@ -464,12 +464,23 @@ describe("providerSetupActionPlacement", () => {
   });
 
   it("returns 'here' when canStartTerminal is true and this surface has the action", () => {
-    const setup = resolveProviderTerminalSetup(
-      "reasonix",
-      stateWith(capabilityWithTerminalLogin(["setup"])),
-    );
+    // A runnable candidate, so the host block that gates the button clears -
+    // this test is about the SURFACE answer, not the CLI-availability one.
+    const setup = resolveProviderTerminalSetup("reasonix", {
+      ...stateWith(capabilityWithTerminalLogin(["setup"])),
+      candidates: [
+        {
+          kind: "path",
+          path: "/usr/local/bin/reasonix",
+          version: "1.35.0",
+          available: true,
+          versionPending: false,
+        },
+      ],
+    });
     expect(setup).not.toBeNull();
     if (setup === null) return;
+    expect(setup.hostBlock).toBeNull();
     expect(providerSetupActionPlacement(setup, true, "supported")).toBe("here");
   });
 
@@ -520,7 +531,7 @@ describe("providerSetupActionPlacement", () => {
     expect(setup).not.toBeNull();
     if (setup === null) return;
     expect(setup.canStartTerminal).toBe(true);
-    expect(setup.packPreparing).not.toBeNull();
+    expect(setup.hostBlock).not.toBeNull();
     expect(providerSetupActionPlacement(setup, true, "supported")).toBe(
       "preparing",
     );
@@ -556,7 +567,7 @@ describe("providerSetupActionPlacement", () => {
     });
     expect(setup).not.toBeNull();
     if (setup === null) return;
-    expect(setup.packPreparing).toBeNull();
+    expect(setup.hostBlock).toBeNull();
     expect(providerSetupPreparingLabel(setup, "reasonix")).toBeNull();
     expect(providerSetupActionPlacement(setup, true, "supported")).toBe("here");
   });
@@ -577,12 +588,21 @@ describe("providerSetupActionPlacement", () => {
   });
 
   it("returns 'other-surface' when canStartTerminal is true but this surface has no action", () => {
-    const setup = resolveProviderTerminalSetup(
-      "reasonix",
-      stateWith(capabilityWithTerminalLogin(["setup"])),
-    );
+    const setup = resolveProviderTerminalSetup("reasonix", {
+      ...stateWith(capabilityWithTerminalLogin(["setup"])),
+      candidates: [
+        {
+          kind: "path",
+          path: "/usr/local/bin/reasonix",
+          version: "1.35.0",
+          available: true,
+          versionPending: false,
+        },
+      ],
+    });
     expect(setup).not.toBeNull();
     if (setup === null) return;
+    expect(setup.hostBlock).toBeNull();
     expect(providerSetupActionPlacement(setup, false, "supported")).toBe(
       "other-surface",
     );

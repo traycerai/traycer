@@ -35,12 +35,14 @@ import {
 import { useProvidersStartLoginForClient } from "@/hooks/providers/use-providers-start-login-mutation";
 import { useProvidersAwaitLoginForClient } from "@/hooks/providers/use-providers-await-login-mutation";
 import { useProvidersCancelLoginForClient } from "@/hooks/providers/use-providers-cancel-login-mutation";
+import { useProvidersEnsurePackForClient } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import { useProvidersSubmitLoginCodeForClient } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLoginForClient } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useRecolorProviderProfileForClient } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRenameProviderProfileForClient } from "@/hooks/providers/use-rename-provider-profile-mutation";
 import { useOpenLink } from "@/lib/links/open-link";
 import { redactEmail } from "@/lib/providers/redact-email";
+import type { ProviderLoginStartCopy } from "@/components/providers/provider-login-start";
 import { CodePasteField, CodePasteRestartNotice } from "./code-paste-field";
 import { SignInCopyIconButton } from "./sign-in-copy-icon-button";
 import {
@@ -158,6 +160,7 @@ export function AddProviderProfileDialog({
   const cancelLogin = useProvidersCancelLoginForClient(client);
   const submitLoginCode = useProvidersSubmitLoginCodeForClient(client);
   const touchLogin = useProvidersTouchLoginForClient(client);
+  const ensurePack = useProvidersEnsurePackForClient(client);
   const recolorProfile = useRecolorProviderProfileForClient(client);
   const renameProfile = useRenameProviderProfileForClient(client);
   const flow = useProviderProfileLoginFlow({
@@ -170,6 +173,7 @@ export function AddProviderProfileDialog({
     cancelLogin,
     submitLoginCode,
     touchLogin,
+    ensurePack,
     failureMessages: {
       notStarted:
         "Sign-in did not start. You can retry when the provider is available.",
@@ -345,6 +349,7 @@ export function AddProviderProfileDialog({
             loginCapability={state.loginCapability}
             isLocalHost={isLocalHost}
             startPending={flow.startPending}
+            startingCopy={flow.startingCopy}
             cancelPending={flow.cancelPending}
             cancelDisabled={flow.commitPending}
             codePaste={flow.codePaste}
@@ -422,6 +427,7 @@ function AddProfileAccountSection({
   loginCapability,
   isLocalHost,
   startPending,
+  startingCopy,
   cancelPending,
   cancelDisabled,
   codePaste,
@@ -443,6 +449,7 @@ function AddProfileAccountSection({
   readonly loginCapability: ProviderCliState["loginCapability"] | null;
   readonly isLocalHost: boolean;
   readonly startPending: boolean;
+  readonly startingCopy: ProviderLoginStartCopy | null;
   readonly cancelPending: boolean;
   readonly cancelDisabled: boolean;
   readonly codePaste: ProviderProfileLoginFlowCodePaste;
@@ -494,6 +501,7 @@ function AddProfileAccountSection({
           loginCapability={loginCapability}
           isLocalHost={isLocalHost}
           queuePending={startPending}
+          startingCopy={startingCopy}
           cancelRequested={
             flowState.kind === "starting" && flowState.cancelRequested
           }
@@ -726,6 +734,7 @@ export function AddProfileWaitingStep({
   loginCapability,
   isLocalHost,
   queuePending,
+  startingCopy,
   cancelRequested,
   cancelPending,
   cancelDisabled,
@@ -742,6 +751,9 @@ export function AddProfileWaitingStep({
   readonly loginCapability: ProviderCliState["loginCapability"] | null;
   readonly isLocalHost: boolean;
   readonly queuePending: boolean;
+  /** The flow's `startingCopy`: what a slow start says instead of "Opening
+   *  the sign-in page…". */
+  readonly startingCopy: ProviderLoginStartCopy | null;
   readonly cancelRequested: boolean;
   readonly cancelPending: boolean;
   readonly cancelDisabled: boolean;
@@ -766,6 +778,7 @@ export function AddProfileWaitingStep({
   const { title, guidance } = waitingStepCopy({
     phase: codePaste.phase,
     queuePending,
+    startingCopy,
     cancelRequested,
     deviceCode,
   });

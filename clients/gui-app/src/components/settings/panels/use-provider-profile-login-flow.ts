@@ -12,7 +12,16 @@ import {
   type ProviderLoginCapability,
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import { providerStartLoginFailureMessage } from "@/components/providers/provider-signin-availability";
+import {
+  providerLoginAnswerWantsPackRetry,
+  providerLoginNotStartedMessage,
+  providerLoginStartCopy,
+  startProviderLoginUntilSettled,
+  waitForProviderLoginStart,
+  type ProviderLoginStartCopy,
+  type ProviderLoginStartProgress,
+  type ProviderStartLoginAnswer,
+} from "@/components/providers/provider-login-start";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
@@ -57,12 +66,23 @@ export type TouchLoginMutation = UseMutationResult<
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, "providers.touchLogin">
 >;
+export type EnsurePackMutation = UseMutationResult<
+  ResponseOfMethod<HostRpcRegistry, "providers.ensurePack">,
+  HostRpcError,
+  RequestOfMethod<HostRpcRegistry, "providers.ensurePack">,
+  LoginMutationContext
+>;
 
 export type ProviderProfileLoginFlowMode = "create" | "reauth";
 
 export type ProviderProfileLoginFlowState =
   | { readonly kind: "start" }
-  | { readonly kind: "starting"; readonly cancelRequested: boolean }
+  | {
+      readonly kind: "starting";
+      readonly cancelRequested: boolean;
+      /** What the host is doing meanwhile - see `ProviderLoginStartProgress`. */
+      readonly progress: ProviderLoginStartProgress;
+    }
   | {
       readonly kind: "waiting";
       readonly profileId: string | null;
@@ -186,6 +206,41 @@ function classifyProfileAwaitResult(
 }
 
 /**
+ * Why a final `providers.startLogin` answer is not a started sign-in, or null
+ * when it is one.
+ *
+ * `profileMissing` is create mode's own requirement: a started login with no
+ * minted profile id is nothing the flow can await.
+ *
+ * An answer that still says `pending: "starting"` is this side having stopped
+ * asking, not the host having given up: the login child is still alive, and
+ * whoever stops waiting for it releases it.
+ */
+function startAnswerRefusal(
+  answer: ProviderStartLoginAnswer,
+  profileMissing: boolean,
+): {
+  readonly blocker: AnalyticsBlocker;
+  readonly releaseHostLogin: boolean;
+} | null {
+  const failure = answer.failure ?? null;
+  if (failure !== null) {
+    return {
+      blocker: failure === "device_code_missing" ? "timeout" : "authentication",
+      releaseHostLogin: false,
+    };
+  }
+  if (answer.started && !profileMissing) return null;
+  // The RPC succeeded but the host declined to start the login: the provider
+  // tooling is the limiting factor, not auth.
+  const gaveUp = (answer.pending ?? null) === "starting";
+  return {
+    blocker: gaveUp ? "timeout" : "provider_unavailable",
+    releaseHostLogin: gaveUp,
+  };
+}
+
+/**
  * The paste field's real-world phases, derived from the mutation lifecycle:
  * `"idle"` - nothing in flight, ready for a paste/submit (including right
  * after a submit RPC error, so the same code can be retried); `"submitting"`
@@ -243,6 +298,10 @@ interface UseProviderProfileLoginFlowInput {
   readonly cancelLogin: CancelLoginMutation;
   readonly submitLoginCode: SubmitLoginCodeMutation;
   readonly touchLogin: TouchLoginMutation;
+  /** Fetches the provider's pack again. Only ever called from `start`, i.e.
+   *  from a press, and only when the previous attempt ended on a failed
+   *  install that a retry can move. */
+  readonly ensurePack: EnsurePackMutation;
   /** Copy for the two failure edges - distinct per mode to match each
    *  dialog's existing wording. */
   readonly failureMessages: {
@@ -265,6 +324,12 @@ export interface ProviderProfileLoginFlow {
    *  is pending. Read from the flow's `starting` state, not the mutation's
    *  `isPending` (see the note above the return). */
   readonly startPending: boolean;
+  /**
+   * What to say while `startPending` when the start is taking longer than a
+   * moment - the provider's pack is downloading, or its login child is still
+   * coming up. Null while "Opening the sign-in page…" still describes it.
+   */
+  readonly startingCopy: ProviderLoginStartCopy | null;
   readonly start: (options: {
     readonly label: string | null;
     readonly shareSkillsAndPlugins: boolean;
@@ -331,6 +396,7 @@ export function useProviderProfileLoginFlow(
     cancelLogin,
     submitLoginCode,
     touchLogin,
+    ensurePack,
     failureMessages,
     onFailed,
   } = input;
@@ -349,6 +415,20 @@ export function useProviderProfileLoginFlow(
   // legitimately `null` and would otherwise collide with this ref's own
   // "nothing cancelled yet" initial value.
   const cancelledRef = useRef(false);
+  // `finishCancellation` can now be reached twice for one press: once from
+  // `cancel` itself, and again when a start call that was already in flight
+  // answers. The second visit may still have a login to cancel on the host;
+  // it has nothing left to report.
+  const cancellationReportedRef = useRef(false);
+  // The target the host is holding a live login for while the flow is still
+  // `starting` - known from the first "still starting" answer onwards. Until
+  // then a cancel has to wait for the start call to say what it started.
+  const liveLoginRef = useRef<{ readonly profileId: string | null } | null>(
+    null,
+  );
+  // The answer the last attempt ended on, read by the next press to decide
+  // whether the provider's pack has to be fetched again first.
+  const lastAnswerRef = useRef<ProviderStartLoginAnswer | null>(null);
   const restartCountRef = useRef(0);
   const attemptIdRef = useRef(0);
   // Two-sided settlement join for the current attempt (see `settleAttempt`'s
@@ -395,6 +475,7 @@ export function useProviderProfileLoginFlow(
         readonly shareSkillsAndPlugins: boolean;
       },
       notice: string | null,
+      retryPackFirst: boolean,
     ) => void
   >(() => {});
 
@@ -424,29 +505,38 @@ export function useProviderProfileLoginFlow(
 
   const cancelProfile = useCallback(
     (profileId: string | null): void => {
-      if (cancelledRef.current) return;
-      cancelledRef.current = true;
-      cancelLogin.mutate({ providerId, profileId });
-    },
-    [cancelLogin, providerId],
-  );
-
-  const finishCancellation = useCallback(
-    (profileId: string | null): void => {
-      clearRepollTimer();
       // Reauth always targets a real login child - a specific profile, or
       // the ambient/no-profile-picker identity when `existingProfileId` is
       // null (the in-chat banner's OAuth reconnect). Create mode's `null`
       // means the host never minted a profile-scoped child, so there is
       // nothing to cancel.
-      if (mode === "reauth" || profileId !== null) cancelProfile(profileId);
-      Analytics.getInstance().track(
-        AnalyticsEvent.ProviderProfileLinkCancelled,
-        { provider: providerId, mode },
-      );
-      setState({ kind: "cancelled" });
+      if (mode !== "reauth" && profileId === null) return;
+      if (cancelledRef.current) return;
+      cancelledRef.current = true;
+      cancelLogin.mutate({ providerId, profileId });
     },
-    [cancelProfile, clearRepollTimer, mode, providerId],
+    [cancelLogin, mode, providerId],
+  );
+
+  // The user-visible half of a cancel: the flow is over as far as this
+  // surface is concerned. Once per press, however many paths arrive here.
+  const reportCancellation = useCallback((): void => {
+    clearRepollTimer();
+    if (cancellationReportedRef.current) return;
+    cancellationReportedRef.current = true;
+    Analytics.getInstance().track(AnalyticsEvent.ProviderProfileLinkCancelled, {
+      provider: providerId,
+      mode,
+    });
+    setState({ kind: "cancelled" });
+  }, [clearRepollTimer, mode, providerId]);
+
+  const finishCancellation = useCallback(
+    (profileId: string | null): void => {
+      cancelProfile(profileId);
+      reportCancellation();
+    },
+    [cancelProfile, reportCancellation],
   );
 
   // The blocker is classified from the REAL error at each call site (or an
@@ -495,6 +585,7 @@ export function useProviderProfileLoginFlow(
       beginLoginRef.current(
         lastStartOptionsRef.current,
         CODE_PASTE_RESTART_NOTICES[cause],
+        false,
       );
     },
     [fail, finishCancellation],
@@ -573,6 +664,7 @@ export function useProviderProfileLoginFlow(
         readonly shareSkillsAndPlugins: boolean;
       },
       notice: string | null,
+      retryPackFirst: boolean,
     ): void => {
       lastStartOptionsRef.current = options;
       // A fresh attempt supersedes any pending ambient re-poll tick.
@@ -582,6 +674,8 @@ export function useProviderProfileLoginFlow(
       awaitOutcomeRef.current = null;
       submitOutcomeRef.current = "none";
       successPayloadRef.current = null;
+      liveLoginRef.current = null;
+      lastAnswerRef.current = null;
       lastTouchAtRef.current = 0;
       // Statefulness fixup: without this, a restart's fresh `CodePasteField`
       // (remounted via `key={attemptId}`) would still render the PREVIOUS
@@ -592,7 +686,11 @@ export function useProviderProfileLoginFlow(
       touchLogin.reset();
       setAttemptId(thisAttemptId);
       setRestartNotice(notice);
-      setState({ kind: "starting", cancelRequested: false });
+      setState({
+        kind: "starting",
+        cancelRequested: false,
+        progress: { kind: "opening" },
+      });
       // The outcome travels on `mutateAsync`'s promise, never on per-`mutate`
       // callbacks. The Settings reauth panel starts this from a MOUNT effect,
       // and under StrictMode (every dev build) that effect's setup -> cleanup
@@ -609,8 +707,13 @@ export function useProviderProfileLoginFlow(
       // both of those, so an answer nobody is waiting for still stops here.
       const startAbandoned = (): boolean =>
         attemptIdRef.current !== thisAttemptId || unmountedRef.current;
-      void startLogin
-        .mutateAsync({
+      // One question is not always the whole start: the host answers
+      // `pending` while the provider's pack downloads or its login child is
+      // still coming up, and the same question asked again attaches to that
+      // work. `startProviderLoginUntilSettled` keeps asking; what arrives
+      // here is the answer that ended it.
+      void startProviderLoginUntilSettled({
+        request: {
           providerId,
           profileId: existingProfileId,
           createProfile:
@@ -620,140 +723,157 @@ export function useProviderProfileLoginFlow(
                   shareSkillsAndPlugins: options.shareSkillsAndPlugins,
                 }
               : null,
-        })
-        .then(
-          (data) => {
-            if (startAbandoned()) return;
-            // Reauth always awaits the profile it was invoked for - the
-            // response never mints a different id for an existing profile.
-            // Create has no id until this response supplies one.
-            const nextProfileId =
-              mode === "reauth" ? existingProfileId : data.profileId;
-            if (cancelRequestedRef.current) {
-              finishCancellation(nextProfileId);
+        },
+        startLogin: (request) => startLogin.mutateAsync(request),
+        ensurePack: () => ensurePack.mutateAsync({ providerId }),
+        retryPackFirst,
+        onProgress: (progress, answer) => {
+          if (startAbandoned()) return;
+          if (progress.kind === "launching") {
+            liveLoginRef.current = {
+              profileId:
+                mode === "reauth" ? existingProfileId : answer.profileId,
+            };
+          }
+          setState({
+            kind: "starting",
+            cancelRequested: cancelRequestedRef.current,
+            progress,
+          });
+        },
+        shouldStop: () => startAbandoned() || cancelRequestedRef.current,
+        wait: waitForProviderLoginStart,
+      }).then(
+        (data) => {
+          if (startAbandoned()) return;
+          lastAnswerRef.current = data;
+          // Reauth always awaits the profile it was invoked for - the
+          // response never mints a different id for an existing profile.
+          // Create has no id until this response supplies one.
+          const nextProfileId =
+            mode === "reauth" ? existingProfileId : data.profileId;
+          if (cancelRequestedRef.current) {
+            finishCancellation(nextProfileId);
+            return;
+          }
+          // Create mode must have a minted profile id to proceed; reauth
+          // mode never derives `nextProfileId` from this response (it is
+          // always the caller's own `existingProfileId`, including the
+          // ambient `null`), so there is nothing to validate there beyond
+          // `data.started`.
+          const refusal = startAnswerRefusal(
+            data,
+            mode === "create" && nextProfileId === null,
+          );
+          if (refusal !== null) {
+            if (refusal.releaseHostLogin) cancelProfile(nextProfileId);
+            fail(
+              providerLoginNotStartedMessage(
+                data,
+                providerId,
+                failureMessages.notStarted,
+              ),
+              refusal.blocker,
+            );
+            return;
+          }
+          liveLoginRef.current = null;
+          setState({
+            kind: "waiting",
+            profileId: nextProfileId,
+            url: data.url,
+            // Test doubles (and a body that skipped 1.2 parse) omit the
+            // field; treat missing as "no device code" so the paste field
+            // still renders for Claude.
+            userCode: data.userCode ?? null,
+          });
+          // Per-attempt budget for the ambient `authPending` re-poll (see
+          // the constant's doc comment). Scoped to this attempt's closure -
+          // an auto-restart mints a fresh attempt with a fresh budget.
+          let authPendingRepolls = 0;
+          // A resolution this attempt must no longer act on: a later attempt
+          // (auto-restart, or the child finishing while a restart was
+          // already triggered) superseded this long-poll, the flow was
+          // cancelled, or the hook unmounted. Clearing the re-poll timer
+          // cannot recall an already-dispatched RPC, and neither cancelling
+          // nor unmounting touches `attemptIdRef` - so without the other two
+          // halves a re-poll landing afterward would settle the attempt
+          // (overwriting the terminal `cancelled` state with a failure) or
+          // arm a fresh timer on a dead hook.
+          const attemptAbandoned = (): boolean =>
+            attemptIdRef.current !== thisAttemptId ||
+            cancelRequestedRef.current ||
+            cancelledRef.current ||
+            unmountedRef.current;
+          const scheduleAuthPendingRepoll = (): boolean => {
+            if (authPendingRepolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) {
+              return false;
+            }
+            authPendingRepolls += 1;
+            repollTimerRef.current = window.setTimeout(() => {
+              repollTimerRef.current = null;
+              if (attemptAbandoned()) return;
+              awaitOnce();
+            }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+            return true;
+          };
+          const handleAwaitSuccess = (result: AwaitLoginResult): void => {
+            if (attemptAbandoned()) return;
+            const resolution =
+              mode === "reauth" && existingProfileId === null
+                ? classifyAmbientAwaitResult(result)
+                : classifyProfileAwaitResult(result, nextProfileId);
+            if (resolution.kind === "authenticated") {
+              awaitOutcomeRef.current = "authenticated";
+              successPayloadRef.current = resolution.payload;
+              settleAttempt(thisAttemptId);
               return;
             }
-            // Create mode must have a minted profile id to proceed; reauth
-            // mode never derives `nextProfileId` from this response (it is
-            // always the caller's own `existingProfileId`, including the
-            // ambient `null`), so there is nothing to validate there beyond
-            // `data.started`.
-            const failure = data.failure ?? null;
-            if (failure !== null) {
-              fail(
-                providerStartLoginFailureMessage(
-                  failure,
-                  failureMessages.notStarted,
-                ),
-                failure === "device_code_missing"
-                  ? "timeout"
-                  : "authentication",
-              );
+            if (resolution.kind === "codeRejected") {
+              restart("codeRejected");
               return;
             }
             if (
-              !data.started ||
-              (mode === "create" && nextProfileId === null)
+              resolution.kind === "authPending" &&
+              scheduleAuthPendingRepoll()
             ) {
-              // The RPC succeeded but the host declined to start the login:
-              // the provider tooling is the limiting factor, not auth.
-              fail(failureMessages.notStarted, "provider_unavailable");
               return;
             }
-            setState({
-              kind: "waiting",
-              profileId: nextProfileId,
-              url: data.url,
-              // Test doubles (and a body that skipped 1.2 parse) omit the
-              // field; treat missing as "no device code" so the paste field
-              // still renders for Claude.
-              userCode: data.userCode ?? null,
-            });
-            // Per-attempt budget for the ambient `authPending` re-poll (see
-            // the constant's doc comment). Scoped to this attempt's closure -
-            // an auto-restart mints a fresh attempt with a fresh budget.
-            let authPendingRepolls = 0;
-            // A resolution this attempt must no longer act on: a later attempt
-            // (auto-restart, or the child finishing while a restart was
-            // already triggered) superseded this long-poll, the flow was
-            // cancelled, or the hook unmounted. Clearing the re-poll timer
-            // cannot recall an already-dispatched RPC, and neither cancelling
-            // nor unmounting touches `attemptIdRef` - so without the other two
-            // halves a re-poll landing afterward would settle the attempt
-            // (overwriting the terminal `cancelled` state with a failure) or
-            // arm a fresh timer on a dead hook.
-            const attemptAbandoned = (): boolean =>
-              attemptIdRef.current !== thisAttemptId ||
-              cancelRequestedRef.current ||
-              cancelledRef.current ||
-              unmountedRef.current;
-            const scheduleAuthPendingRepoll = (): boolean => {
-              if (authPendingRepolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) {
-                return false;
-              }
-              authPendingRepolls += 1;
-              repollTimerRef.current = window.setTimeout(() => {
-                repollTimerRef.current = null;
-                if (attemptAbandoned()) return;
-                awaitOnce();
-              }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
-              return true;
-            };
-            const handleAwaitSuccess = (result: AwaitLoginResult): void => {
-              if (attemptAbandoned()) return;
-              const resolution =
-                mode === "reauth" && existingProfileId === null
-                  ? classifyAmbientAwaitResult(result)
-                  : classifyProfileAwaitResult(result, nextProfileId);
-              if (resolution.kind === "authenticated") {
-                awaitOutcomeRef.current = "authenticated";
-                successPayloadRef.current = resolution.payload;
-                settleAttempt(thisAttemptId);
-                return;
-              }
-              if (resolution.kind === "codeRejected") {
-                restart("codeRejected");
-                return;
-              }
-              if (
-                resolution.kind === "authPending" &&
-                scheduleAuthPendingRepoll()
-              ) {
-                return;
-              }
-              awaitOutcomeRef.current = "notAuthenticated";
-              settleAttempt(thisAttemptId);
-            };
-            const handleAwaitError = (): void => {
-              if (attemptAbandoned()) return;
-              awaitOutcomeRef.current = "notAuthenticated";
-              settleAttempt(thisAttemptId);
-            };
-            const awaitOnce = (): void => {
-              awaitLogin.mutate(
-                { providerId, profileId: nextProfileId },
-                { onSuccess: handleAwaitSuccess, onError: handleAwaitError },
-              );
-            };
-            awaitOnce();
-          },
-          // Every rejection is consumed here, abandoned or not; the hook's own
-          // `onError` has already toasted it. The second argument of `then`,
-          // not a `catch`, so a throw in the success arm above is never
-          // misread as a refused start.
-          (error: unknown) => {
-            if (startAbandoned()) return;
-            if (cancelRequestedRef.current) {
-              finishCancellation(null);
-              return;
-            }
-            fail(failureMessages.notStarted, analyticsBlockerFromError(error));
-          },
-        );
+            awaitOutcomeRef.current = "notAuthenticated";
+            settleAttempt(thisAttemptId);
+          };
+          const handleAwaitError = (): void => {
+            if (attemptAbandoned()) return;
+            awaitOutcomeRef.current = "notAuthenticated";
+            settleAttempt(thisAttemptId);
+          };
+          const awaitOnce = (): void => {
+            awaitLogin.mutate(
+              { providerId, profileId: nextProfileId },
+              { onSuccess: handleAwaitSuccess, onError: handleAwaitError },
+            );
+          };
+          awaitOnce();
+        },
+        // Every rejection is consumed here, abandoned or not; the hook's own
+        // `onError` has already toasted it. The second argument of `then`,
+        // not a `catch`, so a throw in the success arm above is never
+        // misread as a refused start.
+        (error: unknown) => {
+          if (startAbandoned()) return;
+          if (cancelRequestedRef.current) {
+            finishCancellation(null);
+            return;
+          }
+          fail(failureMessages.notStarted, analyticsBlockerFromError(error));
+        },
+      );
     },
     [
       awaitLogin,
+      cancelProfile,
       clearRepollTimer,
+      ensurePack,
       existingProfileId,
       fail,
       failureMessages,
@@ -789,13 +909,21 @@ export function useProviderProfileLoginFlow(
       }
       cancelRequestedRef.current = false;
       cancelledRef.current = false;
+      cancellationReportedRef.current = false;
       restartCountRef.current = 0;
       Analytics.getInstance().track(AnalyticsEvent.ProviderProfileLinkStarted, {
         source: "direct_ui",
         provider: providerId,
         mode,
       });
-      beginLogin(options, null);
+      // A press that follows a failed install asks for the pack again first.
+      // This is the one place that may: it runs from a press and nowhere
+      // else, which is what `providers.ensurePack` takes as the user's say-so.
+      beginLogin(
+        options,
+        null,
+        providerLoginAnswerWantsPackRetry(lastAnswerRef.current),
+      );
     },
     [awaitLogin.isPending, beginLogin, mode, providerId, state.kind],
   );
@@ -814,7 +942,27 @@ export function useProviderProfileLoginFlow(
         finishCancellation(existingProfileId);
         return;
       }
-      setState({ kind: "starting", cancelRequested: true });
+      // The host has said which login it is holding: cancel that one now
+      // rather than after the call attached to it gives up its wait.
+      const liveLogin = liveLoginRef.current;
+      if (liveLogin !== null) {
+        finishCancellation(liveLogin.profileId);
+        return;
+      }
+      // Nothing is running on the host while the pack downloads, so there
+      // is nothing to cancel there yet - and sending the cancel anyway would
+      // spend the one this flow gets. A question already on its way may
+      // still start a login; that one is cancelled when its answer lands
+      // (`beginLogin`).
+      if (state.progress.kind === "downloading") {
+        reportCancellation();
+        return;
+      }
+      setState({
+        kind: "starting",
+        cancelRequested: true,
+        progress: state.progress,
+      });
       return;
     }
     if (state.kind === "waiting") {
@@ -828,7 +976,14 @@ export function useProviderProfileLoginFlow(
     ) {
       finishCancellation(existingProfileId);
     }
-  }, [commitPending, existingProfileId, finishCancellation, mode, state]);
+  }, [
+    commitPending,
+    existingProfileId,
+    finishCancellation,
+    mode,
+    reportCancellation,
+    state,
+  ]);
 
   const submitCode = useCallback(
     (code: string): void => {
@@ -911,6 +1066,10 @@ export function useProviderProfileLoginFlow(
     state,
     busy: state.kind === "starting" || awaitLogin.isPending,
     startPending: state.kind === "starting",
+    startingCopy:
+      state.kind === "starting"
+        ? providerLoginStartCopy(state.progress, providerId)
+        : null,
     start,
     cancel,
     cancelPending: cancelLogin.isPending,
