@@ -89,11 +89,14 @@ export function deriveHostNotificationStoppedReason(
     //
     // And it is not `null`. Declining to classify does stop the switching, but
     // a turn with no typed failure gets no failed-attempt envelope
-    // (`preserveFallbackFailedAttemptEnvelope` returns at an absent `failure`),
-    // so the error card loses its manual `retry` / `switch` / `wait_once` rungs
-    // - and a fresh session is exactly what `retry` performs, i.e. the one
-    // affordance that fixes this failure. What actually stops the automatic
-    // traversal is `EXCLUDED_FALLBACK_REASONS`, which this reason is in.
+    // (`preserveFallbackFailedAttemptEnvelope` returns at an absent `failure`).
+    // Its error card still offers `retry` and `switch` - and a fresh session is
+    // exactly what `retry` performs - but it loses `wait_once` (its wait
+    // disposition is `attempt_unavailable`) and names no `failedTuple`, the
+    // replay facts the envelope carries. Classifying it is what gives this
+    // failure its envelope, so the wait and those facts exist. What actually
+    // stops the automatic traversal is `EXCLUDED_FALLBACK_REASONS`, which this
+    // reason is in.
     case "session_budget_exceeded":
       return "session_budget";
     case "billing_error":

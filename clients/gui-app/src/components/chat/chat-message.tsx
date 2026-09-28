@@ -216,6 +216,9 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
         // rendered as several rows carries it on exactly one of them; absent
         // on all the others, and on every row with no failure at all.
         manualRungAnchorId={message.manualRungAnchorId ?? null}
+        // And whether that segment's card absorbs the settled routing notice
+        // on the same row - stamped by the same projection pass.
+        routingSettledNoticeId={message.routingSettledNoticeId ?? null}
         nextStepActions={nextStepActions}
         forkAction={assistantActions?.fork ?? null}
         interviewDeliveryRetry={

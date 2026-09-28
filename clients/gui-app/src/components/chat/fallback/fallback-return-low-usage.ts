@@ -37,20 +37,23 @@ export interface ComposerRateLimitAdvisory {
 }
 
 /**
- * The advisory as the composer's mount point supplies it.
+ * The advisory as the composer's mount point supplies it - and the composer's
+ * own `rateLimitVisible` is this being non-null.
  *
- * `signedOut` is the same suppression the composer's own `rateLimitVisible`
- * applies, and it has to be applied here too rather than left to the chain: a
- * signed-out gate with no provider/reason renders no reauth banner, so the
- * return banner can win the slot in a state where the advisory itself would
- * have been withheld. Absorbing a sentence the composer would not have shown is
- * the same defect as dropping one it would have, so one function answers both.
+ * `withheld` is every reason the composer holds its banner back outside the
+ * chain: a sign-out, or a settled routing card drawing its own "Switch to…"
+ * for this account (`useComposerRateLimitAdvisory`). It has to be applied
+ * here too rather than left to the chain: a signed-out gate with no
+ * provider/reason renders no reauth banner, so the return banner can win the
+ * slot in a state where the advisory itself would have been withheld.
+ * Absorbing a sentence the composer would not have shown is the same defect as
+ * dropping one it would have, so one function answers both.
  */
 export function composerRateLimitAdvisory(
   prompt: ProfileRateLimitSwitchPrompt,
-  signedOut: boolean,
+  withheld: boolean,
 ): ComposerRateLimitAdvisory | null {
-  if (signedOut || prompt.kind !== "visible") return null;
+  if (withheld || prompt.kind !== "visible") return null;
   return {
     providerId: prompt.providerId,
     profileId: profileCommitId(prompt.current),

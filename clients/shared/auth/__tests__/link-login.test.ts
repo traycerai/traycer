@@ -37,9 +37,9 @@ describe("QR payload build/parse", () => {
     expect(buildLinkLoginQrPayload(`${PLATFORM}/settings`, CODE)).toBe(
       `${PLATFORM}/link?code=${CODE}`,
     );
-    expect(
-      buildLinkLoginQrPayload("https://platform.dev.traycer.ai", CODE),
-    ).toBe(`https://platform.dev.traycer.ai/link?code=${CODE}`);
+    expect(buildLinkLoginQrPayload("https://dev.traycer.ai", CODE)).toBe(
+      `https://dev.traycer.ai/link?code=${CODE}`,
+    );
   });
 
   it("still parses the superseded traycer:// payload", () => {

@@ -5,6 +5,7 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   queuedPromptMessageIds,
+  queuePausedAfterError,
   queueWithoutPersistedPrompts,
 } from "@/components/chat/chat-queue-utils";
 
@@ -154,5 +155,57 @@ describe("queueWithoutPersistedPrompts", () => {
 
     expect(visible.items).toEqual([held]);
     expect(visible.status).toBe("running");
+  });
+});
+
+describe("queueWithoutPersistedPrompts keeps the queue's optional keys", () => {
+  it("carries pausedReason through the rebuild that drops a handed-off prompt", () => {
+    const held = { ...promptItem("message-held"), status: "paused" as const };
+    const handoff = promptItem("message-accepted");
+    const input: ChatQueueState = {
+      status: "running",
+      items: [held, handoff],
+      pausedReason: "turn_error",
+    };
+
+    const visible = queueWithoutPersistedPrompts(input, [
+      { role: "user", messageId: "message-held" },
+      { role: "user", messageId: "message-accepted" },
+    ]);
+
+    expect(visible.items).toEqual([held]);
+    expect(visible.pausedReason).toBe("turn_error");
+  });
+});
+
+describe("queuePausedAfterError", () => {
+  function paused(pausedReason: string | null): ChatQueueState {
+    return { ...queue([]), status: "paused", pausedReason };
+  }
+
+  it("is true for a PAUSED queue carrying either reason that means a turn failed", () => {
+    for (const pausedReason of ["turn_error", "routing"]) {
+      expect(queuePausedAfterError(paused(pausedReason))).toBe(true);
+    }
+  });
+
+  it.each(["running", "idle"] as const)(
+    "is false for a %s queue that still carries a stale turn_error or routing reason",
+    (status) => {
+      for (const pausedReason of ["turn_error", "routing"]) {
+        expect(
+          queuePausedAfterError({ ...queue([]), status, pausedReason }),
+        ).toBe(false);
+      }
+    },
+  );
+
+  it("is false for a paused queue with any other reason, a null reason and an absent one", () => {
+    expect(queuePausedAfterError(paused("user"))).toBe(false);
+    expect(queuePausedAfterError(paused("some_future_reason"))).toBe(false);
+    expect(queuePausedAfterError(paused(null))).toBe(false);
+    expect(queuePausedAfterError({ ...queue([]), status: "paused" })).toBe(
+      false,
+    );
   });
 });

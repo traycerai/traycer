@@ -9,7 +9,7 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import { useEpicRequestFreshSnapshot } from "@/lib/epic-selectors";
-import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
+import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { getClientAppVersion } from "@/lib/app-version";
 import { describeVersionSkew } from "@/lib/host/version-skew-copy";
 import { useServerClockSkew } from "@/lib/clock/use-server-clock-skew";
@@ -19,7 +19,6 @@ import {
 } from "@traycer-clients/shared/clock/server-time-offset-tracker";
 import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { useRunnerHost } from "@/providers/use-runner-host";
 import type { SnapshotFetchError } from "@/stores/epics/open-epic/store";
 
 interface SnapshotErrorBannerProps {
@@ -211,7 +210,7 @@ function LocalStoreRepair(props: { readonly error: SnapshotFetchError }) {
 }
 
 function UpgradeButton() {
-  const runnerHost = useRunnerHost();
+  const billingUrl = usePlatformBillingUrl();
   const { isPending, openLink } = useOpenLinkWithPending();
   return (
     <Button
@@ -220,11 +219,7 @@ function UpgradeButton() {
       data-testid="snapshot-error-upgrade"
       disabled={isPending}
       onClick={() => {
-        void openLink(
-          resolvePlatformBaseUrl(runnerHost.signInUrl),
-          "auth",
-          null,
-        );
+        void openLink(billingUrl, "auth", null);
       }}
     >
       Upgrade

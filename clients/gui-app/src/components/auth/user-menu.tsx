@@ -11,8 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { computeInitials } from "@/lib/auth/compute-initials";
-import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -39,14 +38,13 @@ export interface UserMenuProps {
  * tests. Outside-click + Escape dismissal still come from Radix.
  */
 export function UserMenu(props: UserMenuProps) {
-  const runnerHost = useRunnerHost();
   const openLink = useOpenLink();
   const [open, setOpen] = useState<boolean>(false);
   const [signOutOpen, setSignOutOpen] = useState<boolean>(false);
   const settingsChord = useBindingForAction("app.settings.open");
   useTitleBarDragSuppression("user-menu", open);
   const initials = computeInitials(props.userName, props.email);
-  const manageSubscriptionUrl = resolvePlatformBaseUrl(runnerHost.signInUrl);
+  const manageSubscriptionUrl = usePlatformBillingUrl();
   return (
     <>
       {/* Outside the menu, which Radix unmounts on select - the confirm has to

@@ -29,6 +29,7 @@ import {
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { automaticJudgeInputs } from "@/lib/auto-mode/auto-judge-billing";
+import { COMMAND_CATALOG_COMPOSER_STALE_MS } from "@traycer/protocol/host/agent/gui/command-catalog-policy";
 
 // Model catalogs are CACHE-ONLY: `staleTime: Infinity` on every model query -
 // the batched fan-out in `useGuiHarnessCatalog` and the standalone
@@ -496,7 +497,7 @@ export function useGuiHarnessCommandsQuery(
       // when the user types "/" - an intent edge in its own right, and the one
       // that already prewarms an OpenCode-backed server. Refreshing it at most
       // once per window on that edge is the behavior we want.
-      staleTime: HARNESS_CATALOG_REFRESH_AFTER_MS,
+      staleTime: COMMAND_CATALOG_COMPOSER_STALE_MS,
     },
   } satisfies UseHostQueryOptions<HostRpcRegistry, "agent.gui.listCommands">);
 }
