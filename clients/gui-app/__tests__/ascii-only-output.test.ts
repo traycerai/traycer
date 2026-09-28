@@ -7,9 +7,10 @@ import {
 } from "../vite/ascii-only-output";
 
 /**
- * The rewrite is only worth anything if it changes NOTHING a program can
- * observe. Each case evaluates the original body and the rewritten one and
- * compares what they return.
+ * The rewrite is only worth anything if it changes nothing a program can
+ * observe beyond what the plugin's header lists (a function's own source
+ * text, and a replaced `globalThis.RegExp`). Each case evaluates the original
+ * body and the rewritten one and compares what they return.
  */
 function evaluate(body: string): string {
   // Serialized inside the script, so a result compares as plain data.
@@ -192,6 +193,136 @@ describe("escapeNonAsciiJavaScript", () => {
     expect(result.lineEdits.get(1)).toEqual([
       { column: dash - afterBreak, removed: 1, inserted: 6 },
     ]);
+  });
+});
+
+describe("RegExp shadow guard", () => {
+  const THROWS: ReadonlyArray<readonly [string, string]> = [
+    ["const RegExp = 1", "const RegExp = 1;\nconst r = /—/;"],
+    ["let RegExp", "let RegExp;\nconst r = /—/;"],
+    ["var RegExp", "var RegExp;\nconst r = /—/;"],
+    ["function RegExp() {}", "function RegExp() {}\nconst r = /—/;"],
+    [
+      "named function expression",
+      "const f = function RegExp() {};\nconst r = /—/;",
+    ],
+    ["class RegExp {}", "class RegExp {}\nconst r = /—/;"],
+    ["named class expression", "const C = class RegExp {};\nconst r = /—/;"],
+    ["plain parameter", "function f(RegExp) { return /—/; }"],
+    ["arrow parameter", "const f = (RegExp) => { return /—/; };"],
+    ["default parameter", "function f(RegExp = 1) { return /—/; }"],
+    ["rest parameter", "function f(...RegExp) { return /—/; }"],
+    ["destructured parameter", "function f({ RegExp }) { return /—/; }"],
+    ["destructuring const", "const { RegExp } = o;\nconst r = /—/;"],
+    ["renamed destructuring", "const { a: RegExp } = o;\nconst r = /—/;"],
+    ["array destructuring", "const [RegExp] = a;\nconst r = /—/;"],
+    [
+      "nested destructuring with a default",
+      "const { a: [{ b: RegExp = 1 }] } = o;\nconst r = /—/;",
+    ],
+    ["catch parameter", "try {} catch (RegExp) { const r = /—/; }"],
+    [
+      "destructured catch parameter",
+      "try {} catch ({ RegExp }) { const r = /—/; }",
+    ],
+    ["named import", 'import { RegExp } from "x";\nconst r = /—/;'],
+    ["default import", 'import RegExp from "x";\nconst r = /—/;'],
+    ["namespace import", 'import * as RegExp from "x";\nconst r = /—/;'],
+    ["assignment", "RegExp = function () {};\nconst r = /—/;"],
+    ["destructuring assignment", "({ RegExp } = o);\nconst r = /—/;"],
+    ["for-of target", "for (RegExp of a);\nconst r = /—/;"],
+    ["update expression", "RegExp++;\nconst r = /—/;"],
+    [
+      "a with statement whose object shadows RegExp",
+      'function f(){ with ({ RegExp: function () { return { source: "wrong" }; } }) { return /é/.source; } }',
+    ],
+    [
+      "a direct eval that could declare RegExp",
+      "function f(){ eval(\"var RegExp = function () { return { source: 'wrong' }; }\"); return /é/.source; }",
+    ],
+    [
+      "a direct eval elsewhere in the chunk",
+      'function g(){ eval("1"); }\nfunction f(){ return /é/.source; }',
+    ],
+    [
+      "a with statement unrelated to RegExp",
+      "function f(o){ with (o) { return 1; } return /é/.source; }",
+    ],
+    [
+      "a parenthesized eval callee that could declare RegExp",
+      "function f(){ (eval)(\"var RegExp = function () { return { source: 'wrong' }; }\"); return /é/.source; }",
+    ],
+    [
+      "a doubly-parenthesized eval callee",
+      'function f(){ ((eval))("1"); return /é/; }',
+    ],
+  ];
+
+  it.each(THROWS)("throws when the chunk has: %s", (_name, code) => {
+    expect(() => escapeNonAsciiJavaScript(code, "chunk.js")).toThrow(
+      /binds or assigns the name RegExp/,
+    );
+  });
+
+  it.each(THROWS.slice(-6))(
+    "mentions with or eval when the chunk has: %s",
+    (_name, code) => {
+      expect(() => escapeNonAsciiJavaScript(code, "chunk.js")).toThrow(
+        /with.*eval|eval.*with/,
+      );
+    },
+  );
+
+  const CONTROLS: ReadonlyArray<readonly [string, string]> = [
+    ["a member is not a binding", "x.RegExp = 1;\nconst r = /—/;"],
+    [
+      "an object key is not a binding",
+      "const o = { RegExp: 1 };\nconst r = /—/;",
+    ],
+    ["a use is not a binding", 'const x = new RegExp("a");\nconst r = /—/;'],
+    [
+      "a member call named eval is not a direct eval",
+      'x.eval("1");\nconst r = /é/;',
+    ],
+    [
+      "an object key named eval is not a direct eval",
+      "const o = { eval: 1 };\nconst r = /é/;",
+    ],
+    [
+      "a comma-sequence eval callee is an indirect eval",
+      'function f(){ (0, eval)("1"); return /é/; }',
+    ],
+    [
+      "a globalThis.eval member call is not a direct eval",
+      'globalThis.eval("1");\nconst r = /é/;',
+    ],
+  ];
+
+  it.each(CONTROLS)("does not throw when %s", (_name, code) => {
+    expect(() => escapeNonAsciiJavaScript(code, "chunk.js")).not.toThrow();
+  });
+
+  it.each(CONTROLS.slice(-2))(
+    "still returns a rewrite when %s",
+    (_name, code) => {
+      expect(escapeNonAsciiJavaScript(code, "chunk.js")).not.toBeNull();
+    },
+  );
+
+  it("still rewrites a chunk that binds RegExp but has no non-ASCII regex literal", () => {
+    const result = escapeNonAsciiJavaScript(
+      'const RegExp = 1;\nconst s = "…";',
+      "chunk.js",
+    );
+    expect(result).not.toBeNull();
+  });
+
+  it("still rewrites a chunk with a direct eval but no non-ASCII regex literal", () => {
+    const result = escapeNonAsciiJavaScript(
+      'eval("1");\nconst s = "é";',
+      "chunk.js",
+    );
+    expect(result).not.toBeNull();
   });
 });
 

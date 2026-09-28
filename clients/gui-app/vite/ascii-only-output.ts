@@ -1,5 +1,11 @@
 import { Buffer } from "node:buffer";
-import { parseSync, Visitor, type Plugin, type Rolldown } from "vite";
+import {
+  parseSync,
+  Visitor,
+  type ESTree,
+  type Plugin,
+  type Rolldown,
+} from "vite";
 
 /**
  * # ASCII-only JavaScript output
@@ -40,6 +46,20 @@ import { parseSync, Visitor, type Plugin, type Rolldown } from "vite";
  * - U+2028 and U+2029: left alone everywhere. They can be line terminators,
  *   and replacing one would change the chunk's line structure - and every
  *   source-map line after it.
+ *
+ * What a program can still tell apart is narrow, and it is this:
+ *
+ * - `Function.prototype.toString()` of a function that holds a rewritten
+ *   literal returns the rewritten text: the escapes, and a regex literal as
+ *   its construction;
+ * - a construction looks `RegExp` up where it stands, and a literal does not.
+ *   A page that replaces `globalThis.RegExp` before the chunk runs gets its
+ *   replacement from the construction, where the literal would have made a
+ *   built-in `RegExp`. A chunk that binds or assigns the name `RegExp` itself
+ *   - a declaration, a parameter, a destructured or imported name, an
+ *   assignment - would do the same inside it, and so could one that runs a
+ *   `with` statement or a direct `eval`. The build fails instead of
+ *   rewriting a regex literal in such a chunk.
  *
  * Nothing here adds or removes a line, so a chunk's source map only needs its
  * columns shifted along each edited line (see {@link shiftMappingColumns}).
@@ -144,6 +164,7 @@ export interface AsciiRewrite {
 }
 
 const NON_ASCII_RE = /[\u0080-\uffff]/g;
+const HAS_NON_ASCII_RE = /[\u0080-\uffff]/;
 const WHITESPACE_RE = /\s/;
 const LINE_FEED = 0x0a;
 const CARRIAGE_RETURN = 0x0d;
@@ -166,6 +187,15 @@ interface Span {
   readonly kind: SpanKind;
 }
 
+interface LiteralScan {
+  readonly spans: readonly Span[];
+  /**
+   * Whether the chunk binds or assigns the bare name `RegExp` anywhere, or
+   * could at run time through `with` or a direct `eval`.
+   */
+  readonly bindsRegExp: boolean;
+}
+
 /**
  * The rewrite of `code`, or `null` when it is already ASCII. Throws when
  * `code` - or the rewrite - does not parse.
@@ -176,7 +206,8 @@ export function escapeNonAsciiJavaScript(
 ): AsciiRewrite | null {
   NON_ASCII_RE.lastIndex = 0;
   if (!NON_ASCII_RE.test(code)) return null;
-  const spans = literalSpans(code, filename);
+  const { spans, bindsRegExp } = scanLiterals(code, filename);
+  if (bindsRegExp) refuseRegExpConstructions(code, filename, spans);
   const lineStarts = lineStartOffsets(code);
   const parts: string[] = [];
   const lineEdits = new Map<number, ColumnEdit[]>();
@@ -197,7 +228,6 @@ export function escapeNonAsciiJavaScript(
     const inSpan = spanIndex < spans.length && spans[spanIndex].start <= offset;
     const span = spans[spanIndex];
     if (inSpan && span.kind === "raw") continue;
-
     const { start, end, text } = replacementAt(
       code,
       offset,
@@ -225,6 +255,25 @@ export function escapeNonAsciiJavaScript(
     );
   }
   return { code: rewritten, lineEdits };
+}
+
+/**
+ * Fails when a regex literal would become a construction in a chunk that
+ * binds or assigns `RegExp`: there the construction could resolve to that
+ * binding, where the literal always makes a built-in `RegExp`.
+ */
+function refuseRegExpConstructions(
+  code: string,
+  filename: string,
+  spans: readonly Span[],
+): void {
+  for (const span of spans) {
+    if (span.kind !== "regex") continue;
+    if (!HAS_NON_ASCII_RE.test(code.slice(span.start, span.end))) continue;
+    throw new Error(
+      `ascii-only-output: ${filename} binds or assigns the name RegExp, or can through \`with\` or a direct \`eval\`, so its regular expression literal at offset ${span.start} cannot become a RegExp construction. Rename that binding, or escape the character in the source.`,
+    );
+  }
 }
 
 interface Replacement {
@@ -338,9 +387,10 @@ function escapedByBackslash(
 /**
  * Where the literals are: strings and untagged template text are `literal`;
  * regular expressions are `regex`; the text of a tagged template is `raw`.
- * Sorted, non-overlapping.
+ * Sorted, non-overlapping. Also whether the chunk binds or assigns the name
+ * `RegExp`, which a regex construction would then resolve to.
  */
-function literalSpans(code: string, filename: string): readonly Span[] {
+function scanLiterals(code: string, filename: string): LiteralScan {
   const parsed = parseSync(filename, code);
   if (parsed.errors.length > 0) {
     throw new Error(
@@ -349,7 +399,51 @@ function literalSpans(code: string, filename: string): readonly Span[] {
   }
   const spans: Span[] = [];
   const rawStarts = new Set<number>();
+  let bindsRegExp = false;
+  const bindsIn = (pattern: NamePattern | null): void => {
+    if (pattern !== null && namesRegExp(pattern)) bindsRegExp = true;
+  };
+  const bindsFunction = (node: ESTree.Function): void => {
+    bindsIn(node.id);
+    for (const param of node.params) bindsIn(param);
+  };
   new Visitor({
+    VariableDeclarator: (node) => bindsIn(node.id),
+    FunctionDeclaration: bindsFunction,
+    FunctionExpression: bindsFunction,
+    ArrowFunctionExpression: (node) => {
+      for (const param of node.params) bindsIn(param);
+    },
+    ClassDeclaration: (node) => bindsIn(node.id),
+    ClassExpression: (node) => bindsIn(node.id),
+    CatchClause: (node) => bindsIn(node.param),
+    ImportSpecifier: (node) => bindsIn(node.local),
+    ImportDefaultSpecifier: (node) => bindsIn(node.local),
+    ImportNamespaceSpecifier: (node) => bindsIn(node.local),
+    AssignmentExpression: (node) => bindsIn(node.left),
+    ForInStatement: (node) => {
+      if (node.left.type !== "VariableDeclaration") bindsIn(node.left);
+    },
+    ForOfStatement: (node) => {
+      if (node.left.type !== "VariableDeclaration") bindsIn(node.left);
+    },
+    UpdateExpression: (node) => bindsIn(node.argument),
+    // Either can put a `RegExp` in scope at run time that no declaration
+    // shows: a `with` object's property, or a `var` that sloppy direct
+    // `eval` declares in the calling function.
+    WithStatement: () => {
+      bindsRegExp = true;
+    },
+    CallExpression: (node) => {
+      // `(eval)(...)` is still a direct eval; `(0, eval)(...)` is not.
+      let callee = node.callee;
+      while (callee.type === "ParenthesizedExpression") {
+        callee = callee.expression;
+      }
+      if (callee.type === "Identifier" && callee.name === "eval") {
+        bindsRegExp = true;
+      }
+    },
     TaggedTemplateExpression(node) {
       for (const quasi of node.quasi.quasis) rawStarts.add(quasi.start);
     },
@@ -368,7 +462,55 @@ function literalSpans(code: string, filename: string): readonly Span[] {
       }
     },
   }).visit(parsed.program);
-  return spans.sort((left, right) => left.start - right.start);
+  return {
+    spans: spans.sort((left, right) => left.start - right.start),
+    bindsRegExp,
+  };
+}
+
+/** Anything that can bind or assign a name: a declaration's or parameter's pattern, or an assignment target. */
+type NamePattern =
+  | ESTree.BindingPattern
+  | ESTree.BindingRestElement
+  | ESTree.ParamPattern
+  | ESTree.AssignmentTarget
+  | ESTree.AssignmentTargetMaybeDefault
+  | ESTree.AssignmentTargetRest
+  | ESTree.SimpleAssignmentTarget;
+
+/** Whether `pattern` binds or assigns the bare name `RegExp`, however deep. */
+function namesRegExp(pattern: NamePattern): boolean {
+  switch (pattern.type) {
+    case "Identifier":
+      return pattern.name === "RegExp";
+    case "AssignmentPattern":
+      return namesRegExp(pattern.left);
+    case "RestElement":
+      return namesRegExp(pattern.argument);
+    case "TSParameterProperty":
+      return namesRegExp(pattern.parameter);
+    case "ArrayPattern":
+      for (const element of pattern.elements) {
+        if (element !== null && namesRegExp(element)) return true;
+      }
+      return false;
+    case "ObjectPattern":
+      for (const property of pattern.properties) {
+        if (
+          namesRegExp(
+            property.type === "RestElement"
+              ? property.argument
+              : property.value,
+          )
+        ) {
+          return true;
+        }
+      }
+      return false;
+    default:
+      // A member expression or a TypeScript wrapper assigns no bare name.
+      return false;
+  }
 }
 
 /**
