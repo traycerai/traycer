@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
-// T20: `createServiceDefinitionRefresher`'s `run` wrapper
+// `createServiceDefinitionRefresher`'s `run` wrapper
 // (`definition-refresh.ts:52-56`) re-checks `verifyServiceMutationAuthority`
 // immediately before EVERY service-manager call it makes - not once, up
 // front, at the refresher's own entry. Forced onto the Linux branch (the

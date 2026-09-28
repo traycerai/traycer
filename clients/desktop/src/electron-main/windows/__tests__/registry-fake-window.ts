@@ -17,7 +17,7 @@ export class RegistryFakeWindow implements CloseToTrayManagedWindow {
   minimized = false;
 
   /**
-   * F30/T33: `shown: false` is a still-loading window - not visible, not
+   * `shown: false` is a still-loading window - not visible, not
    * minimized, never hidden (distinct from one that WAS visible and got
    * `.hide()`d). Explicit and required: every caller states which one it
    * means.
@@ -106,7 +106,7 @@ export interface RegistryRig {
  * order; a window created past the end of the queue is `shown: true` (the
  * ordinary, already-loaded case every existing caller wants). Pass `[]` for
  * that default; pass `false` at an index to make that one window a
- * still-loading one (F30/T33).
+ * still-loading one.
  */
 export function registryRig(shownQueue: readonly boolean[]): RegistryRig {
   const created: RegistryFakeWindow[] = [];

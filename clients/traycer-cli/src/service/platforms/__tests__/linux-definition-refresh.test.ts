@@ -28,7 +28,7 @@ vi.mock("../../label", async (importOriginal) => {
   };
 });
 
-// F16: a read-only `systemctl --user show -p NeedDaemonReload` probe, run
+// A read-only `systemctl --user show -p NeedDaemonReload` probe, run
 // through `process-runner`'s `runCommand` (NOT the refresh's injected `run`)
 // whenever the unit TEXT already looks current - so a unit rewrite whose
 // `daemon-reload` earlier failed is detected even though the file itself
@@ -83,7 +83,7 @@ import type { ServiceLabel } from "../../label";
 import type { CliInvocation } from "../../cli-binary";
 
 /**
- * `refreshLinuxServiceDefinition` / `inspectLinuxServiceDefinition` (M1):
+ * `refreshLinuxServiceDefinition` / `inspectLinuxServiceDefinition`:
  * bring a stale systemd user unit to `buildSystemdUnit`'s current text
  * WITHOUT ever running `start`, `restart`, `stop`, `enable`, `disable`,
  * `kill` or `reset-failed` - the only mutating call allowed is exactly one
@@ -408,7 +408,7 @@ describe("daemon-reload rejects", () => {
 
   // Extends the scenario above (pinned at :332-373 as of head 82d2c71781):
   // that test proves the daemon-reload failure is reported and the rewrite
-  // survives it. This continues from there with a RETRY - the real F16
+  // survives it. This continues from there with a RETRY - the real
   // failure mode - rather than editing the pinned test in place.
   it("retry after the failed reload above: NeedDaemonReload now answers 'yes', so the retry reloads and succeeds - head sees the already-current text and does nothing", async () => {
     const label = labelFor("daemon-reload-rejects-then-retry");
@@ -465,13 +465,13 @@ describe("daemon-reload rejects", () => {
   });
 });
 
-// F16: `planLinuxDefinition` currently treats unit-TEXT equality alone as
+// `planLinuxDefinition` currently treats unit-TEXT equality alone as
 // proof there is nothing to do. When a PREVIOUS unit rewrite's own
 // `daemon-reload` failed, systemd still holds the old unit
 // (`NeedDaemonReload=yes`) even though the file on disk now matches
 // `buildUnit`'s current output - so a retry of `host service refresh` must
 // still reload, not report `current`.
-describe("F16: NeedDaemonReload=yes on an already-current unit text", () => {
+describe("NeedDaemonReload=yes on an already-current unit text", () => {
   it("current unit text + NeedDaemonReload=yes: inspect is stale, refresh runs exactly one daemon-reload with no file rewrite - head reports current with zero calls", async () => {
     const label = labelFor("f16-needs-reload");
     const currentText = buildSystemdUnit({ label, cli: CLI });

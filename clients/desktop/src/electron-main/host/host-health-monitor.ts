@@ -132,8 +132,7 @@ const UNREACHABLE_WARN_MS = 600_000;
  * without a spawn, whether the pid still exists
  * (`probeProcessExistenceWithoutSpawn`), and a host that has died since is
  * judged on the next tick rather than at the end of the window - the same
- * rule, and the same defect, as the lifecycle's cached identity verdict
- * (DESKTOP-DEAD-HOST-CACHED-ALIVE).
+ * rule, and the same defect, as the lifecycle's cached identity verdict.
  *
  * Nor does it outlive a clock that stepped backward: see
  * `isInsideAliveRecheckWindow`.

@@ -140,7 +140,7 @@ async function buildRig(input: {
       return () => undefined;
     },
     watchHostHome: () => null,
-    // F5: red - `LifecycleObserverRuntime` has no `processExists` seam yet,
+    // Red - `LifecycleObserverRuntime` has no `processExists` seam yet,
     // so this is simply ignored by production code today.
     processExists: () => "gone",
   };

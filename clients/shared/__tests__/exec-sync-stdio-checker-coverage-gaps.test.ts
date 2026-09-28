@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { checkExecSyncStdio } from "./exec-sync-stdio-checker";
 
 /**
- * F9 (findings-int.md): `exec-sync-stdio-checker.ts:59-101`
+ * `exec-sync-stdio-checker.ts:59-101`
  * (`objectLiteralHasStdioProperty` / `guardedCalleeName`) asks only whether
  * an `stdio` KEY exists on an object-literal argument, and only recognizes
  * a bare identifier or direct `.execFileSync`/`.execSync` property access as
@@ -21,11 +21,11 @@ import { checkExecSyncStdio } from "./exec-sync-stdio-checker";
  *  - `spawnSync(...)` copies a failing child's stderr the same way and is
  *    not a guarded name at all.
  *
- * This gate shares its class with G4 (the host's twin checker,
- * `traycer-host/src/__tests__/exec-sync-stdio-checker.ts`, which has the
+ * This gate shares its class with the host's twin checker
+ * (`traycer-host/src/__tests__/exec-sync-stdio-checker.ts`, which has the
  * identical structural gap for `stdio: "inherit"`).
  */
-describe("checkExecSyncStdio flags every stderr-forwarding shape it currently misses (F9)", () => {
+describe("checkExecSyncStdio flags every stderr-forwarding shape it currently misses", () => {
   it('flags stdio: "inherit"', () => {
     const result = checkExecSyncStdio(
       "fixture.ts",

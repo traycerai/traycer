@@ -53,7 +53,7 @@ afterAll(() => {
 });
 
 // `readLiveSupervisorRun` (host/live-supervisor-run.ts, NEW for
-// CRASH-RELAUNCH-ENSURE-RACE) is the one reader that answers "is a
+// the crash-relaunch race with `host ensure`) is the one reader that answers "is a
 // supervisor alive here, and how was it admitted?" - every doubt reads as
 // `null`. These tests use REAL processes for identity (this test process
 // itself for "alive", a spawned-then-killed child for "dead") and real

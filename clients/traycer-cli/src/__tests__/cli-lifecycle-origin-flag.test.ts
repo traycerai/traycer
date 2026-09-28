@@ -243,7 +243,7 @@ describe("--lifecycle-origin on the eight start-capable commands", () => {
   }
 });
 
-// F19c: `maintenance` is an INTERNAL classification the relaunch legs of
+// `maintenance` is an INTERNAL classification the relaunch legs of
 // `host update` / `host restart` stamp themselves - never something an
 // external caller (a person, a script, Desktop) is entitled to assert
 // through the flag. `HOST_START_ORIGINS` today backs both the wire
@@ -251,7 +251,7 @@ describe("--lifecycle-origin on the eight start-capable commands", () => {
 // accepted from argv on every command in `ORIGIN_FLAG_CASES`. The fix drops
 // it from the flag's own choices, leaving it reachable only from the
 // internal relaunch legs that set it without going through this option.
-describe("--lifecycle-origin maintenance is not a legal external value (F19c)", () => {
+describe("--lifecycle-origin maintenance is not a legal external value", () => {
   let exitSpy: MockInstance;
   beforeEach(() => {
     exitSpy = vi
@@ -285,7 +285,7 @@ describe("--lifecycle-origin maintenance is not a legal external value (F19c)", 
   });
 });
 
-describe("F4-B: `host stop` forwards --lifecycle-origin to buildHostStopCommand", () => {
+describe("`host stop` forwards --lifecycle-origin to buildHostStopCommand", () => {
   let exitSpy: MockInstance;
   beforeEach(() => {
     exitSpy = vi
@@ -300,7 +300,7 @@ describe("F4-B: `host stop` forwards --lifecycle-origin to buildHostStopCommand"
     vi.restoreAllMocks();
   });
 
-  // F4-B: `host stop --if-idle --lifecycle-origin desktop` must reach
+  // `host stop --if-idle --lifecycle-origin desktop` must reach
   // `buildHostStopCommand` as `lifecycleOrigin: "desktop"`. Head never
   // forwards the flag to this builder, so the test is red.
   it("`host stop --if-idle --lifecycle-origin desktop` reaches the builder as lifecycleOrigin: 'desktop'", async () => {
@@ -317,7 +317,7 @@ describe("F4-B: `host stop` forwards --lifecycle-origin to buildHostStopCommand"
     });
   });
 
-  // F4-B: plain `host stop --force`, with no --lifecycle-origin, must reach
+  // Plain `host stop --force`, with no --lifecycle-origin, must reach
   // the builder as lifecycleOrigin: "terminal" (DEFAULT_HOST_START_ORIGIN).
   // Head never forwards the flag, so the test is red.
   it("`host stop --force` with no --lifecycle-origin reaches the builder as lifecycleOrigin: 'terminal'", async () => {

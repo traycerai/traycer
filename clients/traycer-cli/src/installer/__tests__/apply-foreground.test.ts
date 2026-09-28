@@ -11,7 +11,7 @@ import {
   vi,
 } from "vitest";
 
-// P1-apply (F4-restart-sibling family, `applyHost` leg): "The desktop leaves
+// The `applyHost` leg: "The desktop leaves
 // a host that a person started in a terminal untouched; the mode governs the
 // service run only." `applyHost` (`../apply.ts`) has NO `lifecycleOrigin`
 // field and NO foreground-run guard on current, unmodified bytes - confirmed
@@ -324,7 +324,7 @@ afterEach(() => {
   rmSync(hostHomeDir(ENV), { recursive: true, force: true });
 });
 
-describe("applyHost - foreground-run guard (P1-apply)", () => {
+describe("applyHost - foreground-run guard", () => {
   // Test 1: desktop-origin refusal. RED on head - `ApplyHostOptions` has no
   // `lifecycleOrigin` field and no guard reads a foreground run, so the call
   // proceeds straight to the busy check and the service lifecycle instead of

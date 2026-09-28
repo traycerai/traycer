@@ -37,7 +37,7 @@ interface HostStatusOutput {
   /**
    * The host lifecycle policy, the desktop presence, and whether the running
    * supervisor enforces the policy - so "why is my host not running after a
-   * reboot" has an answer here (lifecycle mechanics, D7). Additive: existing
+   * reboot" has an answer here. Additive: existing
    * parsers of this payload ignore it.
    */
   readonly lifecycle: HostLifecycleSnapshot;

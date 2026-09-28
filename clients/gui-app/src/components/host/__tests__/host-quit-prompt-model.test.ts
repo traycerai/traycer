@@ -262,7 +262,7 @@ describe("describeHostQuitPrompt - busy-retry round", () => {
   });
 });
 
-describe("describeHostQuitPrompt - F13: non-initial rounds build countsLine with busy:true", () => {
+describe("describeHostQuitPrompt - non-initial rounds build countsLine with busy:true", () => {
   // A busy/busy-retry round is always busy whatever the FRESH verdict says
   // (the host has just refused an idle-only stop), so countsLine must never
   // be built with the fresh verdict's own busy/idle split.
@@ -318,7 +318,7 @@ describe("describeHostQuitPrompt - F13: non-initial rounds build countsLine with
   }
 });
 
-describe("F24: not-running verdict (a directory entry that is down / not dialable)", () => {
+describe("not-running verdict (a directory entry that is down / not dialable)", () => {
   const NOT_RUNNING_VERDICT: HostQuitVerdict = { kind: "not-running" };
 
   it("initial + ask: auto-answers keep, remember:false, like no-local-host", () => {

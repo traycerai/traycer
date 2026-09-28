@@ -149,7 +149,7 @@ vi.mock("../busy-check", () => ({
   assertHostNotBusy: mocks.assertHostNotBusyMock,
 }));
 
-// P4: real exports (the message constant, the error builder) plus a `vi.fn`
+// Real exports (the message constant, the error builder) plus a `vi.fn`
 // for the read, defaulted to "not-disabled" in `beforeEach` below so every
 // OTHER row in this file - none of which cares about this gate - keeps
 // exercising `runStart`'s escalation exactly as before this mock existed.
@@ -438,7 +438,7 @@ describe("ensureHost", () => {
     });
   });
 
-  // T2: every existing fixture in this file passes `lifecycleOrigin:
+  // Every existing fixture in this file passes `lifecycleOrigin:
   // "terminal"` (the default in `makeOpts`), so nothing here pins that the
   // desktop's own origin actually reaches the published host-start adoption
   // proof. `host ensure` is desktop's post-auth provisioning call, so a
@@ -923,16 +923,16 @@ describe("ensureHost", () => {
     expect(discardStagedHostInstallSourceMock).toHaveBeenCalledTimes(1);
   });
 
-  // R2 (F18 sibling): `readProvisionState` (provision.ts ~:1682-1696) reads a
+  // `readProvisionState` (provision.ts ~:1682-1696) reads a
   // `controller.status` REJECTION as "not registered" - the same shape
   // `statusService` (windows.ts) confuses "access denied" and "timeout" with
-  // "no such task" for (R1). Reading a failed probe as unregistered sends
+  // "no such task" as well. Reading a failed probe as unregistered sends
   // `ensureHost` down the service-register branch even for a host that is
   // fully installed and registered - `installHostServiceWithAttempt` ->
   // `controller.install`, which on Windows is `/Create /F` over the EXISTING
   // task: it drops the user's disabled/customised settings for a task that
   // was never actually missing.
-  describe("R2: a status probe failure must not be read as 'not registered'", () => {
+  describe("a status probe failure must not be read as 'not registered'", () => {
     function accessDeniedStatusError(): Promise<never> {
       return import("../../service/process-runner").then(
         ({ ProcessRunError }) => {
@@ -1088,7 +1088,7 @@ describe("ensureHost", () => {
     });
   });
 
-  describe("P4: a user-disabled Scheduled Task must not be silently re-registered", () => {
+  describe("a user-disabled Scheduled Task must not be silently re-registered", () => {
     function stoppedControllerWithFailingStart(): ServiceController {
       const controller = makeController("stopped");
       controller.status = vi.fn(async () => ({

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
 
-// T20: `refreshServiceDefinitionUnderContender` (this file's other subject
+// `refreshServiceDefinitionUnderContender` (this file's other subject
 // under test) resolves the CLI attempt lock's home via `hostHomeDir`, which
 // - unless `WithCliUpdateContenderOptions.hostHomeDir` is passed explicitly,
 // which this command never does - falls back to `store/paths`'s

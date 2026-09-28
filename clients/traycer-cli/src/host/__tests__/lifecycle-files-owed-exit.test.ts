@@ -122,7 +122,7 @@ async function writeKeptRunState(mark: boolean): Promise<void> {
   await removeSupervisorRecords(ENVIRONMENT, PREDECESSOR_PID, "keep-run-state");
 }
 
-describe("readInheritableRunOwnership cannot tell an owed exit from a SIGKILL (F19a)", () => {
+describe("readInheritableRunOwnership cannot tell an owed exit from a SIGKILL", () => {
   it("inherits from an UNMARKED kept run state - a SIGKILL left the same file behind and must not be inherited", async () => {
     const calls: ProbeCall[] = [];
     mockProbeAsGone(calls);
@@ -157,7 +157,7 @@ describe("readInheritableRunOwnership cannot tell an owed exit from a SIGKILL (F
   });
 });
 
-describe("an owed exit's removeRecords binding marks the run state it keeps (F19b)", () => {
+describe("an owed exit's removeRecords binding marks the run state it keeps", () => {
   it("marks supervisor-run.json owesSuccessor: true via the real removeRecords binding, and removes supervisor.json", async () => {
     const {
       writeSupervisorRecords,

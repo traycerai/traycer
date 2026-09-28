@@ -221,7 +221,7 @@ describe("start identity survives a wall-clock step", () => {
  * `probeProcessExistenceWithoutSpawn` answers "does this pid name a running
  * process" with `process.kill(pid, 0)` alone - no `ps`/`tasklist` spawn - so a
  * caller that re-asks on a fast timer (`HostLifecycle`'s cached identity
- * verdict, DESKTOP-DEAD-HOST-CACHED-ALIVE) can afford to check on every read
+ * verdict) can afford to check on every read
  * instead of trusting a verdict that is up to 120s stale. `exists` may only
  * ever KEEP an answer a full identity probe already gave; `gone` and
  * `unknown` both send the caller back to the full read - see the doc comment
@@ -251,14 +251,14 @@ describe("probeProcessExistenceWithoutSpawn", () => {
     };
   }
 
-  it("P1: reports exists for this process's own live pid, and gone for a pid that cannot name one", () => {
+  it("reports exists for this process's own live pid, and gone for a pid that cannot name one", () => {
     expect(probeProcessExistenceWithoutSpawn(process.pid)).toBe("exists");
     expect(probeProcessExistenceWithoutSpawn(0)).toBe("gone");
     expect(probeProcessExistenceWithoutSpawn(-1)).toBe("gone");
     expect(probeProcessExistenceWithoutSpawn(1.5)).toBe("gone");
   });
 
-  it("P2: reports gone when the kernel positively has no process at this pid (ESRCH)", () => {
+  it("reports gone when the kernel positively has no process at this pid (ESRCH)", () => {
     vi.spyOn(process, "kill").mockImplementation(() => {
       throw errnoError("ESRCH");
     });
@@ -266,7 +266,7 @@ describe("probeProcessExistenceWithoutSpawn", () => {
     expect(probeProcessExistenceWithoutSpawn(4242)).toBe("gone");
   });
 
-  it("P3: reports exists for EPERM on a POSIX platform - the kernel found the pid to check permissions against", () => {
+  it("reports exists for EPERM on a POSIX platform - the kernel found the pid to check permissions against", () => {
     const restorePlatform = stubPlatform("linux");
     try {
       vi.spyOn(process, "kill").mockImplementation(() => {
@@ -287,7 +287,7 @@ describe("probeProcessExistenceWithoutSpawn", () => {
    * evidence of life; `unknown` sends the caller back to the full identity
    * read rather than letting a stale cached verdict stand in for one.
    */
-  it("P4: reports unknown for EPERM on win32, where EPERM is not positive evidence", () => {
+  it("reports unknown for EPERM on win32, where EPERM is not positive evidence", () => {
     const restorePlatform = stubPlatform("win32");
     try {
       vi.spyOn(process, "kill").mockImplementation(() => {
@@ -300,7 +300,7 @@ describe("probeProcessExistenceWithoutSpawn", () => {
     }
   });
 
-  it("P5: reports unknown for any other errno - a probe failure is never positive evidence either way", () => {
+  it("reports unknown for any other errno - a probe failure is never positive evidence either way", () => {
     vi.spyOn(process, "kill").mockImplementation(() => {
       throw errnoError("EINVAL");
     });

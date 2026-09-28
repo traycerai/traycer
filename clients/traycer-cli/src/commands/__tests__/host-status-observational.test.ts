@@ -248,7 +248,7 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
     expect(result.human).toContain("corrupt");
   });
 
-  // O-WIN-1: a Windows requested-kill is recorded as `killed` with the
+  // A Windows requested-kill is recorded as `killed` with the
   // handle-bound kill's exit CODE and no signal (`persistChildExit`). The
   // human renderer must show that code, not silently drop it the way a bare
   // `killed` (no code, no signal) would.

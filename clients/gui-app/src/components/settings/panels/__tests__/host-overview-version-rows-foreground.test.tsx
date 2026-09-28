@@ -1,4 +1,4 @@
-// The P1-in-'none' ruling, applied to the Overview ▸ Updates version picker
+// The foreground-sentence ruling, applied to the Overview ▸ Updates version picker
 // (`host-overview-version-picker.tsx`, rows in `host-version-rows.tsx`; props
 // built in `host-overview-updates-state.ts`, passed at
 // `host-overview-panel.tsx`). During a LOCAL foreground run, every row's
@@ -7,7 +7,7 @@
 // surfaces show instead of "Update now" - neither is wired in yet, so every
 // row below is red at head.
 //
-// Harness mirrors `host-overview-foreground-run.test.tsx` (child B's file,
+// Harness mirrors `host-overview-foreground-run.test.tsx` (that file,
 // read for the pattern, not imported/edited): boundary mocks, a fake
 // `hostLifecycle`, `HostSettingsPanel` under `RunnerHostProvider`. This file
 // additionally opens the Updates tab (`selectHostOverviewTab`) and builds an
@@ -87,7 +87,7 @@ import {
 import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
 
 /**
- * The P1-in-'none' ruling: the constant naming this line does not exist yet
+ * The foreground-sentence ruling: the constant naming this line does not exist yet
  * (mirrors `HOST_FOREGROUND_UPDATE_READY` in `host-lifecycle-copy.ts`), so the
  * literal is asserted directly here too.
  */
@@ -230,7 +230,7 @@ async function findInstallButton(version: string): Promise<HTMLButtonElement> {
 }
 
 describe("host-overview-version-picker — Install disabled during a local foreground run", () => {
-  it("[RED V1] managed + pending:'none': Install disabled, the P1 line present, aria-describedby wired, no dispatch", async () => {
+  it("[RED] managed + pending:'none': Install disabled, the foreground-update line present, aria-describedby wired, no dispatch", async () => {
     const installCalls: string[] = [];
     renderOverview({
       hostId: "host-local",
@@ -262,7 +262,7 @@ describe("host-overview-version-picker — Install disabled during a local foreg
     expect(installCalls).toEqual([]);
   });
 
-  it("[RED V2] localHostCapability:'none': disabled, the self-serve line, the P1 line absent, no dispatch", async () => {
+  it("[RED] localHostCapability:'none': disabled, the self-serve line, the foreground-update line absent, no dispatch", async () => {
     const installCalls: string[] = [];
     renderOverview({
       hostId: "host-local",
@@ -357,7 +357,7 @@ describe("host-overview-version-picker — Install disabled during a local foreg
 });
 
 // ---------------------------------------------------------------------------
-// V3 — the Install-anyway confirm (a `storeFormatConfirmation` row)
+// The Install-anyway confirm (a `storeFormatConfirmation` row)
 // ---------------------------------------------------------------------------
 //
 // Reached the same way `host-overview-updates.test.tsx` reaches it: a
@@ -427,7 +427,7 @@ function recordV3Minors(hostId: string): void {
 }
 
 describe("host-overview-version-picker — the Install-anyway confirm during a local foreground run", () => {
-  it("[RED V3] opened at admittedAs:null, then foreground pushed: Confirm disabled with the line as blockedReason, nothing dispatched", async () => {
+  it("[RED] opened at admittedAs:null, then foreground pushed: Confirm disabled with the line as blockedReason, nothing dispatched", async () => {
     const installRequests: Array<{
       readonly version: string;
       readonly force: boolean;

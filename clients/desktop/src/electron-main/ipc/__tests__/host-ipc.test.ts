@@ -1,5 +1,5 @@
 // Pure-function coverage for `restartRequestResultFromOutcome` /
-// `serviceRestartResultFromOutcome` (MIX-OLD-SUPERVISOR): the wire-result
+// `serviceRestartResultFromOutcome`: the wire-result
 // mapping every restart surface (`requestHostRespawn`,
 // `traycerHostServiceRestartIfHostIdle`, `traycerHostRestartIfIdle`, the
 // Doctor "restart" repair) resolves through. No bridge, no controller - both

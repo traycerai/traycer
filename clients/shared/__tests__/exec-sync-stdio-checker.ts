@@ -85,7 +85,7 @@ function objectLiteralHasCapturedStdio(
 /** Does `call` carry an object-literal argument whose `stdio` value captures
  * or discards stderr (`"pipe"` / `"ignore"`, or an array whose index 2 is
  * one of those)? `"inherit"`, `undefined`, and `["ignore","pipe","inherit"]`
- * all still copy the child's stderr into ours (G4 / F9). */
+ * all still copy the child's stderr into ours. */
 function callHasStdioOptionsObject(call: ts.CallExpression): boolean {
   return call.arguments.some(
     (argument) =>

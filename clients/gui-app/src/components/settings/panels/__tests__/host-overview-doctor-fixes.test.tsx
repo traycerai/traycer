@@ -533,7 +533,7 @@ describe("Overview doctor — the three local-only repairs", () => {
 });
 
 describe("Overview doctor — a local fix re-runs Doctor only when applied", () => {
-  // DOCTOR-RPC-CARD-STALE-AFTER-FIX: before the fix, `onLocalFix` took no
+  // Before the fix, `onLocalFix` took no
   // `onApplied` callback, so the card never re-read the report after a local
   // repair — the fixed issue's row, and its still-enabled fix button, stayed
   // on screen until someone clicked "Re-run Doctor" by hand. The four tests

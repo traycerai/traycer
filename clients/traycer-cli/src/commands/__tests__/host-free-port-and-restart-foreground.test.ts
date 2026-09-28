@@ -8,7 +8,7 @@ import type { CommandContext } from "../../runner/runner";
 // own pattern for this exact mock.
 import type { KillConflictingPortOwnerResult } from "../../host/free-port-kill";
 
-// F4-restart-sibling (row 6): `host free-port-and-restart`'s sibling guard to
+// `host free-port-and-restart`'s sibling guard to
 // `host-restart-foreground.test.ts` - see that file's header for the full
 // rationale (missing foreground-run guard, HOME isolation approach, and why
 // an extra `lifecycleOrigin` field is a behavioral, not a compile-time, red
@@ -265,8 +265,8 @@ afterEach(() => {
   rmSync(workHome, { recursive: true, force: true });
 });
 
-describe("host free-port-and-restart - foreground-run guard (F4-restart-sibling)", () => {
-  // F4-restart-sibling test 3: `host free-port-and-restart` carrying
+describe("host free-port-and-restart - foreground-run guard", () => {
+  // `host free-port-and-restart` carrying
   // `lifecycleOrigin: "desktop"` over a live foreground run must reject
   // E_HOST_NOT_SERVICE_RUN, never signalling the (fake) pid and never
   // restarting.
@@ -300,7 +300,7 @@ describe("host free-port-and-restart - foreground-run guard (F4-restart-sibling)
     });
   });
 
-  // F4-restart-sibling test 3b: the PLAIN free-port-and-restart form (no
+  // The PLAIN free-port-and-restart form (no
   // `--pid`/`--port` at all, so the argument-shape validation never fires
   // either way) with `lifecycleOrigin: "desktop"` over the same live
   // foreground run.
@@ -327,7 +327,7 @@ describe("host free-port-and-restart - foreground-run guard (F4-restart-sibling)
     });
   });
 
-  // F4-restart-sibling control: with no `lifecycleOrigin` field at all (the
+  // With no `lifecycleOrigin` field at all (the
   // only reachable shape on current `HostFreePortAndRestartArgs`), a bare
   // free-port-and-restart (no `--pid`/`--port`, so the argument-shape
   // validation above never fires) over the same live foreground run still

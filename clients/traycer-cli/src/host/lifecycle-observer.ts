@@ -32,7 +32,7 @@ import {
 } from "./lifecycle-teardown";
 
 // The supervisor's policy observer and its stop rule (lifecycle mechanics,
-// "The policy observer and the stop rule"; design review round 1, R2).
+// "The policy observer and the stop rule").
 //
 // ONE observer per supervisor, for the supervisor's whole life after its
 // first admitted spawn, WHATEVER mode was in force at spawn: a Background

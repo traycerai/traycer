@@ -2930,7 +2930,7 @@ describe("killHostProcessTree convergence loop", () => {
     });
   });
 
-  // F-ZOMBIE-SURVIVOR (review addendum, Diff 2): at the round bound a
+  // At the round bound a
   // LISTING is about to fail the stop, and the whole point of this fix is
   // that a listing is no proof - an exited process can stay in the table while
   // another process still holds a handle to it. So at the bound, and only
@@ -2942,7 +2942,7 @@ describe("killHostProcessTree convergence loop", () => {
   // `isProbeCall`) - `roundedRunner`'s table-only scripting can't express a
   // scan that keeps re-listing a pid the kill script itself reports success
   // for, which is exactly the artifact this fix exists to see through.
-  describe("F-ZOMBIE-SURVIVOR: the round-bound probe on a listing the table cannot disprove", () => {
+  describe("the round-bound probe on a listing the table cannot disprove", () => {
     const ROUNDS = WINDOWS_KILL_CONVERGENCE_ROUNDS;
 
     it("a slot process the scan keeps listing every round, but the round-bound probe reports it gone, converges instead of refusing", async () => {
@@ -3273,7 +3273,7 @@ describe("failed-kill WARN gating: a `failed: <type>` outcome waits for the next
     loggerMock.warn.mockReset();
   });
 
-  it("F-CLI-FAILED-WARN: a failed-kill target absent from the next scan gets neither WARN, and the stop resolves", async () => {
+  it("a failed-kill target absent from the next scan gets neither WARN, and the stop resolves", async () => {
     // Round 0 kills 501 and the kill script reports `failed: Win32Exception`.
     // Round 1's scan does not list 501 at all - it really is gone, exactly
     // the field case (a console host that finished exiting on its own once
@@ -3340,7 +3340,7 @@ describe("failed-kill WARN gating: a `failed: <type>` outcome waits for the next
     // immediately, naming 501, before the next round's probe ever runs.
   });
 
-  it("F-ZOMBIE-SURVIVOR: a failed-kill target the next scan STILL LISTS under the same identity, but the probe reports it gone, gets NO WARN - the table row is the artifact, the handle is the truth", async () => {
+  it("a failed-kill target the next scan STILL LISTS under the same identity, but the probe reports it gone, gets NO WARN - the table row is the artifact, the handle is the truth", async () => {
     // The exact mechanism this fix exists for: 501 has genuinely exited (the
     // probe's own handle-bound read proves it), but another process still
     // holds a handle to it, so round 1's scan keeps
@@ -3411,7 +3411,7 @@ describe("failed-kill WARN gating: a `failed: <type>` outcome waits for the next
     // probe sees through. With it there is no WARN, as asserted above.
   });
 
-  it("F-CLI-FAILED-WARN (control): a failed-kill target the next scan still lists under the SAME identity gets exactly one probe-confirmed WARN, and a re-targeted kill still converges", async () => {
+  it("(control) a failed-kill target the next scan still lists under the SAME identity gets exactly one probe-confirmed WARN, and a re-targeted kill still converges", async () => {
     // Round 0 kills 501, reported `failed: Win32Exception`. Round 1's scan
     // still lists 501 under the SAME `created` (1000), and the probe
     // confirms it is genuinely still running - that is the one case the
@@ -3490,7 +3490,7 @@ describe("failed-kill WARN gating: a `failed: <type>` outcome waits for the next
     // the same identity still running, so `loggerMock.warn` is never called.
   });
 
-  it("F-CLI-FAILED-WARN (control): a failed-kill target the probe reports `reused` for gets no failed-kill WARN - a stranger now wears the recycled pid", async () => {
+  it("(control) a failed-kill target the probe reports `reused` for gets no failed-kill WARN - a stranger now wears the recycled pid", async () => {
     // Round 0 kills 501 (born 1000), reported `failed: Win32Exception`.
     // Round 1's scan lists 501 again, but born at 2000 - a fresh, unrelated
     // process that landed on the recycled pid - and the probe, asked about
@@ -3572,7 +3572,7 @@ describe("failed-kill WARN gating: a `failed: <type>` outcome waits for the next
     // nothing ever reaching the WARN gate.
   });
 
-  it("F-CLI-FAILED-WARN: an unreadable scan after a failed kill WARNs naming the target (the probe cannot report either, so nothing is proven gone), and the stop still refuses to enumerate", async () => {
+  it("an unreadable scan after a failed kill WARNs naming the target (the probe cannot report either, so nothing is proven gone), and the stop still refuses to enumerate", async () => {
     // Round 0 kills 501, reported `failed: Win32Exception`. Round 1's scan
     // itself fails (a non-authority throw, same as `scanSlotProcessTable`'s
     // other unreadable-scan pins), so it resolves `null` rather than a table.
@@ -3648,7 +3648,7 @@ describe("failed-kill WARN gating: a `failed: <type>` outcome waits for the next
     });
   });
 
-  it("F-CLI-FAILED-WARN: a probe that cannot report keeps every failed target running even though the very next scan is healthy and empty - the probe is the sole gate, not scan absence", async () => {
+  it("a probe that cannot report keeps every failed target running even though the very next scan is healthy and empty - the probe is the sole gate, not scan absence", async () => {
     // Round 0 kills 501 AND 502, both reported `failed: Win32Exception`.
     // Round 1's scan succeeds and lists neither - under the OLD (pre-probe)
     // table-matching mechanism this alone would have cleared both silently.
@@ -3703,7 +3703,7 @@ describe("failed-kill WARN gating: a `failed: <type>` outcome waits for the next
     });
   });
 
-  it("F-CLI-FAILED-WARN: the probe never runs when no kill failed - an ordinary clean converge issues no probe-shaped call", async () => {
+  it("the probe never runs when no kill failed - an ordinary clean converge issues no probe-shaped call", async () => {
     const calls: RecordedCall[] = [];
     let scanCount = 0;
     const runner: ProcessRunner = async (command, args) => {
@@ -3735,7 +3735,7 @@ describe("failed-kill WARN gating: a `failed: <type>` outcome waits for the next
     expect(loggerMock.warn).not.toHaveBeenCalled();
   });
 
-  it("F-CLI-FAILED-WARN (kept behaviour): a `reused` outcome still WARNs immediately in its own round, before any next scan", async () => {
+  it("(kept behaviour) a `reused` outcome still WARNs immediately in its own round, before any next scan", async () => {
     // 601's kill script reports `reused` - a different process now wears the
     // pid - which is not a `failed...` outcome and must keep the immediate
     // "unreached" WARN this mechanism has always given it; only `failed...`
@@ -3796,7 +3796,7 @@ describe("failed-kill WARN gating: a `failed: <type>` outcome waits for the next
 // `WINDOWS_KILL_CONVERGENCE_ROUNDS` rounds running up to the bound, which is
 // more fixture weight for the same chunking behaviour. `probeProcessesGone`
 // itself is private, so there is no more direct path.
-describe("F-ZOMBIE-SURVIVOR: the probe chunks like the kill (WINDOWS_KILL_TARGETS_PER_SCRIPT per script)", () => {
+describe("the probe chunks like the kill (WINDOWS_KILL_TARGETS_PER_SCRIPT per script)", () => {
   beforeEach(() => {
     mocks.readHostPidMetadata.mockReset();
     mocks.readHostPidMetadata.mockResolvedValue(null);
@@ -4019,7 +4019,7 @@ describe("F-ZOMBIE-SURVIVOR: the probe chunks like the kill (WINDOWS_KILL_TARGET
 // alone would not catch a wiring bug that hands the wrong pid in as `cliPid`
 // (`process.pid`, not PowerShell's own `$PID` inside the scan script).
 // The kill is a PowerShell script over (pid, creation time) pairs, not a
-// `taskkill` per pid (post-merge P1 on #1755): the scan proves a row is the
+// `taskkill` per pid (#1755): the scan proves a row is the
 // host's by pid AND creation time, but a pid-only kill re-resolves the integer
 // at kill time, so a victim that exits between the snapshot and the kill and
 // has its pid reused hands the kill to a stranger the carry-over never saw.
@@ -4068,7 +4068,7 @@ describe("handle-bound kill script", () => {
     expect(script).toContain("if ($null -ne $process) { $process.Dispose() }");
   });
 
-  it('F-ZOMBIE-SURVIVOR: a "probe" script never kills - it only reads HasExited through the pinned handle - while a "kill" script still terminates', () => {
+  it('a "probe" script never kills - it only reads HasExited through the pinned handle - while a "kill" script still terminates', () => {
     const probe = buildWindowsHandleBoundKillScript(
       [{ processId: 400, created: 1_700_000_000_000_400 }],
       "probe",
@@ -4097,7 +4097,7 @@ describe("handle-bound kill script", () => {
     );
   });
 
-  it('F-ZOMBIE-SURVIVOR: a kill that throws re-checks HasExited through the SAME pinned handle before reporting "failed" - an exiting process reports "gone", not "failed"', () => {
+  it('a kill that throws re-checks HasExited through the SAME pinned handle before reporting "failed" - an exiting process reports "gone", not "failed"', () => {
     const kill = buildWindowsHandleBoundKillScript(
       [{ processId: 400, created: 1_700_000_000_000_400 }],
       "kill",
@@ -4135,7 +4135,7 @@ describe("handle-bound kill script", () => {
     // Same epoch, same UTC normalisation on both sides.
     expect(scan).toContain(`($_.CreationDate${epoch} / 10)`);
     expect(kill).toContain(`($process.StartTime${epoch}`);
-    // But NOT the scan's `/ 10` (cold review P1 on the first draft): the
+    // But NOT the scan's `/ 10` (an earlier draft's oversight): the
     // scan's ticks are multiples of 10 (CIM carries microseconds) so its
     // division is exact, while StartTime keeps the FILETIME's 100 ns digit
     // and PowerShell's non-exact `[long]` division goes through `[double]`,
@@ -4210,12 +4210,12 @@ describe("handle-bound kill script", () => {
     await controller.stop(serviceLabelFor("staging"), { force: false });
 
     expect(killRounds(calls)).toEqual([
-      // R0: 555 (child) before 100 (host), each with the age its row had.
+      // 555 (child) before 100 (host), each with the age its row had.
       [
         { processId: 555, created: 3000 },
         { processId: 100, created: 1000 },
       ],
-      // R1: the late spawn, in its own invocation.
+      // The late spawn, in its own invocation.
       [{ processId: 777, created: 5000 }],
     ]);
     expect(scanCalls(calls)).toHaveLength(4);
@@ -4290,7 +4290,7 @@ describe("handle-bound kill script", () => {
   });
 
   it("a round with more targets than one script carries issues several scripts, in order, and still converges", async () => {
-    // Codex P2 on #1762: the script rides `powershell.exe`'s command line,
+    // #1762: the script rides `powershell.exe`'s command line,
     // which `CreateProcessW` caps at 32,767 characters; a single script over
     // 500-600 targets could not start at all, and every kill pass would
     // silently become a no-op. 600 slot processes here: three scripts of
@@ -4559,8 +4559,8 @@ describe("computeWindowsHostKillSet and the kill self-protection it drives", () 
     ).toEqual([100, 400]);
   });
 
-  describe("F26: seedSlotMatches gates whether slot-matched rows outside the placed root are seeded", () => {
-    it("seedSlotMatches:false seeds only the placed root's subtree, sparing an unrelated slot-matched row (F26 pure - red on head, which seeds every slot-matched row unconditionally)", () => {
+  describe("seedSlotMatches gates whether slot-matched rows outside the placed root are seeded", () => {
+    it("seedSlotMatches:false seeds only the placed root's subtree, sparing an unrelated slot-matched row (pure - red on head, which seeds every slot-matched row unconditionally)", () => {
       const rows: TableRowInput[] = [
         // The excluded supervisor.
         { processId: 100, parentProcessId: 1, slot: false },
@@ -4666,23 +4666,23 @@ describe("computeWindowsHostKillSet and the kill self-protection it drives", () 
   // victim's own child, and the occupant check passed it through. The
   // replacement was a lifetime window, `pid -> { created, killedAt }`.
   //
-  // Codex round 5c - an independent cold review found three P1s and a P2
+  // A later, independent review found four issues
   // against that 5b window:
-  //   P1-a - the soundness argument assumed its own conclusion. Sampling the
+  //   - the soundness argument assumed its own conclusion. Sampling the
   //     clock before the KILL does not prove the victim was still alive at
   //     that instant: it can exit on its own, its pid be reused, and the
   //     replacement fork a child, all before the sample is taken. The bound
   //     is now sampled BEFORE THE SCAN and renamed `seenAliveAt` - the scan
   //     that follows observes the victim alive at some instant after the
   //     sample, which is what makes the sample honest.
-  //   P1-b - millisecond rounding let a previous holder's fork-and-exit and
+  //   - millisecond rounding let a previous holder's fork-and-exit and
   //     the victim's own birth project to the same millisecond, wrongly
   //     admitting a stranger. `Created` is now epoch MICROSECONDS.
-  //   P1-c - the scan's edge validation compared LOCAL DateTimes; across a
+  //   - the scan's edge validation compared LOCAL DateTimes; across a
   //     DST fall-back a newer holder can look older and the scan would
   //     VALIDATE a stranger's edge instead of refusing it. Both operands are
   //     now `.ToUniversalTime()` (see the script-pin test above).
-  //   P2 - a row born after the bound but genuinely the host's own child was
+  //   - a row born after the bound but genuinely the host's own child was
   //     refused forever and silently spared, and the loop reported the stop
   //     successful with it alive. `computeWindowsHostKillSet` now returns
   //     `unattributed` alongside `kill`, and the loop (below) throws rather
@@ -4724,13 +4724,13 @@ describe("computeWindowsHostKillSet and the kill self-protection it drives", () 
       });
     });
 
-    it("P1-a: born after seenAliveAt is unattributed, neither killed nor silently spared", () => {
+    it("born after seenAliveAt is unattributed, neither killed nor silently spared", () => {
       // The cold review's finding: an earlier version sampled the clock
       // before the KILL rather than before the SCAN, so a row born after the
       // victim genuinely exited - but before that stale sample was taken -
       // could pass as "still inside the window". Refusing to kill it is not
       // enough on its own either: an even earlier version silently spared
-      // rows like this, which is the P2 the loop-level tests below cover.
+      // rows like this, which is the gap the loop-level tests below cover.
       const table = rowsOf([victimRow(777, 0, 100, 6000, false), cliRow]);
       expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
         kill: [],
@@ -4740,7 +4740,7 @@ describe("computeWindowsHostKillSet and the kill self-protection it drives", () 
       });
     });
 
-    it("P2-2: a row older than the victim is DECIDED, not undecided - it cannot be the victim's child at all", () => {
+    it("a row older than the victim is DECIDED, not undecided - it cannot be the victim's child at all", () => {
       // A process cannot predate its own parent, so 777 (born 900, before
       // 100's own birth at 1000) never was 100's child - the claimed id is
       // one 777 has worn since before 100 existed, which this scan simply
@@ -4784,11 +4784,11 @@ describe("computeWindowsHostKillSet and the kill self-protection it drives", () 
       });
 
       // Ablation (§ablation table): change `created < victim.created` to
-      // `return "unattributed"` → the P2-2 test above reddens, becoming
+      // `return "unattributed"` → the DECIDED-not-undecided test above reddens, becoming
       // `{ kill: [], protectedAncestors: [], undecided: [777], unattributed: [777] }` instead of deciding the row is
       // simply not the victim's child.
       // Ablation (§ablation table): drop `row.created <= victim.seenAliveAt`
-      // → the P1-a test above reddens the same way - exactly the bug this
+      // → the born-after-seenAliveAt test above reddens the same way - exactly the bug this
       // fix exists to close.
     });
 
@@ -4883,7 +4883,7 @@ describe("computeWindowsHostKillSet and the kill self-protection it drives", () 
     });
 
     it("a spared undecided shell's unspared child is reported, and the shell itself is kept in the memory feed", () => {
-      // The cold review's round-6 P2, as one round: the host was killed with
+      // One round of the analogous loop-level test: the host was killed with
       // an UNREADABLE age, so shell 700 (claiming it, born 2000) can be
       // placed neither way; the CLI (9999) is 700's validated child, and so
       // is a side worker 888 (born 6000). 700 is spared by ancestry and 888
@@ -4911,7 +4911,7 @@ describe("computeWindowsHostKillSet and the kill self-protection it drives", () 
       // Ablation: in `computeWindowsHostKillSet`, build `undecided` with the
       // `!spared.has(pid)` filter too (make it equal to `unattributed`) →
       // this assertion and the one above redden on `undecided`, and the
-      // loop-level "round-6 P2" test reddens into a resolved stop.
+      // spared-shell-uncertainty loop-level test reddens into a resolved stop.
     });
 
     it("overlap: a spared shell in BOTH closures - the killed host's validated child and an undecided root's descendant - stays in the memory feed", () => {
@@ -4951,7 +4951,7 @@ describe("computeWindowsHostKillSet and the kill self-protection it drives", () 
     });
 
     it("the CLI's own branch is never a host suspect: its slot-matched scan under an undecided CLI is neither reported nor remembered", () => {
-      // The cold review's round-7 P2, as one round. The host (100) was
+      // One round of the analogous loop-level test. The host (100) was
       // killed with an UNREADABLE age, so the CLI (9999, claiming it) is
       // undecided this round, and its own PowerShell scan 777 - a validated
       // child, slot-MATCHED because its command line names the slot paths -
@@ -4979,7 +4979,7 @@ describe("computeWindowsHostKillSet and the kill self-protection it drives", () 
 
       // Ablation: in `computeWindowsHostKillSet`, drop `!cliBranch.has(pid)`
       // from the `undecided` filter → `undecided: [777, 9999]`, and the
-      // loop-level "round-7 P2" test refuses a stop over a stranger's child.
+      // loop-level CLI-branch test refuses a stop over a stranger's child.
     });
 
     it("a remembered ancestor is spared by IDENTITY once the wrappers between it and the CLI have exited; a reused pid with a different birth is not", () => {
@@ -5365,7 +5365,7 @@ describe("computeWindowsHostKillSet and the kill self-protection it drives", () 
 
         // Ablation (§ablation table): make `classifyAgainstSuspect` return
         // "none" for a row born at or after the suspect → this test reddens
-        // (`unattributed: []`), and so does the loop-level P2-1 pin above.
+        // (`unattributed: []`), and so does the loop-level undecided-row pin above.
       });
 
       it("a row provably older than the suspect's incarnation is decided, not undecided", () => {
@@ -6469,7 +6469,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
   beforeEach(() => {
     vi.stubEnv("USERDOMAIN", "TESTBOX");
     vi.stubEnv("USERNAME", "testuser");
-    // Hermeticity (SSH-USERDOMAIN-WORKGROUP): this block runs the REAL
+    // Hermeticity: this block runs the REAL
     // `stageTaskDefinition` (see the block comment above), which reaches
     // `resolveTaskUserId`. Stub COMPUTERNAME/USERDNSDOMAIN empty and force
     // the SID reader to `null` so a Windows dev machine's real values can't
@@ -6795,14 +6795,14 @@ describe("Windows controller — installService launcher-restore behavior", () =
   });
 });
 
-// P4 fact row: `installService` never reads the CURRENTLY-registered task's
+// `installService` never reads the CURRENTLY-registered task's
 // XML before it rewrites it. It builds the `/Create /F` document fresh from
 // `buildTaskXmlForUser` every time, so a task the user disabled in Task
 // Scheduler (`<Enabled>false</Enabled>` in the LIVE definition
 // `schtasks /Query /XML` would show) is silently re-enabled by any
 // re-register - `installService` has no code path that ever looks at that
-// live XML at all. This is GREEN on head: it records the current fact the P4
-// ruling must change, not a bug in this codepath itself.
+// live XML at all. This is GREEN on head: it records the current fact that
+// policy must change, not a bug in this codepath itself.
 describe("Windows controller — installService fact: /Create's XML is built fresh, never from the queried task", () => {
   beforeEach(() => {
     vi.stubEnv("USERDOMAIN", "TESTBOX");
@@ -6868,7 +6868,7 @@ describe("Windows controller — installService fact: /Create's XML is built fre
 });
 
 // Adapted from main (#2169): the guard in front of this ask
-// (`askHostToStandDown`'s own slot scan, F-WIN-STOP-COOP below) now runs
+// (`askHostToStandDown`'s own slot scan, the cooperative-shutdown guard tests below) now runs
 // BEFORE `requestCooperativeShutdownReporting` on every non-forced site, so a
 // fixture answers the guard's scan (`convergingTableRunner` always does, even
 // with an empty table) or the ask is skipped as unreadable. Every "no OS
@@ -7533,7 +7533,7 @@ describe("killSupervisedHostTree", () => {
     expect(killed).not.toContain(supervisor);
   });
 
-  it("F26 integration: kills only the root's subtree, sparing an unrelated slot-matched process (red on head, which kills it too)", async () => {
+  it("integration: kills only the root's subtree, sparing an unrelated slot-matched process (red on head, which kills it too)", async () => {
     const scanWithBystander: TableRowInput[] = [
       { processId: 0, parentProcessId: 0, slot: false },
       { processId: supervisor, parentProcessId: 1, slot: false, created: 10 },
@@ -7654,7 +7654,7 @@ describe("killSupervisedHostTree", () => {
   });
 });
 
-// F-WIN-STOP-COOP: every Windows stop that is not forced now asks the
+// Every Windows stop that is not forced now asks the
 // running host to stand down (`askHostToStandDown`) before the sweep that
 // used to be the whole stop, so its graceful close - the terminal teardown
 // and the durable store close - runs before anything is killed. The guard in
@@ -7666,7 +7666,7 @@ describe("killSupervisedHostTree", () => {
 // the ask before its `/Run`/`/Delete` ever ran. The guard reads the same slot
 // scan the sweep uses and skips the ask whenever a slot process sits above
 // `process.pid`, or whenever the scan that would prove it cannot run at all.
-describe("F-WIN-STOP-COOP: the cooperative-shutdown guard", () => {
+describe("the cooperative-shutdown guard", () => {
   beforeEach(() => {
     mocks.readHostPidMetadata.mockReset();
     mocks.readHostPidMetadata.mockResolvedValue(null);

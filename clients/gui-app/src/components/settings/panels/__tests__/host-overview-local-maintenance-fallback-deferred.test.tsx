@@ -1,4 +1,4 @@
-// Item 3 / P3: on the LOCAL-MAINTENANCE FALLBACK lane (a host below the
+// On the LOCAL-MAINTENANCE FALLBACK lane (a host below the
 // maintenance floor), does a version row's Install show the terminal-host
 // refusal verbatim when the lane resolves `{ kind: "deferred", message }`?
 //
@@ -266,7 +266,7 @@ function mountFallbackOverview(
 }
 
 describe("<HostSettingsPanel /> local-maintenance CLI fallback - a deferred (terminal-host) install outcome", () => {
-  it("P3: Update now shows the refusal verbatim", async () => {
+  it("Update now shows the refusal verbatim", async () => {
     const { management } = mountFallbackOverview({
       kind: "deferred",
       message: SENTENCE,
@@ -303,7 +303,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback - a deferred (ter
   // (`BRIDGE_CHECK_VERSION`) already offers one installable version other than
   // the running one, so this reuses that row rather than adding a fixture
   // entry.
-  it("P3: a version row's own Install shows the refusal verbatim", async () => {
+  it("a version row's own Install shows the refusal verbatim", async () => {
     const user = userEvent.setup();
     const { management } = mountFallbackOverview({
       kind: "deferred",

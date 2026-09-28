@@ -53,7 +53,7 @@ afterAll(() => {
 });
 
 // `startHostServiceWithAttempt` (host/update-mutation.ts) is the one place
-// every service start passes through - the fix for CRASH-RELAUNCH-ENSURE-RACE.
+// every service start passes through - the fix for the crash-relaunch race with `host ensure`.
 // Before doing anything, it asks whether the service's OWN supervisor
 // (admission granted/unattended) is alive; if so it returns
 // `supervisor-relaunching` and touches NOTHING - no adoption proof, no
@@ -216,7 +216,7 @@ async function runFacade(
   );
 }
 
-describe("startHostServiceWithAttempt - CRASH-RELAUNCH-ENSURE-RACE", () => {
+describe("startHostServiceWithAttempt - the crash-relaunch race with `host ensure`", () => {
   it("returns supervisor-relaunching and touches nothing when the service's own supervisor is alive", async () => {
     const hostHomeDir = await freshHome();
     const identity = readProcessStartIdentity(process.pid);

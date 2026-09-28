@@ -28,7 +28,7 @@ import type {
   ProcessIdentityVerdict,
 } from "../../store/process-identity";
 
-// The review's ruling on U3 (wall-clock silence, desktop-side): the desktop streams
+// The review's ruling (wall-clock silence, desktop-side): the desktop streams
 // `host restart` through `streamBundledTraycerCliJson`, whose idle timer
 // (`CLI_STREAM_IDLE_TIMEOUT_MS`, 600s) is re-armed by every NDJSON event the
 // CLI writes.
@@ -646,7 +646,7 @@ async function runUnderFakeTimers(args: {
   return { timeline, lines };
 }
 
-describe("host restart emits no progress across its longest waits (U3 wall-clock residual)", () => {
+describe("host restart emits no progress across its longest waits (wall-clock residual)", () => {
   it("(g1) fully stacked: stop, an unacknowledged relaunch, reads, two refused-supervisor waits, then a second relaunch - one gap spans nearly the whole run", async () => {
     recoveryAction.current = "restart-current";
     spawnEdgeConfig.failFirstCall = true;

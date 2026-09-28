@@ -508,7 +508,7 @@ describe("useLocalHostQuitStatus", () => {
   // dialability and the client's readiness, not client nullness, are what
   // tell the hook it cannot ask.
 
-  it("F24/T44: no live entry, a dead/booting directory row - reads not-running immediately and after the timeout bound", () => {
+  it("no live entry, a dead/booting directory row - reads not-running immediately and after the timeout bound", () => {
     vi.useFakeTimers();
     hostBindingMock.current = { directory: { getLocalEntry: () => null } };
     directoryListMock.current = { data: [nonDialableLocalEntry("host-a")] };
@@ -532,7 +532,7 @@ describe("useLocalHostQuitStatus", () => {
     expect(result.current.verdict).toEqual({ kind: "not-running" });
   });
 
-  it("F24/T44: a dialable entry but a not-ready client (signed out / credentials refreshing) reads unknown/no-connection without waiting for the timeout", () => {
+  it("a dialable entry but a not-ready client (signed out / credentials refreshing) reads unknown/no-connection without waiting for the timeout", () => {
     vi.useFakeTimers();
     hostBindingMock.current = {
       directory: { getLocalEntry: () => localEntry("host-a") },
@@ -634,7 +634,7 @@ describe("useLocalHostQuitStatus", () => {
     expect(statusQueryMock.refetch).toHaveBeenCalledTimes(1);
   });
 
-  describe("T44: useHostQuery is called with this host's client, never the app-wide one", () => {
+  describe("useHostQuery is called with this host's client, never the app-wide one", () => {
     it("a live local entry resolves the client for that host id, by identity", () => {
       const clientA = readyClient("host-a", localEntry("host-a"));
       const appWideClient = readyClient("app-wide", localEntry("app-wide"));

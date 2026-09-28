@@ -17,7 +17,7 @@ import {
   parseCliInvocationRecord,
 } from "@traycer/protocol/config/cli-invocation-record";
 
-// F15/T21 isolation: `resolveServiceCliInvocation`'s real staging path
+// `resolveServiceCliInvocation`'s real staging path
 // (`stageWellKnownCliBinary`) reaches `ensureCliInstallHomeDir`, whose body
 // - defined INSIDE the real `store/paths` module - calls that module's OWN
 // internal `cliInstallHomeDir`, not the override the mock factory below
@@ -121,8 +121,8 @@ import { wellKnownCliBinaryPath } from "../../../store/well-known-cli";
 import type { CliInvocation } from "../../cli-binary";
 
 /**
- * `refreshWindowsServiceDefinition` / `inspectWindowsServiceDefinition`
- * (M1): rewrite the hidden VBS launcher and, only when the task's ACTION
+ * `refreshWindowsServiceDefinition` / `inspectWindowsServiceDefinition`:
+ * rewrite the hidden VBS launcher and, only when the task's ACTION
  * itself predates the launcher (`redefineTask`), redefine the task with
  * `schtasks /Create ... /F` - never `/Run`, `/End`, `/Change`, `/Delete` or
  * `taskkill`.
@@ -317,9 +317,9 @@ describe("W1: the CLI itself is the task action (direct-action, launcher-less)",
 
     // The registered task redefined, not replaced: its own XML with only the
     // `<Exec>` swapped for the launcher action. This row used to expect a
-    // fresh `buildScheduledTaskXml` - F17's defect, a refresh that dropped
+    // fresh `buildScheduledTaskXml` - the earlier defect, a refresh that dropped
     // whatever the registered task carried (`<Enabled>`, battery and other
-    // user settings); the F17 describe below pins those carrying over.
+    // user settings); the describe below pins those carrying over.
     const newExecBlock = buildScheduledTaskXml(
       { label, cli: resolvedCli },
       TEST_TASK_USER_ID,
@@ -333,7 +333,7 @@ describe("W1: the CLI itself is the task action (direct-action, launcher-less)",
 
 /** A minimal-but-full Scheduled Task XML with a direct-action `<Exec>` PLUS a
  * `<Settings>` block carrying values a fresh `buildScheduledTaskXml` would
- * never emit - the user-disabled task with battery customisations F17
+ * never emit - the user-disabled task with battery customisations this suite
  * exists to preserve. */
 function execTaskXmlWithSettings(
   command: string,
@@ -361,7 +361,7 @@ function execTaskXmlWithSettings(
 `;
 }
 
-describe("F17: refresh's /Create XML carries over the queried task's Settings, replacing only <Exec>", () => {
+describe("refresh's /Create XML carries over the queried task's Settings, replacing only <Exec>", () => {
   it("W1 direct-action, task disabled + battery-customised: the written XML === the queried XML with only its <Exec> body replaced", async () => {
     const label = labelFor("f17-preserve-settings");
     const resolvedCli: CliInvocation = {
@@ -685,7 +685,7 @@ async function snapshotFilesRecursively(
 }
 
 /**
- * F15/T21 fixture: a CLI manifest naming a real, executable, non-slot binary
+ * A CLI manifest naming a real, executable, non-slot binary
  * - so the REAL `resolveServiceCliInvocation` (deps left at their default via
  * `setWindowsDefinitionDepsForTests(null)`) has something to resolve - plus a
  * launcher file already current for the SLOT invocation staging would
@@ -724,7 +724,7 @@ async function setupF15Fixture(
   return { sourceDir };
 }
 
-describe("F15 + T21: planning predicts the slot invocation without staging", () => {
+describe("planning predicts the slot invocation without staging", () => {
   it("inspect: a current task action, predicted-current launcher -> {kind: 'current'} with NO filesystem writes (head stages the slot during planning)", async () => {
     const label = labelFor("f15-inspect-no-stage");
     setWindowsDefinitionDepsForTests(null);
@@ -841,10 +841,10 @@ describe("schtasks /Query /XML decode (reachable without the queryTaskXml seam)"
     },
   );
 
-  // F18: this row used to read EVERY non-zero exit as not-registered - the
+  // This row used to read EVERY non-zero exit as not-registered - the
   // defect: an access denial or any other `/Query` failure then passed for
   // "nothing to refresh". A non-zero exit is still never decoded, but only
-  // stderr that names a missing task reads as not-registered (the F18
+  // stderr that names a missing task reads as not-registered (the
   // describe below); a silent failure names nothing, so it is reported.
   it("a non-zero schtasks exit with no stderr is not decoded, and is reported rather than read as not-registered", async () => {
     const label = labelFor("w-decode-nonzero-exit");
@@ -863,11 +863,11 @@ describe("schtasks /Query /XML decode (reachable without the queryTaskXml seam)"
   });
 });
 
-// F18: a non-zero `schtasks /Query` exit should not ALWAYS mean "no such
+// A non-zero `schtasks /Query` exit should not ALWAYS mean "no such
 // task" - an access denial is a real failure the refresh must surface, not
 // silently swallow as "nothing to refresh". Only stderr that actually NAMES
 // a missing task may still read as not-registered.
-describe("F18: schtasks /Query non-zero exit disambiguated by stderr", () => {
+describe("schtasks /Query non-zero exit disambiguated by stderr", () => {
   it("access denied (exit 1): inspect is 'unrecognized' naming schtasks /Query, refresh rejects SERVICE_DEFINITION_REFRESH_FAILED - head misreads this as not-registered", async () => {
     const label = labelFor("w-f18-access-denied");
     runCommandForBytesMock.impl = async () => ({

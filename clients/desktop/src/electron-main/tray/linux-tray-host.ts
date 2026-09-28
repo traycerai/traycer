@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-// Whether a Linux tray icon can actually be SEEN (host-lifecycle-modes,
-// CLOSE-LNX-NO-TRAY).
+// Whether a Linux tray icon can actually be SEEN (the tray-visibility
+// fix).
 //
 // `new Tray()` never throws on Linux for a missing tray host. Chromium
 // registers a StatusNotifierItem, and with no StatusNotifierWatcher on the

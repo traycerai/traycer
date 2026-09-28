@@ -172,7 +172,7 @@ describe("maybePromptRelocateToApplications", () => {
   });
 });
 
-// U5: a macOS move-to-Applications relaunch is not a user quit. Electron
+// A macOS move-to-Applications relaunch is not a user quit. Electron
 // 42.11.6's `moveToApplicationsFolder` (electron_bundle_mover.mm:426-440)
 // relaunches, then calls `Browser::Quit()`, which synchronously emits
 // `before-quit` - all BEFORE `moveToApplicationsFolder` itself returns. A
@@ -180,10 +180,10 @@ describe("maybePromptRelocateToApplications", () => {
 // able to tell this apart from an ordinary user quit, so main needs a flag
 // it can read while that call is still running. Not on head at all -
 // `relocate-to-applications.ts` exports no such thing.
-describe("U5: isRelocationRelaunchPending is true only while the native relaunch is in flight", () => {
+describe("isRelocationRelaunchPending is true only while the native relaunch is in flight", () => {
   it("reads true during moveToApplicationsFolder's synchronous before-quit", async () => {
     const observed: boolean[] = [];
-    const { relocate } = await loadRelocateForU5({
+    const { relocate } = await loadRelocateWithMoveStub({
       moveResult: true,
       moveThrows: false,
       onMove: (relocateModule) => {
@@ -197,7 +197,7 @@ describe("U5: isRelocationRelaunchPending is true only while the native relaunch
   });
 
   it("reads false again after a move that returns false", async () => {
-    const { relocate } = await loadRelocateForU5({
+    const { relocate } = await loadRelocateWithMoveStub({
       moveResult: false,
       moveThrows: false,
       onMove: () => undefined,
@@ -209,7 +209,7 @@ describe("U5: isRelocationRelaunchPending is true only while the native relaunch
   });
 
   it("reads false again after a move that throws", async () => {
-    const { relocate } = await loadRelocateForU5({
+    const { relocate } = await loadRelocateWithMoveStub({
       moveResult: false,
       moveThrows: true,
       onMove: () => undefined,
@@ -221,7 +221,7 @@ describe("U5: isRelocationRelaunchPending is true only while the native relaunch
   });
 });
 
-async function loadRelocateForU5(opts: {
+async function loadRelocateWithMoveStub(opts: {
   readonly moveResult: boolean;
   readonly moveThrows: boolean;
   readonly onMove: (relocateModule: RelocateModule) => void;

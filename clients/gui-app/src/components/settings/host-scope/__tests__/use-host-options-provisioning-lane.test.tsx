@@ -218,7 +218,7 @@ describe("useHostOptions provisioning lane", () => {
     expect(findLocalRow(result.current.hosts)?.settingUp).toBe(false);
   });
 
-  // M1: `refreshService` ("host service refresh") rewrites the service
+  // `refreshService` ("host service refresh") rewrites the service
   // definition only - the host is neither brought up nor taken down.
   it("does not read a refreshService lane as setting up", async () => {
     const { result, queryClient, hostManagement } =

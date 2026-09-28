@@ -12,13 +12,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { acquireLock, type LockMetadata } from "../cross-process-lock";
 import { readProcessStartIdentity } from "../process-identity";
 
-// U8-lock / U8-R1: these tests prove a contended acquisition, and a fresh
+// These tests prove a contended acquisition, and a fresh
 // process's own first acquisition, currently judge the holder / own identity
 // through a SYNCHRONOUS `ps` spawn (`execFileSync`) rather than the async
 // path the fix introduces (`verifyLockHolderLivenessAsync`,
 // `ownProcessStartTimeMsAsync`). Spying (not stubbing) `execFileSync` keeps
 // real behavior while letting each test count spawns precisely. `execFile`
-// is spied too, for the U8-time spec test below to prove the async read
+// is spied too, for the shared-cache spec test below to prove the async read
 // genuinely spawned `ps` through the async API rather than answering from
 // nothing.
 vi.mock("node:child_process", async (importOriginal) => {
@@ -45,7 +45,7 @@ afterEach(async () => {
   );
 });
 
-describe("acquireLock - contended acquisition against a live holder (U8-lock)", () => {
+describe("acquireLock - contended acquisition against a live holder", () => {
   let child: ChildProcess;
   let childIdentity: ProcessStartIdentity | null;
 
@@ -69,14 +69,14 @@ describe("acquireLock - contended acquisition against a live holder (U8-lock)", 
     child.kill("SIGKILL");
   });
 
-  // Row 1: Pins U8-lock - a contended `acquireLock` against a genuinely
+  // A contended `acquireLock` against a genuinely
   // alive, positively-identified holder must not spawn `ps` synchronously on
   // any poll iteration. The poll loop's holder-liveness judgment (async
   // `verifyLockHolderLivenessAsync`) must never fall back to the
   // synchronous `verifyProcessIdentity` path, which would spawn `ps` on
   // every iteration even though `process.kill` liveness alone already says
   // the holder is alive.
-  it("U8-lock: a contended acquisition never judges its holder synchronously", async () => {
+  it("a contended acquisition never judges its holder synchronously", async () => {
     if (child.pid === undefined) {
       throw new Error("real sleep child was spawned without a pid");
     }
@@ -114,15 +114,15 @@ describe("acquireLock - contended acquisition against a live holder (U8-lock)", 
   });
 });
 
-describe("acquireLock - first uncontended acquisition's own metadata (U8-R1)", () => {
-  // Row 2: Pins U8-R1 - the very first acquisition in a process (a freshly
+describe("acquireLock - first uncontended acquisition's own metadata", () => {
+  // The very first acquisition in a process (a freshly
   // reset own-identity cache) must not spawn `ps` synchronously either.
   // `newAcquisitionMetadata` must build its own metadata over the async
   // `ownProcessStartTimeMsAsync()` / `ownProcessStartIdentityAsync()`, never
   // the synchronous `ownProcessStartTimeMs()` / `ownProcessStartIdentity()`
   // pair, which would spawn `ps` synchronously against a freshly reset
   // cache.
-  it("U8-R1: the first acquisition's own metadata never spawns synchronously", async () => {
+  it("the first acquisition's own metadata never spawns synchronously", async () => {
     // Fresh module registry so the own-identity cache starts empty, and both
     // modules resolve from the SAME fresh registry so `cross-process-lock`'s
     // internal import of `process-identity` is the exact instance we reset
@@ -162,7 +162,7 @@ describe("ownProcessStartTimeMsAsync - shares the sync twin's cache (spec)", () 
   // spawned `ps` through `execFile` (never `execFileSync`), and the sync
   // read that follows must be served entirely from the shared cache - zero
   // additional `execFileSync` spawns.
-  it("U8-time: ownProcessStartTimeMsAsync and ownProcessStartTimeMs agree and share one cache", async () => {
+  it("ownProcessStartTimeMsAsync and ownProcessStartTimeMs agree and share one cache", async () => {
     vi.resetModules();
     const freshProcessIdentity = await import("../process-identity");
 

@@ -15,7 +15,7 @@ import { RELAUNCH_BACKOFF_MS } from "./relaunch-schedule";
 // else's nonce and refused to spawn, spending an attempt per refusal, until
 // the starter gave up. Measured on Linux with the desktop's local ensure as the
 // starter: one child crash, 113.9 s of downtime, and a relaunch budget spent so
-// the NEXT crash left the host down (CRASH-RELAUNCH-ENSURE-RACE).
+// the NEXT crash left the host down (the crash-relaunch race with `host ensure`).
 //
 // So a start that finds the service's supervisor alive leaves the relaunch to
 // it: no proof, no start. The supervisor owns this fact and already publishes

@@ -78,8 +78,8 @@ function state(
     mode: "background",
     rev: null,
     condition: null,
-    // F4 observer: constant for the run, defaulted to the admission every
-    // existing (pre-F4) fixture here implicitly assumed.
+    // Constant for the run, defaulted to the admission every
+    // existing fixture here implicitly assumed.
     admission: "granted" as SupervisorRunAdmission,
     ...overrides,
   };
@@ -365,7 +365,7 @@ describe("applyLifecycleTick", () => {
   });
 });
 
-describe("runIsAdoptable (F4 observer)", () => {
+describe("runIsAdoptable", () => {
   it("a foreground run is never adoptable; granted and unattended are", () => {
     // Red on head: `runIsAdoptable` does not exist yet.
     expect(runIsAdoptable("foreground")).toBe(false);
@@ -374,7 +374,7 @@ describe("runIsAdoptable (F4 observer)", () => {
   });
 });
 
-describe("applyLifecycleTick - F4 observer admission gate", () => {
+describe("applyLifecycleTick - observer admission gate", () => {
   it("a foreground run never adopts, even with a live 'stop' presence", () => {
     // Red on head: `applyLifecycleTick` has no notion of `admission` and
     // adopts on any live presence regardless of how the run was admitted.
@@ -413,7 +413,7 @@ describe("applyLifecycleTick - F4 observer admission gate", () => {
   });
 });
 
-describe("applyLifecycleTick - F14 indeterminate vs absent presence", () => {
+describe("applyLifecycleTick - indeterminate vs absent presence", () => {
   it("an 'indeterminate' observation (an invalid/unreadable record) answers unknown, never fires, and keeps lastPresence", () => {
     // Red on head: `LifecycleTickObservation.presence` has no `"indeterminate"`
     // member yet, so head's `presence === null` / `.liveness` logic does not
@@ -571,7 +571,7 @@ function rig(input: {
       watch.failed = false;
       return handle;
     },
-    // F5: red on head - `LifecycleObserverRuntime` has no `processExists`
+    // Red on head - `LifecycleObserverRuntime` has no `processExists`
     // seam yet, so this is simply ignored by production code today.
     processExists: (_pid: number) => existence.value,
   };
@@ -602,7 +602,7 @@ function rig(input: {
     nowIso: () => "2026-01-01T00:00:00.000Z",
     pollMs: LIFECYCLE_OBSERVER_POLL_MS,
     graceMs: GRACE,
-    // F4 stop/observer: red on head - `LifecycleObserverInput` has no
+    // Red on head - `LifecycleObserverInput` has no
     // top-level `admission` field yet, so this is simply ignored.
     admission: input.admission,
     initial: { adopted: input.initialAdopted, lastPresence: null },
@@ -651,7 +651,7 @@ async function runTick(r: Rig): Promise<void> {
   await r.settle();
 }
 
-describe("startLifecycleObserver - F4 observer admission gate", () => {
+describe("startLifecycleObserver - observer admission gate", () => {
   it("a foreground run's presence dying past the grace never attempts a teardown", async () => {
     // Red on head: `rig`'s `admission: "granted"` is ignored by production
     // (`LifecycleObserverInput` has no `admission` field), so a `foreground`
@@ -715,7 +715,7 @@ describe("startLifecycleObserver - F4 observer admission gate", () => {
   });
 });
 
-describe("startLifecycleObserver - F5 presence-probe reuse", () => {
+describe("startLifecycleObserver - presence-probe reuse", () => {
   it("background and none modes never probe presence", async () => {
     for (const mode of ["background", "none"] as const) {
       // Red on head: `observe()` unconditionally calls `reads.probePresence`
@@ -882,13 +882,13 @@ describe("startLifecycleObserver", () => {
   });
 
   it("a record that goes missing (absent) after adoption still fires", async () => {
-    // F14: rewritten from the pre-F14 pin, which looped absent -> invalid ->
+    // Rewritten from the earlier pin, which looped absent -> invalid ->
     // unreadable and asserted all three still fired. That was the defect: an
     // `invalid` or `unreadable` record is not evidence the desktop is gone,
     // only that this read could not confirm either way, and treating it as
     // `gone` fires a teardown on a read failure, not on absence. Only a
     // genuinely ABSENT record reads as gone here now; the invalid/unreadable
-    // cases get their own dedicated reds below ("F14 indeterminate records
+    // cases get their own dedicated reds below ("indeterminate records
     // never fire").
     const r = rig({
       initialAdopted: true,
@@ -910,7 +910,7 @@ describe("startLifecycleObserver", () => {
     expect(r.attempts.count).toBe(1);
   });
 
-  it("F14 indeterminate records (invalid/unreadable) never fire, past the grace, with no 'stop rule holds' line", async () => {
+  it("indeterminate records (invalid/unreadable) never fire, past the grace, with no 'stop rule holds' line", async () => {
     for (const missing of [
       { kind: "invalid" },
       { kind: "unreadable", cause: "EACCES" },
@@ -1247,7 +1247,7 @@ describe("startLifecycleObserver", () => {
     expect(r.published.length).toBe(publishes);
   });
 
-  it("T6: while gated inside the lock, a fresh reconfirm that sees the desktop come back alive cancels - no commit", async () => {
+  it("while gated inside the lock, a fresh reconfirm that sees the desktop come back alive cancels - no commit", async () => {
     // Green on head: the reconfirm closure passed to `teardown.attempt` is a
     // fresh `observeAndApply()`, not the stale observation that triggered the
     // attempt, so a desktop that reappears while the attempt is gated inside

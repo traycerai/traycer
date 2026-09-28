@@ -4,13 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
-// R1 (F18 sibling): `statusService` (`windows.ts:~520-535`) runs
+// `statusService` (`windows.ts:~520-535`) runs
 // `runCommand("schtasks", ["/Query","/TN",task], {tolerateNonZeroExit: false})`
 // and treats ANY `ProcessRunError` (its base class, so `ProcessSpawnError`
 // and `ProcessTimeoutError` both qualify via `instanceof`) as "the task is
 // not registered". An access-denied query or a timeout is read exactly like
 // a genuinely missing task, so `host status` (and everything that trusts it,
-// like `ensure`'s re-registration decision - see R2) silently reports
+// like `ensure`'s re-registration decision - see `ensure.test.ts`'s status-probe-failure tests) silently reports
 // "not-installed" for a service that is very much still there.
 //
 // HOME isolation: hoisted `vi.mock("node:os")` mkdtemps `homedir()` before
@@ -71,7 +71,7 @@ import { serviceLabelFor } from "../../label";
 
 const label = serviceLabelFor("production");
 
-describe("R1: statusService disambiguates schtasks /Query failures", () => {
+describe("statusService disambiguates schtasks /Query failures", () => {
   it("(i) access denied: status(label) rejects rather than reading as not-installed", async () => {
     runCommandMock.impl = async () => {
       throw new ProcessRunError(

@@ -277,7 +277,7 @@ describe("runDoctor RECENT_CRASH_MARKERS recovery", () => {
     expect(crash).toBeUndefined();
   });
 
-  // O-WIN-1: on Windows, a requested stop is recorded as `killed` with the
+  // On Windows, a requested stop is recorded as `killed` with the
   // handle-bound kill's exit CODE and no signal - the same shape `persistChildExit`
   // now writes for the arm this doctor rule must not flag. `isFatalSignal`
   // (which `lastCrashMarker` gates on) is false for an undefined signal, so

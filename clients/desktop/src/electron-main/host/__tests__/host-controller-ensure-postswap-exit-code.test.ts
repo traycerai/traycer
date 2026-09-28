@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sandboxHome } from "../../__tests__/sandbox-home";
 
-// SSH-USERDOMAIN-WORKGROUP (required test #2): `host-install.ts`
+// `host-install.ts`
 // / `host-ensure.ts` now return `exitCode: 1` when the post-swap service
 // start failed, and the desktop's streaming CLI runner
 // (`streamTraycerCliJsonWithInvocation` in `../../cli/traycer-cli.ts`) trusts
@@ -13,9 +13,9 @@ import { sandboxHome } from "../../__tests__/sandbox-home";
 // Every OTHER `HostController` suite (`host-controller.test.ts`) mocks
 // `../../cli/traycer-cli` wholesale, so `streamBundledTraycerCliJson` never
 // really runs and the exit code never reaches `convergeReadyCliOwned`'s
-// `postSwapError` mapping (Fixup B7) - a regression that reintroduced
-// "non-zero exit throws away a parsed ok payload" (S6 in this finding's
-// ablation set) would still show every one of those tests green.
+// `postSwapError` mapping - a regression that reintroduced
+// "non-zero exit throws away a parsed ok payload" would still show every
+// one of those tests green.
 //
 // This file leaves `../../cli/traycer-cli` UNMOCKED and fakes only the
 // `node:child_process` spawn beneath it (the same seam
@@ -236,7 +236,7 @@ function newController(): HostController {
   });
 }
 
-describe("convergeReadyCliOwned postSwapError mapping survives a real non-zero exit (SSH-USERDOMAIN-WORKGROUP)", () => {
+describe("convergeReadyCliOwned postSwapError mapping survives a real non-zero exit", () => {
   it("reports the service-start failure when `host ensure`'s terminal ok envelope is followed by exit code 1", async () => {
     const terminalLine = JSON.stringify({
       type: "result",
@@ -270,16 +270,16 @@ describe("convergeReadyCliOwned postSwapError mapping survives a real non-zero e
       "keep-installed",
     );
 
-    // Had the streaming runner tested the exit code before `sawTerminalOk`
-    // (S6's mutation), this would instead reject through the "exited with
+    // Had the streaming runner tested the exit code before `sawTerminalOk`,
+    // this would instead reject through the "exited with
     // code 1" branch and the message below would never appear. Had
-    // `convergeReadyCliOwned` lost the Fixup B7 `postSwapError` check (S7's
-    // mutation), this outcome is STILL `kind: "failed"` - but for an
+    // `convergeReadyCliOwned` lost the `postSwapError` check,
+    // this outcome is STILL `kind: "failed"` - but for an
     // unrelated reason (the fixture's `waitForHostReady` mock resolves
     // version "1.0.0" against the expected "1.8.0", so
     // `confirmActivationReadiness`'s own CAS mismatch fires instead) - which
     // is exactly why this assertion pins the MESSAGE, not just `outcome.kind`:
-    // ablating S7 measurably proved that a `kind`-only assertion cannot tell
+    // ablating the `postSwapError` check measurably proved that a `kind`-only assertion cannot tell
     // the two apart (host-controller.test.ts's "fixup B7" test pins the
     // message for the same reason).
     expect(outcome).toEqual({

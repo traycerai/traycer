@@ -1,8 +1,8 @@
-// D-REGISTER: while THIS machine's host was started in a terminal, the
+// While THIS machine's host was started in a terminal, the
 // OS-service "register" controls are disabled - and, for the OS service
 // section's own Deregister, the confirm copy stops claiming a stop the
 // foreground run makes false. Same boundaries as
-// `host-overview-foreground-run.test.tsx` (B's file, read for the harness,
+// `host-overview-foreground-run.test.tsx` (that file, read for the harness,
 // not edited): the scoped stream binding, `useHostScope` and `@/lib/host`'s
 // `useHostBinding` are mocked so `HostSettingsPanel` renders without a real
 // host runtime.
@@ -111,7 +111,7 @@ const SERVICE_METHODS = [
 const REGISTER_FOREGROUND_REASON =
   "A host you started in a terminal is running; stop it, then register the service.";
 
-// R4's new confirm copy for Deregister during a LOCAL foreground run - also
+// The new confirm copy for Deregister during a LOCAL foreground run - also
 // not a constant yet.
 function foregroundDeregisterDescription(hostName: string): string {
   return (
@@ -320,7 +320,7 @@ afterEach(() => {
   resetHostServiceWriteLatchesForTest();
 });
 
-describe("R1 — Overview ▸ Installation ▸ OS service ▸ Re-register during a foreground run", () => {
+describe("Overview ▸ Installation ▸ OS service ▸ Re-register during a foreground run", () => {
   it("RED: foreground + local disables the button, names the reason, and dispatches nothing", async () => {
     let registerCalls = 0;
     renderInstallation({
@@ -416,7 +416,7 @@ describe("R1 — Overview ▸ Installation ▸ OS service ▸ Re-register during
   });
 });
 
-describe("R4 — Overview ▸ Installation ▸ OS service ▸ Deregister's confirm copy during a foreground run", () => {
+describe("Overview ▸ Installation ▸ OS service ▸ Deregister's confirm copy during a foreground run", () => {
   it("RED: local + foreground — the confirm's description is the foreground-safe sentence, never 'This stops', and Deregister stays enabled", async () => {
     renderInstallation({
       hostId: "host-local",
@@ -499,7 +499,7 @@ describe("R4 — Overview ▸ Installation ▸ OS service ▸ Deregister's confi
   });
 });
 
-describe("R2 — the RPC Doctor sheet's Register service fix during a foreground run", () => {
+describe("the RPC Doctor sheet's Register service fix during a foreground run", () => {
   it("RED: foreground + local disables the fix, names the reason, and never calls runDoctorRepairIfIdle", async () => {
     const runDoctorRepairIfIdle = vi.fn(() =>
       Promise.resolve({

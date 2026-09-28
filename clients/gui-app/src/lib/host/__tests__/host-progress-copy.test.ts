@@ -58,7 +58,7 @@ describe("hostProgressHeading", () => {
     );
   });
 
-  it('M1: "refreshService" reads "Updating the host service…"', () => {
+  it('"refreshService" reads "Updating the host service…"', () => {
     expect(hostProgressHeading("refreshService", null)).toBe(
       "Updating the host service…",
     );

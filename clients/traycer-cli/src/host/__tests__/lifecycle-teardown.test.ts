@@ -305,7 +305,7 @@ describe("createLifecycleTeardown: gates before commit", () => {
     expect(h.commit).not.toHaveBeenCalled();
   });
 
-  // T10: keep the child ALIVE across both attempts so attempt 2 goes through
+  // Keep the child ALIVE across both attempts so attempt 2 goes through
   // `withLock` again (a dead child would take the lockless committed
   // shortcut and never reach the `if (!committed)` guard at all), and assert
   // the reconfirm closure still runs exactly once in total.

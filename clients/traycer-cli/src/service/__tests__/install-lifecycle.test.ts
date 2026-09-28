@@ -1852,7 +1852,7 @@ describe("restartAfterAbortedSwap (Desktop-managed: the stop route reports what 
   });
 });
 
-// F21: `createBytesOnlyInstallLifecycle`'s `restartAfterAbortedSwap` calls a
+// `createBytesOnlyInstallLifecycle`'s `restartAfterAbortedSwap` calls a
 // bare `controller.start(label)`, unlike `createServiceInstallLifecycle`'s
 // equivalent restore (`:366-380`), which wraps its start in
 // `runWithPublishedHostStartAdoption` so the controller's spawn-edge lease
@@ -1860,7 +1860,7 @@ describe("restartAfterAbortedSwap (Desktop-managed: the stop route reports what 
 // `setHostStartAdoptionPublisher` at all, so a Windows install that stops a
 // running host, aborts before the swap, and restarts it leaves no adoption
 // proof behind.
-describe("F21: createBytesOnlyInstallLifecycle publishes host-start adoption on restartAfterAbortedSwap", () => {
+describe("createBytesOnlyInstallLifecycle publishes host-start adoption on restartAfterAbortedSwap", () => {
   it("Windows, a running host: setHostStartAdoptionPublisher is wired, and restartAfterAbortedSwap publishes before/at the restart's spawn edge", async () => {
     const harness = makeController("running");
     // The same edge probe the post-swap rows above use: "controller-entered"

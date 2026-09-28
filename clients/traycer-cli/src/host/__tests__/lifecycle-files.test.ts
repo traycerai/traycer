@@ -283,7 +283,7 @@ describe("writeSupervisorRecords / removeSupervisorRecords", () => {
     ).resolves.toBeUndefined();
   });
 
-  // T11: a writer landing a NEWER record at the canonical path between the
+  // A writer landing a NEWER record at the canonical path between the
   // claim-rename and the restore-link must win; the restore must not clobber
   // it. `link()` throws when the destination already exists, which is what
   // makes the claimed-owner's `link` a no-op restore here.
@@ -494,7 +494,7 @@ describe("probeDesktopPresenceLiveness", () => {
 });
 
 describe("removeSupervisorRecords keep-run-state", () => {
-  // T5: a valid start identity (`isProcessStartIdentity`) is required, or the
+  // A valid start identity (`isProcessStartIdentity`) is required, or the
   // run-state record fails to parse and the byte-equality assertion below
   // would hold whether or not `keep-run-state` actually skipped the removal.
   it("removes supervisor.json only and leaves supervisor-run.json byte-identical", async () => {
@@ -624,7 +624,7 @@ describe("markSupervisorRunOwed", () => {
   });
 });
 
-describe("writeSupervisorRecords stamps supervisor.json's startIdentity from the run state (F11)", () => {
+describe("writeSupervisorRecords stamps supervisor.json's startIdentity from the run state", () => {
   async function readRawSupervisorRecordJson(): Promise<unknown> {
     const { supervisorRecordPath } =
       await import("@traycer/protocol/config/supervisor-record");
@@ -694,7 +694,7 @@ describe("writeSupervisorRecords stamps supervisor.json's startIdentity from the
   });
 });
 
-// F4 (lifecycle side): "the desktop leaves a host that a person started in a
+// "The desktop leaves a host that a person started in a
 // terminal untouched; the mode governs the service run only." `admittedAs`
 // on `supervisor.json` is how a reader (the desktop) tells a mode-governed
 // run from a person's own terminal start, stamped from the run state's
@@ -704,7 +704,7 @@ describe("writeSupervisorRecords stamps supervisor.json's startIdentity from the
 // stays `"foreground"` (never parked). Read via raw JSON / `toHaveProperty`
 // so this runs unmodified on current bytes, where the field does not exist
 // yet - vitest does not type-check.
-describe("writeSupervisorRecords stamps supervisor.json's admittedAs from the run state's admission (F4)", () => {
+describe("writeSupervisorRecords stamps supervisor.json's admittedAs from the run state's admission", () => {
   async function readRawSupervisorRecordJson(): Promise<unknown> {
     const { supervisorRecordPath } =
       await import("@traycer/protocol/config/supervisor-record");
@@ -949,7 +949,7 @@ describe("readInheritableRunOwnership", () => {
     );
   }
 
-  // F2-INHERIT (A)1: an owed exit removes `supervisor.json` on its way out
+  // An owed exit removes `supervisor.json` on its way out
   // (`removeSupervisorRecords(..., "keep-run-state")`); a predecessor that
   // was killed, crashed or lost its session never reaches that step and
   // leaves BOTH files, still naming itself. `readInheritableRunOwnership`
@@ -963,7 +963,7 @@ describe("readInheritableRunOwnership", () => {
     expect(await readInheritableRunOwnership(ENVIRONMENT)).toBeNull();
   });
 
-  // F2-INHERIT (A)3: a `supervisor.json` naming a DIFFERENT pid than the
+  // A `supervisor.json` naming a DIFFERENT pid than the
   // run state's predecessor is just as much evidence the predecessor never
   // reached its own exit cleanup (a second supervisor's live record, or a
   // stale one from a third process) - never inherited either.
@@ -976,7 +976,7 @@ describe("readInheritableRunOwnership", () => {
     expect(await readInheritableRunOwnership(ENVIRONMENT)).toBeNull();
   });
 
-  // F2-INHERIT (A)4: a stop exit that DID reach `removeSupervisorRecords`
+  // A stop exit that DID reach `removeSupervisorRecords`
   // but whose run-state half of the removal failed (`rename` rejects) is the
   // same observable shape as a never-attempted removal: `supervisor.json`
   // gone, `supervisor-run.json` left behind. Nothing a successor may inherit

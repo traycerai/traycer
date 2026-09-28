@@ -1,4 +1,4 @@
-// Item 3 / P1: does a click on Settings ▸ Update host show the
+// Does a click on Settings ▸ Update host show the
 // terminal-host refusal verbatim, when the REAL `useRunnerConvergeReady`
 // mutation is the one turning `{ kind: "deferred", message }` into a toast?
 //
@@ -171,7 +171,7 @@ afterEach(() => {
 });
 
 describe("<HostUpdateRequiredSlot /> - a deferred (terminal-host) convergeReady outcome, through the REAL mutation hook", () => {
-  it("P1: shows the refusal verbatim in the error toast's description", async () => {
+  it("shows the refusal verbatim in the error toast's description", async () => {
     seedLeases([INCOMPATIBLE]);
     renderSlot(
       buildManagement(() =>

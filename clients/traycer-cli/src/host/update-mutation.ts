@@ -275,7 +275,7 @@ export type ServiceStartOutcome =
  * service's supervisor is still alive. A start then could never be consumed:
  * the service manager starts nothing for a running service, and the pending
  * proof it left made the supervisor refuse its own relaunches
- * (CRASH-RELAUNCH-ENSURE-RACE). A start after an update or restart stop finds
+ * (the crash-relaunch race with `host ensure`). A start after an update or restart stop finds
  * no live supervisor - that stop ended it and it removed its records - and
  * takes the ordinary path.
  *

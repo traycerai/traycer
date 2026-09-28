@@ -17,9 +17,9 @@ import type {
 import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import type { SupervisorRecord } from "@traycer/protocol/config/supervisor-record";
 
-// U3 residual (a later fix): `admitSupervisorLifecycle`
+// `admitSupervisorLifecycle`
 // (`lifecycle-admission.ts`) already re-consumes the adoption proof ONCE
-// more right before it parks (the U3 fix), so a proof published BEFORE that
+// more right before it parks (a later fix), so a proof published BEFORE that
 // late consume is never lost. But a proof published AFTER it - in the window
 // between the late consume and the parking supervisor's own `exitSupervisor
 // (0)` - still is:
@@ -555,7 +555,7 @@ async function writeCorruptPidMetadata(): Promise<void> {
   await writeFile(hostPidMetadataPath(ENVIRONMENT), "{not json", "utf8");
 }
 
-describe("U3 residual: a starter's proof published after the gate's late-consume window", () => {
+describe("a starter's proof published after the gate's late-consume window", () => {
   it("the parking gate finds no proof and parks (sanity: the race window is real)", async () => {
     const result = await runParkingSupervisor();
     expect(result).toEqual({ kind: "park", mode: "linked" });
@@ -892,7 +892,7 @@ async function runRelauncher(controller: FakeRelauncher, stopped: RestartStop) {
   return admitted.result;
 }
 
-describe("U3 residual, gap 2: the restart/update relaunch leg has no retry at all", () => {
+describe("the restart/update relaunch leg has no retry at all", () => {
   it("(r1) an unacknowledged relaunch whose service is positively stopped is relaunched once more with a fresh proof", async () => {
     await runParkingSupervisor();
     const { controller, calls, grants, service, noOpDecided } =

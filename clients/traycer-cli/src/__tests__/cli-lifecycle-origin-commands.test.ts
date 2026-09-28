@@ -2,7 +2,7 @@ import { rmSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Command } from "commander";
 
-// T3 (pass-2): the list of commands carrying `--lifecycle-origin` must be
+// The list of commands carrying `--lifecycle-origin` must be
 // ONE list, shared by the desktop and the CLI - `LIFECYCLE_ORIGIN_COMMANDS`
 // (`protocol/src/config/lifecycle-origin-commands.ts`). The CLI's own
 // `assertLifecycleOriginCommands` (`index.ts`) already checks its

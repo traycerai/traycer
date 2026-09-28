@@ -73,7 +73,7 @@ afterEach(() => {
 });
 
 describe("defaultLifecycleObserverRuntime.scheduleTicks", () => {
-  // T9: the first tick is scheduled via `setImmediate`, not called
+  // The first tick is scheduled via `setImmediate`, not called
   // synchronously inside `scheduleTicks`, and lands before any interval tick;
   // subsequent ticks then arrive every `intervalMs`.
   it("ticks once via setImmediate before any interval, then every intervalMs, and the canceller stops it", async () => {
@@ -103,7 +103,7 @@ describe("defaultLifecycleObserverRuntime.scheduleTicks", () => {
     expect(calls).toBe(4);
   });
 
-  // T9: cancelling before the first immediate has fired must stop it too, not
+  // Cancelling before the first immediate has fired must stop it too, not
   // only the interval.
   it("the canceller stops a still-pending first tick", async () => {
     vi.useFakeTimers();
@@ -119,7 +119,7 @@ describe("defaultLifecycleObserverRuntime.scheduleTicks", () => {
     expect(calls).toBe(0);
   });
 
-  // T9: NOT unref()ed - a retrying actuator must keep the process alive even
+  // NOT unref()ed - a retrying actuator must keep the process alive even
   // once the interval is the only thing left running.
   it("does not unref() the interval it arms", async () => {
     const { defaultLifecycleObserverRuntime } =
@@ -244,7 +244,7 @@ describe("defaultLifecycleObserverRuntime.watchHostHome", () => {
     }
   });
 
-  // T9: an error on the underlying watcher marks the handle failed and closes
+  // An error on the underlying watcher marks the handle failed and closes
   // the watcher, so the observer re-arms a fresh one on its next tick.
   it("marks the watch failed and closes it when the underlying watcher errors", async () => {
     let capturedWatcher: FSWatcher | undefined;
@@ -307,7 +307,7 @@ describe("defaultLifecycleObserverRuntime.watchHostHome", () => {
 });
 
 describe("defaultLifecycleObserverRuntime.processExists", () => {
-  // F5: the spawn-free existence check behind the `alive` memo. Spawning a
+  // The spawn-free existence check behind the `alive` memo. Spawning a
   // real child and awaiting its own `exit` event both proves a genuinely
   // reaped ("gone") pid and never touches `processExists` itself, so the
   // `node:child_process` wrappers below can start at zero calls and stay

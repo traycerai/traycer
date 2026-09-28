@@ -216,7 +216,7 @@ vi.mock("../../host/credential-provisioning", () => ({
 // Not otherwise reached by this suite's fixtures (`sampleLifecycleHandle()`
 // has no `setHostStartAdoptionPublisher`, so `commitHostInstallSourceWithAttempt`
 // never registers a publisher) - mocked here only so a fixture that DOES
-// wire one up (T2, below) never reaches the real handshake, which waits for
+// wire one up (the lifecycleOrigin desktop fixture below) never reaches the real handshake, which waits for
 // a service-manager child ack that never comes, against the operator's real
 // `~/.traycer` home.
 vi.mock("../../host/host-start-adoption", () => ({
@@ -518,7 +518,7 @@ describe("buildHostInstallCommand", () => {
     ]);
   });
 
-  // T2: every existing fixture in this file passes `lifecycleOrigin:
+  // Every existing fixture in this file passes `lifecycleOrigin:
   // "terminal"` (`baseArgs`'s default), so nothing here pins that an
   // explicit `--lifecycle-origin desktop` actually reaches the publisher
   // `commitHostInstallSourceWithAttempt` registers on the lifecycle handle.
@@ -1501,12 +1501,12 @@ describe("buildHostInstallCommand", () => {
       expect(result.data).toMatchObject({ credentialProvision: null });
     });
 
-    // SSH-USERDOMAIN-WORKGROUP (E1): a post-swap start failure is a failed
+    // A post-swap start failure is a failed
     // install to a shell, even though the swap itself committed - the exit
     // code must say so while the JSON payload stays exactly what it was
     // (Desktop's runners trust the terminal `ok` line over a non-zero exit,
     // see `traycer-cli.ts`'s `sawTerminalOk`/`extractTerminalEnvelope`).
-    it("E1: a post-swap start failure exits 1, with serviceLifecycle.postSwapError unchanged in the payload", async () => {
+    it("a post-swap start failure exits 1, with serviceLifecycle.postSwapError unchanged in the payload", async () => {
       mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
       mocks.createServiceInstallLifecycleMock.mockReturnValue({
         state: {
@@ -1539,10 +1539,10 @@ describe("buildHostInstallCommand", () => {
       });
     });
 
-    // E2: the positive twins - a clean post-swap start, and the bytes-only
+    // The positive twins - a clean post-swap start, and the bytes-only
     // (`--no-service-register`) path where no service lifecycle ran at all -
     // both exit 0.
-    it("E2: no post-swap error exits 0, and a --no-service-register (bytes-only) install exits 0", async () => {
+    it("no post-swap error exits 0, and a --no-service-register (bytes-only) install exits 0", async () => {
       mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
       mocks.createServiceInstallLifecycleMock.mockReturnValue(
         sampleLifecycleHandle(),

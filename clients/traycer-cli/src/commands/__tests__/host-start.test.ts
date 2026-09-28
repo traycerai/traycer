@@ -624,7 +624,7 @@ function makeRunStubs(
         nowMs: () => 0,
         scheduleTicks: () => () => undefined,
         watchHostHome: () => null,
-        // T7/T8 gap-fill: pins the runtime's processExists seam so a
+        // Pins the runtime's processExists seam so a
         // teardown-owed-exit test can assert on it without arming a real
         // observer. Head has no such field; harmless until it does.
         processExists: () => "gone",
@@ -1646,7 +1646,7 @@ describe("runHostStart - signal/exit propagation", () => {
   });
 });
 
-// --------------------------------- O-WIN-1: the Windows requested-kill arm
+// --------------------------------- The Windows requested-kill arm
 //
 // On Windows, `$process.Kill()` is `TerminateProcess(-1)`, leaving the child
 // with exit code 4294967295 (0xffffffff) and NO signal - indistinguishable,
@@ -1676,7 +1676,7 @@ function withLifecyclePlatform(
   };
 }
 
-describe("runHostStart - Windows requested-kill arm (O-WIN-1)", () => {
+describe("runHostStart - Windows requested-kill arm", () => {
   const exec = "/opt/traycer/host/install/traycer-host";
   const WIN32_KILL_EXIT_CODE = 0xffffffff;
 
@@ -2018,7 +2018,7 @@ describe("runHostStart - Windows requested-kill arm (O-WIN-1)", () => {
  *
  * `child.kill` is wired once here too, for every test in the block: it is
  * the ONE handle `OwnedHostChild.signal("SIGKILL")` (the
- * `killHostTree`-rejected fallback, W4) reaches the stub through. Win32's
+ * `killHostTree`-rejected fallback) reaches the stub through. Win32's
  * shutdown handler itself never calls it - a test that observes a call here
  * has exercised the fallback, never the ordinary forward.
  */
@@ -2047,7 +2047,7 @@ interface ConsoleStopRig {
   removeResult: boolean;
   /**
    * Token log across the four actuators plus `deps.exit`, in call order -
-   * W2's proof that the exit happens only after the record is settled.
+   * Proof that the exit happens only after the record is settled.
    */
   readonly order: string[];
 }
@@ -2152,8 +2152,8 @@ function makeConsoleStopRig(
 // while the owned child has not ended, `forceConsoleStoppedChild` runs the
 // verified tree kill, falls back to a handle-bound SIGKILL if that throws,
 // and purges `pid.json` only on an exact pid + identity match once the
-// verdict is not `"current"`. POSIX is unchanged (O-WIN-1 above already
-// covers `child.kill` there); W6 below is this block's control.
+// verdict is not `"current"`. POSIX is unchanged (the Windows requested-kill arm above already
+// covers `child.kill` there); the test below is this block's non-win32 control.
 describe("runHostStart - a Windows console stop is left to the host, then forced", () => {
   const exec = "/opt/traycer/host/install/traycer-host";
   // `makeStubChild()` fixes the stub's pid at 4242 - used as a literal so
@@ -2161,7 +2161,7 @@ describe("runHostStart - a Windows console stop is left to the host, then forced
   // `child.pid` (typed `number | undefined`) through each assertion.
   const CHILD_PID = 4242;
 
-  it("W1: win32 SIGINT while the child runs only arms the escalation; a clean exit needs no force", async () => {
+  it("win32 SIGINT while the child runs only arms the escalation; a clean exit needs no force", async () => {
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const win32Deps = withLifecyclePlatform(deps, "win32");
     const originalSpawn = win32Deps.spawn;
@@ -2202,7 +2202,7 @@ describe("runHostStart - a Windows console stop is left to the host, then forced
     expect(rig.removePidMetadataCalls).toEqual([]);
   });
 
-  it("W2: win32 SIGINT, the child outlives the grace, and the verified tree kill purges its own dead record", async () => {
+  it("win32 SIGINT, the child outlives the grace, and the verified tree kill purges its own dead record", async () => {
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const win32Deps = withLifecyclePlatform(deps, "win32");
     const originalSpawn = win32Deps.spawn;
@@ -2264,11 +2264,11 @@ describe("runHostStart - a Windows console stop is left to the host, then forced
     expect(recorded.spawnCalls).toHaveLength(1);
   });
 
-  // T8: `exitSupervisor` awaits an in-flight console-stop force
+  // `exitSupervisor` awaits an in-flight console-stop force
   // (`consoleStopForce`, host-start.ts:1419) before it calls `deps.exit`.
   // Gates `removePidMetadataIfUnchanged` on a deferred so the wait is
   // proved by blocking, not just by call order.
-  it("T8: exitSupervisor waits for an in-flight console-stop force to settle the record before exiting", async () => {
+  it("exitSupervisor waits for an in-flight console-stop force to settle the record before exiting", async () => {
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const win32Deps = withLifecyclePlatform(deps, "win32");
     const originalSpawn = win32Deps.spawn;
@@ -2364,7 +2364,7 @@ describe("runHostStart - a Windows console stop is left to the host, then forced
       "mismatch" as const,
       true,
     ],
-  ] as const)("W3: %s", async (_label, pidRecord, verdict, expectPurge) => {
+  ] as const)("%s", async (_label, pidRecord, verdict, expectPurge) => {
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const win32Deps = withLifecyclePlatform(deps, "win32");
     const originalSpawn = win32Deps.spawn;
@@ -2405,7 +2405,7 @@ describe("runHostStart - a Windows console stop is left to the host, then forced
     expect(recorded.exited).toBe(0);
   });
 
-  it("W4: a failed tree kill falls back to a handle-bound SIGKILL, then purges as W2 does", async () => {
+  it("a failed tree kill falls back to a handle-bound SIGKILL, then purges the record the same way", async () => {
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const win32Deps = withLifecyclePlatform(deps, "win32");
     const originalSpawn = win32Deps.spawn;
@@ -2448,7 +2448,7 @@ describe("runHostStart - a Windows console stop is left to the host, then forced
     expect(recorded.exited).toBe(0);
   });
 
-  it("W5: SIGHUP behaves like SIGINT on win32, and a second signal arms no second escalation", async () => {
+  it("SIGHUP behaves like SIGINT on win32, and a second signal arms no second escalation", async () => {
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const win32Deps = withLifecyclePlatform(deps, "win32");
     const originalSpawn = win32Deps.spawn;
@@ -2486,7 +2486,7 @@ describe("runHostStart - a Windows console stop is left to the host, then forced
     expect(recorded.exited).toBe(0);
   });
 
-  it("W6 (control): a non-win32 platform still forwards SIGINT directly, arming no escalation", async () => {
+  it("(control) a non-win32 platform still forwards SIGINT directly, arming no escalation", async () => {
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const linuxDeps = withLifecyclePlatform(deps, "linux");
     const originalSpawn = linuxDeps.spawn;
@@ -2530,7 +2530,7 @@ describe("runHostStart - a Windows console stop is left to the host, then forced
     expect(recorded.exited).toBe(0);
   });
 
-  it("W7: win32 SIGINT before any child exists arms no escalation and does not throw", async () => {
+  it("win32 SIGINT before any child exists arms no escalation and does not throw", async () => {
     const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const win32Deps = withLifecyclePlatform(deps, "win32");
     const escalateCalls: number[] = [];
@@ -2538,7 +2538,7 @@ describe("runHostStart - a Windows console stop is left to the host, then forced
 
     // `leaveConsoleStopToChild` is reachable with `ownedChild === null` only
     // in the admission-wait window: the handler still latches `shuttingDown`
-    // unconditionally, which is itself enough for the SAME re-check Q13's
+    // unconditionally, which is itself enough for the SAME re-check that the
     // "a stop that lands DURING the admission wait" table exercises - so no
     // spawn happens at all here, and `leaveConsoleStopToChild` never gets a
     // child to arm against in the first place. That is the shape this test
@@ -5360,7 +5360,7 @@ describe("runHostStart - per-attempt setup failures stay inside the budget", () 
 });
 
 describe("runHostStart - a SERVICE launch refused as busy exits non-zero so it is retried", () => {
-  // Codex round 3, P1 (download-stage). `host download` holds the update-attempt
+  // The download stage: `host download` holds the update-attempt
   // execution segment across its whole transfer, and mutual exclusion on that
   // lock is unconditional on admission - decided before `dispositionFor` is
   // consulted. So a host child that crashes mid-transfer gets its relaunch
@@ -6163,7 +6163,7 @@ describe("runHostStart - supervisor.json lifecycle across outcomes", () => {
   });
 });
 
-describe("runHostStart - published run records survive across the relaunch ladder, not just at the end (T14)", () => {
+describe("runHostStart - published run records survive across the relaunch ladder, not just at the end", () => {
   const exec = "/opt/traycer/host/install/traycer-host";
 
   it("keeps supervisor.json published across spawn 2 and spawn 3 of a crash relaunch ladder", async () => {
@@ -6370,7 +6370,7 @@ function makeLifecycleRig(
             failed: () => false,
           };
         },
-        // T7/T8 gap-fill: pins the runtime's processExists seam so a
+        // Pins the runtime's processExists seam so a
         // teardown-owed-exit test can assert on it without arming a real
         // observer. Head has no such field; harmless until it does.
         processExists: () => "gone",
@@ -6466,7 +6466,7 @@ describe("runHostStart - lifecycle observer and teardown", () => {
     expect(recorded.lifecycleRecordRemovals).toEqual([process.pid]);
   });
 
-  // F4: a foreground (ungranted) run is never adoptable (runIsAdoptable in
+  // A foreground (ungranted) run is never adoptable (runIsAdoptable in
   // lifecycle-observer.ts), so this scenario needs a desktop-GRANTED
   // service run to reach the adopted path it exercises.
   it("adopts on a live presence, then stops the host after the grace under a stop verdict", async () => {
@@ -6549,7 +6549,7 @@ describe("runHostStart - lifecycle observer and teardown", () => {
     await waitForExit(recorded);
   });
 
-  // F4: a foreground (ungranted) run is never adoptable, so this scenario
+  // A foreground (ungranted) run is never adoptable, so this scenario
   // needs a desktop-GRANTED service run to reach the adopted/teardown path.
   it("a committed teardown owns the exit code: 0 even when a restart intent would exit 77", async () => {
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
@@ -6581,7 +6581,7 @@ describe("runHostStart - lifecycle observer and teardown", () => {
     expect(recorded.lifecycleRecordRemovalScopes).toEqual(["all"]);
   });
 
-  // F4: a foreground (ungranted) run is never adoptable, so this scenario
+  // A foreground (ungranted) run is never adoptable, so this scenario
   // needs a desktop-GRANTED service run to reach the adopted/teardown path.
   it("a busy lock on the first due tick touches nothing and latches nothing; the next tick completes", async () => {
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
@@ -6627,11 +6627,11 @@ describe("runHostStart - lifecycle observer and teardown", () => {
   });
 });
 
-describe("runHostStart - observer admission gating (F4a)", () => {
+describe("runHostStart - observer admission gating", () => {
   const exec = "/opt/traycer/host/install/traycer-host";
   const GRACE = LIFECYCLE_PRESENCE_CRASH_GRACE_MS;
 
-  // F4a: the observer must receive the run's admission and never adopt or
+  // The observer must receive the run's admission and never adopt or
   // tear down a genuinely foreground (unlabelled, ungranted) start, even
   // once a desktop presence record goes alive-then-dead past the crash
   // grace. Head wires no admission into the observer, so this run is
@@ -6720,11 +6720,11 @@ describe("runHostStart - observer admission gating (F4a)", () => {
   });
 });
 
-describe("runHostStart - exitSupervisor waits for a committed teardown (T7)", () => {
+describe("runHostStart - exitSupervisor waits for a committed teardown", () => {
   const exec = "/opt/traycer/host/install/traycer-host";
   const GRACE = LIFECYCLE_PRESENCE_CRASH_GRACE_MS;
 
-  // T7: a committed teardown that could not finish on its own tick
+  // A committed teardown that could not finish on its own tick
   // (cooperative busy, then the forced stop hung) must still be the one to
   // purge `pid.json`, and `exitSupervisor` (host-start.ts:1420-1430) must
   // wait for that purge before it calls `deps.exit` - even when nothing
@@ -7079,7 +7079,7 @@ describe("runHostStart - run-state removal scope and successor inheritance", () 
   const CONTINUES_DESKTOP_OWNED_RUN_MESSAGE =
     "Host supervisor continues a desktop-owned run across its relaunch";
 
-  // F2-INHERIT (B)1: a supervisor killed by a stop whose cleanup never ran
+  // A supervisor killed by a stop whose cleanup never ran
   // (the Windows shape - `stop` ends the process directly, so the
   // supervisor's own `exitSupervisor`/`releaseLifecycleResources` never
   // fires) leaves BOTH `supervisor.json` and `supervisor-run.json`, still
@@ -7187,11 +7187,11 @@ describe("runHostStart - run-state removal scope and successor inheritance", () 
   });
 });
 
-// ---------------------------------------------------------------- F20 / F32 / U3
+// ---------------------------------------------------------------- lifecycle admission gate
 
 /**
  * Models `defaultRunDeps.admitHostStartSpawn` (host-start.ts:671-716) exactly
- * enough to exercise F20: `handoff.consumed ?? ` a call to the SAME consume
+ * enough to exercise the relaunch gate re-ask: `handoff.consumed ?? ` a call to the SAME consume
  * fake the lifecycle gate itself uses; a non-absent/non-grant result throws
  * (host-start.ts:690-692); a grant honours `onGranted` and runs; `absent`
  * just runs. The park rule is asked only by the gate
@@ -7233,7 +7233,7 @@ function modeledAdmitHostStartSpawn(
   };
 }
 
-describe("runHostStart - the lifecycle gate is not re-asked on a same-run relaunch (F20)", () => {
+describe("runHostStart - the lifecycle gate is not re-asked on a same-run relaunch", () => {
   const exec = "/opt/traycer/host/install/traycer-host";
 
   it("spawns unattended on attempt 2 without ever asking the park rule, when attempt 1's own proof was refused", async () => {
@@ -7342,7 +7342,7 @@ describe("runHostStart - the lifecycle gate is not re-asked on a same-run relaun
   });
 });
 
-describe("runHostStart - admission for a probed service-labelled launch (F32)", () => {
+describe("runHostStart - admission for a probed service-labelled launch", () => {
   const exec = "/opt/traycer/host/install/traycer-host";
 
   it("records admission as unattended for a service-labelled probe launch with no grant", async () => {
@@ -7396,9 +7396,9 @@ describe("runHostStart - admission for a probed service-labelled launch (F32)", 
   });
 });
 
-// ---------------------------------------------------------------- T1
+// ---------------------------------------------------------------- admitHostStartSpawn
 
-describe("defaultRunHostStartDeps.admitHostStartSpawn - a handed-off grant is honoured without re-consuming (T1)", () => {
+describe("defaultRunHostStartDeps.admitHostStartSpawn - a handed-off grant is honoured without re-consuming", () => {
   it("acknowledges and runs on the gate's handed-off grant, never calling consumeHostStartAdoption itself", async () => {
     const { grant, abandonCalls, acknowledgeSpawnCalls } =
       makeFakeGrant("desktop");
@@ -7437,7 +7437,7 @@ describe("defaultRunHostStartDeps.admitHostStartSpawn - a handed-off grant is ho
   });
 });
 
-describe("runHostStart - the run state records this supervisor's own start identity (T4)", () => {
+describe("runHostStart - the run state records this supervisor's own start identity", () => {
   const exec = "/opt/traycer/host/install/traycer-host";
 
   it("stamps supervisorStartIdentity from lifecycle.ownStartIdentity() into the published run state", async () => {
@@ -7472,7 +7472,7 @@ describe("runHostStart - the run state records this supervisor's own start ident
   });
 });
 
-describe("runHostStart - a proof published during a slow presence probe (U3, settling)", () => {
+describe("runHostStart - a proof published during a slow presence probe (settling)", () => {
   const exec = "/opt/traycer/host/install/traycer-host";
 
   it("honours a late grant instead of parking", async () => {

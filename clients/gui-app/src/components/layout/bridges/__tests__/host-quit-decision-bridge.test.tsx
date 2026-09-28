@@ -1154,7 +1154,7 @@ describe("<HostQuitDecisionBridge /> - no CLI text ever reaches the dialog", () 
   }
 });
 
-// F25: a new `HostQuitStateEvent` phase, `"prompting"`, is not in the shared
+// A new `HostQuitStateEvent` phase, `"prompting"`, is not in the shared
 // type at head (only "stopping" | "quitting" | "cancelled"). The bridge's
 // `onQuitState` branches only on `phase === "stopping"`; anything else
 // (including a future "prompting") falls into the same `else` as
@@ -1163,7 +1163,7 @@ describe("<HostQuitDecisionBridge /> - no CLI text ever reaches the dialog", () 
 // wrong for "prompting": it must end only the phase it names, never an
 // unrelated active request another window (or an earlier round) is still
 // showing.
-describe("<HostQuitDecisionBridge /> - F25: end-of-stopping phase when main prompts", () => {
+describe("<HostQuitDecisionBridge /> - end-of-stopping phase when main prompts", () => {
   it("a window that never received a request: stopping renders, then prompting({requestId:null}) leaves nothing rendered", async () => {
     const quit = createFakeQuit();
     renderBridge(quit);

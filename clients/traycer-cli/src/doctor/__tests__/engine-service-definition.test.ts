@@ -6,7 +6,7 @@ import type { DoctorResult } from "../issues";
 import type { ServiceDefinitionState } from "../../service/service-definition";
 
 /**
- * `traycer host doctor`'s service-DEFINITION issues (M1):
+ * `traycer host doctor`'s service-DEFINITION issues:
  *
  * - `HOST_SERVICE_DEFINITION_STALE` - a non-Background mode is set, but the
  *   registered definition predates the current launcher form.
@@ -148,7 +148,7 @@ async function runDoctorHere(): Promise<DoctorResult> {
   });
 }
 
-describe("runDoctor service-definition issues (M1)", () => {
+describe("runDoctor service-definition issues", () => {
   it("HOST_SERVICE_DEFINITION_STALE: mode already 'ask' (no transition - the policy was written before this run) plus a stale definition", async () => {
     stageQuietEnvironment();
     // "Already ask" on purpose: this doctor run is not itself the mode

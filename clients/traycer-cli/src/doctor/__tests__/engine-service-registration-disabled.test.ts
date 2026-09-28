@@ -6,7 +6,7 @@ import type { DoctorResult } from "../issues";
 import type { ServiceRegistrationDisabled } from "../../service/registration-disabled";
 
 /**
- * `traycer host doctor`'s P4 issue: `HOST_SERVICE_REGISTRATION_DISABLED`,
+ * `traycer host doctor`'s issue: `HOST_SERVICE_REGISTRATION_DISABLED`,
  * emitted by `serviceRegistrationIssues` (engine.ts) whenever
  * `readServiceRegistrationDisabled` reads `{kind:"disabled"}` - in ANY
  * lifecycle mode, unlike the definition issues above it which the
@@ -124,7 +124,7 @@ function stageQuietEnvironment(): void {
       devSlot: null,
     }),
   }));
-  // Neutralize the sibling M1 definition issues so this suite's assertions
+  // Neutralize the sibling definition issues so this suite's assertions
   // are only ever about HOST_SERVICE_REGISTRATION_DISABLED.
   vi.doMock("../../service/definition-refresh", () => ({
     createServiceDefinitionRefresher: () => ({
@@ -161,10 +161,10 @@ async function runDoctorHere(): Promise<DoctorResult> {
   });
 }
 
-describe("runDoctor service-registration issues (P4)", () => {
+describe("runDoctor service-registration issues", () => {
   it("(d1) disabled: exactly one HOST_SERVICE_REGISTRATION_DISABLED issue, with the fields the ruling specifies", async () => {
     stageQuietEnvironment();
-    // Background mode on purpose: the sibling M1 definition issues suppress
+    // Background mode on purpose: the sibling definition issues suppress
     // themselves here, but this issue must fire in EVERY lifecycle mode.
     writePolicy("background");
     mocks.readServiceRegistrationDisabled.mockResolvedValue({

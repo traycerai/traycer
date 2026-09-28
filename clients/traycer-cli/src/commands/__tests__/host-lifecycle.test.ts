@@ -153,7 +153,7 @@ const FAKE_REFRESH_LABEL = {
 };
 
 /** A refresh stub that does nothing observable - the default for every test
- * that isn't itself exercising the M1 refresh-on-mode-change wiring. */
+ * that isn't itself exercising the refresh-on-mode-change wiring. */
 async function noopRefresh(): Promise<ServiceDefinitionRefreshOutcome> {
   return {
     label: FAKE_REFRESH_LABEL,
@@ -279,7 +279,7 @@ describe("host lifecycle get/set commands", () => {
   });
 });
 
-describe("host lifecycle set: service definition refresh on mode change (M1)", () => {
+describe("host lifecycle set: service definition refresh on mode change", () => {
   it("absent policy (= background): 'set ask' calls refresh exactly once, and the policy file already reads 'ask' when it runs", async () => {
     const { buildHostLifecycleSetCommand } = await import("../host-lifecycle");
     const refreshServiceDefinition = vi.fn(

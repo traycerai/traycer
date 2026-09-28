@@ -42,7 +42,7 @@ import type { HostQuitPrompt } from "../ipc/runner-ipc-bridge";
 //
 //   relaunch        presence `handoff` FIRST, then the existing update drain
 //                   and renderer projection drain, unchanged. Never a host
-//                   stop: a relaunch-intended quit keeps the host (D6), and
+//                   stop: a relaunch-intended quit keeps the host, and
 //                   `handoff` - not a timeout - is what tells the supervisor.
 //   user            the existing unsynced-edits decision, then a hold on the
 //                   automatic host intents, then a FRESH policy read:
@@ -69,7 +69,7 @@ import type { HostQuitPrompt } from "../ipc/runner-ipc-bridge";
 // own caller and never reaches a prompt; `HostController` logs its code.
 //
 // Force happens only under Linked or after the user pressed Stop on a list
-// that disclosed busy work (R5). Presence `stop` is what the supervisor
+// that disclosed busy work. Presence `stop` is what the supervisor
 // enforces once the app is gone - forcing whatever it then finds running - so
 // an idle-only stop writes `keep` BEFORE it runs, and the work it does not end
 // (a busy host, a parked update, a stop cut off by the deadline, a crash while
@@ -92,7 +92,7 @@ import type { HostQuitPrompt } from "../ipc/runner-ipc-bridge";
 // relaunch takes over at once; while the lane runs a stop, the relaunch
 // follows it, so its `handoff` never stands over a running stop.
 
-/** Visible "Stopping host…" budget for one quit (lifecycle mechanics R4). */
+/** Visible "Stopping host…" budget for one quit (lifecycle mechanics). */
 export const QUIT_STOP_DEADLINE_MS = 15_000;
 
 /**

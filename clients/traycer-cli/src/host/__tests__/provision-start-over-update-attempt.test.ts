@@ -16,7 +16,7 @@ import {
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import type { HostInstallRecord } from "@traycer/protocol/config/installation-records";
 
-// F1 (P1): a `host ensure` reaching provisionHost's START-ONLY branch
+// A `host ensure` reaching provisionHost's START-ONLY branch
 // (installed + registered + not running) while a nonterminal update-attempt
 // record stands - either PARKED (`waiting-for-work` / `waiting-to-activate`)
 // or INTERRUPTED (e.g. `restarting`, execution `active`, continuation

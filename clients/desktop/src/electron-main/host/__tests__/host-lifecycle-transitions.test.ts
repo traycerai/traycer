@@ -78,14 +78,14 @@ class FakeController implements HostLifecycleTransitionsController {
   stopOutcome: StopHostOutcome = { kind: "stopped", forced: false };
   onStop: () => Promise<void> = () => Promise.resolve();
 
-  /** F29: open `holdAutomaticIntents` holds right now (hold +1, release -1). */
+  /** Open `holdAutomaticIntents` holds right now (hold +1, release -1). */
   openHolds = 0;
-  /** F29: `openHolds` as it stood at the moment of each `convergeReady` call. */
+  /** `openHolds` as it stood at the moment of each `convergeReady` call. */
   readonly convergeOpenHolds: number[] = [];
-  /** T23: `openHolds` as it stood at the moment of each `stopHost` call. */
+  /** `openHolds` as it stood at the moment of each `stopHost` call. */
   readonly holdsAtStop: number[] = [];
 
-  /** M1: `refreshServiceDefinition` calls, in the order made. */
+  /** `refreshServiceDefinition` calls, in the order made. */
   readonly refreshCalls: number[] = [];
   refreshOutcome: MutationOutcome<ServiceDefinitionRefreshOk> = {
     kind: "ok",
@@ -96,7 +96,7 @@ class FakeController implements HostLifecycleTransitionsController {
   /** Hook for order assertions against another spied-on call. */
   onRefreshCall: () => void = () => undefined;
 
-  /** T24(b): every barrier passed to `deferMutationsUntil`, in call order. */
+  /** Every barrier passed to `deferMutationsUntil`, in call order. */
   readonly deferredBarriers: Promise<unknown>[] = [];
 
   deferMutationsUntil(barrier: Promise<unknown>): void {
@@ -104,7 +104,7 @@ class FakeController implements HostLifecycleTransitionsController {
   }
 
   /**
-   * R6: `applyStaged("launch", false)` is the launch reconcile's step
+   * `applyStaged("launch", false)` is the launch reconcile's step
    * (`host apply --respect-hold`, a no-op when nothing is staged), called
    * once when a `"foreground"` run is followed by anything else while the
    * lanes are active.
@@ -515,7 +515,7 @@ describe("setMode: -> none while the lanes run", () => {
       expect(harness.controller.quiesceCount).toBe(1);
       expect(harness.controller.holdCount).toBe(1);
       expect(harness.controller.releaseCount).toBe(1);
-      // T23: the hold taken before the stop is still open AT the stop call -
+      // The hold taken before the stop is still open AT the stop call -
       // the automatic intents (health monitor, ensure port) cannot bring the
       // host back while the stop, and the commit behind it, are in flight.
       expect(harness.controller.holdsAtStop).toEqual([1]);
@@ -526,11 +526,11 @@ describe("setMode: -> none while the lanes run", () => {
     });
   }
 
-  // T23: a stop that succeeds but whose commit's policy write then throws
+  // A stop that succeeds but whose commit's policy write then throws
   // must not have quiesced the automatic intents, and must leave the hold
   // released and the live presence (still naming this process) in place -
   // the write is the commitment, and it did not happen.
-  it("T23: a policy write that fails after a successful stop commits nothing and releases the hold", async () => {
+  it("a policy write that fails after a successful stop commits nothing and releases the hold", async () => {
     const harness = await activeHarness();
     const realWritePolicy = harness.store.writePolicy.bind(harness.store);
     vi.spyOn(harness.store, "writePolicy").mockImplementation(async (mode) => {
@@ -810,14 +810,14 @@ describe("quit verdicts", () => {
     expect(await harness.store.readPresence()).toEqual(before);
   });
 
-  // T27: `setMode({mode:"linked"})` and `writeQuitVerdict("keep")` fired
+  // `setMode({mode:"linked"})` and `writeQuitVerdict("keep")` fired
   // concurrently must not race - `writeQuitVerdict` is serialized behind the
   // in-flight mode change, so its write can only ever be the LAST one to
   // land, whatever `setMode`'s own writePresence call is doing. Gate the
   // `"stop"` write (setMode's) so it stays pending while `writeQuitVerdict`
   // is submitted, then release it and check the calls landed in program
   // order, not by relative speed.
-  it("T27: writeQuitVerdict fired alongside setMode(linked) is serialized behind it and wins", async () => {
+  it("writeQuitVerdict fired alongside setMode(linked) is serialized behind it and wins", async () => {
     const harness = makeHarness("managed", POLL_MS);
     const callOrder: DesktopPresenceOnExit[] = [];
     let releaseGate: () => void = () => undefined;
@@ -907,13 +907,13 @@ describe("readQuitPolicy / localHostLanesActive", () => {
 });
 
 // ---------------------------------------------------------------------------
-// M1: `refreshDefinitionAfterWrite` - the fire-and-forget `host service
+// `refreshDefinitionAfterWrite` - the fire-and-forget `host service
 // refresh` call `applySetMode`/`commitNone` make after a policy write that
 // parks (`refreshOnModeChange`: previous !== next && next !== "background").
 // Mechanism, not just end state - call counts, and order against
 // `writePolicy`.
 // ---------------------------------------------------------------------------
-describe("refreshDefinitionAfterWrite (M1)", () => {
+describe("refreshDefinitionAfterWrite", () => {
   it("background -> ask calls refreshServiceDefinition exactly once, only after writePolicy resolves", async () => {
     const harness = makeHarness("managed", POLL_MS);
     await harness.service.writeLaunchPresence();
@@ -1021,12 +1021,12 @@ describe("refreshDefinitionAfterWrite (M1)", () => {
     expect(Object.keys(payload).sort()).toEqual(["mode", "reason"]);
   });
 
-  // T30: a real-time race against a fixed 250 ms timer can pass vacuously
+  // A real-time race against a fixed 250 ms timer can pass vacuously
   // under load (the timer, not the code, decides the winner). `vi.waitFor`
   // instead polls the actual fact - the setMode promise settled - so the test
   // is red only when `applySetMode` genuinely blocks on the never-settling
   // refresh, whatever the machine's load is.
-  it("T30: applySetMode resolves even when the refresh promise never settles", async () => {
+  it("applySetMode resolves even when the refresh promise never settles", async () => {
     const harness = makeHarness("managed", POLL_MS);
     await harness.service.writeLaunchPresence();
     harness.controller.refreshNeverSettles = true;
@@ -1103,7 +1103,7 @@ describe("refreshDefinitionAfterWrite (M1)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// F-WIN-2: a presence that never landed - a timed-out identity probe at
+// A presence that never landed - a timed-out identity probe at
 // launch, or a failed write - is retried by `observe()` on every later tick
 // instead of being lost for the process's whole life. Mechanism, not just end
 // state: call counts on `store.writePresence` and the attempt-numbered log
@@ -1113,7 +1113,7 @@ describe("refreshDefinitionAfterWrite (M1)", () => {
 // test above) drives the ticks; `identitySequence` controls exactly which
 // call to `readOwnStartIdentity` fails and which succeeds.
 // ---------------------------------------------------------------------------
-describe("presence retry (F-WIN-2)", () => {
+describe("presence retry", () => {
   /** Answers `answers[call]`, repeating the last entry once exhausted. */
   function identitySequence(
     answers: readonly (ProcessStartIdentity | null)[],
@@ -1138,7 +1138,7 @@ describe("presence retry (F-WIN-2)", () => {
     });
   }
 
-  it("D1: a launch presence that failed identity is retried on the next tick and lands with an attempts count", async () => {
+  it("a launch presence that failed identity is retried on the next tick and lands with an attempts count", async () => {
     const harness = makeHarnessWithIdentity(
       "managed",
       POLL_MS,
@@ -1169,7 +1169,7 @@ describe("presence retry (F-WIN-2)", () => {
     expect(writeSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("D2: repeated tick failures warn once for the streak, then log DEBUG for the rest", async () => {
+  it("repeated tick failures warn once for the streak, then log DEBUG for the rest", async () => {
     const harness = makeHarnessWithIdentity("managed", POLL_MS, () =>
       Promise.resolve(null),
     );
@@ -1205,7 +1205,7 @@ describe("presence retry (F-WIN-2)", () => {
     ).toEqual([2, 3]);
   });
 
-  it("D3: a quit verdict held through a failed identity probe is what the retry publishes, not the mode's verdict", async () => {
+  it("a quit verdict held through a failed identity probe is what the retry publishes, not the mode's verdict", async () => {
     const harness = makeHarnessWithIdentity(
       "managed",
       POLL_MS,
@@ -1227,7 +1227,7 @@ describe("presence retry (F-WIN-2)", () => {
     expect(presence?.onExit).toBe("stop");
   });
 
-  it("D4a: booted with the none capability, observation ticks never call writePresence", async () => {
+  it("booted with the none capability, observation ticks never call writePresence", async () => {
     const harness = makeHarnessWithIdentity("none", POLL_MS, () =>
       Promise.resolve(null),
     );
@@ -1239,7 +1239,7 @@ describe("presence retry (F-WIN-2)", () => {
     expect(writeSpy).not.toHaveBeenCalled();
   });
 
-  it("D4b: after none is committed this session, observation ticks never call writePresence", async () => {
+  it("after none is committed this session, observation ticks never call writePresence", async () => {
     const harness = makeHarnessWithIdentity("managed", POLL_MS, () =>
       Promise.resolve(OWN_IDENTITY),
     );
@@ -1255,7 +1255,7 @@ describe("presence retry (F-WIN-2)", () => {
     expect(writeSpy).not.toHaveBeenCalled();
   });
 
-  it("D5: a thrown write (write-failed) at launch is also retried on the next tick", async () => {
+  it("a thrown write (write-failed) at launch is also retried on the next tick", async () => {
     const harness = makeHarnessWithIdentity("managed", POLL_MS, () =>
       Promise.resolve(OWN_IDENTITY),
     );
@@ -1287,13 +1287,13 @@ describe("presence retry (F-WIN-2)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// F10: `observe()`'s change-detection keys on `rev` alone
+// `observe()`'s change-detection keys on `rev` alone
 // (`read.rev !== this.presenceRev`). An external write that lands at the
 // SAME rev this desktop already published under - a different mode, at an
 // equal rev, from a co-writer racing the same bump - is invisible to that
 // check, so the stale presence verdict is never corrected.
 // ---------------------------------------------------------------------------
-describe("F10: change detection keys on (rev, mode), not rev", () => {
+describe("change detection keys on (rev, mode), not rev", () => {
   it("an equal-rev CLI write with a different mode republishes the presence", async () => {
     const harness = makeHarness("managed", POLL_MS);
     await writeCliPolicy(harness.store, 4, "ask");
@@ -1339,16 +1339,16 @@ describe("F10: change detection keys on (rev, mode), not rev", () => {
 });
 
 // ---------------------------------------------------------------------------
-// U9: a quit verdict's presence write that failed (a transient EPERM/rename
+// A quit verdict's presence write that failed (a transient EPERM/rename
 // failure) must be retried by the NEXT observation, exactly like a launch
-// presence or a mode-change presence is (F-WIN-2). Today `observe()`'s retry
+// presence or a mode-change presence is (see the presence-retry tests above). Today `observe()`'s retry
 // branch (`presenceRev === null`) only fires when NOTHING has ever landed,
 // and its "external write" branch is gated on `quitVerdict === null` - so a
 // verdict write that fails while a PRIOR write already set `presenceRev`
 // (the common case: launch presence lands, then a quit verdict's write
 // fails) hits neither branch and is silently never retried.
 // ---------------------------------------------------------------------------
-describe("U9: a quit verdict whose write failed is retried", () => {
+describe("a quit verdict whose write failed is retried", () => {
   it("a failed quit-verdict write is retried by the next observation", async () => {
     const harness = makeHarness("managed", POLL_MS);
     await harness.service.writeLaunchPresence();
@@ -1403,14 +1403,14 @@ describe("U9: a quit verdict whose write failed is retried", () => {
 });
 
 // ---------------------------------------------------------------------------
-// F29: every job the service runs - `setMode`, `writeQuitVerdict`,
+// Every job the service runs - `setMode`, `writeQuitVerdict`,
 // `releaseQuitVerdict`, an observation tick - goes through the SAME strict
 // FIFO `serialize()` chain, so a `→ none` commit's `stopHost` await (which
 // can run for as long as the host takes to drain) blocks every quit-path
 // call submitted after it starts, even though none of them touch the host
 // the stop is acting on. The quit path must not wait behind it.
 // ---------------------------------------------------------------------------
-describe("F29: quit-path calls do not wait behind an in-flight none stop", () => {
+describe("quit-path calls do not wait behind an in-flight none stop", () => {
   function sleep(ms: number): Promise<"blocked"> {
     return new Promise((resolve) => {
       setTimeout(() => resolve("blocked"), ms);
@@ -1520,14 +1520,14 @@ describe("F29: quit-path calls do not wait behind an in-flight none stop", () =>
 });
 
 // ---------------------------------------------------------------------------
-// F11 (desktop side): `convergeIfDown` only brings a down host back when
+// (Desktop side) `convergeIfDown` only brings a down host back when
 // `readSupervisorState()` says `not-running`. Once that read also verifies
 // the recorded supervisor's liveness/identity, a `supervisor.json` left
 // behind by a dead or recycled-pid supervisor must read as stale (so the
 // converge fires) rather than `enforcing` (which suppresses it, per the
 // existing `any -> linked over an old supervisor` test's baseline).
 // ---------------------------------------------------------------------------
-describe("F11: a stale supervisor.json does not suppress the linked converge", () => {
+describe("a stale supervisor.json does not suppress the linked converge", () => {
   const RECORDED_PID = 777_001;
   const RECORDED_IDENTITY = requireIdentity(
     formatDarwinProcessStartIdentity("Sun Jul 6 12:00:00 2026"),
@@ -1642,7 +1642,7 @@ describe("F11: a stale supervisor.json does not suppress the linked converge", (
 });
 
 // ---------------------------------------------------------------------------
-// F4 (lifecycle side): "the desktop leaves a host that a person started in a
+// (Lifecycle side) "the desktop leaves a host that a person started in a
 // terminal untouched; the mode governs the service run only." A live,
 // capable, identity-matching supervisor record now also carries `admittedAs`
 // ("service" for a labelled/unattended start, "foreground" for a person's own
@@ -1652,7 +1652,7 @@ describe("F11: a stale supervisor.json does not suppress the linked converge", (
 // considered satisfied by a run this desktop did not start under service
 // control. `background` and a `"service"` record are unaffected.
 // ---------------------------------------------------------------------------
-describe("R4: getView surfaces admittedAs, and a foreground run pends a restart under an enforced mode", () => {
+describe("getView surfaces admittedAs, and a foreground run pends a restart under an enforced mode", () => {
   const RECORDED_PID = 777_002;
   const RECORDED_IDENTITY = requireIdentity(
     formatDarwinProcessStartIdentity("Sun Jul 6 12:00:00 2026"),
@@ -1788,7 +1788,7 @@ describe("R4: getView surfaces admittedAs, and a foreground run pends a restart 
 });
 
 // ---------------------------------------------------------------------------
-// F4 / the review's ruling: a `→ none` stop request against a host this desktop
+// The review's ruling: a `→ none` stop request against a host this desktop
 // never started under service control reports `not-service-run`, not a
 // failure - "the desktop leaves a host that a person started in a terminal
 // untouched" means there is nothing for `host stop` to withdraw, but this
@@ -1796,7 +1796,7 @@ describe("R4: getView surfaces admittedAs, and a foreground run pends a restart 
 // fix, `not-service-run` fell into the same bucket as a genuine `failed` stop
 // (see `stopNotCommitted`) and committed nothing.
 // ---------------------------------------------------------------------------
-describe("R5: → none commits on a not-service-run stop (the review's ruling)", () => {
+describe("→ none commits on a not-service-run stop (the review's ruling)", () => {
   it("commits none when the stop reports not-service-run", async () => {
     const harness = makeHarness("managed", POLL_MS);
     await writeCliPolicy(harness.store, 4, "ask");
@@ -1817,7 +1817,7 @@ describe("R5: → none commits on a not-service-run stop (the review's ruling)",
     expect(harness.controller.quiesceCount).toBe(1);
     expect(harness.controller.openHolds).toBe(0);
     expect(harness.controller.releaseCount).toBe(1);
-    // OBS-HOST-STOP-FOREGROUND's observability intent, carried onto the
+    // The terminal-host observability intent, carried onto the
     // committed path: the "none committed" INFO line names the reason a
     // person's terminal host was left untouched, and nothing here WARNs -
     // this was never a failure.
@@ -1840,7 +1840,7 @@ describe("R5: → none commits on a not-service-run stop (the review's ruling)",
 // --respect-hold`, a no-op when nothing is staged) once, so a staged update
 // that was waiting behind the foreground run lands as soon as it ends.
 // ---------------------------------------------------------------------------
-describe("R6: a terminal run ending applies a ready launch stage", () => {
+describe("a terminal run ending applies a ready launch stage", () => {
   const RECORDED_PID = 777_003;
   const RECORDED_IDENTITY = requireIdentity(
     formatDarwinProcessStartIdentity("Sun Jul 6 12:00:00 2026"),

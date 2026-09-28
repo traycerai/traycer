@@ -43,7 +43,7 @@ function ownedToken(metadata: LockMetadata): string {
 // module makes to `lstat`/`stat`/`unlink`/`writeFile` internally) passes
 // straight through to the real implementation.
 // An armed rename failure for `rewriteLockLivenessIfToken`'s retry-loop
-// coverage below (A1-A4). Independent of `simulateWin32RenameEperm` above,
+// coverage below. Independent of `simulateWin32RenameEperm` above,
 // which models the open-handle refusal; this models a THIRD PARTY (a reader
 // holding the file open, antivirus, etc.) making the rename to `path` fail
 // for reasons the acquiring process does not control.
@@ -51,7 +51,7 @@ type ArmedRenameFailure = {
   readonly path: string;
   readonly code: string;
   // Number of upcoming calls to `rename(_, path)` that still fail. Set to
-  // `Number.POSITIVE_INFINITY` to fail every call (A3's persistent EPERM).
+  // `Number.POSITIVE_INFINITY` to fail every call (persistent EPERM).
   remaining: number;
   // Run BEFORE the throw, so a test can simulate a third party mutating the
   // canonical file out from under the retry. Uses the real `writeFile`,
@@ -349,13 +349,13 @@ describe("tryAcquireOnce - close failure on the canonical lock handle", () => {
   });
 });
 
-// A1-A4: `rewriteLockLivenessIfToken`'s win32 retry loop around its final
+// `rewriteLockLivenessIfToken`'s win32 retry loop around its final
 // `rename(temporaryPath, path)`. Each test acquires the lock UNSTUBBED (real
 // platform), then stubs win32 ONLY around the `rewriteLockLivenessIfToken`
 // call under test - other code paths in `cross-process-lock.ts` branch on
 // `process.platform` too (`probeProcessGroupLiveness`), so the stub must not
 // leak into them.
-describe("rewriteLockLivenessIfToken - win32 retry against a transient reader (A1)", () => {
+describe("rewriteLockLivenessIfToken - win32 retry against a transient reader", () => {
   it("retries past a transient EPERM and rebinds liveness metadata", async () => {
     const dir = await freshDir();
     const lockPath = join(dir, "host.lock");
@@ -450,7 +450,7 @@ describe("rewriteLockLivenessIfToken - ownership change between retries", () => 
   });
 });
 
-describe("rewriteLockLivenessIfToken - persistent EPERM (A3)", () => {
+describe("rewriteLockLivenessIfToken - persistent EPERM", () => {
   it("returns false after exhausting the retry schedule, leaving the canonical lock unchanged", async () => {
     const dir = await freshDir();
     const lockPath = join(dir, "host.lock");
@@ -498,7 +498,7 @@ describe("rewriteLockLivenessIfToken - persistent EPERM (A3)", () => {
   });
 });
 
-describe("rewriteLockLivenessIfToken - ENOENT is not retried (T55)", () => {
+describe("rewriteLockLivenessIfToken - ENOENT is not retried", () => {
   it("surfaces ENOENT after one rename call", async () => {
     const dir = await freshDir();
     const lockPath = join(dir, "host.lock");
@@ -534,7 +534,7 @@ describe("rewriteLockLivenessIfToken - ENOENT is not retried (T55)", () => {
   });
 });
 
-describe("rewriteLockLivenessIfToken - EBUSY and EACCES retry like EPERM (T55)", () => {
+describe("rewriteLockLivenessIfToken - EBUSY and EACCES retry like EPERM", () => {
   it.each(["EBUSY", "EACCES"] as const)(
     "retries past a transient %s and rebinds liveness metadata",
     async (code) => {
@@ -574,7 +574,7 @@ describe("rewriteLockLivenessIfToken - EBUSY and EACCES retry like EPERM (T55)",
   );
 });
 
-describe("rewriteLockLivenessIfToken - off win32 (A4, control)", () => {
+describe("rewriteLockLivenessIfToken - off win32 (control)", () => {
   it("does not retry a transient rename failure off win32", async () => {
     const dir = await freshDir();
     const lockPath = join(dir, "host.lock");

@@ -194,7 +194,7 @@ describe("unknown extra keys are ignored", () => {
   });
 });
 
-describe("startIdentity (F11)", () => {
+describe("startIdentity", () => {
   const ID = formatDarwinProcessStartIdentity("Sun Jul 6 12:00:00 2026");
 
   it("serializes startIdentity into the record's text", () => {
@@ -288,7 +288,7 @@ describe("supervisorRecordHasCapability", () => {
   });
 });
 
-// F4 (lifecycle side): "the desktop leaves a host that a person started in a
+// "the desktop leaves a host that a person started in a
 // terminal untouched; the mode governs the service run only." `admittedAs`
 // is how the supervisor records which kind of start it admitted -
 // `"service"` (a mode-governed run: launchd/systemd/Scheduled Task, or an
@@ -299,7 +299,7 @@ describe("supervisorRecordHasCapability", () => {
 // than a typed field access, and construct raw literals rather than typed
 // `SupervisorRecord` values, so they run unmodified once the type gains the
 // field - vitest does not type-check.
-describe("admittedAs (F4)", () => {
+describe("admittedAs", () => {
   it("parses admittedAs 'service'", () => {
     const raw = { ...VALID_RECORD, admittedAs: "service" };
     const parsed = parseSupervisorRecord(raw);

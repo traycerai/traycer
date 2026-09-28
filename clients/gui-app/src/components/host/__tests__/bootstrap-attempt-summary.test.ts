@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BootstrapMarkerEntry } from "@traycer-clients/shared/platform/runner-host";
 import { describeOutcome } from "@/components/host/bootstrap-attempt-summary";
 
-// O-WIN-1: on Windows, a requested stop is recorded as `phase=killed` with
+// On Windows, a requested stop is recorded as `phase=killed` with
 // the handle-bound kill's exit CODE and NO signal - the same shape a POSIX
 // signal death used to be the only way to reach `killed`. `describeOutcome`
 // has to tell the two apart: a code with no signal reads as a requested

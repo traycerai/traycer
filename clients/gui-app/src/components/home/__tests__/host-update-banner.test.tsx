@@ -160,7 +160,7 @@ function makeHost(management: IHostManagement | null): IRunnerHost {
   });
 }
 
-/** Overrides just `hostLifecycle` on an already-built fake host (P1-B). */
+/** Overrides just `hostLifecycle` on an already-built fake host. */
 function withHostLifecycle(
   host: IRunnerHost,
   hostLifecycle: IHostLifecycleHost,
@@ -221,7 +221,7 @@ const HOST_UPDATE_FOREGROUND_SENTENCE =
   "Update ready. A host you started in a terminal is running; stop it to finish the update.";
 
 /**
- * The review's P1-in-`none` ruling: the sentence above is true only when THIS APP
+ * The review's foreground-sentence ruling: the sentence above is true only when THIS APP
  * can finish the update itself
  * (`applied.localHostCapability === "managed" && pending !== "restart-app"`).
  * Otherwise a foreground run gets this one instead - the constant this names
@@ -680,8 +680,8 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
     expect(await findHostUpdateBanner()).toBeTruthy();
   });
 
-  describe("P1-B — a foreground-admitted host cannot finish an update over itself", () => {
-    it("[P1-B1, RED] update-ready + admittedAs:'foreground' replaces the action with the stop-it sentence", async () => {
+  describe("a foreground-admitted host cannot finish an update over itself", () => {
+    it("[RED] update-ready + admittedAs:'foreground' replaces the action with the stop-it sentence", async () => {
       const management = makeManagement({ status: READY_STATUS });
       const host = withHostLifecycle(
         makeHost(management),
@@ -700,7 +700,7 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
       expect(management.applyStaged).not.toHaveBeenCalled();
     });
 
-    it("[P1-B2, RED] activation debt + admittedAs:'foreground' replaces the restart action with the same sentence", async () => {
+    it("[RED] activation debt + admittedAs:'foreground' replaces the restart action with the same sentence", async () => {
       const management = makeManagement({
         status: { ...UP_TO_DATE_STATUS, activation: "pendingActivation" },
       });
@@ -719,7 +719,7 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
       expect(management.activateInstalled).not.toHaveBeenCalled();
     });
 
-    it("[P1-B3, RED] a later push with admittedAs:null brings the action back reading 'Update now'", async () => {
+    it("[RED] a later push with admittedAs:null brings the action back reading 'Update now'", async () => {
       const management = makeManagement({ status: READY_STATUS });
       const hostLifecycle = createFakeHostLifecycleForBanner(
         lifecycleView("foreground"),
@@ -757,8 +757,8 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
     });
   });
 
-  describe("The P1-in-'none' ruling — the foreground sentence is true only when this app can finish the update itself", () => {
-    it("[RED N1] booted in none (localHostCapability:'none', pending:'none'): the self-serve sentence, not the P1 one, with no action", async () => {
+  describe("The foreground-sentence ruling — the foreground sentence is true only when this app can finish the update itself", () => {
+    it("[RED] booted in none (localHostCapability:'none', pending:'none'): the self-serve sentence, not the foreground-update one, with no action", async () => {
       const management = makeManagement({ status: READY_STATUS });
       const host = withHostLifecycle(
         makeHost(management),
@@ -779,7 +779,7 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
       expect(screen.queryByTestId("host-update-banner-action")).toBeNull();
     });
 
-    it("[RED N2] a committed '→ none' this session (localHostCapability:'managed', pending:'restart-app'): same three assertions", async () => {
+    it("[RED] a committed '→ none' this session (localHostCapability:'managed', pending:'restart-app'): same three assertions", async () => {
       const management = makeManagement({ status: READY_STATUS });
       const host = withHostLifecycle(
         makeHost(management),
@@ -800,7 +800,7 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
       expect(screen.queryByTestId("host-update-banner-action")).toBeNull();
     });
 
-    it("[GREEN M1] managed + pending:'none': the P1 sentence, not the self-serve one", async () => {
+    it("[GREEN] managed + pending:'none': the foreground-update sentence, not the self-serve one", async () => {
       const management = makeManagement({ status: READY_STATUS });
       const host = withHostLifecycle(
         makeHost(management),
@@ -821,7 +821,7 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
       expect(screen.queryByTestId("host-update-banner-action")).toBeNull();
     });
 
-    it("[GREEN M2] managed + pending:'restart-host' (restart-to-apply): the P1 sentence still shows", async () => {
+    it("[GREEN] managed + pending:'restart-host' (restart-to-apply): the foreground-update sentence still shows", async () => {
       const management = makeManagement({ status: READY_STATUS });
       const host = withHostLifecycle(
         makeHost(management),

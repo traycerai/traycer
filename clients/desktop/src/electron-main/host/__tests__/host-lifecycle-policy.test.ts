@@ -309,7 +309,7 @@ describe("HostLifecyclePolicyStore.readSupervisorState", () => {
   });
 
   // ---------------------------------------------------------------------
-  // F11: a supervisor record naming a dead or recycled pid must not read as
+  // A supervisor record naming a dead or recycled pid must not read as
   // "enforcing" - the recorded supervisor is provably gone, so its promise
   // that the lifecycle policy is enforced does not hold. Only POSITIVE
   // liveness/identity evidence (dead, or alive-different) may downgrade the
@@ -317,7 +317,7 @@ describe("HostLifecyclePolicyStore.readSupervisorState", () => {
   // record with no identity to compare, or one whose `startIdentity` is not a
   // usable identity string) falls back to `enforcing` on the capability alone.
   // ---------------------------------------------------------------------
-  describe("F11: readSupervisorState liveness", () => {
+  describe("readSupervisorState liveness", () => {
     async function writeRawSupervisorWithIdentity(
       store: HostLifecyclePolicyStore,
       pid: number,
@@ -441,7 +441,7 @@ describe("HostLifecyclePolicyStore.readSupervisorState", () => {
   });
 });
 
-// F11-cache: `supervisorRecordIsStale`'s memo is reused only for less than
+// `supervisorRecordIsStale`'s memo is reused only for less than
 // `SUPERVISOR_VERDICT_REUSE_MS` (60s) AND only while the spawn-free existence
 // probe still agrees with the cached verdict. Both conditions matter: on
 // Windows a dead supervisor's pid is commonly reissued within seconds, and a
@@ -452,7 +452,7 @@ describe("HostLifecyclePolicyStore.readSupervisorState", () => {
 // a bare `process.kill(pid, 0)`) answers `exists` throughout, standing in for
 // "the pid still exists" without mocking that probe itself. `process.pid` is
 // deliberately not used: `verifyProcessIdentityAsync` special-cases it.
-describe("F11-cache: the supervisor verdict cache is re-probed after its max age (pid reuse)", () => {
+describe("the supervisor verdict cache is re-probed after its max age (pid reuse)", () => {
   const RECORDED_PID = process.ppid;
   const RECORDED = requireIdentity(
     formatDarwinProcessStartIdentity("Sun Jul 6 12:00:00 2026"),
@@ -551,16 +551,16 @@ describe("F11-cache: the supervisor verdict cache is re-probed after its max age
   });
 });
 
-// F4 (lifecycle side): "the desktop leaves a host that a person started in a
+// (Lifecycle side) "the desktop leaves a host that a person started in a
 // terminal untouched; the mode governs the service run only." `readSupervisorRun`
 // is the one call that gives a caller BOTH facts at once - whether the running
 // supervisor enforces the policy at all (`state`, exactly `readSupervisorState`'s
 // answer) and, when it does, which kind of run this is (`admittedAs`, from the
 // live record's own field) - so a decision that must leave a foreground run
-// alone can be made from one read. Reuses the F11 fixture shape: a real, live,
+// alone can be made from one read. Reuses the fixture shape from the liveness tests above: a real, live,
 // non-self pid (`process.ppid`) so the spawn-free existence probe answers
 // `exists`, and the liveness/identity seams.
-describe("HostLifecyclePolicyStore.readSupervisorRun (F4)", () => {
+describe("HostLifecyclePolicyStore.readSupervisorRun", () => {
   const RUN_RECORDED_PID = process.ppid;
   const RUN_RECORDED_IDENTITY = requireIdentity(
     formatDarwinProcessStartIdentity("Sun Jul 6 12:00:00 2026"),
@@ -687,13 +687,13 @@ describe("HostLifecyclePolicyStore.readSupervisorRun (F4)", () => {
   });
 });
 
-// F4 (addendum): the health monitor's hold key. `readIdentifiedSupervisorPid`
+// Addendum: the health monitor's hold key. `readIdentifiedSupervisorPid`
 // returns the live supervisor's pid ONLY when its record carries a start
 // identity AND that identity checks out - a positively-identified process to
 // hold, never a bare pid a legacy record cannot vouch for. This is the one
 // difference from `readSupervisorRun().supervisorPid`, which returns the pid
 // for a legacy record too (liveness alone is enough for that read's purpose).
-describe("HostLifecyclePolicyStore.readIdentifiedSupervisorPid (F4)", () => {
+describe("HostLifecyclePolicyStore.readIdentifiedSupervisorPid", () => {
   const ID_RECORDED_PID = process.ppid;
   const ID_RECORDED_IDENTITY = requireIdentity(
     formatDarwinProcessStartIdentity("Sun Jul 6 12:00:00 2026"),
@@ -803,7 +803,7 @@ describe("HostLifecyclePolicyStore presence", () => {
     });
   });
 
-  it("D6: writePresence with a null identity returns identity-unavailable, writes no file, and logs nothing (the caller retries and owns the log line)", async () => {
+  it("writePresence with a null identity returns identity-unavailable, writes no file, and logs nothing (the caller retries and owns the log line)", async () => {
     const store = makeStore(null);
     const warnCallsBefore = vi.mocked(log.warn).mock.calls.length;
     expect(await store.writePresence("keep", 1)).toBe("identity-unavailable");

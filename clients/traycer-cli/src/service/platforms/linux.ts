@@ -1212,7 +1212,7 @@ export async function inspectLinuxServiceDefinition(
  * already current and systemd has not loaded it. That is the whole write: no
  * `enable`, `start`, `restart` or `disable`, no grant and no rollback.
  * `daemon-reload` re-reads unit files without touching running processes
- * (PROBE-RELOAD-LNX: `MainPID` unchanged, the running process still the old
+ * (`MainPID` unchanged, the running process still the old
  * argv, `ExecStart` the new one, and a `Restart=` respawn running the new
  * one), so the host keeps running and the new launcher applies from its next
  * start. A current unit costs one file read and one read-only `systemctl

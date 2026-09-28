@@ -345,11 +345,11 @@ describe("<WindowHostModalHost />", () => {
     expect(openSettings.getAttribute("data-emphasis")).toBe("button");
   });
 
-  // P4-b1: `HostControllerStatus.lastEnsureFailure`'s settled read, surfaced
+  // `HostControllerStatus.lastEnsureFailure`'s settled read, surfaced
   // on `DefaultHostReadinessPresentation` as `ensureFailure`. Same post-latch
   // ∅/local-lifecycle settled body as the test above, so the only variable is
   // `ensureFailure` itself.
-  it("P4-b1: the settled ∅ narrator shows the ensure failure's own message verbatim", async () => {
+  it("the settled ∅ narrator shows the ensure failure's own message verbatim", async () => {
     const SENTENCE =
       "the Traycer Host task is disabled in Task Scheduler; enable it or run `traycer host service install`";
     hostStatus.data = BOOTSTRAP_MARKERS;
@@ -382,7 +382,7 @@ describe("<WindowHostModalHost />", () => {
     expect(messageEl?.className ?? "").toContain("select-text");
   });
 
-  it("P4-b1 control: ensureFailure: null renders no message, and the attempt body is unchanged", async () => {
+  it("control: ensureFailure: null renders no message, and the attempt body is unchanged", async () => {
     hostStatus.data = BOOTSTRAP_MARKERS;
     applySnapshot({
       attached: true,

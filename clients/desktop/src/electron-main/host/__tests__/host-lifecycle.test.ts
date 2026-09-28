@@ -139,7 +139,7 @@ function useIndeterminateProcessLiveness(): () => void {
 const realProcessKill = process.kill.bind(process);
 
 /**
- * DEAD-HOST gates `HostLifecycle`'s cached identity verdict
+ * The dead-host guard gates `HostLifecycle`'s cached identity verdict
  * (`readIdentityVerdict`) on `probeProcessExistenceWithoutSpawn(pid)`, which
  * is `process.kill(pid, 0)` with no test seam of its own. Fixture pid 12345
  * (below) names no process on the machine running this suite, so once a
@@ -1161,7 +1161,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       await lifecycle.reloadSnapshotFromDisk();
       expect(lifecycle.getSnapshot()?.availability).toBe("available");
       expect(changes).toEqual(["same-host"]);
-      // The mechanism DEAD-HOST added: this failed-probe reload consulted the
+      // The dead-host guard added: this failed-probe reload consulted the
       // pinned pid rather than trusting the cache's age alone. If the pin
       // stops being load-bearing (the cache-reuse check is removed or
       // bypassed), this assertion is what goes red instead of the test

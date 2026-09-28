@@ -874,7 +874,7 @@ describe("DesktopTrayController host lifecycle", () => {
     expect(tray.toolTips).toHaveLength(tips);
   });
 
-  // The deliberate fail-open default (OBS-NONE-RESTART-MENU): before any
+  // The deliberate fail-open default: before any
   // host-lifecycle presentation has landed, Restart Host must still be
   // reachable - a policy read that never arrives must not silently remove
   // the remedy control.

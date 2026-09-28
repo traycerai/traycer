@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // `traycer host service start` (commands/service-start.ts) is one of the
 // three callers that pass through `startHostServiceWithAttempt`
-// (CRASH-RELAUNCH-ENSURE-RACE). When the host is not positively serving but
+// (the crash-relaunch race with `host ensure`). When the host is not positively serving but
 // its own supervisor is alive, this command must report the relaunch and
 // start nothing - never publish an adoption proof the manager would start
 // nothing to consume.
@@ -149,7 +149,7 @@ function fakeCtx(): CommandContext {
   };
 }
 
-describe("buildServiceStartCommand - CRASH-RELAUNCH-ENSURE-RACE", () => {
+describe("buildServiceStartCommand - the crash-relaunch race with `host ensure`", () => {
   it("exits 0 with data.supervisorRelaunchingPid and starts nothing when the host is not serving but its own supervisor is alive", async () => {
     const hostHomeDir = await freshHome();
     homeRef.current = hostHomeDir;

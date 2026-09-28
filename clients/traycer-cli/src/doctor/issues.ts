@@ -288,7 +288,7 @@ export interface DoctorResult {
   readonly issues: readonly DoctorIssue[];
   /**
    * The host lifecycle policy, desktop presence, run origin/owner and the
-   * running supervisor's capability (D7). Facts, not issues: printed in the
+   * running supervisor's capability. Facts, not issues: printed in the
    * report whatever they are, and additive to the payload, whose existing
    * readers take `issues` only.
    */

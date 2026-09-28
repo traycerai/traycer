@@ -1,6 +1,6 @@
 /**
- * RED (row 3, "U8-lock (Electron main): probeAttemptHolder for a
- * supervised-group holder"): the supervised-group branch of
+ * probeAttemptHolder for a supervised-group holder (Electron main): the
+ * supervised-group branch of
  * `probeAttemptHolder` (`clients/shared/host-update/lock.ts`) currently calls
  * the SYNC `verifyLockHolderLiveness` (which itself calls sync
  * `verifyProcessIdentity`, which shells out via `execFileSync`) whenever a
@@ -49,7 +49,7 @@ async function freshDir(): Promise<string> {
 }
 
 describe("probeAttemptHolder — supervised-group holder sync-vs-async spawn", () => {
-  // Row 3 (U8-lock): a supervised-group holder must be probed WITHOUT any
+  // A supervised-group holder must be probed WITHOUT any
   // synchronous execFileSync spawn (the mechanism: darwin's
   // readProcessStartIdentityImpl / verifyProcessIdentity shell out via
   // execFileSync — see clients/shared/host-lock/process-identity.ts).

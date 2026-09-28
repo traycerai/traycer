@@ -28,7 +28,7 @@ import {
 } from "./service-refresh";
 
 // `traycer host lifecycle get | set <mode>` - the CLI half of the host
-// lifecycle setting (lifecycle mechanics, D7). Traycer Desktop's Settings card
+// lifecycle setting. Traycer Desktop's Settings card
 // writes the same `lifecycle-policy.json`; the CLI supervisor is the only
 // thing that enforces it.
 //

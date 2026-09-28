@@ -44,7 +44,7 @@ import { readPidMetadataState } from "./host-lifecycle";
 // this desktop's presence record, and the supervisor record (read only).
 //
 // Nothing here caches a record. The CLI is a co-writer of the policy, so every
-// decision re-reads the file it decides on (R12, "never hydrate once"). Two
+// decision re-reads the file it decides on ("never hydrate once"). Two
 // values are memoized: this process's own start identity, which cannot
 // change, and the identity verdict on the process `supervisor.json` names,
 // keyed by that record's pid and identity and kept only while the pid's
@@ -260,7 +260,7 @@ export class HostLifecyclePolicyStore {
 
   /**
    * `supervisor.json` when it describes a running, capable supervisor: the
-   * capability advertised, and the process it names not provably gone (F11).
+   * capability advertised, and the process it names not provably gone.
    * The record is removed only on a clean exit, so one a killed supervisor
    * left behind (SIGKILL, power loss, a Windows session end) is checked
    * against the process it names - otherwise `→ linked` would read a dead

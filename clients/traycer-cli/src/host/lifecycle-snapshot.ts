@@ -26,7 +26,7 @@ import type { HostStartOrigin } from "./lifecycle-origin";
 
 // What `host status`, `host doctor` and `host lifecycle get` report about the
 // host lifecycle policy: the desired mode, the desktop presence, and whether
-// the RUNNING supervisor enforces any of it (lifecycle mechanics, D7). One
+// the RUNNING supervisor enforces any of it. One
 // reader, so the three commands can never describe the same machine two ways.
 //
 // Read-only and never throws, like every read under `lifecycle-files.ts`.

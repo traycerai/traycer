@@ -1305,7 +1305,7 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         // An explicit "Update now" apply never sets it.
         "traycer host apply --respect-hold",
         "traycer host download --automatic",
-        // Host lifecycle modes (D3): who is asking for a host start, written
+        // Host lifecycle modes: who is asking for a host start, written
         // into the adoption proof the supervisor consumes. The desktop passes
         // `desktop`, update/repair legs pass `maintenance`, and a person who
         // omits it is `terminal`. Informational only - a grant runs whatever

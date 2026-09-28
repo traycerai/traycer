@@ -58,7 +58,7 @@ afterAll(() => {
 
 const ENVIRONMENT = "dev";
 
-describe("rotateHostLogIfOversized - async liveness guard (Row 4 / U8-rotation)", () => {
+describe("rotateHostLogIfOversized - async liveness guard", () => {
   let child: ChildProcess | null = null;
 
   afterEach(async () => {
@@ -74,7 +74,7 @@ describe("rotateHostLogIfOversized - async liveness guard (Row 4 / U8-rotation)"
     await rm(hostHomeDir(ENVIRONMENT), { recursive: true, force: true });
   });
 
-  // U8-rotation: the supervisor's log rotation guard, over a real live holder.
+  // The supervisor's log rotation guard, over a real live holder.
   // `hostIsLive` -> `publishedHostProcessGone` -> `matchLiveProcessStartIdentity`
   // reads the live child's identity via a SYNCHRONOUS `execFileSync("ps", ...)`
   // spawn on macOS - blocking the event loop on every oversized-log check

@@ -1644,7 +1644,7 @@ describe("FallbackManualRungActions", () => {
   });
 
   /**
-   * FALLBACK-LIMIT-COPY.
+   * The wait explanation is a rate-limit-only fact.
    *
    * `waitExplanation` (`describeWaitDisposition(attempt.waitDisposition, …)`)
    * is a RATE-LIMIT fact: the host derives `waitDisposition` from the
@@ -1667,7 +1667,7 @@ describe("FallbackManualRungActions", () => {
    * that gating exists yet, so each sentence below is asserted ABSENT and
    * currently renders anyway.
    */
-  describe("FALLBACK-LIMIT-COPY: the wait explanation is a rate-limit-only fact", () => {
+  describe("the wait explanation is a rate-limit-only fact", () => {
     it("does not show the no-verified-reset sentence for missing_terminal_event, and still renders Retry", () => {
       seedAttempt(
         lastFailedAttempt({
@@ -1745,8 +1745,8 @@ describe("FallbackManualRungActions", () => {
           failure: { reason: "missing_terminal_event" },
           // "switch" included so the menu's own empty-state branch (which
           // carries `emptyStateActions`, and therefore `waitExplanation`
-          // again) is what renders - the same scaffolding the F6 test above
-          // uses to drive this exact branch.
+          // again) is what renders - the same scaffolding the wait-disposition
+          // test above uses to drive this exact branch.
           eligibleRungs: ["switch"],
           waitDisposition: "no_verified_reset",
           switchDisposition: "eligible",
@@ -1771,8 +1771,8 @@ describe("FallbackManualRungActions", () => {
       fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
       // RED on current code: `emptyStateActions` renders the SAME
       // `waitExplanation` value the card computed above, with no reason gate
-      // of its own either - F6 gave this sentence two renderers and neither
-      // one checks the reason.
+      // of its own either - the sentence already has two renderers and
+      // neither one checks the reason.
       expect(
         screen.queryByText(
           "The provider hasn't said when this limit resets, so there's nothing to wait for.",
@@ -1842,7 +1842,7 @@ describe("FallbackManualRungActions", () => {
    * the reason gate lands - they are what stops the fix from over-gating and
    * silencing the sentence for the one reason it is actually about.
    */
-  describe("FALLBACK-LIMIT-COPY controls: the wait explanation still renders for rate_limit", () => {
+  describe("controls: the wait explanation still renders for rate_limit", () => {
     it("still shows the no-verified-reset sentence for rate_limit", () => {
       seedAttempt(
         positiveAttempt({

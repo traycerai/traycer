@@ -603,7 +603,7 @@ describe("streamTraycerCliJson trusts a completed terminal result over the exit 
   });
 });
 
-// SSH-USERDOMAIN-WORKGROUP (R1): `host install` / `host ensure` now exit 1
+// `host install` / `host ensure` now exit 1
 // whenever the post-swap service start itself failed, even though their
 // JSON payload is a fully-formed `ok` envelope carrying
 // `serviceLifecycle.postSwapError` (or, for `host ensure`, the top-level
@@ -1023,7 +1023,7 @@ describe("runTraycerCliJson preserves successful envelopes on non-zero exit", ()
     expect(pending?.terminalCommand).toBe("traycer host restart");
   });
 
-  // SSH-USERDOMAIN-WORKGROUP (R2): the same tolerance, with the real
+  // The same tolerance, with the real
   // `host install` payload shape - `serviceLifecycle.postSwapError` set,
   // exitCode 1 from the CLI's own "a post-swap start failure fails the
   // command" rule. `runTraycerCliJsonWithInvocation`'s `extractTerminalEnvelope`

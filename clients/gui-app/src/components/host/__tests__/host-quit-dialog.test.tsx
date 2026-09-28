@@ -45,7 +45,7 @@ vi.mock("sonner", () => ({
 
 // `HostQuitDialog` branches on `useHostBinding()` BEFORE it ever reads the
 // (mocked) status hook - an unbound renderer answers its own `UNBOUND_STATUS`
-// instead. Switchable so the unbound-arm test (T44) can flip it to `null`.
+// instead. Switchable so the unbound-arm test can flip it to `null`.
 interface HostBindingFixture {
   readonly directory: { readonly getLocalEntry: () => null };
 }
@@ -225,7 +225,7 @@ afterEach(() => {
   hostBindingMock.current = { directory: { getLocalEntry: () => null } };
 });
 
-describe("<HostQuitDialog /> - U7: Stop must never force a stop the person never saw disclosed", () => {
+describe("<HostQuitDialog /> - Stop must never force a stop the person never saw disclosed", () => {
   it("verdict flips idle -> busy between render and click: Stop still sends the disclosed force:false", async () => {
     const quit = createFakeQuit();
     localHostQuitStatusMock.current = idleStatus();
@@ -358,7 +358,7 @@ describe("<HostQuitDialog /> - U7: Stop must never force a stop the person never
   });
 });
 
-describe("<HostQuitDialog /> - T41: Keep is focused on open, so Enter keeps rather than stops", () => {
+describe("<HostQuitDialog /> - Keep is focused on open, so Enter keeps rather than stops", () => {
   it("a busy verdict (where Stop would force) still auto-focuses Keep; Enter sends Keep, never Stop", async () => {
     const user = userEvent.setup();
     const quit = createFakeQuit();
@@ -382,7 +382,7 @@ describe("<HostQuitDialog /> - T41: Keep is focused on open, so Enter keeps rath
   });
 });
 
-describe("<HostQuitDialog /> - T44: unbound arm and click-time host-changed recheck", () => {
+describe("<HostQuitDialog /> - unbound arm and click-time host-changed recheck", () => {
   it("useHostBinding() null renders the unknown/no-connection state and never calls useLocalHostQuitStatus", async () => {
     const quit = createFakeQuit();
     hostBindingMock.current = null;
@@ -431,7 +431,7 @@ describe("<HostQuitDialog /> - T44: unbound arm and click-time host-changed rech
   });
 });
 
-describe("<HostQuitDialog /> - F24: not-running verdict (a directory entry that is down / not dialable)", () => {
+describe("<HostQuitDialog /> - not-running verdict (a directory entry that is down / not dialable)", () => {
   it("initial ask round with a not-running verdict answers Keep automatically and never opens the dialog", async () => {
     const quit = createFakeQuit();
     const NOT_RUNNING_VERDICT: HostQuitVerdict = { kind: "not-running" };

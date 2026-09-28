@@ -22,7 +22,7 @@ import type {
 
 // The one implementation of "bring the registered service definition to the
 // current launcher form without disturbing a running host" (host lifecycle
-// ruling M1). Reached from `traycer host service refresh` - which the desktop
+// ruling). Reached from `traycer host service refresh` - which the desktop
 // runs after its own mode writes - and in-process from
 // `traycer host lifecycle set`; the doctor asks `inspect` the same question.
 // The per-platform read-back, predicate and write live beside each

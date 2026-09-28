@@ -302,7 +302,7 @@ function describedReasonText(button: HTMLElement): string | null {
   return reasonEl?.textContent ?? null;
 }
 
-describe("OV-5 — the bridge Doctor card's restart fixes during a foreground run", () => {
+describe("the bridge Doctor card's restart fixes during a foreground run", () => {
   it("RED: a host-restart fix is disabled, reasoned, and dispatches nothing", async () => {
     const runDoctorRepairQueued = vi.fn(() =>
       Promise.resolve({ kind: "applied" as const }),
@@ -393,13 +393,13 @@ describe("OV-5 — the bridge Doctor card's restart fixes during a foreground ru
     expect(isDisabled(button)).toBe(false);
   });
 
-  // R3 (D-REGISTER, the review's ruling): "Register service" (fixAction
+  // "Register service" (fixAction
   // "service-install") joins the fixes withheld during a foreground run — see
   // this file's OWN "GREEN control: a non-restart fix stays enabled with no
   // reason" test above, which asserts the OPPOSITE for this exact issue and
   // will need updating once the fix lands (flagged in the report, not
   // touched here since only new red rows were asked for).
-  it("R3 RED: a service-install fix (Register service) is disabled, reasoned, and dispatches nothing", async () => {
+  it("RED: a service-install fix (Register service) is disabled, reasoned, and dispatches nothing", async () => {
     const runDoctorRepairQueued = vi.fn(() =>
       Promise.resolve({ kind: "applied" as const }),
     );
@@ -427,7 +427,7 @@ describe("OV-5 — the bridge Doctor card's restart fixes during a foreground ru
     expect(runDoctorRepairQueued).not.toHaveBeenCalled();
   });
 
-  it("R3 GREEN control: admittedAs null — the service-install fix is enabled", async () => {
+  it("GREEN control: admittedAs null — the service-install fix is enabled", async () => {
     const management = makeManagement({
       runDoctor: () =>
         Promise.resolve<HostDoctorReport>({
@@ -446,15 +446,15 @@ describe("OV-5 — the bridge Doctor card's restart fixes during a foreground ru
 });
 
 // ---------------------------------------------------------------------------
-// OV-10: the bridge Doctor card's "Free port and restart?" prompt
+// The bridge Doctor card's "Free port and restart?" prompt
 // (host-doctor-card.tsx's `freePortPrompt` ~229-231, rendered by
 // `host-doctor-report-content.tsx` ~104 with `blockedReason={null}` today)
 // must close its Confirm the moment a foreground run starts under it - same
-// class as OV-5, but through the dialog's own `blockedReason` rather than by
+// class as the restart-fixes tests above, but through the dialog's own `blockedReason` rather than by
 // disabling the fix button before it is ever opened.
 // ---------------------------------------------------------------------------
 
-describe("OV-10 — the bridge Doctor card's free-port-and-restart prompt during a foreground run", () => {
+describe("the bridge Doctor card's free-port-and-restart prompt during a foreground run", () => {
   it("RED: Confirm is disabled with the restart reason and dispatches nothing once foreground starts under it", async () => {
     const freePortAndRestart = vi.fn(
       (input: FreePortAndRestartInput & { readonly expectedHostId: string }) =>

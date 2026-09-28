@@ -147,7 +147,7 @@ export class FakeHostController implements IpcHostController {
     return false;
   }
   /**
-   * M1: `host service refresh` on the mutation lane. Defaults to an
+   * `host service refresh` on the mutation lane. Defaults to an
    * already-current, no-op outcome - the overwhelming common case for a
    * suite that is not itself testing the refresh - so the one field that
    * changed here (a new controller method) never has to be re-stubbed by

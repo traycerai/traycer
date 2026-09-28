@@ -31,7 +31,7 @@ const ownProcessStartIdentityAsyncMock = vi.hoisted(() =>
   vi.fn(async () => VALID_ASYNC_IDENTITY),
 );
 
-// F27: the supervisor stamps `supervisorStartIdentity` from the SYNC
+// The supervisor stamps `supervisorStartIdentity` from the SYNC
 // own-identity read (`ownProcessStartIdentity`), which caches a failed first
 // probe for the whole life of the process. `ownProcessStartIdentity` below
 // models exactly that failed first sync probe; `ownProcessStartIdentityAsync`
@@ -61,7 +61,7 @@ afterAll(() => {
   rmSync(osHome.current, { recursive: true, force: true });
 });
 
-describe("defaultRunHostStartDeps.lifecycle.ownStartIdentity (F27)", () => {
+describe("defaultRunHostStartDeps.lifecycle.ownStartIdentity", () => {
   it("uses the async reader's identity instead of a cached failed first sync probe", async () => {
     expect(isProcessStartIdentity(VALID_ASYNC_IDENTITY)).toBe(true);
 

@@ -304,7 +304,7 @@ function HostLifecycleAppliedLine(props: {
       ) : null}
       {/* `service`: this line means the running supervisor predates lifecycle
           enforcement, and the cooperative `host.restart` would only have that
-          old supervisor respawn its child (MIX-OLD-SUPERVISOR). */}
+          old supervisor respawn its child. */}
       <LocalHostRestartFlow
         requested={restartRequested}
         firstLeg="service"

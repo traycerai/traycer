@@ -52,7 +52,7 @@ describe("trayHostLifecyclePresentation", () => {
         ).toEqual({
           line: `Host: ${state} · ${PROMISES[mode]}`,
           // Linked's plain Quit already stops; none has nothing to stop; a
-          // dead host (F24) has nothing to stop either.
+          // dead host has nothing to stop either.
           offerQuitAndStopHost:
             hostRunning && mode !== "linked" && mode !== "none",
           // Restart Host is offered whenever lanes are active, regardless of
@@ -66,9 +66,9 @@ describe("trayHostLifecyclePresentation", () => {
   }
 });
 
-// F24: a dead local host must never offer "Quit and Stop Host" - there is
+// A dead local host must never offer "Quit and Stop Host" - there is
 // nothing to stop.
-describe("F24: a dead local host is never offered Quit and Stop Host (tray)", () => {
+describe("a dead local host is never offered Quit and Stop Host (tray)", () => {
   const offerableModes: readonly HostLifecycleMode[] = [
     "ask",
     "stop-if-idle",
@@ -88,7 +88,7 @@ describe("F24: a dead local host is never offered Quit and Stop Host (tray)", ()
   }
 });
 
-// F4: "the desktop leaves a host that a person started in a terminal
+// "The desktop leaves a host that a person started in a terminal
 // untouched; the mode governs the service run only." A foreground run is
 // hidden from the tray entirely - neither offer applies to a host the
 // service does not own, and the line says so. On head,
@@ -97,7 +97,7 @@ describe("F24: a dead local host is never offered Quit and Stop Host (tray)", ()
 // existing formula (already false for `linked`/`none`), and
 // `offerRestartHost` is unconditionally `true` whenever lanes are active -
 // The review ruled Restart Host is hidden for a foreground run too.
-describe("F4: a foreground run is hidden from the tray", () => {
+describe("a foreground run is hidden from the tray", () => {
   const foregroundModes: readonly HostLifecycleMode[] = [
     "background",
     "ask",

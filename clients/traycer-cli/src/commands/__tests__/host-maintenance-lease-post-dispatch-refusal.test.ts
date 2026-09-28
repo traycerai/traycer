@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-// F-EXECUTOR-MSG (findings-int.md), CLI side: `serveMaintenanceLease`'s
+// CLI side: `serveMaintenanceLease`'s
 // request handler (`host-maintenance-lease.ts:289-296`) catches EVERY error
 // thrown while dispatching an `execute-root` request - including one from
 // `superviseRootMaintenanceExecutor` rejecting with
@@ -25,7 +25,7 @@ const LEASE_SOURCE = readFileSync(
   "utf8",
 );
 
-describe("serveMaintenanceLease distinguishes a post-dispatch actuator failure from a pre-dispatch refusal (F-EXECUTOR-MSG)", () => {
+describe("serveMaintenanceLease distinguishes a post-dispatch actuator failure from a pre-dispatch refusal", () => {
   it('the execute-root dispatch catch does not answer every error with the same bare kind: "refused"', () => {
     const serveFn = LEASE_SOURCE.slice(
       LEASE_SOURCE.indexOf("async function serveMaintenanceLease("),

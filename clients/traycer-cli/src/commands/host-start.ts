@@ -2580,7 +2580,7 @@ export async function runHostStart(
         presence: lifecyclePresence,
       });
       // Whatever mode is in force now: a Background run must notice a later
-      // switch to Linked with no host restart (design review round 1, R2). A
+      // switch to Linked with no host restart. A
       // terminal-started (`foreground`) run is never adopted: Linked governs
       // the service-run host only.
       observer = startLifecycleObserver({

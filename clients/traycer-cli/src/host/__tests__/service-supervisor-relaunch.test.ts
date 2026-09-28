@@ -6,11 +6,11 @@ import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import type { SupervisorRecord } from "@traycer/protocol/config/supervisor-record";
 
 // `findLiveServiceSupervisor` (host/service-supervisor-relaunch.ts, NEW for
-// CRASH-RELAUNCH-ENSURE-RACE) narrows `readLiveSupervisorRun` to "the
+// the crash-relaunch race with `host ensure`) narrows `readLiveSupervisorRun` to "the
 // SERVICE's own supervisor" - an admission of `granted` or `unattended`. A
 // `foreground` run (`traycer host start` by hand) is a different question
 // and must take the ordinary path, which is the one control this suite
-// exists to pin (R2 in the ablation table).
+// exists to pin.
 
 const homeRef = vi.hoisted(() => ({ current: "" }));
 vi.mock("../../store/paths", () => ({
@@ -105,7 +105,7 @@ describe("findLiveServiceSupervisor", () => {
     });
   });
 
-  // R2: dropping the `=== "foreground"` check in `findLiveServiceRelaunch`
+  // Dropping the `=== "foreground"` check in `findLiveServiceRelaunch`
   // would make this row `{ supervisorPid: process.pid }` instead of `null`,
   // even though `readLiveSupervisorRun` genuinely found a live run - the two
   // assertions in one test pin exactly that distinction, not merely "returns

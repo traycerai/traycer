@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { HostUpdateAttemptRecord } from "@traycer-clients/shared/host-update";
 
-// P2-takeover sibling: the same ruling as
+// The same ruling as
 // `service-install-foreground.test.ts`, applied to `traycer host service
 // start` (`../service-start.ts`). `buildServiceStartCommand` reads status and
 // requests a start over ANY live host under the target service label today,
@@ -292,7 +292,7 @@ afterEach(() => {
   rmSync(workHome, { recursive: true, force: true });
 });
 
-describe("buildServiceStartCommand - refusal over a foreground run (P2-takeover sibling)", () => {
+describe("buildServiceStartCommand - refusal over a foreground run", () => {
   // Test 1 (RED): `lifecycleOrigin: "desktop"` over a live foreground run
   // must refuse before the status read and before `startHostServiceWithAttempt`.
   // RED on current code: no guard exists, so `controller.status` IS called

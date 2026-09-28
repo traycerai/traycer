@@ -27,7 +27,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 // Windows is proven on a real host separately (this repo's CI has no
 // Windows sandbox for a suite that needs to fabricate a fake `ps`/`tasklist`
 // on PATH and inspect real subprocess stderr).
-const STDERR_MARKER = "T08-FAKE-PS-STDERR";
+const STDERR_MARKER = "FAKE-PS-STDERR-MARKER";
 const RESULT_PREFIX = "RESULT:";
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url));

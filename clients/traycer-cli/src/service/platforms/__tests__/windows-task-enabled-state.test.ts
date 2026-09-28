@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
-// P4: `readWindowsTaskEnabledState` (windows.ts) reads the task's own
+// `readWindowsTaskEnabledState` (windows.ts) reads the task's own
 // `<Settings><Enabled>` - Task Scheduler's "Disable" switch - from ONE
 // read-only `queryTaskXml` call, the same seam `WindowsDefinitionDeps` gives
 // the definition refresher. A sibling trigger's own `<Enabled>` (e.g. a

@@ -1,4 +1,4 @@
-// P4: `HostControllerStatus.lastEnsureFailure` (a failed ensure's own
+// `HostControllerStatus.lastEnsureFailure` (a failed ensure's own
 // message, set by desktop main on every failed converge - launch or Retry -
 // and cleared on the next ok ensure or once the host is reachable) must reach
 // the DOM verbatim in exactly one element, `host-ensure-failure-message`, in
@@ -336,8 +336,8 @@ afterEach(() => {
   useAuthStore.getState().setSignedOut();
 });
 
-describe("host-ensure-failure-message (P4)", () => {
-  it("P4-a: the automatic launch's settled failure is shown verbatim, before the renderer ever calls convergeReady", async () => {
+describe("host-ensure-failure-message", () => {
+  it("the automatic launch's settled failure is shown verbatim, before the renderer ever calls convergeReady", async () => {
     const spy = buildManagementSpy({
       getHostControllerStatus: () =>
         Promise.resolve({
@@ -362,7 +362,7 @@ describe("host-ensure-failure-message (P4)", () => {
     expect(spy.convergeReadyCalls()).toBe(0);
   });
 
-  it("P4-c: the settled-only guard - the message is withheld while an ensure is in flight", async () => {
+  it("the settled-only guard - the message is withheld while an ensure is in flight", async () => {
     const spy = buildManagementSpy({
       getHostControllerStatus: () =>
         Promise.resolve({
@@ -387,13 +387,13 @@ describe("host-ensure-failure-message (P4)", () => {
     expect(screen.queryByTestId("host-ensure-failure-message")).toBeNull();
   });
 
-  // P4-d dropped: `provisioningError.message` rendering verbatim on the
+  // Dropped: `provisioningError.message` rendering verbatim on the
   // gate's card is already pinned by
   // `default-host-ready-gate.test.tsx:671-675` and `:745-759`
   // (`getByText("boom")`), and is untouched by `lastEnsureFailure` - a
   // duplicate not worth its ~10s real-timer wait.
 
-  it("P4-b2: after a user Retry, the pushed failure shows SENTENCE again; withheld while the retry is in flight", async () => {
+  it("after a user Retry, the pushed failure shows SENTENCE again; withheld while the retry is in flight", async () => {
     // A holder, not a `let`: TypeScript does not see the executor's
     // assignment and would narrow a `let` to `null` where it is called.
     const converge: {
@@ -429,7 +429,7 @@ describe("host-ensure-failure-message (P4)", () => {
     ).toBe(SENTENCE);
 
     // Step 2: click Retry, and while it is in flight the message must never
-    // show - the same settled-only guard P4-c pins, exercised here across a
+    // show - the same settled-only guard pinned above, exercised here across a
     // user-initiated ensure instead of the automatic one.
     const retryButton = await screen.findByTestId("window-host-modal-retry");
     fireEvent.click(retryButton);
@@ -440,7 +440,7 @@ describe("host-ensure-failure-message (P4)", () => {
 
     // Step 3: the retry resolves failed, and desktop main pushes a fresh
     // status carrying the fixture again. This suite mounts no
-    // `HostControllerStatusListener` (P4-a/c/b1 don't need one either), so -
+    // `HostControllerStatusListener` (the earlier cases don't need one either), so -
     // per the brief - that push is modelled directly as a `setQueryData` on
     // the exact key the real listener writes into
     // (`host-controller-status-listener.tsx`'s `onChange` handler).

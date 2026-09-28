@@ -708,7 +708,7 @@ describe("CLI capability-consuming mutation facades", () => {
     expect(stopForRestart).toHaveBeenCalledTimes(1);
   });
 
-  // `refreshHostServiceDefinitionWithAttempt` (M1): the definition-only
+  // `refreshHostServiceDefinitionWithAttempt`: the definition-only
   // refresh facade. Unlike `installHostServiceWithAttempt` there is no host
   // start adoption to publish or wait for - the mechanism under test is
   // simply "the refresher's `refresh` runs exactly once, under the
@@ -741,7 +741,7 @@ describe("CLI capability-consuming mutation facades", () => {
     expect(refresh).toHaveBeenCalledWith(serviceOptions.label);
   });
 
-  // T20: `refreshHostServiceDefinitionWithAttempt` runs its refresher
+  // `refreshHostServiceDefinitionWithAttempt` runs its refresher
   // callback INSIDE `withServiceMutationAuthority`'s scope (`update-
   // mutation.ts:154`) - the pinned test at `:672-698` above only observes
   // that the refresher ran; this observes the SCOPE itself, from inside the

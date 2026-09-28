@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 
-// F4-restart-sibling (row 6): `host restart` and `host free-port-and-restart`
+// `host restart` and `host free-port-and-restart`
 // today proceed to stop/kill/relaunch a LIVE FOREGROUND run (a `traycer host
 // start` in a terminal - see `host/foreground-host-run.ts`) exactly as if it
 // were the service's own host. `host stop` already refuses this
@@ -279,8 +279,8 @@ afterEach(() => {
   rmSync(workHome, { recursive: true, force: true });
 });
 
-describe("host restart - foreground-run guard (F4-restart-sibling)", () => {
-  // F4-restart-sibling test 1: a plain `host restart` carrying
+describe("host restart - foreground-run guard", () => {
+  // A plain `host restart` carrying
   // `lifecycleOrigin: "desktop"` over a live foreground run must reject
   // E_HOST_NOT_SERVICE_RUN before touching the controller at all. RED on
   // current (unmodified) code: `HostRestartArgs` has no `lifecycleOrigin`
@@ -308,7 +308,7 @@ describe("host restart - foreground-run guard (F4-restart-sibling)", () => {
     });
   });
 
-  // F4-restart-sibling test 2: `--force` must NOT bypass the guard - unlike
+  // `--force` must NOT bypass the guard - unlike
   // `host stop --force` (which legitimately kills a terminal-owned host
   // directly), `host restart --force` only widens the busy gate on the
   // SERVICE's stop/relaunch cycle; it has no meaning against a host the
@@ -336,7 +336,7 @@ describe("host restart - foreground-run guard (F4-restart-sibling)", () => {
     });
   });
 
-  // F4-restart-sibling test (a later correction, round 3): `--if-idle` with
+  // `--if-idle` with
   // `lifecycleOrigin: "desktop"` over the same live foreground run. The
   // refusal must come BEFORE the busy probe ever runs - a foreground run is
   // not the service's host, so probing whether IT is busy is meaningless,
@@ -366,7 +366,7 @@ describe("host restart - foreground-run guard (F4-restart-sibling)", () => {
     });
   });
 
-  // F4-restart-sibling control: with no `lifecycleOrigin` field at all (today's
+  // With no `lifecycleOrigin` field at all (today's
   // only reachable shape - `terminal` is not yet a meaningful distinct code
   // path since the field doesn't exist on current `HostRestartArgs`), the
   // same live foreground run is untouched by any guard and the command

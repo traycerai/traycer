@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 
-// OBS-HOST-STOP-FOREGROUND: a plain or `--if-idle` `host stop` asks the
+// A plain or `--if-idle` `host stop` asks the
 // SERVICE manager, and a host started by `traycer host start` in a terminal
 // (a `foreground` supervisor run) is not the service's - the service stop
 // reaches nothing and the command used to report success while that host ran
@@ -275,7 +275,7 @@ afterEach(() => {
   rmSync(workHome, { recursive: true, force: true });
 });
 
-describe("host stop - foreground-run refusal (OBS-HOST-STOP-FOREGROUND)", () => {
+describe("host stop - foreground-run refusal", () => {
   it("a plain stop rejects E_HOST_NOT_SERVICE_RUN over a live foreground run, naming the supervisor and host pids", async () => {
     writeLiveForegroundRun();
     mocks.findLiveIncumbentHostMock.mockResolvedValue(LIVE_INCUMBENT_HOST);
@@ -396,7 +396,7 @@ describe("host stop - foreground-run refusal (OBS-HOST-STOP-FOREGROUND)", () => 
     expect(mocks.findLiveIncumbentHostMock).not.toHaveBeenCalled();
   });
 
-  describe("F4 stop: the foreground check runs FIRST, before any busy probe or controller call", () => {
+  describe("stop: the foreground check runs FIRST, before any busy probe or controller call", () => {
     it("(i) --if-idle with lifecycleOrigin 'desktop' rejects E_HOST_NOT_SERVICE_RUN having never probed busy - red on head, which probes and rejects busy", async () => {
       writeLiveForegroundRun();
       mocks.findLiveIncumbentHostMock.mockResolvedValue(LIVE_INCUMBENT_HOST);

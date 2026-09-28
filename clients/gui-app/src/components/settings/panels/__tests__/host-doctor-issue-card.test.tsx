@@ -53,7 +53,7 @@ describe("<HostDoctorIssueCard /> Open in Terminal hint", () => {
   });
 });
 
-// M1: "Update service" (`service-refresh`) - the `host service refresh` doctor
+// "Update service" (`service-refresh`) - the `host service refresh` doctor
 // fix. Same card, a different issue shape.
 const serviceRefreshIssue: HostDoctorIssue = {
   code: "HOST_SERVICE_DEFINITION_STALE",
@@ -65,7 +65,7 @@ const serviceRefreshIssue: HostDoctorIssue = {
   details: null,
 };
 
-describe("<HostDoctorIssueCard /> service-refresh (M1)", () => {
+describe("<HostDoctorIssueCard /> service-refresh", () => {
   afterEach(() => {
     cleanup();
   });

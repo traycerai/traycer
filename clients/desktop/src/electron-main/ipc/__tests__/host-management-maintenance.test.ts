@@ -154,7 +154,7 @@ describe("laneBusyRestartMessage", () => {
     expect(laneBusyRestartMessage("ensure")).toBe(installing);
     expect(laneBusyRestartMessage("register")).toBe(service);
     expect(laneBusyRestartMessage("deregister")).toBe(service);
-    // M1: `refreshService` ("host service refresh") groups with the other
+    // `refreshService` ("host service refresh") groups with the other
     // service-definition mutations, not with update work.
     expect(laneBusyRestartMessage("refreshService")).toBe(service);
     expect(laneBusyRestartMessage("uninstallHost")).toBe(removing);
@@ -965,7 +965,7 @@ describe("maintenanceInstallVersion IPC", () => {
       ensure: false,
       register: false,
       deregister: false,
-      // M1: rewrites the service definition only, moves no version.
+      // Rewrites the service definition only, moves no version.
       refreshService: false,
       respawn: false,
       recoverIfDown: false,
@@ -2301,7 +2301,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       kind: "declined",
       message: HOST_CHANGED_MESSAGE,
     });
-    // M1: refresh-service is refused the same way, before any refresh call.
+    // refresh-service is refused the same way, before any refresh call.
     await expect(
       handler(null, { repair: "refresh-service", ...mismatched }),
     ).resolves.toEqual({
@@ -2365,7 +2365,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       kind: "declined",
       message: HOST_UNVERIFIED_MESSAGE,
     });
-    // M1: same unverifiable-enrollment refusal, before any refresh call.
+    // Same unverifiable-enrollment refusal, before any refresh call.
     await expect(
       handler(null, { repair: "refresh-service", ...payload }),
     ).resolves.toEqual({
@@ -3033,7 +3033,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
     expect(refreshCalls).toHaveLength(1);
   });
 
-  // MIX-OLD-SUPERVISOR: the lifecycle card's new idle-gated SERVICE channel
+  // The lifecycle card's new idle-gated SERVICE channel
   // (`traycerHostServiceRestartIfHostIdle`), which shares
   // `respawnWatchedLocalHost`'s identity fence and admission block with the
   // pre-existing `traycerHostRestartIfIdle` above - mirrored here rather than

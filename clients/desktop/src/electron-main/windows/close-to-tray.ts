@@ -7,13 +7,13 @@ import type {
   WindowRegistryRecord,
 } from "./window-registry";
 
-// Close-to-tray on Windows and Linux (host-lifecycle-modes D5). Under a
+// Close-to-tray on Windows and Linux. Under a
 // mode whose quit does something to the host - Linked stops it, Ask and
 // Stop-if-idle may - closing the last window must not be the quit: the user
 // closed a window, and only Quit (tray, menu, Ctrl+Q) runs the quit policy.
 // So the LAST window's `close` is intercepted, not `window-all-closed`: by
 // then the window is gone, the registry has dropped it, and the tray's Show
-// has nothing to restore (critique R10).
+// has nothing to restore.
 //
 // The policy is read fresh (the CLI co-writes it), which is asynchronous,
 // while `close` must be prevented synchronously. So a candidate close is
@@ -50,7 +50,7 @@ import type {
 //
 // macOS is untouched: a closed window never quits the app there.
 
-/** The modes whose quit policy acts on the host (D5). */
+/** The modes whose quit policy acts on the host. */
 const CLOSE_TO_TRAY_MODES: ReadonlySet<HostLifecycleMode> = new Set([
   "linked",
   "ask",

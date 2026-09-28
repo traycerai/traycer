@@ -170,7 +170,7 @@ describe("hostDoctorCommand human output", () => {
     const result = await hostDoctorCommand(makeCtx());
 
     expect(result.human).toContain("Lifecycle:");
-    // T18: pins the Lifecycle row's OWN rendered text (lifecycle-snapshot.ts
+    // Pins the Lifecycle row's OWN rendered text (lifecycle-snapshot.ts
     // describePolicy's "invalid" branch), not just the substring "corrupt" -
     // which the injected issue's title also contains and would satisfy even
     // if this row stopped naming the policy file corrupt.

@@ -375,7 +375,7 @@ function processIdentityVerdictOf(
 // Windows it is a PowerShell spawn with a timeout, which a loaded machine can
 // outlast - not about the process, and caching it made one slow boot probe
 // cost a desktop its presence record, and with it Linked's crash guarantee,
-// for its whole life (F-WIN-2). The ASYNC read retries instead: an async
+// for its whole life. The ASYNC read retries instead: an async
 // failure is remembered for `OWN_START_IDENTITY_RETRY_MS`, so callers asking
 // in a loop do not spawn a probe each, and the next async read after that
 // probes again. The SYNCHRONOUS read still probes at most once per process: it
@@ -945,7 +945,7 @@ const WINDOWS_START_IDENTITY_TIMEOUT_MS = 5_000;
 // a desktop launched by Task Scheduler does, its PowerShell child inheriting
 // that priority - against four busy Normal-priority loops, and one such boot
 // crossed the old 5 s. Nothing waits on this read but the presence write,
-// and a failure costs that record until a retry lands (F-WIN-2), so the wait
+// and a failure costs that record until a retry lands, so the wait
 // is the cheaper side.
 const OWN_WINDOWS_START_IDENTITY_TIMEOUT_MS = 15_000;
 

@@ -797,7 +797,7 @@ describe("registryCloseToTrayWindows (real WindowRegistry)", () => {
     );
     // Not visible and not minimized, but never hidden BY this mechanism -
     // still an open window (a still-loading window is the other case this
-    // protects, F30/T33).
+    // protects).
     expect(adapter.otherOpenWindowCount(ids[0])).toBe(1);
     expect(adapter.otherHiddenWindowCount(ids[0])).toBe(0);
   });
@@ -954,11 +954,11 @@ describe("reopen after a native Cancel (composition, counted by window creation)
   });
 });
 
-// F30: a still-loading window (`shown: false` - never shown, never hidden)
+// A still-loading window (`shown: false` - never shown, never hidden)
 // must count as OPEN, not hidden. "Hidden" is only a window HiddenToTrayWindows
 // itself hid; a loading window was never hidden through that adapter, so it
 // reads as open regardless of its visible/minimized state.
-describe("F30: a loading (show:false) window is not hidden", () => {
+describe("a loading (show:false) window is not hidden", () => {
   async function twoWindowsOneLoading(): Promise<{
     readonly rig: RegistryRig;
     readonly aId: string;

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { ServiceInstallArgs } from "../service-install";
 
-// P2 sibling (plain install, no `--takeover`): the same ruling family as
+// Plain install, no `--takeover`: the same ruling family as
 // `service-install-foreground.test.ts` and `service-start-foreground.test.ts`,
 // applied to a PLAIN `traycer host service install` - no `--takeover` at all.
 // A live foreground run in the target slot must refuse `E_HOST_NOT_SERVICE_RUN`

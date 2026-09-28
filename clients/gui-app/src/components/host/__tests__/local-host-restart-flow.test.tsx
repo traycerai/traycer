@@ -1081,7 +1081,7 @@ describe("<LocalHostRestartFlow /> - a dialable host with no client is offered f
   });
 });
 
-// MIX-OLD-SUPERVISOR: the lifecycle card's `firstLeg="service"` arm. Uses the
+// The lifecycle card's `firstLeg="service"` arm. Uses the
 // SAME bound/unbound split as the cooperative-first tests above, but through
 // `restartHostServiceIfHostIdle` instead of the `host.restart` RPC or a
 // straight-to-force respawn.
@@ -1126,7 +1126,7 @@ describe('<LocalHostRestartFlow /> - firstLeg="service" (the lifecycle card idle
   // FENCE: the binding's own app-wide host id (`HostRuntimeBinding.hostId`,
   // which production never reads) is a DIFFERENT, remote host than the local
   // entry `directory.getLocalEntry()` resolves. `dispatchService` must still
-  // fence to the LOCAL entry's id - an M8-style regression that swapped in
+  // fence to the LOCAL entry's id - a regression that swapped in
   // `binding.hostId` would send the wrong `expectedHostId` here and this test
   // would catch it while the "confirm calls..." test above could not (there
   // the two ids never diverge).

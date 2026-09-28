@@ -1,4 +1,4 @@
-// MIX-OLD-SUPERVISOR: the preload's `restartHostServiceIfHostIdle` method,
+// The preload's `restartHostServiceIfHostIdle` method,
 // mirroring `host-lifecycle-bridge.test.ts`'s mock-`ipcRenderer` pattern.
 // Scoped to just this method - `buildHostManagementBridge`'s other ~25
 // passthroughs have no dedicated preload suite today (see that file's

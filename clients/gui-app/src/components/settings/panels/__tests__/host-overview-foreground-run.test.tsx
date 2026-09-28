@@ -94,7 +94,7 @@ import {
 import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
 
 const RESTART_REASON = HOST_FOREGROUND_RESTART_REASON;
-const P1 = HOST_FOREGROUND_UPDATE_READY;
+const FOREGROUND_UPDATE_SENTENCE = HOST_FOREGROUND_UPDATE_READY;
 
 const OVERVIEW_METHODS = [
   "host.status",
@@ -211,10 +211,10 @@ function renderOverview(options: {
 }
 
 // ---------------------------------------------------------------------------
-// OV-1: the header "..." menu's Restart item
+// The header "..." menu's Restart item
 // ---------------------------------------------------------------------------
 
-describe("OV-1 — the header menu's Restart during a foreground run", () => {
+describe("the header menu's Restart during a foreground run", () => {
   it("RED: degrades Restart and dispatches nothing on the local host", async () => {
     const { fixture } = renderOverview({
       hostId: "host-local",
@@ -276,7 +276,7 @@ describe("OV-1 — the header menu's Restart during a foreground run", () => {
 });
 
 // ---------------------------------------------------------------------------
-// OV-2: the version card's "Update now"
+// The version card's "Update now"
 // ---------------------------------------------------------------------------
 
 function updatableManifestHandlers(): MockHandlerMap<HostRpcRegistry> {
@@ -290,7 +290,7 @@ function updatableManifestHandlers(): MockHandlerMap<HostRpcRegistry> {
   };
 }
 
-describe("OV-2 — the version card's Update now during a foreground run", () => {
+describe("the version card's Update now during a foreground run", () => {
   it("RED: hides Update now and shows the foreground reason when a newer version exists", async () => {
     renderOverview({
       hostId: "host-local",
@@ -306,7 +306,7 @@ describe("OV-2 — the version card's Update now during a foreground run", () =>
     await waitFor(() => {
       expect(
         screen.getByTestId("host-overview-update-foreground").textContent,
-      ).toBe(P1);
+      ).toBe(FOREGROUND_UPDATE_SENTENCE);
     });
     expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
   });
@@ -350,7 +350,7 @@ describe("OV-2 — the version card's Update now during a foreground run", () =>
 });
 
 // ---------------------------------------------------------------------------
-// OV-3: the operation card's update-finishing controls
+// The operation card's update-finishing controls
 // ---------------------------------------------------------------------------
 
 function activationDebtInstallation(): HostGetInstallationInfoResponseV11 {
@@ -396,7 +396,7 @@ function activationDebtStatusHandler(): MockHandlerMap<HostRpcRegistry> {
   };
 }
 
-describe("OV-3 — the operation card's update-finishing controls during a foreground run", () => {
+describe("the operation card's update-finishing controls during a foreground run", () => {
   it("RED: withdraws Restart/force controls and shows the foreground reason", async () => {
     renderOverview({
       hostId: "host-local",
@@ -410,7 +410,7 @@ describe("OV-3 — the operation card's update-finishing controls during a foreg
     await waitFor(() => {
       expect(
         screen.getByTestId("host-overview-operation-foreground").textContent,
-      ).toBe(P1);
+      ).toBe(FOREGROUND_UPDATE_SENTENCE);
     });
     expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
     expect(
@@ -436,7 +436,7 @@ describe("OV-3 — the operation card's update-finishing controls during a foreg
 });
 
 // ---------------------------------------------------------------------------
-// OV-4: the Doctor sheet's restart fixes
+// The Doctor sheet's restart fixes
 // ---------------------------------------------------------------------------
 
 const CLI_UPGRADE_PENDING: HostDoctorIssue = {
@@ -493,7 +493,7 @@ function describedReasonText(button: HTMLElement): string | null {
   return reasonEl?.textContent ?? null;
 }
 
-describe("OV-4 — the Doctor sheet's restart fixes during a foreground run", () => {
+describe("the Doctor sheet's restart fixes during a foreground run", () => {
   it("RED: a host-restart fix is disabled, reasoned, and dispatches nothing", async () => {
     const management = buildOverviewManagement({});
     renderOverview({
@@ -585,7 +585,7 @@ describe("OV-4 — the Doctor sheet's restart fixes during a foreground run", ()
 });
 
 // ---------------------------------------------------------------------------
-// OV-6: a bridge-route restart confirm arms at OPEN and is not closed by
+// A bridge-route restart confirm arms at OPEN and is not closed by
 // `restartDegrade` (host-overview-panel.tsx:1288-1294 closes only the
 // COOPERATIVE route) - so a foreground run starting while it is open leaves
 // it answerable, and Confirm still dispatches the bridge respawn.
@@ -659,7 +659,7 @@ function renderBridgeRouteOverview(): {
   };
 }
 
-describe("OV-6 — a bridge-route restart confirm during a foreground run", () => {
+describe("a bridge-route restart confirm during a foreground run", () => {
   it("RED: closes the open confirm and dispatches nothing once a foreground run starts under it", async () => {
     const { restartHostIfIdle, pushLifecycleView } =
       renderBridgeRouteOverview();
@@ -705,7 +705,7 @@ describe("OV-6 — a bridge-route restart confirm during a foreground run", () =
 });
 
 // ---------------------------------------------------------------------------
-// OV-6b/c/d: the three busy/force/defer offers (`HostBusyForceDeferDialog`,
+// The three busy/force/defer offers (`HostBusyForceDeferDialog`,
 // testid `host-busy-force-defer-dialog`, `data-purpose` "restart" | "update")
 // - each opens from live work a click discovered, arms independently of the
 // restart confirm above, and is never re-checked against a foreground run
@@ -947,7 +947,7 @@ function floorStagedManifest(version: string): HostAvailableManifest {
   };
 }
 
-describe("OV-6b — the busy verdict's Force restart during a foreground run", () => {
+describe("the busy verdict's Force restart during a foreground run", () => {
   function busyRestartHandlers(): MockHandlerMap<HostRpcRegistry> {
     return {
       "host.restart": () =>
@@ -1016,7 +1016,7 @@ describe("OV-6b — the busy verdict's Force restart during a foreground run", (
   });
 });
 
-describe("OV-6c — the staged-wait Force update… offer during a foreground run", () => {
+describe("the staged-wait Force update… offer during a foreground run", () => {
   function stagedWaitOptions(
     installCalls: Array<{ readonly version: string; readonly force: boolean }>,
   ): {
@@ -1099,7 +1099,7 @@ describe("OV-6c — the staged-wait Force update… offer during a foreground ru
   });
 });
 
-describe("OV-6d — the bound-dispatch offer during a foreground run", () => {
+describe("the bound-dispatch offer during a foreground run", () => {
   function boundParkOptions(
     continueCalls: Array<{
       readonly attemptId: string;
@@ -1189,7 +1189,7 @@ describe("OV-6d — the bound-dispatch offer during a foreground run", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The P1-in-`none` ruling (Overview half): P1 only holds when
+// The foreground-sentence ruling (Overview half): it only holds when
 // `applied.localHostCapability === "managed"` AND `pending !== "restart-app"`.
 // Otherwise, during a foreground run, both surfaces must show this sentence
 // instead — no constant exists yet, so the literal is asserted directly.
@@ -1250,8 +1250,8 @@ function renderForegroundOverview(options: {
   return { fixture, queryClient };
 }
 
-describe("OV-7 — the version card's Update now under the P1-in-`none` ruling", () => {
-  it("RED N1: capability none — the self-update sentence, not P1, and Update now absent", async () => {
+describe("the version card's Update now under the foreground-sentence ruling", () => {
+  it("RED: capability none — the self-update sentence, not the foreground-update one, and Update now absent", async () => {
     renderForegroundOverview({
       hostId: "host-local",
       isLocalMachine: true,
@@ -1269,7 +1269,7 @@ describe("OV-7 — the version card's Update now under the P1-in-`none` ruling",
     expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
   });
 
-  it("RED N2: managed but pending restart-app — the self-update sentence, not P1", async () => {
+  it("RED: managed but pending restart-app — the self-update sentence, not the foreground-update one", async () => {
     renderForegroundOverview({
       hostId: "host-local",
       isLocalMachine: true,
@@ -1287,7 +1287,7 @@ describe("OV-7 — the version card's Update now under the P1-in-`none` ruling",
     expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
   });
 
-  it("GREEN control M1: managed and pending none — P1", async () => {
+  it("GREEN control: managed and pending none — the foreground-update sentence", async () => {
     renderForegroundOverview({
       hostId: "host-local",
       isLocalMachine: true,
@@ -1300,14 +1300,14 @@ describe("OV-7 — the version card's Update now under the P1-in-`none` ruling",
     await waitFor(() => {
       expect(
         screen.getByTestId("host-overview-update-foreground").textContent,
-      ).toBe(P1);
+      ).toBe(FOREGROUND_UPDATE_SENTENCE);
     });
     expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
   });
 });
 
-describe("OV-8 — the operation card's finishing line under the P1-in-`none` ruling", () => {
-  it("RED N1: capability none — the self-update sentence, controls still absent", async () => {
+describe("the operation card's finishing line under the foreground-sentence ruling", () => {
+  it("RED: capability none — the self-update sentence, controls still absent", async () => {
     renderForegroundOverview({
       hostId: "host-local",
       isLocalMachine: true,
@@ -1331,7 +1331,7 @@ describe("OV-8 — the operation card's finishing line under the P1-in-`none` ru
     ).toBeNull();
   });
 
-  it("RED N2: managed but pending restart-app — the self-update sentence, controls still absent", async () => {
+  it("RED: managed but pending restart-app — the self-update sentence, controls still absent", async () => {
     renderForegroundOverview({
       hostId: "host-local",
       isLocalMachine: true,
@@ -1355,7 +1355,7 @@ describe("OV-8 — the operation card's finishing line under the P1-in-`none` ru
     ).toBeNull();
   });
 
-  it("GREEN control M1: managed and pending none — P1", async () => {
+  it("GREEN control: managed and pending none — the foreground-update sentence", async () => {
     renderForegroundOverview({
       hostId: "host-local",
       isLocalMachine: true,
@@ -1368,21 +1368,22 @@ describe("OV-8 — the operation card's finishing line under the P1-in-`none` ru
     await waitFor(() => {
       expect(
         screen.getByTestId("host-overview-operation-foreground").textContent,
-      ).toBe(P1);
+      ).toBe(FOREGROUND_UPDATE_SENTENCE);
     });
   });
 });
 
 // ---------------------------------------------------------------------------
-// OV-9: the RPC Doctor sheet's "Free port and restart?" prompt
+// The RPC Doctor sheet's "Free port and restart?" prompt
 // (host-doctor-rpc-card.tsx ~353-357 opens it, ~407-432 renders it, always
 // with `blockedReason={null}` today) must close its Confirm the moment a
-// foreground run starts under it, same class as OV-6/6b/6c/6d but rendered
+// foreground run starts under it, same class as the bridge-route confirm
+// test and its busy/force/defer siblings, but rendered
 // through `ConfirmDestructiveDialog`'s own `blockedReason` rather than by
 // unmounting the dialog.
 // ---------------------------------------------------------------------------
 
-describe("OV-9 — the RPC Doctor sheet's free-port-and-restart prompt during a foreground run", () => {
+describe("the RPC Doctor sheet's free-port-and-restart prompt during a foreground run", () => {
   it("RED: Confirm is disabled with the restart reason and dispatches nothing once foreground starts under it", async () => {
     const freePortAndRestartIfIdle = vi.fn(() =>
       Promise.resolve({
@@ -1453,11 +1454,12 @@ describe("OV-9 — the RPC Doctor sheet's free-port-and-restart prompt during a 
 });
 
 // ---------------------------------------------------------------------------
-// OV-11: the bound offer's one-shot auto-open must WAIT OUT a foreground run
+// The bound offer's one-shot auto-open must WAIT OUT a foreground run
 // (`gateArmed: ... || restartDegrade === "terminal-run"`,
 // host-overview-panel.tsx:1260) rather than fire and get closed by the
 // terminal-run close rule (:1321-1333) in the same render pass, which would
-// spend `autoOpenedFor` on a dialog nobody ever saw. Mirrors H1 in
+// spend `autoOpenedFor` on a dialog nobody ever saw. Mirrors the
+// recoverable-region-retirement one-shot test in
 // host-overview-bound-dispatch.test.tsx:1908-2012 (same shape, for the
 // `updates.degrade` term).
 // ---------------------------------------------------------------------------
@@ -1508,7 +1510,7 @@ function activationAttemptStatusHandler(): MockHandlerMap<HostRpcRegistry> {
 
 /** The slot's own half of "otherwise qualifying" - this page dispatched a1,
  * and the host has published it at least once (`seen`) - set up directly
- * against the store as H1 does. */
+ * against the store as the recoverable-region-retirement test does. */
 function armOwnedActivationAttempt(hostId: string, incarnation: string): void {
   useHostServiceWriteLatchStore.getState().armUpdateDispatch(hostId, {
     attemptId: "a1",
@@ -1519,7 +1521,7 @@ function armOwnedActivationAttempt(hostId: string, incarnation: string): void {
     .observeUpdateDispatchFrame(hostId, { attemptId: "a1", terminal: false });
 }
 
-describe("OV-11 — the bound offer's one-shot auto-open waits out a foreground run", () => {
+describe("the bound offer's one-shot auto-open waits out a foreground run", () => {
   // Each case spies `newOverviewIncarnation` to its own fixed value; restore it
   // so no later block inherits one.
   afterEach(() => {

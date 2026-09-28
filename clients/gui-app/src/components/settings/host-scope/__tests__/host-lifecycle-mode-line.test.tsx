@@ -196,11 +196,11 @@ describe("<HostLifecycleModeLine />", () => {
   });
 });
 
-// F4-2: a host started in a terminal (`applied.admittedAs === "foreground"`)
+// A host started in a terminal (`applied.admittedAs === "foreground"`)
 // is not governed by the mode - the line must say so instead of the mode's
 // ordinary promise, for every desired mode including "none" (which today
 // renders no line at all).
-describe("<HostLifecycleModeLine /> - foreground admission (F4-2)", () => {
+describe("<HostLifecycleModeLine /> - foreground admission", () => {
   it("renders 'started in a terminal' when admittedAs is foreground, whatever the desired mode", async () => {
     const host = buildLifecycleHost(
       view({

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// §5.4 class sweep, R-E: Desktop kills a CLI that prints no NDJSON line
+// Desktop kills a CLI that prints no NDJSON line
 // for 600s (`CLI_STREAM_IDLE_TIMEOUT_MS`). The fix (already in the tree) is
 // `reportBoundedWait` (bounded-wait-progress.ts), called as each bounded wait
 // BEGINS, so the longest silence a caller can see is one wait's own bound,
@@ -204,7 +204,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("bounded-wait-progress sweep (§5.4, R-E)", () => {
+describe("bounded-wait-progress sweep", () => {
   it("(s1) `host uninstall --all`, Windows shape: uninstall then stop never silence longer than either actuator's own span", async () => {
     // Windows uninstall: schtasks /End + kill ladder (300s) + the
     // invocation-record txn (30s) - one lump, one actuator call.

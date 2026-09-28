@@ -1,4 +1,4 @@
-// The D-REMOVE ruling: while THIS machine's host was started in a
+// The foreground-remove ruling: while THIS machine's host was started in a
 // terminal (`applied.admittedAs === "foreground"`), "Remove Traycer"
 // (`RemoveTraycerRow`, `host-danger-zone.tsx` ~:196-300) must not touch it -
 // the same "this app leaves a terminal-started run alone" rule the update
@@ -307,14 +307,14 @@ describe("HostDangerZone - Remove Traycer during a foreground host run", () => {
   });
 });
 
-describe("HostDangerZone - Remove Traycer's declined-uninstall notice (D-REMOVE typed arm)", () => {
-  it("RED X1: a foreground-refusal decline shows the notice, not an error toast, and stays on the same row", async () => {
-    const M1 =
+describe("HostDangerZone - Remove Traycer's declined-uninstall notice", () => {
+  it("RED: a foreground-refusal decline shows the notice, not an error toast, and stays on the same row", async () => {
+    const FOREGROUND_REFUSAL_MESSAGE =
       "A host you started in a terminal is running, and Traycer leaves it alone. Stop it there to continue.";
     const uninstallTraycer = vi.fn(() =>
       Promise.resolve({
         kind: "declined",
-        message: M1,
+        message: FOREGROUND_REFUSAL_MESSAGE,
       } satisfies TraycerUninstallResult),
     );
     renderDangerZone({
@@ -330,19 +330,19 @@ describe("HostDangerZone - Remove Traycer's declined-uninstall notice (D-REMOVE 
     });
     expect(toast.error).not.toHaveBeenCalled();
     expect(toast.info).toHaveBeenCalledWith("Remove Traycer didn't run", {
-      description: M1,
+      description: FOREGROUND_REFUSAL_MESSAGE,
     });
     expect(screen.queryByTestId("settings-quit-after-uninstall")).toBeNull();
     expect(screen.queryByTestId("settings-retry-uninstall")).toBeNull();
     expect(screen.getByTestId("settings-remove-traycer")).not.toBeNull();
   });
 
-  it("RED X2: a lock-busy decline shows the notice, not an error toast, and stays on the same row", async () => {
-    const M2 = "Another Traycer process is managing the host.";
+  it("RED: a lock-busy decline shows the notice, not an error toast, and stays on the same row", async () => {
+    const LOCK_BUSY_MESSAGE = "Another Traycer process is managing the host.";
     const uninstallTraycer = vi.fn(() =>
       Promise.resolve({
         kind: "declined",
-        message: M2,
+        message: LOCK_BUSY_MESSAGE,
       } satisfies TraycerUninstallResult),
     );
     renderDangerZone({
@@ -358,14 +358,14 @@ describe("HostDangerZone - Remove Traycer's declined-uninstall notice (D-REMOVE 
     });
     expect(toast.error).not.toHaveBeenCalled();
     expect(toast.info).toHaveBeenCalledWith("Remove Traycer didn't run", {
-      description: M2,
+      description: LOCK_BUSY_MESSAGE,
     });
     expect(screen.queryByTestId("settings-quit-after-uninstall")).toBeNull();
     expect(screen.queryByTestId("settings-retry-uninstall")).toBeNull();
     expect(screen.getByTestId("settings-remove-traycer")).not.toBeNull();
   });
 
-  it("GREEN control C1: a genuine rejection still shows the error toast, not the declined notice", async () => {
+  it("GREEN control: a genuine rejection still shows the error toast, not the declined notice", async () => {
     const uninstallTraycer = vi.fn(() => Promise.reject(new Error("boom")));
     renderDangerZone({
       admittedAs: null,
@@ -386,7 +386,7 @@ describe("HostDangerZone - Remove Traycer's declined-uninstall notice (D-REMOVE 
     ).toBe("boom");
   });
 
-  it("GREEN control C2: a completed removal renders the removed surface", async () => {
+  it("GREEN control: a completed removal renders the removed surface", async () => {
     const uninstallTraycer = vi.fn(() =>
       Promise.resolve({
         kind: "removed",

@@ -158,7 +158,7 @@ describe("assertHostNotBusy", () => {
 
   it("resolves (no live host) when pid.json is missing - no probe attempted", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(null);
-    // F3: both mocks must agree - `absent` reads as `null`.
+    // Both mocks must agree - `absent` reads as `null`.
     mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({ kind: "absent" });
     const fetchSpy = stubFetch(async () => jsonResponse({ busy: true }, 200));
     await expect(assertHostNotBusy("production")).resolves.toBeUndefined();
@@ -167,7 +167,7 @@ describe("assertHostNotBusy", () => {
 
   it("resolves (no live host) for a stale pid.json whose process has exited", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
-    // F3: both mocks must agree - a `read(meta)` evidence beside the stale metadata.
+    // Both mocks must agree - a `read(meta)` evidence beside the stale metadata.
     mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
       kind: "read",
       metadata: VALID_META,
@@ -178,8 +178,8 @@ describe("assertHostNotBusy", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  // F3: reds for `assertHostNotBusy`'s sibling gate, same fail-closed evidence.
-  describe("F3: fail-closed evidence the collapsed null-read hides", () => {
+  // Reds for `assertHostNotBusy`'s sibling gate, same fail-closed evidence.
+  describe("fail-closed evidence the collapsed null-read hides", () => {
     it("an unreadable pid.json rejects E_HOST_BUSY without probing - red on head, which resolves", async () => {
       mocks.readHostPidMetadataMock.mockResolvedValue(null);
       mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
@@ -264,7 +264,7 @@ describe("assertHostIdleForStop", () => {
 
   it("resolves with no probe when there is no pid.json", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(null);
-    // F3: both mocks must agree - `absent` reads as `null`.
+    // Both mocks must agree - `absent` reads as `null`.
     mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({ kind: "absent" });
     const fetchSpy = stubFetch(async () => jsonResponse({ busy: true }, 200));
     await expect(assertHostIdleForStop("production")).resolves.toBeUndefined();
@@ -273,7 +273,7 @@ describe("assertHostIdleForStop", () => {
 
   it("resolves with no probe for a stale pid.json", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
-    // F3: both mocks must agree - a `read(meta)` evidence beside the stale metadata.
+    // Both mocks must agree - a `read(meta)` evidence beside the stale metadata.
     mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
       kind: "read",
       metadata: VALID_META,
@@ -284,11 +284,11 @@ describe("assertHostIdleForStop", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  // F3: `assertHostIdleForStop` must fail closed on evidence a plain
+  // `assertHostIdleForStop` must fail closed on evidence a plain
   // `readHostPidMetadata` null-read cannot express - an unreadable pid.json
   // (not proof of absence) and a live host under a websocket URL the current
   // validator wrongly waves through as "no host".
-  describe("F3: fail-closed evidence the collapsed null-read hides", () => {
+  describe("fail-closed evidence the collapsed null-read hides", () => {
     it("an unreadable pid.json rejects E_HOST_BUSY without probing - red on head, which resolves", async () => {
       // `readHostPidMetadata` folds `unreadable` into `null` today, so head
       // reads "no live host" and resolves; the evidence-aware fix must fail

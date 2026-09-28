@@ -230,7 +230,7 @@ const SERVICE_MANAGED = lifecycleView({
 });
 
 describe("host-overview drain gate — Apply now during a local foreground run", () => {
-  it("[RED DG1] managed + pending none: gate present, no trigger, the P1 line in host-apply-now-foreground", async () => {
+  it("[RED] managed + pending none: gate present, no trigger, the foreground-update line in host-apply-now-foreground", async () => {
     renderOverview({
       hostId: "host-local",
       isLocalMachine: true,
@@ -248,7 +248,7 @@ describe("host-overview drain gate — Apply now during a local foreground run",
     ).toBe(HOST_FOREGROUND_UPDATE_READY);
   });
 
-  it("[RED DG2] capability none: the unmanaged line", async () => {
+  it("[RED] capability none: the unmanaged line", async () => {
     renderOverview({
       hostId: "host-local",
       isLocalMachine: true,
@@ -270,7 +270,7 @@ describe("host-overview drain gate — Apply now during a local foreground run",
     ).toBe(HOST_FOREGROUND_UPDATE_READY_UNMANAGED);
   });
 
-  it("[RED DG3] a dialog opened before the run began: blocked with the P1 line, confirm dispatches nothing", async () => {
+  it("[RED] a dialog opened before the run began: blocked with the foreground-update line, confirm dispatches nothing", async () => {
     const { push } = renderOverview({
       hostId: "host-local",
       isLocalMachine: true,

@@ -97,7 +97,7 @@ describe("runFixAction", () => {
     },
   );
 
-  it("M1: service-refresh dispatches runDoctorRepairQueued with refresh-service exactly once, and calls nothing else on management", async () => {
+  it("service-refresh dispatches runDoctorRepairQueued with refresh-service exactly once, and calls nothing else on management", async () => {
     const runDoctorRepairQueued = vi.fn(() =>
       Promise.resolve<QueuedDoctorRepairResult>({ kind: "applied" }),
     );
@@ -128,7 +128,7 @@ describe("runFixAction", () => {
 });
 
 describe("fixActionLabel", () => {
-  it('M1: "service-refresh" reads "Update service"', () => {
+  it('"service-refresh" reads "Update service"', () => {
     expect(fixActionLabel("service-refresh")).toBe("Update service");
   });
 
@@ -212,7 +212,7 @@ describe("doctorFixRoute", () => {
     },
   );
 
-  it("M1: service-refresh is local-bridge when local with a bridge, copy-command otherwise", () => {
+  it("service-refresh is local-bridge when local with a bridge, copy-command otherwise", () => {
     expect(
       doctorFixRoute({
         fixAction: "service-refresh",

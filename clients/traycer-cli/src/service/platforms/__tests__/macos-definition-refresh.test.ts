@@ -27,7 +27,7 @@ vi.mock("../../label", async (importOriginal) => {
   };
 });
 
-// Zero `launchctl` is a hard M1 invariant for this whole file: wrap the real
+// Zero `launchctl` is a hard invariant for this whole file: wrap the real
 // `runCommand` (the module every launchctl call in macos.ts goes through)
 // with a recorder, so EVERY test below - not just the ones that assert it
 // explicitly - would fail loudly if any refresh path ever called it.
@@ -66,7 +66,7 @@ import type { ServiceLabel } from "../../label";
 import type { CliInvocation } from "../../cli-binary";
 
 /**
- * `refreshMacosServiceDefinition` / `inspectMacosServiceDefinition` (M1):
+ * `refreshMacosServiceDefinition` / `inspectMacosServiceDefinition`:
  * bring a stale LaunchAgent to the current launcher form with ZERO
  * `launchctl` calls (`process-runner.ts` is mocked module-wide above so
  * every test in this file is that assertion, not just the ones naming it).

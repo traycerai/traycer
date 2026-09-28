@@ -11,8 +11,8 @@ import {
 } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 
-// P1-install (F4-restart-sibling family, `buildHostInstallCommand`'s own
-// case): "The desktop leaves a host that a person started in a terminal
+// `buildHostInstallCommand`'s own
+// case: "The desktop leaves a host that a person started in a terminal
 // untouched; the mode governs the service run only." `host restart` and
 // `host stop` already refuse a live FOREGROUND run (a `traycer host start`
 // run in a terminal - see `../../host/foreground-host-run.ts`) under
@@ -310,7 +310,7 @@ beforeEach(async () => {
   mocks.findLiveIncumbentHostMock.mockResolvedValue(LIVE_INCUMBENT_HOST);
 });
 
-describe("host install - foreground-run guard (P1-install)", () => {
+describe("host install - foreground-run guard", () => {
   it("rejects E_HOST_NOT_SERVICE_RUN over a live foreground run with lifecycleOrigin 'desktop', never probing busy or committing, and scrubs the staged temp", async () => {
     await writeLiveForegroundRun();
 

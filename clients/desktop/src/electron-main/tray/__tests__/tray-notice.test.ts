@@ -5,7 +5,7 @@ import type { TrayManagedWindow } from "../tray";
 // `showNotice`: a balloon on win32, a system Notification on linux, nothing on
 // darwin. The platform is read from `node:process` at call time, so each case
 // re-imports the tray module against a mocked `node:process`. Since the
-// CLOSE-LNX-NO-TRAY fix, `showNotice` resolves only once the platform confirms
+// tray-visibility fix, `showNotice` resolves only once the platform confirms
 // the notice was actually DISPLAYED - `balloon-show` on win32, the
 // notification's `show` on linux - within `TRAY_NOTICE_CONFIRM_TIMEOUT_MS`;
 // a `failed` event or a silent timeout resolves `false`.

@@ -17,7 +17,7 @@ import type { PublishedProcessIdentityVerdict } from "../store/process-identity"
 import type { HostPidMetadata } from "./pid-metadata";
 
 // The supervisor's own teardown of its own host (lifecycle mechanics, "The
-// teardown actuator (supervisor-owned stop)"; design review round 1, R3).
+// teardown actuator (supervisor-owned stop)").
 //
 // Sending SIGTERM to the child is not a stop: the signal handler only
 // forwards, Node's SIGTERM on Windows is `TerminateProcess` with no host

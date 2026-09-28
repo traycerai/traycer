@@ -1152,7 +1152,7 @@ export class HostController {
   private pendingRevisionRefreshQuarantined = false;
 
   // Host-start suspension (host lifecycle modes, "Automatic producers during
-  // quit and in `none`", widened to every host start by F22). `quiesced` is
+  // quit and in `none`", now widened to every host start). `quiesced` is
   // permanent; `holds` counts the reversible suspensions still open. See
   // `quiesce` / `holdAutomaticIntents`.
   private automaticIntentsQuiesced = false;
@@ -1426,7 +1426,7 @@ export class HostController {
    * lifecycle suspends host starts (`quiesce` / `holdAutomaticIntents`) - at
    * submission, and again at the head of the lane, so a start queued before
    * the suspension began does not run after it. Every start, a person's
-   * included (F22): a Restart clicked after an in-session `→ none`, or while
+   * included: a Restart clicked after an in-session `→ none`, or while
    * its stop runs, would otherwise bring back a host this machine no longer
    * manages.
    */
@@ -3268,7 +3268,7 @@ export class HostController {
   // (`HostStartMutationKind`) is suspended then - the automatic producers (a
   // background `convergeReady`, `recoverIfDown`, the launch reconcile's apply
   // and activation) and a person's Restart, Install, Update or Doctor repair
-  // alike (F22): a started host would run unmanaged, with no presence for a
+  // alike: a started host would run unmanaged, with no presence for a
   // supervisor to follow. While suspended they resolve `deferred`
   // (`suppressed` for `recoverIfDown`, its own "nothing to do" arm) without
   // reaching the CLI, checked at submission AND again at the head of the lane
@@ -5041,7 +5041,7 @@ export class HostController {
   // restart would report the very declined outcome it exists to override.
   //
   // `if-idle` (`host restart --if-idle`) is the lifecycle card's restart for
-  // an old supervisor (MIX-OLD-SUPERVISOR): the host's cooperative
+  // an old supervisor: the host's cooperative
   // `host.restart` is an in-process CHILD respawn by whatever supervisor is
   // running, so only a service cycle puts this CLI in the supervisor's place.
   // It must not end work nobody disclosed, so it refuses busy, and the card
@@ -5560,7 +5560,7 @@ export class HostController {
           return { kind: "deferred", message: HOST_REMOVED_BY_USER_MESSAGE };
         }
         if (mode === "if-idle") {
-          // No F3 continuation: it overrides the drain on the strength of a
+          // No force-restart continuation: it overrides the drain on the strength of a
           // Force confirmation this mode never had. `--defer-if-parked`
           // leaves a parked activation to the command, under its own lock.
           //

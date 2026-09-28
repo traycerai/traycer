@@ -13,7 +13,7 @@ import {
 import { DOCTOR_ISSUE_CODES } from "../issues";
 import { probeUpdateAttemptLock } from "../update-attempt-lock";
 
-// TU6: doctor judges the retain-flag dead-pid record with the async
+// Doctor judges the retain-flag dead-pid record with the async
 // verifier + `lockHolderLivenessGivenPublisher`; acquisition uses the
 // sync `verifyLockHolderLiveness`. This file acquires against that
 // record and asserts both the doctor issue and the acquire refusal.
@@ -43,7 +43,7 @@ function spawnAndWaitDeadPid(): number {
   return result.pid;
 }
 
-describe("update-attempt lock acquire vs doctor on a retain-flag dead-pid record (TU6)", () => {
+describe("update-attempt lock acquire vs doctor on a retain-flag dead-pid record", () => {
   it("refuses acquire and reports HOST_UPDATE_ATTEMPT_LOCK_UNBREAKABLE", async () => {
     const hostHomeDir = mkdtempSync(join(tmpdir(), "tu6-attempt-lock-"));
     dirs.push(hostHomeDir);

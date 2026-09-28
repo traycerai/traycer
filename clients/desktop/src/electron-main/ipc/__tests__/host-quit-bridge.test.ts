@@ -485,7 +485,7 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 20; i += 1) await Promise.resolve();
 }
 
-// T35: the previous version raced `promise.then(...)` (a NEW promise, always
+// The previous version raced `promise.then(...)` (a NEW promise, always
 // at least one microtask tick behind `promise` itself) against an
 // already-resolved sentinel - so the sentinel always won, even when `promise`
 // had ALREADY settled. That made `settlesWithin` a tautological `false`.
@@ -502,7 +502,7 @@ async function settlesWithin(promise: Promise<unknown>): Promise<boolean> {
   }
 }
 
-describe("T35: settlesWithin correctly distinguishes settled from pending", () => {
+describe("settlesWithin correctly distinguishes settled from pending", () => {
   it("an already-resolved promise gives true", async () => {
     expect(await settlesWithin(Promise.resolve("value"))).toBe(true);
   });
@@ -958,7 +958,7 @@ function requireHandler(
 
 const UNREGISTERED_SENDER_ID = 90909;
 
-describe("untrusted sender rejection through the real bridge (T36)", () => {
+describe("untrusted sender rejection through the real bridge", () => {
   it("hostQuitListening rejects an unregistered sender", async () => {
     const fixture = await newFixture(true);
     const handler = requireHandler(RunnerHostInvoke.hostQuitListening);
@@ -1041,11 +1041,11 @@ describe("untrusted sender rejection through the real bridge (T36)", () => {
   });
 });
 
-// F6: the unsynced-edits prompt (`requestQuitDecision`) must show and focus
+// The unsynced-edits prompt (`requestQuitDecision`) must show and focus
 // a hidden MRU window before asking it - the same as `requestHostQuitDecision`
 // already does. On head it does not: it sends straight to `safeSendToWindow`
 // with no `focusById` first, so a hidden MRU window is asked while invisible.
-describe("F6: requestQuitDecision shows and focuses a hidden MRU window", () => {
+describe("requestQuitDecision shows and focuses a hidden MRU window", () => {
   it("w1 hidden and MRU, app-lifecycle ready: show, focus, THEN send quitRequested", async () => {
     const fixture = await newFixture(false);
     fixture.bridge.appLifecycleReadyWindowIds.add("window-1");
@@ -1065,11 +1065,11 @@ describe("F6: requestQuitDecision shows and focuses a hidden MRU window", () => 
   });
 });
 
-// T35 negatives: an ack (or a respond) must match BOTH the window that owns
+// An ack (or a respond) must match BOTH the window that owns
 // the pending request and its requestId - a stale/foreign one must never be
 // mistaken for the real answer. These stay green on head; only
 // `settlesWithin`'s tautology (fixed above) was hiding them.
-describe("T35 negatives: an ack/respond must match window AND requestId", () => {
+describe("an ack/respond must match window AND requestId", () => {
   it("host quit prompt: an ack from the WRONG window (w1's requestId acked as window-2) is ignored - still rejects after the ack budget", async () => {
     vi.useFakeTimers();
     const fixture = await newFixture(true);

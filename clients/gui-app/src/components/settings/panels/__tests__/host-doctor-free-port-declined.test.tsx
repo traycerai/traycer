@@ -40,12 +40,12 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostDoctorCard } from "@/components/settings/panels/host-doctor-card";
 import { runFixAction } from "@/components/settings/panels/host-doctor-actions";
 
-// Exact wording, reused from DR-1's D2/D1 messages — the F4 not-service-run
+// Exact wording, reused from the earlier deferred-refusal tests — the not-service-run
 // text and the `none`-quiesce text, both plausible refusal reasons for a
 // free-port-and-restart repair.
-const M1 =
+const FOREGROUND_REFUSAL_MESSAGE =
   "A host you started in a terminal is running, and Traycer leaves it alone. Stop it there to continue.";
-const M2 =
+const NONE_QUIESCE_MESSAGE =
   "This app no longer starts a local host. Restart Traycer to apply the host lifecycle setting.";
 
 afterEach(() => {
@@ -209,9 +209,12 @@ async function clickFreePortFixAndConfirm(): Promise<void> {
 }
 
 describe("free-port `declined` — the bridge card's own freePortMutation", () => {
-  it("RED F1: a declined refusal (foreground, M1) shows a declined notice, not success or Fix failed", async () => {
+  it("RED: a declined refusal (foreground) shows a declined notice, not success or Fix failed", async () => {
     const freePortAndRestart = vi.fn((): Promise<FreePortAndRestartResult> =>
-      Promise.resolve({ kind: "declined" as const, message: M1 }),
+      Promise.resolve({
+        kind: "declined" as const,
+        message: FOREGROUND_REFUSAL_MESSAGE,
+      }),
     );
     const management = makeManagement({
       runDoctor: () =>
@@ -231,13 +234,16 @@ describe("free-port `declined` — the bridge card's own freePortMutation", () =
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
     expect(toast.info).toHaveBeenCalledWith("Free port + restart didn't run", {
-      description: M1,
+      description: FOREGROUND_REFUSAL_MESSAGE,
     });
   });
 
-  it("RED F2: a declined refusal (none-quiesce, M2) shows a declined notice, not success or Fix failed", async () => {
+  it("RED: a declined refusal (none-quiesce) shows a declined notice, not success or Fix failed", async () => {
     const freePortAndRestart = vi.fn((): Promise<FreePortAndRestartResult> =>
-      Promise.resolve({ kind: "declined" as const, message: M2 }),
+      Promise.resolve({
+        kind: "declined" as const,
+        message: NONE_QUIESCE_MESSAGE,
+      }),
     );
     const management = makeManagement({
       runDoctor: () =>
@@ -257,7 +263,7 @@ describe("free-port `declined` — the bridge card's own freePortMutation", () =
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
     expect(toast.info).toHaveBeenCalledWith("Free port + restart didn't run", {
-      description: M2,
+      description: NONE_QUIESCE_MESSAGE,
     });
   });
 
@@ -311,10 +317,13 @@ describe("free-port `declined` — the bridge card's own freePortMutation", () =
 });
 
 describe("free-port `declined` — runFixAction's free-port arm, called directly", () => {
-  it("RED F3: a declined refusal is reported as declined, not applied", async () => {
+  it("RED: a declined refusal is reported as declined, not applied", async () => {
     const management = makeManagement({
       freePortAndRestart: () =>
-        Promise.resolve({ kind: "declined" as const, message: M1 }),
+        Promise.resolve({
+          kind: "declined" as const,
+          message: FOREGROUND_REFUSAL_MESSAGE,
+        }),
     });
 
     const result = await runFixAction(
@@ -323,7 +332,10 @@ describe("free-port `declined` — runFixAction's free-port arm, called directly
       "local-host",
     );
 
-    expect(result).toEqual({ kind: "declined", message: M1 });
+    expect(result).toEqual({
+      kind: "declined",
+      message: FOREGROUND_REFUSAL_MESSAGE,
+    });
   });
 
   it("GREEN control: an applied result is reported as applied", async () => {

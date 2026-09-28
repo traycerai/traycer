@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { ServiceInstallArgs } from "../service-install";
 
-// P2-takeover (this suite): the ruling is "the desktop leaves a host that a
+// The ruling is "the desktop leaves a host that a
 // person started in a terminal untouched; the mode governs the service run
 // only." `buildServiceInstallCommand`'s `--takeover` path moves host
 // management from Traycer Desktop to the CLI-owned service - but on current
@@ -323,7 +323,7 @@ afterEach(() => {
   rmSync(workHome, { recursive: true, force: true });
 });
 
-describe("buildServiceInstallCommand - takeover over a foreground run (P2-takeover)", () => {
+describe("buildServiceInstallCommand - takeover over a foreground run", () => {
   // Test 1 (RED): `--takeover` with `lifecycleOrigin: "desktop"` over a live
   // foreground run must refuse before touching either mutation actuator.
   // RED on current code: no guard exists, so both actuators ARE called and

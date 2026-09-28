@@ -31,7 +31,7 @@ import {
 // "Absent" is the adoption proof's verdict, never `serviceStarted` and never
 // the launcher's nonce: the launcher mints a nonce at every start, and
 // `serviceStarted` is true for a desktop converge and a terminal `host ensure`
-// just as for a login (design review round 1, R1). What an explicit start has and
+// just as for a login. What an explicit start has and
 // an unattended one lacks is a live parent's proof, consumed here.
 //
 // `indeterminate` runs because it is never evidence of death: a refused

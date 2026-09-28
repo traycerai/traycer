@@ -3210,9 +3210,9 @@ function buildTaskXmlForUser(
 // sets it to `WORKGROUP`, and schtasks rejects `WORKGROUP\<name>` from
 // EVERY session ("No mapping between account names and security IDs was
 // done") - so a registration run over ssh swapped the host's bytes and then
-// failed (SSH-USERDOMAIN-WORKGROUP). Measured on the Windows VM
-// (PROBE-TASK-USERID-SSH): the SID from `whoami /user` is identical in both
-// sessions, schtasks accepts it from both, the task it stores carries the
+// failed. Measured on the Windows VM: the SID from `whoami /user` is
+// identical in both sessions, schtasks accepts it from both, the task it
+// stores carries the
 // same `<UserId>` pair as the task Traycer registers interactively (SID
 // principal, `<machine>\<name>` logon trigger - schtasks canonicalises every
 // accepted form to that pair), and it runs in the console session. It is
@@ -3299,8 +3299,8 @@ function resolveTaskUserIdFromEnvironment(): string {
 // ---- Definition refresh (see ../service-definition.ts) ----------------------
 //
 // A task's definition is its action plus the launcher script that action
-// runs. Both refresh legs leave a running host alone (PROBE-TASK-REDEFINE-WIN,
-// on a throwaway task cloned from Traycer's own): renaming a new `.vbs` over
+// runs. Both refresh legs leave a running host alone (on a throwaway task
+// cloned from Traycer's own): renaming a new `.vbs` over
 // the one a running `wscript` executes succeeds first time, because WSH
 // compiles the whole script at start and does not hold it open or read it
 // incrementally; and `schtasks /Create /F` redefining a RUNNING task returns

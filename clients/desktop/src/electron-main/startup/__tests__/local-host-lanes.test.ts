@@ -51,7 +51,7 @@ describe("startLocalHostLanes", () => {
     expect(started).toEqual([]);
   });
 
-  // T34: an independently written literal, not `[...LOCAL_HOST_LANE_NAMES]` -
+  // An independently written literal, not `[...LOCAL_HOST_LANE_NAMES]` -
   // that self-referential expectation passes no matter what order (or which
   // names) production actually declares, since it compares the list to
   // itself rather than to a fact this test states on its own.

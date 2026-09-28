@@ -401,11 +401,11 @@ describe("buildHostEnsureCommand", () => {
     );
   });
 
-  // SSH-USERDOMAIN-WORKGROUP (E3/E4): `host ensure` now exits 1 whenever the
+  // `host ensure` now exits 1 whenever the
   // post-swap start itself failed, the same rule `host install` follows -
   // Desktop's CLI runners trust the terminal `ok` line over a non-zero exit,
   // so the JSON payload stays exactly what it was.
-  it("E3: a post-swap start failure exits 1, with data.postSwapError unchanged", async () => {
+  it("a post-swap start failure exits 1, with data.postSwapError unchanged", async () => {
     // Both `postSwapError` fields are set, as the "Both postSwapError
     // fields are set" fixture above explains: every `HostProvisionResult`
     // construction site copies one value into the nested lifecycle AND the
@@ -430,7 +430,7 @@ describe("buildHostEnsureCommand", () => {
     });
   });
 
-  it("E4: no post-swap error exits 0", async () => {
+  it("no post-swap error exits 0", async () => {
     mocks.ensureHostMock.mockResolvedValue(
       baseEnsureResult({
         action: "started",

@@ -116,7 +116,7 @@ const REACHABILITY_RETRY_MAX_MS = 5_000;
  *     enough on its own: the cache held the LAST verdict, the live one, so a
  *     host SIGKILLed with `pid.json` left behind was served `current` - and
  *     published `busy`, and called reachable by the health monitor - until the
- *     entry aged out (DESKTOP-DEAD-HOST-CACHED-ALIVE: "reachable" three times
+ *     entry aged out (the observed defect: "reachable" three times
  *     over 114 s for a dead pid). So a cached verdict is served only while a
  *     spawn-free existence check still finds the pid; `gone` or `unknown`
  *     takes the full read. The residual is pid reuse: a pid the OS hands to

@@ -16,7 +16,7 @@ import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import type { SupervisorRecord } from "@traycer/protocol/config/supervisor-record";
 
 // `provisionHost`'s start branch (installed + registered + not running) is
-// where CRASH-RELAUNCH-ENSURE-RACE actually surfaces end to end: a
+// where the crash-relaunch race with `host ensure` actually surfaces end to end: a
 // `startHostServiceWithAttempt` that finds the service's own supervisor
 // alive must not escalate to a re-register, and `provisionHost` must wait
 // for that relaunch OUTSIDE the update-attempt lock the relaunch itself
@@ -368,7 +368,7 @@ describe("provisionHost - the start branch, with a live service supervisor", () 
     expect(result.action).toBe("noop");
   });
 
-  // F28: this row used to pin a timed-out wait REJECTING as "relaunching"
+  // This row used to pin a timed-out wait REJECTING as "relaunching"
   // with nothing started - the defect itself: "relaunching" was only ever
   // inferred from the supervisor's liveness, and the wait had just disproved
   // it, so the host stayed down behind a wedged supervisor. A timed-out wait
@@ -481,7 +481,7 @@ describe("provisionHost - the start branch, with a live service supervisor", () 
     const { controller: base, calls } = stoppedController();
     let restartCalls = 0;
     // The wait below times out, and a timed-out wait now escalates to a
-    // service restart ((3h)) - the rejection this row once awaited was F28's
+    // service restart ((3h)) - the rejection this row once awaited was that earlier
     // defect, not what it pins. What it pins is the probe inside the wait.
     const controller = {
       ...base,
@@ -509,7 +509,7 @@ describe("provisionHost - the start branch, with a live service supervisor", () 
               // a caller waiting for THIS supervisor's relaunch runs exactly
               // one wait when the segment is correctly released before it -
               // capturing only the first probe keeps the assertion pinned to
-              // that first wait even if a mutation (R7) makes the mechanism
+              // that first wait even if a mutation makes the mechanism
               // loop an extra time around a second, correctly-released wait.
               const outcome = await withUpdateContender(
                 {
@@ -568,7 +568,7 @@ describe("provisionHost - the start branch, with a live service supervisor", () 
     expect(beforeMutate).toHaveBeenCalledTimes(1);
   });
 
-  // R6: a bound on how many live-supervisor relaunches one `provisionHost`
+  // A bound on how many live-supervisor relaunches one `provisionHost`
   // call will wait out. Two waits, each ended by the supervisor genuinely
   // going away (not a deadline), and each followed by a re-provision that
   // finds a DIFFERENT live supervisor already there (a service manager
@@ -651,7 +651,7 @@ describe("provisionHost - the start branch, with a live service supervisor", () 
     expect(calls.install).toBe(0);
   });
 
-  // F28: a live supervisor whose child never comes back must not be waited
+  // A live supervisor whose child never comes back must not be waited
   // out a second time and left to throw. After the FIRST timed-out wait,
   // `provisionHost` must escalate by recycling the wedged supervisor through
   // a service restart, and resolve - not throw, and not wait a second time.

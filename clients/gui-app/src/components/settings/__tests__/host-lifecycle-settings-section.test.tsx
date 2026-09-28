@@ -16,7 +16,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
 });
 
 // Same boundary as `local-host-restart-flow.test.tsx`, needed only for the
-// MIX-OLD-SUPERVISOR service-restart tests below: those are the first tests
+// service-restart tests below: those are the first tests
 // in this file to render `LocalHostRestartFlow`'s BOUND arm
 // (`CooperativeFirstRestartFlow`), which calls both hooks unconditionally.
 // Neither is mocked anywhere else in this file (every earlier test either
@@ -146,7 +146,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 const MACHINE = hostMachineNoun();
 const OPTION_COPY = hostLifecycleOptionCopy(MACHINE);
 
-// F23/T42: the copy a set refusal renders is chosen by `result.reason`
+// The copy a set refusal renders is chosen by `result.reason`
 // (`hostLifecycleSetRefusalCopy`), never `result.message` (main's or the CLI's
 // raw text). Written out literally so these tests pin the wording itself.
 const HOST_BUSY_STOP_REFUSED_COPY =
@@ -490,7 +490,7 @@ describe("<HostLifecycleSettingsSection /> - desired/applied status line", () =>
   });
 });
 
-// MIX-OLD-SUPERVISOR: the restart-host line's button runs
+// The restart-host line's button runs
 // `LocalHostRestartFlow` with `firstLeg="service"` - the lifecycle card's
 // idle-gated SERVICE restart, never the cooperative `host.restart` RPC these
 // other cards use. These tests mount the BOUND arm
@@ -600,11 +600,11 @@ describe("<HostLifecycleSettingsSection /> - restart-host line dispatches the SE
   });
 });
 
-// F4-3: a host started in a terminal is not governed by the mode, so the
+// A host started in a terminal is not governed by the mode, so the
 // restart-host line's own button must never dispatch a restart over it - it
 // disables itself and names why, rather than letting a click reach
 // `LocalHostRestartFlow`.
-describe("<HostLifecycleSettingsSection /> - restart-host line with a foreground-admitted host (F4-3)", () => {
+describe("<HostLifecycleSettingsSection /> - restart-host line with a foreground-admitted host", () => {
   it("disables Restart host, names the reason via aria-describedby, and dispatches no restart on click", async () => {
     hostBindingMock.current = {
       directory: { getLocalEntry: () => localEntry("host-a") },
@@ -762,7 +762,7 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and plan gating",
     expect(dialog).not.toBeNull();
     expect(screen.queryByTestId("host-quit-keep")).toBeNull();
     expect(screen.queryByTestId("host-quit-remember")).toBeNull();
-    // T43: not pending, so the button renders no PendingDots node - its
+    // Not pending, so the button renders no PendingDots node - its
     // textContent should be exactly the stop label, nothing else.
     expect(screen.getByTestId("host-quit-stop").textContent).toBe(
       HOST_NONE_CONFIRM_STOP_LABEL,
@@ -810,7 +810,7 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and plan gating",
     });
   });
 
-  it("F23: a stop-refused (host-busy) result shows curated copy (never the raw CLI text), and the NEXT Stop sends force", async () => {
+  it("a stop-refused (host-busy) result shows curated copy (never the raw CLI text), and the NEXT Stop sends force", async () => {
     hostBindingMock.current = { directory: { getLocalEntry: () => null } };
     localHostQuitStatusMock.current = idleVerdict("host-a");
     let attempt = 0;
@@ -855,7 +855,7 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and plan gating",
     });
   });
 
-  it("F23: a failed (write-failed) result shows curated copy and never leaks the raw path/error text", async () => {
+  it("a failed (write-failed) result shows curated copy and never leaks the raw path/error text", async () => {
     hostBindingMock.current = { directory: { getLocalEntry: () => null } };
     localHostQuitStatusMock.current = idleVerdict("host-a");
     const fixture = buildLifecycleHost(view({}), () =>
@@ -962,7 +962,7 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and plan gating",
     });
   });
 
-  it("U7: force is sent only when the verdict FIRST offered with Stop enabled was busy/unknown - an idle-then-busy flip still sends if-idle", async () => {
+  it("force is sent only when the verdict FIRST offered with Stop enabled was busy/unknown - an idle-then-busy flip still sends if-idle", async () => {
     hostBindingMock.current = { directory: { getLocalEntry: () => null } };
     localHostQuitStatusMock.current = idleVerdict("host-a");
     const fixture = buildLifecycleHost(view({}), () =>
@@ -1013,7 +1013,7 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and plan gating",
     });
   });
 
-  it("U7 control: a verdict that is busy from the dialog's first render sends force", async () => {
+  it("control: a verdict that is busy from the dialog's first render sends force", async () => {
     hostBindingMock.current = { directory: { getLocalEntry: () => null } };
     localHostQuitStatusMock.current = busyVerdict("host-a");
     const fixture = buildLifecycleHost(view({}), () =>
@@ -1034,7 +1034,7 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and plan gating",
     });
   });
 
-  it("F13: after a host-busy refusal on an idle verdict, the counts line must not still read idle", async () => {
+  it("after a host-busy refusal on an idle verdict, the counts line must not still read idle", async () => {
     hostBindingMock.current = { directory: { getLocalEntry: () => null } };
     localHostQuitStatusMock.current = idleVerdict("host-a");
     const fixture = buildLifecycleHost(view({}), () =>
@@ -1062,7 +1062,7 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and plan gating",
     );
   });
 
-  it("T44a: an 'unknown' verdict sends stop:'force'", async () => {
+  it("an 'unknown' verdict sends stop:'force'", async () => {
     hostBindingMock.current = { directory: { getLocalEntry: () => null } };
     localHostQuitStatusMock.current = {
       localHostId: "host-a",
@@ -1088,7 +1088,7 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and plan gating",
     });
   });
 
-  it("T44b: a host changed under the open dialog refuses to stop, toasts, and rechecks instead", async () => {
+  it("a host changed under the open dialog refuses to stop, toasts, and rechecks instead", async () => {
     hostBindingMock.current = { directory: { getLocalEntry: () => null } };
     const recheck = vi.fn();
     localHostQuitStatusMock.current = {
@@ -1121,7 +1121,7 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and plan gating",
     expect(recheck).toHaveBeenCalledTimes(1);
   });
 
-  it("T41: the none-confirm opens with Cancel focused, and Enter closes it without calling set", async () => {
+  it("the none-confirm opens with Cancel focused, and Enter closes it without calling set", async () => {
     hostBindingMock.current = { directory: { getLocalEntry: () => null } };
     localHostQuitStatusMock.current = idleVerdict("host-a");
     const fixture = buildLifecycleHost(view({}), () =>
@@ -1148,9 +1148,9 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and plan gating",
     expect(fixture.setMock).not.toHaveBeenCalled();
   });
 
-  // F24: `not-running` - the local host is not serving - has nothing to list
+  // `not-running` - the local host is not serving - has nothing to list
   // and nothing to force.
-  it("F24: a 'not-running' verdict titles as the idle confirm and sends stop:'if-idle'", async () => {
+  it("a 'not-running' verdict titles as the idle confirm and sends stop:'if-idle'", async () => {
     hostBindingMock.current = { directory: { getLocalEntry: () => null } };
     const notRunningVerdict: LocalHostQuitStatus = {
       localHostId: "host-a",
@@ -1230,11 +1230,11 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and plan gating",
   });
 });
 
-// F4-E: main now COMMITS `set({mode:"none", stop})` during a foreground run -
+// Main now COMMITS `set({mode:"none", stop})` during a foreground run -
 // it refuses the stop as `not-service-run`, writes none, and leaves the
 // terminal host running. So the confirm must not offer or claim a stop while
 // `admittedAs === "foreground"`.
-describe("<HostLifecycleSettingsSection /> - the none confirm during a foreground run (F4-E)", () => {
+describe("<HostLifecycleSettingsSection /> - the none confirm during a foreground run", () => {
   it("shows the foreground-safe title/description and a Switch action, never Stop host", async () => {
     hostBindingMock.current = { directory: { getLocalEntry: () => null } };
     localHostQuitStatusMock.current = idleVerdict("host-a");
@@ -1325,7 +1325,7 @@ describe("<HostLifecycleSettingsSection /> - the none confirm during a foregroun
 });
 
 describe("<HostLifecycleSettingsSection /> - the settings card's own inline error uses result.reason, not raw message", () => {
-  it("F23: a failed (write-failed) result on a direct mode change shows curated copy and never leaks the raw path/error text", async () => {
+  it("a failed (write-failed) result on a direct mode change shows curated copy and never leaks the raw path/error text", async () => {
     const fixture = buildLifecycleHost(view({}), () =>
       Promise.resolve({
         kind: "failed",

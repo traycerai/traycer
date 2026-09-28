@@ -18,18 +18,18 @@ import {
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import type { HostInstallRecord } from "@traycer/protocol/config/installation-records";
 
-// F1 sibling (found in an earlier sweep): `traycer host service start`
+// `traycer host service start`
 // (`commands/service-start.ts:125-133`) takes its segment under admission
 // `service-maintenance`. The shared contender's `dispositionFor`
 // (`clients/shared/host-update/contender.ts:1252-1271`) REFUSES that
 // admission on ANY nonterminal attempt record - unlike
 // `supervisor-relaunch-maintenance` and `lifecycle-teardown-maintenance`,
 // nothing upgrades it for a parked/interrupted record whose own next act is
-// exactly this command's start. So in exactly F1's states - a parked
+// exactly this command's start. So in exactly the same states - a parked
 // `waiting-for-work`, a MATCHING `waiting-to-activate`, or an interrupted
 // `restarting`/`active`/`activate` record with no live holder, host down
 // after a teardown - the terminal's explicit `host service start` refuses
-// with `E_HOST_UPDATE_ATTEMPT_ACTIVE` for as long as the record stands. F1
+// with `E_HOST_UPDATE_ATTEMPT_ACTIVE` for as long as the record stands. That same remedy
 // fixed `host ensure`'s equivalent branch by starting it under the
 // supervisor-relaunch admission (`withCliSupervisorRelaunchSegment`); `host
 // service start` still refuses.
@@ -135,7 +135,7 @@ function sampleInstallRecord(version: string): HostInstallRecord {
 }
 
 // Mirrors `attempt-record-test-support.ts`'s `attemptRecord()` fixture, and
-// F1's own inline copy in `provision-start-over-update-attempt.test.ts` -
+// the inline copy in `provision-start-over-update-attempt.test.ts` -
 // copied here (rather than imported across `host/__tests__` and
 // `commands/__tests__`) so this file's on-disk shape is self-contained.
 function attemptRecord(
@@ -191,7 +191,7 @@ interface FakeControllerHandle {
 
 /** Installed + registered + NOT running (status always "stopped"), whose
  * `start` really reaches the spawn edge and satisfies its own adoption proof
- * (self-supervisor style) - the same shape as F1's `startCapableController`
+ * (self-supervisor style) - the same shape as the sibling suite's `startCapableController`
  * in `provision-start-over-update-attempt.test.ts`. */
 function startCapableController(): FakeControllerHandle {
   const calls: FakeControllerCalls = { start: 0, status: 0 };

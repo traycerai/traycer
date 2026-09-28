@@ -70,7 +70,7 @@ describe("revealHiddenWindowForStopping (real WindowRegistry)", () => {
     expect(rig.created[0].showCalls).toBe(1);
   });
 
-  // T33: a still-loading window (never shown, never hidden BY THE ADAPTER) is
+  // A still-loading window (never shown, never hidden BY THE ADAPTER) is
   // not a window close-to-tray hid, so it reads as open regardless of its
   // visible/minimized state - `revealHiddenWindowForStopping` has nothing to
   // reveal.

@@ -54,7 +54,7 @@ const BUSY: StopHostOutcome = {
   kind: "host-busy",
   message: "2 agents running",
 };
-// OBS-HOST-STOP-FOREGROUND: the running host is a terminal's
+// The running host is a terminal's
 // `traycer host start`, not the service's - the service stop reached
 // nothing, and the host still runs. Never a reason to escalate to --force
 // (that host is the terminal's), never a reason to re-prompt (asking would
@@ -74,7 +74,7 @@ type PromptScript =
   /** The renderer is asked and never answers until the question is withdrawn. */
   | { readonly via: "pending" }
   /**
-   * T32: the renderer answers, but only after `delayMs` (a real `setTimeout`,
+   * The renderer answers, but only after `delayMs` (a real `setTimeout`,
    * so it works under fake timers) - modeling a prompt that stays up for a
    * while before the person answers it.
    */
@@ -87,11 +87,11 @@ type PromptScript =
 /**
  * A scripted stop: an outcome, a stop that runs until withdrawn, or (lane
  * mode only) one that, once ADMITTED onto the lane, hangs until the test
- * settles it via `resolveStop` (F31: an admitted stop with a hanging child).
+ * settles it via `resolveStop` (an admitted stop with a hanging child).
  */
 type StopScript = StopHostOutcome | "hang" | "deferred" | "lane-hang";
 
-/** F31: the two lane job kinds the F31 corner tests hold ahead of the quit. */
+/** The two lane job kinds the corner-case tests hold ahead of the quit. */
 type LaneHeldJobKind = "install" | "stopHost";
 
 interface Scenario {
@@ -103,7 +103,7 @@ interface Scenario {
   readonly deadlineMs: number;
   readonly revealDelayMs: number;
   /**
-   * F7(a-lane): model the ONE exclusive lane `setMode(linked)`'s
+   * Model the ONE exclusive lane `setMode(linked)`'s
    * `refreshServiceDefinition` job and `stopHost`'s own job share
    * (`host-lifecycle-transitions.ts:422-449`, `host-controller.ts:3146`).
    * When true, `setMode` and `stopHost` are driven through a FIFO lane
@@ -111,7 +111,7 @@ interface Scenario {
    */
   readonly lane: boolean;
   /**
-   * F31: a job of this kind occupies the lane's head BEFORE the quit
+   * A job of this kind occupies the lane's head BEFORE the quit
    * starts, running until the test calls `releaseLane()`. Models another
    * lane job (an "install", or a `stopHost` from an unrelated `→ none`
    * commit) that is already running when the quit's own stop is enqueued
@@ -121,13 +121,13 @@ interface Scenario {
    */
   readonly laneHeld: LaneHeldJobKind | null;
   /**
-   * F24: whether a local host is reachable right now. Not on
+   * Whether a local host is reachable right now. Not on
    * `QuitTransactionDeps` at head - vitest does not type-check fixtures,
    * and head's transaction never reads it, so it has no effect there.
    */
   readonly isLocalHostRunning: boolean;
   /**
-   * F4: the running local host was started in a terminal (supervisor
+   * The running local host was started in a terminal (supervisor
    * `admittedAs: foreground`), not the service. Not on `QuitTransactionDeps`
    * at head - vitest does not type-check fixtures, and head's transaction
    * never reads it, so it has no effect there.
@@ -170,11 +170,11 @@ interface Rig {
     reveal: number;
   };
   hooks(): UpdateInstallQuitHooks;
-  /** F7(a-lane): how many `stopHost` lane jobs actually spawned (not withdrawn). */
+  /** How many `stopHost` lane jobs actually spawned (not withdrawn). */
   laneSpawned(): number;
-  /** F31: release the `laneHeld` job, letting whatever is queued behind it run. */
+  /** Release the `laneHeld` job, letting whatever is queued behind it run. */
   releaseLane(): void;
-  /** F31 (Phase E): the fake's own `lifecycleAdmissionBlock`, for the test to assert directly. */
+  /** The fake's own `lifecycleAdmissionBlock`, for the test to assert directly. */
   admissionBlock(): LifecycleAdmissionBlock | null;
   /** Settle the oldest `deferred` or `lane-hang` stop. */
   resolveStop(outcome: StopHostOutcome): void;
@@ -216,11 +216,11 @@ function buildRig(scenario: Scenario): Rig {
   const updateSequenceWaiters: Array<() => void> = [];
   const deferredStops: Array<(outcome: StopHostOutcome) => void> = [];
 
-  // F7(a-lane): a minimal FIFO lane. `enqueue` runs `job` only once every
+  // A minimal FIFO lane. `enqueue` runs `job` only once every
   // job enqueued before it has settled, mirroring the exclusive mutation
   // lane `setMode(linked)`'s refresh and `stopHost` share.
   //
-  // F31: also tracks the RUNNING job's kind, set in the same synchronous
+  // Also tracks the RUNNING job's kind, set in the same synchronous
   // stretch as the job starts and cleared once it settles - mirroring
   // production's `mutationStatus` (host-controller.ts:1394, then :1410) -
   // and exposed to the controller fake as `lifecycleAdmissionBlock`.
@@ -355,7 +355,7 @@ function buildRig(scenario: Scenario): Rig {
                 }
                 laneSpawnedCount += 1;
                 if (laneScript === "lane-hang") {
-                  // F31: admitted and running, with a hanging child - held
+                  // Admitted and running, with a hanging child - held
                   // until the test settles it via `resolveStop`.
                   return new Promise<StopHostOutcome>((resolve) => {
                     deferredStops.push((outcome) => {
@@ -374,7 +374,7 @@ function buildRig(scenario: Scenario): Rig {
           }
           if (script === "deferred") {
             return new Promise<StopHostOutcome>((resolve) => {
-              // F31: an admitted CLI child settling - `resolveStop` invokes
+              // An admitted CLI child settling - `resolveStop` invokes
               // this, so "stop:settled" always precedes whatever the
               // outcome's own promise reaction does next.
               deferredStops.push((outcome) => {
@@ -406,7 +406,7 @@ function buildRig(scenario: Scenario): Rig {
         quiesce: () => {
           events.push("quiesce");
         },
-        // F7(c): not on `QuitTransactionController` at head - vitest does
+        // Not on `QuitTransactionController` at head - vitest does
         // not type-check fixtures, and head's `remember()` never calls it.
         // The fix reads it to spawn a detached refresh once a stop is
         // remembered, instead of the parked-mode refresh queued on the lane.
@@ -414,7 +414,7 @@ function buildRig(scenario: Scenario): Rig {
           events.push("refresh:detached");
           return Promise.resolve("spawned");
         },
-        // F31: not on `QuitTransactionController` at head - vitest does not
+        // Not on `QuitTransactionController` at head - vitest does not
         // type-check fixtures, and head's `join()` never reads it. The fix
         // reads it to tell an ADMITTED stop (the lane's running job is
         // `stopHost`) from one merely queued behind something else.
@@ -617,9 +617,9 @@ describe("user quit: linked", () => {
     });
   }
 
-  // F4: that host is the terminal's - the service stop reached nothing, so
+  // That host is the terminal's - the service stop reached nothing, so
   // the standing verdict corrects to `keep` once the stop settles, exactly
-  // like F2's "stopped" correction, never `stop`.
+  // like the idle-only round's own verdict correction once the real outcome is known, never `stop`.
   it("not-service-run: verdict keep after the stop settles, no force escalation (that host is the terminal's), authorize anyway", async () => {
     const rig = buildRig(
       scenario({ mode: "linked", stops: [NOT_SERVICE_RUN] }),
@@ -704,7 +704,7 @@ describe("user quit: ask", () => {
       }),
     );
     await quit(rig);
-    // F7: "Remember" is applied at commit, after the stop settles - not
+    // "Remember" is applied at commit, after the stop settles - not
     // right after the verdict - and a mode change that parks the host
     // (ask -> linked) is followed by a detached service-definition refresh.
     expect(rig.events).toEqual([
@@ -792,7 +792,7 @@ describe("user quit: ask", () => {
     expect(rig.events).toEqual([
       ...USER_START,
       ASK_PROMPT,
-      // F2: the FIRST round is idle-only (force:false) - it writes `keep`,
+      // The FIRST round is idle-only (force:false) - it writes `keep`,
       // never `stop`, since it may not end anything. Only the busy-retry
       // round's forced stop commits `stop`.
       "verdict:keep",
@@ -825,7 +825,7 @@ describe("user quit: ask", () => {
     );
     await quit(rig);
     const verdicts = rig.events.filter((event) => event.startsWith("verdict:"));
-    // F2: the idle-only Stop round writes `keep`, not `stop` - it never
+    // The idle-only Stop round writes `keep`, not `stop` - it never
     // finished anything before the busy-retry round Cancel/Keep took over.
     expect(verdicts).toEqual(["verdict:keep", "verdict:keep"]);
     expect(rig.stopRequests.map((r) => r.mode)).toEqual(["if-idle"]);
@@ -910,7 +910,7 @@ describe("user quit: stop-if-idle", () => {
       ...USER_START,
       "state:stopping:null:idleOnly=true",
       "stop:if-idle:detached",
-      // F2 (Phase C): the silent stop's genuinely successful outcome now
+      // The silent stop's genuinely successful outcome now
       // writes `verdict:stop` before commit, so a Windows supervisor tree
       // that outlives the stop is never adopted under a stale `keep`.
       "verdict:stop",
@@ -1010,7 +1010,7 @@ describe("user quit: stop-if-idle", () => {
   });
 });
 
-describe("stop-if-idle busy round naming and force (Q-SII-COPY)", () => {
+describe("stop-if-idle busy round naming and force", () => {
   it("the silent stop's host-busy prompt carries no busyMessage key", async () => {
     const rig = buildRig(
       scenario({
@@ -1068,7 +1068,7 @@ describe("stop-if-idle busy round naming and force (Q-SII-COPY)", () => {
   });
 });
 
-describe("stopping event idleOnly (Q-SII-COPY)", () => {
+describe("stopping event idleOnly", () => {
   it("stop-if-idle's silent attempt publishes idleOnly:true", async () => {
     const rig = buildRig(
       scenario({ mode: "stop-if-idle", stops: [IDLE_STOP] }),
@@ -1231,7 +1231,7 @@ describe("tray preset: quitAndStopHost", () => {
     const modeAt = rig.events.indexOf("setMode:linked:null");
     expect(verdictAt).toBeGreaterThan(-1);
     expect(stopAt).toBeGreaterThan(verdictAt);
-    // F7: "Remember" is applied only once the decision is final, at commit -
+    // "Remember" is applied only once the decision is final, at commit -
     // after the stop has settled, not right after the verdict.
     expect(modeAt).toBeGreaterThan(stopAt);
     expect(rig.events.indexOf("authorize")).toBeGreaterThan(modeAt);
@@ -1428,7 +1428,7 @@ describe("reasons", () => {
   });
 });
 
-// Q4: the stopping phase's tray indicator and the delayed reveal, by call
+// The stopping phase's tray indicator and the delayed reveal, by call
 // count under fake timers.
 describe("stopping phase: indicator and delayed reveal", () => {
   const REVEAL_MS = 1_000;
@@ -1528,12 +1528,12 @@ describe("stopping phase: indicator and delayed reveal", () => {
   });
 });
 
-// F2 (R5): an idle-only Stop (force:false) never leaves the on-disk
+// An idle-only Stop (force:false) never leaves the on-disk
 // presence verdict as `stop` unless the stop is actually forced/committed.
 // On head, `applyDecision`'s "stop" branch writes `verdict:stop` eagerly,
 // before `runStop` even settles, for EVERY decision.kind==="stop" - forced
 // or not, and regardless of the eventual outcome.
-describe("F2: an idle-only Stop never leaves presence stop (R5)", () => {
+describe("an idle-only Stop never leaves presence stop", () => {
   const IDLE_ONLY_OUTCOMES: ReadonlyArray<readonly [string, StopHostOutcome]> =
     [
       ["lock-busy", { kind: "lock-busy", message: "cli lock held" }],
@@ -1625,7 +1625,7 @@ describe("F2: an idle-only Stop never leaves presence stop (R5)", () => {
     }
   });
 
-  // Phase C (F2 follow-up): a non-forced stop still writes `keep` BEFORE it
+  // A non-forced stop still writes `keep` BEFORE it
   // runs (crash-window and non-stopped-outcome protection unchanged), but
   // once its outcome is genuinely `stopped`, `verdict:stop` must be written
   // AFTER it settles and before `authorize` - otherwise a Windows supervisor
@@ -1754,7 +1754,7 @@ describe("F2: an idle-only Stop never leaves presence stop (R5)", () => {
   });
 });
 
-// F4: "the desktop leaves a host that a person started in a terminal
+// "The desktop leaves a host that a person started in a terminal
 // untouched; the mode governs the service run only." A `not-service-run`
 // stop outcome means the service stop reached nothing - the terminal's host
 // is still running, exactly as told, so the standing verdict must be `keep`,
@@ -1762,7 +1762,7 @@ describe("F2: an idle-only Stop never leaves presence stop (R5)", () => {
 // running, and `applyDecision`'s "stop" case only corrects a FORCED write
 // back to `keep` when the outcome is `stopped` - `not-service-run` is left
 // standing as whatever was written before the stop ran.
-describe("F4: a not-service-run stop leaves keep, quits, never re-prompts", () => {
+describe("a not-service-run stop leaves keep, quits, never re-prompts", () => {
   function lastVerdictBeforeAuthorize(
     events: readonly string[],
   ): string | undefined {
@@ -1892,11 +1892,11 @@ describe("F4: a not-service-run stop leaves keep, quits, never re-prompts", () =
   // not duplicated here.
 });
 
-// F4 (Part 2): a foreground run (the host was started in a terminal, not
+// (Part 2) a foreground run (the host was started in a terminal, not
 // the service) is skipped ENTIRELY - no prompt, no stop, nothing remembered.
 // On head, `QuitTransactionDeps` has no `isForegroundHostRun` at all, so
 // every mode still runs its normal prompt/stop path against that host.
-describe("F4: a foreground run is left untouched", () => {
+describe("a foreground run is left untouched", () => {
   it("a) Ask: no prompt, no stop, verdict keep, authorize", async () => {
     const rig = buildRig(
       scenario({
@@ -2000,12 +2000,12 @@ describe("F4: a foreground run is left untouched", () => {
   });
 });
 
-// F7: "Remember" (a mode change to Linked) must be applied only once the
+// "Remember" (a mode change to Linked) must be applied only once the
 // stop decision is FINAL - after the stop itself has settled - never before
 // it, and never for a round a later answer superseded. On head,
 // `applyDecision`'s "stop" case calls `this.remember(...)` BEFORE
 // `runStop(...)`, unconditionally, for every remembered Stop answer.
-describe("F7: Remember is applied only once the decision is final", () => {
+describe("Remember is applied only once the decision is final", () => {
   function indexOf(events: readonly string[], event: string): number {
     const index = events.indexOf(event);
     expect(index).toBeGreaterThan(-1);
@@ -2210,7 +2210,7 @@ describe("F7: Remember is applied only once the decision is final", () => {
       await flush();
       await new Promise<void>((resolve) => setTimeout(resolve, 80));
       await flush();
-      // F2: the deadline cuts off an idle-only attempt - never `stop`.
+      // The deadline cuts off an idle-only attempt - never `stop`.
       expect(rig.events).toContain("verdict:keep");
       const stopRequestedIndex = indexOf(rig.events, "stop:if-idle:detached");
       const setModeIndex = indexOf(rig.events, "setMode:linked:null");
@@ -2223,11 +2223,11 @@ describe("F7: Remember is applied only once the decision is final", () => {
   });
 });
 
-// F24 (main side): a dead local host is never prompted or stopped against.
+// (Main side) a dead local host is never prompted or stopped against.
 // On head, `QuitTransactionDeps` has no `isLocalHostRunning` gate at all, so
 // Ask still prompts and Stop-if-idle still re-prompts on an unrelated
 // outcome even when there is no local host to reach.
-describe("F24: a dead local host is never prompted (main)", () => {
+describe("a dead local host is never prompted (main)", () => {
   function noPromptOrStopEvents(events: readonly string[]): void {
     expect(events.some((event) => event.startsWith("prompt:"))).toBe(false);
     expect(events.some((event) => event.startsWith("native:"))).toBe(false);
@@ -2282,12 +2282,12 @@ describe("F24: a dead local host is never prompted (main)", () => {
   });
 });
 
-// F31: an update-install takeover must never overlap a stop still in
+// An update-install takeover must never overlap a stop still in
 // flight. On head, `join()`'s supersede check only looks at `stopCommitted`,
 // which `runStopIfIdle`'s SILENT if-idle attempt never sets - so `supersede()`
 // (and the new transaction's `verdict:handoff` / `runUpdateInstallSequence`)
 // proceeds immediately, while the old admitted stop is still running.
-describe("F31: update-install takeover never overlaps a stop in flight", () => {
+describe("update-install takeover never overlaps a stop in flight", () => {
   it("admitted: a deferred silent stop is not overlapped - no handoff/updateSeq until it settles, then the update relaunches", async () => {
     const rig = buildRig(
       scenario({ mode: "stop-if-idle", lane: true, stops: ["lane-hang"] }),
@@ -2360,7 +2360,7 @@ describe("F31: update-install takeover never overlaps a stop in flight", () => {
   });
 });
 
-// F31 (Phase D): `join()`'s defer must track ADMISSION, not mere presence of
+// `join()`'s defer must track ADMISSION, not mere presence of
 // an in-flight stop. On the current tree, ANY `inFlightStop` (queued or
 // admitted) makes the relaunch wait for it to settle before writing
 // `handoff` - so a stop still queued behind an unrelated lane job (an
@@ -2369,7 +2369,7 @@ describe("F31: update-install takeover never overlaps a stop in flight", () => {
 // actually running yet. The fix reads `controller.lifecycleAdmissionBlock`:
 // only a RUNNING `stopHost` job defers; a merely QUEUED one is aborted and
 // superseded at once.
-describe("F31: only an admitted stop defers the relaunch", () => {
+describe("only an admitted stop defers the relaunch", () => {
   it("queued behind a long job: the relaunch supersedes at once, without waiting for the job ahead", async () => {
     const rig = buildRig(
       scenario({ mode: "stop-if-idle", lane: true, laneHeld: "install" }),
@@ -2457,7 +2457,7 @@ describe("F31: only an admitted stop defers the relaunch", () => {
   });
 });
 
-// F25 (main side): a stopping phase that ends because main is about to
+// (Main side) a stopping phase that ends because main is about to
 // prompt must publish an end-of-stopping "prompting" state - not just stop
 // silently, which leaves a renderer showing "Stopping host…" over a modal
 // that is about to appear. On head, `ask()` calls `endStopping()` (the
@@ -2466,7 +2466,7 @@ describe("F31: only an admitted stop defers the relaunch", () => {
 // ever produced - the rig's formatter already prints one correctly
 // (`state:${event.phase}:${event.requestId}`, same as "quitting"/"cancelled"),
 // it is simply never called with `phase: "prompting"`.
-describe("F25 (main side): prompting ends a stopping phase", () => {
+describe("prompting ends a stopping phase (main side)", () => {
   function indexOf(events: readonly string[], event: string): number {
     return events.indexOf(event);
   }
@@ -2552,11 +2552,11 @@ describe("F25 (main side): prompting ends a stopping phase", () => {
   });
 });
 
-// T32 (test-gap, green on head): the force stop's OWN deadline budget is
+// (Test-gap, green on head) the force stop's OWN deadline budget is
 // whatever remains of the overall `deadlineMs` after the silent if-idle
 // attempt spent its share - not the full deadline again. `runStop` tracks
 // this via `this.remainingMs -= Date.now() - startedAt`.
-describe("T32: the force stop's withdrawal deadline is the remaining budget, not a fresh one", () => {
+describe("the force stop's withdrawal deadline is the remaining budget, not a fresh one", () => {
   async function settle(): Promise<void> {
     for (let i = 0; i < 30; i += 1) await Promise.resolve();
   }

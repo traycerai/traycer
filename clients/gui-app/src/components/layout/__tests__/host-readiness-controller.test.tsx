@@ -653,7 +653,7 @@ describe("SurfaceReadinessFallback - desktop no-local-host card", () => {
     ).toBeNull();
   });
 
-  it("F23: a 'failed' result shows curated copy inline (never the raw path/error text), keeps the run-here button, and fires no analytics", async () => {
+  it("a 'failed' result shows curated copy inline (never the raw path/error text), keeps the run-here button, and fires no analytics", async () => {
     const trackSpy = vi
       .spyOn(Analytics.getInstance(), "track")
       .mockImplementation(() => true);

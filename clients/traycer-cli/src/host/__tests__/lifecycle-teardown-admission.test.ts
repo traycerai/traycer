@@ -16,7 +16,7 @@ import {
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import type { HostInstallRecord } from "@traycer/protocol/config/installation-records";
 
-// R-B: the supervisor's Linked-mode lifecycle teardown
+// The supervisor's Linked-mode lifecycle teardown
 // (`createLifecycleTeardownPlatform().withLock`, `update-mutation.ts`
 // ~591-610) takes its lock under admission `lifecycle-teardown-maintenance`.
 // `lifecycleTeardownDisposition` (`clients/shared/host-update/contender.ts`
@@ -159,7 +159,7 @@ async function runTeardown(): Promise<{
   }
 }
 
-describe("createLifecycleTeardownPlatform().withLock - admission over a standing update-attempt record (R-B)", () => {
+describe("createLifecycleTeardownPlatform().withLock - admission over a standing update-attempt record", () => {
   it("(b1) waiting-to-activate with NO claim: refused, run never called", async () => {
     const hostHomeDirPath = hostHomeDir("production");
     const installRecord = sampleInstallRecord(INSTALLED_VERSION);

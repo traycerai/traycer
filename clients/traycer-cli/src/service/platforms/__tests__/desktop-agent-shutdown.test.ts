@@ -81,7 +81,7 @@ vi.mock("../../../host/pid-metadata", async (importOriginal) => {
 // stubs the identical way for the identical reason: it shells out to a real
 // OS process probe, which has no place in a hermetic unit suite.
 //
-// U8: `verifyProcessIdentityAsync` and `matchLiveProcessStartIdentity` are
+// `verifyProcessIdentityAsync` and `matchLiveProcessStartIdentity` are
 // added here too - the async seam the cooperative leg's fix must route
 // through instead of the sync `isProcessAlive`/`matchLiveProcessStartIdentity`
 // probes, and the sync probes this file's mock of `store/cli-lock` stubs.
@@ -351,13 +351,13 @@ describe("requestCooperativeShutdown", () => {
   });
 });
 
-// U8: the cooperative leg's liveness/identity checks must route through the
+// The cooperative leg's liveness/identity checks must route through the
 // ASYNC probe (`verifyProcessIdentityAsync`) end to end, never through the
 // synchronous ones (`isProcessAlive` from `store/cli-lock`,
 // `matchLiveProcessStartIdentity`) - those block the event loop on a
 // platform probe (`ps`/`tasklist`) for as long as it takes, which is exactly
 // what the async seam exists to avoid on this path.
-describe("U8: the supervisor teardown's cooperative leg never probes synchronously", () => {
+describe("the supervisor teardown's cooperative leg never probes synchronously", () => {
   it("routes through verifyProcessIdentityAsync end to end with a pre-identity (processStartIdentity: null) record", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
     // The gone-check (not gone) first, then the exit-wait poll (exited) -

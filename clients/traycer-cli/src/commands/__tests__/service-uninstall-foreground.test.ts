@@ -4,9 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 
-// P2 sibling (uninstall), REDIRECTED (C of a 4-part design - A=Windows
-// backend, B=stop-intent decorator, D=macOS/Linux, each owned by a different
-// agent; this file owns only (C), the command-level surface): unlike
+// This file covers only the command-level surface of uninstall: unlike
 // `service-install`/`service-start`, a live foreground run over
 // `traycer host service uninstall` (`../service-uninstall.ts`) is NOT a
 // refusal. The new design (production not yet changed - these tests are

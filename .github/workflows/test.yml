@@ -358,7 +358,7 @@ jobs:
       # mutually exclusive; `stream` is already a non-TUI style).
       - name: Desktop unit tests (darwin-gated blocks included)
         run: bunx nx run-many --target=test --projects="@traycer-clients/desktop" --outputStyle=stream
-      # T52: the shared exec-sync-stderr off-Linux case never ran in CI
+      # the shared exec-sync-stderr off-Linux case never ran in CI
       # (shared tests are Linux-only; this job is the macOS lane).
       - name: Shared exec-sync stderr (darwin-gated blocks)
         working-directory: clients/shared

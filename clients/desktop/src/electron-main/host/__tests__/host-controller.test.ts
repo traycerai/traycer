@@ -4744,12 +4744,12 @@ describe("platform matrix", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // M1: `refreshServiceDefinition` - `host service refresh` on the exclusive
+  // `refreshServiceDefinition` - `host service refresh` on the exclusive
   // mutation lane, flat (never streamed: the verb emits no progress). Brings
   // the registered service definition to the bundled CLI's current launcher
   // WITHOUT starting, stopping or restarting anything.
   // ---------------------------------------------------------------------------
-  describe("refreshServiceDefinition (M1)", () => {
+  describe("refreshServiceDefinition", () => {
     it("runs `host service refresh` exactly once, flat (not streamed), on the mutation lane", async () => {
       const controller = newController("production");
       writeInstallRecord("production", {
@@ -5705,7 +5705,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       .mock.calls.filter(([opts]) => opts.args.includes("uninstall")).length;
   }
 
-  it("C1: removeTraycer refuses first over a non-packaged terminal-started host - no sentinel, no CLI spawn", async () => {
+  it("removeTraycer refuses first over a non-packaged terminal-started host - no sentinel, no CLI spawn", async () => {
     readSupervisorRunMock.mockResolvedValue({
       state: "enforcing",
       supervisorPid: 4242,
@@ -5723,7 +5723,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
     expect(uninstallSpawnCount()).toBe(0);
   });
 
-  it("C2: removeTraycer refuses first over a packaged-macOS terminal-started host - no login-item unregister, no CLI spawn", async () => {
+  it("removeTraycer refuses first over a packaged-macOS terminal-started host - no login-item unregister, no CLI spawn", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     readSupervisorRunMock.mockResolvedValue({
       state: "enforcing",
@@ -5743,7 +5743,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
     expect(uninstallSpawnCount()).toBe(0);
   });
 
-  it("C3: removeTraycer's packaged-macOS race - a foreground supervisor appears between the pre-lane check and the contender - still refuses, and the sentinel backstop clears", async () => {
+  it("removeTraycer's packaged-macOS race - a foreground supervisor appears between the pre-lane check and the contender - still refuses, and the sentinel backstop clears", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     readSupervisorRunMock
       .mockResolvedValueOnce({
@@ -5770,7 +5770,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
     expect(await isHostRemovedByUser()).toBe(false);
   });
 
-  it("C4: removeTraycer's non-packaged race backstop - the CLI itself refuses not-service-run after the desktop-side checks passed - still resolves deferred, and the sentinel backstop clears", async () => {
+  it("removeTraycer's non-packaged race backstop - the CLI itself refuses not-service-run after the desktop-side checks passed - still resolves deferred, and the sentinel backstop clears", async () => {
     readSupervisorRunMock.mockResolvedValue({
       state: "enforcing",
       supervisorPid: 9001,
@@ -5791,7 +5791,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
     expect(await isHostRemovedByUser()).toBe(false);
   });
 
-  it("C5: uninstallHost(true) refuses first over a packaged-macOS terminal-started host - no login-item unregister, no CLI spawn", async () => {
+  it("uninstallHost(true) refuses first over a packaged-macOS terminal-started host - no login-item unregister, no CLI spawn", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     readSupervisorRunMock.mockResolvedValue({
       state: "enforcing",
@@ -5810,7 +5810,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
     expect(uninstallSpawnCount()).toBe(0);
   });
 
-  it("K1: removeTraycer proceeds over a non-packaged host with no supervisor running", async () => {
+  it("removeTraycer proceeds over a non-packaged host with no supervisor running", async () => {
     readSupervisorRunMock.mockResolvedValue({
       state: "not-running",
       supervisorPid: null,
@@ -5828,7 +5828,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
     expect(uninstallSpawnCount()).toBe(1);
   });
 
-  it("K2: removeTraycer proceeds over a packaged-macOS host running as a service", async () => {
+  it("removeTraycer proceeds over a packaged-macOS host running as a service", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     readSupervisorRunMock.mockResolvedValue({
       state: "enforcing",
@@ -5848,7 +5848,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
     expect(await isHostRemovedByUser()).toBe(true);
   });
 
-  it("K3: uninstallHost(true) proceeds over a packaged-macOS host running as a service", async () => {
+  it("uninstallHost(true) proceeds over a packaged-macOS host running as a service", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     readSupervisorRunMock.mockResolvedValue({
       state: "enforcing",
@@ -5867,7 +5867,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
     expect(uninstallSpawnCount()).toBe(1);
   });
 
-  it("K4: removeTraycer proceeds over a legacy supervisor record with no attested admission - only an attested foreground run is refused desktop-side", async () => {
+  it("removeTraycer proceeds over a legacy supervisor record with no attested admission - only an attested foreground run is refused desktop-side", async () => {
     readSupervisorRunMock.mockResolvedValue({
       state: "enforcing",
       supervisorPid: 4242,
@@ -5884,7 +5884,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
     expect(uninstallSpawnCount()).toBe(1);
   });
 
-  it("C4b: removeTraycer's non-packaged race backstop leaves an already-set sentinel alone", async () => {
+  it("removeTraycer's non-packaged race backstop leaves an already-set sentinel alone", async () => {
     readSupervisorRunMock.mockResolvedValue({
       state: "enforcing",
       supervisorPid: 9001,
@@ -5916,7 +5916,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
 // avoidable durable activation debt.
 // ---------------------------------------------------------------------------
 describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
-  it("F8a: reports a durable failure when apply reports a post-swap service-start error", async () => {
+  it("reports a durable failure when apply reports a post-swap service-start error", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -5945,7 +5945,7 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
     expect(waitForHostReady).not.toHaveBeenCalled();
   });
 
-  it("P8: reports a failed apply when a null-runtime activation never becomes ready", async () => {
+  it("reports a failed apply when a null-runtime activation never becomes ready", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -5987,7 +5987,7 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
     });
   });
 
-  it("F8: reports a failed apply when an already-stamped pending activation never becomes ready", async () => {
+  it("reports a failed apply when an already-stamped pending activation never becomes ready", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -6462,7 +6462,7 @@ describe("convergeReady E_HOST_BUSY classification (fixup B8)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// R6 (F4): "the desktop leaves a host that a person started in a terminal
+// "The desktop leaves a host that a person started in a terminal
 // untouched." The CLI refuses a desktop-origin mutation with
 // `E_HOST_NOT_SERVICE_RUN` when a terminal-started (foreground) supervisor
 // runs the host, and every Desktop-owned CLI mutation route funnels its
@@ -6484,7 +6484,7 @@ describe("convergeReady E_HOST_BUSY classification (fixup B8)", () => {
 // (`isPackagedMacOwned()` is false for `newController`), never the
 // packaged-Mac activation cycle around host-controller.ts:2529.
 // ---------------------------------------------------------------------------
-describe("E_HOST_NOT_SERVICE_RUN classification (R6)", () => {
+describe("E_HOST_NOT_SERVICE_RUN classification", () => {
   function expectDeferredNotServiceRun(outcome: unknown): void {
     expect(outcome).toEqual({
       kind: "deferred",
@@ -6637,12 +6637,12 @@ describe("E_HOST_NOT_SERVICE_RUN classification (R6)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// R8 (F4): `HostControllerStatus.lastEnsureFailure` - the last ensure's CLI
+// `HostControllerStatus.lastEnsureFailure` - the last ensure's CLI
 // failure, surfaced for Doctor/Settings to show without another failing
 // round-trip. Absent today (`undefined`), so every row here is red on
 // current bytes.
 // ---------------------------------------------------------------------------
-describe("HostControllerStatus.lastEnsureFailure (R8)", () => {
+describe("HostControllerStatus.lastEnsureFailure", () => {
   it("a failed convergeReady with a TraycerCliError records {message, code}", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -7443,7 +7443,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(await controller.awaitMutationLaneIdle(20)).toBe(true);
   });
 
-  it("P4: quit drain sees the pending-revision intent during its reachability precheck", async () => {
+  it("quit drain sees the pending-revision intent during its reachability precheck", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const reachabilityGate = deferred<boolean>();
     const controller = newControllerWithReachability(
@@ -8164,7 +8164,7 @@ describe("Class B no-op liveness", () => {
     });
   });
 
-  // Final hold model (Codex P2 series): `host apply --respect-hold`'s no-op
+  // Final hold model: `host apply --respect-hold`'s no-op
   // outcome (nothing to apply, or the CLI kept a held-and-viable install) is
   // what `applyStaged("launch", ...)` reaches - the CLI-owned route, under
   // the same "trust nothing without a live endpoint" rule as the `manual`
@@ -8289,7 +8289,7 @@ describe("Class B CLI-owned caller publication", () => {
 });
 
 // ---------------------------------------------------------------------------
-// F3: `routeForceRestartContinuation()`, reached only through `respawn()` -
+// `routeForceRestartContinuation()`, reached only through `respawn()` -
 // never by calling the private method directly. Returning `null` means "fall
 // through to today's byte-identical `host restart --force`"; only a
 // completed continuation or a live-executor busy refusal diverge from that.
@@ -9874,14 +9874,14 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
     });
   });
 
-  // MIX-OLD-SUPERVISOR: `if-idle` mode never even calls
+  // `if-idle` mode never even calls
   // `routeForceRestartContinuation` - it is gated on `mode === "if-idle"`
-  // BEFORE that call in `respawn()`'s body. Proven against the richest F3
-  // fixture available (an owned SMAppService substrate with a genuinely
+  // BEFORE that call in `respawn()`'s body. Proven against the richest
+  // continuation-route fixture available (an owned SMAppService substrate with a genuinely
   // parked, legally-resumable `waiting-to-activate` attempt) rather than a
   // bare no-record case, so this cannot pass merely because there was
   // nothing to continue.
-  it("if-idle never reaches the F3 continuation route: no notifyRespawning, no update-verify CLI call, and the parked record is untouched", async () => {
+  it("if-idle never reaches the force-restart continuation route: no notifyRespawning, no update-verify CLI call, and the parked record is untouched", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const lifecycle = fakeHostLifecycle();
     const controller = newControllerWithLifecycle(lifecycle, async () => true);
@@ -9927,13 +9927,13 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
 });
 
 // ---------------------------------------------------------------------------
-// MIX-OLD-SUPERVISOR: the lifecycle card's idle-gated service cycle
+// The lifecycle card's idle-gated service cycle
 // (`respawn(intent, "if-idle")`), as distinct from the pre-existing forced
 // path covered throughout the rest of this file. `--lifecycle-origin
 // desktop` is `streamBundled`'s own addition (see the platform-matrix tests
 // above), so every expected argv below carries it.
 // ---------------------------------------------------------------------------
-describe("respawn: if-idle mode (MIX-OLD-SUPERVISOR)", () => {
+describe("respawn: if-idle mode", () => {
   const RESTART_IF_IDLE_ARGV = [
     "host",
     "restart",
@@ -11382,7 +11382,7 @@ describe("streamBundled progress ownership: mutationEpoch (fixup E)", () => {
   });
 });
 
-// R-C/R-D: the packaged-Mac park kickstart, and the CLI-owned
+// The packaged-Mac park kickstart, and the CLI-owned
 // `--defer-if-parked` gap.
 //
 // Today, packaged Mac + host DOWN + a standing (nonterminal) attempt record:
@@ -11414,7 +11414,7 @@ describe("streamBundled progress ownership: mutationEpoch (fixup E)", () => {
 // which already does both. So a CLI-owned activate against a parked record
 // always calls `waitForHostReady` and reports `{activated:true}` regardless
 // of what the CLI actually did.
-describe("R-C/R-D: the packaged-Mac park kickstart, and CLI-owned --defer-if-parked", () => {
+describe("the packaged-Mac park kickstart, and CLI-owned --defer-if-parked", () => {
   const RC_INSTALLED_VERSION = "2.0.0";
 
   function argvHasConsecutive(

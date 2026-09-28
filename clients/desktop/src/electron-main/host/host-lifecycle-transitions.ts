@@ -169,7 +169,7 @@ export class HostLifecycleService {
 
   /**
    * Every write, observation and transition runs one at a time, in order.
-   * Nothing on it waits on the host: `→ none`'s stop runs off it (F29), so a
+   * Nothing on it waits on the host: `→ none`'s stop runs off it, so a
    * job here is file I/O and at most this process's identity probe.
    */
   private chain: Promise<void> = Promise.resolve();
@@ -420,14 +420,14 @@ export class HostLifecycleService {
    * policy's `(rev, mode)`, never by `rev` alone: both writers write one past
    * the `rev` they read, so a CLI write racing this desktop's can land at the
    * SAME `rev` with another mode, and a verdict derived from the loser's mode
-   * would stand for the rest of the session (F10).
+   * would stand for the rest of the session.
    *
    * It is also the retry of a presence that never landed - an identity probe
    * that timed out on a loaded machine, or a failed write, a quit verdict's
-   * and a release's included (U9). Without one the supervisor never adopts
+   * and a release's included. Without one the supervisor never adopts
    * this desktop, or enforces a verdict nobody chose, so Linked's promise
    * (the host ends with the app, crash included) silently does not hold
-   * (F-WIN-2). The supervisor adopts on whichever tick first sees the
+   * The supervisor adopts on whichever tick first sees the
    * presence alive, so a late write restores it. A held quit verdict is what
    * gets published if one is held, and a policy change under it does not
    * restamp it; with the lanes off there is nothing to publish.
@@ -624,7 +624,7 @@ export class HostLifecycleService {
    * happen, so nothing brings the host back in between; a refused stop
    * leaves the session exactly as it was.
    *
-   * The stop runs OFF the serialized chain (F29). It is an attached CLI child
+   * The stop runs OFF the serialized chain. It is an attached CLI child
    * that waits its turn on the controller's lane and cannot be withdrawn once
    * it runs, so holding the chain across it held every quit verdict, release,
    * observation and mode change behind it - an update install's `handoff`
@@ -820,7 +820,7 @@ export class HostLifecycleService {
    * prompt's `keep` / `stop`. Held until `releaseQuitVerdict`, so no mode
    * change or observed CLI write overwrites what the supervisor must enforce
    * once the app is gone. A write that fails is retried by the next
-   * observation, like every presence that did not land (U9).
+   * observation, like every presence that did not land.
    */
   writeQuitVerdict(
     onExit: DesktopPresenceOnExit,

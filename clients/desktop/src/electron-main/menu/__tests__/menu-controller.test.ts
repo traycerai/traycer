@@ -262,7 +262,7 @@ class FakeZoomController implements MenuZoomController {
  * Fake `MenuLocalHostLanes`. `active` starts the object's
  * `localHostLanesActive()` answer and can be flipped directly between
  * assertions; `foreground` starts `localHostRunIsForeground()`'s answer
- * (F4: a person started the running host in a terminal) and is likewise
+ * (a person started the running host in a terminal) and is likewise
  * mutable; `fireChange()` replays what `HostLifecycleService` does on a
  * real lane transition, and `listenerCount` lets a test prove `dispose()`
  * actually unsubscribed rather than merely not crashing.
@@ -1439,7 +1439,7 @@ describe("MenuController", () => {
       });
     }
 
-    // F4: "the desktop leaves a host that a person started in a terminal
+    // "The desktop leaves a host that a person started in a terminal
     // untouched; the mode governs the service run only." Restart Host
     // targets the SERVICE run, so it must never be offered for a run the
     // service does not own either - the review ruling extends the same hiding

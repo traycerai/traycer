@@ -18,7 +18,7 @@ import {
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import type { HostInstallRecord } from "@traycer/protocol/config/installation-records";
 
-// F1 sibling (found in an earlier sweep): `cli finalize-upgrade`
+// `cli finalize-upgrade`
 // (`commands/cli-finalize-upgrade.ts`) - the hidden command the Windows (and
 // POSIX) detached finalize-helper invokes after `host restart` has already
 // STOPPED the service - ran under admission `service-maintenance`, which the
@@ -34,8 +34,8 @@ import type { HostInstallRecord } from "@traycer/protocol/config/installation-re
 // one (`HOST_UPDATE_ATTEMPT_ACTIVE`, never a bare lock `CLI_LOCK_BUSY`), the
 // command now falls back to JUST starting the host, admitted the way the
 // service's own supervisor relaunch is (`withCliSupervisorRelaunchSegment`,
-// admission `supervisor-relaunch-maintenance`) - the same exemption F1 gave
-// `host ensure` and `host service start`. The overall outcome is still
+// admission `supervisor-relaunch-maintenance`) - the same exemption already
+// given to `host ensure` and `host service start`. The overall outcome is still
 // reported as `{ status: "lock-timeout" }` either way: only the SIDE EFFECT
 // differs (the host gets started), never the swap's own deferred status.
 //
@@ -120,7 +120,7 @@ const RESTART_COMPLETION_MESSAGE =
   "Finalize-upgrade deferred its CLI swap and is starting the installed host to complete the restart that stopped it";
 
 // Not read by this command's own code today, but the coming fix is expected
-// to mirror F1/`service-start`'s `withCliSupervisorRelaunchSegment`, whose
+// to mirror `service-start`'s `withCliSupervisorRelaunchSegment`, whose
 // disposition check reads the install record to verify the claim generation
 // (`update-contender.ts`'s `readSupervisorRelaunchInstalledIdentity`).
 // Mocked here now so the main-matrix rows' generation matches once that
@@ -212,7 +212,7 @@ function sampleInstallRecord(version: string): HostInstallRecord {
   };
 }
 
-// Same fixture as `service-start-over-update-attempt.test.ts` and F1's
+// Same fixture as `service-start-over-update-attempt.test.ts` and
 // `provision-start-over-update-attempt.test.ts` - copied inline so this
 // file's on-disk shape is self-contained.
 function attemptRecord(
@@ -295,7 +295,7 @@ interface FakeControllerHandle {
 
 /** Installed + registered + NOT running (status always "stopped"), whose
  * `start` really reaches the spawn edge and satisfies its own adoption proof
- * (self-supervisor style) - same shape as F1's `startCapableController`. */
+ * (self-supervisor style) - same shape as the sibling suite's `startCapableController`. */
 function startCapableController(): FakeControllerHandle {
   const calls: FakeControllerCalls = { start: 0, status: 0 };
   return {
@@ -514,7 +514,7 @@ describe("cliFinalizeUpgradeCommand - the finalize helper's start, over a standi
   // the third (recovery-maintenance) tier - whose `recoveryActionFor` reads
   // "stop-only" for `waiting-to-activate`, so it logs its own distinct
   // continuation line and returns without starting anything. This is `n3`:
-  // its shape already matches R-A's "STOP-ONLY records" list, so it needed
+  // its shape already matches the third-tier's "STOP-ONLY records" list, so it needed
   // no rewrite, only this log-line update once the fix's exact wording
   // landed.
   it("control: a waiting-to-activate record with a MISMATCHED claim generation never starts the service", async () => {
@@ -636,7 +636,7 @@ describe("cliFinalizeUpgradeCommand - the finalize helper's start, over a standi
   });
 });
 
-// R-A: when `supervisor-relaunch-maintenance` ALSO refuses, the
+// When `supervisor-relaunch-maintenance` ALSO refuses, the
 // fallback is expected to take a third tier, `recovery-maintenance`, and
 // start the host ONLY when the contender context's `recoveryAction` reads
 // "restart-current" - the exact verdict `host restart` stopped the host
@@ -672,7 +672,7 @@ describe("cliFinalizeUpgradeCommand - the finalize helper's start, over a standi
 // for "preparing"+"activate"), so at current bytes AND after the fix they
 // stay exactly as refused as the file's `n3` control (the existing
 // mismatched-claim `waiting-to-activate` row above) already is.
-describe("cliFinalizeUpgradeCommand - the third (recovery-maintenance) tier R-A adds to the fallback", () => {
+describe("cliFinalizeUpgradeCommand - the third (recovery-maintenance) tier adds to the fallback", () => {
   interface ThirdTierCase {
     readonly name: string;
     readonly overrides: Partial<HostUpdateAttemptRecord>;

@@ -1,4 +1,4 @@
-// DR-1: a Doctor refusal that resolves `deferred` is a declined
+// A Doctor refusal that resolves `deferred` is a declined
 // notice, exactly like `lane-busy` / `host-changed` — not a "Fix failed"
 // error. Route 1 is the WATCHED RPC Doctor sheet's if-idle dispatch
 // (`useLocalDoctorFixMutation`, `host-settings-panel.tsx`), which today
@@ -103,11 +103,11 @@ const OVERVIEW_METHODS = [
   "diagnostics.logs.tail",
 ] as const;
 
-// Exact wording reused — the `none`-quiesce message, D1 and D3.
+// Exact wording reused by the Install-fix and Free-port-fix declined-notice tests below.
 const NONE_QUIESCE_MESSAGE =
   "This app no longer starts a local host. Restart Traycer to apply the host lifecycle setting.";
 
-// The confirmed F4 not-service-run text, D2 — named so it can be swapped in
+// The confirmed not-service-run text — named so it can be swapped in
 // one place if that wording changes again.
 const FOREGROUND_NOT_SERVICE_RUN_MESSAGE =
   "A host you started in a terminal is running, and Traycer leaves it alone. Stop it there to continue.";
@@ -265,8 +265,8 @@ async function clickFixAndSettle(code: string): Promise<HTMLButtonElement> {
   return screen.getByTestId(`host-doctor-fix-${code}`) as HTMLButtonElement;
 }
 
-describe("DR-1 route 1 — the watched RPC Doctor sheet's if-idle dispatch", () => {
-  it("RED D1: an Install host fix that resolves deferred shows a declined notice, not Fix failed", async () => {
+describe("the deferred-refusal route 1 — the watched RPC Doctor sheet's if-idle dispatch", () => {
+  it("RED: an Install host fix that resolves deferred shows a declined notice, not Fix failed", async () => {
     const runDoctorRepairIfIdle = vi.fn((): Promise<DoctorRepairDispatch> =>
       Promise.resolve({
         kind: "dispatched" as const,
@@ -294,7 +294,7 @@ describe("DR-1 route 1 — the watched RPC Doctor sheet's if-idle dispatch", () 
     });
   });
 
-  it("RED D2: a Register service fix that resolves deferred shows a declined notice, not Fix failed", async () => {
+  it("RED: a Register service fix that resolves deferred shows a declined notice, not Fix failed", async () => {
     const runDoctorRepairIfIdle = vi.fn((): Promise<DoctorRepairDispatch> =>
       Promise.resolve({
         kind: "dispatched" as const,
@@ -325,7 +325,7 @@ describe("DR-1 route 1 — the watched RPC Doctor sheet's if-idle dispatch", () 
     });
   });
 
-  it("RED D3: a Free port + restart fix that resolves deferred shows a declined notice, not Fix failed", async () => {
+  it("RED: a Free port + restart fix that resolves deferred shows a declined notice, not Fix failed", async () => {
     const freePortAndRestartIfIdle = vi.fn((): Promise<DoctorRepairDispatch> =>
       Promise.resolve({
         kind: "dispatched" as const,
@@ -544,7 +544,7 @@ async function clickBridgeFixAndAwaitCall(
   });
 }
 
-describe("DR-1 route 2 — the bridge Doctor card's queued dispatch", () => {
+describe("the deferred-refusal route 2 — the bridge Doctor card's queued dispatch", () => {
   it("SETTLING (expected GREEN): three declined answers never lock the card, and the fourth still queues", async () => {
     const runDoctorRepairQueued = vi.fn((): Promise<QueuedDoctorRepairResult> =>
       Promise.resolve({
@@ -610,8 +610,8 @@ describe("DR-1 route 2 — the bridge Doctor card's queued dispatch", () => {
   // a genuinely disabled control never reaches its `onClick` — confirmed
   // against a bare disabled `<button>` in this harness before writing this
   // test. A fourth real click therefore cannot reach that branch without
-  // hand-mocking the recurrence state around the lock, which the brief asked
-  // not to do. Flagged for follow-up rather than faked.
+  // hand-mocking the recurrence state around the lock, so this pins the lock
+  // alone; the branch and the disabled button both predate this suite.
   it("CONTROL: three rejections do lock the card", async () => {
     const runDoctorRepairQueued = vi.fn(() =>
       Promise.reject(new Error("boom")),

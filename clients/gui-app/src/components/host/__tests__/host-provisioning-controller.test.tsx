@@ -1568,7 +1568,7 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
    */
 });
 
-// Item 3 / P2: when Force resolves the terminal-host refusal
+// When Force resolves the terminal-host refusal
 // (`{ kind: "deferred", message }`), does the person's own recovery flow
 // (`presentation.forceProvisioning` -> `run(true, ...)` -> the shared
 // `useRunnerConvergeReady` mutation) end up with SENTENCE, verbatim, on
@@ -1586,7 +1586,7 @@ describe("a deferred (terminal-host) convergeReady outcome reaches provisioning.
     vi.restoreAllMocks();
   });
 
-  it("P2: Force -> deferred -> provisioning.error.message === SENTENCE", async () => {
+  it("Force -> deferred -> provisioning.error.message === SENTENCE", async () => {
     const SENTENCE =
       "A host started in a terminal is running; the desktop won't update it.";
     const convergeReady = vi.fn((): Promise<MutationOutcome<ConvergeReadyOk>> =>

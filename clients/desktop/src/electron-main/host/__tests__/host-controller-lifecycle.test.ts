@@ -446,7 +446,7 @@ describe("stopHost outcome mapping", () => {
     expect(outcome.kind).toBe("failed");
   });
 
-  // OBS-HOST-STOP-FOREGROUND: the running host is a terminal's
+  // The running host is a terminal's
   // `traycer host start`, not the service's - the service stop reached
   // nothing and the host still runs. This is NOT a failure of this app or
   // the CLI (never `failed`, and never `stopped`): it gets its own outcome
@@ -608,12 +608,12 @@ describe("stopHost spawn form", () => {
   });
 });
 
-// T31: `stopHost` is never coalesced - every request carries its own mode
+// `stopHost` is never coalesced - every request carries its own mode
 // (and withdrawal), so a force must not join an if-idle that is about to be
 // refused, or vice versa. Prove it with the mechanism (two spawns, two
 // distinct outcomes), not just an end state a coalesced pair could also
 // produce by accident.
-describe("T31: stopHost is never coalesced", () => {
+describe("stopHost is never coalesced", () => {
   it("a force stop submitted while an if-idle stop is still in flight is not coalesced into it", async () => {
     const controller = newReachableController();
     const idleGate = deferred<{ data: unknown }>();
@@ -731,9 +731,9 @@ describe("quiesce", () => {
     expect(totalSpawns()).toBe(0);
   });
 
-  // F22: an explicit start after an in-session `none` brings the host back
+  // An explicit start after an in-session `none` brings the host back
   // unmanaged, so a user-repair converge must ALSO stay off the CLI while
-  // quiesced (see the "F22" describe below) - this positive control moved
+  // quiesced (see the "explicit start-capable intents" describe below) - this positive control moved
   // onto a FRESH, unsuspended controller instead of the quiesced one above.
   it("positive control: a fresh, unsuspended controller's user-repair converge still spawns", async () => {
     const controller = newReachableController();
@@ -793,8 +793,8 @@ describe("quiesce", () => {
     expect(totalSpawns()).toBe(0);
   });
 
-  // F22: an explicit "Update now" is a start-capable intent too, so it must
-  // ALSO stay off the CLI while quiesced (see the "F22" describe below) -
+  // An explicit "Update now" is a start-capable intent too, so it must
+  // ALSO stay off the CLI while quiesced (see the "explicit start-capable intents" describe below) -
   // this positive control moved onto a FRESH, unsuspended controller.
   it('positive control: a fresh, unsuspended controller applies applyStaged("manual")', async () => {
     const controller = newReachableController();
@@ -827,9 +827,9 @@ describe("quiesce", () => {
     expect(totalSpawns()).toBe(0);
   });
 
-  // F22: the explicit form (a person clicking Restart/Update) is a
+  // The explicit form (a person clicking Restart/Update) is a
   // start-capable intent too, so it must ALSO stay off the CLI while
-  // quiesced (see the "F22" describe below) - this positive control moved
+  // quiesced (see the "explicit start-capable intents" describe below) - this positive control moved
   // onto a FRESH, unsuspended controller.
   it("positive control: a fresh, unsuspended controller's explicit activateInstalled(false, true) still spawns restart", async () => {
     const controller = newReachableController();
@@ -988,7 +988,7 @@ describe("suspended background converge names its cause", () => {
 
 // ---- deferMutationsUntil -----------------------------------------------------
 
-// T24(a): the barrier itself is the invariant, not a race against a real
+// The barrier itself is the invariant, not a race against a real
 // timer - `enqueueMutation`'s job body cannot run until `mutationTail`
 // settles, and `mutationTail` cannot settle until the barrier does, however
 // long that takes. So the negative needs no wall-clock wait at all: draining
@@ -1059,7 +1059,7 @@ describe("deferMutationsUntil", () => {
   });
 });
 
-// ---- T24: the launch presence lands before the first CLI spawn -----------
+// ---- The launch presence lands before the first CLI spawn -----------
 
 function fakeLifecycleRecordWatch(): {
   watchLifecycleRecords: () => Promise<void>;
@@ -1078,11 +1078,11 @@ function requireIdentity(
   return value;
 }
 
-const T24_OWN_IDENTITY = requireIdentity(
+const OWN_START_IDENTITY = requireIdentity(
   formatDarwinProcessStartIdentity("Sun Jul 6 12:00:00 2026"),
 );
 
-describe("T24: the launch presence lands before the first CLI spawn", () => {
+describe("the launch presence lands before the first CLI spawn", () => {
   it("holds a converge submitted right after holdLaneOnLaunchPresence() until the presence write's identity read settles, and the presence is already on disk at the first spawn", async () => {
     const layout = getHostFsLayout("production");
     const identityGate = deferred<ProcessStartIdentity | null>();
@@ -1112,7 +1112,7 @@ describe("T24: the launch presence lands before the first CLI spawn", () => {
 
     const launchPresence = service.holdLaneOnLaunchPresence();
     const convergePromise = converge(controller, BACKGROUND);
-    // Admission, not spawns - see the T24(a) note: `lifecycleAdmissionBlock`
+    // Admission, not spawns - see the barrier-vs-race note above: `lifecycleAdmissionBlock`
     // is set synchronously on the job's first line, before any fs I/O, so a
     // drained microtask queue is enough to prove nothing was admitted while
     // the identity gate (which we control and never resolves on its own) is
@@ -1121,7 +1121,7 @@ describe("T24: the launch presence lands before the first CLI spawn", () => {
     expect(controller.lifecycleAdmissionBlock).toBeNull();
     expect(totalSpawns()).toBe(0);
 
-    identityGate.resolve(T24_OWN_IDENTITY);
+    identityGate.resolve(OWN_START_IDENTITY);
     await launchPresence;
     await convergePromise;
 
@@ -1342,7 +1342,7 @@ describe("--lifecycle-origin desktop over the controller's real spawns", () => {
   });
 });
 
-// ---- F22: explicit start-capable intents while suspended --------------------
+// ---- Explicit start-capable intents while suspended --------------------
 //
 // An in-session `none` (`quiesce`) or a reversible hold
 // (`holdAutomaticIntents`) must refuse every intent that can bring the local
@@ -1351,14 +1351,14 @@ describe("--lifecycle-origin desktop over the controller's real spawns", () => {
 // hold releases or the app restarts. Only `stopHost`, `refreshServiceDefinition`
 // and `uninstallHost` - which never start anything - stay unaffected.
 
-/** What a narrowing check over an F22 case's outcome needs, and nothing more. */
+/** What a narrowing check over one of these suspended-intent cases' outcome needs, and nothing more. */
 interface DeferrableOutcome {
   readonly kind: string;
   readonly message?: string;
 }
 
-/** The 8 explicit, start-capable intents F22 must refuse while suspended. */
-const F22_QUIESCED_CASES: readonly {
+/** The 8 explicit, start-capable intents that must be refused while suspended. */
+const QUIESCED_START_INTENT_CASES: readonly {
   readonly label: string;
   readonly run: (controller: HostController) => Promise<DeferrableOutcome>;
 }[] = [
@@ -1397,8 +1397,8 @@ const F22_QUIESCED_CASES: readonly {
   },
 ];
 
-describe("F22: explicit start-capable intents are refused while the local host is suspended", () => {
-  it.each(F22_QUIESCED_CASES)(
+describe("explicit start-capable intents are refused while the local host is suspended", () => {
+  it.each(QUIESCED_START_INTENT_CASES)(
     "after quiesce(), $label does not reach the CLI",
     async ({ run }) => {
       const controller = newReachableController();

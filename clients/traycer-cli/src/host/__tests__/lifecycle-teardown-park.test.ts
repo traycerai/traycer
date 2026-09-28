@@ -98,7 +98,7 @@ vi.mock("@traycer-clients/shared/host-update", async (importOriginal) => {
   };
 });
 
-// TU2 (settled by written verification; no production code applies - this is
+// (Settled by written verification; no production code applies - this is
 // a property of THIS test file's shared mutable fixtures, not of anything
 // under test): a test that times out is declared failed by vitest, but its
 // `it(...)` callback is an ordinary un-cancellable `Promise` - nothing aborts
@@ -241,7 +241,7 @@ interface RealChild extends OwnedHostChild {
 }
 
 /** A REAL OS process (`sleep`), so the pid-addressed facade in
- * `update-mutation.ts` (T13) can act on it for real: no fake to intercept
+ * `update-mutation.ts` can act on it for real: no fake to intercept
  * `forceStopPublishedHost`/`verifyPublishedInstance`/
  * `removePidMetadataIfUnchanged`. */
 async function spawnRealHostChild(): Promise<{
@@ -485,7 +485,7 @@ describe("a parked update does not defer the lifecycle teardown, and is resumed 
     30_000,
   );
 
-  // T13: a published `pid.json` naming the test's own real child process, so
+  // A published `pid.json` naming the test's own real child process, so
   // the teardown's REAL facade bindings (`update-mutation.ts`) run against a
   // real OS process: `forceStopPublishedHost` (which internally verifies via
   // `getPublishedProcessIdentityVerdict`, the same function
@@ -537,10 +537,10 @@ describe("a parked update does not defer the lifecycle teardown, and is resumed 
     30_000,
   );
 
-  // T13(b): the OTHER door into `confirmAndPurge` - an already-ENDED own
+  // The OTHER door into `confirmAndPurge` - an already-ENDED own
   // child, so `attempt()` skips the whole stop sequence and goes straight to
   // the real `verifyPublishedInstance`/`removePidMetadataIfUnchanged` facade
-  // calls (`update-mutation.ts:485-488`), which the first T13 test never
+  // calls (`update-mutation.ts:485-488`), which the published-host test above never
   // reaches (the force helper purges the record itself before `confirmAndPurge`
   // runs). The identity is read from the REAL process while it is still
   // alive, then it is SIGKILLed and its real exit awaited, so
@@ -582,7 +582,7 @@ describe("a parked update does not defer the lifecycle teardown, and is resumed 
     30_000,
   );
 
-  // T13(c): a published pid.json naming a LIVE FOREIGN process (not this
+  // A published pid.json naming a LIVE FOREIGN process (not this
   // test's own ended child) must be verified `current` and left completely
   // alone - real `verifyPublishedInstance`, real bytes, real still-alive
   // process, none of them a guess.
@@ -656,10 +656,10 @@ describe("a parked update does not defer the lifecycle teardown, and is resumed 
       expect(child.signals).toEqual([]);
       expect(readFileSync(path, "utf8")).toBe(before);
     });
-  }, 30_000); // cold measurement applies here and the default 5s timeout is too tight. // `vi.resetModules()`, like the parked-update row above; the same 11.8s // T12: `buildTeardown` cold-imports `commands/host-start` after
+  }, 30_000); // cold measurement applies here and the default 5s timeout is too tight. // `vi.resetModules()`, like the parked-update row above; the same 11.8s // `buildTeardown` cold-imports `commands/host-start` after
 });
 
-// TU1: `lifecycle-teardown.test.ts`'s fake `withLock` never models a release,
+// `lifecycle-teardown.test.ts`'s fake `withLock` never models a release,
 // so whether the REAL lock actually releases on the `retry` and `throw` paths
 // is unproven by that suite. Settled here against the real facade
 // (`defaultRunHostStartDeps.lifecycle.teardown`, the same object
@@ -684,7 +684,7 @@ describe("a parked update does not defer the lifecycle teardown, and is resumed 
 // composes: either a real leak surfaces as `held-in-process` or a thrown
 // `CLI_LOCK_BUSY`, or a genuine release lets the second attempt's callback
 // run for real. No child-process probe is needed.
-describe("TU1: the CLI update lock is genuinely released on the retry and throw paths", () => {
+describe("the CLI update lock is genuinely released on the retry and throw paths", () => {
   it("a fresh acquisition after a retry-returning attempt runs its callback for real", async () => {
     const ownRecord = freshAdmissionRecord();
     await admissionScope.run(ownRecord, async () => {

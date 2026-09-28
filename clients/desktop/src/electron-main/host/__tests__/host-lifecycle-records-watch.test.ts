@@ -205,7 +205,7 @@ describe("HostLifecycle.onLifecycleRecordsChanged", () => {
     expect(dirname(fsState.pidFile)).toBe(fsState.watchers[0]?.directory);
   });
 
-  it("re-installs a fresh watcher on the next watchLifecycleRecords() call after the current one errors (TU11)", async () => {
+  it("re-installs a fresh watcher on the next watchLifecycleRecords() call after the current one errors", async () => {
     // The transitions poll calls `watchLifecycleRecords()` on every tick as
     // its own repair for a watcher that silently died (see the doc comment
     // on `watchLifecycleRecords` and `installWatcher`'s `error` handler,

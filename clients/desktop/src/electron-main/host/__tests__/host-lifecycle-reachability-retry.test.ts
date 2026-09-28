@@ -373,7 +373,7 @@ describe("HostLifecycle reachability retry ladder (predicate, no bootstrap)", ()
 const realProcessKill = process.kill.bind(process);
 
 /**
- * `readIdentityVerdict`'s cache (DESKTOP-DEAD-HOST-CACHED-ALIVE) now checks
+ * `readIdentityVerdict`'s cache now checks
  * `probeProcessExistenceWithoutSpawn` before reusing a cached verdict, which
  * calls the REAL, unmocked `process.kill(pid, 0)` - unlike the liveness reader
  * above, which is a test seam. `PID_METADATA`'s pid (18841) names no process on
@@ -516,7 +516,7 @@ describe("HostLifecycle process-identity throttle", () => {
 });
 
 /**
- * DESKTOP-DEAD-HOST-CACHED-ALIVE, the defect this whole file's throttle
+ * The defect this whole file's throttle
  * exists to close: a cached `current` verdict used to be served for up to
  * 120s off nothing but its own age, so a host SIGKILLed with its `pid.json`
  * left behind - the file the fix's own comment cites - kept reading as
@@ -524,18 +524,18 @@ describe("HostLifecycle process-identity throttle", () => {
  * (`host-health-monitor.test.ts`) had the same shape of shield in two more
  * places. `readIdentityVerdict` now gates reuse on
  * `probeProcessExistenceWithoutSpawn` finding the SAME pid still there; these
- * pin the cache honoring a live pid (L1), losing it the moment the pid dies
- * (L2 - the regression itself, reproduced directly against the cache rather
+ * pin the cache honoring a live pid, losing it the moment the pid dies
+ * (the regression itself, reproduced directly against the cache rather
  * than inferred from a probe-call count), and losing it for an EPERM the
- * platform check can't turn into positive evidence either (L3).
+ * platform check can't turn into positive evidence either.
  *
  * A dedicated pid.json (with a `processStartIdentity` field the stubbed
  * identity reader can match) is used here, rather than this file's shared
  * `PID_METADATA`, so the cached verdict is genuinely `current` - the exact
- * value DESKTOP-DEAD-HOST-CACHED-ALIVE found being served past a pid's death -
+ * value found being served past a pid's death -
  * and not merely `indeterminate`, which every row above already covers.
  */
-describe("HostLifecycle identity-verdict cache vs process existence (DESKTOP-DEAD-HOST-CACHED-ALIVE)", () => {
+describe("HostLifecycle identity-verdict cache vs process existence", () => {
   const cleanups: (() => void)[] = [];
   const CACHE_TEST_PID = 27182;
   const CACHE_TEST_IDENTITY = "linux:boot-cache 27182";
@@ -593,7 +593,7 @@ describe("HostLifecycle identity-verdict cache vs process existence (DESKTOP-DEA
     cleanups.push(() => __setAsyncProcessStartIdentityReaderForTest(previous));
   }
 
-  it("L1: a live pid keeps the cache - the full identity reader runs exactly once across two reads", async () => {
+  it("a live pid keeps the cache - the full identity reader runs exactly once across two reads", async () => {
     const identity = countingLivenessReader(() => "alive");
     stubStartIdentity(() => CACHE_TEST_IDENTITY);
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
@@ -615,7 +615,7 @@ describe("HostLifecycle identity-verdict cache vs process existence (DESKTOP-DEA
     expect(lifecycle.getSnapshot()?.availability).toBe("busy");
   });
 
-  it("L2: THE DEFECT - a pid that dies between reads forces a fresh read and is never served stale as busy", async () => {
+  it("a pid that dies between reads forces a fresh read and is never served stale as busy", async () => {
     let livenessVerdict: ProcessLivenessVerdict = "alive";
     const identity = countingLivenessReader(() => livenessVerdict);
     stubStartIdentity(() => CACHE_TEST_IDENTITY);
@@ -629,7 +629,7 @@ describe("HostLifecycle identity-verdict cache vs process existence (DESKTOP-DEA
     expect(lifecycle.getSnapshot()?.availability).toBe("busy");
 
     // The host is SIGKILLed between reads, `pid.json` left behind exactly as
-    // DESKTOP-DEAD-HOST-CACHED-ALIVE found it: `process.kill` now reports
+    // the defect found it: `process.kill` now reports
     // ESRCH, and a fresh liveness read would find the same pid gone too.
     killSpy.mockImplementation(() => {
       throw Object.assign(new Error("simulated ESRCH"), { code: "ESRCH" });
@@ -648,7 +648,7 @@ describe("HostLifecycle identity-verdict cache vs process existence (DESKTOP-DEA
     expect(lifecycle.getSnapshot()).toBeNull();
   });
 
-  it("L3: EPERM on win32 is not positive evidence either - unknown existence forces a fresh read", async () => {
+  it("EPERM on win32 is not positive evidence either - unknown existence forces a fresh read", async () => {
     const identity = countingLivenessReader(() => "alive");
     stubStartIdentity(() => CACHE_TEST_IDENTITY);
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);

@@ -417,7 +417,7 @@ beforeEach(() => {
   findLiveIncumbentHostMock.mockResolvedValue(LIVE_INCUMBENT_HOST);
 });
 
-describe("provisionHost - foreground-run guard (F4-ensure-sibling)", () => {
+describe("provisionHost - foreground-run guard", () => {
   // Test 1: desktop-origin refusal, mechanism-first. RED on current code -
   // `provisionHost` has no foreground-run check at all, so it proceeds
   // straight through `prepareInstallStage` (`stageHostInstallSource`) and the

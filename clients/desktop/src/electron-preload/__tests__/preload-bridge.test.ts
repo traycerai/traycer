@@ -1338,7 +1338,7 @@ describe("preload local-host snapshot convergence", () => {
   });
 });
 
-describe("preload exposes the host-lifecycle surface (T36)", () => {
+describe("preload exposes the host-lifecycle surface", () => {
   afterEach(() => {
     fakeElectron.reset();
     vi.unstubAllGlobals();

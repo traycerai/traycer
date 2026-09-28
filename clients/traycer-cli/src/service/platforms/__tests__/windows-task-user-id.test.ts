@@ -3,7 +3,7 @@ import { CLI_ERROR_CODES } from "../../../runner/errors";
 import { serviceLabelFor } from "../../label";
 import type { CliInvocation } from "../../cli-binary";
 
-// SSH-USERDOMAIN-WORKGROUP: an OpenSSH session on a workgroup machine sets
+// An OpenSSH session on a workgroup machine sets
 // `USERDOMAIN=WORKGROUP`, and schtasks rejects `WORKGROUP\<name>` from EVERY
 // session - `host install` over ssh used to emit exactly that and then fail
 // to register. `resolveTaskUserId` (exported as `resolveScheduledTaskUserId`;
@@ -12,7 +12,7 @@ import type { CliInvocation } from "../../cli-binary";
 // prefers the account SID from `whoami /user`, and only falls back to an
 // environment-derived name - never `WORKGROUP\<name>` - when no SID can be
 // read. See `windows.ts`'s `resolveTaskUserId` docblock for the full
-// rationale and the live-VM probe (PROBE-TASK-USERID-SSH) this codifies.
+// rationale and the live-VM probe this codifies.
 //
 // Every case stubs all four inputs (`USERDOMAIN`, `USERDNSDOMAIN`,
 // `COMPUTERNAME`, `USERNAME`) explicitly - an empty string models "unset"
@@ -55,7 +55,7 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     setWindowsTaskUserSidReaderForTests(null);
   });
 
-  it("U1: a readable SID wins over every env field, including an ssh WORKGROUP domain", async () => {
+  it("a readable SID wins over every env field, including an ssh WORKGROUP domain", async () => {
     const {
       buildScheduledTaskXml,
       resolveScheduledTaskUserId,
@@ -82,7 +82,7 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     expect(xml).not.toContain("WORKGROUP");
   });
 
-  it("U2: no SID, ssh WORKGROUP domain: falls back to COMPUTERNAME, never WORKGROUP\\alice", async () => {
+  it("no SID, ssh WORKGROUP domain: falls back to COMPUTERNAME, never WORKGROUP\\alice", async () => {
     const {
       buildScheduledTaskXml,
       resolveScheduledTaskUserId,
@@ -108,7 +108,7 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     expect(xml).not.toContain("WORKGROUP\\alice");
   });
 
-  it("U3: no SID, interactive logon (USERDOMAIN === COMPUTERNAME): unchanged BOX\\alice", async () => {
+  it("no SID, interactive logon (USERDOMAIN === COMPUTERNAME): unchanged BOX\\alice", async () => {
     const {
       buildScheduledTaskXml,
       resolveScheduledTaskUserId,
@@ -133,7 +133,7 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     ]);
   });
 
-  it("U4: no SID, a domain logon (USERDNSDOMAIN set): unchanged CORP\\alice", async () => {
+  it("no SID, a domain logon (USERDNSDOMAIN set): unchanged CORP\\alice", async () => {
     const {
       buildScheduledTaskXml,
       resolveScheduledTaskUserId,
@@ -158,7 +158,7 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     ]);
   });
 
-  it("U5: no SID, no COMPUTERNAME: falls back to USERDOMAIN, then to a bare name", async () => {
+  it("no SID, no COMPUTERNAME: falls back to USERDOMAIN, then to a bare name", async () => {
     const {
       buildScheduledTaskXml,
       resolveScheduledTaskUserId,
@@ -197,7 +197,7 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     ]);
   });
 
-  it("U6: no SID, no USERNAME: fails closed with SERVICE_INSTALL_FAILED", async () => {
+  it("no SID, no USERNAME: fails closed with SERVICE_INSTALL_FAILED", async () => {
     const {
       buildScheduledTaskXml,
       resolveScheduledTaskUserId,
@@ -227,7 +227,7 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
   });
 });
 
-// U7: the real `whoami /user /fo csv /nh` reader, end to end. `windows.ts`
+// The real `whoami /user /fo csv /nh` reader, end to end. `windows.ts`
 // imports `execFileSync` directly from `node:child_process`, so this block
 // mocks that module (spreading `importOriginal` - `process-runner.ts` and
 // others reached transitively from `windows.ts` import other members of
@@ -274,7 +274,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-describe("Windows Task XML <UserId>: the real whoami SID reader (U7)", () => {
+describe("Windows Task XML <UserId>: the real whoami SID reader", () => {
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(
     process,
     "platform",
@@ -297,7 +297,7 @@ describe("Windows Task XML <UserId>: the real whoami SID reader (U7)", () => {
     setWindowsTaskUserSidReaderForTests(null);
   });
 
-  it("U7a: a well-formed csv row resolves the SID from whoami, called exactly once with the System32 path", async () => {
+  it("a well-formed csv row resolves the SID from whoami, called exactly once with the System32 path", async () => {
     const {
       buildScheduledTaskXml,
       resolveScheduledTaskUserId,
@@ -331,7 +331,7 @@ describe("Windows Task XML <UserId>: the real whoami SID reader (U7)", () => {
     ]);
   });
 
-  it("U7b: execFileSync throwing a non-zero-exit error falls back to the env form", async () => {
+  it("execFileSync throwing a non-zero-exit error falls back to the env form", async () => {
     const {
       buildScheduledTaskXml,
       resolveScheduledTaskUserId,
@@ -366,7 +366,7 @@ describe("Windows Task XML <UserId>: the real whoami SID reader (U7)", () => {
     ]);
   });
 
-  it("U7c: execFileSync throwing a timeout error falls back to the env form", async () => {
+  it("execFileSync throwing a timeout error falls back to the env form", async () => {
     const {
       buildScheduledTaskXml,
       resolveScheduledTaskUserId,
@@ -401,7 +401,7 @@ describe("Windows Task XML <UserId>: the real whoami SID reader (U7)", () => {
     ]);
   });
 
-  it("U7d: garbage stdout with no SID falls back to the env form", async () => {
+  it("garbage stdout with no SID falls back to the env form", async () => {
     const {
       buildScheduledTaskXml,
       resolveScheduledTaskUserId,
@@ -434,7 +434,7 @@ describe("Windows Task XML <UserId>: the real whoami SID reader (U7)", () => {
     ]);
   });
 
-  it("U7e: empty stdout falls back to the env form", async () => {
+  it("empty stdout falls back to the env form", async () => {
     const {
       buildScheduledTaskXml,
       resolveScheduledTaskUserId,

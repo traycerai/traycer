@@ -107,8 +107,7 @@ function isOfferStale(
  * - `service`: the idle-gated service cycle (`host restart --if-idle`), which
  *   replaces the supervisor too. The lifecycle card's choice while an old
  *   supervisor is running: that supervisor would only respawn its child, and
- *   the card would keep asking for the restart it just did
- *   (MIX-OLD-SUPERVISOR).
+ *   the card would keep asking for the restart it just did.
  */
 export type LocalHostRestartFirstLeg = "cooperative" | "service";
 

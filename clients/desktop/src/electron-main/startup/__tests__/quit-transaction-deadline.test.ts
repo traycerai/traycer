@@ -117,7 +117,7 @@ const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 const ORIGINAL_DEV_DESKTOP_SLOT = process.env[DEV_DESKTOP_SLOT_ENV];
 const DEADLINE_MS = 200;
-// F31 (Phase E): the relaunch-supersede path never races the stop's own
+// The relaunch-supersede path never races the stop's own
 // deadline budget - these tests keep it out of the way entirely.
 const LONG_DEADLINE_MS = 30_000;
 const VIEW: HostLifecycleView = {
@@ -232,7 +232,7 @@ function detachedStopCalls(): number {
   return vi.mocked(spawnDetachedBundledTraycerCliJson).mock.calls.length;
 }
 
-/** F31: every detached spawn's args, in call order - the marker pins. */
+/** Every detached spawn's args, in call order - the marker pins. */
 function detachedArgs(): readonly (readonly string[])[] {
   return vi
     .mocked(spawnDetachedBundledTraycerCliJson)
@@ -245,7 +245,7 @@ interface Quitter {
   readonly outcomes: StopHostOutcome[];
   readonly verdicts: string[];
   readonly updateSeqCalls: () => number;
-  /** F31 (Phase E): flip the relaunch on for a later `onBeforeQuit()` pass. */
+  /** Flip the relaunch on for a later `onBeforeQuit()` pass. */
   setRelaunchIntended(value: boolean): void;
 }
 
@@ -285,7 +285,7 @@ function newQuitter(
       },
       spawnServiceDefinitionRefresh: () =>
         controller.spawnServiceDefinitionRefresh(),
-      // F31 (Phase E): forwards the REAL controller's getter, so `join()`'s
+      // Forwards the REAL controller's getter, so `join()`'s
       // admission check is proved against the real mutation lane, not a
       // fake that could drift from what `host-controller.ts` actually does.
       get lifecycleAdmissionBlock() {
@@ -459,10 +459,10 @@ describe("quit deadline withdrawal (real HostController)", () => {
   });
 });
 
-// F31 (Phase E): proves `join()`'s admission check against the REAL
+// Proves `join()`'s admission check against the REAL
 // `HostController.lifecycleAdmissionBlock`, not a fake that could drift from
 // what the lane actually reports.
-describe("F31: only an admitted stop defers the relaunch (real HostController)", () => {
+describe("only an admitted stop defers the relaunch (real HostController)", () => {
   it("stop-if-idle, queued behind a held non-stop lane job: the relaunch supersedes at once, before the lane frees", async () => {
     const real = newController();
     const blocker = await blockLaneWithInstall(real);

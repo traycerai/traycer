@@ -93,10 +93,10 @@ function stubCommand(): () => Promise<{
   return async () => ({ data: { ok: true }, human: "ok", exitCode: 0 });
 }
 
-// T16: each start-capable verb's builder-argument contract, pinned through
+// Each start-capable verb's builder-argument contract, pinned through
 // `buildProgram()` end to end (the spy pattern `cli-lifecycle-origin-flag.
 // test.ts` / `cli-with-runner-positionals.test.ts` use).
-describe("T16: host verb --if-idle / mode builder arguments", () => {
+describe("host verb --if-idle / mode builder arguments", () => {
   let exitSpy: MockInstance;
   beforeEach(() => {
     exitSpy = vi

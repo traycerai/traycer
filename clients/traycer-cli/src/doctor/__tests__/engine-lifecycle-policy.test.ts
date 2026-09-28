@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorResult } from "../issues";
 
 /**
- * `traycer host doctor`'s host-lifecycle-policy issues (D7):
+ * `traycer host doctor`'s host-lifecycle-policy issues:
  *
  * - `HOST_LIFECYCLE_POLICY_UNREADABLE` - the policy file on disk is present
  *   but corrupt/unreadable, which quietly reads as Background everywhere
@@ -308,7 +308,7 @@ describe("runDoctor host lifecycle policy issues", () => {
     expect(result.lifecycle.policy.mode).toBe("background");
   });
 
-  // T19: `HOST_LIFECYCLE_POLICY_NOT_ENFORCED` (engine.ts:1007) requires
+  // `HOST_LIFECYCLE_POLICY_NOT_ENFORCED` (engine.ts:1007) requires
   // `hostProcessAlive` as well as a non-background mode and a
   // non-enforcing supervisor. A non-background mode with no running host
   // (no pid.json) must never fire the issue, even beside a non-enforcing
