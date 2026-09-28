@@ -847,7 +847,12 @@ function TabItemBody(
   );
 
   return (
-    <ContextMenu>
+    // `modal={false}` is load-bearing for Edit Title. A modal menu keeps a
+    // TRAPPED focus scope while it closes: the rename input mounts and focuses
+    // inside the trigger (outside that scope), the scope pulls focus back, the
+    // input blurs, and `useInlineRename` blur-commits and unmounts it before a
+    // keystroke lands. Un-trapped, the input keeps the focus it takes on mount.
+    <ContextMenu modal={false}>
       <TabItemMotionFrame
         isDragging={isDragging}
         tileItemId={tab.instanceId}

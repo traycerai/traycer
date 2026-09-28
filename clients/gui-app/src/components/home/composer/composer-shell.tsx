@@ -280,6 +280,7 @@ function ComposerAreaImpl({
         </div>
         <div
           data-composer-editor-frame=""
+          data-layout-passive
           className={cn(
             "px-4 pt-4",
             expanded &&

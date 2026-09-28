@@ -6,6 +6,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 
 export const APPEARANCE = defineSettingsSection("appearance", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Appearance",
     description: "Themes, fonts, and display preferences.",
     keywords: [
@@ -301,6 +302,73 @@ export const APPEARANCE = defineSettingsSection("appearance", {
     description: "Blink the terminal cursor while the terminal is focused.",
     availableWhen: alwaysAvailable,
     keywords: ["blink", "flash", "cursor", "caret"],
+  },
+  // One surface's own settings, like Terminal. The diff tile's settings
+  // popover edits the same preferences in context.
+  diffViewer: {
+    kind: "group",
+    search: { anchor: "appearance-diff-viewer" },
+    label: "Diff viewer",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["diff", "changes", "git", "review", "patch", "file edit"],
+  },
+  diffLayout: {
+    kind: "row",
+    group: "diffViewer",
+    search: { anchor: "appearance-diff-layout" },
+    label: "Layout",
+    description:
+      "Old and new side by side, or in one column. File edits in chat always use one column.",
+    availableWhen: alwaysAvailable,
+    keywords: ["split", "unified", "side by side", "inline", "view"],
+  },
+  diffLineNumbers: {
+    kind: "row",
+    group: "diffViewer",
+    search: { anchor: "appearance-diff-line-numbers" },
+    label: "Line numbers",
+    description:
+      "Line numbers, backgrounds and gutter marks also apply to file edits in chat.",
+    availableWhen: alwaysAvailable,
+    keywords: ["line numbers", "gutter"],
+  },
+  diffBackgrounds: {
+    kind: "row",
+    group: "diffViewer",
+    search: { anchor: "appearance-diff-backgrounds" },
+    label: "Backgrounds",
+    description: "Tint added and removed lines.",
+    availableWhen: alwaysAvailable,
+    keywords: ["highlight", "color", "tint", "added", "removed"],
+  },
+  diffGutterMarks: {
+    kind: "row",
+    group: "diffViewer",
+    search: { anchor: "appearance-diff-gutter-marks" },
+    label: "Gutter marks",
+    description: "How each changed line is marked at its edge.",
+    availableWhen: alwaysAvailable,
+    keywords: ["indicator", "bars", "plus", "minus", "gutter"],
+  },
+  diffWordWrap: {
+    kind: "row",
+    group: "diffViewer",
+    search: { anchor: "appearance-diff-word-wrap" },
+    label: "Word wrap",
+    description: "Wrap long lines instead of scrolling sideways.",
+    availableWhen: alwaysAvailable,
+    keywords: ["wrap", "long lines", "soft wrap"],
+  },
+  diffIgnoreWhitespace: {
+    kind: "row",
+    group: "diffViewer",
+    search: { anchor: "appearance-diff-ignore-whitespace" },
+    label: "Ignore whitespace",
+    description: "Skip changes that only touch spaces and indentation.",
+    availableWhen: alwaysAvailable,
+    keywords: ["whitespace", "spaces", "indentation"],
   },
   // Its OWN group rather than a row under Interface: the groups here are
   // either a cross-cutting appearance concern (Themes, Interface, Fonts and

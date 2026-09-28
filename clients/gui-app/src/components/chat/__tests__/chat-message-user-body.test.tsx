@@ -42,6 +42,10 @@ import {
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/landing-image-budget";
 import { formatFullTimestamp, formatMessageTime } from "@/lib/relative-time";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
@@ -2103,6 +2107,7 @@ describe("<ChatMessage /> sender overline timestamp", () => {
 
   afterEach(() => {
     cleanup();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
   it("renders exactly one timestamp on a sent YOU row", () => {
@@ -2219,4 +2224,36 @@ describe("<ChatMessage /> sender overline timestamp", () => {
       expect(overline?.textContent).toBe("You");
     },
   );
+
+  // Layout > Chat > Timestamps (audit R1, R3): the stamp and the " · " that
+  // joins it to the sender label are one region, and hiding it must not
+  // strand the separator any more than an unrepresentable instant does above.
+  it("renders the stamp and its ' · ' separator when Timestamps is shown, neither when hidden", () => {
+    render(
+      <ChatMessage
+        message={plainUserMessage("Status?")}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+    expect(screen.getByTestId("chat-message-timestamp")).not.toBeNull();
+    expect(screen.getByText("You").parentElement?.textContent).toContain(" · ");
+    cleanup();
+
+    useLayoutStore.getState().setRegionValues("timestamps", {
+      shown: "hidden",
+    });
+    render(
+      <ChatMessage
+        message={plainUserMessage("Status?")}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+
+    expect(screen.queryByTestId("chat-message-timestamp")).toBeNull();
+    expect(screen.getByText("You").parentElement?.textContent).toBe("You");
+  });
 });

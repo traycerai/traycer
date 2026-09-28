@@ -1,0 +1,70 @@
+---
+title: "Port forwarding"
+description: "Reach a dev server on one of your machines from another, through a port an agent forwards."
+---
+
+A port forward makes a localhost port on one of your machines reachable as a localhost port on another. Agents use it when a process on one machine, such as a dev server, has to be reached from another machine, such as the one running your browser or the [in-app browser](/panels/browsers).
+
+Traffic travels over the connection your hosts already hold. Both ends are loopback only, so nothing is opened to your network.
+
+## How A Forward Starts
+
+Agents create forwards with the **Forward Port** tool. You can't start one from the app yourself; ask the agent, for example "forward the dev server to my laptop".
+
+- One end is always the agent's own host. The other is another host on your account.
+- The listening machine tries the same port number first, so `localhost:5173` stays `localhost:5173` and OAuth redirects, CORS allowlists and browser storage keep working. If that port is taken, another port is used and the agent is told which.
+- Only unprivileged ports (1024–65535) can be forwarded, and Traycer's own ports can't be.
+- Each consumer of a server gets its own forward.
+
+Only agents on the Chat interface have the forwarding tools. See [Terminal agents vs terminals](/concepts/terminal-agents-vs-terminals).
+
+## When A Forward Ends
+
+A forward lasts until one of these happens:
+
+- You or the agent stops it.
+- The agent is stopped.
+- Either host restarts.
+- Someone cuts it on the other machine (see [Ports on the Other Machine](#ports-on-the-other-machine)).
+
+A forward that ends without being stopped becomes **Interrupted**, and the agent is told once. It doesn't come back on its own; ask the agent to forward the port again.
+
+An agent with an open forward can't be archived until the forward is stopped.
+
+## In The Chat
+
+An agent's forwards appear in its **Background** panel, above the composer. Each row shows the forward's description, its port, and its state:
+
+| State | Meaning |
+|---|---|
+| **Forwarding** | The forward is working. |
+| **Interrupted** | The forward stopped working, for example because a host restarted. |
+
+- **Open localhost:&lt;port&gt; in the browser** appears when the listening end is this computer.
+- **Stop** closes the forward and its open connections.
+- On an interrupted forward, **Clear** removes the record.
+
+Expand a row to see why it is in its state and what happened to it recently. **Stop all** in the Background panel doesn't stop forwards; each has its own **Stop**.
+
+## In Settings
+
+**Settings › Host › Overview › Ports** lists the forwards on the host chosen in the host picker. See [Overview](/settings/host#ports).
+
+### Forwards on This Host
+
+Forwards that this host's agents created. Each row shows the description, the port, the route (for example `laptop:5173 → build-box:5173`), open connections and bytes in and out.
+
+| State | Button |
+|---|---|
+| **Forwarding** | **Stop** |
+| **Binding** (asking the other machine for the port; nothing is listening yet) | **Stop** |
+| **Interrupted** | **Clear** |
+| **Stopped** | **Clear** |
+
+### Ports on the Other Machine
+
+**Ports other machines hold here** lists ports that forwards from other machines use on this host. A row reads **Listening for &lt;machine&gt;** when the port is open on this host and carries traffic to that machine, or **Reached by &lt;machine&gt;** when that machine reaches this port through a forward.
+
+**Cut** closes the port here and its open connections. It asks "Cut port &lt;port&gt;?" first. The forward on the other machine becomes **Interrupted** and its agent is told.
+
+The lists refresh every 15 seconds while the page is open; **Refresh** reads them again now. When anything is forwarded or held, the **Ports** tab shows a count. If nothing is, the tab reads "Nothing is forwarded through &lt;host&gt;."

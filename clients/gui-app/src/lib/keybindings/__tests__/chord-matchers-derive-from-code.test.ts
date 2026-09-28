@@ -139,11 +139,26 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   // Enter/Space on a row's overlay link, plus the search box's Escape (clears a
   // non-empty query; not a registered chord).
   "gui-app/src/components/epics/epics-list-panel.tsx": 3,
+  // The layout editor's sortable list: Space grabs a row (or activates it in
+  // an unordered list), Enter activates, arrows move a grabbed row or, with
+  // Alt, reorder it (L-31), and Escape cancels a grab. All named keys, none of
+  // them a registered chord.
+  "gui-app/src/components/layout-editor/inspector/sortable-list.tsx": 5,
+  // The editor's own Mod+Z / Mod+Shift+Z, matched by the letter the user
+  // reads - see PRINTABLE_CHARACTER_MATCHES - plus the session's Escape, which
+  // pops one inspector level or closes the editor. Escape is a named key.
+  "gui-app/src/components/layout-editor/layout-editor.tsx": 2,
   "gui-app/src/components/layout/find-in-page-bar.tsx": 2,
   "gui-app/src/components/layout/header/desktop-menu-buttons.tsx": 3,
-  "gui-app/src/components/layout/tabs/tab-group-chip.tsx": 4,
+  // A group's chip and its side-strip header open the group editor on F2,
+  // ContextMenu and Shift+F10: named keys, none of them a registered chord.
+  "gui-app/src/components/layout/tabs/side-strip/side-tab-group-header.tsx": 3,
+  "gui-app/src/components/layout/tabs/tab-group-chip.tsx": 3,
   // The guided tour's card answers arrows, Enter and Escape by name; none is
   // a registered chord.
+  // Arrows, Home and End walking the minimap's own list - named keys inside an
+  // open card, not chords.
+  "gui-app/src/components/minimap/minimap-list-card.tsx": 4,
   "gui-app/src/components/onboarding/onboarding-coachmark.tsx": 4,
   "gui-app/src/components/onboarding/onboarding-page.tsx": 4,
   "gui-app/src/components/providers/profile-dropdown.tsx": 4,
@@ -211,6 +226,10 @@ const PRINTABLE_CHARACTER_MATCHES: Readonly<
   "gui-app/src/components/providers/profile-dropdown.tsx": {
     chars: ["r"],
     why: "single-letter accelerator on a visible label inside an open menu",
+  },
+  "gui-app/src/components/layout-editor/layout-editor.tsx": {
+    chars: ["z"],
+    why: "platform mod+Z undo convention, scoped to an open Customize session and matched where the letter is",
   },
   "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": {
     chars: ["c", "d"],

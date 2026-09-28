@@ -28,7 +28,7 @@ import {
   type SettingsAvailabilityContext,
 } from "@/lib/settings/settings-availability";
 import { modLabel } from "@/lib/keybindings/platform";
-import { clearAllPersistedStores } from "@/lib/persist";
+import { clearAllPersistedStores } from "@/lib/persist/wipe";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
@@ -186,8 +186,8 @@ vi.mock("sonner", () => ({
   },
 }));
 
-vi.mock("@/lib/persist", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/persist")>();
+vi.mock("@/lib/persist/wipe", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/persist/wipe")>();
   return {
     ...actual,
     clearAllPersistedStores: vi.fn(() => Promise.resolve()),
@@ -261,11 +261,7 @@ describe("GeneralSettingsPanel", () => {
     });
     useLocalSnapshotClearStore.setState({ clearedAtByScope: {} });
     useSettingsStore.setState({
-      showGlobalResourceMonitor: true,
-      navigatorResourceMetrics: [],
-      pinContextUsageBreakdown: false,
       quoteReplyEnabled: true,
-      homeTabEnabled: false,
       linkOpen: {
         default: "in-app",
         markdown: "in-app",
@@ -283,7 +279,6 @@ describe("GeneralSettingsPanel", () => {
     setMobileApp(false);
     useAuthStore.getState().setSignedOut();
     useLocalSnapshotClearStore.setState({ clearedAtByScope: {} });
-    useSettingsStore.setState({ homeTabEnabled: false });
     delete (globalThis as { runnerHost?: unknown }).runnerHost;
   });
 
@@ -696,7 +691,6 @@ describe("GeneralSettingsPanel", () => {
         runnerHost: null,
         featureSettings: null,
         mobileApp: false,
-        mobileFooter: false,
       };
       expect(isExperimentalGroupAvailable(context)).toBe(false);
       const { container } = render(panelTree());
@@ -718,7 +712,6 @@ describe("GeneralSettingsPanel", () => {
         runnerHost: null,
         featureSettings,
         mobileApp: false,
-        mobileFooter: false,
       };
       expect(isExperimentalGroupAvailable(context)).toBe(true);
       const { container } = render(panelTree());
@@ -732,7 +725,6 @@ describe("GeneralSettingsPanel", () => {
         runnerHost: null,
         featureSettings: null,
         mobileApp: true,
-        mobileFooter: false,
       };
       expect(isVoiceInputRowAvailable(context)).toBe(false);
       expect(isPreventSleepRowAvailable(context)).toBe(false);

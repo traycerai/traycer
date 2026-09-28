@@ -20,9 +20,9 @@ import {
 } from "@/providers/keybinding-context";
 import { LEADER_SCOPE_MODEL_PICKER } from "@/lib/keybindings/leader-scope";
 import {
-  DEFAULT_COMPOSER_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
+} from "@/stores/layout/layout-store";
 
 // Renders the footer as if the picker's own `⌥`-hold state said so - the
 // footer's badges read `LeaderHeldContext` directly (via
@@ -132,23 +132,21 @@ function renderUnderAltHold(config: ReasoningFooterConfig): void {
 
 // The Fast button and its digit-0 badge sit in `ModelSettingsFooter` above
 // (and independently of) the reasoning group, so ⌥0 must light the same way
-// whichever control - list or slider - Layout ▸ Composer ▸ Reasoning renders
-// the levels through.
+// whichever control - list or slider - Layout ▸ Composer ▸ Reasoning control
+// renders the levels through.
 describe.each(["list", "slider"] as const)(
   "<HarnessModelPickerModelSettingsFooter /> Fast leader badge (%s control)",
   (control) => {
     beforeEach(() => {
-      useLayoutStore.setState({
-        composer: {
-          ...DEFAULT_COMPOSER_LAYOUT,
-          reasoningFooterControl: control,
-        },
+      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+      useLayoutStore.getState().setRegionValues("model", {
+        reasoningControl: control,
       });
     });
 
     afterEach(() => {
       cleanup();
-      useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
+      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     });
 
     it("shows the Fast digit-0 badge on the rendered Fast button while ⌥ is held", () => {
@@ -181,7 +179,7 @@ describe.each(["list", "slider"] as const)(
       expect(screen.getByTestId("model-fast-mode-digit-0")).not.toBeNull();
     });
 
-    // The compact slider puts Fast’s shortcut in its icon slot; list mode
+    // The compact slider puts Fast's shortcut in its icon slot; list mode
     // keeps the trailing badge beside its label.
     it(`places the Fast badge within the ${control} layout`, () => {
       renderUnderAltHold(reasoningConfig(false));
@@ -203,14 +201,15 @@ describe.each(["list", "slider"] as const)(
 // under the list control (`ReasoningLevelButton`).
 describe("<HarnessModelPickerModelSettingsFooter /> reasoning leader badges (list control)", () => {
   beforeEach(() => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, reasoningFooterControl: "list" },
-    });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    useLayoutStore
+      .getState()
+      .setRegionValues("model", { reasoningControl: "list" });
   });
 
   afterEach(() => {
     cleanup();
-    useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
   it("shows reasoning digit badges 1-9 alongside the Fast badge when levels are enabled", () => {
@@ -255,27 +254,24 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning leader badges (lis
   });
 });
 
-// The slider now carries the same per-stop digit badges the list pills do
-// (`ReasoningLevelStop`, restored on top of the track). This block is the
-// regression coverage for that restoration and the fixes that came with it:
-// the selected stop's badge must survive (only its dot goes to opacity-0, not
-// the stop container - the container instead goes `pointer-events-none`), the
+// The slider carries the same per-stop digit badges the list pills do
+// (`ReasoningLevelStop`). This block is the regression coverage for that: the
+// selected stop's badge must survive (only its dot goes to opacity-0, not the
+// stop container - the container instead goes `pointer-events-none`), the
 // 10th stop still never claims digit "0" (`PICKER_REASONING_LEADER_INDEX_LIMIT`
 // caps it, matching the list), and the badges react live to holding/releasing
 // the leader modifier.
 describe("<HarnessModelPickerModelSettingsFooter /> reasoning leader badges (slider control)", () => {
   beforeEach(() => {
-    useLayoutStore.setState({
-      composer: {
-        ...DEFAULT_COMPOSER_LAYOUT,
-        reasoningFooterControl: "slider",
-      },
-    });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    useLayoutStore
+      .getState()
+      .setRegionValues("model", { reasoningControl: "slider" });
   });
 
   afterEach(() => {
     cleanup();
-    useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
   it("shows reasoning digit badges 1-9 on every stop, including the selected one", () => {

@@ -8,11 +8,11 @@ import { existingEpicTabIntent } from "@/lib/tab-navigation/intents";
 import { duplicateEpicTab } from "@/lib/commands/actions/duplicate-tab";
 import type { EpicViewTab } from "@/stores/epics/canvas/types";
 import type { TabKindModule } from "@/stores/tabs/types";
-import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import {
   isTabCloseLocked,
   isTabStructurallyLocked,
 } from "@/stores/tabs/tab-structural-lock";
+import { TAB_KIND_SPLIT_ELIGIBILITY } from "@/stores/tabs/tab-kind-policy";
 
 const epicSurface = lazy(() =>
   import("@/components/epic-tabs/epic-surface").then((module) => ({
@@ -73,7 +73,7 @@ export const epicTabModule: TabKindModule<"epic", EpicTabBuildSource> = {
       render: (tab) =>
         createElement(epicSurface, { epicId: tab.epicId, tabId: tab.id }),
       canonicalRoute: (tab) => tab.route,
-      splitEligibility: "eligible",
+      splitEligibility: TAB_KIND_SPLIT_ELIGIBILITY.epic,
       duplication: "allowed",
       singleton: "per-instance",
       newWindow: "move",
@@ -116,11 +116,8 @@ export const epicTabModule: TabKindModule<"epic", EpicTabBuildSource> = {
       useLandingDraftStore.getState().clearActiveDraft();
       useEpicCanvasStore.getState().setActiveTab(intent.tabId);
     },
-    requestClose: (tab) => {
-      tabCommandCoordinator.closeRefAfterConfirmed({
-        kind: "epic",
-        id: tab.id,
-      });
+    requestClose: (tab, close) => {
+      close({ kind: "epic", id: tab.id });
     },
     requiresCloseConfirm: (tab) => epicHasUnsyncedEdits(tab.epicId),
     openInNewWindow: (tab, deps) => {

@@ -38,6 +38,7 @@ import {
   getHeaderStripItemSlotDropId,
   type HeaderTabSlotDropData,
 } from "@/components/layout/tabs/header-tab-dnd";
+import { HEADER_STRIP_SCROLL_TEST_ID } from "@/components/layout/tabs/header-strip-geometry";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -118,7 +119,13 @@ function CanvasTearOffHarness(props: {
     <QueryClientProvider client={queryClient}>
       <RootDndProvider>
         <TestCanvasTabDragSource data={props.source} />
-        <TestSplitGroupHeaderDropTarget />
+        <div
+          data-testid={HEADER_STRIP_SCROLL_TEST_ID}
+          data-strip-axis="x"
+          data-strip-edge="top"
+        >
+          <TestSplitGroupHeaderDropTarget />
+        </div>
       </RootDndProvider>
     </QueryClientProvider>
   );

@@ -4,11 +4,7 @@ import type {
   WorktreeFolderIntent,
   WorktreeWorkspaceSummary,
 } from "@traycer/protocol/host/worktree-schemas";
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
+import { HoverCard } from "@/components/ui/hover-card";
 import { WorkspaceFolderHoverList } from "../workspace-folder-hover-list";
 
 const NOOP = (): void => undefined;
@@ -114,11 +110,9 @@ describe("WorkspaceFolderHoverList", () => {
 
   it("keeps the scroll root out of sequential focus inside a HoverCard", () => {
     render(
-      <HoverCard open>
-        <HoverCardTrigger asChild>
-          <button type="button">Hover-list trigger</button>
-        </HoverCardTrigger>
-        <HoverCardContent side="bottom">
+      <HoverCard
+        trigger={<button type="button">Hover-list trigger</button>}
+        content={
           <WorkspaceFolderHoverList
             items={[
               folder({
@@ -131,8 +125,18 @@ describe("WorkspaceFolderHoverList", () => {
               }),
             ]}
           />
-        </HoverCardContent>
-      </HoverCard>,
+        }
+        appearance="preview"
+        semantics={{ role: "dialog", label: "Workspace folders" }}
+        side="bottom"
+        align="start"
+        sideOffset={8}
+        enabled
+        open
+        onOpenChange={null}
+        testId={null}
+        className={null}
+      />,
     );
     // HoverCard renders a single copy (no hidden a11y clone), and its scroll
     // root carries the explicit tab-stop opt-out.

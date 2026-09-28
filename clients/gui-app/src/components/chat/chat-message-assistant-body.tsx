@@ -1,4 +1,6 @@
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
+import { useRegionShown } from "@/lib/layout-overrides";
+import { useRegionGhost } from "@/components/layout-editor/use-layout-region";
 import { BrowserSessionRow } from "./segments/browser-session-row";
 import { chatFindSegmentUnitId } from "@/components/chat/chat-find";
 import { ChatBlockNavigationAnchor } from "@/components/chat/chat-navigation-highlight";
@@ -243,6 +245,9 @@ export function AssistantMessageBody({
   interviewDeliveryRetry,
 }: AssistantBodyProps) {
   const activityTimelineTurnState = runState === null ? "complete" : "active";
+  // A ghost while the editor points at hidden Thinking (L-14).
+  const thinkingShown = useRegionShown("thinking");
+  const thinkingGhost = useRegionGhost("thinking");
   const queuePauseReasonSupport = useTranscriptQueuePauseReasonSupport();
   // What this row draws: the host's notices this client keeps off screen are
   // gone before anything is built from the list (`hidden-transcript-notices`).
@@ -260,8 +265,15 @@ export function AssistantMessageBody({
       buildChatActivityTimeline(shownSegments, {
         turnState: activityTimelineTurnState,
         promotedToolBlockIds: backgroundToolBlockIds,
+        hideReasoning: !(thinkingShown || thinkingGhost),
       }),
-    [activityTimelineTurnState, backgroundToolBlockIds, shownSegments],
+    [
+      activityTimelineTurnState,
+      backgroundToolBlockIds,
+      shownSegments,
+      thinkingGhost,
+      thinkingShown,
+    ],
   );
   const timelineKeys = useMemo(
     () =>

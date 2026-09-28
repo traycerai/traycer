@@ -88,6 +88,9 @@ const WINDOWS_NODE: WorkspaceFileRef = {
 const WINDOWS_ABSOLUTE_PATH = "C:/Users/dev/repo/src/index.ts";
 
 const OPEN_DELAY_MS = 500;
+// `hover-card.tsx`'s own `HOVER_CARD_TRANSITION_MS`: the exit fade a closing
+// card runs before `useTransitionStyles` unmounts it.
+const HOVER_CARD_TRANSITION_MS = 100;
 const COPY_BUTTON_TEST_ID = "workspace-file-copy-path";
 
 function copyButtonQuery() {
@@ -126,7 +129,12 @@ describe("<WorkspaceFileTile /> path header", () => {
     });
     expect(copyButtonQuery()).toBeNull();
 
+    // `useHover`'s open-delay timer lives on a native `mouseenter` listener
+    // Floating UI attaches directly to the DOM node, gated on the pointer
+    // type `onPointerEnter` (a React prop) just recorded - both have to fire,
+    // like a real browser's compat mouse events would.
     fireEvent.pointerEnter(trigger, { pointerType: "mouse" });
+    fireEvent.mouseEnter(trigger);
     act(() => {
       vi.advanceTimersByTime(OPEN_DELAY_MS * 2);
     });
@@ -139,8 +147,13 @@ describe("<WorkspaceFileTile /> path header", () => {
     expect(writeText).toHaveBeenCalledWith(POSIX_ABSOLUTE_PATH);
 
     // Clicking the trigger switches to the click-open popover; the hover
-    // card must be forced shut rather than the two coexisting.
+    // card must be forced shut rather than the two coexisting. `enabled`
+    // going false schedules `useTransitionStyles`' real exit fade rather than
+    // unmounting synchronously - flush it before counting.
     fireEvent.click(trigger);
+    act(() => {
+      vi.advanceTimersByTime(HOVER_CARD_TRANSITION_MS);
+    });
     expect(screen.getAllByTestId(COPY_BUTTON_TEST_ID)).toHaveLength(1);
   });
 
@@ -162,8 +175,16 @@ describe("<WorkspaceFileTile /> path header", () => {
 
     await user.keyboard("{Enter}");
 
+    // Tabbing onto the trigger opened the hover card too (`useFocus` opens on
+    // ANY focus here - jsdom cannot tell keyboard from mouse modality); Enter
+    // then opens the popover and `enabled={!popoverOpen}` shuts the hover
+    // card, but its real exit fade (unmocked motion) can still be mounted for
+    // a moment after `keyboard()` resolves. Wait for exactly the popover's
+    // own copy control to settle before asserting on it.
+    await waitFor(() => {
+      expect(screen.getAllByTestId(COPY_BUTTON_TEST_ID)).toHaveLength(1);
+    });
     expect(screen.getByText(POSIX_ABSOLUTE_PATH)).toBeTruthy();
-    expect(screen.getAllByTestId(COPY_BUTTON_TEST_ID)).toHaveLength(1);
     // Radix's Popover moves focus into its content on open (its default
     // `onOpenAutoFocus`) - onto the copy control, since it's the only
     // focusable element in there. A further Tab would move PAST it, not

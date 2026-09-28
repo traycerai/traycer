@@ -1,8 +1,16 @@
-import { useCallback, useRef, type ChangeEvent } from "react";
+import {
+  useCallback,
+  useRef,
+  type ButtonHTMLAttributes,
+  type Ref,
+  type ChangeEvent,
+} from "react";
 import { ImagePlus } from "lucide-react";
 import { ToolbarIconButton } from "@/components/home/toolbar/toolbar-buttons";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useRegionShown } from "@/lib/layout-overrides";
+import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
+import { useComposerTileId } from "@/components/home/composer/composer-tile-hooks";
 
 interface ComposerAttachImageButtonProps {
   readonly onAttachImages: (files: ReadonlyArray<File>) => void;
@@ -27,7 +35,15 @@ export function ComposerAttachImageButton(
 ) {
   const { onAttachImages } = props;
   const inputRef = useRef<HTMLInputElement>(null);
-  const attachImage = useLayoutStore((state) => state.composer.attachImage);
+  const tileId = useComposerTileId();
+  const { ref: hotspotRef, ghost } = useLayoutRegion({
+    regionId: "attachImage",
+    instanceId: tileId,
+  });
+  // A hidden control materialises while the editor points at it (L-14); the
+  // button and its file input draw from props alone, so a preview starts
+  // nothing.
+  const shown = useRegionShown("attachImage") || ghost;
 
   const handleOpenImagePicker = useCallback(() => {
     const input = inputRef.current;
@@ -46,7 +62,7 @@ export function ComposerAttachImageButton(
     [onAttachImages],
   );
 
-  if (attachImage === "hidden") return null;
+  if (!shown) return null;
 
   return (
     <>
@@ -66,13 +82,23 @@ export function ComposerAttachImageButton(
         sideOffset={undefined}
         align={undefined}
       >
-        <ToolbarIconButton
-          aria-label="Attach image"
+        <ComposerAttachImageTrigger
+          ref={hotspotRef}
           onClick={handleOpenImagePicker}
-        >
-          <ImagePlus className="size-4" />
-        </ToolbarIconButton>
+        />
       </TooltipWrapper>
     </>
+  );
+}
+
+export function ComposerAttachImageTrigger(
+  props: ButtonHTMLAttributes<HTMLButtonElement> & {
+    ref?: Ref<HTMLButtonElement>;
+  },
+) {
+  return (
+    <ToolbarIconButton aria-label="Attach image" {...props}>
+      <ImagePlus className="size-4" />
+    </ToolbarIconButton>
   );
 }

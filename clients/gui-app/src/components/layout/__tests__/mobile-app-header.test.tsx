@@ -19,7 +19,10 @@ import {
   useMobileHeaderStore,
 } from "@/stores/layout/mobile-header-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { emptySystemTabs, tabItemId } from "@/stores/tabs/layout";
 import type { SystemTabs } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -188,7 +191,10 @@ describe("MobileAppHeader", () => {
     useMobileNavStore.setState({ open: false });
     useMobileHeaderStore.setState({ rightActionEntries: new Map() });
     presentNoTab();
-    useSettingsStore.setState({ showGlobalResourceMonitor: false });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    useLayoutStore
+      .getState()
+      .setRegionValues("resourceMonitor", { shown: "hidden" });
     // A cloud-homed epic's rename follows the live cloud verdict; the store
     // is module-scope Zustand defaulting to `signed-out`.
     useAuthStore.setState({ status: "signed-in" });
@@ -329,21 +335,25 @@ describe("MobileAppHeader", () => {
     ).not.toBeNull();
   });
 
-  it("shows the resource monitor only when the global toggle is on", async () => {
-    useSettingsStore.setState({ showGlobalResourceMonitor: true });
-    renderAt("/");
-    expect(
-      await screen.findByRole("button", { name: "Resource monitor" }),
-    ).not.toBeNull();
+  // G6: the phone header drew the usage glyph whatever the switch said, the
+  // same bug class the resource-monitor gate never had.
+  it.each([
+    ["resourceMonitor", "Resource monitor"],
+    ["usageLimits", "Usage limits"],
+  ] as const)(
+    "shows the %s control only when its toggle is on",
+    async (region, name) => {
+      useLayoutStore.getState().setRegionValues(region, { shown: "shown" });
+      renderAt("/");
+      expect(await screen.findByRole("button", { name })).not.toBeNull();
 
-    cleanup();
-    useSettingsStore.setState({ showGlobalResourceMonitor: false });
-    renderAt("/");
-    await screen.findByRole("button", { name: "Open menu" });
-    expect(
-      screen.queryByRole("button", { name: "Resource monitor" }),
-    ).toBeNull();
-  });
+      cleanup();
+      useLayoutStore.getState().setRegionValues(region, { shown: "hidden" });
+      renderAt("/");
+      await screen.findByRole("button", { name: "Open menu" });
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    },
+  );
 
   it("renders the presented epic tab's registered right actions", async () => {
     useMobileHeaderStore

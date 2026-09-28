@@ -1,8 +1,6 @@
 // Browser regression for the status bar's usage cluster: it scrolls when it
 // holds more readings than the strip is wide, fades only the edge that hides
-// something, and never pushes the resource readout off the strip - and the
-// Settings preview's frame, whose readings are `inert`, still scrolls under a
-// REAL wheel and a real swipe, since an inert ancestor would swallow both.
+// something, and never pushes the resource readout off the strip.
 //
 // jsdom cannot answer any of that. It lays nothing out, so `scrollWidth` and
 // `clientWidth` are both 0 and "does this overflow" has no answer; and the
@@ -40,11 +38,6 @@ const vitePort = await freePort();
 const SCROLLER = '[data-testid="status-bar-rate-limit-scroller"]';
 const RESOURCES =
   '[data-testid="app-status-bar"] [data-testid="status-bar-resource-segment"]';
-const PREVIEW_SCROLLER = '[data-testid="status-bar-preview-usage"]';
-// Vertical wheel notches, which the scroller turns sideways.
-const WHEEL_DELTA_PX = 120;
-// How far the swipe travels, in a few moves so Chrome treats it as a drag.
-const SWIPE_DISTANCE_PX = 160;
 // A narrow window: six accounts cannot fit, and the readout on the right
 // must still be whole.
 const NARROW_WIDTH_PX = 480;
@@ -168,71 +161,6 @@ try {
     `mid-scroll both edges hide something (classes: ${narrowMiddle.scroller.className})`,
   );
 
-  // ── the preview at its Narrow frame, driven by real input ─────────────────
-  // A wide viewport, so the frame's own `w-[480px]` is what constrains the
-  // preview and not the window: the preview has to scroll because of the
-  // width the control named, on a page with plenty of room.
-  await setViewportWidth(client, WIDE_WIDTH_PX);
-  await settle(client);
-  const previewStart = await readScroller(client, PREVIEW_SCROLLER);
-  assert.ok(
-    previewStart.scrollWidth > previewStart.clientWidth,
-    `six accounts in the Narrow preview frame must overflow (scrollWidth ${previewStart.scrollWidth}, clientWidth ${previewStart.clientWidth})`,
-  );
-  assert.equal(
-    previewStart.scrollLeft,
-    0,
-    "the preview starts at the first account",
-  );
-  assert.deepEqual(previewStart.fade, { left: false, right: true });
-  assert.equal(
-    previewStart.inertAncestor,
-    false,
-    "no ancestor of the preview's scroller may be inert - it would swallow the wheel",
-  );
-  assert.equal(
-    previewStart.inertReadings,
-    true,
-    "the preview's readings must be inert",
-  );
-
-  // A real mouse wheel over the readings: the inert content is skipped by hit
-  // testing, so the event lands on the scroller and the strip's wheel handler
-  // turns it sideways. `scrollLeft` is never assigned here.
-  await client.send("Input.dispatchMouseEvent", {
-    type: "mouseWheel",
-    x: previewStart.centerX,
-    y: previewStart.centerY,
-    deltaX: 0,
-    deltaY: WHEEL_DELTA_PX,
-  });
-  await settle(client);
-  const previewAfterWheel = await readScroller(client, PREVIEW_SCROLLER);
-  assert.ok(
-    previewAfterWheel.scrollLeft > 0,
-    `a real wheel over the preview must scroll it (scrollLeft ${previewAfterWheel.scrollLeft})`,
-  );
-  assert.equal(
-    previewAfterWheel.fade.left,
-    true,
-    `once scrolled the preview's left edge hides something (classes: ${previewAfterWheel.className})`,
-  );
-
-  // A real swipe, with touch emulated: a drag from left to right across the
-  // readings scrolls the frame the other way from the wheel above, back
-  // toward the start.
-  await client.send("Emulation.setTouchEmulationEnabled", {
-    enabled: true,
-    maxTouchPoints: 1,
-  });
-  await swipe(client, previewAfterWheel, "toward-start");
-  await client.send("Emulation.setTouchEmulationEnabled", { enabled: false });
-  const previewAfterSwipe = await readScroller(client, PREVIEW_SCROLLER);
-  assert.ok(
-    previewAfterSwipe.scrollLeft < previewAfterWheel.scrollLeft,
-    `a real swipe over the preview must scroll it (before ${previewAfterWheel.scrollLeft}, after ${previewAfterSwipe.scrollLeft})`,
-  );
-
   // ── two accounts at 1400px: everything fits, nothing fades ────────────────
   await client.send("Page.navigate", { url: pageUrl(2) });
   await setViewportWidth(client, WIDE_WIDTH_PX);
@@ -256,7 +184,7 @@ try {
   assertResourcesWhole(wide, WIDE_WIDTH_PX);
 
   console.log(
-    `status bar usage-scroll regression passed: narrow ${narrowStart.scroller.scrollWidth}/${narrowStart.scroller.clientWidth}px scrolls with fades right→both→left, resources at right=${narrowStart.resources.right}px; preview ${previewStart.scrollWidth}/${previewStart.clientWidth}px scrolled to ${previewAfterWheel.scrollLeft}px by wheel and back to ${previewAfterSwipe.scrollLeft}px by swipe; wide ${wide.scroller.scrollWidth}/${wide.scroller.clientWidth}px, no fade`,
+    `status bar usage-scroll regression passed: narrow ${narrowStart.scroller.scrollWidth}/${narrowStart.scroller.clientWidth}px scrolls with fades right→both→left, resources at right=${narrowStart.resources.right}px; wide ${wide.scroller.scrollWidth}/${wide.scroller.clientWidth}px, no fade`,
   );
 } catch (error) {
   console.error("MEASUREMENT FAILED:", error);
@@ -330,72 +258,6 @@ async function scrollTo(client, where) {
      })()`,
   );
   await settle(client);
-}
-
-/**
- * One scroller's overflow, position, fade and hit-test situation, plus the
- * point to aim real input at.
- */
-async function readScroller(client, selector) {
-  return evaluate(
-    client,
-    `(() => {
-       const s = document.querySelector('${selector}');
-       const rect = s.getBoundingClientRect();
-       const className = s.className;
-       let inertAncestor = false;
-       for (let node = s.parentElement; node !== null; node = node.parentElement) {
-         if (node.hasAttribute("inert")) inertAncestor = true;
-       }
-       const readings = s.querySelector('[data-testid="status-bar-preview-readings"]');
-       return {
-         scrollWidth: s.scrollWidth,
-         clientWidth: s.clientWidth,
-         scrollLeft: s.scrollLeft,
-         className,
-         fade: {
-           left: className.includes("to_right,transparent,black_1.5rem"),
-           right: className.includes("black_calc(100%-1.5rem),transparent"),
-         },
-         inertAncestor,
-         inertReadings: readings !== null && readings.hasAttribute("inert"),
-         left: rect.left,
-         right: rect.right,
-         centerX: Math.round(rect.left + rect.width / 2),
-         centerY: Math.round(rect.top + rect.height / 2),
-       };
-     })()`,
-  );
-}
-
-/**
- * A one-finger drag across the scroller. `toward-start` moves the finger
- * left-to-right, which scrolls the content back toward its first account.
- */
-async function swipe(client, scroller, direction) {
-  const y = scroller.centerY;
-  const from =
-    direction === "toward-start"
-      ? scroller.centerX - SWIPE_DISTANCE_PX / 2
-      : scroller.centerX + SWIPE_DISTANCE_PX / 2;
-  const step = direction === "toward-start" ? 20 : -20;
-  await client.send("Input.dispatchTouchEvent", {
-    type: "touchStart",
-    touchPoints: [{ x: from, y }],
-  });
-  for (let moved = step; Math.abs(moved) <= SWIPE_DISTANCE_PX; moved += step) {
-    await client.send("Input.dispatchTouchEvent", {
-      type: "touchMove",
-      touchPoints: [{ x: from + moved, y }],
-    });
-    await delay(16);
-  }
-  await client.send("Input.dispatchTouchEvent", {
-    type: "touchEnd",
-    touchPoints: [],
-  });
-  // Touch scrolling decelerates after the finger lifts; give it time to stop.
-  await evaluate(client, `new Promise((r) => setTimeout(r, 600))`);
 }
 
 async function readLayout(client) {

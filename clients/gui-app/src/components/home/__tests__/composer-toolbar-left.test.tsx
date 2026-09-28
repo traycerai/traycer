@@ -4,6 +4,29 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 import { ComposerToolbarLeft } from "@/components/home/toolbar/composer-toolbar-left";
 import type { PermissionMode } from "@/components/home/data/landing-options";
+import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+
+function testStore() {
+  return createComposerToolbarStore({
+    purpose: "run",
+    reasoningFallback: "model-default",
+    seedKey: "composer-toolbar-left-test",
+    values: {
+      permission: "supervised",
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-sonnet",
+        profileId: null,
+      },
+      reasoning: "medium",
+      serviceTier: "",
+    },
+    onSettingsChange: null,
+    tuiOnly: false,
+    chatLineCarriesAutoMode: null,
+    hostId: null,
+  });
+}
 
 describe("<ComposerToolbarLeft />", () => {
   afterEach(() => {
@@ -87,6 +110,12 @@ describe("<ComposerToolbarLeft />", () => {
           turnActive={false}
           judgeBilling={null}
           settingsLocked={false}
+          store={testStore()}
+          createProfileHostId={null}
+          runTargetHostId={null}
+          terminalLoginSurface={null}
+          dictation={null}
+          dictationPreparing={null}
           onOpenPermissionSettings={vi.fn()}
         />
       </TooltipProvider>,
@@ -152,6 +181,12 @@ function renderToolbar(
         turnActive={false}
         judgeBilling={null}
         settingsLocked={settingsLocked}
+        store={testStore()}
+        createProfileHostId={null}
+        runTargetHostId={null}
+        terminalLoginSurface={null}
+        dictation={null}
+        dictationPreparing={null}
         onOpenPermissionSettings={onOpenPermissionSettings}
       />
     </TooltipProvider>,

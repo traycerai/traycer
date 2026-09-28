@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
+import { HoverCard } from "@/components/ui/hover-card";
 import {
   Tooltip,
   TooltipContent,
@@ -18,14 +14,20 @@ afterEach(cleanup);
 describe("hover-preview surface", () => {
   it("renders the HoverCard preview as a popover card, not the inverted label chip", () => {
     render(
-      <HoverCard open>
-        <HoverCardTrigger asChild>
-          <button type="button">Trigger</button>
-        </HoverCardTrigger>
-        <HoverCardContent side="bottom">
-          <span data-testid="hover-body">Body</span>
-        </HoverCardContent>
-      </HoverCard>,
+      <HoverCard
+        trigger={<button type="button">Trigger</button>}
+        content={<span data-testid="hover-body">Body</span>}
+        appearance="preview"
+        semantics={{ role: "tooltip" }}
+        side="bottom"
+        align="start"
+        sideOffset={4}
+        enabled
+        open
+        onOpenChange={null}
+        testId={null}
+        className={null}
+      />,
     );
     const content = document.querySelector<HTMLElement>(
       '[data-slot="hover-card-content"]',
@@ -45,16 +47,24 @@ describe("hover-preview surface", () => {
 
   it("renders HoverCard content without a visually-hidden accessible clone, so a focusable action is not duplicated", () => {
     render(
-      <HoverCard open>
-        <HoverCardTrigger asChild>
-          <button type="button">Trigger</button>
-        </HoverCardTrigger>
-        <HoverCardContent side="bottom">
+      <HoverCard
+        trigger={<button type="button">Trigger</button>}
+        content={
           <button type="button" data-testid="hover-action">
             Copy
           </button>
-        </HoverCardContent>
-      </HoverCard>,
+        }
+        appearance="preview"
+        semantics={{ role: "dialog", label: "Copy" }}
+        side="bottom"
+        align="start"
+        sideOffset={4}
+        enabled
+        open
+        onOpenChange={null}
+        testId={null}
+        className={null}
+      />,
     );
     // A Radix Tooltip mounts a hidden a11y clone of its children (two copies);
     // HoverCard does not - the single copy is why a copy-path button lives
@@ -64,16 +74,24 @@ describe("hover-preview surface", () => {
 
   it("renders the appearance='tooltip' HoverCard variant on the inverted chip surface, tagged for CSS opt-out, still without a duplicate accessible clone", () => {
     render(
-      <HoverCard open>
-        <HoverCardTrigger asChild>
-          <button type="button">Trigger</button>
-        </HoverCardTrigger>
-        <HoverCardContent side="bottom" appearance="tooltip">
+      <HoverCard
+        trigger={<button type="button">Trigger</button>}
+        content={
           <button type="button" data-testid="hover-action">
             Copy
           </button>
-        </HoverCardContent>
-      </HoverCard>,
+        }
+        appearance="tooltip"
+        semantics={{ role: "dialog", label: "Copy" }}
+        side="bottom"
+        align="start"
+        sideOffset={4}
+        enabled
+        open
+        onOpenChange={null}
+        testId={null}
+        className={null}
+      />,
     );
     const content = document.querySelector<HTMLElement>(
       '[data-slot="hover-card-content"]',
@@ -84,6 +102,7 @@ describe("hover-preview surface", () => {
     // overridden by it, so the attribute itself is the contract, not just a
     // debugging label.
     expect(content.getAttribute("data-appearance")).toBe("tooltip");
+    expect(content.getAttribute("data-state")).toBe("open");
     const tokens = content.className.split(/\s+/);
     expect(tokens).toContain("bg-foreground");
     expect(tokens).toContain("text-background");

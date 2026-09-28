@@ -91,7 +91,20 @@ describe("<AboutDetailsDialog />", () => {
     const copyButton = await screen.findByRole("button", {
       name: "Copy details",
     });
-    fireEvent.click(copyButton);
+    // Awaited inside `act` rather than followed by a `findByRole`: the copied
+    // label reverts on a real 1500ms timer (`useClipboardCopy`'s `resetMs`),
+    // and a polling query racing that timer is a flake on a loaded runner -
+    // it failed exactly once, in a combined run, and passed alone. Flushing
+    // the clipboard promise and React's commit here settles the button's name
+    // before the timer is even queued, so the assertion below is synchronous
+    // and has no window to lose.
+    await act(async () => {
+      fireEvent.click(copyButton);
+      // The clipboard write is already resolved, so one turn of the microtask
+      // queue is all `setCopied(true)` is waiting on; `act` commits it before
+      // returning.
+      await Promise.resolve();
+    });
 
     expect(writeText).toHaveBeenCalledWith(
       [
@@ -105,7 +118,7 @@ describe("<AboutDetailsDialog />", () => {
         "Host: 1.1.8 (pid 12257)",
       ].join("\n"),
     );
-    await screen.findByRole("button", { name: "Copied details" });
+    screen.getByRole("button", { name: "Copied details" });
   });
 
   it("hides the copy action while details are unavailable", async () => {

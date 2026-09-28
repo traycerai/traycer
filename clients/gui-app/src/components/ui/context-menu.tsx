@@ -6,6 +6,7 @@ import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility
 import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
+import { MenuOpenMarker } from "@/components/ui/open-menus";
 
 function ContextMenu({
   ...props
@@ -26,6 +27,7 @@ function ContextMenuContent({
   className,
   collisionPadding,
   onCloseAutoFocus,
+  children,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
   // A modal context menu drives `hideOthers` + scroll-lock while open, so a
@@ -58,7 +60,11 @@ function ContextMenuContent({
         )}
         onCloseAutoFocus={handleCloseAutoFocus}
         {...props}
-      />
+      >
+        {/* Mounted with the open menu: no hover card opens meanwhile. */}
+        <MenuOpenMarker />
+        {children}
+      </ContextMenuPrimitive.Content>
     </ContextMenuPrimitive.Portal>
   );
 }
@@ -129,6 +135,65 @@ function ContextMenuCheckboxItem({
       </span>
       {children}
     </ContextMenuPrimitive.CheckboxItem>
+  );
+}
+
+function ContextMenuRadioGroup({
+  ...props
+}: React.ComponentProps<typeof ContextMenuPrimitive.RadioGroup>) {
+  return (
+    <ContextMenuPrimitive.RadioGroup
+      data-slot="context-menu-radio-group"
+      {...props}
+    />
+  );
+}
+
+function ContextMenuRadioItem({
+  className,
+  children,
+  inset,
+  ...props
+}: React.ComponentProps<typeof ContextMenuPrimitive.RadioItem> & {
+  inset?: boolean;
+}) {
+  return (
+    <ContextMenuPrimitive.RadioItem
+      data-slot="context-menu-radio-item"
+      data-inset={inset}
+      className={cn(
+        "relative flex cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground focus:**:text-accent-foreground data-inset:pl-7 data-[state=checked]:bg-foreground/5 data-disabled:pointer-events-none data-disabled:opacity-50 aria-disabled:opacity-50 pointer-coarse:min-h-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        className,
+      )}
+      {...props}
+    >
+      <span
+        className="pointer-events-none absolute right-2 flex items-center justify-center"
+        data-slot="context-menu-radio-item-indicator"
+      >
+        <ContextMenuPrimitive.ItemIndicator>
+          <CheckIcon />
+        </ContextMenuPrimitive.ItemIndicator>
+      </span>
+      {children}
+    </ContextMenuPrimitive.RadioItem>
+  );
+}
+
+/** A section heading inside a menu, drawn like `DropdownMenuLabel`. */
+function ContextMenuLabel({
+  className,
+  ...props
+}: React.ComponentProps<typeof ContextMenuPrimitive.Label>) {
+  return (
+    <ContextMenuPrimitive.Label
+      data-slot="context-menu-label"
+      className={cn(
+        "px-1.5 py-1 text-overline tracking-wide uppercase text-muted-foreground",
+        className,
+      )}
+      {...props}
+    />
   );
 }
 
@@ -206,6 +271,9 @@ export {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuCheckboxItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
+  ContextMenuLabel,
   ContextMenuSub,
   ContextMenuSubTrigger,
   ContextMenuSubContent,

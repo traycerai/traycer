@@ -6,7 +6,8 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { LivePulse } from "@/components/ui/live-pulse";
-import { useChatDockSectionRevealed } from "@/components/chat/chat-dock-compact-context";
+import { useChatDockSectionAttached } from "@/components/chat/chat-dock-compact-context";
+import { ChatDockAttachedPanelBody } from "@/components/chat/chat-dock-attached-panel";
 import { AgentStopList } from "@/components/chat/chat-agent-stop-list";
 import { AgentStopButton } from "@/components/chat/agent-stop-button";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
@@ -28,15 +29,44 @@ export function ActiveAgentsPanel(props: {
   readonly self: AgentRow;
   readonly descendants: ReadonlyArray<AgentRow>;
   readonly scrollRegionMaxHeightClass: string;
+  /** A hairline above this panel, because a sibling drew before it in the
+   *  dock's shared frame (L-97). */
   readonly separated: boolean;
 }) {
-  // Open on arrival when a chip click is what put this row back in the dock.
-  const revealedByChip = useChatDockSectionRevealed("activeAgents");
-  const [open, setOpen] = useState(revealedByChip);
+  // Attached above the composer because its pill is the open one (L-142).
+  const attached = useChatDockSectionAttached("activeAgents");
+  const [open, setOpen] = useState(false);
   // The root agent counts as running too when it is itself active (not just
   // idling while its sub-agents work).
   const runningCount =
     props.descendants.length + (props.self.activity === false ? 0 : 1);
+
+  const list = (
+    <AgentStopList
+      epicId={props.epicId}
+      viewTabId={props.viewTabId}
+      self={props.self}
+      descendants={props.descendants}
+      surface="composer-panel"
+    />
+  );
+
+  if (attached) {
+    // No portalled action, and that is this panel's own long-standing rule
+    // rather than an omission: "Stop all" is a COLLAPSED-header affordance,
+    // and an expanded list puts the same stop on the current chat's own row,
+    // where it sits beside the agent it acts on. An attached panel is expanded
+    // by construction, so lifting the header button into the pill row would
+    // show the same action twice.
+    return (
+      <ChatDockAttachedPanelBody
+        section="activeAgents"
+        testId="active-agents-list"
+      >
+        {list}
+      </ChatDockAttachedPanelBody>
+    );
+  }
 
   return (
     <Collapsible
@@ -47,33 +77,7 @@ export function ActiveAgentsPanel(props: {
       variant="panel"
     >
       <div className="flex items-stretch">
-        <CollapsibleTrigger
-          className="group/agents flex min-w-0 flex-1 items-center text-left"
-          variant="panel"
-        >
-          <ChevronDown
-            aria-hidden
-            className={cn(
-              "size-3 shrink-0 text-muted-foreground/70 transition-transform",
-              open ? null : "-rotate-90",
-            )}
-          />
-          <LivePulse
-            size="xs"
-            tone="active"
-            ariaLabel="Agents running"
-            className={undefined}
-          />
-          <span className="shrink-0 text-ui-xs font-medium text-foreground/85">
-            Active agents
-          </span>
-          <span aria-hidden className="shrink-0 text-muted-foreground/40">
-            ·
-          </span>
-          <span className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
-            {runningCount} running
-          </span>
-        </CollapsibleTrigger>
+        <ActiveAgentsHeader open={open} runningCount={runningCount} />
         {open ? null : (
           // Collapsed: a one-click "Stop all" lives in the header (like the
           // accumulated-changes "Undo all"). Expanding moves it onto the
@@ -99,15 +103,47 @@ export function ActiveAgentsPanel(props: {
             props.scrollRegionMaxHeightClass,
           )}
         >
-          <AgentStopList
-            epicId={props.epicId}
-            viewTabId={props.viewTabId}
-            self={props.self}
-            descendants={props.descendants}
-            surface="composer-panel"
-          />
+          {list}
         </div>
       </CollapsibleContent>
     </Collapsible>
+  );
+}
+
+export function ActiveAgentsHeader({
+  open,
+  runningCount,
+}: {
+  open: boolean;
+  runningCount: number;
+}) {
+  return (
+    <CollapsibleTrigger
+      className="group/agents flex min-w-0 flex-1 items-center text-left"
+      variant="panel"
+    >
+      <ChevronDown
+        aria-hidden
+        className={cn(
+          "size-3 shrink-0 text-muted-foreground/70 transition-transform",
+          open ? null : "-rotate-90",
+        )}
+      />
+      <LivePulse
+        size="xs"
+        tone="active"
+        ariaLabel="Agents running"
+        className={undefined}
+      />
+      <span className="shrink-0 text-ui-xs font-medium text-foreground/85">
+        Active agents
+      </span>
+      <span aria-hidden className="shrink-0 text-muted-foreground/40">
+        ·
+      </span>
+      <span className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
+        {runningCount} running
+      </span>
+    </CollapsibleTrigger>
   );
 }

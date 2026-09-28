@@ -5,6 +5,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 // only render when per-type placement is enabled.
 export const OPENING_BEHAVIOR = defineSettingsSection("opening-behavior", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Opening behavior",
     description: "Where links and tiles land when you open them.",
     keywords: ["open", "click", "navigate", "placement", "target"],

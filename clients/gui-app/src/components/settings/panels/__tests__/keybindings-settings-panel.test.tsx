@@ -11,7 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsSettingsPanel } from "@/components/settings/panels/keybindings-settings-panel";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { GLOBAL_SHORTCUT_DEFAULT_CHORDS } from "@traycer-clients/shared/keybindings/global-shortcuts";
 import type {
   DesktopGlobalShortcutsBridge,
@@ -84,13 +87,13 @@ describe("KeybindingsSettingsPanel - flag-gated actions", () => {
     vi.clearAllMocks();
     platformMock.isMac = false;
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
-    useSettingsStore.setState({ homeTabEnabled: false });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     summonHotkeyMock.current = { bridge: null, status: null };
   });
 
   afterEach(() => {
     cleanup();
-    useSettingsStore.setState({ homeTabEnabled: false });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
   it("omits Go to Home while the Home tab is off", () => {
@@ -100,12 +103,34 @@ describe("KeybindingsSettingsPanel - flag-gated actions", () => {
   });
 
   it("lists Go to Home once the Home tab is on", () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
 
     renderPanel();
 
     expect(screen.getByText("Go to Home")).not.toBeNull();
   });
+
+  it("omits Collapse vertical tabs while the tabs are at the top", () => {
+    renderPanel();
+
+    expect(screen.queryByText("Collapse vertical tabs")).toBeNull();
+  });
+
+  it.each([{ placement: "left" as const }, { placement: "right" as const }])(
+    "lists Collapse vertical tabs once the tabs are at the side ($placement)",
+    ({ placement }) => {
+      useLayoutStore.setState({
+        arrangement: {
+          ...useLayoutStore.getState().arrangement,
+          tabStripPlacement: placement,
+        },
+      });
+
+      renderPanel();
+
+      expect(screen.getByText("Collapse vertical tabs")).not.toBeNull();
+    },
+  );
 });
 
 describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {

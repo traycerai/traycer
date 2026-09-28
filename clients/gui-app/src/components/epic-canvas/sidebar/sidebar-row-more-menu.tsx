@@ -10,6 +10,7 @@ import {
   type SidebarRowMenuEntry,
 } from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
 import { useSidebarRowDropdownMount } from "@/components/epic-canvas/sidebar/use-sidebar-row-dropdown-mount";
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 
 /** Keep an untouched row's trigger accessible without mounting a Radix root. */
 export function SidebarRowMoreMenu(props: {
@@ -28,6 +29,7 @@ export function SidebarRowMoreMenu(props: {
     onKeyDown,
     onClick,
   } = useSidebarRowDropdownMount(false);
+  const placement = useColumnOverlayPlacement("row");
   const trigger = (
     <Button
       type="button"
@@ -57,7 +59,11 @@ export function SidebarRowMoreMenu(props: {
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-max">
+      <DropdownMenuContent
+        side={placement?.side}
+        align={placement?.align ?? "end"}
+        className="w-max"
+      >
         <SidebarDropdownMenuItems entries={props.entries} />
       </DropdownMenuContent>
     </DropdownMenu>

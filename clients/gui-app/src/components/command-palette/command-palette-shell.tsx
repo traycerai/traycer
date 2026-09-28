@@ -255,8 +255,33 @@ export function RootView(props: RootViewProps) {
     const buckets: Array<CommandGroupBucket> = [];
     if (pinned !== null) buckets.push(pinned);
     if (showRecents && recents !== null) buckets.push(recents);
-    return [...buckets, ...trimmed];
-  }, [defaultBuckets, pinned, recents, pinnedIdSet, recentIdSet, showRecents]);
+    const ordered = [...buckets, ...trimmed];
+    if (showRecents) return ordered;
+    // Best match first, ACROSS groups (C15: "layout" means the layout doors,
+    // not a task titled with it). cmdk 1.1.1 means to reorder groups by score
+    // but looks each one up by its generated id against a `data-value` that
+    // holds the heading, so it never finds one and the default order stands.
+    const bestScore = (bucket: CommandGroupBucket): number =>
+      Math.max(
+        ...bucket.items.map((item) =>
+          paletteFilter(buildCmdkValue(item), effectiveQuery, [
+            ...item.keywords,
+          ]),
+        ),
+      );
+    return ordered
+      .map((bucket) => ({ bucket, score: bestScore(bucket) }))
+      .toSorted((a, b) => b.score - a.score)
+      .map(({ bucket }) => bucket);
+  }, [
+    defaultBuckets,
+    pinned,
+    recents,
+    pinnedIdSet,
+    recentIdSet,
+    showRecents,
+    effectiveQuery,
+  ]);
 
   return (
     <>

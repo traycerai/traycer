@@ -101,10 +101,8 @@ import {
 
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
 import { useRenameCanvasTab } from "@/components/epic-canvas/canvas/use-rename-canvas-tab";
-import {
-  useLeftPanelStore,
-  type LeftPanelId,
-} from "@/stores/epics/left-panel-store";
+import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
+import { type LeftPanelId } from "@/lib/left-panel-ids";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { prDetailTileId } from "@/lib/pr/pr-detail-tile";

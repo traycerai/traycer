@@ -1,4 +1,6 @@
+import { useNavigatorResourceMetrics } from "@/hooks/resources/use-navigator-resource-metrics";
 import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 /**
  * Chat/terminal-agent tree body for the sidebar. Renders the tree of chat nodes
  * with expansion, rename, delete, and drag-drop behaviors.
@@ -16,10 +18,7 @@ import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
 import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import {
-  chatOpensPublishedCopy,
-  makeChatOpenTileRef,
-} from "@/lib/chats/chat-open-tile-ref";
+import { chatOpensPublishedCopy } from "@/lib/chats/chat-open-tile-ref";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import {
@@ -58,7 +57,7 @@ import {
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { cn } from "@/lib/utils";
 import { useCompactRelativeTime } from "@/lib/relative-time";
-import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
+import { NavigatorResourceHotspotChip } from "@/components/resources/resource-usage-chip";
 import type { ResourceOwnerKindWire } from "@traycer/protocol/host/resources/subscribe";
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
 import { TerminalAgentProgressIcon } from "@/components/chat/terminal-agent-progress-icon";
@@ -78,7 +77,7 @@ import {
   terminalFailureTone,
   type IndicatorTone,
 } from "@/components/notifications/notification-indicator-tones";
-import { BackgroundActivityGlyph } from "@/components/notifications/background-activity-glyph";
+import { StatusGlyph } from "@/components/notifications/status-glyph";
 import {
   selectNotificationIndicatorState,
   EMPTY_INDICATOR_STATE_RESPONSE,
@@ -102,7 +101,6 @@ import {
   SidebarGroupContent,
 } from "@/components/ui/sidebar";
 import { LazySidebarTooltipWrapper } from "@/components/epic-canvas/sidebar/lazy-sidebar-hover";
-import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import {
   CHAT_ARCHIVE_VISIBILITY,
@@ -189,8 +187,9 @@ import {
   type ChatSharingMenuDecision,
 } from "@/lib/chats/chat-sharing-ux";
 import { AgentRoleBadges } from "./agent-role-badges";
+import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
+import { HoverCardGroup } from "@/components/ui/hover-card";
 import { isEditableRole } from "@/lib/epic-permissions";
-import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   Archive,
   ArchiveRestore,
@@ -223,13 +222,15 @@ import {
   BASE_PAD_LEFT,
   EMPTY_PENDING_LIST,
   EMPTY_PRE_ACK_LIST,
+  ARCHIVED_ROW_CLASS,
   INDENT_PX,
   SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
   anyMutationPending,
-  nodePadRightClass,
+  chatRowClassName,
   revealSidebarNode,
   useNodeIconDisplay,
 } from "./epic-sidebar-tree-shared";
+import { ChatRowLeadingIconSlot, ChatRowView } from "./chat-row-view";
 import { TreeGroupGuide } from "./epic-sidebar-tree-guide";
 import {
   applyVisibleFilter,
@@ -297,7 +298,7 @@ import { SidebarRowMoreMenu } from "@/components/epic-canvas/sidebar/sidebar-row
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
-import { type IndicatorRunningKind } from "@/components/notifications/notification-indicator-icon";
+import type { IndicatorRunningKind } from "@/components/notifications/notification-indicator-icon";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -306,6 +307,7 @@ import {
   useChatTreeSurface,
   useRevealRowControls,
 } from "@/components/epic-canvas/sidebar/chat-tree-surface";
+import { useChatRowOpenRef } from "@/components/epic-canvas/sidebar/use-chat-row-open-ref";
 
 interface ChatTreePanelBodyProps {
   readonly epicId: string;
@@ -668,7 +670,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const tree = useEpicTreeIndex();
   const revealRequest = useSidebarNodeRevealRequest(tabId);
   const ancestorIdsOfReveal = useAncestorIds(revealRequest?.nodeId ?? null);
-  // Bulk selection owns the header outright (`PanelGroupSectionHeader` returns
+  // Bulk selection owns the header outright (`LeftPanelSectionHeader` returns
   // the selection actions before it ever considers the search row), so while
   // selection mode is on there is no search input to type into, to read a query
   // back from, or to press Escape in. Treating search as INACTIVE for that whole
@@ -1425,18 +1427,22 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                     resultCount={searchResultCount}
                   />
                 ) : null}
-                <SidebarContent>
-                  <SidebarGroup className="min-h-0 flex-1">
-                    <SidebarGroupContent
-                      ref={treeRegionRef}
-                      className="flex min-h-0 flex-1 flex-col"
-                      data-testid="epic-chat-tree-region"
-                    >
-                      {panelContent}
-                      {messageHits.node}
-                    </SidebarGroupContent>
-                  </SidebarGroup>
-                </SidebarContent>
+                {/* One clock for the tree's rows, owner cards and name labels
+                    alike: the first waits, the next row's opens at once. */}
+                <HoverCardGroup>
+                  <SidebarContent>
+                    <SidebarGroup className="min-h-0 flex-1">
+                      <SidebarGroupContent
+                        ref={treeRegionRef}
+                        className="flex min-h-0 flex-1 flex-col"
+                        data-testid="epic-chat-tree-region"
+                      >
+                        {panelContent}
+                        {messageHits.node}
+                      </SidebarGroupContent>
+                    </SidebarGroup>
+                  </SidebarContent>
+                </HoverCardGroup>
               </SidebarFilterVisibilityContext.Provider>
             </SidebarSortClockContext.Provider>
           </SidebarSortContext.Provider>
@@ -1498,6 +1504,9 @@ interface ChatNodeProps {
   selectionMode: boolean;
   selectedIds: ReadonlySet<string>;
   onToggleSelection: (id: string) => void;
+  /** Only the navigator's first root row carries the `sidebar.resourceChips`
+   *  hotspot - see `ChatRowButton`. Every recursive child render passes
+   *  `false`, so exactly one instance ever registers per navigator. */
 }
 
 /**
@@ -1678,15 +1687,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     [archiveSupported, isArchived, archivePending, toggleArchive],
   );
 
-  // The tab must bind to the chat's OWNER host, not whichever host happens to
-  // be active: a connected peer host's chat reaches this tree through the
-  // shared projection, and binding it to the active host would open a tab
-  // that asks the wrong machine for the transcript. Downstream already
-  // honors the ref's hostId (`renderTile` wraps each ref in its own
-  // `TabHostProvider`), so the owner id is all that was missing. The FALLBACK
-  // for a row that carries no owner is the Epic SESSION's host - the host
-  // that projected the row - never the app-wide one, which during a re-point
-  // is a different machine from the one this tree is showing.
   // Declared HERE rather than beside `openRef` below, which is the only other
   // thing that reads it: the record-head lookup is keyed on the record
   // identity `(ownerUserId, chatId)`, and the content clock beneath it needs
@@ -1709,59 +1709,15 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     cloudChat,
     recordHead,
   });
-  const openHostId = ownerHostId ?? sessionHostId ?? UNKNOWN_HOST_PLACEHOLDER;
-  // The host that SERVES a published copy's read (the owner is unreachable by
-  // construction there) - the session's, for the reason above.
-  const readingHostId = sessionHostId ?? UNKNOWN_HOST_PLACEHOLDER;
-  // Same rule the cloud rows follow (user ruling: offline hosts show as
-  // readonly with a locked composer): a CHAT row whose owner host is
-  // unreachable opens the published copy, not a live tab that dials a dead
-  // host into a banner. Falls back to the live ref when the identity triple
-  // cannot be built (no owner user on the record) - a click always opens
-  // something.
-  const ownerReachability = useHostReachability(
-    ownerHostId ?? UNKNOWN_HOST_PLACEHOLDER,
-  );
-  // The other reason a reachable owner cannot serve the live chat: its build
-  // is older than this epic's store. Same source `ChatRowButton`'s lock reads,
-  // so the row never promises a published copy the click will not open.
-  const ownerRefusesStore = useHostRefusesEpicStore(ownerHostId, epicId);
-  // `ownerUserId` is declared ABOVE, beside the record-head read that keys on
-  // it - see the content-clock block. Main declared it here; our branch needed
-  // it earlier, so this is the same binding, not a dropped one.
-  const openRef = useCallback(
-    () =>
-      openableType === "chat"
-        ? makeChatOpenTileRef({
-            taskId: epicId,
-            chatId: nodeId,
-            ownerHostId,
-            ownerUserId,
-            ownerIsUnreachable: ownerReachability.status === "unreachable",
-            ownerRefusesStore,
-            name: nodeName,
-            sessionHostId: readingHostId,
-          })
-        : {
-            id: nodeId,
-            instanceId: uuidv4(),
-            type: openableType ?? "terminal-agent",
-            name: nodeName,
-            hostId: openHostId,
-          },
-    [
-      openableType,
-      ownerHostId,
-      ownerUserId,
-      ownerReachability.status,
-      ownerRefusesStore,
-      epicId,
-      nodeId,
-      nodeName,
-      readingHostId,
-      openHostId,
-    ],
-  );
+  const openRef = useChatRowOpenRef({
+    epicId,
+    nodeId,
+    nodeName,
+    openableType,
+    ownerHostId,
+    ownerUserId,
+    sessionHostId,
+  });
 
   const selectChatNode = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -2550,32 +2506,6 @@ function SidebarRowCheckbox(props: {
 }
 
 /**
- * Fixed-size slot the leading icon renders into, so every row's text column
- * starts at the same x regardless of which variant (chat glyph, harness brand
- * + terminal subscript, spinner, bot) fills it. Sized to the widest variant -
- * `SidebarAgentHarnessIcon`, whose subscript overhangs the 14px brand mark.
- *
- * The slot is only a WIDTH reservation: it carries no vertical alignment of
- * its own. Centering across the two-line card is the outer row's job
- * (`items-center`), which is why the slot must not grow to the card's height.
- */
-function ChatRowLeadingIconSlot(props: { readonly children: ReactNode }) {
-  return (
-    // NOT `aria-hidden`. This slot was hidden while a trailing status chip
-    // existed, because the two announced the same state and a read-only row
-    // said "Read-only agent" twice. The row now carries no trailing chip, so
-    // this icon is the row's ONLY status surface (`ChatProgressIcon` for chats,
-    // the spinner / rollup for agents) - hiding it would drop running,
-    // approval, failure, and read-only from the a11y tree entirely rather than
-    // de-duplicating them. The status elements inside own their own
-    // `role="status"` and accessible names; nothing here is focusable.
-    <span className="inline-flex h-3.5 w-[1.125rem] shrink-0 items-center">
-      {props.children}
-    </span>
-  );
-}
-
-/**
  * Leading icon for a sidebar row - the row's single status surface now that no
  * trailing chip exists. A COLLAPSED PARENT resolves its hidden descendants'
  * rollup here too: that rollup used to live in the trailing slot, and dropping
@@ -2940,12 +2870,6 @@ interface ChatRowButtonProps {
 }
 
 /**
- * Dimming for an archived row included by the selected visibility mode or by
- * the narrow open/activity/unread exception in the default view.
- */
-const ARCHIVED_ROW_CLASS = "opacity-55";
-
-/**
  * The row button's accessible name. Its explicit `aria-label` replaces the
  * subtree as the name, so every state a glyph inside the row shows visually
  * (archived prefix, offline lock) has to be restated here or a keyboard /
@@ -3178,44 +3102,6 @@ function AgentSessionStateBadge(props: {
   );
 }
 
-/**
- * The row's own class list, lifted out of {@link ChatRowButton} so its five
- * state modifiers stop counting against that component's complexity ceiling.
- * Pure and unchanged - same operands, same order.
- *
- * `min-h-7` is a FLOOR, not a height: the row is a horizontal flex - chevron,
- * leading icon, then the text column - and `items-center` centers the short
- * children against whatever height the column takes. Kept as a floor rather
- * than a fixed height so a row whose title wraps, or which regains a second
- * line, grows instead of clipping.
- */
-function chatRowClassName(state: {
-  readonly isDragging: boolean;
-  readonly showRowControls: boolean;
-  readonly reserveArchiveSlot: boolean;
-  readonly selectionMode: boolean;
-  readonly isArchived: boolean;
-  readonly isActive: boolean;
-  readonly revealRowControls: boolean;
-}): string {
-  return cn(
-    "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 text-left text-ui-sm font-normal transition-colors",
-    "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
-    state.isDragging && "cursor-grabbing opacity-60",
-    nodePadRightClass(
-      state.showRowControls,
-      state.reserveArchiveSlot,
-      state.revealRowControls,
-    ),
-    state.selectionMode && "cursor-pointer",
-    state.isArchived && ARCHIVED_ROW_CLASS,
-    state.isActive
-      ? "bg-accent text-accent-foreground"
-      : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
-    SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
-  );
-}
-
 function ChatRowButton(props: ChatRowButtonProps) {
   const {
     epicId,
@@ -3240,6 +3126,8 @@ function ChatRowButton(props: ChatRowButtonProps) {
   } = props;
   const resourceOwnerKind = resourceOwnerKindForNode(artifactType);
   const roleClaims = useEpicAgentRoleClaims(nodeId);
+  const placement = useColumnOverlayPlacement("row");
+  const popoverSide = placement?.side ?? "right";
   // Read HERE as well as inside the badge, because the row button's explicit
   // `aria-label` replaces its subtree - a state only the badge knows would be
   // visible and unspoken. The same store read, so the two cannot disagree.
@@ -3333,9 +3221,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     },
     [onToggle],
   );
-  const navigatorResourceMetrics = useSettingsStore(
-    (state) => state.navigatorResourceMetrics,
-  );
+  const navigatorResourceMetrics = useNavigatorResourceMetrics();
   const ownerKind = useEpicNodeOwnerKind(nodeId);
 
   const showRowControls = !selectionMode;
@@ -3363,47 +3249,53 @@ function ChatRowButton(props: ChatRowButtonProps) {
           paddingLeft: `${depth * INDENT_PX + BASE_PAD_LEFT}px`,
         }}
       >
-        <NodeChevron
-          hasChildren={hasChildren}
-          expanded={expanded}
-          onToggle={selectionChevronToggle}
-        />
-        <SidebarRowCheckbox
-          inputId={selectionInputId}
-          nodeId={nodeId}
-          nodeName={nodeName}
-          isSelected={isSelected}
-          onToggleSelection={onToggleSelection}
-        />
-        <ChatRowLeadingIconSlot>
-          <ChatRowLeadingIcon
-            epicId={epicId}
-            nodeId={nodeId}
-            ownerHostId={ownerHostId}
-            artifactType={artifactType}
-            hasChildren={hasChildren}
-            expanded={expanded}
-          />
-        </ChatRowLeadingIconSlot>
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="flex min-w-0 items-center gap-1.5">
-            {isArchived ? <ArchivedTitlePrefix /> : null}
-            <span className="min-w-0 flex-1 truncate">{nodeName}</span>
-            <AgentRoleBadgesForOwner
-              ownerKind={resourceOwnerKind}
-              claims={roleClaims}
+        <ChatRowView
+          chevron={
+            <NodeChevron
+              hasChildren={hasChildren}
+              expanded={expanded}
+              onToggle={selectionChevronToggle}
             />
-            {/*
-             * The session state survives selection mode, unlike the owner
-             * metadata below. Bulk-selecting is exactly where a reader decides
-             * what to act on, and "this one is asleep, not stopped" is the
-             * distinction that changes the decision - dropping it here would
-             * hide the fact this change exists to surface, at the one moment
-             * it is being used.
-             */}
-            <AgentSessionStateBadge nodeId={nodeId} isArchived={isArchived} />
-          </span>
-        </span>
+          }
+          selection={
+            <SidebarRowCheckbox
+              inputId={selectionInputId}
+              nodeId={nodeId}
+              nodeName={nodeName}
+              isSelected={isSelected}
+              onToggleSelection={onToggleSelection}
+            />
+          }
+          leadingIcon={
+            <ChatRowLeadingIcon
+              epicId={epicId}
+              nodeId={nodeId}
+              ownerHostId={ownerHostId}
+              artifactType={artifactType}
+              hasChildren={hasChildren}
+              expanded={expanded}
+            />
+          }
+          nodeName={nodeName}
+          isArchived={isArchived}
+          badges={
+            <>
+              <AgentRoleBadgesForOwner
+                ownerKind={resourceOwnerKind}
+                claims={roleClaims}
+              />
+              {/*
+               * The session state survives selection mode, unlike the owner
+               * metadata below. Bulk-selecting is exactly where a reader decides
+               * what to act on, and "this one is asleep, not stopped" is the
+               * distinction that changes the decision - dropping it here would
+               * hide the fact this change exists to surface, at the one moment
+               * it is being used.
+               */}
+              <AgentSessionStateBadge nodeId={nodeId} isArchived={isArchived} />
+            </>
+          }
+        />
       </label>
     );
     // No owner metadata while bulk-selecting, so this reduces to the role
@@ -3421,7 +3313,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         ownerKind={null}
         roleClaims={roleClaims}
         extraContent={null}
-        side="right"
+        side={popoverSide}
       />
     );
   }
@@ -3451,89 +3343,97 @@ function ChatRowButton(props: ChatRowButtonProps) {
       onClick={onClick}
       onDoubleClick={onDoubleClick}
     >
-      <NodeChevron
-        hasChildren={hasChildren}
-        expanded={expanded}
-        onToggle={onToggle}
-      />
-      <ChatRowLeadingIconSlot>
-        <ChatRowLeadingIcon
-          epicId={epicId}
-          nodeId={nodeId}
-          ownerHostId={ownerHostId}
-          artifactType={artifactType}
-          hasChildren={hasChildren}
-          expanded={expanded}
-        />
-      </ChatRowLeadingIconSlot>
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex min-w-0 items-center gap-1.5">
-          {isArchived ? <ArchivedTitlePrefix /> : null}
-          <span className="min-w-0 flex-1 truncate">{nodeName}</span>
-          <AgentSessionStateBadge nodeId={nodeId} isArchived={isArchived} />
-          {showSharedIndicator ? (
-            <LazySidebarTooltipWrapper
-              label={SHARED_WITH_TASK_TOOLTIP}
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Users
-                className="size-3 shrink-0 text-muted-foreground"
-                data-testid={`epic-sidebar-shared-${nodeId}`}
-                aria-hidden
-              />
-            </LazySidebarTooltipWrapper>
-          ) : null}
-          {offlineLock !== null ? (
-            <LazySidebarTooltipWrapper
-              label={offlineRowLockTooltip(offlineLock)}
-              side="right"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Lock
-                className="size-3 shrink-0 text-muted-foreground"
-                data-testid={`epic-sidebar-tree-lock-${nodeId}`}
-                // Decoration: the row button's explicit `aria-label` REPLACES
-                // its subtree as the accessible name, so a label here could
-                // never reach assistive technology - the offline state rides
-                // the row's own name instead (see `chatRowAriaLabel`).
-                aria-hidden
-              />
-            </LazySidebarTooltipWrapper>
-          ) : null}
-          <AgentRoleBadgesForOwner
-            ownerKind={resourceOwnerKind}
-            claims={roleClaims}
+      <ChatRowView
+        chevron={
+          <NodeChevron
+            hasChildren={hasChildren}
+            expanded={expanded}
+            onToggle={onToggle}
           />
-          {resourceOwnerKind === null ||
-          navigatorResourceMetrics.length === 0 ? null : (
-            <OwnerResourceChip
-              epicId={epicId}
-              kind={resourceOwnerKind}
-              ownerId={nodeId}
-              hostId={null}
+        }
+        selection={null}
+        leadingIcon={
+          <ChatRowLeadingIcon
+            epicId={epicId}
+            nodeId={nodeId}
+            ownerHostId={ownerHostId}
+            artifactType={artifactType}
+            hasChildren={hasChildren}
+            expanded={expanded}
+          />
+        }
+        nodeName={nodeName}
+        isArchived={isArchived}
+        badges={
+          <>
+            <AgentSessionStateBadge nodeId={nodeId} isArchived={isArchived} />
+            {showSharedIndicator ? (
+              <LazySidebarTooltipWrapper
+                label={SHARED_WITH_TASK_TOOLTIP}
+                side="top"
+                sideOffset={undefined}
+                align={undefined}
+              >
+                <Users
+                  className="size-3 shrink-0 text-muted-foreground"
+                  data-testid={`epic-sidebar-shared-${nodeId}`}
+                  aria-hidden
+                />
+              </LazySidebarTooltipWrapper>
+            ) : null}
+            {offlineLock !== null ? (
+              <LazySidebarTooltipWrapper
+                label={offlineRowLockTooltip(offlineLock)}
+                side={popoverSide}
+                sideOffset={undefined}
+                align={placement?.align}
+              >
+                <Lock
+                  className="size-3 shrink-0 text-muted-foreground"
+                  data-testid={`epic-sidebar-tree-lock-${nodeId}`}
+                  // Decoration: the row button's explicit `aria-label` REPLACES
+                  // its subtree as the accessible name, so a label here could
+                  // never reach assistive technology - the offline state rides
+                  // the row's own name instead (see `chatRowAriaLabel`).
+                  aria-hidden
+                />
+              </LazySidebarTooltipWrapper>
+            ) : null}
+            <AgentRoleBadgesForOwner
+              ownerKind={resourceOwnerKind}
+              claims={roleClaims}
+            />
+            <NavigatorResourceHotspotChip
+              owner={
+                resourceOwnerKind === null
+                  ? null
+                  : {
+                      epicId,
+                      kind: resourceOwnerKind,
+                      ownerId: nodeId,
+                      hostId: null,
+                    }
+              }
               metrics={navigatorResourceMetrics}
               className={undefined}
             />
-          )}
-          {/* Completes the control SWAP: while the archive button is mounted,
+            {/* Completes the control SWAP: while the archive button is mounted,
               revealing the controls removes the idle-time slot from layout so
               the title can use every pixel before the reserved action strip.
               Scoped to this trailing span only - the leading icon sits outside
               it, so the swap never blanks the row's status glyph. */}
-          <span
-            className={cn(
-              "flex-none",
-              reserveArchiveSlot &&
-                "group-hover/tree-item:hidden group-focus-within/tree-item:hidden group-has-[[data-state=open]]/tree-item:hidden",
-            )}
-          >
-            <ChatRowIdleTime updatedAt={updatedAt} />
-          </span>
-        </span>
-      </span>
+            <span
+              className={cn(
+                "flex-none",
+                reserveArchiveSlot &&
+                  "group-hover/tree-item:hidden group-focus-within/tree-item:hidden group-has-[[data-state=open]]/tree-item:hidden",
+              )}
+            >
+              <ChatRowIdleTime updatedAt={updatedAt} />
+            </span>
+          </>
+        }
+      />
     </button>
   );
   // Same composition the graph nodes use - extracted so the navigator and the
@@ -3553,24 +3453,8 @@ function ChatRowButton(props: ChatRowButtonProps) {
       ownerKind={ownerKind}
       roleClaims={roleClaims}
       extraContent={null}
-      side="right"
+      side={popoverSide}
     />
-  );
-}
-
-/**
- * Keeps the archival state attached to the title rather than competing with
- * timestamps and controls in the trailing metadata cluster.
- */
-function ArchivedTitlePrefix(): ReactNode {
-  return (
-    <span
-      className="inline-flex shrink-0 items-center gap-1 text-muted-foreground"
-      data-testid="chat-row-archived-label"
-    >
-      <span className="font-semibold">Archived</span>
-      <span aria-hidden="true">·</span>
-    </span>
   );
 }
 
@@ -3579,7 +3463,9 @@ function ArchivedTitlePrefix(): ReactNode {
  * (`now` / `10m` / `4h` / `1d` / `1w` / short date). Isolated in its own leaf
  * so the shared 60s clock tick repaints this span rather than the whole row.
  */
-function ChatRowIdleTime(props: { readonly updatedAt: number }): ReactNode {
+export function ChatRowIdleTime(props: {
+  readonly updatedAt: number;
+}): ReactNode {
   const relative = useCompactRelativeTime(props.updatedAt);
   return (
     <span
@@ -3693,24 +3579,26 @@ function NestedChatStatusIcon(props: {
   );
 }
 
-function NestedChatStatusGlyph(props: {
+/**
+ * A status kind's glyph, the shared `StatusGlyph` like the row's own: the
+ * collapsed parent's rollup here, and each row of the strip's live agents
+ * list (D9).
+ */
+export function NestedChatStatusGlyph(props: {
   readonly kind: ChatDescendantStatusKind;
 }): ReactNode {
-  if (props.kind === "background") {
-    return <BackgroundActivityGlyph testId={undefined} />;
-  }
-  if (props.kind === "running") {
-    return (
-      <AgentSpinningDots
-        className={undefined}
-        testId={undefined}
-        variant={undefined}
-      />
-    );
-  }
-  const tone = CHAT_DESCENDANT_STATUS_TONES[props.kind];
-  const Icon = tone.Icon;
-  return <Icon aria-hidden className={cn("size-3.5", tone.className)} />;
+  return (
+    <StatusGlyph
+      status={
+        props.kind === "running" || props.kind === "background"
+          ? props.kind
+          : CHAT_DESCENDANT_STATUS_TONES[props.kind]
+      }
+      className="size-3.5"
+      testId={undefined}
+      label={null}
+    />
+  );
 }
 
 /**

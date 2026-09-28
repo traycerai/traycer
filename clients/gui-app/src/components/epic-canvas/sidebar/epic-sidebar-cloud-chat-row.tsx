@@ -18,6 +18,7 @@ import {
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useChatTreeSurface } from "@/components/epic-canvas/sidebar/chat-tree-surface";
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
   makePublishedChatTileRef,
   publishedChatTileId,
@@ -68,6 +69,7 @@ export function EpicSidebarCloudChatRow(
 ): ReactNode {
   const { chat } = props;
   const title = chat.title ?? "Untitled chat";
+  const placement = useColumnOverlayPlacement("row");
   // The Epic SESSION's host - not `useTabHostId()`, and not the app-wide one.
   // The sidebar is not a tab (it sits outside every `<TabHostProvider>`, so a
   // tab-scoped read throws here - it did), and it is not an app-wide surface
@@ -257,9 +259,9 @@ export function EpicSidebarCloudChatRow(
           {ownerReachable ? null : (
             <LazySidebarTooltipWrapper
               label={lockCopy.tooltip}
-              side="right"
+              side={placement?.side ?? "right"}
               sideOffset={undefined}
-              align={undefined}
+              align={placement?.align}
             >
               <Lock
                 className="size-3 shrink-0 text-muted-foreground"

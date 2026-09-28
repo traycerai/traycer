@@ -591,7 +591,7 @@ function renderTreeInSelectionMode(): HTMLElement {
     <QueryClientProvider client={new QueryClient()}>
       <EpicSessionContext.Provider value={handle}>
         <DndContext>
-          <SidebarBulkSelectionProvider panelId="chats" collapsed={false}>
+          <SidebarBulkSelectionProvider panelId="chats">
             <EnterSelectionMode>
               <ChatTreePanelBody
                 epicId={EPIC_ID}

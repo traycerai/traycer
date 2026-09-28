@@ -4,7 +4,6 @@ import {
   statusBarResourceReading,
   type StatusBarResourceMetricView,
 } from "@/lib/resources/status-bar-resource-reading";
-import type { DesktopAppResourceUsage } from "@/lib/resources/desktop-app-resource-usage";
 import {
   EMPTY_GLOBAL_RESOURCE_PROJECTION,
   type GlobalResourceProjection,
@@ -13,7 +12,7 @@ import type {
   AppResourceUsage,
   HostTreeResourceUsage,
 } from "@/stores/resources/resources-store";
-import type { ResourceMetric } from "@/stores/settings/layout-store";
+import type { ResourceMetric } from "@/lib/layout/layout-values";
 
 const GIB = 1024 * 1024 * 1024;
 
@@ -51,22 +50,6 @@ function projection(
   return { ...EMPTY_GLOBAL_RESOURCE_PROJECTION, ...overrides };
 }
 
-function desktopUsage(
-  overrides: Partial<DesktopAppResourceUsage>,
-): DesktopAppResourceUsage {
-  const group = { cpuPercent: 0, rssBytes: 0, processCount: 0 };
-  return {
-    sampledAt: 1,
-    cpuPercent: 7,
-    rssBytes: 512 * 1024 * 1024,
-    processCount: 5,
-    main: group,
-    renderer: group,
-    other: group,
-    ...overrides,
-  };
-}
-
 const ALL_METRICS: ReadonlyArray<ResourceMetric> = [
   "cpu",
   "memory",
@@ -75,29 +58,17 @@ const ALL_METRICS: ReadonlyArray<ResourceMetric> = [
 ];
 
 function views(input: {
-  readonly scope: "host-tree" | "desktop-app";
   readonly metrics?: ReadonlyArray<ResourceMetric>;
   readonly projection?: GlobalResourceProjection;
   readonly watchedHostId?: string | null;
   readonly hasExplicitPick?: boolean;
-  readonly desktopApp?: DesktopAppResourceUsage | null;
-  /**
-   * Defaults to the BROWSER build, so every case that says nothing about the
-   * bridge is asking about one that is genuinely absent. A desktop build with a
-   * reading still in flight has to opt in, which is the point: the two are
-   * indistinguishable from `desktopApp` alone.
-   */
-  readonly desktopBridgePresent?: boolean;
   readonly globalStreamUnsupported?: boolean;
 }) {
   return statusBarResourceMetricViews({
-    scope: input.scope,
     metrics: input.metrics ?? ALL_METRICS,
     projection: input.projection ?? EMPTY_GLOBAL_RESOURCE_PROJECTION,
     watchedHostId: input.watchedHostId ?? null,
     hasExplicitPick: input.hasExplicitPick ?? false,
-    desktopApp: input.desktopApp ?? null,
-    desktopBridgePresent: input.desktopBridgePresent ?? false,
     globalStreamUnsupported: input.globalStreamUnsupported ?? false,
     hostLabel: "Office Linux",
   });
@@ -123,17 +94,13 @@ function valueOf(
 }
 
 describe("statusBarResourceReading", () => {
-  it("reads the watched host's whole tree in the host-tree scope", () => {
-    const reading = statusBarResourceReading({
-      scope: "host-tree",
-      projection: projection({
+  it("reads the watched host's whole tree", () => {
+    const reading = statusBarResourceReading(
+      projection({
         hostTree: hostTreeSnapshot({}),
         app: appSnapshot({}),
       }),
-      // Present, and deliberately NOT folded in: the two scopes are subjects
-      // the user picks between, not a total plus a component of it.
-      desktopApp: desktopUsage({}),
-    });
+    );
 
     expect(reading.cpuPercent).toBe(12);
     expect(reading.memoryBytes).toBe(GIB);
@@ -142,11 +109,9 @@ describe("statusBarResourceReading", () => {
   });
 
   it("falls back to the host app process when a pre-@1.2 host sends no tree", () => {
-    const reading = statusBarResourceReading({
-      scope: "host-tree",
-      projection: projection({ hostTree: null, app: appSnapshot({}) }),
-      desktopApp: null,
-    });
+    const reading = statusBarResourceReading(
+      projection({ hostTree: null, app: appSnapshot({}) }),
+    );
 
     expect(reading.cpuPercent).toBe(4);
     expect(reading.memoryBytes).toBe(256 * 1024 * 1024);
@@ -156,35 +121,15 @@ describe("statusBarResourceReading", () => {
     expect(reading.ramSharePercent).toBeCloseTo(1.5625, 5);
   });
 
-  it("reads THIS desktop app in the desktop-app scope, whatever the host reports", () => {
-    const reading = statusBarResourceReading({
-      scope: "desktop-app",
-      projection: projection({
-        hostTree: hostTreeSnapshot({}),
-        app: appSnapshot({}),
-      }),
-      desktopApp: desktopUsage({}),
-    });
-
-    expect(reading.cpuPercent).toBe(7);
-    expect(reading.memoryBytes).toBe(512 * 1024 * 1024);
-    expect(reading.processCount).toBe(5);
-    // The watched host's total is the wrong denominator — it may not even be
-    // this machine — so the share is refused rather than approximated.
-    expect(reading.ramSharePercent).toBeNull();
-  });
-
   it("keeps CPU and process count when the host could not read memory", () => {
     // `rssBytes` is nullable from @1.5 on. One missing field must not throw
     // away the two that arrived.
-    const reading = statusBarResourceReading({
-      scope: "host-tree",
-      projection: projection({
+    const reading = statusBarResourceReading(
+      projection({
         hostTree: hostTreeSnapshot({ rssBytes: null }),
         app: appSnapshot({}),
       }),
-      desktopApp: null,
-    });
+    );
 
     expect(reading.cpuPercent).toBe(12);
     expect(reading.processCount).toBe(14);
@@ -193,14 +138,12 @@ describe("statusBarResourceReading", () => {
   });
 
   it("has no share to report when the host never sent a total", () => {
-    const reading = statusBarResourceReading({
-      scope: "host-tree",
-      projection: projection({
+    const reading = statusBarResourceReading(
+      projection({
         hostTree: hostTreeSnapshot({}),
         app: appSnapshot({ hostTotalMemoryBytes: 0 }),
       }),
-      desktopApp: null,
-    });
+    );
 
     expect(reading.ramSharePercent).toBeNull();
   });
@@ -209,7 +152,6 @@ describe("statusBarResourceReading", () => {
 describe("statusBarResourceMetricViews", () => {
   it("renders the stored metrics in the stored order and nothing else", () => {
     const rendered = views({
-      scope: "host-tree",
       metrics: ["memory", "cpu"],
       projection: projection({
         hostTree: hostTreeSnapshot({}),
@@ -225,7 +167,6 @@ describe("statusBarResourceMetricViews", () => {
 
   it("formats process counts and the RAM share", () => {
     const rendered = views({
-      scope: "host-tree",
       projection: projection({
         hostTree: hostTreeSnapshot({}),
         app: appSnapshot({}),
@@ -236,70 +177,8 @@ describe("statusBarResourceMetricViews", () => {
     expect(valueOf(rendered, "ramShare")).toBe("6.3%");
   });
 
-  it("dashes RAM share in the desktop-app scope and says which denominator is missing", () => {
-    const rendered = views({
-      scope: "desktop-app",
-      desktopApp: desktopUsage({}),
-    });
-
-    // `formatCpuPercent`'s own rule: one decimal below 10, whole above.
-    expect(valueOf(rendered, "cpu")).toBe("7.0%");
-    expect(valueOf(rendered, "memory")).toBe("512 MB");
-    expect(valueOf(rendered, "ramShare")).toBeNull();
-    const share = rendered.find((view) => view.metric === "ramShare");
-    expect(share?.unavailableReason).toContain("total-memory reading");
-    // Every other metric has a number, so none of them carries a sentence.
-    expect(
-      rendered
-        .filter((view) => view.metric !== "ramShare")
-        .every((view) => view.unavailableReason === null),
-    ).toBe(true);
-  });
-
-  it("says 'desktop app only' for every metric in a build with no shell bridge", () => {
-    const rendered = views({
-      scope: "desktop-app",
-      desktopApp: null,
-      desktopBridgePresent: false,
-    });
-
-    expect(rendered.every((view) => view.value === null)).toBe(true);
-    for (const view of rendered) {
-      expect(view.unavailableReason).toContain("Desktop app only");
-    }
-    // The scope-level cause outranks RAM share's own limitation: in a browser
-    // build every metric is missing for the same reason, and naming the share's
-    // denominator there would explain the wrong thing.
-    const share = rendered.find((view) => view.metric === "ramShare");
-    expect(share?.unavailableReason).not.toContain("total-memory reading");
-  });
-
-  // The same `null` reading, and the opposite sentence. `useDesktopAppResourceUsage`
-  // answers `null` before its first `getMetrics()` round trip returns and again
-  // whenever one rejects, so the reading cannot tell "no shell" from "not yet" -
-  // only the bridge can, which is why it is threaded in beside the reading.
-  it("waits, rather than denying the shell, when the bridge is there but the sample is not", () => {
-    const rendered = views({
-      scope: "desktop-app",
-      desktopApp: null,
-      desktopBridgePresent: true,
-    });
-
-    expect(rendered.every((view) => view.value === null)).toBe(true);
-    for (const view of rendered) {
-      expect(view.unavailableReason).toBe("Waiting for resource data.");
-      // The sentence reserved for a build that HAS no desktop shell must not
-      // appear in one that does - it is flatly false there, on the surface
-      // whose whole job is telling identical dashes apart.
-      expect(view.unavailableReason).not.toContain("Desktop app only");
-    }
-  });
-
   it("names the host's age when it cannot serve a global stream", () => {
-    const rendered = views({
-      scope: "host-tree",
-      globalStreamUnsupported: true,
-    });
+    const rendered = views({ globalStreamUnsupported: true });
 
     for (const view of rendered) {
       expect(view.value).toBeNull();
@@ -309,7 +188,7 @@ describe("statusBarResourceMetricViews", () => {
   });
 
   it("waits, rather than blaming the host, before the first sample lands", () => {
-    const rendered = views({ scope: "host-tree" });
+    const rendered = views({});
 
     for (const view of rendered) {
       expect(view.value).toBeNull();
@@ -323,7 +202,6 @@ describe("statusBarResourceMetricViews", () => {
     // show. "Waiting for resource data." beside `cpu 12%` names the one cause
     // that is certainly not it.
     const rendered = views({
-      scope: "host-tree",
       projection: projection({
         hostId: "host-b",
         sampledAt: 1,
@@ -350,7 +228,6 @@ describe("statusBarResourceMetricViews", () => {
     // `hostTotalMemoryBytes` is 0 on a host that never reports one, so "in this
     // sample" would promise a next sample that reads no differently.
     const rendered = views({
-      scope: "host-tree",
       projection: projection({
         hostId: "host-b",
         sampledAt: 1,
@@ -378,7 +255,6 @@ describe("statusBarResourceMetricViews · host attribution", () => {
     // fallback per-epic aggregate rides the AMBIENT transport - the active
     // host's numbers, one frame from being drawn for a pick nobody can see.
     const rendered = views({
-      scope: "host-tree",
       projection: liveProjection("host-a"),
       watchedHostId: "host-b",
       hasExplicitPick: true,
@@ -394,7 +270,6 @@ describe("statusBarResourceMetricViews · host attribution", () => {
     // an unattributed projection supplying numbers hid the copy in exactly the
     // state it was written for.
     const rendered = views({
-      scope: "host-tree",
       projection: liveProjection("host-a"),
       watchedHostId: "host-b",
       hasExplicitPick: true,
@@ -408,7 +283,6 @@ describe("statusBarResourceMetricViews · host attribution", () => {
 
   it("reads a projection that names the picked host", () => {
     const rendered = views({
-      scope: "host-tree",
       projection: liveProjection("host-b"),
       watchedHostId: "host-b",
       hasExplicitPick: true,
@@ -423,31 +297,15 @@ describe("statusBarResourceMetricViews · host attribution", () => {
     // projection is every cold start - demanding proof there would blank a
     // working strip on every launch.
     const unattributed = views({
-      scope: "host-tree",
       projection: liveProjection(null),
       watchedHostId: "host-b",
     });
     expect(valueOf(unattributed, "cpu")).toBe("12%");
 
     const foreign = views({
-      scope: "host-tree",
       projection: liveProjection("host-a"),
       watchedHostId: "host-b",
     });
     expect(valueOf(foreign, "cpu")).toBeNull();
-  });
-
-  it("leaves the desktop-app scope alone, since it reads no stream", () => {
-    // The local Electron shell is not the watched host's to attribute.
-    const rendered = views({
-      scope: "desktop-app",
-      projection: liveProjection("host-a"),
-      watchedHostId: "host-b",
-      hasExplicitPick: true,
-      desktopApp: desktopUsage({}),
-    });
-
-    expect(valueOf(rendered, "cpu")).toBe("7.0%");
-    expect(valueOf(rendered, "memory")).toBe("512 MB");
   });
 });

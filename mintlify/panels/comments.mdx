@@ -1,30 +1,95 @@
 ---
 title: "Comments"
-description: "Use Comments to work with artifact comment threads."
+description: "Discuss artifact text in anchored comment threads, and have agents address them."
 ---
 
-<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Add and resolve an anchored artifact comment">
-  <source src="https://assets.traycer.ai/docs/videos/artifact-comments.mp4" type="video/mp4" />
-  Unable to load video.
-</video>
+import { FeatureVideo } from "/snippets/feature-video.jsx";
 
-The **Comments** panel shows comment threads for the active artifact.
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/artifact-comments.mp4" label="Add and resolve an anchored artifact comment" />
 
-It is contextual: if there is no active artifact with comments available, the panel does not need to take space.
+Comments are threads anchored to text in an artifact. Use them for questions, review notes, decisions, and follow-ups that belong to a specific passage. Everyone with access to the Task can comment, including Viewers.
 
-## Comment Threads
+## The Comments Panel
 
-Comments are anchored to artifact text. Use them for questions, review notes, decisions, and follow-ups that belong to a specific artifact.
+The **Comments** panel lists the threads on the active artifact.
 
-Typical flow:
+- Its icon appears in the sidebar rail once you start or open a thread, and stays while an artifact is active.
+- To keep it on the rail, right-click the rail and check **Comments**. While it is shown this way without an open artifact, the menu notes "Needs an open artifact".
+- Close it with **Close comments** in its header.
+
+Threads are listed in the order their text appears in the artifact. Switch between the **Open**, **Resolved**, and **All** tabs to filter them. Click a thread to expand it and scroll the artifact to its text.
+
+## Start a Thread
 
 1. Select text in an artifact.
-2. Add a comment.
-3. Continue the thread.
-4. Resolve the thread when the discussion is done.
+2. Click **Comment** in the toolbar, or press ⌘⌥M / Ctrl+Alt+M.
+3. Write your comment in the "Start a thread…" box.
+4. Click **Comment**, or press ⌘Enter / Ctrl+Enter.
 
-Resolved threads leave the **Open** list. Switch to **Resolved** to find them again.
+Press Esc to cancel. If you've typed something, Traycer asks before discarding it.
 
-## Where Comments Appear
+## Work in a Thread
 
-Comments are part of artifact collaboration. They belong with specs, tickets, stories, and reviews rather than with plain terminals or file browsing.
+Each thread shows the quoted text and the number of comments. When you expand it:
+
+- **Reply** adds a comment. ⌘Enter / Ctrl+Enter sends it.
+- **Resolve** closes the thread and moves it to the **Resolved** tab. **Reopen** brings it back.
+- **Delete thread** (the trash button) removes the whole thread.
+- Your own comments have a **⋯** menu with **Edit** and **Delete**. Edited comments show "(edited)".
+
+Type **@** to mention a collaborator. They get a notification that you mentioned them.
+
+A thread shows **Anchor missing** when the text it was attached to is gone from the artifact. The thread and its comments are kept.
+
+## Who Can Do What
+
+| Action                                   | Who                                               |
+| ---------------------------------------- | ------------------------------------------------- |
+| Start threads, reply, and mention people | Everyone with access, including Viewers           |
+| Edit or delete a comment                 | The comment's author                              |
+| Resolve, reopen, or delete a thread      | The person who started it, and Editors and Owners |
+
+See [Roles](/panels/sharing#roles) for the full list.
+
+## Comments and Agents
+
+Agents can work through your comments. On hosts where you're an Editor or Owner, every thread is copied to a file beside its artifact:
+
+```text
+<artifact-folder>/.comments/<thread-id>.md
+```
+
+The folder is hidden, so plain file listings skip it. Each file holds the thread's status, author, the quoted text, and every comment:
+
+```markdown
+---
+thread: 0f6c1b2e-8a44-4d19-9c3e-5b7a0d21f8ac
+status: open
+author: "alice"
+created: 2026-08-14T10:15:00.000Z
+anchor: present
+---
+
+<quoted_section>
+the artifact text this thread is attached to
+</quoted_section>
+
+<comment id="9a1f0c73-2d64-4a58-b0e7-6c1d95f2ab34" author="alice" created_at="2026-08-14T10:15:00.000Z">
+Shouldn't this handle the offline case?
+</comment>
+```
+
+The `status:` line is the only part that can be changed. Setting it to `resolved` resolves the thread in the app, and `open` reopens it. Any other edit to the file is undone, so an agent can't reply to a thread this way.
+
+To have an agent address feedback, ask it directly. For example:
+
+```text
+Address the open comments on the tech plan. Update the plan, and resolve each thread you've handled.
+```
+
+The artifact's `comments:` frontmatter line gives a quick count, such as `comments: 2 open, 1 resolved`. See [Artifacts on Disk](/panels/artifacts#artifacts-on-disk).
+
+## Related
+
+- [Editing artifacts](/panels/artifacts/editing)
+- [Version history and recovery](/panels/artifacts/version-history): restoring an older version can move where comments are anchored.

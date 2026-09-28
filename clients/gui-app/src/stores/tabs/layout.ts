@@ -22,6 +22,8 @@ export interface TabStripItem {
   readonly kind: "tab";
   readonly id: string;
   readonly ref: TabRef;
+  /** Only the transient sample tab carries this; null remembers Home. */
+  readonly sampleReturnItemId?: string | null;
 }
 
 export interface SplitStripItem {
@@ -394,9 +396,11 @@ export function replaceLayoutRef(
   );
 }
 
+/** Home availability only affects the sample tab's captured return selection. */
 export function removeLayoutRef(
   layout: PersistedTabStripLayout,
   ref: TabRef,
+  homeEnabled: boolean,
 ): PersistedTabStripLayout {
   const itemIndex = layout.items.findIndex((item) =>
     flattenStripItemRefs(item).some((entry) => refsEqual(entry, ref)),
@@ -408,11 +412,19 @@ export function removeLayoutRef(
   );
   if (item.kind === "tab") {
     const items = layout.items.filter((_entry, index) => index !== itemIndex);
-    const activeItemId =
+    let activeItemId =
       layout.activeItemId === item.id
         ? (activationHistoryItemId(items, activationHistory) ??
           neighboringItemId(items, itemIndex))
         : layout.activeItemId;
+    if (
+      ref.kind === "sample-workspace" &&
+      layout.activeItemId === item.id &&
+      item.sampleReturnItemId !== undefined &&
+      ((item.sampleReturnItemId === null && homeEnabled) ||
+        items.some((candidate) => candidate.id === item.sampleReturnItemId))
+    )
+      activeItemId = item.sampleReturnItemId;
     return {
       ...layout,
       items,
@@ -597,7 +609,7 @@ export function repairLayout(
       (ref.kind === "settings" && systemTabs.settings === null),
   );
   const withoutMissingSystemRefs = missingSystemRefs.reduce(
-    removeLayoutRef,
+    (current, ref) => removeLayoutRef(current, ref, false),
     withSystemRefs,
   );
   return repairTabGroups({
@@ -648,7 +660,7 @@ function repairStripItem(
       context.usedIds,
     );
     recordRepairedItemId(context, item.id, id);
-    return { kind: "tab", id, ref: item.ref };
+    return { ...item, id };
   }
   const left = repairSplitSide(
     item.left,
@@ -804,6 +816,7 @@ function validRef(ref: TabRef, isKnownTabKind: IsKnownTabKind): boolean {
   // it here is what keeps a persisted or hand-edited payload from materializing
   // one as an ordinary, closable, draggable tab.
   if (ref.kind === "home") return false;
+  if (ref.kind === "sample-workspace") return ref.id === "sample-workspace";
   return true;
 }
 
@@ -874,4 +887,17 @@ function repairSystemTabs(systemTabs: SystemTabs): SystemTabs {
         ? { ...systemTabs.settings, id: "settings", kind: "settings" }
         : null,
   };
+}
+
+/** Ephemeral editor tabs never survive a renderer restart. */
+export function withoutSampleWorkspace(
+  layout: PersistedTabStripLayout,
+  homeEnabled: boolean,
+): PersistedTabStripLayout {
+  const next = removeLayoutRef(
+    layout,
+    { kind: "sample-workspace", id: "sample-workspace" },
+    homeEnabled,
+  );
+  return next === layout ? layout : repairTabGroups(next);
 }

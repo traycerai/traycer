@@ -36,7 +36,7 @@ function SelectionHarness(props: { readonly ids: readonly string[] }) {
 describe("SidebarBulkSelectionProvider", () => {
   it("reconciles selected rows when a shared filter changes", () => {
     const { rerender } = render(
-      <SidebarBulkSelectionProvider panelId="chats" collapsed={false}>
+      <SidebarBulkSelectionProvider panelId="chats">
         <SelectionHarness ids={INITIAL_IDS} />
       </SidebarBulkSelectionProvider>,
     );
@@ -46,7 +46,7 @@ describe("SidebarBulkSelectionProvider", () => {
     expect(screen.getByTestId("selected-ids").textContent).toBe("chat-a");
 
     rerender(
-      <SidebarBulkSelectionProvider panelId="chats" collapsed={false}>
+      <SidebarBulkSelectionProvider panelId="chats">
         <SelectionHarness ids={FILTERED_IDS} />
       </SidebarBulkSelectionProvider>,
     );

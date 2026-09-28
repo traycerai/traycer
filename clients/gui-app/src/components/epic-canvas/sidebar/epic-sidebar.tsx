@@ -13,12 +13,24 @@ import {
  */
 import { useDroppable } from "@dnd-kit/core";
 import {
-  getLeftPanelGroupDropId,
+  leftPanelIdForRailRegion,
+  railRegionForLeftPanelId,
+  railStackMembersFor,
+  visibleRailPanelIds,
+  type RailEntry,
+} from "@/lib/layout/rail";
+import {
+  getLeftPanelBodyDropId,
   getPaneScopedDndId,
   getSidebarReparentPanelDropId,
-  type EpicCanvasDropPreview,
+  LEFT_PANEL_RAIL_ITEM_DND_TYPE,
+  railDragCarry,
   type EpicCanvasDropTargetData,
 } from "@/components/epic-canvas/dnd/dnd";
+import {
+  railStackJoin,
+  type RailStackJoin,
+} from "@/lib/layout/layout-arrangement";
 import {
   useEpicDndStore,
   useSidebarReparentRootActive,
@@ -26,7 +38,7 @@ import {
 import {
   isLeftPanelVisible,
   LEFT_PANEL_DEFINITIONS,
-  resolveActiveVisibleGroupIndex,
+  resolveDisplayedPanelId,
   retainDisplayedPrPanel,
   type LeftPanelAvailabilityContext,
   type LeftPanelMetadataDefinition,
@@ -69,7 +81,7 @@ import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-ca
 import { type EpicNodeRef } from "@/stores/epics/canvas/types";
 import { getCurrentNestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { EMPTY_CANVAS } from "@/stores/epics/canvas/canvas-state";
-import { PanelGroupSectionHeader } from "@/components/epic-canvas/sidebar/epic-sidebar-header";
+import { LeftPanelSectionHeader } from "@/components/epic-canvas/sidebar/epic-sidebar-header";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
 import { EpicSidebarMessageHits } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits";
 import {
@@ -97,7 +109,6 @@ import { CommentsPanelSkeleton } from "@/components/epic-canvas/skeletons/commen
 import { FileTreePanelSkeleton } from "@/components/epic-canvas/skeletons/file-tree-panel-skeleton";
 import { TerminalsPanelSkeleton } from "@/components/epic-canvas/skeletons/terminals-panel-skeleton";
 import { CommentSidebarPanel } from "@/components/comments";
-import { DropLine } from "@/components/ui/drop-line";
 import { Sidebar } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -106,14 +117,14 @@ import {
   useAcknowledgedRootCreatePending,
   useCommentsPanelRevealed,
   useEpicLeftPanelStore,
-  useLeftPanelGroups,
-  useLeftPanelSectionCollapsed,
   useLocalRootCreatePending,
-  usePanelVisibilityOverrides,
-  type LeftPanelGroup,
-  type LeftPanelId,
   type RootCreatePanelId,
 } from "@/stores/epics/left-panel-store";
+import { type LeftPanelId } from "@/lib/left-panel-ids";
+import {
+  useLayoutRail,
+  usePanelVisibilityOverrides,
+} from "@/lib/layout/rail-view";
 import {
   selectPrScopeHasItems,
   usePrPresenceStore,
@@ -250,6 +261,7 @@ import {
   BrowsersPanelActions,
   BrowsersPanelBody,
 } from "@/components/epic-canvas/sidebar/epic-browser-sidebar";
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 const CHATS_PANEL_SKELETON = <ChatsPanelSkeleton />;
 const ARTIFACTS_PANEL_SKELETON = <ArtifactsPanelSkeleton />;
@@ -470,12 +482,10 @@ function useFileTreeRevealRouting(args: {
 export interface EpicLeftPanelHostProps {
   epicId: string;
   tabId: string;
-  side: "left" | "right" | undefined;
 }
 
 export type LeftPanelBodyProps = LeftPanelSlotProps;
 export interface LeftPanelHeaderSlotProps extends LeftPanelSlotProps {
-  readonly collapsed: boolean;
   readonly mode: "normal" | "search" | "selection";
 }
 
@@ -612,49 +622,59 @@ function getLeftPanelDefinition(
   return definition;
 }
 
-function getVisiblePanelGroupDefinitions(
-  group: LeftPanelGroup,
-  context: LeftPanelAvailabilityContext,
-  definitionsById: ReadonlyMap<LeftPanelId, LeftPanelDefinition>,
-): ReadonlyArray<LeftPanelDefinition> {
-  return group.panelIds.flatMap((panelId) => {
-    const definition = getLeftPanelDefinition(definitionsById, panelId);
-    return isLeftPanelVisible(definition, context) ? [definition] : [];
-  });
+/**
+ * What the sidebar body draws: the active panel, and the panels drawn with it.
+ *
+ * One panel where it stands alone in the rail, and every member where the rail
+ * stacks it (L-166, L-181) - top to bottom, sharing the column. Which member
+ * is ACTIVE still decides the highlight, the focus and what
+ * `data-left-panel-id` says; all are drawn either way.
+ *
+ * Resolved through the same helpers the rail draws with, so an active panel
+ * the user has hidden leaves the two agreeing, and a hidden member leaves the
+ * body exactly as it leaves the rail's stack icon.
+ */
+interface DisplayedPanels {
+  readonly active: LeftPanelDefinition;
+  readonly panels: ReadonlyArray<LeftPanelDefinition>;
 }
 
-function getActivePanelDefinitions(
-  groups: ReadonlyArray<LeftPanelGroup>,
+function getDisplayedPanels(
+  rail: ReadonlyArray<RailEntry>,
   activePanelId: LeftPanelId,
   context: LeftPanelAvailabilityContext,
   definitionsById: ReadonlyMap<LeftPanelId, LeftPanelDefinition>,
-): ReadonlyArray<LeftPanelDefinition> {
-  const visibleGroups = groups.flatMap((group) => {
-    const definitions = getVisiblePanelGroupDefinitions(
-      group,
+): DisplayedPanels {
+  const isVisiblePanel = (panelId: LeftPanelId): boolean =>
+    isLeftPanelVisible(
+      getLeftPanelDefinition(definitionsById, panelId),
       context,
-      definitionsById,
     );
-    return definitions.length === 0 ? [] : [definitions];
-  });
-  // Shared with the rail so the highlighted icon and the rendered body agree
-  // even when the active panel is hidden.
-  const activeIndex = resolveActiveVisibleGroupIndex(
-    visibleGroups.map((definitions) =>
-      definitions.map((definition) => definition.id),
-    ),
+  const displayed = resolveDisplayedPanelId(
+    visibleRailPanelIds(rail, isVisiblePanel),
     activePanelId,
   );
-  if (activeIndex === null) {
-    return [getLeftPanelDefinition(definitionsById, DEFAULT_LEFT_PANEL_ID)];
-  }
-  return visibleGroups[activeIndex];
+  const activeId = displayed ?? DEFAULT_LEFT_PANEL_ID;
+  const members = railStackMembersFor(
+    rail,
+    railRegionForLeftPanelId(activeId),
+    (regionId) => isVisiblePanel(leftPanelIdForRailRegion(regionId)),
+  );
+  return {
+    active: getLeftPanelDefinition(definitionsById, activeId),
+    panels: members.map((regionId) =>
+      getLeftPanelDefinition(
+        definitionsById,
+        leftPanelIdForRailRegion(regionId),
+      ),
+    ),
+  };
 }
 
 export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
-  const { epicId, tabId, side } = props;
+  const { epicId, tabId } = props;
   const activePanelId = useActiveLeftPanelId(tabId);
-  const panelGroups = useLeftPanelGroups();
+  const rail = useLayoutRail();
   const commentsPanelRevealed = useCommentsPanelRevealed(tabId);
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const activeArtifact = useEpicArtifact(activeArtifactId);
@@ -672,14 +692,14 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const visibilityOverrideById = usePanelVisibilityOverrides();
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
     () =>
-      retainDisplayedPrPanel(panelGroups, activePanelId, {
+      retainDisplayedPrPanel(rail, activePanelId, {
         commentsPanelRevealed,
         hasActiveCommentableArtifact,
         hasPullRequests,
         visibilityOverrideById,
       }),
     [
-      panelGroups,
+      rail,
       activePanelId,
       commentsPanelRevealed,
       hasActiveCommentableArtifact,
@@ -687,43 +707,48 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
       visibilityOverrideById,
     ],
   );
-  const panels = useMemo(
+  const displayed = useMemo(
     () =>
-      getActivePanelDefinitions(
-        panelGroups,
+      getDisplayedPanels(
+        rail,
         activePanelId,
         availabilityContext,
         EPIC_LEFT_PANEL_DEFINITIONS_BY_ID,
       ),
-    [activePanelId, availabilityContext, panelGroups],
+    [activePanelId, availabilityContext, rail],
   );
-  const primaryPanel = panels[0];
 
   return (
     <Sidebar
-      side={side ?? "left"}
       collapsible="none"
       className="w-full"
+      // The panel body is non-editable chrome and dims while a layout session
+      // is live (4.2). The rail beside it is a sibling, not a descendant, so
+      // its per-panel regions are untouched by this.
+      data-layout-passive
       data-testid="epic-sidebar"
       data-epic-id={epicId}
-      data-left-panel-id={primaryPanel.id}
-      data-left-panel-group-size={panels.length}
+      data-left-panel-id={displayed.active.id}
     >
       <ArtifactReadLifecycleBridge epicId={epicId} tabId={tabId} />
       {/* A5a: the sidebar renders GitHub and markdown links (PR rows, comment
           bodies) OUTSIDE `renderTile`, so without this they would have no
           in-app destination and every one of them would open externally. */}
       <LinkTargetProvider epicId={epicId} viewTabId={tabId}>
-        <PanelGroupBody epicId={epicId} tabId={tabId} panels={panels} />
+        <LeftPanelBody
+          epicId={epicId}
+          tabId={tabId}
+          panels={displayed.panels}
+        />
       </LinkTargetProvider>
     </Sidebar>
   );
 }
 
 export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
-  const { epicId, tabId, side } = props;
+  const { epicId, tabId } = props;
   const activePanelId = useActiveLeftPanelId(tabId);
-  const panelGroups = useLeftPanelGroups();
+  const rail = useLayoutRail();
   const commentsPanelRevealed = useCommentsPanelRevealed(tabId);
   // Share the PR resolver; task-agent hosts become available with the session.
   const canvasHostId = useCanvasHostId();
@@ -738,44 +763,42 @@ export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
   const visibilityOverrideById = usePanelVisibilityOverrides();
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
     () =>
-      retainDisplayedPrPanel(panelGroups, activePanelId, {
+      retainDisplayedPrPanel(rail, activePanelId, {
         commentsPanelRevealed,
         hasActiveCommentableArtifact: false,
         hasPullRequests,
         visibilityOverrideById,
       }),
     [
-      panelGroups,
+      rail,
       activePanelId,
       commentsPanelRevealed,
       hasPullRequests,
       visibilityOverrideById,
     ],
   );
-  const panels = useMemo(
+  const displayed = useMemo(
     () =>
-      getActivePanelDefinitions(
-        panelGroups,
+      getDisplayedPanels(
+        rail,
         activePanelId,
         availabilityContext,
         EPIC_LEFT_PANEL_LOADING_DEFINITIONS_BY_ID,
       ),
-    [activePanelId, availabilityContext, panelGroups],
+    [activePanelId, availabilityContext, rail],
   );
-  const primaryPanel = panels[0];
 
   return (
     <Sidebar
-      side={side ?? "left"}
       collapsible="none"
       className="w-full"
+      data-layout-passive
       data-testid="epic-sidebar"
       data-epic-id={epicId}
-      data-left-panel-id={primaryPanel.id}
-      data-left-panel-group-size={panels.length}
+      data-left-panel-id={displayed.active.id}
       data-session-ready="false"
     >
-      <PanelGroupBody epicId={epicId} tabId={tabId} panels={panels} />
+      <LeftPanelBody epicId={epicId} tabId={tabId} panels={displayed.panels} />
     </Sidebar>
   );
 }
@@ -790,239 +813,216 @@ function PanelBodyDropRegion(props: { readonly children: ReactNode }) {
   );
 }
 
-type PanelSectionBoundaryEdge = "top" | "bottom";
-
-function PanelSectionBoundaryLine(props: {
-  readonly edge: PanelSectionBoundaryEdge;
-}) {
-  return (
-    <div
-      aria-hidden
-      data-edge={props.edge}
-      className={cn(
-        "pointer-events-none absolute left-7 right-7 z-20",
-        props.edge === "top" ? "top-0" : "bottom-0",
-      )}
-    >
-      <DropLine
-        orientation="horizontal"
-        glow
-        className="w-full"
-        testId="epic-left-panel-section-drop-preview"
-      />
-    </div>
-  );
-}
-
-function getSectionBoundaryEdge(
-  panelId: LeftPanelId,
-  dropPreview: EpicCanvasDropPreview,
-): PanelSectionBoundaryEdge | null {
-  if (dropPreview?.kind !== "left-panel-section") return null;
-  if (dropPreview.panelId !== panelId) return null;
-  return dropPreview.position === "before" ? "top" : "bottom";
-}
-
-function PanelGroupBody(props: {
+/**
+ * The sidebar body: the panels the rail says are drawn, and the drop target
+ * around them.
+ *
+ * One section where the displayed panel stands alone, and one per member,
+ * with a resize handle between each two, where the rail stacks it (L-166,
+ * L-181).
+ *
+ * The whole body is ONE drop target, and it means INTO this stack (L-182):
+ * dropping a rail icon anywhere on the open panel joins the stack exactly as
+ * a drop on the middle of its rail icon does. So the droppable names the
+ * stack's top panel, the icon that stands for it, and the preview and commit
+ * are the rail's own. The frame draws the same answer the icon does - the
+ * join, or the refusal for a stack that would pass the cap - and a drop that
+ * would do nothing (a member onto its own stack) draws nothing.
+ */
+export function LeftPanelBody(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly panels: ReadonlyArray<LeftPanelDefinition>;
 }) {
-  return (
-    <GroupedPanelBody
-      epicId={props.epicId}
-      tabId={props.tabId}
-      panels={
-        props.panels.length === 0
-          ? [
-              getLeftPanelDefinition(
-                EPIC_LEFT_PANEL_DEFINITIONS_BY_ID,
-                DEFAULT_LEFT_PANEL_ID,
-              ),
-            ]
-          : props.panels
-      }
-    />
+  const { epicId, tabId, panels } = props;
+  const top = panels[0].id;
+  const bodyDropData = useMemo<EpicCanvasDropTargetData>(
+    () => ({
+      kind: "left-panel-body",
+      viewTabId: tabId,
+      panelId: top,
+    }),
+    [top, tabId],
   );
-}
-
-interface PanelSectionRun {
-  readonly type: "collapsed" | "expanded";
-  readonly panels: ReadonlyArray<LeftPanelDefinition>;
-}
-
-function bucketPanelSectionRuns(
-  panels: ReadonlyArray<LeftPanelDefinition>,
-  collapsedById: Readonly<Partial<Record<LeftPanelId, boolean>>>,
-): ReadonlyArray<PanelSectionRun> {
-  return panels.reduce<PanelSectionRun[]>((runs, panel) => {
-    const type: PanelSectionRun["type"] = collapsedById[panel.id]
-      ? "collapsed"
-      : "expanded";
-    const last = runs.at(-1);
-    if (last !== undefined && last.type === type) {
-      return [...runs.slice(0, -1), { type, panels: [...last.panels, panel] }];
-    }
-    return [...runs, { type, panels: [panel] }];
-  }, []);
-}
-
-function GroupedPanelBody(props: {
-  readonly epicId: string;
-  readonly tabId: string;
-  readonly panels: ReadonlyArray<LeftPanelDefinition>;
-}) {
-  const collapsedById = useEpicLeftPanelStore(
-    (s) => s.panelSectionCollapsedByPanelId,
-  );
-  const panelIds = useMemo(
-    () => props.panels.map((panel) => panel.id),
-    [props.panels],
-  );
-  const sectionRuns = useMemo(
-    () => bucketPanelSectionRuns(props.panels, collapsedById),
-    [props.panels, collapsedById],
-  );
-  const groupDropId = getLeftPanelGroupDropId(
-    props.epicId,
-    panelIds[0] ?? DEFAULT_LEFT_PANEL_ID,
-  );
-  const groupDropData = useMemo<EpicCanvasDropTargetData>(
-    () => ({ kind: "left-panel-group", viewTabId: props.tabId, panelIds }),
-    [panelIds, props.tabId],
-  );
-  const { setNodeRef: groupDropRef } = useDroppable({
-    id: getPaneScopedDndId(props.tabId, groupDropId),
-    data: groupDropData,
+  const { setNodeRef: bodyDropRef } = useDroppable({
+    id: getPaneScopedDndId(tabId, getLeftPanelBodyDropId(epicId, top)),
+    data: bodyDropData,
   });
-  // Narrow selector: only a left-panel-section preview tick re-renders this
-  // group body; canvas strip/body preview ticks never reach it.
-  const sectionDropPreview = useEpicDndStore((s) =>
-    s.dropPreview?.kind === "left-panel-section" &&
-    s.dropPreview.viewTabId === props.tabId &&
-    s.activeSource?.kind === "left-panel-rail-item" &&
-    s.activeSource.viewTabId === props.tabId
-      ? s.dropPreview
-      : null,
-  );
+  const dropCue = useLeftPanelBodyDropCue(tabId, top);
   return (
     <div
-      ref={groupDropRef}
-      data-dnd-droppable-id={getPaneScopedDndId(props.tabId, groupDropId)}
-      className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      ref={bodyDropRef}
+      className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
     >
-      {sectionRuns.map((run, runIndex) => (
-        <PanelSectionRunRenderer
-          key={run.panels.map((panel) => panel.id).join("|")}
-          epicId={props.epicId}
-          tabId={props.tabId}
-          run={run}
-          runIndex={runIndex}
-          dropPreview={sectionDropPreview}
+      {panels.length >= 2 ? (
+        <StackedPanelSections epicId={epicId} tabId={tabId} panels={panels} />
+      ) : (
+        <LeftPanelSection
+          epicId={epicId}
+          tabId={tabId}
+          panel={panels[0]}
+          // A lone panel IS the sidebar body, so it is never collapsible and
+          // a flag left in a record by a pair the user has since taken apart
+          // is inert rather than obeyed (L-157, R5R-01).
+          collapsible={false}
+          collapsed={false}
         />
-      ))}
+      )}
+      {dropCue === null ? null : (
+        <div
+          aria-hidden
+          data-body-drop-cue={dropCue}
+          className={cn(
+            "pointer-events-none absolute inset-0 z-20 ring-2 ring-inset",
+            dropCue === "join"
+              ? "bg-primary/5 ring-primary"
+              : "bg-destructive/5 ring-destructive",
+          )}
+        />
+      )}
     </div>
   );
 }
 
 /**
- * Synthetic group id for the section run's resize handles; the commit
- * callback maps fractions straight back to panel weights, so the id is only
- * surfaced on the handle's `data-resize-group-id` for tests.
+ * What a drop on this body would do right now, from the same answer the rail
+ * draws on the stack's icon (L-182): the preview is the stack's middle-band
+ * join, so `railStackJoin` decides between the join cue and the refusal.
+ * Re-renders only when a rail drag in this tab aims at this stack.
  */
-const SECTION_RUN_GROUP_ID = "epic-left-panel-sections";
+function useLeftPanelBodyDropCue(
+  tabId: string,
+  top: LeftPanelId,
+): Exclude<RailStackJoin, "same"> | null {
+  const rail = useLayoutRail();
+  const source = useEpicDndStore((s) =>
+    s.dropPreview?.kind === "left-panel-rail" &&
+    s.dropPreview.position === "combine" &&
+    s.dropPreview.panelId === top &&
+    s.dropPreview.viewTabId === tabId &&
+    s.activeSource?.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE &&
+    s.activeSource.viewTabId === tabId
+      ? s.activeSource
+      : null,
+  );
+  if (source === null) return null;
+  const join = railStackJoin(rail, source.panelId, top, railDragCarry(source));
+  return join === "same" ? null : join;
+}
+
+/**
+ * The split a stack draws in the body: one section per member and a handle
+ * between each two, on the weights the user last dragged them to (L-166,
+ * L-181).
+ *
+ * The stored weights are an arbitrary-sum unit - the shape the shipped build
+ * wrote, kept so an upgrading user's split comes back - and the resize engine
+ * works on fractions, so they are normalised live: a handle drag mutates DOM
+ * only, then commits fractions which map back to weights preserving the
+ * stack's current weight sum.
+ *
+ * A COLLAPSED section hands its space to the open members rather than leaving
+ * a gap: it goes `flex-none` at its header height, and the handles and
+ * weights are the open members' alone. That is what makes a per-section collapse
+ * safe here and unsafe on a lone panel - a lone panel has no other member to
+ * hand its space to, which is the empty column R5R-01 found.
+ */
+const SECTION_SPLIT_GROUP_ID = "epic-left-panel-sections";
 /** Old `minSize="2rem"` floor, now enforced by the custom handle. */
 const SECTION_MIN_PX = 32;
 
-function PanelSectionRunRenderer(props: {
-  readonly epicId: string;
-  readonly tabId: string;
-  readonly run: PanelSectionRun;
-  readonly runIndex: number;
-  readonly dropPreview: EpicCanvasDropPreview;
-}) {
-  const { epicId, tabId, run, dropPreview } = props;
-  const isResizable = run.type === "expanded" && run.panels.length >= 2;
-
-  if (!isResizable) {
-    return (
-      <>
-        {run.panels.map((panel) => (
-          <PanelGroupSection
-            key={panel.id}
-            epicId={epicId}
-            tabId={tabId}
-            panel={panel}
-            boundaryEdge={getSectionBoundaryEdge(panel.id, dropPreview)}
-          />
-        ))}
-      </>
-    );
-  }
-  return (
-    <ResizableSectionRun
-      epicId={epicId}
-      tabId={tabId}
-      panels={run.panels}
-      dropPreview={dropPreview}
-    />
-  );
-}
-
-function ResizableSectionRun(props: {
+function StackedPanelSections(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly panels: ReadonlyArray<LeftPanelDefinition>;
-  readonly dropPreview: EpicCanvasDropPreview;
 }) {
-  const { epicId, tabId, panels, dropPreview } = props;
+  const { epicId, tabId, panels } = props;
   const setPanelSectionWeights = useEpicLeftPanelStore(
     (s) => s.setPanelSectionWeights,
   );
   const weightsByPanelId = useEpicLeftPanelStore(
     (s) => s.panelSectionWeightsByPanelId,
   );
-
-  // Stored weights are an arbitrary-sum unit (legacy percent-ish numbers);
-  // the resize engine works on fractions. Normalize live - a handle drag
-  // mutates DOM only, then commits fractions which map back to weights
-  // preserving the run's current weight sum.
-  const { fractions, referenceSum } = useMemo(() => {
-    const fallback = 100 / panels.length;
-    const weights = panels.map((panel) => {
+  const collapsedById = useEpicLeftPanelStore(
+    (s) => s.panelSectionCollapsedByPanelId,
+  );
+  // At least one member is open, whatever the flags say (L-170, L-181). The
+  // flags are per panel and outlive the stack: unstacking or hiding the one
+  // member that was open leaves a stack of members that were all collapsed,
+  // and drawing that as title rows over an empty column is the state the
+  // last-open rule exists to rule out. The top member opens in that case; its
+  // flag is left alone, so the rule costs nothing once another member opens.
+  const { collapsedFlags, expanded, fractions, referenceSum } = useMemo(() => {
+    const allCollapsed = panels.every(
+      (panel) => collapsedById[panel.id] === true,
+    );
+    const flags = panels.map(
+      (panel, index) =>
+        collapsedById[panel.id] === true && !(allCollapsed && index === 0),
+    );
+    const open = panels.filter((_panel, index) => !flags[index]);
+    const fallback = 100 / open.length;
+    const weights = open.map((panel) => {
       const stored = weightsByPanelId[panel.id];
       if (stored === undefined || stored <= 0) return fallback;
       return stored;
     });
     const sum = weights.reduce((acc, weight) => acc + weight, 0);
     return {
+      collapsedFlags: flags,
+      expanded: open,
       fractions: weights.map((weight) => weight / sum),
       referenceSum: sum,
     };
-  }, [panels, weightsByPanelId]);
-
+  }, [panels, collapsedById, weightsByPanelId]);
   const handleCommitSizes = useCallback(
     (_groupId: string, sizes: ReadonlyArray<number>) => {
       setPanelSectionWeights(
-        panels.map((panel, panelIndex) => ({
+        expanded.map((panel, panelIndex) => ({
           panelId: panel.id,
           weight: (sizes[panelIndex] ?? 0) * referenceSum,
         })),
       );
     },
-    [panels, referenceSum, setPanelSectionWeights],
+    [expanded, referenceSum, setPanelSectionWeights],
   );
-
+  // Whether this member may be collapsed: never the last expanded one of the
+  // stack (L-170, L-181). A member that is collapsed keeps its control,
+  // because that control is its Expand.
+  const collapsibleFor = (collapsed: boolean): boolean =>
+    collapsed || expanded.length > 1;
+  // The open members split the column on their stored weights with a handle
+  // between each two; a collapsed member is its header alone, drawn inside
+  // the split child of the open member above it (or ahead of the split when
+  // it is above them all), so every handle sits between two split children
+  // and resizes only open members.
+  const leading: ReactNode[] = [];
+  const groups: { panel: LeftPanelDefinition; trailing: ReactNode[] }[] = [];
+  panels.forEach((panel, index) => {
+    const collapsed = collapsedFlags[index];
+    const section = (
+      <LeftPanelSection
+        key={panel.id}
+        epicId={epicId}
+        tabId={tabId}
+        panel={panel}
+        collapsible={collapsibleFor(collapsed)}
+        collapsed={collapsed}
+      />
+    );
+    if (!collapsed) groups.push({ panel, trailing: [section] });
+    else if (groups.length === 0) leading.push(section);
+    else groups[groups.length - 1].trailing.push(section);
+  });
   return (
-    // The run wrapper carries the boundary border its inner sections cannot:
-    // each is an only child, so their own `last:border-b-0` always wins.
-    <div className="flex min-h-0 flex-1 flex-col border-b border-border/60 last:border-b-0">
-      {panels.map((panel, panelIndex) => (
-        <Fragment key={panel.id}>
-          {panelIndex > 0 ? (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {leading}
+      {groups.map((group, groupIndex) => (
+        <Fragment key={group.panel.id}>
+          {groupIndex > 0 ? (
             <SplitResizeHandle
-              groupId={SECTION_RUN_GROUP_ID}
-              index={panelIndex - 1}
+              groupId={SECTION_SPLIT_GROUP_ID}
+              index={groupIndex - 1}
               direction="vertical"
               sizes={fractions}
               minChildPx={SECTION_MIN_PX}
@@ -1034,19 +1034,12 @@ function ResizableSectionRun(props: {
             data-split-child
             className="relative min-h-0 min-w-0"
             style={{
-              flexGrow: fractions[panelIndex],
+              flexGrow: fractions[groupIndex],
               flexBasis: 0,
               flexShrink: 1,
             }}
           >
-            <div className="flex h-full min-h-0 flex-col">
-              <PanelGroupSection
-                epicId={epicId}
-                tabId={tabId}
-                panel={panel}
-                boundaryEdge={getSectionBoundaryEdge(panel.id, dropPreview)}
-              />
-            </div>
+            <div className="flex h-full min-h-0 flex-col">{group.trailing}</div>
           </div>
         </Fragment>
       ))}
@@ -1054,28 +1047,26 @@ function ResizableSectionRun(props: {
   );
 }
 
-function PanelGroupSection(props: {
+function LeftPanelSection(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly panel: LeftPanelDefinition;
-  readonly boundaryEdge: PanelSectionBoundaryEdge | null;
+  /** Whether this section offers a collapse control at all (L-157, L-170). */
+  readonly collapsible: boolean;
+  readonly collapsed: boolean;
 }) {
-  const collapsed = useLeftPanelSectionCollapsed(props.panel.id);
   if (
     isSidebarBulkSelectionPanelId(props.panel.id) &&
     props.panel.Actions !== null
   ) {
     return (
-      <SidebarBulkSelectionProvider
-        panelId={props.panel.id}
-        collapsed={collapsed}
-      >
-        <PanelGroupSectionContent
+      <SidebarBulkSelectionProvider panelId={props.panel.id}>
+        <LeftPanelSectionContent
           epicId={props.epicId}
           tabId={props.tabId}
           panel={props.panel}
-          boundaryEdge={props.boundaryEdge}
-          collapsed={collapsed}
+          collapsible={props.collapsible}
+          collapsed={props.collapsed}
         />
         <SidebarBulkDeleteController
           epicId={props.epicId}
@@ -1085,46 +1076,50 @@ function PanelGroupSection(props: {
     );
   }
   return (
-    <PanelGroupSectionContent
+    <LeftPanelSectionContent
       epicId={props.epicId}
       tabId={props.tabId}
       panel={props.panel}
-      boundaryEdge={props.boundaryEdge}
-      collapsed={collapsed}
+      collapsible={props.collapsible}
+      collapsed={props.collapsed}
     />
   );
 }
 
-function PanelGroupSectionContent(props: {
+function LeftPanelSectionContent(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly panel: LeftPanelDefinition;
-  readonly boundaryEdge: PanelSectionBoundaryEdge | null;
+  readonly collapsible: boolean;
   readonly collapsed: boolean;
 }) {
   const Body = props.panel.Body;
+  // Both facts are decided by the BODY, which is the only thing that can see
+  // the stack: whether this section may be collapsed at all, and whether it
+  // is. A lone panel is never either (L-157), and the last expanded member of
+  // a stack is never collapsible (L-170).
+  const collapsed = props.collapsed;
   return (
     <section
       className={cn(
         "group/panel-section relative flex min-h-0 flex-col border-b border-border/60 last:border-b-0",
-        props.collapsed ? "flex-none" : "flex-1",
+        collapsed ? "flex-none" : "flex-1",
       )}
       data-testid={`epic-left-panel-section-${props.panel.id}`}
       data-left-panel-section-id={props.panel.id}
     >
-      <PanelGroupSectionHeader
+      <LeftPanelSectionHeader
         epicId={props.epicId}
         tabId={props.tabId}
         panel={props.panel}
+        collapsible={props.collapsible}
+        collapsed={collapsed}
       />
-      {props.collapsed ? null : (
+      {collapsed ? null : (
         <PanelBodyDropRegion>
           <Body epicId={props.epicId} tabId={props.tabId} />
         </PanelBodyDropRegion>
       )}
-      {props.boundaryEdge !== null ? (
-        <PanelSectionBoundaryLine edge={props.boundaryEdge} />
-      ) : null}
     </section>
   );
 }
@@ -1876,7 +1871,6 @@ interface TreePanelActionsProps {
   readonly epicId: string;
   readonly tabId: string;
   readonly panelId: RootCreatePanelId;
-  readonly collapsed: boolean;
   readonly addLabel: string;
   readonly menuTestId: string;
   readonly triggerTestId: string;
@@ -2015,9 +2009,6 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const setPanelHeaderMenuOpen = usePanelHeaderMenuStore(
     (state) => state.setMenuOpen,
   );
-  const setPanelSectionCollapsed = useEpicLeftPanelStore(
-    (state) => state.setPanelSectionCollapsed,
-  );
   const addIsPending =
     localRootPending !== null ||
     acknowledgedRootPending !== null ||
@@ -2079,15 +2070,11 @@ function TreePanelActions(props: TreePanelActionsProps) {
     artifactsDisabledTooltip,
   );
 
-  const expandBeforeOpen = useCallback(() => {
-    if (props.collapsed) setPanelSectionCollapsed(props.panelId, false);
-  }, [props.collapsed, props.panelId, setPanelSectionCollapsed]);
   const handleArtifactMenuOpenChange = useCallback(
     (open: boolean) => {
-      if (open) expandBeforeOpen();
       setPanelHeaderMenuOpen(props.tabId, props.panelId, "create", open);
     },
-    [expandBeforeOpen, props.panelId, props.tabId, setPanelHeaderMenuOpen],
+    [props.panelId, props.tabId, setPanelHeaderMenuOpen],
   );
 
   if (props.panelId === "chats") {
@@ -2106,7 +2093,6 @@ function TreePanelActions(props: TreePanelActionsProps) {
         triggerLabel={props.addLabel}
         triggerTestId={props.triggerTestId}
         actionRevealClassName=""
-        onBeforeOpen={expandBeforeOpen}
       />
     );
   }
@@ -2168,7 +2154,6 @@ function ChatsPanelActions(props: LeftPanelHeaderSlotProps) {
           epicId={props.epicId}
           tabId={props.tabId}
           panelId="chats"
-          collapsed={props.collapsed}
           addLabel="Add agent"
           menuTestId="epic-sidebar-add-chat-root-menu"
           triggerTestId="epic-sidebar-add-chat-root"
@@ -2179,14 +2164,12 @@ function ChatsPanelActions(props: LeftPanelHeaderSlotProps) {
       <ChatHeaderMoreMenu
         epicId={props.epicId}
         tabId={props.tabId}
-        collapsed={props.collapsed}
         searching={props.mode === "search"}
         onCollapseAll={collapseAll}
       />
       <ChatFilterMenu
         epicId={props.epicId}
         tabId={props.tabId}
-        collapsed={props.collapsed}
         canArchive={canArchive}
       />
     </div>
@@ -2220,10 +2203,9 @@ function PanelHeaderMoreMenuTrigger(props: {
   );
 }
 
-function useExpandableHeaderMenu(
+function useHeaderMenu(
   tabId: string,
   panelId: LeftPanelId,
-  collapsed: boolean,
 ): {
   readonly open: boolean;
   readonly handleOpenChange: (open: boolean) => void;
@@ -2232,15 +2214,11 @@ function useExpandableHeaderMenu(
   const open = usePanelHeaderMenuOpen(tabId, panelId, "more");
   const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
   const openSearch = usePanelHeaderSearchStore((state) => state.openSearch);
-  const setPanelSectionCollapsed = useEpicLeftPanelStore(
-    (state) => state.setPanelSectionCollapsed,
-  );
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
-      if (nextOpen && collapsed) setPanelSectionCollapsed(panelId, false);
       setMenuOpen(tabId, panelId, "more", nextOpen);
     },
-    [collapsed, panelId, setMenuOpen, setPanelSectionCollapsed, tabId],
+    [panelId, setMenuOpen, tabId],
   );
   // Search swaps the header row for the search row, which remounts this menu.
   // Close it first: its open state lives in the store, so the new instance
@@ -2256,15 +2234,15 @@ function useExpandableHeaderMenu(
 function ChatHeaderMoreMenu(props: {
   readonly epicId: string;
   readonly tabId: string;
-  readonly collapsed: boolean;
   readonly searching: boolean;
   readonly onCollapseAll: () => void;
 }) {
   const selection = useSidebarBulkSelection();
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
-  const menu = useExpandableHeaderMenu(props.tabId, "chats", props.collapsed);
+  const menu = useHeaderMenu(props.tabId, "chats");
   const selectionEnabled = selection.canSelect && connectionStatus !== "closed";
+  const placement = useColumnOverlayPlacement("row");
 
   return (
     <DropdownMenu open={menu.open} onOpenChange={menu.handleOpenChange}>
@@ -2273,8 +2251,8 @@ function ChatHeaderMoreMenu(props: {
         testId="epic-sidebar-more-chats"
       />
       <DropdownMenuContent
-        side="right"
-        align="start"
+        side={placement?.side ?? "right"}
+        align={placement?.align ?? "start"}
         sideOffset={8}
         avoidCollisions={false}
         className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-56"
@@ -2310,17 +2288,13 @@ function ChatHeaderMoreMenu(props: {
 function ArtifactHeaderMoreMenu(props: {
   readonly epicId: string;
   readonly tabId: string;
-  readonly collapsed: boolean;
   readonly searching: boolean;
   readonly onCollapseAll: () => void;
 }) {
   const selection = useSidebarBulkSelection();
   const searchAvailable = useArtifactSearchAvailable();
-  const menu = useExpandableHeaderMenu(
-    props.tabId,
-    "artifacts",
-    props.collapsed,
-  );
+  const menu = useHeaderMenu(props.tabId, "artifacts");
+  const placement = useColumnOverlayPlacement("row");
 
   return (
     <DropdownMenu open={menu.open} onOpenChange={menu.handleOpenChange}>
@@ -2329,8 +2303,8 @@ function ArtifactHeaderMoreMenu(props: {
         testId="epic-sidebar-more-artifacts"
       />
       <DropdownMenuContent
-        side="right"
-        align="start"
+        side={placement?.side ?? "right"}
+        align={placement?.align ?? "start"}
         sideOffset={8}
         avoidCollisions={false}
         className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-52"
@@ -2382,7 +2356,6 @@ function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
           epicId={props.epicId}
           tabId={props.tabId}
           panelId="artifacts"
-          collapsed={props.collapsed}
           addLabel="Add artifact"
           menuTestId="epic-sidebar-add-artifact-root-menu"
           triggerTestId="epic-sidebar-add-artifact-root"
@@ -2393,14 +2366,12 @@ function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
       <ArtifactHeaderMoreMenu
         epicId={props.epicId}
         tabId={props.tabId}
-        collapsed={props.collapsed}
         searching={props.mode === "search"}
         onCollapseAll={collapseAll}
       />
       <ArtifactFilterMenu
         epicId={props.epicId}
         tabId={props.tabId}
-        collapsed={props.collapsed}
         onMarkAllRead={markAllRead}
         markAllReadDisabled={unreadArtifacts.length === 0}
       />
@@ -2460,6 +2431,10 @@ function SidebarSelectedChatArchiveButton(props: {
   );
 }
 function SidebarBulkSelectionActions() {
+  const placement = useColumnOverlayPlacement("row") ?? {
+    side: undefined,
+    align: "end" as const,
+  };
   const selection = useSidebarBulkSelection();
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
@@ -2549,7 +2524,7 @@ function SidebarBulkSelectionActions() {
               )}
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
+          <DropdownMenuContent side={placement.side} align={placement.align}>
             <DropdownMenuItem
               data-testid="epic-sidebar-export-selected-markdown"
               disabled={!canExportSelected || exportArtifacts.isPending}

@@ -177,6 +177,7 @@ describe("ArtifactHeadingMinimap", () => {
         editor={editor}
         refreshRef={refreshRef()}
         scroller={scroller.element}
+        shown
         side="right"
       />,
     );
@@ -196,6 +197,7 @@ describe("ArtifactHeadingMinimap", () => {
         editor={editor}
         refreshRef={refreshRef()}
         scroller={scroller.element}
+        shown
         side="left"
       />,
     );
@@ -228,6 +230,7 @@ describe("ArtifactHeadingMinimap", () => {
         editor={editor}
         refreshRef={refreshRef()}
         scroller={scroller.element}
+        shown
         side="left"
       />,
     );
@@ -251,6 +254,7 @@ describe("ArtifactHeadingMinimap", () => {
         editor={editor}
         refreshRef={refresh}
         scroller={scroller.element}
+        shown
         side="right"
       />,
     );
@@ -278,6 +282,7 @@ describe("ArtifactHeadingMinimap", () => {
         editor={editor}
         refreshRef={refreshRef()}
         scroller={scroller.element}
+        shown
         side="left"
       />,
     );
@@ -307,6 +312,7 @@ describe("ArtifactHeadingMinimap", () => {
         editor={editor}
         refreshRef={refreshRef()}
         scroller={scroller.element}
+        shown
         side="right"
       />,
     );
@@ -332,6 +338,7 @@ describe("ArtifactHeadingMinimap", () => {
         editor={editor}
         refreshRef={refreshRef()}
         scroller={scroller.element}
+        shown
         side="right"
       />,
     );

@@ -126,6 +126,10 @@ import {
   subagentOpenInitializedScopes,
   useSubagentOpenStore,
 } from "@/stores/chats/subagent-open-store";
+import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
+import { LayoutClusterContextMenu } from "@/components/layout-editor/region-quick-verbs";
+import { useArrangementValue, useRegionShown } from "@/lib/layout-overrides";
+import { isThinkingShown } from "@/stores/layout/layout-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { isEpicCanvasTileInstanceLive } from "@/stores/epics/canvas/tile-instance-liveness";
 import { resolveHostedTileOwnership } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
@@ -696,6 +700,7 @@ function activityGroupIdForBlock(
   const timeline = buildChatActivityTimeline(message.segments, {
     turnState: message.completedAt === null ? "active" : "complete",
     promotedToolBlockIds,
+    hideReasoning: !isThinkingShown(),
   });
   for (const item of timeline) {
     if (item.kind !== "activity_group") continue;
@@ -2874,10 +2879,24 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const quoteReplyEnabled = useSettingsStore(
     (state) => state.quoteReplyEnabled,
   );
-  const chatTurnMinimapSide = useSettingsStore(
-    (state) => state.chatTurnMinimapSide,
-  );
+  const minimapSide = useArrangementValue("minimapSide");
   const isMobileViewport = useIsMobileViewport();
+  // This tile's `minimap` region, registered here because this is the
+  // component that draws it. Whether the registration actually reaches the
+  // editor is `useLayoutRegion`'s own pane-visibility gate to decide and not
+  // this file's - while a session is live the sample workspace is the only
+  // visible top-level surface, so every epic surface's
+  // `PaneVisibilityContext` is false and nothing here registers. The ref is
+  // handed to the rail unconditionally: `ChatTurnMinimap` renders nothing
+  // (and so attaches nothing) unless the rail is actually running.
+  const { ref: minimapHotspotRef, ghost: minimapGhost } = useLayoutRegion({
+    regionId: "minimap",
+    instanceId: taskId,
+  });
+  // A hidden minimap materialises in place while the editor points at it
+  // (L-14). It is a pure view over rows the transcript already has, so
+  // drawing one costs nothing the chat was not already paying.
+  const minimapShown = useRegionShown("minimap") || minimapGhost;
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,
     enabled: quoteReplyEnabled && visible && !systemOverlayActive,
@@ -4031,87 +4050,97 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   return (
     <ChatOpenStoreScopeProvider value={instanceId}>
       <ActivityGroupOpenStoreProvider store={activityGroupOpenStore}>
-        <div
-          ref={transcriptContainerRef}
-          data-testid="chat-transcript-container"
-          // Ctrl/Cmd+A selects the transcript, not the whole window (#592).
-          // Marked here rather than on the chat tile's transcript wrapper: that
-          // wrapper also holds the absolutely-positioned lower-surfaces dock
-          // (composer, approvals, todo), which must stay out of the selection.
-          // The timeline is virtualized, so this covers the mounted rows.
-          data-selection-root=""
-          onPointerDown={handleTranscriptPointerDown}
-          className="relative flex-1 overflow-hidden"
-        >
-          <ChatTimeline
-            rows={listRows}
-            onVisibleRowRangeChange={onChatTimelineVisibleRowsChange}
-            taskTitle={taskTitle}
-            backgroundToolBlockIds={backgroundToolBlockIds}
-            getMessageActions={getMessageActions}
-            nextStepActions={nextStepActions}
-            listRef={chatTimelineRef}
-            onScroll={handleScroll}
-            initialScrollAtEnd={initialScrollAtEnd}
-            initialScrollIndex={initialScrollIndexAnchor}
-            contentInsetEndAdjustment={endInset}
-            onFollowIntentChange={onFollowIntentChange}
-            onReaderGesture={handleTimelineReaderGesture}
-            followLatchRef={followLatchRef}
-            isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
-            resolveSuppressedEndLanding={resolveSuppressedEndLanding}
-            navigationHighlightedMessageId={
-              navigationHighlight?.messageId ?? null
-            }
-            navigationHighlightedBlockId={navigationHighlight?.blockId ?? null}
-            rowHeightMemory={rowHeightMemory}
-            onItemSizeChanged={onChatTimelineItemSizeChanged}
-            onRowMount={onChatTimelineRowMount}
-            onListMetricsChange={onListMetricsChange}
-            data-testid="chat-messages-scroll"
-            data-scroll-mode={scrollMode}
-          />
-          {/* The minimap rail is untappable on touch and its hover-expand
-              never fires; hide it below md and reclaim the right edge.
-              `contents` keeps the absolutely-positioned rail's layout
-              identical on desktop (>=768px). The `side` setting is a user
-              preference, not a viewport rule, so it cannot stand in for this. */}
-          {shouldMountChatTurnMinimap({
-            hasContent,
-            side: chatTurnMinimapSide,
-            mobileViewport: isMobileViewport,
-          }) ? (
-            <div className="contents max-md:hidden">
-              <ChatTurnMinimap
-                rows={listRows}
-                transcriptWindow={transcriptWindow}
-                inViewRefreshRef={minimapInViewRefreshRef}
-                listRef={chatTimelineRef}
-                topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
-                viewportRef={transcriptContainerRef}
-                bottomInset={endInset}
-                onSelect={onMinimapItemSelect}
-                side={chatTurnMinimapSide}
+        {/* One menu for the whole transcript, naming the region under the
+            pointer (G3-10): timestamps, activity rows and reasoning blocks
+            repeat on every message, and a root per item was a Radix menu per
+            row of a long chat. The minimap is inside it too (L-144). */}
+        <LayoutClusterContextMenu>
+          <div
+            ref={transcriptContainerRef}
+            data-testid="chat-transcript-container"
+            // Ctrl/Cmd+A selects the transcript, not the whole window (#592).
+            // Marked here rather than on the chat tile's transcript wrapper: that
+            // wrapper also holds the absolutely-positioned lower-surfaces dock
+            // (composer, approvals, todo), which must stay out of the selection.
+            // The timeline is virtualized, so this covers the mounted rows.
+            data-selection-root=""
+            onPointerDown={handleTranscriptPointerDown}
+            className="relative flex-1 overflow-hidden"
+          >
+            <ChatTimeline
+              rows={listRows}
+              onVisibleRowRangeChange={onChatTimelineVisibleRowsChange}
+              taskTitle={taskTitle}
+              backgroundToolBlockIds={backgroundToolBlockIds}
+              getMessageActions={getMessageActions}
+              nextStepActions={nextStepActions}
+              listRef={chatTimelineRef}
+              onScroll={handleScroll}
+              initialScrollAtEnd={initialScrollAtEnd}
+              initialScrollIndex={initialScrollIndexAnchor}
+              contentInsetEndAdjustment={endInset}
+              onFollowIntentChange={onFollowIntentChange}
+              onReaderGesture={handleTimelineReaderGesture}
+              followLatchRef={followLatchRef}
+              isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
+              resolveSuppressedEndLanding={resolveSuppressedEndLanding}
+              navigationHighlightedMessageId={
+                navigationHighlight?.messageId ?? null
+              }
+              navigationHighlightedBlockId={
+                navigationHighlight?.blockId ?? null
+              }
+              rowHeightMemory={rowHeightMemory}
+              onItemSizeChanged={onChatTimelineItemSizeChanged}
+              onRowMount={onChatTimelineRowMount}
+              onListMetricsChange={onListMetricsChange}
+              data-testid="chat-messages-scroll"
+              data-scroll-mode={scrollMode}
+            />
+            {/* The minimap rail is untappable on touch and its hover-expand
+                never fires; hide it below md and reclaim the right edge.
+                `contents` keeps the absolutely-positioned rail's layout
+                identical on desktop (>=768px). The `side` setting is a user
+                preference, not a viewport rule, so it cannot stand in for this. */}
+            {shouldMountChatTurnMinimap({
+              hasContent,
+              shown: minimapShown,
+              mobileViewport: isMobileViewport,
+            }) ? (
+              <div className="contents max-md:hidden">
+                <ChatTurnMinimap
+                  ref={minimapHotspotRef}
+                  rows={listRows}
+                  transcriptWindow={transcriptWindow}
+                  inViewRefreshRef={minimapInViewRefreshRef}
+                  listRef={chatTimelineRef}
+                  topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
+                  viewportRef={transcriptContainerRef}
+                  bottomInset={endInset}
+                  onSelect={onMinimapItemSelect}
+                  shown={minimapShown}
+                  side={minimapSide}
+                />
+              </div>
+            ) : null}
+            {hasContent ? (
+              <ScrollToEndPill
+                state={scrollToEndPillState}
+                onClick={() => scrollToEnd(true)}
+                bottomOffsetPx={endInset + 4}
               />
-            </div>
-          ) : null}
-          {hasContent ? (
-            <ScrollToEndPill
-              state={scrollToEndPillState}
-              onClick={() => scrollToEnd(true)}
-              bottomOffsetPx={endInset + 4}
-            />
-          ) : null}
-          {quoteSelection.snapshot !== null ? (
-            <QuoteSelectionPopover
-              taskId={taskId}
-              snapshot={quoteSelection.snapshot}
-              onDismiss={quoteSelection.dismiss}
-              boundaryRef={transcriptContainerRef}
-              bottomOverlayInsetPx={endInset}
-            />
-          ) : null}
-        </div>
+            ) : null}
+            {quoteSelection.snapshot !== null ? (
+              <QuoteSelectionPopover
+                taskId={taskId}
+                snapshot={quoteSelection.snapshot}
+                onDismiss={quoteSelection.dismiss}
+                boundaryRef={transcriptContainerRef}
+                bottomOverlayInsetPx={endInset}
+              />
+            ) : null}
+          </div>
+        </LayoutClusterContextMenu>
         {hostId !== null && transcriptWindow !== null ? (
           <>
             <ChatFindIndexSource
