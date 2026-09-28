@@ -298,6 +298,16 @@ describe("useHistoryQuery", () => {
     expect(testState.rawRefetch).not.toHaveBeenCalled();
   });
 
+  it("refreshes only the task page for activity reconciliation", () => {
+    render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh tasks" }));
+
+    expect(testState.refetch).toHaveBeenCalledTimes(1);
+    expect(testState.organizationRefresh).not.toHaveBeenCalled();
+    expect(testState.rawRefetch).not.toHaveBeenCalled();
+  });
+
   it("keeps pending host organization state over the confirmed cloud row", () => {
     const cloudTask = taskLightWithOrganization(
       "epic-alpha",
@@ -1236,6 +1246,14 @@ function HistoryQueryHarness(props: {
         }}
       >
         Refresh
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          void result.refetchTasks();
+        }}
+      >
+        Refresh tasks
       </button>
       <div data-testid="pending">{String(result.isPending)}</div>
       <div data-testid="fetching">{String(result.isFetching)}</div>

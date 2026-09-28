@@ -356,6 +356,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     isPending,
     error,
     refetch,
+    refetchTasks,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
@@ -374,7 +375,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     enabled: !hasActiveHistoryFilters(search) && search.sort === "recent",
     refreshEnabled: search.sort === "recent",
     refreshScope: activityRefreshScope,
-    refetch,
+    refetch: refetchTasks,
   });
 
   // The rows' status indicator reads notification state from context, and the

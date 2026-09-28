@@ -73,6 +73,7 @@ function historyResult(
     currentUserId: "user-1",
     activityRefreshScope: "fixture-recent-list",
     refetch: () => Promise.resolve(),
+    refetchTasks: () => Promise.resolve(),
     fetchNextPage: () => undefined,
     hasNextPage: false,
     isFetchingNextPage: false,

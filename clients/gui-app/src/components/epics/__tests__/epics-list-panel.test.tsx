@@ -274,6 +274,7 @@ vi.mock("@/hooks/home/use-history-query", () => ({
     error: null,
     hostId: testState.hostId,
     refetch: testState.refetch,
+    refetchTasks: testState.refetch,
     fetchNextPage: testState.fetchNextPage,
     hasNextPage: false,
     isFetchingNextPage: false,

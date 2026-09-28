@@ -93,6 +93,7 @@ vi.mock("@/hooks/home/use-history-query", () => ({
     isFetching: false,
     error: null,
     refetch: () => Promise.resolve(),
+    refetchTasks: () => Promise.resolve(),
     fetchNextPage: () => undefined,
     hasNextPage: false,
     isFetchingNextPage: false,

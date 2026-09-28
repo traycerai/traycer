@@ -369,6 +369,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     error,
     hostId,
     refetch,
+    refetchTasks,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
@@ -407,7 +408,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       variant !== "picker" && !hasActiveFilters && search.sort === "recent",
     refreshEnabled: search.sort === "recent",
     refreshScope: activityRefreshScope,
-    refetch,
+    refetch: refetchTasks,
   });
   const worktreesByEpicId = view.worktreesByEpicId;
   const indicatorEpicIds = useMemo(

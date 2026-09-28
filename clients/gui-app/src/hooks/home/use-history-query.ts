@@ -87,6 +87,8 @@ export interface UseHistoryQueryResult {
   /** Canonical request identity for scoped activity reconciliation. */
   readonly activityRefreshScope: string;
   refetch: () => Promise<unknown>;
+  /** Refresh only the task page when reconciling a chat activity edge. */
+  refetchTasks: () => Promise<unknown>;
   fetchNextPage: () => void;
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
@@ -464,6 +466,7 @@ export function useHistoryQuery(
     currentUserId,
     activityRefreshScope,
     refetch,
+    refetchTasks: refetchCloudTasks,
     fetchNextPage,
     // Pagination follows the plain cloud query; id-fetched local matches are
     // complete per query (not paginated). Keep the guard so "Show more"
