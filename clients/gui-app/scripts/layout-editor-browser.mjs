@@ -195,6 +195,13 @@
 // stripresize, overlays, readings, hostmenu, activity, placement, groups to run
 // only those while iterating; every selected phase runs even after one fails, and
 // the run fails if any did.
+//
+// Set LAYOUT_EDITOR_BROWSER_SHARD to k/n to run the k-th of n contiguous slices
+// of the phase list, balanced by each phase's measured CI time (see
+// `PHASE_CI_SECONDS`). CI runs the driver as n parallel jobs this way
+// (`run-browser-regressions.ts`); the slices cover every phase exactly once,
+// a phase added later included. It cannot be combined with
+// LAYOUT_EDITOR_BROWSER_PHASES.
 // ---------------------------------------------------------------------------
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -6529,6 +6536,16 @@ function selectedPhases() {
     "groups",
   ];
   const raw = process.env.LAYOUT_EDITOR_BROWSER_PHASES;
+  const rawShard = process.env.LAYOUT_EDITOR_BROWSER_SHARD;
+  const shard = rawShard === undefined ? "" : rawShard.trim();
+  if (shard !== "") {
+    if (raw !== undefined && raw.trim() !== "") {
+      throw new Error(
+        "set LAYOUT_EDITOR_BROWSER_PHASES or LAYOUT_EDITOR_BROWSER_SHARD, not both",
+      );
+    }
+    return phaseShard(all, shard);
+  }
   if (raw === undefined || raw.trim() === "") return new Set(all);
   const picked = raw
     .split(",")
@@ -6542,6 +6559,74 @@ function selectedPhases() {
     }
   }
   return new Set(picked);
+}
+
+/**
+ * Seconds each phase took on the CI runner (Tests run 36491924268,
+ * 2026-09-28), used only to balance LAYOUT_EDITOR_BROWSER_SHARD. A phase
+ * missing here weighs `PHASE_CI_SECONDS_DEFAULT`, so a new phase still lands
+ * in exactly one shard; re-measure when a shard's job drifts well past the
+ * others.
+ */
+const PHASE_CI_SECONDS = {
+  parity: 29,
+  canvas: 63,
+  sides: 93,
+  switch: 11,
+  strip: 29,
+  sheets: 40,
+  header: 61,
+  running: 28,
+  flip: 52,
+  moves: 25,
+  join: 49,
+  rail: 22,
+  striptop: 76,
+  stripresize: 29,
+  overlays: 22,
+  activity: 17,
+  placement: 19,
+  readings: 103,
+  hostmenu: 39,
+  groups: 35,
+};
+const PHASE_CI_SECONDS_DEFAULT = 40;
+
+/**
+ * The phases of the k-th of n contiguous slices of `all`. Each phase goes to
+ * the slice its weight's midpoint falls in, so the slices partition `all`:
+ * every phase runs in exactly one shard.
+ */
+function phaseShard(all, spec) {
+  const match = /^(\d+)\/(\d+)$/.exec(spec);
+  const index = match === null ? 0 : Number(match[1]);
+  const count = match === null ? 0 : Number(match[2]);
+  if (count < 1 || index < 1 || index > count) {
+    throw new Error(
+      `LAYOUT_EDITOR_BROWSER_SHARD must be k/n with 1 <= k <= n, got "${spec}"`,
+    );
+  }
+  const weights = all.map(
+    (phase) => PHASE_CI_SECONDS[phase] ?? PHASE_CI_SECONDS_DEFAULT,
+  );
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  const picked = new Set();
+  let before = 0;
+  for (const [position, phase] of all.entries()) {
+    const weight = weights[position];
+    const slice = Math.min(
+      count - 1,
+      Math.floor(((before + weight / 2) / total) * count),
+    );
+    if (slice === index - 1) picked.add(phase);
+    before += weight;
+  }
+  if (picked.size === 0) {
+    throw new Error(
+      `LAYOUT_EDITOR_BROWSER_SHARD ${spec} selects no phase; use fewer shards`,
+    );
+  }
+  return picked;
 }
 
 function variantUrl(base, params) {

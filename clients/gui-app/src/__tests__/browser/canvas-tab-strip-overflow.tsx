@@ -54,8 +54,8 @@ import "@/index.css";
  * without a real drag gesture; omitted, no preview is seeded and behaviour is
  * unchanged. Structure follows
  * `status-bar-usage-scroll.tsx` (vite + headless Chrome over CDP via
- * `scripts/chrome-launcher.mjs`); wired into `scripts/run-tests.ts` behind
- * `RUN_DIFF_EDIT_BROWSER_REGRESSION`, next to that fixture's entry.
+ * `scripts/chrome-launcher.mjs`); run in CI by
+ * `scripts/run-browser-regressions.ts`, next to that fixture's entry.
  *
  * What it mounts around `TabStrip`, and why each layer is real rather than
  * mocked (there is no `vi.mock` outside vitest):
