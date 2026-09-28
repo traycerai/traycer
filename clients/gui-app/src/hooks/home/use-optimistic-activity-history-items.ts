@@ -214,9 +214,13 @@ export function settleHistoryActivity(
     if (stamp !== undefined) {
       let caughtUp: boolean;
       if (stamp.baselineAt === null) {
-        // First sight of an off-page row can already be ahead of the browser
-        // clock. Record it as a baseline before inferring any persistence.
-        caughtUp = false;
+        // An exact accepted record timestamp proves its write. Otherwise the
+        // first off-page key may predate this edge, even when it is ahead of
+        // the browser clock, so keep it as the baseline.
+        caughtUp =
+          stamp.acceptedAt !== null &&
+          stamp.turnAfterAcceptedAt === null &&
+          durableAt === stamp.acceptedAt;
       } else if (stamp.acceptedAt !== null) {
         caughtUp =
           durableAt >= stamp.acceptedAt &&
@@ -230,8 +234,8 @@ export function settleHistoryActivity(
         stamps.delete(key);
         removed = true;
       } else if (stamp.baselineAt === null) {
-        // A task that was off-page at the edge has no prior key. Establish the
-        // first returned value as its baseline; only a later change settles it.
+        // Without an exact accepted match, establish the first returned key as
+        // the baseline; only a later change can settle the remaining edge.
         stamps.set(key, { ...stamp, baselineAt: durableAt });
       }
     }

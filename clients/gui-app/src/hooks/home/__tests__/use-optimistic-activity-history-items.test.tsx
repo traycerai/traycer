@@ -270,6 +270,20 @@ describe("optimistic activity history projection", () => {
     ).toBe(1_000);
   });
 
+  it("settles the first durable key accepted after an off-page active edge", () => {
+    const userId = `edge-before-own-off-page-${crypto.randomUUID()}`;
+    const epicId = "edge-before-own-off-page-epic";
+    observeActiveHistoryEdges(userId, new Set([epicId]), 10_000);
+    observeOwnHistoryRecordChange(userId, epicId, 3_000);
+
+    settleHistoryActivity(userId, [historyItem(epicId, 3_000, 3_000)]);
+    const olderCachedRow = historyItem(epicId, 1_000, 1_000);
+    expect(
+      projectOptimisticHistoryItems(userId, [olderCachedRow], [], 10_000)[0]
+        ?.recentAtMs,
+    ).toBe(1_000);
+  });
+
   it("does not settle a legacy row from updatedAt without durable recency", () => {
     const userId = `legacy-recency-${crypto.randomUUID()}`;
     const epicId = "legacy-recency-epic";
