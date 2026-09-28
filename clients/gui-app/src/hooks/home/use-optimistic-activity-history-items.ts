@@ -18,6 +18,7 @@ import { useOwnTurnEpicIds } from "@/stores/use-own-turn-epic-ids";
 
 const MAX_ACTIVE_ROWS = 64;
 const MAX_KNOWN_DURABLE_KEYS = MAX_ACTIVE_ROWS * 4;
+const MAX_ACTIVE_EDGE_LATCHES = MAX_ACTIVE_ROWS * 4;
 const MAX_SETTLED_REFRESH_SCOPES = 64;
 const STAMP_TTL_MS = 10 * 60_000;
 const REFRESH_DEBOUNCE_MS = 750;
@@ -183,29 +184,42 @@ function stampActiveHistoryEdge(key: string, at: number): void {
   capStamps();
 }
 
-/** Records only a new active edge; a durable catch-up does not re-arm it. */
+/**
+ * Records only a new active edge; a durable catch-up does not re-arm it.
+ *
+ * Idempotent for an unchanged active set, at capacity too: a latch whose id
+ * is still active keeps its slot, because evicting it would admit it again as
+ * a new edge on the next observation, and every observation would publish. An
+ * id past the cap waits, in sorted order, until an active latch frees.
+ */
 export function observeActiveHistoryEdges(
   userId: string,
   workingEpicIds: ReadonlySet<string>,
   at: number,
 ): boolean {
-  let added = false;
+  const evictable: string[] = [];
   for (const key of [...activeSeen]) {
     const pair = JSON.parse(key) as [string, string];
-    if (pair[0] === userId && !workingEpicIds.has(pair[1]))
-      activeSeen.delete(key);
+    if (pair[0] !== userId) evictable.push(key);
+    else if (!workingEpicIds.has(pair[1])) activeSeen.delete(key);
   }
   const expired = removeExpiredStamps(at);
-  for (const epicId of workingEpicIds) {
-    const key = keyFor(userId, epicId);
-    if (activeSeen.has(key)) continue;
+  const admissions = [...workingEpicIds]
+    .map((epicId) => keyFor(userId, epicId))
+    .filter((key) => !activeSeen.has(key))
+    .sort();
+  let added = false;
+  for (const key of admissions) {
+    if (activeSeen.size >= MAX_ACTIVE_EDGE_LATCHES) {
+      // Only another viewer's latch may give up its slot; this viewer's
+      // remaining latches are all still active.
+      const evicted = evictable.shift();
+      if (evicted === undefined) break;
+      activeSeen.delete(evicted);
+    }
     activeSeen.add(key);
     stampActiveHistoryEdge(key, at);
     added = true;
-    if (activeSeen.size > MAX_ACTIVE_ROWS * 4) {
-      const oldest = activeSeen.values().next().value;
-      if (oldest !== undefined) activeSeen.delete(oldest);
-    }
   }
   if (added) changed(userId);
   else if (expired) changed(null);

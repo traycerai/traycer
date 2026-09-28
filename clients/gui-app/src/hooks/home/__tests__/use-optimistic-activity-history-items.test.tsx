@@ -168,6 +168,59 @@ describe("optimistic activity history projection", () => {
     );
   });
 
+  it("publishes nothing when an unchanged active set exceeds the latch cap", () => {
+    // One more viewer-owned active task than the 256 active-edge latches. A
+    // latch evicted while its id is still active is admitted again as a new
+    // edge on the next observation, evicting the next one: every observation
+    // of the same set would publish a snapshot and re-run the observing effect.
+    const userId = `latch-cap-${crypto.randomUUID()}`;
+    const ids = Array.from(
+      { length: 257 },
+      (_, index) => `latch-${String(index).padStart(3, "0")}`,
+    );
+    let publications = 0;
+    // A passive subscriber: only a published snapshot re-renders it.
+    renderHook(() => {
+      publications += 1;
+      return useOptimisticActivityHistoryItems({
+        items: [],
+        userId: null,
+        hostId: null,
+        enabled: false,
+        refetch: () => Promise.resolve(),
+      });
+    });
+    const observe = (
+      working: ReadonlySet<string>,
+      at: number,
+    ): { readonly added: boolean; readonly published: number } => {
+      const before = publications;
+      let added = false;
+      act(() => {
+        added = observeActiveHistoryEdges(userId, working, at);
+      });
+      return { added, published: publications - before };
+    };
+
+    expect(observe(new Set(ids), 1_000)).toEqual({ added: true, published: 1 });
+    expect(observe(new Set(ids), 2_000)).toEqual({
+      added: false,
+      published: 0,
+    });
+
+    // The surplus id waits, in a stable order, until an active latch frees.
+    const freed = new Set(ids.filter((id) => id !== "latch-000"));
+    expect(observe(freed, 3_000)).toEqual({ added: true, published: 1 });
+    const [surplus] = projectOptimisticHistoryItems(
+      userId,
+      [historyItem("latch-256", 1, undefined)],
+      [],
+      3_000,
+    );
+    expect(surplus.recentAtMs).toBe(3_000);
+    expect(observe(freed, 4_000)).toEqual({ added: false, published: 0 });
+  });
+
   it("prioritizes a pending own-record id within the 64-row backfill cap", () => {
     const userId = `retained-backfill-cap-${crypto.randomUUID()}`;
     const workingIds = Array.from(
