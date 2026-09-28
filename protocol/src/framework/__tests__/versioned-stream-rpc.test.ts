@@ -127,12 +127,12 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // Host-owned accepted-message delivery took @1.15. The approval card's
     // judge-reason tier took @1.16. The sender host on `send` /
     // `editUserMessage` and on the queued prompt item took @1.17. The
-    // Claude-parity surfaces took @1.18.
+    // Claude-parity surfaces took @1.19.
     //
     // RESTATED rather than derived, deliberately: this file is the
     // change-detector for the line set, so deriving it from the registry would
     // assert the registry against itself.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(18);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(19);
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
     // @1.3 carries `chatTier` on failed-frame chat-turn holders.
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(

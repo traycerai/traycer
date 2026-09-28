@@ -101,14 +101,14 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // 1.16 is captured ON TIME, from main's own bytes at OSS commit 0014b742d,
 // before the sender-host key (`sentFromHostId` on the queued prompt item)
 // took 1.17 above it, and re-verified after the freeze: identical - and again
-// after the Claude-parity freeze put 1.18 above 1.17: identical. The first
+// after the Claude-parity freeze put 1.19 above 1.17: identical. The first
 // draft of that key was added to the live prompt item in place, which every
 // line from 1.13 up reached by reference; this gate caught it on 1.13, and
 // the hand-frozen `chatQueuedPromptItemSchemaPreSentFromHost` copy is what
 // puts 1.13–1.16 back on their captured values.
 //
 // 1.17 is captured ON TIME, from main's own bytes at OSS commit da3d4f40d,
-// before the Claude-parity surfaces took 1.18 above it. That line had been
+// before the Claude-parity surfaces took 1.19 above it. That line had been
 // built as 1.17 on a long-lived branch while main minted its own 1.17, so it
 // was renumbered rather than folded in: main's line was already on a release
 // train. The merged tree's frozen 1.17 reproduces main's digests exactly,

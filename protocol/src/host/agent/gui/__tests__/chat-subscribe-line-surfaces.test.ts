@@ -30,7 +30,7 @@
  *   needle can pin a boundary for it; its shape coverage lives in
  *   `chat-subscribe-approval-tier-v116.test.ts` and it is listed here for the
  *   same line-count and ceiling reason as `1.15`;
- * - `1.18` is the Claude-parity surface, minted above `1.16`: the suggested
+ * - `1.19` is the Claude-parity surface, minted above `1.16`: the suggested
  *   prompt, the thinking-tokens estimate and frame, the cron background item
  *   kind, and the approval card's display facts / cautious / rule-forced
  *   keys. Unlike `1.16` these are PROJECTED for an older peer, and the older
@@ -67,7 +67,7 @@ const APPROVAL_TIER_MINOR = 16;
 const SENT_FROM_HOST_MINOR = 17;
 // The Claude-parity surfaces: suggested prompt, thinking tokens, cron items,
 // approval display facts / cautious / rule-forced.
-const CLAUDE_PARITY_MINOR = 18;
+const CLAUDE_PARITY_MINOR = 19;
 const LIVE_MINOR = CLAUDE_PARITY_MINOR;
 // Object keys carry their colon so a needle cannot hit an enum value or a
 // description that merely mentions the name; the two literals (`thinkingTokens`
@@ -208,12 +208,12 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.18 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.19 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
