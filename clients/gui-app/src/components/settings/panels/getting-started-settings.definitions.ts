@@ -16,6 +16,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
  */
 export const GETTING_STARTED = defineSettingsSection("getting-started", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Getting started",
     description: "Your introduction and setup guides.",
     keywords: [

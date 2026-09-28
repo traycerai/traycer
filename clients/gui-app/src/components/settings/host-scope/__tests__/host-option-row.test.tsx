@@ -57,6 +57,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           intent="view"
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={viewA}
+          nameRef={null}
         />
         <HostOptionRow
           host={hostB}
@@ -65,6 +66,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           intent="view"
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={viewB}
+          nameRef={null}
         />
       </>,
     );
@@ -90,6 +92,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           intent="view"
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "idle" })}
+          nameRef={null}
         />
         <HostOptionRow
           host={hostB}
@@ -98,6 +101,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           intent="view"
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "failed" })}
+          nameRef={null}
         />
       </>,
     );
@@ -115,6 +119,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           intent="view"
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "failed" })}
+          nameRef={null}
         />
         <HostOptionRow
           host={hostB}
@@ -123,6 +128,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           intent="view"
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "idle" })}
+          nameRef={null}
         />
       </>,
     );
@@ -142,6 +148,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
         intent="view"
         surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
         updateView={null}
+        nameRef={null}
       />,
     );
     expect(queryByTestId("host-option-update-badge-host-a")).toBeNull();
@@ -160,6 +167,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           kind: "waiting-for-work",
           blockingSessionCount: 3,
         })}
+        nameRef={null}
       />,
     );
     // Structural, not a checklist of specific attributes: NOTHING this row

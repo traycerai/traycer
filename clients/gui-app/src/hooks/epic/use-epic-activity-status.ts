@@ -14,6 +14,7 @@ import {
   chatActivityIndicator,
   type ChatActivityIndicator,
 } from "@/components/epic-canvas/renderers/chat-tile-session-state";
+import { approvalAwaitingJudge } from "@/components/epic-canvas/renderers/chat-approval-visibility";
 
 const CHAT_REGISTRY = getChatSessionRegistry();
 
@@ -37,7 +38,12 @@ export function useEpicActivityStatus(
   const liveAgentIds = useRegisteredEpicLiveAgentIds(epicId);
   const subscribeLocalChatActivity = useCallback(
     (onChange: () => void) =>
-      subscribeChatSessionActivity(epicId, liveAgentIds, onChange),
+      subscribeLiveChatSessions(
+        epicId,
+        liveAgentIds,
+        chatSessionActivity,
+        onChange,
+      ),
     [epicId, liveAgentIds],
   );
   const getLocalChatActivity = useCallback(
@@ -109,10 +115,15 @@ export function epicActivityStatusFromSources(
   return hasBackgroundActivity ? "background" : "idle";
 }
 
-/** Subscribes only to live chats in `candidateIds` belonging to this epic. */
-function subscribeChatSessionActivity(
+/**
+ * Subscribes only to live chats in `candidateIds` belonging to this epic, and
+ * calls `onChange` when `select` reads a different value from one of them or
+ * the set of live chats changes.
+ */
+function subscribeLiveChatSessions<T>(
   epicId: string | null,
   candidateIds: ReadonlySet<string> | null,
+  select: (state: ChatSessionState) => T,
   onChange: () => void,
 ): () => void {
   if (epicId === null || candidateIds === null || candidateIds.size === 0) {
@@ -127,11 +138,11 @@ function subscribeChatSessionActivity(
       ),
       handleSubs,
       (handle) => {
-        let previousActivity = chatSessionActivity(handle.store.getState());
+        let previous = select(handle.store.getState());
         return handle.store.subscribe((state) => {
-          const nextActivity = chatSessionActivity(state);
-          if (nextActivity === previousActivity) return;
-          previousActivity = nextActivity;
+          const next = select(state);
+          if (Object.is(next, previous)) return;
+          previous = next;
           onChange();
         });
       },
@@ -154,6 +165,80 @@ export function chatSessionActivity(
   state: ChatSessionState,
 ): ChatActivityIndicator {
   return chatActivityIndicator(state);
+}
+
+/** What a chat is blocked on the user for: a question to answer, or a gate to approve. */
+export type EpicWaitingReason = "approval" | "reply";
+
+/**
+ * The warm session's own gate facts, which stay true while the agent is
+ * blocked, including when no prompt notification is lit for it (cleared,
+ * superseded, or not yet filed). A pending interview outranks an approval, the
+ * order `attentionTone` uses. An approval under an auto-judge is not waiting on
+ * the user until the judge escalates it; a plan approval is.
+ */
+export function chatSessionWaitingReason(
+  state: ChatSessionState,
+): EpicWaitingReason | null {
+  if (state.pendingInterviews.length > 0) return "reply";
+  if (
+    state.pendingApprovals.some(
+      (approval) => !approvalAwaitingJudge(approval),
+    ) ||
+    state.pendingFileEditApprovals.length > 0
+  ) {
+    return "approval";
+  }
+  return null;
+}
+
+/**
+ * Aggregates {@link chatSessionWaitingReason} over the epic's live chats with
+ * a warm session; `"reply"` outranks `"approval"`. `candidateIds` is the same
+ * liveness filter {@link epicActivityStatusFromSources} takes, and `null` (no
+ * session for the epic in this window) reads as not waiting, since only a warm
+ * chat session knows it is blocked.
+ *
+ * Chats match by epic id only, not by host, the same scope
+ * {@link epicActivityStatusFromSources} reads, so a tab bound to one host can
+ * reflect a warm chat of the same epic id on another.
+ */
+export function epicWaitingReasonFromSessions(
+  epicId: string | null,
+  candidateIds: ReadonlySet<string> | null,
+): EpicWaitingReason | null {
+  if (epicId === null || candidateIds === null) return null;
+  let reason: EpicWaitingReason | null = null;
+  for (const handle of CHAT_REGISTRY.listHandles()) {
+    if (handle.epicId !== epicId) continue;
+    if (!candidateIds.has(handle.chatId)) continue;
+    const chatReason = chatSessionWaitingReason(handle.store.getState());
+    if (chatReason === "reply") return "reply";
+    if (chatReason === "approval") reason = "approval";
+  }
+  return reason;
+}
+
+/** What this epic's live chats are waiting on the user for, if anything. */
+export function useEpicWaitingReason(
+  epicId: string | null,
+): EpicWaitingReason | null {
+  const liveAgentIds = useRegisteredEpicLiveAgentIds(epicId);
+  const subscribeWaiting = useCallback(
+    (onChange: () => void) =>
+      subscribeLiveChatSessions(
+        epicId,
+        liveAgentIds,
+        chatSessionWaitingReason,
+        onChange,
+      ),
+    [epicId, liveAgentIds],
+  );
+  const getWaiting = useCallback(
+    () => epicWaitingReasonFromSessions(epicId, liveAgentIds),
+    [epicId, liveAgentIds],
+  );
+  return useSyncExternalStore(subscribeWaiting, getWaiting, () => null);
 }
 
 function noopUnsubscribe(): void {}

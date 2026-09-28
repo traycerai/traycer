@@ -28,16 +28,14 @@ import {
 } from "@/stores/home/landing-draft-store";
 import { isMobileApp } from "@/lib/mobile-app";
 import { landingDraftIsRetired } from "@/lib/drafts/landing-draft-retirement";
-import {
-  isRegisteredTabKind,
-  tabSurfaceDescriptor,
-} from "@/stores/tabs/registry";
+import { tabSurfaceDescriptor } from "@/stores/tabs/registry";
+import { isRegisteredTabKind } from "@/stores/tabs/tab-kind-policy";
 import {
   consumeLegacyTabsSourceActiveSelection,
   layoutHomeIsActive,
   useTabsStore,
 } from "@/stores/tabs/store";
-import { isHomeTabEnabled } from "@/stores/settings/settings-store";
+import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import { HOME_TAB_REF } from "@/stores/tabs/kinds/home";
 import {
   createEmptySplit,
@@ -365,6 +363,8 @@ function sourceHasRef(ref: TabRef): boolean {
   // Home owns no source record and no strip item, so it is never a placement
   // this reconciles - `resolveHomeActivation` is its only entry point.
   if (ref.kind === "home") return false;
+  if (ref.kind === "sample-workspace")
+    return findStripItemForRef(currentLayout(), ref) !== null;
   return currentLayout().systemTabs[ref.kind] !== null;
 }
 
@@ -474,7 +474,7 @@ function layoutWithRemovedRef(
   layout: PersistedTabStripLayout,
   ref: TabRef,
 ): PersistedTabStripLayout {
-  const next = removeLayoutRef(layout, ref);
+  const next = removeLayoutRef(layout, ref, isHomeTabEnabled());
   if (ref.kind !== "history" && ref.kind !== "settings") return next;
   return {
     ...next,
@@ -618,7 +618,9 @@ export class TabCommandCoordinator {
     // ordinary frame first, then fill the requested side inside the SAME
     // transaction so source ownership never changes and the view stays keyed.
     const withoutUngroupedSource =
-      existing?.kind === "tab" ? removeLayoutRef(layout, command.ref) : layout;
+      existing?.kind === "tab"
+        ? removeLayoutRef(layout, command.ref, isHomeTabEnabled())
+        : layout;
     const next = replaceFillableSide(
       withoutUngroupedSource,
       command,
@@ -1276,6 +1278,8 @@ export class TabCommandCoordinator {
         useLandingDraftStore.getState().setActiveDraft(ref.id);
       });
     }
+    if (ref.kind === "sample-workspace")
+      return this.activationForRef(layout, ref, () => undefined);
     if (ref.kind === "home") return this.resolveHomeActivation(layout);
     if (layout.systemTabs[ref.kind] === null) return null;
     return this.activationForRef(layout, ref, () => undefined);
@@ -1801,7 +1805,10 @@ export class TabCommandCoordinator {
         !sourceKeys.has(tabRefKey(ref)),
     );
     const repaired = repairedLayoutPreservingHome(
-      missing.reduce(removeLayoutRef, layout),
+      missing.reduce(
+        (current, ref) => removeLayoutRef(current, ref, isHomeTabEnabled()),
+        layout,
+      ),
     );
     const currentKeys = new Set(flattenLayoutRefs(current).map(tabRefKey));
     const reservedAdditions = flattenLayoutRefs(repaired).filter(

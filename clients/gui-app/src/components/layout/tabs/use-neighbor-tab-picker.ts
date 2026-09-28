@@ -2,7 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { LANDING_ROUTE } from "@/lib/routes";
 import { homeTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
-import { isHomeTabEnabled } from "@/stores/settings/settings-store";
+import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import { tabActivationHistory, tabRefKey } from "@/stores/tabs/layout";
 import { pickNeighborAfterRemovingTabs } from "@/stores/tabs/neighbor";
 import { readTabStripLayout } from "@/stores/tabs/store";

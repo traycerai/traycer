@@ -6,6 +6,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 // top of the page — and name the page as their breadcrumb.
 export const PROVIDERS = defineSettingsSection("providers", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Providers",
     description: "Coding agents, their accounts, models, and extensions.",
     keywords: [

@@ -38,6 +38,7 @@ import { activateHostedTopLevelSurface } from "@/components/epic-canvas/surface-
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
@@ -829,6 +830,60 @@ describe("<TopLevelTabHost />", () => {
         .getByTestId(`landing-terminal-anchor-${DRAFT_B.id}`)
         .contains(screen.getByTestId("landing-terminal-panel-body")),
     ).toBe(true);
+  });
+});
+
+/**
+ * Sheet shell (ticket 02, D1/D2): `TopLevelSurfaceMount` is the single sheet
+ * for every non-epic surface (Home/History/Settings/draft) and carries no
+ * sheet marker of its own for an epic tab - the epic surface paints its own
+ * two sheets (panel/content) internally, proven separately in
+ * `epic-sidebar-side.test.tsx` against the REAL (unmocked) `EpicSurface`.
+ * `EpicSurface` is mocked here, so this suite can only speak to the mount
+ * wrapper's own marker, not the epic surface's internal structure. The
+ * surface frame around the mount is `app-column-frame.test.tsx`'s, and Home's
+ * retained marker is `home-surface-mount-latch.test.tsx`'s.
+ */
+describe("TopLevelSurfaceMount: single-sheet route marker (D1/D2)", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useLayoutStore.setState(useLayoutStore.getInitialState(), true);
+  });
+
+  afterEach(() => {
+    cleanup();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useLayoutStore.setState(useLayoutStore.getInitialState(), true);
+  });
+
+  it.each([
+    ["draft", DRAFT_A],
+    ["history", HISTORY],
+    ["settings", SETTINGS],
+  ] as const)(
+    "stamps data-shell-sheet=route on a %s tab's mount",
+    (_kind, ref) => {
+      seedSources([EPIC_A, ref]);
+      setSplit(EPIC_A, ref, "left");
+
+      render(<TopLevelTabHost />);
+
+      expect(surfaceRef(ref).dataset.shellSheet).toBe("route");
+    },
+  );
+
+  it("leaves data-shell-sheet unset on an epic tab's own mount", () => {
+    seedSources([EPIC_A, HISTORY]);
+    setSplit(EPIC_A, HISTORY, "left");
+
+    render(<TopLevelTabHost />);
+
+    expect(surfaceRef(EPIC_A).hasAttribute("data-shell-sheet")).toBe(false);
   });
 });
 

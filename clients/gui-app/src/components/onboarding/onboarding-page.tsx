@@ -72,6 +72,10 @@ import {
   useSessionImportRun,
 } from "@/stores/session-import/session-import-run-store";
 import { cn } from "@/lib/utils";
+import {
+  WINDOW_LEADING_INSET_CLASS,
+  WINDOW_TRAILING_INSET_CLASS,
+} from "@/components/layout/header/title-bar-drag";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import "@/styles/auth-arrival.css";
 import "./onboarding.css";
@@ -718,7 +722,13 @@ function TourHeader(props: {
     onSkip,
   } = props;
   return (
-    <header className="onboarding-header flex shrink-0 items-center justify-between gap-4 px-[var(--onboarding-header-gutter)] wco:pl-[env(titlebar-area-x,82px)] wco:pr-[max(12px,calc(100vw-env(titlebar-area-x,82px)-env(titlebar-area-width,100vw)+12px))]">
+    <header
+      className={cn(
+        "onboarding-header flex shrink-0 items-center justify-between gap-4 px-[var(--onboarding-header-gutter)]",
+        WINDOW_LEADING_INSET_CLASS,
+        WINDOW_TRAILING_INSET_CLASS,
+      )}
+    >
       {phone ? (
         <div className="onboarding-header-slot--lead flex items-center">
           {activeIndex === 0 ? (

@@ -39,12 +39,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const completedQuestion = row.units.find(
       (unit) =>
         unit.unitId ===
@@ -112,7 +110,7 @@ describe("chat find projection", () => {
       ],
       TILE_INSTANCE_ID,
       new Set(),
-      null,
+      { hideReasoning: false, queuePauseReasonProtocolSupported: null },
     )[0];
 
     expect(
@@ -215,12 +213,10 @@ describe("chat find projection", () => {
       ...makeMessage(4, "assistant"),
       segments: [segment],
     };
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const model = deriveInterviewReviewModel({
       blockId: segment.id,
       status: segment.status,
@@ -378,7 +374,7 @@ describe("chat find projection", () => {
       [user, assistant],
       TILE_INSTANCE_ID,
       new Set(),
-      null,
+      { hideReasoning: false, queuePauseReasonProtocolSupported: null },
     );
     const joined = rows.map((row) => rowSearchText(row)).join("\n");
 
@@ -416,7 +412,10 @@ describe("chat find projection", () => {
       },
     };
 
-    const joined = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), null)
+    const joined = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })
       .map((row) => rowSearchText(row))
       .join("\n");
 
@@ -470,12 +469,10 @@ describe("chat find projection", () => {
       segments,
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(rowSearchText(row)).toContain("Read 1 file, edited 1 file");
     expect(rowSearchText(row)).toContain("src/components/search-bar.tsx");
@@ -497,12 +494,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(rowSearchText(row)).toContain("Thought for 2s");
     expect(rowSearchText(row)).not.toContain("private chain of thought");
@@ -522,12 +517,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(rowSearchText(row)).toContain("Thinking");
     expect(rowSearchText(row)).not.toContain(
@@ -556,7 +549,10 @@ describe("chat find projection", () => {
     };
 
     const text = rowSearchText(
-      buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), null)[0],
+      buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: null,
+      })[0],
     );
 
     expect(text).toContain("Thought");
@@ -607,12 +603,10 @@ describe("chat find projection", () => {
     };
 
     const promoted = new Set(["tool-live-promoted"]);
-    const unitIds = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      promoted,
-      null,
-    )[0].units.map((unit) => unit.unitId);
+    const unitIds = buildChatFindRows([assistant], TILE_INSTANCE_ID, promoted, {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0].units.map((unit) => unit.unitId);
 
     // The run starts at the reasoning block, because the tool stands alone.
     // Probed through the group SUMMARY unit: the group's sole reasoning block
@@ -649,12 +643,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     // Exactly once - in the group summary ("Thought for 2s"). The label is
     // still findable; it is just not counted twice.
@@ -707,7 +699,7 @@ describe("chat find projection", () => {
       [assistant],
       TILE_INSTANCE_ID,
       new Set(["command-backgrounded"]),
-      null,
+      { hideReasoning: false, queuePauseReasonProtocolSupported: null },
     )[0];
 
     expect(row.units.map((unit) => unit.unitId)).not.toContain(
@@ -753,12 +745,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toContain(
       chatFindActivityGroupChildHeaderUnitId(
@@ -795,7 +785,7 @@ describe("chat find projection", () => {
       [assistant],
       TILE_INSTANCE_ID,
       new Set(),
-      null,
+      { hideReasoning: false, queuePauseReasonProtocolSupported: null },
     )
       .flatMap((row) => row.units)
       .map((unit) => unit.unitId);
@@ -835,12 +825,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const renderId = derivePromotedSubagentRenderId(subagentId);
     const headerUnit = row.units.find(
       (unit) => unit.unitId === chatFindSubagentHeaderUnitId(renderId),
@@ -898,12 +886,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const renderId = derivePromotedSubagentRenderId(subagentId);
     const bodyUnit = row.units.find(
       (unit) => unit.unitId === chatFindSubagentBodyUnitId(renderId),
@@ -945,12 +931,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const headerUnit = row.units.find(
       (unit) =>
         unit.unitId ===
@@ -995,12 +979,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(rowSearchText(row)).toContain("1 of 3 Done");
     // Completed item renders its plain text, never its active form.
@@ -1052,12 +1034,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(rowSearchText(row)).toContain("Refactor the search index");
     // The status badge LABEL is indexed, not the raw enum value.
@@ -1100,12 +1080,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const joined = buildChatFindRows(
-      [grouped],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )
+    const joined = buildChatFindRows([grouped], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })
       .map((row) => rowSearchText(row))
       .join("\n");
 
@@ -1141,12 +1119,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const noticeUnit = row.units.find(
       (unit) => unit.unitId === chatFindSegmentUnitId("notice-top"),
     );
@@ -1188,12 +1164,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const textOf = (id: string): string | undefined =>
       row.units.find((unit) => unit.unitId === chatFindSegmentUnitId(id))?.text;
 
@@ -1230,12 +1204,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const retryUnit = row.units.find(
       (unit) => unit.unitId === chatFindSegmentUnitId("retry-notice"),
     );
@@ -1286,12 +1258,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const renderId = derivePromotedSubagentRenderId(subagentId);
     const bodyUnit = row.units.find(
       (unit) => unit.unitId === chatFindSubagentBodyUnitId(renderId),
@@ -1329,7 +1299,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), null)[0];
+    const row = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindMessageContentUnitId(user.id),
@@ -1361,7 +1334,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), null)[0];
+    const row = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindMessageContentUnitId(user.id),
@@ -1384,12 +1360,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindSegmentUnitId("assistant-text-0"),
@@ -1416,12 +1390,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [synthesized],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([synthesized], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindSegmentUnitId("forked-1"),
@@ -1448,12 +1420,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [synthesized],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([synthesized], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindSegmentUnitId("imported-1"),
@@ -1485,12 +1455,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [synthesized],
-      TILE_INSTANCE_ID,
-      new Set(),
-      null,
-    )[0];
+    const row = buildChatFindRows([synthesized], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units).toEqual([]);
   });
@@ -1562,7 +1530,7 @@ describe("chat find projection", () => {
         ],
         TILE_INSTANCE_ID,
         new Set(),
-        null,
+        { hideReasoning: false, queuePauseReasonProtocolSupported: null },
       )[0];
 
       const noticeUnit = row.units.find(
@@ -1592,7 +1560,7 @@ describe("chat find projection", () => {
         ],
         TILE_INSTANCE_ID,
         new Set(),
-        null,
+        { hideReasoning: false, queuePauseReasonProtocolSupported: null },
       )[0];
 
       expect(rowSearchText(row)).toContain("zqtext");
@@ -1614,7 +1582,7 @@ describe("chat find projection", () => {
           ],
           TILE_INSTANCE_ID,
           new Set(),
-          null,
+          { hideReasoning: false, queuePauseReasonProtocolSupported: null },
         )[0];
         const text = rowSearchText(row);
 
@@ -1650,12 +1618,10 @@ describe("chat find projection", () => {
         ...makeMessage(70, "assistant"),
         segments: [errorSegment("queue-pause", QUEUE_PAUSED_AFTER_ERROR_CODE)],
       };
-      const row = buildChatFindRows(
-        [assistant],
-        TILE_INSTANCE_ID,
-        new Set(),
-        true,
-      )[0];
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: true,
+      })[0];
 
       expect(
         row.units.some(
@@ -1670,12 +1636,10 @@ describe("chat find projection", () => {
         ...makeMessage(71, "assistant"),
         segments: [errorSegment("not-queue-pause", "RUNTIME")],
       };
-      const row = buildChatFindRows(
-        [assistant],
-        TILE_INSTANCE_ID,
-        new Set(),
-        true,
-      )[0];
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: true,
+      })[0];
 
       expect(rowSearchText(row)).toContain("queued message was held");
     });
@@ -1689,12 +1653,10 @@ describe("chat find projection", () => {
           errorSegment("queue-pause-n1", QUEUE_PAUSED_AFTER_ERROR_CODE),
         ],
       };
-      const row = buildChatFindRows(
-        [assistant],
-        TILE_INSTANCE_ID,
-        new Set(),
-        false,
-      )[0];
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: false,
+      })[0];
 
       expect(
         row.units.some(
@@ -1712,12 +1674,10 @@ describe("chat find projection", () => {
           errorSegment("queue-pause-n3", QUEUE_PAUSED_AFTER_ERROR_CODE),
         ],
       };
-      const row = buildChatFindRows(
-        [assistant],
-        TILE_INSTANCE_ID,
-        new Set(),
-        null,
-      )[0];
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: null,
+      })[0];
 
       expect(
         row.units.some(
@@ -1775,7 +1735,10 @@ describe("chat find projection", () => {
           [assistant],
           TILE_INSTANCE_ID,
           new Set(),
-          protocolSupported,
+          {
+            hideReasoning: false,
+            queuePauseReasonProtocolSupported: protocolSupported,
+          },
         )[0];
 
         expect(
@@ -1799,12 +1762,10 @@ describe("chat find projection", () => {
           }),
         ],
       };
-      const row = buildChatFindRows(
-        [assistant],
-        TILE_INSTANCE_ID,
-        new Set(),
-        true,
-      )[0];
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: true,
+      })[0];
 
       expect(
         row.units.some(
@@ -1827,12 +1788,10 @@ describe("chat find projection", () => {
           }),
         ],
       };
-      const row = buildChatFindRows(
-        [assistant],
-        TILE_INSTANCE_ID,
-        new Set(),
-        true,
-      )[0];
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: true,
+      })[0];
 
       expect(
         row.units.some(
@@ -1843,6 +1802,34 @@ describe("chat find projection", () => {
       ).toBe(true);
       expect(rowSearchText(row)).toContain(CANCEL_TITLE);
     });
+  });
+});
+
+// Layout > Chat > Thinking is Hidden: the renderer draws no reasoning, so
+// Find must not emit units for it either - a match nobody could paint or
+// navigate to.
+describe("buildChatFindRows - hideReasoning", () => {
+  it("emits no reasoning units for a reasoning-only run", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(6, "assistant"),
+      segments: [
+        {
+          id: "reasoning-hidden",
+          kind: "reasoning",
+          markdown: "private chain of thought",
+          isStreaming: false,
+          durationMs: 2000,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: true,
+      queuePauseReasonProtocolSupported: true,
+    })[0];
+
+    expect(row.units).toEqual([]);
+    expect(rowSearchText(row)).not.toContain("Thought");
   });
 });
 

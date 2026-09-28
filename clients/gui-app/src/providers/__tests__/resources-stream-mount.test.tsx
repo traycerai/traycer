@@ -3,10 +3,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import { ResourcesStreamMount } from "@/providers/resources-stream-mount";
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
-import {
-  useSettingsStore,
-  type NavigatorResourceMetric,
-} from "@/stores/settings/settings-store";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 
 function installStubFactory(): void {
   __setResourcesStreamClientFactoryForTests(() => ({
@@ -15,13 +12,18 @@ function installStubFactory(): void {
   }));
 }
 
-function setResourceUiSettings(
-  showGlobalResourceMonitor: boolean,
-  navigatorResourceMetrics: ReadonlyArray<NavigatorResourceMetric>,
-): void {
-  useSettingsStore.setState({
-    showGlobalResourceMonitor,
-    navigatorResourceMetrics,
+/**
+ * Two switches own the readings now (G7): the resource monitor's own `shown`
+ * and the sidebar rows' independent `agentRows`. The stream connects while
+ * EITHER wants it, so a test isolating one leaf's effect must pin the other.
+ */
+function setResourceMonitor(values: {
+  readonly shown: boolean;
+  readonly agentRows: boolean;
+}): void {
+  useLayoutStore.getState().setRegionValues("resourceMonitor", {
+    shown: values.shown ? "shown" : "hidden",
+    agentRows: values.agentRows,
   });
 }
 
@@ -29,93 +31,41 @@ afterEach(() => {
   cleanup();
   __setResourcesStreamClientFactoryForTests(null);
   resourcesRegistry.disposeAll();
-  setResourceUiSettings(true, []);
+  setResourceMonitor({ shown: true, agentRows: true });
 });
 
 describe("<ResourcesStreamMount />", () => {
-  it("acquires nothing when both resource-UI settings are off", () => {
+  it("acquires live when the monitor is shown mid-session, without remounting", () => {
     installStubFactory();
-    setResourceUiSettings(false, []);
-
-    render(<ResourcesStreamMount epicId="epic-1" />);
-
-    expect(resourcesRegistry.get("epic-1")).toBeNull();
-  });
-
-  it("acquires the registry entry when the global monitor setting is on", () => {
-    installStubFactory();
-    setResourceUiSettings(true, []);
-
-    render(<ResourcesStreamMount epicId="epic-1" />);
-
-    expect(resourcesRegistry.get("epic-1")).not.toBeNull();
-  });
-
-  it("acquires the registry entry when the navigator chips pick any metric", () => {
-    installStubFactory();
-    setResourceUiSettings(false, ["cpu"]);
-
-    render(<ResourcesStreamMount epicId="epic-1" />);
-
-    expect(resourcesRegistry.get("epic-1")).not.toBeNull();
-  });
-
-  it("acquires the registry entry for a pick that is not CPU", () => {
-    installStubFactory();
-    // The gate is the list's LENGTH, not any particular reading: a row showing
-    // only the process count needs the same stream a CPU chip does.
-    setResourceUiSettings(false, ["processes"]);
-
-    render(<ResourcesStreamMount epicId="epic-1" />);
-
-    expect(resourcesRegistry.get("epic-1")).not.toBeNull();
-  });
-
-  it("acquires live when a setting flips on mid-session, without remounting", () => {
-    installStubFactory();
-    setResourceUiSettings(false, []);
+    setResourceMonitor({ shown: false, agentRows: false });
 
     render(<ResourcesStreamMount epicId="epic-1" />);
     expect(resourcesRegistry.get("epic-1")).toBeNull();
 
     act(() => {
-      setResourceUiSettings(true, []);
+      setResourceMonitor({ shown: true, agentRows: false });
     });
 
     expect(resourcesRegistry.get("epic-1")).not.toBeNull();
   });
 
-  it("releases live when the last-on setting flips off mid-session", () => {
+  it("releases live when the monitor is hidden mid-session", () => {
     installStubFactory();
-    setResourceUiSettings(true, []);
+    setResourceMonitor({ shown: true, agentRows: false });
 
     render(<ResourcesStreamMount epicId="epic-1" />);
     expect(resourcesRegistry.get("epic-1")).not.toBeNull();
 
     act(() => {
-      setResourceUiSettings(false, []);
+      setResourceMonitor({ shown: false, agentRows: false });
     });
 
     expect(resourcesRegistry.get("epic-1")).toBeNull();
-  });
-
-  it("keeps the entry held while at least one setting stays on", () => {
-    installStubFactory();
-    setResourceUiSettings(true, ["cpu"]);
-
-    render(<ResourcesStreamMount epicId="epic-1" />);
-    expect(resourcesRegistry.get("epic-1")).not.toBeNull();
-
-    act(() => {
-      setResourceUiSettings(false, ["cpu"]);
-    });
-
-    expect(resourcesRegistry.get("epic-1")).not.toBeNull();
   });
 
   it("releases the entry on unmount", () => {
     installStubFactory();
-    setResourceUiSettings(true, []);
+    setResourceMonitor({ shown: true, agentRows: false });
 
     const { unmount } = render(<ResourcesStreamMount epicId="epic-1" />);
     expect(resourcesRegistry.get("epic-1")).not.toBeNull();
@@ -124,4 +74,22 @@ describe("<ResourcesStreamMount />", () => {
 
     expect(resourcesRegistry.get("epic-1")).toBeNull();
   });
+
+  // agentRows and shown independently want the stream (G7).
+  it.each([
+    { shown: true, agentRows: false, connected: true },
+    { shown: false, agentRows: true, connected: true },
+    { shown: false, agentRows: false, connected: false },
+    { shown: true, agentRows: true, connected: true },
+  ])(
+    "connects=$connected when shown=$shown and agentRows=$agentRows",
+    ({ shown, agentRows, connected }) => {
+      installStubFactory();
+      setResourceMonitor({ shown, agentRows });
+
+      render(<ResourcesStreamMount epicId="epic-1" />);
+
+      expect(resourcesRegistry.get("epic-1") !== null).toBe(connected);
+    },
+  );
 });

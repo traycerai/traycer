@@ -159,7 +159,6 @@ describe("<SwitcherPanelEmbed /> pull-requests category", () => {
     tileNavigationMocks.openTile.mockClear();
     useLeftPanelStore.setState({
       mainCollapsedByTabId: {},
-      panelSectionCollapsedByPanelId: {},
     });
     usePrPresenceStore.setState({ hasItemsByScopeKey: {} });
   });
@@ -204,11 +203,10 @@ describe("<SwitcherPanelEmbed /> pull-requests category", () => {
   });
 
   it("subscribes on a phone even while the desktop sidebar is persisted collapsed", () => {
-    // The collapse flags describe the sidebar column, which is not rendered at
-    // mobile width - so they must not gate the sheet's copy of the body.
+    // The collapse flag describes the sidebar column, which is not rendered at
+    // mobile width - so it must not gate the sheet's copy of the body.
     useLeftPanelStore.setState({
       mainCollapsedByTabId: { [TAB_ID]: true },
-      panelSectionCollapsedByPanelId: { "pull-requests": true },
     });
     subscriptionState.items = [buildPrItem({})];
     renderEmbed();

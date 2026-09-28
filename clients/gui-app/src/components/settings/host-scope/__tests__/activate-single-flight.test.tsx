@@ -74,7 +74,19 @@ function renderScope() {
   );
 }
 
-afterEach(() => {
+afterEach(async () => {
+  // The latch is module-level (R1-A2), keyed by the mocked `authority` this
+  // whole file shares - an unresolved `activate` from one test is still the
+  // authority's pending entry in the next one. Settle it before resetting, or
+  // the next test's precondition ("nothing in flight") is false before it
+  // even runs.
+  const resolve = resolveActivate;
+  if (resolve !== null) {
+    await act(async () => {
+      resolve({ ok: true });
+      await Promise.resolve();
+    });
+  }
   cleanup();
   activateCalls.length = 0;
   resolveActivate = null;

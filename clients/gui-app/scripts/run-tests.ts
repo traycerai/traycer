@@ -201,6 +201,56 @@ if (runsFirstShard) {
       exitCode,
       runBrowserRegression("scripts/status-bar-usage-scroll-browser.mjs"),
     );
+    // The layout editor's parity rule (P2, L-11, L-53) is a claim about
+    // RESOLVED styles and laid-out rects - whether two pictures of the same
+    // region look the same, whether a preset card is a scaled app frame
+    // rather than a reflowed one, and where Chrome's anchor positioning
+    // actually paints the hover chip. jsdom has no cascade, no layout and no
+    // anchor positioning, so none of the four is decidable without a browser.
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/layout-editor-browser.mjs"),
+    );
+    // Same gate: the message queue is never a pill (G1-G2) - it sits directly
+    // on the composer with no gap, the pill row above it, and every one-line
+    // row holds the dock's one row metric (L-171, L-172). All of that is laid
+    // out geometry plus real key input, none of which jsdom has. Ablated
+    // before wiring: HEAD's Compact queue pill fails 14 checks, and an
+    // unbudgeted row toolbar or an unfloated provenance badge fails the metric.
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/composer-queue-dock-browser.mjs"),
+    );
+    // Same gate: hover-card timing (G8) is pointer events, focus modality,
+    // portals and frames, none of which jsdom has. Ablated before wiring:
+    // the Radix cards failed 22 of 26 scenario runs, when the driver still ran
+    // each in both themes (hand-off ~510ms, a card that opens after a
+    // click-and-leave, a blink on click, a card under the menu).
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/hover-card-browser.mjs"),
+    );
+    // Same gate: Settings ▸ Layout beside the live app column (G6, G7). An
+    // area's body scrolls under a pinned rail and header, the page fits a
+    // desktop and a phone width with the rail or the select the breakpoint
+    // draws, a short pane's rail scrolls under a real wheel, the Radix select
+    // and a row's ↺ work by real pointer and key, the header's readings leave
+    // the tabs room, and every setting visibly changes the app column. Layout,
+    // media queries, hit testing and real input: none of it is jsdom's.
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/layout-settings-browser.mjs"),
+    );
+    // Same gate: the sheet join's concave corners are pseudo-element offsets
+    // resolved against an anchored bridge's padding box and painted arcs.
+    // jsdom has no anchor positioning, no used-value offsets and no pixels.
+    // Ablated before wiring: arcs 1px short of the bridge's inner edge fail
+    // the offsets suite, and the hard-stop gradient arcs fail the corners
+    // suite's anti-aliasing check at DPR 1 and 2.
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/sheet-join-geometry-browser.mjs"),
+    );
     // Same gate: whether a non-overflowing tab strip's scroller has ANY
     // vertical scroll range, and whether a real mouse wheel over it wobbles
     // the active tab's row by a pixel, are both layout questions - jsdom

@@ -17,7 +17,7 @@ interface UnknownActivityGlyphProps {
  *
  * Deliberately NOT animated: motion reads as progress, and there is none to
  * report. It is the calmest glyph in the family for the same reason
- * `BackgroundActivityGlyph` is calmer than the spinner.
+ * the background glyph is calmer than the spinner.
  */
 export function UnknownActivityGlyph(props: UnknownActivityGlyphProps) {
   return (

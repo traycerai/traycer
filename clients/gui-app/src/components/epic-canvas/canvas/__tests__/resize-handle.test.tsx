@@ -772,4 +772,102 @@ describe("<SplitResizeHandle />", () => {
     expect(handle.getAttribute("data-resize-group-id")).toBe(GROUP_ID);
     expect(handle.hasAttribute("data-group-id")).toBe(false);
   });
+
+  // F9: Escape must be a terminal event the hook owns directly, the same way
+  // blur already is (fix-round 2, F1 above) - a window CAPTURE-phase listener
+  // so it is seen and stopped before any other Escape handler (a layout
+  // session, a dialog) acts on the same keypress while a handle is held.
+  describe("Escape during a drag (F9)", () => {
+    it("cancels the drag: restores fractions, commits nothing, and a later pointerup is a no-op", () => {
+      const onCommitSizes =
+        vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+      const { handle, left, right } = renderHandle([0.5, 0.5], onCommitSizes);
+
+      fireEvent(
+        handle,
+        pointerEvent("pointerdown", {
+          pointerId: 91,
+          clientX: 500,
+          clientY: 10,
+          button: 0,
+        }),
+      );
+      fireEvent(
+        handle,
+        pointerEvent("pointermove", {
+          pointerId: 91,
+          clientX: 600,
+          clientY: 10,
+          button: 0,
+        }),
+      );
+      expect(flexGrowOf(left)).toBeCloseTo(0.6, 10);
+      expect(
+        document.documentElement.classList.contains("traycer-panel-resizing"),
+      ).toBe(true);
+
+      fireEvent.keyDown(handle, { key: "Escape" });
+
+      expect(flexGrowOf(left)).toBeCloseTo(0.5, 10);
+      expect(flexGrowOf(right)).toBeCloseTo(0.5, 10);
+      expect(onCommitSizes).not.toHaveBeenCalled();
+      expect(
+        document.documentElement.classList.contains("traycer-panel-resizing"),
+      ).toBe(false);
+
+      // The drag already finished on Escape - a later release for the same
+      // pointerId commits nothing.
+      fireEvent(
+        window,
+        pointerEvent("pointerup", {
+          pointerId: 91,
+          clientX: 600,
+          clientY: 10,
+          button: 0,
+        }),
+      );
+      expect(onCommitSizes).not.toHaveBeenCalled();
+    });
+
+    it("stops Escape at capture, so no other listener on the page sees it", () => {
+      const onCommitSizes =
+        vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+      const { handle } = renderHandle([0.5, 0.5], onCommitSizes);
+      const outerEscape = vi.fn();
+      document.addEventListener("keydown", outerEscape);
+      onTestFinished(() =>
+        document.removeEventListener("keydown", outerEscape),
+      );
+
+      fireEvent(
+        handle,
+        pointerEvent("pointerdown", {
+          pointerId: 92,
+          clientX: 500,
+          clientY: 10,
+          button: 0,
+        }),
+      );
+
+      fireEvent.keyDown(handle, { key: "Escape" });
+
+      expect(outerEscape).not.toHaveBeenCalled();
+    });
+
+    it("leaves Escape untouched with no drag in progress", () => {
+      const onCommitSizes =
+        vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+      const { handle } = renderHandle([0.5, 0.5], onCommitSizes);
+      const outerEscape = vi.fn();
+      document.addEventListener("keydown", outerEscape);
+      onTestFinished(() =>
+        document.removeEventListener("keydown", outerEscape),
+      );
+
+      fireEvent.keyDown(handle, { key: "Escape" });
+
+      expect(outerEscape).toHaveBeenCalledTimes(1);
+      expect(onCommitSizes).not.toHaveBeenCalled();
+    });
+  });
 });

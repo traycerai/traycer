@@ -1,5 +1,4 @@
 import { memo, type ReactElement } from "react";
-import { hasRenderableMessageTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import type {
   ChatMessage as ChatMessageModel,
@@ -9,7 +8,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { AssistantMessageBody } from "./chat-message-assistant-body";
 import { chatFindSegmentUnitId } from "./chat-find";
-import { ChatMessageTimestamp } from "./chat-message-timestamp";
+import { ChatSenderOverline } from "./chat-message-timestamp";
 import { rowPaintsNothing, singleSpecialSegment } from "./chat-special-segment";
 import { UserMessageBody } from "./chat-message-user-body";
 import { ForkedChatLinkSegment } from "./segments/forked-chat-link-segment";
@@ -254,21 +253,18 @@ function ChatMessageImpl(props: ChatMessageProps) {
   // `statusLabel` means exactly that here - the other two labels ("Streaming",
   // "Completed") are applied under a `role === "assistant"` guard, and an
   // assistant row returns above without ever reaching this overline.
-  // The separator is drawn here but the stamp decides whether it renders, so
-  // both hang off the same predicate: a persisted row can carry an instant a
-  // `Date` cannot represent, and a lone " · " after the label is worse than no
-  // stamp at all.
+  // The stamp draws its own " · " so the two hang off one predicate: a
+  // persisted row can carry an instant a `Date` cannot represent, and the
+  // Timestamps setting can hide it, and a lone separator after the label is
+  // worse than no stamp at all.
   const sentAt = message.sentAt ?? message.createdAt;
   const sender = (
-    <span className="text-overline font-medium text-muted-foreground/60">
-      <span className="uppercase">{label}</span>
-      {message.statusLabel === null && hasRenderableMessageTime(sentAt) ? (
-        <>
-          <span aria-hidden> · </span>
-          <ChatMessageTimestamp timestamp={sentAt} />
-        </>
-      ) : null}
-    </span>
+    <ChatSenderOverline
+      label={label}
+      sentAt={sentAt}
+      stamped={message.statusLabel === null}
+      instanceId={message.id}
+    />
   );
 
   return (

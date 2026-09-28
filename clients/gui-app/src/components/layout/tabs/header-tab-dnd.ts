@@ -8,6 +8,7 @@
  */
 import { TAB_KINDS, type HeaderTabKind } from "@/stores/tabs/registry";
 import { isRecord, type RectLike } from "@/components/epic-canvas/dnd/dnd";
+import type { StripAxis } from "@/components/epic-canvas/dnd/strip-axis";
 
 export const HEADER_TAB_DND_TYPE = "header-tab";
 export const HEADER_TAB_SLOT_DND_TYPE = "header-tab-slot";
@@ -25,7 +26,7 @@ export interface HeaderTabDragData {
 /**
  * One droppable slot per header tab plus one trailing slot for the strip's
  * empty space. `index` is the slot's tab index (trailing slot = tab count);
- * the insertion index is refined against the pointer x at resolve time.
+ * the insertion index is refined against the pointer at resolve time.
  */
 export interface HeaderTabSlotDropData {
   readonly kind: typeof HEADER_TAB_SLOT_DND_TYPE;
@@ -111,23 +112,26 @@ export function readHeaderTabSlotDropData(
 }
 
 /**
- * Pointer-x midpoint insertion-index resolution over a header slot, for CANVAS
+ * Pointer midpoint insertion-index resolution over a header slot, for CANVAS
  * TEAR-OFF onto the strip - a source with no slot of its own, so hit-testing
- * cannot feed back on itself. Header-tab reorder does NOT come through here; it
- * resolves from `header-strip-drag-model.ts` instead. `sourceIndex` is retained
- * for the noop-suppression case and is null for tear-off.
+ * cannot feed back on itself. `pointer` is the position along the strip's
+ * `axis`, and the slot splits at its midpoint on that axis. Header-tab reorder
+ * does NOT come through here; it resolves from `strip-drag-model.ts` instead.
+ * `sourceIndex` is retained for the noop-suppression case and is null for
+ * tear-off.
  */
 export function resolveHeaderStripDropIndex(input: {
   readonly slot: HeaderTabSlotDropData;
-  readonly pointerX: number;
+  readonly pointer: number;
   readonly slotRect: RectLike | null;
+  readonly axis: StripAxis;
   readonly sourceIndex: number | null;
 }): number | null {
-  const { slot, pointerX, slotRect, sourceIndex } = input;
+  const { slot, pointer, slotRect, axis, sourceIndex } = input;
   const insertAfterSlot =
     !slot.isTrailing &&
     slotRect !== null &&
-    pointerX >= slotRect.left + slotRect.width / 2;
+    pointer >= axis.mainStart(slotRect) + axis.mainExtent(slotRect) / 2;
   const rawIndex = insertAfterSlot ? slot.index + 1 : slot.index;
   if (sourceIndex !== null) {
     if (rawIndex === sourceIndex || rawIndex === sourceIndex + 1) return null;

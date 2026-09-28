@@ -739,8 +739,10 @@ describe("auto-mode judge notices in the windowed transcript", () => {
       for (const notice of notices) {
         expect(screen.queryByText(notice.message)).toBeNull();
         expect(
-          buildChatFindRows([notice.model], "tile-notice", new Set(), null)[0]
-            ?.units,
+          buildChatFindRows([notice.model], "tile-notice", new Set(), {
+            hideReasoning: false,
+            queuePauseReasonProtocolSupported: null,
+          })[0]?.units,
         ).toEqual([]);
       }
     } finally {

@@ -36,7 +36,7 @@ import {
   homeTabIntent,
   openPhaseMigrationIntent,
 } from "@/lib/tab-navigation";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useRegionShown } from "@/lib/layout-overrides";
 import { cn } from "@/lib/utils";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { useAmbientHistorySearchState } from "@/hooks/home/use-history-search-state";
@@ -80,7 +80,7 @@ export function MobileNavDrawer(): ReactNode {
   const billingUrl = usePlatformBillingUrl();
   const openLink = useOpenLink();
   const [signOutOpen, setSignOutOpen] = useState(false);
-  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
+  const homeTabEnabled = useRegionShown("homeTab");
   // Immutable after boot, so a plain read is stable for this component's
   // whole life - no resize can flip it the way the viewport hook flips.
   const installedApp = isMobileApp();

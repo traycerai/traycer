@@ -1,5 +1,4 @@
 import {
-  type CSSProperties,
   type ReactNode,
   useCallback,
   useEffect,
@@ -18,8 +17,6 @@ import {
 } from "@/components/ui/menubar";
 import { DesktopMenuEntries } from "@/components/layout/header/desktop-menu-entries";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
-
-const NO_DRAG_STYLE = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
 /** One active session: idle hover highlights, engaged hover switches menus. */
 export function DesktopMenuButtons(props: {
@@ -98,8 +95,7 @@ export function DesktopMenuButtons(props: {
   return (
     <nav
       aria-label="Application menu"
-      className="relative z-10 flex h-full shrink-0 items-center"
-      style={NO_DRAG_STYLE}
+      className="relative z-10 flex h-full shrink-0 items-center [-webkit-app-region:no-drag]"
     >
       <Menubar
         value={openMenu}

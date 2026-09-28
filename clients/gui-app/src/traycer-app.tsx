@@ -61,7 +61,7 @@ import { SupportContextRegistryBridge } from "@/providers/support-context-regist
 import { ThemeProvider } from "@/providers/theme-provider";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
 import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
-import { ResourceTelemetryBridge } from "@/providers/resource-telemetry-bridge";
+import { AppTelemetryBridge } from "@/providers/app-telemetry-bridge";
 import { STARTUP_NAVIGATION_INTENT_KEY } from "@/lib/host/startup-navigation-intent";
 import { createAppRouter, type AppRouter } from "@/router";
 // Side-effect import: installs the WCO → `.wco` class bridge at module
@@ -205,7 +205,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
       <PersistentBrowserGuestHost />
       <LazyMotion features={domMax}>
         <WindowsBridgeProvider>
-          <ResourceTelemetryBridge />
+          <AppTelemetryBridge />
           <QueryClientProvider client={queryClient}>
             <ThemeProvider>
               <TooltipProvider>

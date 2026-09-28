@@ -14,6 +14,7 @@ import { useMemo } from "react";
 import { getAllItems } from "@/lib/commands/registry";
 import { actionsSource } from "@/lib/commands/sources/actions.source";
 import { composerSource } from "@/lib/commands/sources/composer.source";
+import { customizeSource } from "@/lib/commands/sources/customize.source";
 import { epicsSource } from "@/lib/commands/sources/epics.source";
 import { helpSource } from "@/lib/commands/sources/help.source";
 import { historyNavigationSource } from "@/lib/commands/sources/history-navigation.source";
@@ -33,6 +34,7 @@ export function useCommandItems(ctx: CommandContext): UseCommandItemsResult {
   const epicItems = epicsSource.useItems(ctx);
   const composerItems = composerSource.useItems(ctx);
   const helpItems = helpSource.useItems(ctx);
+  const customizeItems = customizeSource.useItems(ctx);
 
   const items = useMemo<ReadonlyArray<CommandItem>>(
     () => [
@@ -43,6 +45,7 @@ export function useCommandItems(ctx: CommandContext): UseCommandItemsResult {
       ...epicItems,
       ...composerItems,
       ...helpItems,
+      ...customizeItems,
     ],
     [
       syncItems,
@@ -52,6 +55,7 @@ export function useCommandItems(ctx: CommandContext): UseCommandItemsResult {
       epicItems,
       composerItems,
       helpItems,
+      customizeItems,
     ],
   );
 

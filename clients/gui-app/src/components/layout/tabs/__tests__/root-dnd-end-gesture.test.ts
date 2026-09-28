@@ -44,7 +44,7 @@ const PROVIDER = join(
 /** State a finished gesture must not leave behind. */
 const TEARDOWN_ASSIGNMENTS = [
   "activeTileDrag = null",
-  "activeHeaderStripGeometry = null",
+  "activeHeaderStripSession = null",
   "promotedPreviewOnDrag = null",
 ] as const;
 
@@ -58,18 +58,19 @@ function providerSource(): string {
  *
  * Matching on `"}, [deps];"` would couple this guard to the exact dependency
  * list, so adding one dependency to an unrelated hook would break a test about
- * teardown. `"\n  }, ["` is the closing line of a top-level `useCallback` at
- * this file's indentation and says nothing about what is inside the brackets.
+ * teardown. A top-level `useCallback` closes either inline (`"\n  }, ["`) or,
+ * when prettier breaks the arguments, with the array alone on a line at four
+ * spaces (`"\n    ["`); both say nothing about what is inside the brackets.
  */
 function callbackBody(source: string, declaration: string): string {
   const start = source.indexOf(declaration);
   expect(start, `"${declaration}" not found`).toBeGreaterThan(-1);
-  const end = source.indexOf("\n  }, [", start);
+  const end = source.slice(start).search(/\n {2}\}, \[|\n {4}\[/);
   expect(
     end,
     `no closing dependency array after "${declaration}"`,
-  ).toBeGreaterThan(start);
-  return source.slice(start, end);
+  ).toBeGreaterThan(0);
+  return source.slice(start, start + end);
 }
 
 /** The body of `endGesture`, from its declaration to its dependency array. */

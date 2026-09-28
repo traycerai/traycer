@@ -1,3 +1,4 @@
+import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
 /**
@@ -12,6 +13,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
  */
 export const DELETE_ACCOUNT = defineSettingsSection("delete-account", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Delete account",
     description:
       "Permanently delete your Traycer account and all associated data.",

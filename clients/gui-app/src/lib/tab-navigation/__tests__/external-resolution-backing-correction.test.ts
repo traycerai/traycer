@@ -40,7 +40,10 @@ import {
   type TabNavigationLocation,
 } from "@/lib/tab-navigation";
 import { hasRestoredTabs } from "@/lib/has-restored-tabs";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { draftPathname, epicPathname } from "@/lib/routes";
 import {
   __resetTabSyncCoordinatorForTesting,
@@ -246,7 +249,8 @@ function resetStores(): void {
   });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-  useSettingsStore.setState({ homeTabEnabled: false });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
   __resetTabSyncCoordinatorForTesting();
   __resetTabNavigationControllerForTesting();
 }
@@ -745,7 +749,7 @@ describe("closing the Settings overlay over a populated strip", () => {
 describe("stepping back onto the landing with the Home tab on", () => {
   beforeEach(async () => {
     resetStores();
-    useSettingsStore.setState({ homeTabEnabled: true });
+    useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
     installTabSyncCoordinator({ readyPromise: Promise.resolve() });
     await Promise.resolve();
     await Promise.resolve();
@@ -780,7 +784,7 @@ describe("stepping back onto the landing with the Home tab on", () => {
   });
 
   it("mints the landing draft instead when the Home tab is off", () => {
-    useSettingsStore.setState({ homeTabEnabled: false });
+    useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
     const a = openEpic("epic-a", "A");
     seedCommittedLayout({
       version: 2,

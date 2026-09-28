@@ -2,6 +2,7 @@ import type { ComponentProps, ReactNode } from "react";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { pinShortDateLocale } from "@/components/chat-search/__tests__/pin-short-date-locale";
 import type {
   ChatSearchChatMatch,
   ChatSearchMessageHit,
@@ -126,6 +127,8 @@ function renderView(
   );
   return { onOpen, onShowMoreChats, onShowMoreMessages, renderExpansion };
 }
+
+pinShortDateLocale();
 
 describe("ChatSearchResultsView: sections", () => {
   it("renders a Chats heading followed by a message-matches separator, chats first", () => {

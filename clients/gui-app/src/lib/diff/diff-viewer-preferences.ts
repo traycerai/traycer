@@ -7,6 +7,18 @@ export type GitDiffViewMode = "split" | "unified";
 export type GitDiffIndicatorStyle = "bars" | "classic" | "none";
 
 /**
+ * The words both doors use - the diff tile's settings popover and Settings >
+ * Appearance > Diff viewer - so the same choice reads the same in each.
+ */
+export const GIT_DIFF_VIEW_MODE_LABELS: Readonly<
+  Record<GitDiffViewMode, string>
+> = { split: "Split", unified: "Unified" };
+
+export const GIT_DIFF_INDICATOR_STYLE_LABELS: Readonly<
+  Record<GitDiffIndicatorStyle, string>
+> = { bars: "Bars", classic: "Plus / minus", none: "Hidden" };
+
+/**
  * Shared, user-level diff viewer configuration. Owned by `useSettingsStore`
  * and consumed by every git and snapshot diff renderer, so changing one field
  * live-updates all mounted viewers. Tile-local state (e.g. which files are

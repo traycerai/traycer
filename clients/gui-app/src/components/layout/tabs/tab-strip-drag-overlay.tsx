@@ -18,6 +18,7 @@ const HEADER_TAB_OVERLAY_TRANSITION = {
 
 interface HeaderTabDragOverlayProps {
   readonly tab: HeaderTab;
+  readonly isActive: boolean;
   /**
    * Render-ready enrichment (`appearance`, `indicatorState`)
    * resolved ONCE at drag start from the strip item's own drag payload - see
@@ -53,11 +54,17 @@ export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
       transition={HEADER_TAB_OVERLAY_TRANSITION}
       style={props.width === null ? undefined : { width: props.width }}
       className={cn(
-        headerTabClassName("own", true),
+        headerTabClassName("own", props.isActive),
         "pointer-events-none cursor-grabbing select-none",
       )}
     >
-      <HeaderTabPreview tab={tab} ghost={props.ghost} chrome="own" isActive />
+      <HeaderTabPreview
+        tab={tab}
+        ghost={props.ghost}
+        chrome="own"
+        isActive={props.isActive}
+        joined={props.isActive}
+      />
     </m.div>
   );
 }

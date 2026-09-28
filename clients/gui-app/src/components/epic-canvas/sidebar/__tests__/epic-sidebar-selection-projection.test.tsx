@@ -211,7 +211,7 @@ describe("sidebar selection projection reconciliation", () => {
     const handle = createSession();
     const view = render(
       <EpicSessionContext.Provider value={handle}>
-        <SidebarBulkSelectionProvider panelId="chats" collapsed={false}>
+        <SidebarBulkSelectionProvider panelId="chats">
           <ProjectionSelectionProbe />
         </SidebarBulkSelectionProvider>
       </EpicSessionContext.Provider>,
@@ -250,7 +250,7 @@ describe("sidebar selection projection reconciliation", () => {
     const handle = createSession();
     const view = render(
       <EpicSessionContext.Provider value={handle}>
-        <SidebarBulkSelectionProvider panelId="chats" collapsed={false}>
+        <SidebarBulkSelectionProvider panelId="chats">
           <ProjectionSelectionProbe />
         </SidebarBulkSelectionProvider>
       </EpicSessionContext.Provider>,

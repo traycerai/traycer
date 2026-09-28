@@ -1,3 +1,4 @@
+import { sampleWorkspaceTabModule } from "./kinds/sample-workspace";
 import type { NavigateOptions } from "@tanstack/react-router";
 import { epicTabModule } from "@/stores/tabs/kinds/epic";
 import { draftTabModule } from "@/stores/tabs/kinds/draft";
@@ -8,6 +9,7 @@ import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import type {
   HeaderTab,
   OpenInNewWindowDeps,
+  TabRef,
   TabSurfaceCapabilities,
   TabSurfaceDescriptor,
 } from "@/stores/tabs/types";
@@ -23,14 +25,14 @@ import type {
  *
  * All kind-dispatched behaviors (close, duplicate, navigate) go through the
  * per-concern dispatch functions exported below. Switches are centralized here
- * - consumers call `tabRequestClose(tab)`, `tabDuplicate(tab)`, etc.
+ * - consumers call `tabRequestClose(tab, close)`, `tabDuplicate(tab)`, etc.
  *
  * `home` is registered like every other kind so it dispatches through the same
  * seams, but it is the one kind with no strip presence: it is never in `items`,
- * `systemTabs` or `stripOrder`, and `validRef` in `layout.ts` refuses a `home`
- * ref outright. Registration here is what makes `isRegisteredTabKind("home")`
- * true, so that refusal is the thing keeping a hand-edited payload from
- * injecting a second Home into the strip.
+ * `systemTabs` or `stripOrder`.
+ *
+ * Stores must not import this module: the kinds import the stores. What a
+ * store needs per kind lives in `tab-kind-policy.ts`.
  */
 export const TAB_KINDS = {
   epic: epicTabModule,
@@ -38,6 +40,7 @@ export const TAB_KINDS = {
   history: historyTabModule,
   settings: settingsTabModule,
   home: homeTabModule,
+  "sample-workspace": sampleWorkspaceTabModule,
 } as const;
 
 /**
@@ -56,11 +59,6 @@ export const TAB_KINDS_SURFACE_CONTRACT = TAB_KINDS satisfies Record<
   { readonly descriptor: { readonly surface: TabSurfaceCapabilities } }
 >;
 
-/** Runtime guard for persisted layout sanitization. */
-export function isRegisteredTabKind(kind: string): kind is HeaderTabKind {
-  return Object.hasOwn(TAB_KINDS, kind);
-}
-
 /**
  * Surface-policy dispatch. This composes with the established behavioral
  * descriptor rather than creating a parallel split-view registry.
@@ -78,6 +76,9 @@ export function tabSurfaceDescriptor(
   kind: "settings",
 ): TabSurfaceDescriptor<"settings">;
 export function tabSurfaceDescriptor(
+  kind: "sample-workspace",
+): TabSurfaceDescriptor<"sample-workspace">;
+export function tabSurfaceDescriptor(
   kind: "home",
 ): TabSurfaceDescriptor<"home">;
 export function tabSurfaceDescriptor(
@@ -87,6 +88,7 @@ export function tabSurfaceDescriptor(
   | TabSurfaceDescriptor<"draft">
   | TabSurfaceDescriptor<"history">
   | TabSurfaceDescriptor<"settings">
+  | TabSurfaceDescriptor<"sample-workspace">
   | TabSurfaceDescriptor<"home">;
 export function tabSurfaceDescriptor(
   kind: HeaderTabKind,
@@ -95,6 +97,7 @@ export function tabSurfaceDescriptor(
   | TabSurfaceDescriptor<"draft">
   | TabSurfaceDescriptor<"history">
   | TabSurfaceDescriptor<"settings">
+  | TabSurfaceDescriptor<"sample-workspace">
   | TabSurfaceDescriptor<"home"> {
   switch (kind) {
     case "epic":
@@ -105,6 +108,8 @@ export function tabSurfaceDescriptor(
       return TAB_KINDS.history.descriptor.surface;
     case "settings":
       return TAB_KINDS.settings.descriptor.surface;
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.surface;
     case "home":
       return TAB_KINDS.home.descriptor.surface;
   }
@@ -118,18 +123,23 @@ export function tabSurfaceDescriptor(
  * Calls the per-kind `requestClose` behavior for `tab`.
  * Consumers never need to switch on `tab.kind` for close.
  */
-export function tabRequestClose(tab: HeaderTab): void {
+export function tabRequestClose(
+  tab: HeaderTab,
+  close: (ref: TabRef) => void,
+): void {
   switch (tab.kind) {
     case "epic":
-      return TAB_KINDS.epic.descriptor.requestClose(tab);
+      return TAB_KINDS.epic.descriptor.requestClose(tab, close);
     case "draft":
-      return TAB_KINDS.draft.descriptor.requestClose(tab);
+      return TAB_KINDS.draft.descriptor.requestClose(tab, close);
     case "history":
-      return TAB_KINDS.history.descriptor.requestClose(tab);
+      return TAB_KINDS.history.descriptor.requestClose(tab, close);
     case "settings":
-      return TAB_KINDS.settings.descriptor.requestClose(tab);
+      return TAB_KINDS.settings.descriptor.requestClose(tab, close);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.requestClose(tab, close);
     case "home":
-      return TAB_KINDS.home.descriptor.requestClose(tab);
+      return TAB_KINDS.home.descriptor.requestClose(tab, close);
   }
 }
 
@@ -147,6 +157,8 @@ export function tabDuplicate(tab: HeaderTab): TabNavigationIntent | null {
       return TAB_KINDS.history.descriptor.duplicate(tab);
     case "settings":
       return TAB_KINDS.settings.descriptor.duplicate(tab);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.duplicate(tab);
     case "home":
       return TAB_KINDS.home.descriptor.duplicate(tab);
   }
@@ -166,6 +178,8 @@ export function tabResolveIntent(tab: HeaderTab): TabNavigationIntent {
       return TAB_KINDS.history.descriptor.resolveIntent(tab);
     case "settings":
       return TAB_KINDS.settings.descriptor.resolveIntent(tab);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.resolveIntent(tab);
     case "home":
       return TAB_KINDS.home.descriptor.resolveIntent(tab);
   }
@@ -185,6 +199,8 @@ export function tabRouteOptions(intent: TabNavigationIntent): NavigateOptions {
       return TAB_KINDS.history.descriptor.routeOptions(intent);
     case "settings":
       return TAB_KINDS.settings.descriptor.routeOptions(intent);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.routeOptions(intent);
     case "home":
       return TAB_KINDS.home.descriptor.routeOptions(intent);
   }
@@ -204,6 +220,8 @@ export function tabActivate(intent: TabNavigationIntent): void {
       return TAB_KINDS.history.descriptor.activate(intent);
     case "settings":
       return TAB_KINDS.settings.descriptor.activate(intent);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.activate(intent);
     case "home":
       return TAB_KINDS.home.descriptor.activate(intent);
   }
@@ -225,6 +243,8 @@ export function tabRequiresCloseConfirm(tab: HeaderTab): boolean {
       return TAB_KINDS.history.descriptor.requiresCloseConfirm(tab);
     case "settings":
       return TAB_KINDS.settings.descriptor.requiresCloseConfirm(tab);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.requiresCloseConfirm(tab);
     case "home":
       return TAB_KINDS.home.descriptor.requiresCloseConfirm(tab);
   }
@@ -243,6 +263,7 @@ export function tabEpicId(tab: HeaderTab): string | null {
     case "history":
     case "settings":
     case "home":
+    case "sample-workspace":
       return null;
   }
 }
@@ -270,6 +291,11 @@ export function tabOpenInNewWindow(
       return TAB_KINDS.history.descriptor.openInNewWindow(tab, deps);
     case "settings":
       return TAB_KINDS.settings.descriptor.openInNewWindow(tab, deps);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.openInNewWindow(
+        tab,
+        deps,
+      );
     case "home":
       return TAB_KINDS.home.descriptor.openInNewWindow(tab, deps);
   }
@@ -290,6 +316,11 @@ export function tabMatchesPath(tab: HeaderTab, pathname: string): boolean {
       return TAB_KINDS.history.descriptor.matchesPath(tab, pathname);
     case "settings":
       return TAB_KINDS.settings.descriptor.matchesPath(tab, pathname);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.matchesPath(
+        tab,
+        pathname,
+      );
     case "home":
       return TAB_KINDS.home.descriptor.matchesPath(tab, pathname);
   }

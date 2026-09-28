@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-trigger";
 import type { HarnessModelSelection } from "@/components/home/data/landing-options";
 import type { ReasoningStep } from "@/components/home/pickers/harness-model-picker-presentation";
-import type { ComposerReasoningIndicator } from "@/stores/settings/layout-store";
+import type { ModelStyle } from "@/lib/layout/layout-values";
 
 // The glyph's fixed geometry (see `reasoning-bars-glyph.tsx`): a constant
 // slot per bar, so the box grows sideways with the count instead of thinning.
@@ -199,7 +199,7 @@ describe("<HarnessModelTrigger />", () => {
 
   describe("reasoning indicator", () => {
     function renderReasoning(
-      reasoningIndicator: ComposerReasoningIndicator,
+      reasoningIndicator: ModelStyle,
       reasoningLabel: string,
       reasoningStep: ReasoningStep,
     ): void {

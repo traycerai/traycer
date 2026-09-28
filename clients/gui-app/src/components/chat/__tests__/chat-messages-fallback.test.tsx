@@ -81,6 +81,10 @@ import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
+import {
   installLegendListViewportMetrics,
   setLegendListScrollContainerScrollHeightOverride,
 } from "./legend-list-test-environment";
@@ -1353,10 +1357,10 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
   beforeEach(() => {
     installLegendListViewportMetrics();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
-    useSettingsStore.setState({
-      chatTurnMinimapSide: "right",
-      quoteReplyEnabled: false,
-    });
+    // The minimap's side/shown live on the layout store now; the shipped
+    // default (right, shown) is what this file always wanted here.
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    useSettingsStore.setState({ quoteReplyEnabled: false });
     runManualRungState.handler = () =>
       Promise.resolve({ outcome: "applied", detail: null });
     runManualRungState.callCount.current = 0;

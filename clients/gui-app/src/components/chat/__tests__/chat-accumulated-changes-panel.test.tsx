@@ -3,12 +3,37 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
 import { ChatAccumulatedChangesPanel } from "@/components/chat/chat-accumulated-changes-panel";
 import { ChatDockCompactStripProvider } from "@/components/chat/chat-dock-compact-strip";
+import type { ChatDockSection } from "@/lib/chat/chat-dock-sections";
 import {
   ChatDiffTargetContext,
   type ChatSnapshotDiffOpener,
 } from "@/components/chat/chat-diff-target";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { TooltipProvider } from "@/components/ui/tooltip";
+
+/**
+ * The header's summary, read as text off its own marker.
+ *
+ * `getByText("2 files changed")` no longer finds it: the count is a
+ * `<RollingNumber>` beside static words, and Testing Library's matcher joins
+ * only an element's DIRECT text nodes. The sentence the user reads is
+ * unchanged, which is what `textContent` sees - so this stays an assertion
+ * about the rendered words rather than being weakened to a count prop.
+ */
+function summary(): HTMLElement {
+  return screen.getByTestId("accumulated-changes-summary");
+}
+
+/**
+ * One side of the header's `+N −N` total, read the same way and for the same
+ * reason: the sign is static text beside a rolling number, so the tone span
+ * that used to read `+5` now has only the `+` as a direct text node.
+ */
+function headerDelta(marker: string): string {
+  const header = summary().parentElement;
+  if (header === null) throw new Error("no accumulated-changes header");
+  return header.querySelector(`[${marker}]`)?.textContent ?? "";
+}
 
 describe("<ChatAccumulatedChangesPanel />", () => {
   afterEach(() => {
@@ -66,7 +91,7 @@ describe("<ChatAccumulatedChangesPanel />", () => {
         cumulativeBundle: vi.fn(() => vi.fn()),
       },
     });
-    fireEvent.click(screen.getByText("1 file changed"));
+    fireEvent.click(summary());
 
     expect(segment).toHaveBeenCalledWith({
       filePath: "/repo/src/streaming.ts",
@@ -97,7 +122,7 @@ describe("<ChatAccumulatedChangesPanel />", () => {
         cumulativeBundle: vi.fn(() => vi.fn()),
       },
     });
-    fireEvent.click(screen.getByText("1 file changed"));
+    fireEvent.click(summary());
 
     expect(cumulative).toHaveBeenCalledWith("/repo/src/app.ts");
     expect(segment).not.toHaveBeenCalled();
@@ -147,8 +172,8 @@ describe("<ChatAccumulatedChangesPanel />", () => {
       opener: null,
     });
 
-    expect(screen.getByText("+5")).not.toBeNull();
-    expect(screen.getByText("−2")).not.toBeNull();
+    expect(headerDelta("data-diff-additions")).toBe("+5");
+    expect(headerDelta("data-diff-deletions")).toBe("−2");
   });
 
   it("omits an uncountable row from the header total rather than adding zero", () => {
@@ -169,9 +194,37 @@ describe("<ChatAccumulatedChangesPanel />", () => {
       opener: null,
     });
 
-    expect(screen.getByText("2 files changed")).not.toBeNull();
-    expect(screen.getByText("+1")).not.toBeNull();
-    expect(screen.getByText("−1")).not.toBeNull();
+    expect(summary().textContent).toBe("2 files changed");
+    expect(headerDelta("data-diff-additions")).toBe("+1");
+    expect(headerDelta("data-diff-deletions")).toBe("−1");
+  });
+
+  // The header carries TOTALS that move several times while a turn writes, and
+  // it is one line, so a roll there is the whole of what a roll is for. The
+  // per-file rows below it are the other half of that decision and print
+  // plain text (`FileChangeHeader`, or `DiffLineDeltas` with `rolling={false}`
+  // on an artifact row): a turn touching twelve files would roll twelve rows
+  // at once, which is the same failure this repo already recorded and fixed
+  // for the chip's attention ring.
+  //
+  // jsdom cannot see the roll itself - the number renders as plain text
+  // wherever it cannot animate - so what is read here is the structure only
+  // the rolling call site produces: a number inside an element of its own
+  // rather than a bare text node beside the word. The digits actually
+  // travelling is the browser driver's claim.
+  it("rolls the header's count and its totals", () => {
+    renderPanel({
+      changes: [fileChange("/repo/src/app.ts")],
+      activeTurnStatus: null,
+      opener: null,
+    });
+
+    expect(summary().textContent).toBe("1 file changed");
+    expect(summary().childElementCount).toBe(1);
+    const header = summary().parentElement;
+    const additions = header?.querySelector("[data-diff-additions]");
+    expect(additions?.childElementCount).toBe(1);
+    expect(additions?.textContent).toBe("+1");
   });
 });
 
@@ -195,7 +248,7 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
       undeliveredChangeCount: 6,
     });
 
-    expect(screen.getByText("7 files changed")).not.toBeNull();
+    expect(summary().textContent).toBe("7 files changed");
   });
 
   it("renders while the count is known and no summary has arrived", () => {
@@ -209,7 +262,7 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
     });
 
     expect(screen.getByTestId("accumulated-changes-panel")).not.toBeNull();
-    expect(screen.getByText("4 files changed")).not.toBeNull();
+    expect(summary().textContent).toBe("4 files changed");
   });
 
   it("withholds Review all on an OVERSHOOT, which the undelivered count reads as 0", () => {
@@ -309,24 +362,25 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
   });
 });
 
-// Layout ▸ Composer folding: a chip click puts a compacted row back in the
-// dock already OPEN - the click asked for the panel, not for a second click
-// to expand it. Outside a strip provider (every existing mount) the panel
-// keeps its ordinary collapsed-by-default behavior.
-describe("<ChatAccumulatedChangesPanel /> revealed by the compact chip", () => {
+// Layout ▸ Composer folding (L-142): while this section's pill is the open
+// one the panel is ATTACHED - no collapsible header, rows on screen, and its
+// header actions portalled to the pill row. Outside a strip provider (every
+// existing mount) the panel keeps its ordinary collapsed-by-default row.
+describe("<ChatAccumulatedChangesPanel /> attached to the open pill", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
   });
 
-  it("opens already expanded when its section is revealed", () => {
-    render(
+  function renderAttached(openSection: ChatDockSection | null) {
+    return render(
       <TooltipProvider delayDuration={0}>
         <ChatDiffTargetContext.Provider value={null}>
           <ChatDockCompactStripProvider
             value={{
               chips: [],
-              expanded: new Set(["filesChanged"]),
+              openSection,
+              panelId: "dock-panel-1",
               onToggle: vi.fn(),
             }}
           >
@@ -339,12 +393,30 @@ describe("<ChatAccumulatedChangesPanel /> revealed by the compact chip", () => {
         </ChatDiffTargetContext.Provider>
       </TooltipProvider>,
     );
+  }
+
+  it("shows its rows with no collapsible header when its pill is open", () => {
+    renderAttached("filesChanged");
 
     expect(
       screen.getByRole("button", {
         name: "Undo changes to /repo/src/app.ts",
       }),
     ).not.toBeNull();
+    // The pill IS the header: no trigger, no chevron, nothing to collapse.
+    expect(screen.queryByTestId("accumulated-changes-panel")).toBeNull();
+    expect(screen.getByTestId("chat-dock-attached-panel")).not.toBeNull();
+  });
+
+  it("draws its ordinary collapsed row when another section's pill is open", () => {
+    renderAttached("background");
+
+    expect(screen.getByTestId("accumulated-changes-panel")).not.toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: "Undo changes to /repo/src/app.ts",
+      }),
+    ).toBeNull();
   });
 
   it("stays collapsed with no strip provider", () => {

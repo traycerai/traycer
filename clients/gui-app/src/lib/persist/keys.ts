@@ -339,6 +339,25 @@ export const PERSIST_STORES = [
   // display preferences, same tier as theme and font size, so machine-local
   // rather than identity-scoped.
   { camelName: "layout", leaf: "layout", kind: "static" },
+  // The layout editor's single-window lease: which window currently holds the
+  // editor open. Registered here, unlike the lease it replaces, so the
+  // module-load uniqueness assertion below can see it.
+  {
+    camelName: "layoutEditorLease",
+    leaf: "layout-editor-lease",
+    kind: "static",
+  },
+  // Where the layout inspector is docked (right, left or floating) and where
+  // a floating panel was last dragged to. Per device, like the layout itself.
+  { camelName: "layoutEditorDock", leaf: "layout-editor-dock", kind: "static" },
+  // The vertical tab strip's width and whether it is collapsed to a rail.
+  // Global across windows and kept outside the layout arrangement, so a drag
+  // of the handle is not a layout change.
+  { camelName: "sideTabStrip", leaf: "side-tab-strip", kind: "static" },
+  // When this device last sent the `layout_snapshot` analytics event. Read and
+  // written as one synchronous compare-and-set, so two windows launching
+  // together cannot both count the same device (L-54).
+  { camelName: "layoutSnapshot", leaf: "layout-snapshot", kind: "static" },
   // The one host every usage/resource surface READS
   // (`watch-host-store.ts`). Machine-local for the same reason the two picks
   // it replaces were: it names a machine to watch, not an account.

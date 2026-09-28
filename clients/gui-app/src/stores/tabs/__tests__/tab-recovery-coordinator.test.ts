@@ -31,7 +31,10 @@ import {
   retireLandingDraft,
 } from "@/lib/drafts/landing-draft-retirement";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import {
   flattenLayoutRefs,
   tabItemId,
@@ -57,7 +60,8 @@ function resetStores(): void {
   });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-  useSettingsStore.setState({ homeTabEnabled: false });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
   resetLandingDraftRetirementsForTests();
   useTabRecoveryHistory.setState({ entries: [], ready: true });
   __resetTabSyncCoordinatorForTesting();
@@ -134,7 +138,7 @@ afterEach(() => {
 
 describe("tab recovery through the command coordinator", () => {
   it("preserves Home selection and history when a background draft source appears", () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
     const taskId = useEpicCanvasStore
       .getState()
       .openEpicTab("epic-home-background", "Home background");
@@ -155,7 +159,7 @@ describe("tab recovery through the command coordinator", () => {
   });
 
   it("does not restore a retired closed draft while Home is selected", () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
     const taskId = useEpicCanvasStore
       .getState()
       .openEpicTab("epic-retired-closed", "Retained task");

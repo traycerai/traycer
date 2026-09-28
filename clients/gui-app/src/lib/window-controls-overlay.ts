@@ -15,8 +15,9 @@
  * lets components scope inset styles to `visible === true` cases.
  *
  * Tailwind variant: `@custom-variant wco (&:is(.wco, .wco *));` in
- * `index.css`. Use `wco:pl-[env(titlebar-area-x,82px)]` to apply the
- * inset only while controls are visible.
+ * `index.css`. Use `WINDOW_LEADING_INSET_CLASS`
+ * (`components/layout/header/title-bar-drag.ts`) to apply the inset only
+ * while controls are visible.
  */
 
 const WCO_CLASS_NAME = "wco";
