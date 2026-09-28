@@ -309,6 +309,14 @@ jobs:
       - name: Denied-read fallback, a real denied read
         working-directory: clients/shared
         run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File host-lock/__tests__/run-without-sedebug.ps1 bunx vitest run host-lock/__tests__/process-identity-windows-denied-read.win32.test.ts
+      # The update-recovery reader builds its open() flags from the constants
+      # the platform defines, and Windows defines none of O_NOFOLLOW,
+      # O_NONBLOCK and O_NOCTTY. This runs the real reader where they are
+      # missing: a real file must still verify and a missing one must still
+      # read as missing.
+      - name: Update-recovery reader, real Windows open flags
+        working-directory: clients/traycer-cli
+        run: bunx vitest run src/host/__tests__/update-recovery-evidence-flag-fallback-real-platform.test.ts
 
   # macOS job: the desktop workspace's packaging/signing-adjacent assertions
   # (prepack unit suite + the real electron-builder pack in test:packaging)
