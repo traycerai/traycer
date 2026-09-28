@@ -35,6 +35,7 @@ import {
   ownerScopedRowKey,
   type RecordTable,
 } from "./record-table";
+import type { RetainedValueSize } from "@/stores/replica-memory/retained-value-size";
 
 /**
  * What a mutation the table now backs needs to hear, and when.
@@ -70,6 +71,7 @@ export interface ChatRecordPublication {
 }
 
 export interface ChatRecordTable {
+  retainedRowSize(): RetainedValueSize;
   /** The slice as last published. The projector reads this as an input. */
   current(): ChatsSlice;
   /**
@@ -372,6 +374,7 @@ export function createChatRecordTable(
   }
 
   return {
+    retainedRowSize: () => table.retainedRowSize(),
     current: () => table.current(),
     ingestSeq: () => table.ingestSeq(),
     snapshotIncompleteSeq: () => table.snapshotIncompleteSeq(),

@@ -1,5 +1,9 @@
 import { useLayoutEffect, useSyncExternalStore, type RefObject } from "react";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
 
 /**
  * One shared 25 Hz clock for every long-lived status animation: the run
@@ -55,6 +59,7 @@ const reducedMotionSubscribers = new Set<() => void>();
 let intervalHandle: number | null = null;
 let elapsedMs = 0;
 let listenersAttached = false;
+let stopVisibility: (() => void) | null = null;
 let reducedMotionList: MediaQueryList | null = null;
 
 function queryReducedMotion(): MediaQueryList | null {
@@ -69,9 +74,7 @@ export function prefersReducedMotion(): boolean {
 }
 
 function documentHidden(): boolean {
-  return (
-    typeof document !== "undefined" && document.visibilityState === "hidden"
-  );
+  return !isDocumentVisible();
 }
 
 function tick(): void {
@@ -119,7 +122,7 @@ function handleReducedMotionChange(): void {
 function attachListenersOnce(): void {
   if (listenersAttached || typeof document === "undefined") return;
   listenersAttached = true;
-  document.addEventListener("visibilitychange", handleVisibilityChange);
+  stopVisibility = subscribeDocumentVisibility(handleVisibilityChange);
   reducedMotionList = queryReducedMotion();
   reducedMotionList?.addEventListener("change", handleReducedMotionChange);
 }
@@ -127,7 +130,8 @@ function attachListenersOnce(): void {
 function detachListeners(): void {
   if (!listenersAttached) return;
   listenersAttached = false;
-  document.removeEventListener("visibilitychange", handleVisibilityChange);
+  stopVisibility?.();
+  stopVisibility = null;
   reducedMotionList?.removeEventListener("change", handleReducedMotionChange);
   reducedMotionList = null;
 }

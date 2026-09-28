@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { FLEET_ACTIVE_POLL_MS } from "@/lib/host/fleet-update/fleet-poll-policy";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 import {
   warrantsFastPoll,
   type FleetUpdateView,
@@ -45,7 +46,7 @@ import {
  */
 interface AcceleratorEntry {
   count: number;
-  readonly timer: number;
+  readonly stop: () => void;
 }
 
 /**
@@ -91,20 +92,24 @@ function acquireAccelerator(
   } else {
     hosts.set(hostId, {
       count: 1,
-      timer: window.setInterval(() => {
-        // Non-canceling, or the cadence eats its own reads: `invalidateQueries`
-        // refetches active observers with TanStack's default
-        // `cancelRefetch: true`, so each tick would abort the round trip the
-        // previous tick started. On a link whose `host.status` RTT exceeds
-        // this cadence that is not "slightly stale" — it is a poll that NEVER
-        // completes, every request dying at the next tick while the wire
-        // churns. Leaving the in-flight read to finish still marks the key
-        // stale, so the next tick refetches: coalescing, not skipping.
-        void queryClient.invalidateQueries(
-          { queryKey: hostQueryKeys.methodScope(hostId, "host.status") },
-          { cancelRefetch: false },
-        );
-      }, FLEET_ACTIVE_POLL_MS),
+      stop: startVisibleInterval({
+        tick: () => {
+          // Non-canceling, or the cadence eats its own reads: `invalidateQueries`
+          // refetches active observers with TanStack's default
+          // `cancelRefetch: true`, so each tick would abort the round trip the
+          // previous tick started. On a link whose `host.status` RTT exceeds
+          // this cadence that is not "slightly stale" — it is a poll that NEVER
+          // completes, every request dying at the next tick while the wire
+          // churns. Leaving the in-flight read to finish still marks the key
+          // stale, so the next tick refetches: coalescing, not skipping.
+          void queryClient.invalidateQueries(
+            { queryKey: hostQueryKeys.methodScope(hostId, "host.status") },
+            { cancelRefetch: false },
+          );
+        },
+        intervalMs: FLEET_ACTIVE_POLL_MS,
+        fireOnShow: true,
+      }),
     });
   }
   let released = false;
@@ -118,7 +123,7 @@ function acquireAccelerator(
     if (entry === undefined) return;
     entry.count -= 1;
     if (entry.count > 0) return;
-    window.clearInterval(entry.timer);
+    entry.stop();
     hosts.delete(hostId);
   };
 }

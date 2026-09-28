@@ -7,11 +7,12 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderWithLibrary,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -91,6 +92,17 @@ afterEach(cleanup);
 afterEach(() => {
   vi.useRealTimers();
 });
+
+function render(ui: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return renderWithLibrary(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
 
 describe("folder-mapping refresh affordance", () => {
   it("forces one re-derive when the picker opens, so the chip's stale branch heals on the way in", async () => {

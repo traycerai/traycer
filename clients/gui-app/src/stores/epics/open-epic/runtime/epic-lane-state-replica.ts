@@ -95,6 +95,7 @@ import {
 import type { EpicRawProjectionSources } from "../projection-helpers";
 import { artifactProjectionsEq, arrayShallowEq } from "../projection-helpers";
 import { createRecordTable, type RecordTable } from "./record-table";
+import type { RetainedValueSize } from "@/stores/replica-memory/retained-value-size";
 
 /**
  * Whether a reset means the next snapshot may come from a store that never saw
@@ -179,6 +180,8 @@ export interface EpicLaneStateReplicaSources {
   readonly isDisposed: () => boolean;
   /** Called once per envelope that actually changed the slices. */
   readonly onChanged: () => void;
+  /** Called after an accepted row change, even when the visible slice is equal. */
+  readonly onRetainedRowsChanged?: (size: RetainedValueSize) => void;
 }
 
 export interface EpicLaneStateReplica {
@@ -646,19 +649,33 @@ export function createEpicLaneStateReplica(
   return {
     apply(event: EpicStateLaneEvent): ReplicaApplyOutcome {
       if (isDisposed()) return { kind: "ignored", reason: "disposed" };
+      const before = table.retainedRowSize();
+      let outcome: ReplicaApplyOutcome;
       switch (event.kind) {
         case "record-snapshot":
-          return applyRecordSnapshot(event);
+          outcome = applyRecordSnapshot(event);
+          break;
         case "record-transaction":
-          return applyRecordTransaction(event);
+          outcome = applyRecordTransaction(event);
+          break;
         case "record-trust":
-          return applyRecordTrust(event);
+          outcome = applyRecordTrust(event);
+          break;
         case "record-poll-answer":
           // Never emitted by this lane's adapter, and deliberately not wired -
           // see the module doc. Ignored with a reason rather than dropped, so a
           // replay that produces one is a diagnosable event.
-          return { kind: "ignored", reason: "before-fence" };
+          outcome = { kind: "ignored", reason: "before-fence" };
+          break;
       }
+      const after = table.retainedRowSize();
+      if (
+        after.rawBytes !== before.rawBytes ||
+        after.estimatedHeapBytes !== before.estimatedHeapBytes
+      ) {
+        sources.onRetainedRowsChanged?.(after);
+      }
+      return outcome;
     },
 
     slices: () => table.current(),
@@ -687,6 +704,7 @@ export function createEpicLaneStateReplica(
       // reader must not have to know that to see this is right.
       if (replacesThePositionSpace(cause)) table.forgetRetractions();
       table.applySnapshot([], table.ingestSeq());
+      sources.onRetainedRowsChanged?.(table.retainedRowSize());
       onChanged();
     },
   };

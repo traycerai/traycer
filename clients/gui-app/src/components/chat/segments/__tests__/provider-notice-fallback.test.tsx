@@ -1,5 +1,9 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  providerNoticeKindSchema,
+  type ProviderNoticeKind,
+} from "@traycer/protocol/persistence/epic/content-blocks";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { ProviderNoticeSegment } from "../provider-notice-segment";
 
@@ -12,108 +16,109 @@ const DETAILS = [
   { label: "reason", value: "Rate limit reached" },
 ];
 
+const TITLE = "Switched to Sonnet 5 · Low on Surya after a rate limit";
+const MESSAGE = "claude/sonnet (Surya 2) → claude/sonnet (Surya)";
+
+// Every kind the fallback engine writes, derived from the prefix rather than
+// listed, so a sixth `fallback_*` kind joins the loops below by existing.
+const FALLBACK_KINDS: ReadonlyArray<ProviderNoticeKind> =
+  providerNoticeKindSchema.options.filter((kind) =>
+    kind.startsWith("fallback_"),
+  );
+
+function renderNotice(
+  noticeKind: ProviderNoticeKind,
+  message: string | null,
+): void {
+  render(
+    <TabHostProvider hostId="tab-host-b">
+      <ProviderNoticeSegment
+        status="completed"
+        noticeKind={noticeKind}
+        tone="info"
+        title={TITLE}
+        message={message}
+        details={DETAILS}
+        findUnitId={null}
+      />
+    </TabHostProvider>,
+  );
+}
+
 describe("ProviderNoticeSegment fallback details", () => {
   afterEach(() => {
     cleanup();
   });
 
-  it("reveals detail pairs and a Fallback settings link on fallback_applied, and no link on model_rerouted", () => {
-    const { unmount } = render(
-      <TabHostProvider hostId="tab-host-b">
-        <ProviderNoticeSegment
-          status="completed"
-          noticeKind="fallback_applied"
-          tone="info"
-          title="Switched providers"
-          message="Moved to Codex."
-          details={DETAILS}
-          findUnitId={null}
-        />
-      </TabHostProvider>,
-    );
-    fireEvent.click(screen.getByRole("button"));
-    expect(screen.getByText("via:")).toBeDefined();
-    expect(screen.getByText("Claude Code → Codex")).toBeDefined();
-    const settings = screen.getByRole("button", { name: "Model routing" });
-    const detailsBox = screen.getByText("via:").closest("dl")?.parentElement;
-    expect(detailsBox?.querySelectorAll("button")).toHaveLength(1);
-    expect(settings.textContent).toBe("Model routing");
-    expect(detailsBox?.textContent).not.toMatch(/Switch elsewhere/);
-    unmount();
-
-    render(
-      <TabHostProvider hostId="tab-host-b">
-        <ProviderNoticeSegment
-          status="completed"
-          noticeKind="model_rerouted"
-          tone="warning"
-          title="Model changed"
-          message="Codex switched models."
-          details={DETAILS}
-          findUnitId={null}
-        />
-      </TabHostProvider>,
-    );
-    fireEvent.click(screen.getByRole("button"));
-    expect(screen.getByText("via:")).toBeDefined();
-    // Falsification: make isFallbackNoticeKind return true unconditionally and THIS control assertion must go red.
-    expect(screen.queryByRole("button", { name: "Model routing" })).toBeNull();
+  it("covers the fallback kinds the engine writes (guards the loops below from going vacuous)", () => {
+    expect(FALLBACK_KINDS).toContain("fallback_applied");
+    expect(FALLBACK_KINDS).toContain("fallback_wait_resumed");
+    expect(FALLBACK_KINDS).toContain("fallback_settled");
+    expect(FALLBACK_KINDS).toContain("fallback_returned");
+    expect(FALLBACK_KINDS).toContain("fallback_return_blocked");
   });
 
-  /**
-   * The GUI half of "no notice kind falls into a default arm".
-   *
-   * There is no arm to fall into: this component is kind-BLIND apart from the
-   * settings-link gate. `title`, `message` and `details` all come off the wire,
-   * so "every kind is rendered with its own copy" is a property of whoever
-   * appends the notice, not of this file - which is why the assertions below
-   * check that the rendered copy is exactly what was passed in, and that the
-   * only thing membership in `FALLBACK_NOTICE_KINDS` buys a kind is the link.
-   *
-   * Written for `fallback_return_blocked` because it is the harder of the two
-   * new kinds to reason about from its name: a return that ended with the chat
-   * NOT moving is still a fallback-engine notice, so it still carries the
-   * affordance. One case rather than one per kind - set membership itself is
-   * pinned exhaustively over `providerNoticeKindSchema.options` in
-   * `fallback/__tests__/fallback-notice-kinds.test.ts`, and a second render
-   * case here would assert the same derivation twice.
-   */
-  it("reveals the Fallback settings link for a return-ending notice too - the settings-link gate is the component's ONLY kind-keyed branch", () => {
-    render(
-      <TabHostProvider hostId="tab-host-b">
-        <ProviderNoticeSegment
-          status="completed"
-          noticeKind="fallback_return_blocked"
-          tone="info"
-          title="Stayed on the fallback"
-          message="Kept this chat where it is."
-          details={[
-            { label: "Staying on", value: "Codex · gpt-5" },
-            { label: "Preferred", value: "Claude Code · work-account" },
-          ]}
-          findUnitId={null}
-        />
-      </TabHostProvider>,
-    );
+  it.each(FALLBACK_KINDS)(
+    "reveals detail pairs and no settings action under the chevron for %s",
+    (noticeKind) => {
+      renderNotice(noticeKind, MESSAGE);
+      const chevron = screen.getByRole("button");
+      expect(chevron.getAttribute("aria-expanded")).toBe("false");
+      // Collapsed: the details are not on screen yet.
+      expect(screen.queryByText("via:")).toBeNull();
 
-    // Kind-blind: the collapsed rule renders the wire's own title and message,
-    // with nothing derived from the kind added to either.
-    const expander = screen.getByRole("button");
-    expect(expander.textContent).toBe(
-      "Stayed on the fallback · Kept this chat where it is.",
-    );
+      fireEvent.click(chevron);
+      expect(chevron.getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByText("via:")).toBeDefined();
+      expect(screen.getByText("Claude Code → Codex")).toBeDefined();
+      // The chevron is the only button: no "Model routing" link, styled or
+      // otherwise, in the expanded details (clutter cuts, 2026-09-27).
+      expect(
+        screen.queryByRole("button", { name: "Model routing" }),
+      ).toBeNull();
+      expect(screen.queryByRole("link")).toBeNull();
+      expect(screen.queryByText("Model routing")).toBeNull();
+      expect(screen.getAllByRole("button")).toHaveLength(1);
+    },
+  );
 
-    fireEvent.click(expander);
-    expect(screen.getByText("Staying on")).toBeDefined();
-    expect(screen.getByText("Codex · gpt-5")).toBeDefined();
-    // Falsification: remove "fallback_return_blocked" from
-    // FALLBACK_NOTICE_KINDS in fallback/fallback-notice-kinds.ts and THIS
-    // assertion must go red - the same mutation the notice-kinds cell pins,
-    // reaching the affordance through the real component instead of the set.
-    expect(screen.getByRole("button", { name: "Model routing" })).toBeDefined();
-    const detailsBox = screen
-      .getByText("Staying on")
-      .closest("dl")?.parentElement;
-    expect(detailsBox?.querySelectorAll("button")).toHaveLength(1);
+  it("also offers no settings action on a non-fallback notice", () => {
+    renderNotice("model_rerouted", "Codex switched models.");
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByText("via:")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Model routing" })).toBeNull();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+  });
+
+  it("paints a fallback_applied notice's title and not its message, collapsed or expanded, with the details under the chevron", () => {
+    renderNotice("fallback_applied", MESSAGE);
+    const chevron = screen.getByRole("button");
+
+    expect(chevron.textContent).toBe(TITLE);
+    expect(document.body.textContent).not.toContain("claude/sonnet");
+    expect(screen.queryByText(MESSAGE)).toBeNull();
+
+    fireEvent.click(chevron);
+    expect(screen.getByText("via:")).toBeDefined();
+    expect(screen.getByText("Claude Code → Codex")).toBeDefined();
+    expect(chevron.textContent).toBe(TITLE);
+    expect(document.body.textContent).not.toContain("claude/sonnet");
+    expect(screen.queryByText(MESSAGE)).toBeNull();
+  });
+
+  it.each([
+    "fallback_settled",
+    "fallback_wait_resumed",
+    "fallback_returned",
+    "fallback_return_blocked",
+    "model_rerouted",
+    "harness_message",
+  ] as const)("still prints ' · message' inline for %s", (noticeKind) => {
+    renderNotice(noticeKind, "Kept this chat where it is.");
+    // Control for the fallback_applied absence above: the same message text
+    // renders when the kind is not `fallback_applied`.
+    expect(screen.getByRole("button").textContent).toBe(
+      `${TITLE} · Kept this chat where it is.`,
+    );
   });
 });

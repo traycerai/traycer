@@ -142,6 +142,11 @@ export function JudgeTab(): ReactNode {
           <SettingsGroup
             group={PERMISSIONS.definitions.autoModeJudge}
             showTitle
+            titleStatus={
+              <Badge variant="muted" size="xs">
+                Experimental
+              </Badge>
+            }
             tone="default"
             dataTestId={undefined}
             fill={false}
@@ -809,6 +814,10 @@ function useJudgePicker(props: JudgeTilesProps): JudgePicker {
       providerSwitchModel,
       selectionMarked,
       openRef,
+      closeRef: null,
+      followSelectionRef: null,
+      onOpenChange: null,
+      footer: null,
     }),
     [face, providerSwitchModel, selectionMarked],
   );

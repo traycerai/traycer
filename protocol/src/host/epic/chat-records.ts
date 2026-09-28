@@ -636,6 +636,47 @@ export type GetChatRunSettingsResponse = z.infer<
 >;
 
 /**
+ * `epic.getChatRunSettingsBatch@1.0` - the N-chat counterpart of the unary
+ * above. Same owner-scoped nulls, same store-first precedence, one round trip.
+ *
+ * Cap matches `epic.getTaskContexts` so id-batch methods share one number.
+ * The client chunks a longer sibling list; the host never sees more than this.
+ */
+export const GET_CHAT_RUN_SETTINGS_BATCH_MAX_IDS = 50;
+
+export const getChatRunSettingsBatchRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    chatIds: z
+      .array(z.string().min(1))
+      .min(1)
+      .max(GET_CHAT_RUN_SETTINGS_BATCH_MAX_IDS),
+  }),
+);
+export type GetChatRunSettingsBatchRequest = z.infer<
+  typeof getChatRunSettingsBatchRequestSchema
+>;
+
+export const getChatRunSettingsBatchEntrySchema = lazySchema(() =>
+  z.object({
+    chatId: z.string().min(1),
+    settings: chatRunSettingsSchema.nullable(),
+  }),
+);
+export type GetChatRunSettingsBatchEntry = z.infer<
+  typeof getChatRunSettingsBatchEntrySchema
+>;
+
+export const getChatRunSettingsBatchResponseSchema = lazySchema(() =>
+  z.object({
+    entries: z.array(getChatRunSettingsBatchEntrySchema),
+  }),
+);
+export type GetChatRunSettingsBatchResponse = z.infer<
+  typeof getChatRunSettingsBatchResponseSchema
+>;
+
+/**
  * Frozen harness id set for `epic.getChatRunSettings@1.0`, as the v1.2.0 tags
  * (2026-08-24) shipped it.
  *

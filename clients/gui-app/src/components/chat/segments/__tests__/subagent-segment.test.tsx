@@ -932,6 +932,7 @@ describe("<SubagentSegment /> promoted feed", () => {
           {
             id: "notice-1",
             kind: "provider_notice",
+            receipt: null,
             status: "completed",
             noticeKind: "model_rerouted",
             tone: "warning",

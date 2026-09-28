@@ -922,7 +922,7 @@ describe("useFileAsset", () => {
     unmount();
   });
 
-  it("opens a fresh stream when a git image remounts during an in-flight transfer", () => {
+  it("rejoins a git image's in-flight stream when remounted", async () => {
     const first = renderHook(() => useFileAsset(GIT_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const firstSession = mockWsStreamClient.sessions[0];
@@ -932,16 +932,18 @@ describe("useFileAsset", () => {
     });
     expect(first.result.current.status).toBe("header");
     first.unmount();
-    expect(firstSession.closed).toBe(true);
+    expect(firstSession.closed).toBe(false);
+    expect(imageBlobCache.size()).toBe(1);
 
     const remounted = renderHook(() => useFileAsset(GIT_REQUEST));
-    expect(mockWsStreamClient.sessions).toHaveLength(2);
-    const remountedSession = mockWsStreamClient.sessions[1];
-    expect(remountedSession).not.toBe(firstSession);
-    act(() => {
-      emitHeader(remountedSession, "remount-in-flight", 3);
-    });
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
     expect(remounted.result.current.status).toBe("header");
+    act(() => {
+      emitBytes(firstSession, [1, 2, 3]);
+    });
+    await flushPromises();
+    expect(remounted.result.current.status).toBe("ready");
+    expect(createObjectUrlMock).toHaveBeenCalledTimes(1);
     remounted.unmount();
   });
 
@@ -1312,7 +1314,7 @@ describe("useFileAsset", () => {
     },
   );
 
-  it("closes the stream and releases the cache entry on unmount mid-stream", () => {
+  it("keeps the in-flight stream until grace elapses after last unmount", async () => {
     const acquireSpy = vi.spyOn(imageBlobCache, "acquire");
     const { result, unmount } = renderHook(() =>
       useFileAsset(WORKSPACE_REQUEST),
@@ -1327,7 +1329,8 @@ describe("useFileAsset", () => {
 
     unmount();
 
-    expect(session.closed).toBe(true);
+    expect(session.closed).toBe(false);
+    expect(imageBlobCache.size()).toBe(1);
     expect(acquireSpy).toHaveBeenCalledWith(
       JSON.stringify([
         // The cache key's first element is the account+host scope pair
@@ -1347,6 +1350,11 @@ describe("useFileAsset", () => {
       "grace",
     );
     expect(createObjectUrlMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(session.closed).toBe(true);
     expect(imageBlobCache.size()).toBe(0);
   });
 

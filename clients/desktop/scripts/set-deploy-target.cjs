@@ -80,7 +80,7 @@ if (process.argv.includes("--restore")) {
 const production = {
   cloud: {
     authnApiUrl: "https://authn.traycer.ai",
-    cloudUiBaseUrl: "https://platform.traycer.ai",
+    cloudUiBaseUrl: "https://traycer.ai",
     relayAttachUrl: "wss://relay.traycer.ai/attach",
   },
   appId: "ai.traycer.desktop",

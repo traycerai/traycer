@@ -485,8 +485,8 @@ function BackgroundTreeRow(props: {
   // subscribing here repainted every command, monitor, subagent, workflow,
   // MCP and wake row each tick to change nothing. `BackgroundWaitTitle` below
   // is where a fallback-wait row gets the live clock instead, isolated the
-  // same way `FallbackGraceHeadline` isolates its own countdown from
-  // `FallbackGraceCard`.
+  // same way the routing card's `CountdownHeadline` isolates its own
+  // countdown from the rest of the card.
   const displayTitle =
     item === null ? node.title : backgroundItemDisplayTitle(item, 0);
   const titleNode: ReactNode =
@@ -592,8 +592,8 @@ function BackgroundTreeRow(props: {
  * kind whose title reads `now` (whether the resume time is far enough out to
  * need its weekday, via `formatWaitTime`), so subscribing at this depth means
  * the tick repaints this leaf alone - not the icon, the badge, the stop
- * button, or any sibling row in the panel. Same shape `FallbackGraceHeadline`
- * uses to isolate its own countdown from `FallbackGraceCard`.
+ * button, or any sibling row in the panel. Same shape the routing card's
+ * `CountdownHeadline` uses to isolate its own countdown from the card.
  *
  * Returns a bare fragment rather than a `<span>`: the caller renders this
  * both as the row's visible title AND as the tooltip's `label` (which takes a

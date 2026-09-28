@@ -26,10 +26,12 @@ const MAX_TEST_WORKERS = Math.min(
 // went away, on a real device. The suite was green throughout, because it ran
 // the UNCOMPILED hook while production mobile compiles everything. A test that
 // does not run the compiled component cannot see this class of bug at all.
-// `relative-time` / `fallback-grace-card` are the desktop repeat of the exact
-// same shape, caught live rather than in review: the fallback grace card's
-// countdown froze at "in 3m 27s" for a 15s window and never moved until the
-// host switched. `useGraceCountdown` used to discard
+// `relative-time` / `routing-card` are the desktop repeat of the exact same
+// shape, caught live rather than in review: the routing card's countdown (then
+// `fallback-grace-card`) froze at "in 3m 27s" for a 15s window and never moved
+// until the host switched. The routing card's drain bar reads the same
+// snapshot (`useGraceCountdownState`), so a frozen bar is the same regression
+// with a width instead of a string. `useGraceCountdown` used to discard
 // `useSyncExternalStore`'s return and read the mutable
 // `secondClock.sampledNow()` at render time; the compiler memoized
 // `formatGraceCountdown(deadline, secondClock.sampledNow())` on `deadline`
@@ -42,7 +44,7 @@ const MAX_TEST_WORKERS = Math.min(
 // desktop renderer compiles the whole tree, its dev server included (where
 // the freeze was seen).
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|fallback-grace-card)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card)\.(?:ts|tsx)$/;
 
 export default defineConfig({
   // Run the affected composer boundary through the packaged desktop

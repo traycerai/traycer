@@ -2,6 +2,7 @@ import { create, useStore } from "zustand";
 import type { LastFailedAttempt } from "@traycer/protocol/host/agent/gui/subscribe";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import { fallbackComposerCardVisible } from "./fallback-state";
 
 type LastFailedAttemptSlice = Pick<
   ChatSessionState,
@@ -73,6 +74,13 @@ export function useChatLastFailedAttempt(input: {
  *
  * Read BY VALUE for the same reason as its sibling above: `undefined` is what
  * gives the row back, and a hook that accumulated would strand it.
+ *
+ * "Live" means a traversal the composer is DRAWING a routing card for - the
+ * same predicate the composer's banner slot decides on - not merely a defined
+ * `pendingFallback`. The one frame that separates them is a countdown with
+ * nothing to try: the composer draws no card for it (spec Flow 1: "the
+ * failed-turn card shows instead"), so the row must not stand down for it
+ * either, or the error would sit on screen with no controls anywhere.
  */
 export function useChatFallbackTraversalIsLive(input: {
   readonly epicId: string;
@@ -82,5 +90,7 @@ export function useChatFallbackTraversalIsLive(input: {
   const { epicId, chatId, hostId } = input;
   const handle = useExistingChatSessionHandle(epicId, chatId, hostId);
   const store = handle === null ? emptySlice : handle.store;
-  return useStore(store, (state) => state.pendingFallback !== undefined);
+  return useStore(store, (state) =>
+    fallbackComposerCardVisible(state.pendingFallback),
+  );
 }

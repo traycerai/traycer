@@ -123,6 +123,7 @@ import {
   worktreeBindingIsFolderless,
 } from "@/hooks/composer/use-workspace-mention-roots";
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
+import { notifyChatTileSessionAcquired } from "@/components/epic-canvas/chat-prewarm-handoff";
 import { useEpicParked } from "@/lib/epics/epic-parking";
 import { useEpicDraftGuard } from "@/lib/epics/use-epic-draft-guard";
 import {
@@ -171,7 +172,9 @@ import {
   resolveApprovalJumpLanding,
   messageIdForTranscriptTarget,
   sentMessageAnchorId,
+  TRANSCRIPT_JUMP_TTL_MS,
 } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
+import { TranscriptQueuePauseReasonSupportContext } from "@/components/chat/use-transcript-queue-pause-reason-support";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
 import { useHostBinding } from "@/lib/host";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
@@ -210,10 +213,7 @@ import { useQueuedPromptBlobRepair } from "@/hooks/chats/use-queued-prompt-blob-
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
-import {
-  useGuiHarnessCatalogForClient,
-  type GuiHarnessCatalogEntry,
-} from "@/hooks/harnesses/use-gui-harness-catalog";
+import { useGuiHarnessCatalogForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useInitialChatHandoffDriver } from "@/hooks/chats/use-initial-chat-handoff-driver";
 import { useChatActions } from "@/hooks/chats/use-chat-actions";
 import { useChatSetupFailureRestoreDriver } from "@/hooks/chats/use-chat-setup-failure-restore-driver";
@@ -250,12 +250,12 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
-  agentModelKey,
   resolveAgentReasoningLabel,
   resolveAgentSenderDisplay,
   resolveSenderLabel,
   type SenderDisplayContext,
 } from "@/lib/chat/sender-display";
+import { getModelLabelIndex } from "@/lib/chat/model-label-index";
 import {
   selectEpicRunSettingsEntry,
   selectGlobalLastRunSettings,
@@ -386,35 +386,6 @@ interface ChatTileSessionViewProps {
    * synthesized loaded and never waits.
    */
   readonly preContent: ChatTilePreContentFrame | null;
-}
-
-function buildModelReasoningLabels(
-  harnesses: ReadonlyArray<GuiHarnessCatalogEntry>,
-): ReadonlyMap<string, ReadonlyMap<string, string>> {
-  return new Map(
-    harnesses.flatMap((harness) =>
-      harness.models.map((model) =>
-        reasoningLabelEntry(
-          harness.id,
-          model.slug,
-          new Map(
-            model.supportedReasoningEfforts.map((option) => [
-              option.id,
-              option.label,
-            ]),
-          ),
-        ),
-      ),
-    ),
-  );
-}
-
-function reasoningLabelEntry(
-  harnessId: GuiHarnessCatalogEntry["id"],
-  modelSlug: string,
-  labels: ReadonlyMap<string, string>,
-): readonly [string, ReadonlyMap<string, string>] {
-  return [agentModelKey(harnessId, modelSlug), labels];
 }
 
 /**
@@ -574,6 +545,16 @@ function ChatTileForChat(props: ChatTileProps) {
     tabHostId,
     !epicParked && (chatRecord !== null || isCrossHostOpen || isCloudKnown),
   );
+  useEffect(() => {
+    if (handle !== null) {
+      notifyChatTileSessionAcquired(
+        epicId,
+        tabHostId,
+        node.id,
+        node.instanceId,
+      );
+    }
+  }, [handle, epicId, tabHostId, node.id, node.instanceId]);
   const reachability = useHostReachability(tabHostId);
   // The chat's own bounded load (invariant 6), for both halves of the wait:
   // while `handle === null`, and after it until the first snapshot. The
@@ -842,14 +823,6 @@ function resolveBackgroundClickTarget(
 }
 
 /**
- * How long a parked cross-tile transcript jump waits for its target row to
- * stream in before it is dropped. Generous enough to cover a cold tile pulling
- * a large transcript, short enough that a stale request cannot fire minutes
- * later and yank the reader somewhere they no longer expect.
- */
-const TRANSCRIPT_JUMP_TTL_MS = 30_000;
-
-/**
  * Which open-store a cross-tile block jump should expand. A block that names a
  * live background item follows that item's card kind; anything else (a settled
  * tool card - the usual shape for a file-write anchor) opens as a tool card.
@@ -931,6 +904,21 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       viewHandle.store.getState().reportVisibleTranscriptRange(range);
     },
     [viewHandle],
+  );
+  // Find → hydration bridge: the row chat find reads to confirm an index hit.
+  // Required hydration beside the viewport's, never a move of it.
+  const onFindReadOrdinalChange = useCallback(
+    (ordinal: number | null): void => {
+      viewHandle.store.getState().requestFindReadOrdinal(ordinal);
+    },
+    [viewHandle],
+  );
+  // The transcript's hidden-row rule reads its OWN session's answer, from
+  // whichever handle this view renders - a published or replica handle is
+  // never registered, so this is the only route that reaches it.
+  const queuePauseReasonSupport = useStore(
+    viewHandle.store,
+    (s) => s.queuePauseReasonProtocolSupported,
   );
   const hostId = useTabHostId();
   // Chat image byte reads are scoped here, once per tile, rather than per
@@ -1510,40 +1498,45 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
              * absolutely positioned, so it does not participate in this flex
              * layout regardless. */}
             <div className="relative flex min-h-0 flex-1 flex-col">
-              <ChatSessionMessagesSurface
-                snapshotLoaded={view.snapshotLoaded}
-                connectionStatus={view.connectionStatus}
-                fatalClose={view.fatalClose}
-                preSnapshotRetries={view.preSnapshotRetries}
-                preSnapshotReloadStartedAt={view.preSnapshotReloadStartedAt}
-                onRetry={view.onChatRetryFromUser}
-                preContent={view.preContent}
-                restoreContext={view.restoreContext}
-                node={view.node}
-                taskTitle={view.taskTitle}
-                epicId={view.currentEpicId}
-                viewTabId={view.viewTabId}
-                tabHostId={view.tabHostId}
-                workspaceRoots={view.linkResolutionRoots}
-                messages={view.messages}
-                activeTurnId={view.activeTurnId}
-                transcriptWindow={view.transcriptWindow}
-                onVisibleOrdinalRangeChange={onVisibleOrdinalRangeChange}
-                baselineEpoch={view.transcriptBaselineEpoch}
-                hydrationSequence={view.transcriptHydrationSequence}
-                coldRewrittenMessageIds={view.coldRewrittenMessageIds}
-                backgroundItems={view.lower.backgroundItems}
-                scrollRequest={backgroundScrollRequest}
-                onScrollRequestSettled={onScrollRequestSettled}
-                surfaceVisible={view.surfaceVisible}
-                systemOverlayActive={systemOverlayActive}
-                getMessageActions={view.getMessageActions}
-                nextStepActions={view.nextStepActions}
-                planActions={view.planActions}
-                composerOverlayHeight={
-                  lowerSurfacesElement === null ? 0 : lowerSurfacesHeight
-                }
-              />
+              <TranscriptQueuePauseReasonSupportContext
+                value={queuePauseReasonSupport}
+              >
+                <ChatSessionMessagesSurface
+                  snapshotLoaded={view.snapshotLoaded}
+                  connectionStatus={view.connectionStatus}
+                  fatalClose={view.fatalClose}
+                  preSnapshotRetries={view.preSnapshotRetries}
+                  preSnapshotReloadStartedAt={view.preSnapshotReloadStartedAt}
+                  onRetry={view.onChatRetryFromUser}
+                  preContent={view.preContent}
+                  restoreContext={view.restoreContext}
+                  node={view.node}
+                  taskTitle={view.taskTitle}
+                  epicId={view.currentEpicId}
+                  viewTabId={view.viewTabId}
+                  tabHostId={view.tabHostId}
+                  workspaceRoots={view.linkResolutionRoots}
+                  messages={view.messages}
+                  activeTurnId={view.activeTurnId}
+                  transcriptWindow={view.transcriptWindow}
+                  onVisibleOrdinalRangeChange={onVisibleOrdinalRangeChange}
+                  onFindReadOrdinalChange={onFindReadOrdinalChange}
+                  baselineEpoch={view.transcriptBaselineEpoch}
+                  hydrationSequence={view.transcriptHydrationSequence}
+                  coldRewrittenMessageIds={view.coldRewrittenMessageIds}
+                  backgroundItems={view.lower.backgroundItems}
+                  scrollRequest={backgroundScrollRequest}
+                  onScrollRequestSettled={onScrollRequestSettled}
+                  surfaceVisible={view.surfaceVisible}
+                  systemOverlayActive={systemOverlayActive}
+                  getMessageActions={view.getMessageActions}
+                  nextStepActions={view.nextStepActions}
+                  planActions={view.planActions}
+                  composerOverlayHeight={
+                    lowerSurfacesElement === null ? 0 : lowerSurfacesHeight
+                  }
+                />
+              </TranscriptQueuePauseReasonSupportContext>
               {/*
                * SurfaceActivityProvider narrows catalog/provider query subscriptions
                * to the one focused pane+tab. A visible split partner keeps rendering
@@ -1778,12 +1771,10 @@ function useChatTileSessionViewModel(
   // transcript describes turns that ran on the TAB host, so a slug that host
   // does not advertise must degrade to the raw slug rather than borrow a label
   // (or a reasoning-effort label, which is version-specific) from a host that
-  // never served the turn. On a default-host tab this is the slot the
-  // app-load prefetcher already filled, so nothing changes there; on a
-  // remote-host tab the labels appear as that host's per-harness slots warm —
-  // this tile's own composer warms its selected harness on mount, and its
-  // picker warms whatever the user browses (the catalog fan-out itself is
-  // `"cached-only"` everywhere but the app-load fill).
+  // never served the turn. Labels appear as that host's per-harness slots
+  // warm: this tile's own composer warms its selected harness on mount, and
+  // its picker warms whatever the user browses. The catalog fan-out itself is
+  // `"cached-only"`.
   const tabHostCatalogClient = useTabHostClient();
   const tabModelCatalog = useGuiHarnessCatalogForClient(
     tabHostCatalogClient,
@@ -1791,20 +1782,8 @@ function useChatTileSessionViewModel(
     { enabled: false, subscribed: surfaceVisible, modelsFetch: "cached-only" },
   );
   const displayCatalog = tabModelCatalog.harnesses;
-  const modelLabels = useMemo<ReadonlyMap<string, string>>(
-    () =>
-      new Map(
-        displayCatalog.flatMap((harness) =>
-          harness.models.map((model) => [
-            agentModelKey(harness.id, model.slug),
-            model.label,
-          ]),
-        ),
-      ),
-    [displayCatalog],
-  );
-  const modelReasoningLabels = useMemo(
-    () => buildModelReasoningLabels(displayCatalog),
+  const { modelLabels, modelReasoningLabels } = useMemo(
+    () => getModelLabelIndex(displayCatalog),
     [displayCatalog],
   );
   const handoffScope = useMemo<InitialChatHandoffScope>(
@@ -3781,6 +3760,8 @@ interface ChatSessionMessagesSurfaceProps {
   readonly transcriptWindow: TranscriptWindow | null;
   /** Viewport-driven hydration report; see `ChatMessagesProps`. */
   readonly onVisibleOrdinalRangeChange: (range: OrdinalRange | null) => void;
+  /** Chat find's index-read hydration; see `ChatMessagesProps`. */
+  readonly onFindReadOrdinalChange: (ordinal: number | null) => void;
   /** Which connection's snapshot established `messages`; see `ChatMessages`. */
   readonly baselineEpoch: number;
   /** Whether a range seated these rows; see `ChatMessages`. */
@@ -3894,6 +3875,7 @@ function ChatSessionMessagesSurface(
               messages={props.messages}
               transcriptWindow={props.transcriptWindow}
               onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
+              onFindReadOrdinalChange={props.onFindReadOrdinalChange}
               baselineEpoch={props.baselineEpoch}
               hydrationSequence={props.hydrationSequence}
               coldRewrittenMessageIds={props.coldRewrittenMessageIds}

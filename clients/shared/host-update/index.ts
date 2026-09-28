@@ -152,6 +152,7 @@ export {
   rebindUpdateMutationCapabilityLiveness,
   withUpdateContender,
   withSupervisorRelaunchContender,
+  parkedActivationMatchesInstall,
   commitAttemptMutationWithCapability,
   discardAttemptRecordWithCapability,
   withUpdateContenderAdoption,

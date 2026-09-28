@@ -270,6 +270,18 @@ export interface HostUpdateRunOutcome {
    * running state is a different fact and now travels as one.
    */
   readonly runningVersion: string | null;
+  /**
+   * `true` when the activation arm's restart brought up a host that was NOT
+   * running - the `no-live-host` reading under its lock - rather than
+   * replacing a live one. An explicit fact, because the legacy projection
+   * cannot express it: `previousVersion === version` holds for that run, and
+   * ALSO for a genuine restart of a live host whose published version equals
+   * the catalog version while its runtime stamp does not (the runtime-stamp
+   * domain in `classifyActivationAgainst` reads that as debt). The shell
+   * renders the two differently, and inferring the first from version
+   * equality mislabels the second (traycer#2208 review).
+   */
+  readonly startedStoppedHost: boolean;
 }
 
 // Matches `projectInstallResult`'s own fallback when `serviceLifecycle` is
@@ -402,6 +414,7 @@ export async function runHostUpdate(
     lastSeenRunningVersion: null,
     planActivationReading: null,
     foreignRuntimeVersion: null,
+    activationStartedStoppedHost: false,
   };
 
   // The ONE settlement point every exit in the table above funnels through.
@@ -662,6 +675,13 @@ interface SelectionFacts {
    * activated.
    */
   foreignRuntimeVersion: string | null;
+  /**
+   * Written by the ACTIVATION ARM, under its lock: its restart was taken on a
+   * `no-live-host` reading, so the run started a stopped host rather than
+   * replacing a live one. See `HostUpdateRunOutcome.startedStoppedHost` for
+   * why the legacy projection cannot carry this.
+   */
+  activationStartedStoppedHost: boolean;
 }
 
 /**
@@ -3205,6 +3225,10 @@ async function activationArm(
         stopped,
       );
       restarted = true;
+      // The reading this arm ACTED on, not a re-read: the same lock span
+      // decided there was no live host and relaunched one.
+      selection.activationStartedStoppedHost =
+        readingUnderLock.kind === "no-live-host";
     } catch (err) {
       if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
         throw await parkForActivation(input, writer, err);
@@ -3737,6 +3761,7 @@ async function projectSegment(
       // An executed arm reports through its own result; the running state is
       // the release path's question.
       runningVersion: null,
+      startedStoppedHost: selection.activationStartedStoppedHost,
     };
   }
   // `terminalized` is `update-verify`'s exit and never this command's: under
@@ -3868,6 +3893,8 @@ async function projectSegment(
     releasedReason: reason,
     foreignRuntimeVersion: selection.foreignRuntimeVersion,
     runningVersion,
+    // A release started nothing.
+    startedStoppedHost: false,
   };
 }
 

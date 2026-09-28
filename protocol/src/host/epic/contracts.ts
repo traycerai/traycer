@@ -167,6 +167,8 @@ import {
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
   getChatRunSettingsResponseSchemaV20,
+  getChatRunSettingsBatchRequestSchema,
+  getChatRunSettingsBatchResponseSchema,
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   readChatAttachmentRequestSchema,
@@ -1661,6 +1663,16 @@ export const epicGetChatRunSettingsDowngradeV20ToV10 = defineDowngradePath<
     }
     return { ok: true, value: parsed.data };
   },
+});
+
+export const epicGetChatRunSettingsBatchV10 = defineRpcContract({
+  method: "epic.getChatRunSettingsBatch",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: getChatRunSettingsBatchRequestSchema,
+  // Live settings tuple, same head body as `epic.getChatRunSettings@3.0`.
+  // Optional; an old host answers `E_HOST_UNSUPPORTED` and the client falls
+  // back to N singles.
+  responseSchema: getChatRunSettingsBatchResponseSchema,
 });
 
 // The terminal-agent RECORD read (`epic.listTuiAgents@1.0`) lives in

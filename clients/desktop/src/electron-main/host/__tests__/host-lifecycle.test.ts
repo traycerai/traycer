@@ -54,6 +54,23 @@ vi.mock("node:tls", () => ({
   default: { connect: tlsConnect },
 }));
 
+// A passthrough spy, not a fake: `watch` still does the real FSEvents/inotify
+// subscription. This lets a test assert bootstrap actually CALLED `watch`
+// against a given directory and that the call RETURNED rather than threw
+// (the ENOENT regression, traycer#961/#996/#1001), without depending on the
+// lossy real-world timing of whether an edge is ever delivered.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const watchSpy = vi.fn(actual.watch);
+  // Builtins resolve named imports through `default` too, so spy on both.
+  return {
+    ...actual,
+    watch: watchSpy,
+    default: { ...actual, watch: watchSpy },
+  };
+});
+
+import { watch } from "node:fs";
 import {
   canReachHostWebsocketUrl,
   HostLifecycle,
@@ -65,6 +82,11 @@ import {
 import { __setAsyncProcessLivenessReaderForTest } from "../process-identity";
 import { DEV_LABEL } from "../host-paths";
 import { config } from "../../../config";
+import {
+  startHostHealthMonitor,
+  type HostHealthMonitor,
+} from "../host-health-monitor";
+import { createHostRecoveryGovernor } from "../host-recovery-governor";
 
 // These fixtures deliberately use synthetic PIDs. Their endpoint listener is
 // the positive readiness evidence under test; an OS liveness result is
@@ -524,6 +546,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const restoreLiveness = useIndeterminateProcessLiveness();
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
+    let monitor: HostHealthMonitor | null = null;
     try {
       await Promise.race([
         lifecycle.bootstrap({ hostInstalled: false }),
@@ -531,21 +554,59 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
           setTimeout(() => reject(new Error("bootstrap waited")), 3_000),
         ),
       ]);
+
+      // The watcher went in against a root that did not exist when bootstrap
+      // started: `watch` RETURNED rather than threw ENOENT, which would leave
+      // the desktop with no watcher for the session. Asserted on the call, not
+      // on a delivered edge, because FSEvents can drop a write that lands in
+      // the first few ms after `watch()` (see `HostLifecycle.installWatcher`).
+      const watchMock = vi.mocked(watch);
+      const rootWatchCallIndex = watchMock.mock.calls.findIndex(
+        ([target]) => target === dir,
+      );
+      expect(watchMock.mock.calls.map((call) => String(call[0]))).toContain(
+        dir,
+      );
+      expect(watchMock.mock.results[rootWatchCallIndex]?.type).toBe("return");
+
       // No host, but also no failure to report: nothing was asked to start.
       expect(errors).toEqual([]);
       expect(lifecycle.getSnapshot()).toBeNull();
 
-      // The watcher still went in - against a root that did not exist when
-      // bootstrap started. That is what picks the host up once the user signs
-      // in and provisioning runs; skipping the wait must not cost the
-      // auto-heal, and an ENOENT here would leave the desktop blind to a host
-      // that appears later.
-      reachable = true;
       // Exactly what provisioning does after sign-in: create the host root,
-      // then publish pid.json into it. Creating it HERE rather than in the
-      // fixture is what isolates the watcher - if bootstrap failed to install
-      // one, these writes land silently and the snapshot never converges.
+      // then publish pid.json into it. The host must be picked up by the
+      // watcher OR the health monitor's null-snapshot re-read, whichever comes
+      // first; one forced tick makes convergence certain. Only the interval
+      // clock is faked, so real fs I/O and the lifecycle's own setTimeout
+      // ladder are untouched.
+      reachable = true;
       await mkdir(dir, { recursive: true });
+
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const intervalMs = 25;
+      const respawn = vi.fn(async () => {});
+      monitor = startHostHealthMonitor({
+        host: lifecycle,
+        intervalMs,
+        // A real network probe here would either need something actually
+        // listening on `websocketUrl` or eat a real ~750ms timeout per tick;
+        // this mirrors the lifecycle's own injected reachability stub so the
+        // tick can converge without touching a socket.
+        probe: (url) => Promise.resolve(url === websocketUrl && reachable),
+        readMetadata: undefined,
+        respawn,
+        governor: createHostRecoveryGovernor({
+          readLiveness: async () => "alive",
+          now: undefined,
+        }),
+        readLiveness: undefined,
+      });
+
+      // Listening BEFORE the write, since the watcher may fire first.
+      const changed = new Promise((resolve) => {
+        lifecycle.once("change", resolve);
+      });
+
       await writeFile(
         layout.pidMetadataFile,
         JSON.stringify({
@@ -556,18 +617,17 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         }),
         "utf8",
       );
-      // Comfortably inside this test's own 10s budget so a missing watcher
-      // fails on the snapshot assertion below - naming the actual cause -
-      // rather than as an opaque test timeout. The watcher fires in
-      // milliseconds when it exists; the margin is for a loaded CI box where
-      // event-loop and fs.watch latency spike.
-      const deadline = Date.now() + 5_000;
-      while (lifecycle.getSnapshot() === null && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
+
+      // One tick forces the backstop re-read if the watcher edge was lost.
+      await vi.advanceTimersByTimeAsync(intervalMs);
+      await changed;
+
       expect(lifecycle.getSnapshot()?.hostId).toBe("post-signin-host");
       expect(errors).toEqual([]);
+      expect(respawn).not.toHaveBeenCalled();
     } finally {
+      monitor?.dispose();
+      vi.useRealTimers();
       restoreLiveness();
       lifecycle.dispose();
       // `parent`, not `dir` - the layout is rooted one level down, so removing
@@ -1018,7 +1078,12 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       changes.push(snapshot?.hostId ?? null);
     });
     try {
-      await lifecycle.bootstrap({ hostInstalled: true });
+      // Seed with a plain reload, not `bootstrap()`: this test counts probes, so
+      // it must own every reload. `bootstrap()` installs the real pid.json
+      // watcher, and macOS FSEvents can replay the fixture write above into it
+      // after install. That extra reload supersedes a manual one mid-flight, so
+      // the manual one skips its fold and the assertion reads the old verdict.
+      await lifecycle.reloadSnapshotFromDisk();
       expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
       expect(changes).toEqual(["same-host"]);
       // The explicit reloads below drive both failures; frozen timers keep the

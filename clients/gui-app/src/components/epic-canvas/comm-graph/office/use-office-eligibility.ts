@@ -21,6 +21,10 @@
 import { useEffect, useState } from "react";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
 
 export interface OfficeEligibilityInput {
   /** The canvas element's own intersection state, from its observer. */
@@ -28,21 +32,16 @@ export interface OfficeEligibilityInput {
 }
 
 /**
- * `document.visibilityState`, live. A minimised window and a background
- * browser tab both arrive here and nowhere else - no React signal reports
- * them, because nothing about the React tree changed.
+ * Window on-screen bit, live. A minimised desktop window and a background
+ * browser tab both arrive here through `document-visibility.ts` - Page
+ * Visibility alone stays `"visible"` on desktop.
  */
 function useDocumentVisible(): boolean {
-  const [visible, setVisible] = useState(
-    () => typeof document === "undefined" || !document.hidden,
-  );
+  const [visible, setVisible] = useState(isDocumentVisible);
   useEffect(() => {
-    const apply = (): void => setVisible(!document.hidden);
+    const apply = (): void => setVisible(isDocumentVisible());
     apply();
-    document.addEventListener("visibilitychange", apply);
-    return () => {
-      document.removeEventListener("visibilitychange", apply);
-    };
+    return subscribeDocumentVisibility(apply);
   }, []);
   return visible;
 }

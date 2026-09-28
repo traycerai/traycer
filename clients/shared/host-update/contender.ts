@@ -1418,12 +1418,36 @@ async function supervisorRelaunchDisposition(
   //    no readable install record. Unverifiable, so also refused.
   if (claim === undefined || readInstalledIdentity === null) return "refuse";
   const installed = await readInstalledIdentity();
-  if (installed === null) return "refuse";
-  return installed.installedVersion === record.targetVersion &&
+  return parkedActivationMatchesInstall(record, installed) ? "allow" : "refuse";
+}
+
+/**
+ * Whether a `waiting-to-activate` park describes EXACTLY the bytes installed
+ * right now - the predicate that makes a relaunch of the installed host the
+ * activation restart the park is waiting for, rather than an activation of
+ * bytes nobody in the attempt vouched for. The arm above is the supervisor's
+ * use; `host restart` asks the same question before it relaunches over a
+ * park instead of stopping and leaving the machine hostless.
+ *
+ * ONE function for both, deliberately. The two used to agree by construction
+ * because only one existed; a second copy of the three comparisons is how the
+ * supervisor and the restart command would come to admit different parks.
+ *
+ * `false` for anything that is not a claimed `waiting-to-activate` park, and
+ * for a `null` install identity: unverifiable is refused, never admitted.
+ */
+export function parkedActivationMatchesInstall(
+  record: HostUpdateAttemptRecord,
+  installed: SupervisorRelaunchInstalledIdentity | null,
+): boolean {
+  if (record.phase !== "waiting-to-activate") return false;
+  const claim = record.claim;
+  if (claim === undefined || installed === null) return false;
+  return (
+    installed.installedVersion === record.targetVersion &&
     installed.installedVersion === claim.installedVersion &&
     installed.installGeneration === claim.installGeneration
-    ? "allow"
-    : "refuse";
+  );
 }
 
 /**
