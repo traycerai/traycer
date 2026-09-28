@@ -1264,9 +1264,32 @@ describe("DesktopHostFleetSource", () => {
       },
     });
 
-    // In flight, having already read `local-host-1`.
+    // Observe each local-identity read settle, so the assertions wait on the
+    // read itself instead of a fixed timer (#1826's pattern, also used below
+    // in "re-resolves the local identity..."). `flushIo`'s sleep raced this
+    // test: `refresh()`'s own read (line 519, `readLocalHostId` awaited
+    // BEFORE the registry fetch) and `refreshLocalIdentity`'s read (fired by
+    // `host.emitChange()`) both go through real `fs.readFile`, and neither is
+    // guaranteed to land inside a fixed number of milliseconds.
+    let settledReads = 0;
+    const actualRead = localHostIdentityTestDoubles.actual;
+    localHostIdentityTestDoubles.readLastKnownLocalHostId.mockImplementation(
+      async (files) => {
+        try {
+          return await actualRead(files);
+        } finally {
+          settledReads += 1;
+        }
+      },
+    );
+
+    // In flight: wait for `refresh()`'s own read (of `local-host-1`) to
+    // settle - the exact point where it is now blocked on the held fetch,
+    // proving the read-before-held-fetch ordering the race depends on.
     const refreshing = fleet.refresh();
-    await flushIo();
+    await vi.waitFor(() => {
+      expect(settledReads).toBe(1);
+    });
 
     // The machine re-enrolls while that fetch is outstanding.
     await writeFile(
@@ -1275,12 +1298,16 @@ describe("DesktopHostFleetSource", () => {
       "utf8",
     );
     host.emitChange();
-    await flushIo();
+    // `refreshLocalIdentity`'s read is independent of the held fetch and
+    // publishes as soon as it settles; wait for exactly that read rather than
+    // an arbitrary delay.
+    await vi.waitFor(() => {
+      expect(settledReads).toBe(2);
+    });
     expect(fleet.snapshot().localHostId).toBe("local-host-2");
 
     releaseFetch();
     await refreshing;
-    await flushIo();
 
     // The older refresh still adopts its ROWS; only its stale id is declined.
     expect(fleet.snapshot().localHostId).toBe("local-host-2");

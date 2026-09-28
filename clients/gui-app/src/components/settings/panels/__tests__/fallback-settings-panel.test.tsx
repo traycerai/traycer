@@ -1695,6 +1695,19 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
     ).toBe("false");
     const checkAgain = within(notice).getByTestId("fallback-check-again");
 
+    // The notice appears as soon as `save-failed` dispatches, which races the
+    // AUTOMATIC read-back `commit` fires for an "unknown" outcome
+    // (`reconcileUnknownSave`, still consuming the FIRST queued
+    // `refetchMock` resolution above): `findByTestId` can settle before that
+    // read-back's `finally` clears `readBackInFlight`, and the button is
+    // `disabled={readBackInFlight}` while it is. Clicking a disabled button
+    // is a no-op, so wait for that automatic read-back to finish - the exact
+    // observable boundary - before firing this manual retry, or the click
+    // never reaches `onCheckAgain` and the switch is never re-settled.
+    await waitFor(() => {
+      expect((checkAgain as HTMLButtonElement).disabled).toBe(false);
+    });
+
     // This time the host answers, and it says ON - a value the failed save's
     // own draft disagrees with, which is the whole reason neither was claimed.
     fallbackMocks.refetchMock.mockResolvedValueOnce({

@@ -1,9 +1,9 @@
-import { mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE } from "@traycer/protocol/host/lifecycle-constants";
 import type { ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
-import { CLI_ERROR_CODES, cliError, isErrnoException } from "../runner/errors";
+import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { serviceLabelFor } from "../service/label";
 import {
   readWindowsServiceTaskOwnership,
@@ -292,12 +292,6 @@ function markerPath(
 
 /** Whether this call placed the marker (the park just began). */
 async function placeMarker(marker: string): Promise<boolean> {
-  try {
-    await stat(marker);
-    return false;
-  } catch (cause) {
-    if (!(isErrnoException(cause) && cause.code === "ENOENT")) return false;
-  }
   try {
     await mkdir(dirname(marker), { recursive: true });
     await writeFile(marker, "", { flag: "wx" });
