@@ -53,7 +53,10 @@ export function useSidebarRowDropdownMount(disabled: boolean) {
     setMounted(true);
   };
   const onClick = (): void => {
-    // Assistive activations and test helpers can issue click alone.
+    // A bare click - `element.click()`, a test helper - opens the menu as a
+    // press does. Assistive technology does not send one: Chromium's
+    // accessibility press dispatches a primary-button pointerdown first, so
+    // it takes `onPointerDown`, the path Radix's own trigger takes.
     if (!mounted) openFirstTime();
   };
   return {
