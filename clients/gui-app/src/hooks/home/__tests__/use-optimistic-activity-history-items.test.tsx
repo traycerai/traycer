@@ -352,6 +352,45 @@ describe("optimistic activity history projection", () => {
     expect(result.current[0]?.recentAtMs).toBe(3_000);
   });
 
+  it("preserves an earlier accepted timestamp when the active edge arrives later", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const userId = `accepted-before-edge-${crypto.randomUUID()}`;
+    const initialItems = [historyItem("accepted-before-edge", 1_000, 1_000)];
+    const { result, rerender } = renderHook(
+      ({ items }) =>
+        useOptimisticActivityHistoryItems({
+          items,
+          userId,
+          hostId: "host-accepted-before-edge",
+          enabled: true,
+          refetch: vi.fn(() => Promise.resolve()),
+        }),
+      { initialProps: { items: initialItems } },
+    );
+
+    act(() =>
+      observeOwnHistoryRecordChange(userId, "accepted-before-edge", 3_000),
+    );
+    act(() => {
+      observeActiveHistoryEdges(
+        userId,
+        new Set(["accepted-before-edge"]),
+        10_000,
+      );
+    });
+
+    rerender({
+      items: [historyItem("accepted-before-edge", 2_000, 2_000)],
+    });
+    expect(result.current[0]?.recentAtMs).toBe(10_000);
+
+    rerender({
+      items: [historyItem("accepted-before-edge", 3_000, 3_000)],
+    });
+    expect(result.current[0]?.recentAtMs).toBe(3_000);
+  });
+
   it("refreshes once when two consumers share the same user and host scope", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(20_000);

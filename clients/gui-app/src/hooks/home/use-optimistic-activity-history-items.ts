@@ -103,6 +103,22 @@ function removeExpiredStamps(at: number): boolean {
   return removed;
 }
 
+function stampActiveHistoryEdge(key: string, at: number): void {
+  // A record delta may arrive before the turn projection. Preserve its exact
+  // accepted timestamp so a different task edit cannot settle it early.
+  const previous = stamps.get(key);
+  stamps.set(key, {
+    at: Math.max(previous?.at ?? 0, at),
+    expiresAt: Math.max(previous?.expiresAt ?? 0, at + STAMP_TTL_MS),
+    baselineAt: previous?.baselineAt ?? knownDurableAt.get(key) ?? null,
+    acceptedAt: previous?.acceptedAt ?? null,
+  });
+  if (stamps.size > MAX_ACTIVE_ROWS) {
+    const oldest = stamps.keys().next().value;
+    if (oldest !== undefined) stamps.delete(oldest);
+  }
+}
+
 /** Records only a new active edge; a durable catch-up does not re-arm it. */
 export function observeActiveHistoryEdges(
   userId: string,
@@ -120,17 +136,8 @@ export function observeActiveHistoryEdges(
     const key = keyFor(userId, epicId);
     if (activeSeen.has(key)) continue;
     activeSeen.add(key);
-    stamps.set(key, {
-      at,
-      expiresAt: at + STAMP_TTL_MS,
-      baselineAt: knownDurableAt.get(key) ?? null,
-      acceptedAt: null,
-    });
+    stampActiveHistoryEdge(key, at);
     added = true;
-    if (stamps.size > MAX_ACTIVE_ROWS) {
-      const oldest = stamps.keys().next().value;
-      if (oldest !== undefined) stamps.delete(oldest);
-    }
     if (activeSeen.size > MAX_ACTIVE_ROWS * 4) {
       const oldest = activeSeen.values().next().value;
       if (oldest !== undefined) activeSeen.delete(oldest);

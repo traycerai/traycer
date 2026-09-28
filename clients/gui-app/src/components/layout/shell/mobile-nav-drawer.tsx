@@ -538,7 +538,9 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
                 `updatedLabel`, which the landing list and the tray also read. */}
             <span className="shrink-0 text-ui-xs text-muted-foreground">
               {formatRelativeTimestamp(
-                item.recentAtMs ?? item.updatedAtMs,
+                search.sort === "oldest"
+                  ? item.updatedAtMs
+                  : (item.recentAtMs ?? item.updatedAtMs),
                 now,
               )}
             </span>

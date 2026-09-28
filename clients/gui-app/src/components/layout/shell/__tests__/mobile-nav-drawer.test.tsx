@@ -190,6 +190,7 @@ function historyItem(overrides: {
   readonly id: string;
   readonly title: string;
   readonly updatedAtMs: number;
+  readonly recentAtMs?: number;
 }): HistoryItem {
   return {
     id: overrides.id,
@@ -198,6 +199,7 @@ function historyItem(overrides: {
     title: overrides.title,
     initialUserPrompt: "",
     updatedAtMs: overrides.updatedAtMs,
+    recentAtMs: overrides.recentAtMs,
     updatedLabel: "about 1 month ago",
     updatedBucket: "earlier",
     linkedRepos: [],
@@ -910,6 +912,28 @@ describe("MobileNavDrawer", () => {
 
       expect(useDesktopDialogStore.getState().activeDialog).toBe("drafts");
       expect(useMobileNavStore.getState().open).toBe(false);
+    });
+  });
+
+  describe("Oldest timestamp", () => {
+    it("shows updated time for Oldest while the recent time is newer", async () => {
+      testState.items = [
+        historyItem({
+          id: "older",
+          title: "Older task",
+          updatedAtMs: NOW_MS - DAY_MS,
+          recentAtMs: NOW_MS - HOUR_MS,
+        }),
+      ];
+      useHistorySearchStore.setState({
+        search: patchHistorySearch(DEFAULT_HISTORY_SEARCH, { sort: "oldest" }),
+      });
+
+      renderDrawer();
+      const row = await screen.findByTestId("mobile-nav-task-row");
+
+      expect(row.textContent).toContain("Yesterday");
+      expect(row.textContent).not.toContain("1h ago");
     });
   });
 
