@@ -17,11 +17,19 @@ import { parseSync, Visitor, type Plugin, type Rolldown } from "vite";
  *
  * Each character above U+007F is rewritten by where it sits:
  *
- * - inside a string, regular expression or untagged template: `\uXXXX`, the
- *   same character by the spec in all three (an astral character becomes its
- *   surrogate pair, which a `u`-flag pattern recombines). A backslash that
- *   was escaping the character is folded in - `\…` is the character itself,
- *   and escaping only the character would leave `\\u2026`, a backslash;
+ * - inside a string or untagged template: `\uXXXX`, the same character by
+ *   the spec in both (an astral character becomes its surrogate pair). A
+ *   backslash that was escaping the character is folded in - `\…` is the
+ *   character itself, and escaping only the character would leave
+ *   `\\u2026`, a backslash;
+ * - a regular expression literal: the whole literal becomes
+ *   `(new RegExp("<pattern>", "<flags>"))`, its pattern text in an escaped
+ *   string. Escaping inside the literal would match the same, but a program
+ *   can read the pattern text back: `/…/.source` is `…`, `/\u2026/.source`
+ *   is `\u2026`, and `toString()` follows `source`. The string's escapes are
+ *   gone once it is evaluated, so the construction's `source`, `flags` and
+ *   `toString()` are the literal's. Each evaluation of a literal already
+ *   makes a new object, as the construction does;
  * - inside a TAGGED template: left alone. The tag can read the raw text
  *   (`String.raw`), and an escape would change it;
  * - elsewhere - identifiers and comments - `\uXXXX` for a non-whitespace
@@ -142,12 +150,15 @@ const CARRIAGE_RETURN = 0x0d;
 const LINE_SEPARATOR = 0x2028;
 const PARAGRAPH_SEPARATOR = 0x2029;
 const BACKSLASH = 0x5c;
+const DOUBLE_QUOTE = 0x22;
+const PRINTABLE_ASCII_MIN = 0x20;
+const PRINTABLE_ASCII_MAX = 0x7e;
 const HIGH_SURROGATE_MIN = 0xd800;
 const HIGH_SURROGATE_MAX = 0xdbff;
 const LOW_SURROGATE_MIN = 0xdc00;
 const LOW_SURROGATE_MAX = 0xdfff;
 
-type SpanKind = "literal" | "raw";
+type SpanKind = "literal" | "raw" | "regex";
 
 interface Span {
   readonly start: number;
@@ -231,6 +242,13 @@ function replacementAt(
   span: Span | null,
 ): Replacement {
   const unit = code.charCodeAt(offset);
+  if (span !== null && span.kind === "regex") {
+    return {
+      start: span.start,
+      end: span.end,
+      text: regExpConstruction(code.slice(span.start, span.end)),
+    };
+  }
   if (span !== null) {
     const start = escapedByBackslash(code, offset, span.start)
       ? offset - 1
@@ -249,6 +267,36 @@ function replacementAt(
     end: offset + 1,
     text: WHITESPACE_RE.test(code[offset]) ? " " : unicodeEscape(unit),
   };
+}
+
+/**
+ * A regular expression literal as a construction with the same pattern text
+ * and flags. The parentheses keep it one primary expression wherever the
+ * literal stood: `return/—/.test(s)` becomes `return(new RegExp(...)).test(s)`.
+ */
+function regExpConstruction(literal: string): string {
+  const close = literal.lastIndexOf("/");
+  const pattern = asciiStringLiteral(literal.slice(1, close));
+  const flags = literal.slice(close + 1);
+  return flags === ""
+    ? `(new RegExp(${pattern}))`
+    : `(new RegExp(${pattern},${asciiStringLiteral(flags)}))`;
+}
+
+/** `text` as a double-quoted string literal that is printable ASCII. */
+function asciiStringLiteral(text: string): string {
+  let body = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const unit = text.charCodeAt(index);
+    if (unit === BACKSLASH || unit === DOUBLE_QUOTE) {
+      body += `\\${text[index]}`;
+    } else if (unit < PRINTABLE_ASCII_MIN || unit > PRINTABLE_ASCII_MAX) {
+      body += unicodeEscape(unit);
+    } else {
+      body += text[index];
+    }
+  }
+  return `"${body}"`;
 }
 
 function unicodeEscape(unit: number): string {
@@ -288,8 +336,9 @@ function escapedByBackslash(
 }
 
 /**
- * Where the literals are: strings, regular expressions and template text are
- * `literal`; the text of a tagged template is `raw`. Sorted, non-overlapping.
+ * Where the literals are: strings and untagged template text are `literal`;
+ * regular expressions are `regex`; the text of a tagged template is `raw`.
+ * Sorted, non-overlapping.
  */
 function literalSpans(code: string, filename: string): readonly Span[] {
   const parsed = parseSync(filename, code);
@@ -312,7 +361,9 @@ function literalSpans(code: string, filename: string): readonly Span[] {
       });
     },
     Literal(node) {
-      if (typeof node.value === "string" || "regex" in node) {
+      if ("regex" in node) {
+        spans.push({ start: node.start, end: node.end, kind: "regex" });
+      } else if (typeof node.value === "string") {
         spans.push({ start: node.start, end: node.end, kind: "literal" });
       }
     },

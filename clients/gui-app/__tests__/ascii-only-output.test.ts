@@ -51,6 +51,20 @@ const EQUIVALENT: ReadonlyArray<readonly [string, string]> = [
   ["u-flag regex over an astral range", 'return /[😀-😂]/u.test("😁");'],
   ["astral regex without the u flag", 'return /😀/.test("x😀");'],
   ["identity-escaped character in a regex", 'return /\\…/.test("…");'],
+  [
+    "regex source, flags and text",
+    'const r = /[—–]\\/x…"/giu; return [r.source, r.flags, String(r), r.test("A–/X…\\"")];',
+  ],
+  [
+    "regex with a slash in a class",
+    'return [/[/—]/.source, /[/—]/.test("/")];',
+  ],
+  ["identity-escaped character in a regex source", "return /\\…/.source;"],
+  ["regex straight after return", "return/—/.source;"],
+  [
+    "global regex state",
+    'const r = /—/g; r.test("a—b—"); return [r.lastIndex, r.test("a—b—"), r.lastIndex];',
+  ],
   ["untagged template", 'const a = "x"; return `${a}—…${a}`;'],
   ["identity-escaped character in a template", "return `a\\…b`;"],
   ["tagged template raw text", "return String.raw`a—\\…b`;"],
