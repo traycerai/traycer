@@ -340,6 +340,71 @@ describe("resolveModelBySlug", () => {
     expect(resolveModelBySlug(bySlug, "opus[200K]").kind).toBe("alias");
   });
 
+  it("keeps slug-before-resolvedModel precedence inside the tier-tolerant pass", () => {
+    // Pass 3 ranks its matches the way passes 1 and 2 do: a row whose slug
+    // matches beats a row whose resolvedModel matches, whatever the catalog
+    // order. A merged tie would pick by catalog accident.
+    const bySlug = model({
+      harnessId: "claude",
+      slug: "beta",
+      resolvedModel: "wire-a",
+    });
+    const byCanonical = model({
+      harnessId: "claude",
+      slug: "pointer",
+      resolvedModel: "beta",
+    });
+    for (const catalog of [
+      [bySlug, byCanonical],
+      [byCanonical, bySlug],
+    ]) {
+      expect(resolveModelBySlug(catalog, "beta[1m]")).toEqual({
+        kind: "alias",
+        model: bySlug,
+        ambiguous: false,
+        tied: [bySlug],
+      });
+    }
+
+    // The case that matters: a version pin must not land on the floating
+    // pointer that currently routes to it. `sonnet` precedes the pinned row
+    // in Claude's catalog, so a merged tie would have picked `sonnet`.
+    const sonnet = model({
+      harnessId: "claude",
+      slug: "sonnet",
+      resolvedModel: "claude-sonnet-5",
+    });
+    const pinned = model({
+      harnessId: "claude",
+      slug: "claude-sonnet-5",
+      resolvedModel: "claude-sonnet-5",
+    });
+    expect(resolveModelBySlug([sonnet, pinned], "claude-sonnet-5[1m]")).toEqual(
+      { kind: "alias", model: pinned, ambiguous: false, tied: [pinned] },
+    );
+  });
+
+  it("prefers the same tier marker over a missing one", () => {
+    // A catalog listing both tiers: `opus[1M]` names the `[1m]` tier (the
+    // grammar is case-insensitive), so it must not tie with plain `opus`.
+    const plain = model({
+      harnessId: "claude",
+      slug: "opus",
+      resolvedModel: "claude-opus-5-5",
+    });
+    const decorated = model({
+      harnessId: "claude",
+      slug: "opus[1m]",
+      resolvedModel: "claude-opus-5-5[1m]",
+    });
+    expect(resolveModelBySlug([plain, decorated], "opus[1M]")).toEqual({
+      kind: "alias",
+      model: decorated,
+      ambiguous: false,
+      tied: [decorated],
+    });
+  });
+
   it("keeps rows with no resolvedModel on exact-only matching, marker or not", () => {
     // Only adapters whose catalog decorates slugs publish `resolvedModel`, so
     // a row without it has no evidence that `x[1m]` and `x` are one model.

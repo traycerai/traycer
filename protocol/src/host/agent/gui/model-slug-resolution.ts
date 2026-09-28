@@ -122,19 +122,44 @@ function splitTierMarker(value: string): TierSplit {
 }
 
 /**
- * Whether `candidate` names the same model as `input` at a compatible tier: the
- * same id once the markers are set aside, with a marker on at most one side or
- * the same marker on both. Two different markers (`[1m]`, `[200k]`) name two
- * different tiers and never match.
+ * How closely `candidate` names the model `input` names, once markers are set
+ * aside: `2` for the same marker on both sides (reachable only through a
+ * case-only difference, since identical strings match in pass 1 or 2), `1` for
+ * a marker on one side only, `0` for no match. Two different markers (`[1m]`,
+ * `[200k]`) name two different tiers and never match.
  */
-function tierCompatible(input: TierSplit, candidate: string): boolean {
+function tierMatchRank(input: TierSplit, candidate: string): number {
   const other = splitTierMarker(candidate);
-  if (other.bare !== input.bare) return false;
-  return (
-    input.marker === null ||
-    other.marker === null ||
-    input.marker === other.marker
-  );
+  if (other.bare !== input.bare) return 0;
+  if (input.marker === null || other.marker === null) return 1;
+  return input.marker === other.marker ? 2 : 0;
+}
+
+/**
+ * The rows whose `field` is the closest tier match for `input`. Only a row that
+ * publishes `resolvedModel` takes part: that is the signal of an adapter whose
+ * catalog decorates slugs, and every other row stays on exact-only matching.
+ */
+function closestTierMatches(
+  models: readonly GuiAgentModelOption[],
+  input: TierSplit,
+  field: (model: GuiAgentModelOption) => string | null,
+): GuiAgentModelOption[] {
+  let bestRank = 0;
+  let best: GuiAgentModelOption[] = [];
+  for (const candidate of models) {
+    if (modelResolvedModel(candidate) === null) continue;
+    const value = field(candidate);
+    if (value === null) continue;
+    const rank = tierMatchRank(input, value);
+    if (rank === 0 || rank < bestRank) continue;
+    if (rank > bestRank) {
+      bestRank = rank;
+      best = [];
+    }
+    best.push(candidate);
+  }
+  return best;
 }
 
 /**
@@ -143,11 +168,13 @@ function tierCompatible(input: TierSplit, candidate: string): boolean {
  * 1. exact `slug`;
  * 2. the row whose `metadata.resolvedModel` equals `slug`;
  * 3. the rows that agree with `slug` once a trailing tier marker (`[1m]`) is
- *    set aside, on either their `slug` or their `resolvedModel` - provided the
- *    marker is on at most one side or is the same on both. Two different
- *    markers are two different tiers and never match. Only rows that publish
- *    `resolvedModel` take part: that is the signal of an adapter whose catalog
- *    decorates slugs, and every other row keeps exact-only matching.
+ *    set aside - provided the marker is on at most one side or is the same on
+ *    both. Two different markers are two different tiers and never match. It
+ *    keeps the earlier passes' precedence: rows matching on `slug` before rows
+ *    matching on `resolvedModel`, and within each, the same marker before a
+ *    missing one. Only rows that publish `resolvedModel` take part: that is the
+ *    signal of an adapter whose catalog decorates slugs, and every other row
+ *    keeps exact-only matching.
  *
  * Pass 3 exists because a catalog can gain or lose the marker between two
  * provider CLI releases: Claude's 2.1.280 listed `opus[1m]` and
@@ -181,15 +208,13 @@ export function resolveModelBySlug(
   }
   const input = splitTierMarker(slug);
   if (input.bare.length === 0) return NO_MATCH;
-  const tierTied = models.filter((candidate) => {
-    // Only a row that publishes `resolvedModel` comes from an adapter whose
-    // catalog decorates slugs; any other row stays on exact-only matching.
-    const resolved = modelResolvedModel(candidate);
-    if (resolved === null) return false;
-    return (
-      tierCompatible(input, candidate.slug) || tierCompatible(input, resolved)
-    );
-  });
+  // Slug before resolvedModel, as in passes 1 and 2: merging the two into one
+  // tie would pick between different models by catalog order.
+  const bySlug = closestTierMatches(models, input, (row) => row.slug);
+  const tierTied =
+    bySlug.length > 0
+      ? bySlug
+      : closestTierMatches(models, input, modelResolvedModel);
   const tierFirst = tierTied.at(0);
   if (tierFirst === undefined) return NO_MATCH;
   return {
