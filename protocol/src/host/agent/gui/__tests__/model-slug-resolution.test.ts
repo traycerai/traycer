@@ -415,6 +415,40 @@ describe("resolveModelBySlug", () => {
     expect(resolveModelBySlug([plain], "opus[1m]").kind).toBe("alias");
   });
 
+  it("leaves an unmarked input unresolved when the candidates name different tiers", () => {
+    // `opus` says nothing about its tier, so against a catalog listing the same
+    // id at two tiers there is no evidence which one it means; a tie would read
+    // as covered and serve the first row's capabilities. Unresolved is what the
+    // two-pass resolver answered here before pass 3 existed.
+    const oneM = model({
+      harnessId: "claude",
+      slug: "opus[1m]",
+      resolvedModel: "claude-opus-5-5[1m]",
+    });
+    const twoHundredK = model({
+      harnessId: "claude",
+      slug: "opus[200k]",
+      resolvedModel: "claude-opus-5-5[200k]",
+    });
+    expect(resolveModelBySlug([oneM, twoHundredK], "opus")).toEqual({
+      kind: "none",
+    });
+    expect(resolveModelBySlug([oneM, twoHundredK], "claude-opus-5-5")).toEqual({
+      kind: "none",
+    });
+
+    // Rows that agree on the tier still tie: they are one model.
+    const defaultRow = model({
+      harnessId: "claude",
+      slug: "default",
+      resolvedModel: "claude-opus-5-5[1m]",
+    });
+    const match = resolveModelBySlug([defaultRow, oneM], "claude-opus-5-5");
+    expect(match.kind).toBe("alias");
+    if (match.kind !== "alias") return;
+    expect(match.tied).toEqual([defaultRow, oneM]);
+  });
+
   it("prefers the same tier marker over a missing one", () => {
     // A catalog listing both tiers: `opus[1M]` names the `[1m]` tier (the
     // grammar is case-insensitive), so it must not tie with plain `opus`.

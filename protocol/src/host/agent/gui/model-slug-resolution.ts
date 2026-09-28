@@ -153,6 +153,22 @@ function rowNamesOtherTier(
 }
 
 /**
+ * How many distinct tiers the rows name across both fields. More than one
+ * means the rows are the same id at different tiers, not one model.
+ */
+function distinctTierCount(rows: readonly GuiAgentModelOption[]): number {
+  const markers = new Set<string>();
+  for (const row of rows) {
+    for (const value of [row.slug, modelResolvedModel(row)]) {
+      if (value === null) continue;
+      const marker = splitTierMarker(value).marker;
+      if (marker !== null) markers.add(marker);
+    }
+  }
+  return markers.size;
+}
+
+/**
  * The rows whose `field` is the closest tier match for `input`. Only a row that
  * publishes `resolvedModel` takes part: that is the signal of an adapter whose
  * catalog decorates slugs, and every other row stays on exact-only matching.
@@ -189,12 +205,13 @@ function closestTierMatches(
  * 3. the rows that agree with `slug` once a trailing tier marker (`[1m]`) is
  *    set aside - provided the marker is on at most one side or is the same on
  *    both. Two different markers are two different tiers and never match, on
- *    whichever of the row's two fields the conflicting marker sits. It
- *    keeps the earlier passes' precedence: rows matching on `slug` before rows
+ *    whichever of the row's two fields the conflicting marker sits. It keeps
+ *    the earlier passes' precedence: rows matching on `slug` before rows
  *    matching on `resolvedModel`, and within each, the same marker before a
- *    missing one. Only rows that publish `resolvedModel` take part: that is the
- *    signal of an adapter whose catalog decorates slugs, and every other row
- *    keeps exact-only matching.
+ *    missing one. An unmarked input whose matches name more than one tier is
+ *    left unresolved. Only rows that publish `resolvedModel` take part: that
+ *    is the signal of an adapter whose catalog decorates slugs, and every
+ *    other row keeps exact-only matching.
  *
  * Pass 3 exists because a catalog can gain or lose the marker between two
  * provider CLI releases: Claude's 2.1.280 listed `opus[1m]` and
@@ -237,6 +254,9 @@ export function resolveModelBySlug(
       : closestTierMatches(models, input, modelResolvedModel);
   const tierFirst = tierTied.at(0);
   if (tierFirst === undefined) return NO_MATCH;
+  // An unmarked input tied across rows that name different tiers says nothing
+  // about which tier it means, so it stays unresolved rather than covered.
+  if (distinctTierCount(tierTied) > 1) return NO_MATCH;
   return {
     kind: "alias",
     model: tierFirst,
