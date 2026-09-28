@@ -94,19 +94,15 @@ import type { ProviderId } from "@/components/home/data/landing-options";
 import { ProfileBadgedHarnessIcon } from "@/components/providers/profile-badged-harness-icon";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { LazySidebarConfirmDialog } from "@/components/epic-canvas/sidebar/lazy-sidebar-confirm-dialog";
 import { ContextMenuContent } from "@/components/ui/context-menu";
 import {
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
 } from "@/components/ui/sidebar";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { LazySidebarTooltipWrapper } from "@/components/epic-canvas/sidebar/lazy-sidebar-hover";
+import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import {
   CHAT_ARCHIVE_VISIBILITY,
@@ -193,7 +189,6 @@ import {
   type ChatSharingMenuDecision,
 } from "@/lib/chats/chat-sharing-ux";
 import { AgentRoleBadges } from "./agent-role-badges";
-import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -201,7 +196,6 @@ import {
   ArchiveRestore,
   Check,
   MessagesSquare,
-  MoreHorizontal,
   Lock,
   Pencil,
   Plus,
@@ -297,9 +291,9 @@ import { useEpicChatRecordHead } from "@/hooks/chats/use-epic-chat-record-head";
 import type { ChatRecordHeadStamp } from "@traycer/protocol/host/epic/chat-records";
 import {
   SidebarContextMenuItems,
-  SidebarDropdownMenuItems,
   type SidebarRowMenuEntry,
 } from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
+import { SidebarRowMoreMenu } from "@/components/epic-canvas/sidebar/sidebar-row-more-menu";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
@@ -2393,7 +2387,7 @@ function ChatNodeShellBody(
         selectedIds={selectedIds}
         onToggleSelection={onToggleSelection}
       />
-      <ConfirmDestructiveDialog
+      <LazySidebarConfirmDialog
         blockedReason={null}
         open={confirmDeleteOpen}
         onOpenChange={onConfirmDeleteOpenChange}
@@ -2769,7 +2763,7 @@ function SidebarAgentHarnessIcon(props: {
   );
   const managedProfileId = tuiAgent?.profileId ?? null;
   return (
-    <TooltipWrapper
+    <LazySidebarTooltipWrapper
       label="TUI terminal agent"
       side="top"
       sideOffset={undefined}
@@ -2805,7 +2799,7 @@ function SidebarAgentHarnessIcon(props: {
           strokeWidth={3}
         />
       </span>
-    </TooltipWrapper>
+    </LazySidebarTooltipWrapper>
   );
 }
 
@@ -3167,7 +3161,7 @@ function AgentSessionStateBadge(props: {
   }
   if (facet.sessionState !== "sleeping") return null;
   return (
-    <TooltipWrapper
+    <LazySidebarTooltipWrapper
       label={sleepingAgentTooltip(facet.lastExit)}
       side="top"
       sideOffset={undefined}
@@ -3180,7 +3174,7 @@ function AgentSessionStateBadge(props: {
       >
         Asleep
       </span>
-    </TooltipWrapper>
+    </LazySidebarTooltipWrapper>
   );
 }
 
@@ -3478,7 +3472,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
           <span className="min-w-0 flex-1 truncate">{nodeName}</span>
           <AgentSessionStateBadge nodeId={nodeId} isArchived={isArchived} />
           {showSharedIndicator ? (
-            <TooltipWrapper
+            <LazySidebarTooltipWrapper
               label={SHARED_WITH_TASK_TOOLTIP}
               side="top"
               sideOffset={undefined}
@@ -3489,10 +3483,10 @@ function ChatRowButton(props: ChatRowButtonProps) {
                 data-testid={`epic-sidebar-shared-${nodeId}`}
                 aria-hidden
               />
-            </TooltipWrapper>
+            </LazySidebarTooltipWrapper>
           ) : null}
           {offlineLock !== null ? (
-            <TooltipWrapper
+            <LazySidebarTooltipWrapper
               label={offlineRowLockTooltip(offlineLock)}
               side="right"
               sideOffset={undefined}
@@ -3507,7 +3501,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
                 // the row's own name instead (see `chatRowAriaLabel`).
                 aria-hidden
               />
-            </TooltipWrapper>
+            </LazySidebarTooltipWrapper>
           ) : null}
           <AgentRoleBadgesForOwner
             ownerKind={resourceOwnerKind}
@@ -3681,7 +3675,7 @@ function NestedChatStatusIcon(props: {
 }): ReactNode {
   const title = nestedChatStatusSummary(props.rollup);
   return (
-    <TooltipWrapper
+    <LazySidebarTooltipWrapper
       label={title}
       side="top"
       sideOffset={undefined}
@@ -3695,7 +3689,7 @@ function NestedChatStatusIcon(props: {
       >
         <NestedChatStatusGlyph kind={props.rollup.kind} />
       </span>
-    </TooltipWrapper>
+    </LazySidebarTooltipWrapper>
   );
 }
 
@@ -4274,7 +4268,7 @@ function ChatRowArchiveButton(props: {
   const revealed = useRevealRowControls();
   const ArchiveIcon = props.isArchived ? ArchiveRestore : Archive;
   return (
-    <TooltipWrapper
+    <LazySidebarTooltipWrapper
       label={label}
       side="top"
       sideOffset={undefined}
@@ -4309,7 +4303,7 @@ function ChatRowArchiveButton(props: {
           <ArchiveIcon className="size-3" />
         )}
       </Button>
-    </TooltipWrapper>
+    </LazySidebarTooltipWrapper>
   );
 }
 
@@ -4321,30 +4315,16 @@ function ChatMoreMenu(props: {
   const { nodeId, nodeName, entries } = props;
   const revealed = useRevealRowControls();
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          aria-label={`Agent actions for ${nodeName}`}
-          data-testid={`epic-sidebar-more-${nodeId}`}
-          className={cn(
-            "absolute right-1 top-1/2 -translate-y-1/2 transition-opacity",
-            revealed
-              ? "opacity-100"
-              : "opacity-0 focus-visible:opacity-100 group-hover/tree-item:opacity-100 aria-expanded:opacity-100",
-          )}
-          onClick={(event) => {
-            event.stopPropagation();
-          }}
-        >
-          <MoreHorizontal className="size-3" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-max">
-        <SidebarDropdownMenuItems entries={entries} />
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <SidebarRowMoreMenu
+      nodeId={nodeId}
+      label={`Agent actions for ${nodeName}`}
+      entries={entries}
+      className={cn(
+        "absolute right-1 top-1/2 -translate-y-1/2 transition-opacity",
+        revealed
+          ? "opacity-100"
+          : "opacity-0 focus-visible:opacity-100 group-hover/tree-item:opacity-100 aria-expanded:opacity-100",
+      )}
+    />
   );
 }

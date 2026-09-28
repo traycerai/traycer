@@ -129,6 +129,10 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-artifact-search.tsx": 9,
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-chat-tree.tsx": 3,
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-filter.ts": 2,
+  // First-use dropdown mounting: Enter/Space/ArrowDown open a row dropdown on
+  // its first press, and that key is replayed once the menu root mounts.
+  // These are platform navigation keys, not registered shortcut identity.
+  "gui-app/src/components/epic-canvas/sidebar/use-sidebar-row-dropdown-mount.ts": 2,
   "gui-app/src/components/epic-canvas/tile-find/tile-find-bar.tsx": 3,
   "gui-app/src/components/epic-canvas/tile-select-all-bridge.tsx": 2,
   "gui-app/src/components/epic-canvas/zoom-controls/zoom-controls.tsx": 7,
