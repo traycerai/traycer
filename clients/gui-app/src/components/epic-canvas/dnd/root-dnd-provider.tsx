@@ -1,3 +1,4 @@
+import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
 /**
  * THE single DndContext for the app. Mounted once in `app-shell.tsx`,
  * wrapping the header tab strip and every route surface, so canvas tiles,
@@ -1634,19 +1635,21 @@ export function RootDndProvider(props: RootDndProviderProps) {
   );
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={epicRootCollisionDetection}
-      autoScroll={{ threshold: { x: 0.2, y: 0.2 } }}
-      onDragStart={handleDragStart}
-      onDragMove={handleDragMove}
-      onDragOver={handleDragOver}
-      onDragEnd={handleDragEnd}
-      onDragCancel={handleDragCancel}
-    >
-      {props.children}
-      <RootDragOverlay />
-    </DndContext>
+    <SheetJoinScope>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={epicRootCollisionDetection}
+        autoScroll={{ threshold: { x: 0.2, y: 0.2 } }}
+        onDragStart={handleDragStart}
+        onDragMove={handleDragMove}
+        onDragOver={handleDragOver}
+        onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
+      >
+        {props.children}
+        <RootDragOverlay />
+      </DndContext>
+    </SheetJoinScope>
   );
 }
 

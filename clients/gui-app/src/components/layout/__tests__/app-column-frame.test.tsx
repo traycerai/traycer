@@ -1,16 +1,40 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   AppColumnFrame,
   type AppColumnFrameProps,
 } from "@/components/layout/app-column-frame";
 import type { AppColumnChrome } from "@/components/layout/header/app-title-band-kind";
+import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
+import { usePublishSheetJoin } from "@/components/layout/tabs/sheet-join-context";
 
 const TOP: AppColumnChrome = { placement: "top", titleBand: "header" };
 const LEFT_NONE: AppColumnChrome = { placement: "left", titleBand: "none" };
 const RIGHT_BAND: AppColumnChrome = { placement: "right", titleBand: "band" };
 
+/** A stand-in for a joined tab: publishes while on, and a click toggles it. */
+function TogglePublisher(): ReactNode {
+  const [on, setOn] = useState(true);
+  usePublishSheetJoin(on ? "canvas" : null);
+  return (
+    <button
+      type="button"
+      data-testid="join-toggle"
+      onClick={() => setOn((current) => !current)}
+    />
+  );
+}
+
 function renderFrame(chrome: AppColumnChrome): HTMLElement {
+  return renderFrameWith(chrome, null);
+}
+
+/** The frame inside a join scope (the app's own lives in `RootDndProvider`). */
+function renderFrameWith(
+  chrome: AppColumnChrome,
+  beside: ReactNode,
+): HTMLElement {
   const props: AppColumnFrameProps = {
     ...chrome,
     columnRef: () => undefined,
@@ -26,7 +50,12 @@ function renderFrame(chrome: AppColumnChrome): HTMLElement {
       </>
     ),
   };
-  const { container } = render(<AppColumnFrame {...props} />);
+  const { container } = render(
+    <SheetJoinScope>
+      <AppColumnFrame {...props} />
+      {beside}
+    </SheetJoinScope>,
+  );
   const column = container.querySelector<HTMLElement>("[data-layout-column]");
   if (column === null) throw new Error("column not rendered");
   return column;
@@ -152,6 +181,23 @@ describe("AppColumnFrame", () => {
     },
   );
 
+  it.each([TOP, LEFT_NONE, RIGHT_BAND])(
+    "publishes $titleBand on the document root for the portalled overlays, and clears it on unmount",
+    (chrome) => {
+      renderFrame(chrome);
+
+      expect(document.documentElement.getAttribute("data-app-title-band")).toBe(
+        chrome.titleBand,
+      );
+
+      cleanup();
+
+      expect(document.documentElement.hasAttribute("data-app-title-band")).toBe(
+        false,
+      );
+    },
+  );
+
   describe("the task surface frame (no tray wrapper)", () => {
     it.each([TOP, LEFT_NONE, RIGHT_BAND])(
       "sits directly under <main>, with no wrapper around it, for $placement",
@@ -182,6 +228,29 @@ describe("AppColumnFrame", () => {
       expect(
         document.querySelectorAll('[data-sheet-join-bridge="top"]'),
       ).toHaveLength(1);
+    });
+
+    it("activates the top bridge for a published join and clears it when the join is withdrawn", () => {
+      renderFrameWith(TOP, <TogglePublisher />);
+      const bridge = document.querySelector('[data-sheet-join-bridge="top"]');
+
+      expect(bridge?.hasAttribute("data-join-active")).toBe(true);
+      expect(bridge?.getAttribute("data-join-pane")).toBe("canvas");
+
+      fireEvent.click(screen.getByTestId("join-toggle"));
+
+      expect(bridge?.hasAttribute("data-join-active")).toBe(false);
+      expect(bridge?.hasAttribute("data-join-pane")).toBe(false);
+    });
+
+    it("leaves the top bridge inactive while nothing publishes a join", () => {
+      renderFrame(TOP);
+
+      expect(
+        document
+          .querySelector('[data-sheet-join-bridge="top"]')
+          ?.hasAttribute("data-join-active"),
+      ).toBe(false);
     });
 
     it.each([LEFT_NONE, RIGHT_BAND])(

@@ -283,12 +283,12 @@
   }
 
   [data-sheet-joined][data-join-pane="panel"],
-  :has([data-sheet-joined][data-join-pane="panel"]) > [data-sheet-join-bridge] {
+  [data-sheet-join-bridge][data-join-pane="panel"] {
     --join-fill: var(--sidebar);
   }
 
   [data-sheet-joined][data-join-pane="rail"],
-  :has([data-sheet-joined][data-join-pane="rail"]) > [data-sheet-join-bridge] {
+  [data-sheet-join-bridge][data-join-pane="rail"] {
     --join-fill: var(--background);
   }
 
@@ -333,7 +333,7 @@
     }
   }
 
-  :has([data-sheet-joined]) > [data-sheet-join-bridge] {
+  :where([data-sheet-join-bridge])[data-join-active] {
     --join-fill: var(--canvas);
     --join-radius: var(--radius-lg);
     display: block;
@@ -372,7 +372,7 @@
   /* Tabs on top: from the tab's bottom down onto the sheet, whose top edge is
      the surface frame's, its own anchor, so the run follows whatever sits
      between them (a banner included). */
-  :has([data-sheet-joined="top"]) > [data-sheet-join-bridge="top"] {
+  [data-sheet-join-bridge="top"][data-join-active] {
     left: anchor(left);
     right: anchor(right);
     top: anchor(bottom);
@@ -407,8 +407,8 @@
 
   /* Tabs on the side: from the row's inner edge across the strip's gutter
      onto the surface. */
-  :has([data-sheet-joined="left"]) > [data-sheet-join-bridge="left"],
-  :has([data-sheet-joined="right"]) > [data-sheet-join-bridge="right"] {
+  [data-sheet-join-bridge="left"][data-join-active],
+  [data-sheet-join-bridge="right"][data-join-active] {
     top: anchor(top);
     bottom: anchor(bottom);
     border-block: 1px solid var(--canvas-border);
@@ -422,7 +422,7 @@
     }
   }
 
-  :has([data-sheet-joined="left"]) > [data-sheet-join-bridge="left"] {
+  [data-sheet-join-bridge="left"][data-join-active] {
     left: anchor(right);
     right: calc(anchor(--task-frame left) - 1px);
 
@@ -450,7 +450,7 @@
     }
   }
 
-  :has([data-sheet-joined="right"]) > [data-sheet-join-bridge="right"] {
+  [data-sheet-join-bridge="right"][data-join-active] {
     right: anchor(left);
     left: calc(anchor(--task-frame right) - 1px);
 

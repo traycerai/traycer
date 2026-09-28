@@ -8,6 +8,7 @@ import {
   type TransitionEvent,
 } from "react";
 import { flushSync } from "react-dom";
+import { SheetJoinBridge } from "../sheet-join";
 import { useLayoutSurface } from "@/components/layout-editor/use-layout-surface";
 import { ColumnEdgeContext } from "@/components/layout/column-edge-context";
 import { HoverCardGroup } from "@/components/ui/hover-card";
@@ -155,7 +156,7 @@ export function SideTabStrip(props: {
           {/* The joined tab's run onto its task's sheet, anchored to the joined
             row and drawn only while one exists (`index.css`). */}
           <div data-strip-drag-overlay-host className="contents" />
-          <span aria-hidden data-sheet-join-bridge={edge} />
+          <SheetJoinBridge edge={edge} />
           <SideStripResizeHandle
             edge={edge}
             stripRef={stripRef}

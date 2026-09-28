@@ -2,6 +2,7 @@ import { LayoutUsageProvider } from "@/components/layout-editor/inspector/provid
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -61,6 +62,11 @@ export function LayoutEditor(props: LayoutEditorProps): ReactNode {
   const windowId = useDesktopWindowId();
   const [inspector, setInspector] = useState<HTMLDivElement | null>(null);
   const floatPosition = useFloatingDock(inspector);
+  useLayoutEffect(() => {
+    if (column === null || !live) return;
+    column.setAttribute("data-inspector-dock", dockMode);
+    return () => column.removeAttribute("data-inspector-dock");
+  }, [column, live, dockMode]);
 
   // The panel is this file's markup, so the door is HANDED it rather than
   // going looking for it: `editor-motion.ts` animates the exit on this node.

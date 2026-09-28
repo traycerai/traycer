@@ -1,8 +1,8 @@
 /* `--app-title-band-height` is the height of whatever sits at the window's
    top edge: the app header (APP_HEADER_HEIGHT_CLASS, h-10) or the slim title
    band, never shorter than the native window controls. It is zero when
-   neither does, which the shell declares by stamping
-   `data-app-title-band="none"` on the app column. */
+   neither does. AppColumnFrame publishes its effective title band on HTML
+   so portalled overlays inherit it without a descendant query. */
 :root {
   --app-title-band-height: max(
     env(titlebar-area-height, 0px),
@@ -10,7 +10,7 @@
   );
 }
 
-:root:has([data-app-title-band="none"]) {
+:root[data-app-title-band="none"] {
   --app-title-band-height: 0px;
 }
 
@@ -22,7 +22,7 @@
   --window-leading-inset: env(titlebar-area-x, 82px);
 }
 
-.wco:has([data-layout-inspector][data-dock-mode="left"]) [data-layout-column] {
+.wco [data-layout-column][data-inspector-dock="left"] {
   --window-leading-inset: min(env(titlebar-area-x, 82px), 0.75rem);
 }
 
