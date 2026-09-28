@@ -7,8 +7,7 @@
 // proxy. This clicks a button behind the modal in a real layout engine.
 //
 // Structure follows `diff-edit-browser-regression.mjs` (vite + headless Chrome
-// over CDP); both are wired into `scripts/run-tests.ts` behind
-// RUN_DIFF_EDIT_BROWSER_REGRESSION, which CI sets for this package.
+// over CDP); both run in CI through `scripts/run-browser-regressions.ts`.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { rm } from "node:fs/promises";
