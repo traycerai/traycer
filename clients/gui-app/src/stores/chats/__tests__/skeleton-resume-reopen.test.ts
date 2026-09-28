@@ -431,6 +431,41 @@ describe("skeleton resume: re-opening a chat whose session was closed", () => {
     reopened.handle.dispose();
   });
 
+  it("keeps a stale cached prefix private when the host sends a full, mismatching skeleton", () => {
+    const staleRows = entries(0, 2 * BLOCK + 40);
+    const closed = createHarness();
+    openFully(closed, 0, staleRows.length);
+    closed.handle.dispose();
+
+    const reopened = createHarness();
+    const cb = reopened.callbacks();
+    expect(cb.readSkeletonResume()?.blockDigests).toHaveLength(2);
+
+    cb.onWindowedSnapshot(bootstrapSnapshot(0, staleRows.length));
+    expect(windowOf(reopened).skeleton).toHaveLength(0);
+    expect(reopened.handle.store.getState().messages).toHaveLength(0);
+
+    const hostRows = entries(8_000, 8_000 + staleRows.length);
+    cb.onSkeletonChunk(
+      chunkFrame({
+        epoch: 0,
+        fromOrdinal: 0,
+        entries: hostRows,
+        retainedRows: undefined,
+      }),
+    );
+
+    expect(windowOf(reopened).skeleton.map((value) => value?.rowId)).toEqual(
+      hostRows.map((value) => value.rowId),
+    );
+    const staleFirstRow = staleRows[0];
+    expect(
+      windowOf(reopened).skeleton.map((value) => value?.rowId),
+    ).not.toContain(staleFirstRow.rowId);
+    expect(windowOf(reopened).skeletonComplete).toBe(true);
+    reopened.handle.dispose();
+  });
+
   it("leaves nothing behind across an identity change", () => {
     const closed = createHarness();
     openFully(closed, 0, 2 * BLOCK);
