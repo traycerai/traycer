@@ -1,3 +1,5 @@
+import { HOST_STORE_FORMAT_FLOOR_CODE } from "@traycer/protocol/config/host-update-attempt";
+
 // Machine-readable error codes the runner emits in NDJSON `error` events
 // and on the human stderr line. The codebase should always raise CliError
 // with one of these so downstream consumers (Desktop, CI, scripts) can
@@ -162,7 +164,7 @@ export const CLI_ERROR_CODES = {
   // typically older on purpose, and the only remedies are to update forward or
   // to accept the loss explicitly with `--accept-store-format-loss`.
   // `--force` never reaches it - see `host/store-format-floor.ts`.
-  HOST_STORE_FORMAT_FLOOR: "E_HOST_STORE_FORMAT_FLOOR",
+  HOST_STORE_FORMAT_FLOOR: HOST_STORE_FORMAT_FLOOR_CODE,
   REGISTRY_UNAVAILABLE: "E_REGISTRY_UNAVAILABLE",
   REGISTRY_VERSION_NOT_FOUND: "E_REGISTRY_VERSION_NOT_FOUND",
   REGISTRY_NOT_IMPLEMENTED: "E_REGISTRY_NOT_IMPLEMENTED",

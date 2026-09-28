@@ -47,6 +47,8 @@ import {
 import { LocalHostRestartFlow } from "@/components/host/local-host-restart-flow";
 import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
 import { UpdateProgressBar } from "@/components/host/update-progress-bar";
+import { HOST_STORE_FORMAT_FLOOR_CODE } from "@traycer/protocol/config/host-update-attempt";
+import { hostUpdateFailureMessage } from "@traycer-clients/shared/host-update/store-format-refusal-copy";
 
 interface HostUpdateBannerProps {
   readonly className: string | undefined;
@@ -132,6 +134,7 @@ interface BusyState {
 interface TerminalOutcomeState {
   readonly intent: BannerIntent;
   readonly message: string;
+  readonly errorCode: string | null;
 }
 
 function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
@@ -434,6 +437,15 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
               hostId: null,
             });
           }}
+          onHostSettings={() => {
+            openSettings({
+              section: "host",
+              resetToGeneral: false,
+              tab: "updates",
+              draft: null,
+              hostId: localUpdate.hostId,
+            });
+          }}
           onOperationDismiss={dismissLandingAttempt}
           onTerminalRetry={() => {
             if (terminalOutcome === null) return;
@@ -544,6 +556,7 @@ interface BannerBodyProps {
   readonly onForceRestart: () => void;
   readonly onOperationRetry: () => void;
   readonly onDiagnostics: () => void;
+  readonly onHostSettings: () => void;
   readonly onOperationDismiss: (attemptId: string) => void;
   readonly onTerminalRetry: () => void;
   readonly onTerminalDismiss: () => void;
@@ -570,6 +583,7 @@ function BannerBody(props: BannerBodyProps) {
           onForceRestart={props.onForceRestart}
           onRetry={props.onOperationRetry}
           onDiagnostics={props.onDiagnostics}
+          onHostSettings={props.onHostSettings}
           onDismiss={props.onOperationDismiss}
         />
       );
@@ -579,6 +593,7 @@ function BannerBody(props: BannerBodyProps) {
           terminalOutcome={props.terminalOutcome}
           isPending={props.isPending}
           onRetry={props.onTerminalRetry}
+          onHostSettings={props.onHostSettings}
           onDismiss={props.onTerminalDismiss}
         />
       );
@@ -620,7 +635,51 @@ interface OperationContentProps {
   readonly onForceRestart: () => void;
   readonly onRetry: () => void;
   readonly onDiagnostics: () => void;
+  readonly onHostSettings: () => void;
   readonly onDismiss: (attemptId: string) => void;
+}
+
+interface OperationRecoveryActionProps {
+  readonly view: FleetUpdateView;
+  readonly storeFormatRefusal: boolean;
+  readonly onDiagnostics: () => void;
+  readonly onHostSettings: () => void;
+}
+
+function OperationRecoveryAction(props: OperationRecoveryActionProps) {
+  if (props.storeFormatRefusal) {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="shrink-0"
+        onClick={props.onHostSettings}
+        data-testid="host-update-banner-open-host-settings"
+      >
+        Settings › Host
+      </Button>
+    );
+  }
+  if (
+    props.view.kind === "failed" ||
+    props.view.kind === "unavailable" ||
+    props.view.kind === "verification-refused"
+  ) {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="shrink-0"
+        onClick={props.onDiagnostics}
+        data-testid="host-update-banner-operation-diagnostics"
+      >
+        Diagnostics
+      </Button>
+    );
+  }
+  return null;
 }
 
 /**
@@ -637,6 +696,10 @@ interface OperationContentProps {
  */
 function OperationContent(props: OperationContentProps) {
   const { view } = props;
+  const storeFormatRefusal =
+    view.errorCode === HOST_STORE_FORMAT_FLOOR_CODE &&
+    (view.kind === "failed" ||
+      (view.kind === "unknown" && view.lastKnownKind === "failed"));
   const percent = operationProgressPercent(view);
   const bytes = operationProgressBytes(view);
   const showProgress = showsProgressBar(view);
@@ -689,7 +752,7 @@ function OperationContent(props: OperationContentProps) {
             {percent}%
           </span>
         ) : null}
-        {view.kind === "failed" ? (
+        {view.kind === "failed" && !storeFormatRefusal ? (
           <Button
             type="button"
             size="sm"
@@ -701,33 +764,14 @@ function OperationContent(props: OperationContentProps) {
             Retry
           </Button>
         ) : null}
-        {/*
-          Diagnostics for the two states the contract points there: a failure
-          (its "Retry; Diagnostics" pair) and an unreadable record, whose own
-          copy already ends "see Diagnostics" and until now named a place with
-          no way to get to it.
-        */}
-        {/*
-          `verification-refused` joins the two states that point here, and it is
-          the reason it is not on the Retry gate above: a host that refused the
-          authenticated check will refuse it again, so a Retry would be a button
-          whose only outcome is the same refusal. Diagnostics is the one
-          affordance, and the sentence ends by naming it.
-        */}
-        {view.kind === "failed" ||
-        view.kind === "unavailable" ||
-        view.kind === "verification-refused" ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="shrink-0"
-            onClick={props.onDiagnostics}
-            data-testid="host-update-banner-operation-diagnostics"
-          >
-            Diagnostics
-          </Button>
-        ) : null}
+        {/* Diagnostics covers failed/unavailable/verification-refused views;
+            a store-format refusal instead opens the existing Host settings. */}
+        <OperationRecoveryAction
+          view={view}
+          storeFormatRefusal={storeFormatRefusal}
+          onDiagnostics={props.onDiagnostics}
+          onHostSettings={props.onHostSettings}
+        />
         {offersForceRestart(view) ? (
           <Button
             type="button"
@@ -807,7 +851,12 @@ function applyMutationOutcome<TOk>(
     blocker: "unknown",
   });
   actions.setBusy(null);
-  actions.setTerminalOutcome({ intent, message: outcome.message });
+  const errorCode = outcome.kind === "failed" ? outcome.errorCode : null;
+  actions.setTerminalOutcome({
+    intent,
+    message: hostUpdateFailureMessage(errorCode, outcome.message),
+    errorCode,
+  });
 }
 
 function resolveForceAction(
@@ -925,6 +974,7 @@ interface TerminalOutcomeContentProps {
   readonly terminalOutcome: TerminalOutcomeState;
   readonly isPending: boolean;
   readonly onRetry: () => void;
+  readonly onHostSettings: () => void;
   readonly onDismiss: () => void;
 }
 
@@ -937,16 +987,28 @@ function TerminalOutcomeContent(props: TerminalOutcomeContentProps) {
       >
         {props.terminalOutcome.message}
       </span>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled={props.isPending}
-        onClick={props.onRetry}
-        data-testid="host-update-banner-retry"
-      >
-        Retry
-      </Button>
+      {props.terminalOutcome.errorCode === HOST_STORE_FORMAT_FLOOR_CODE ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={props.onHostSettings}
+          data-testid="host-update-banner-open-host-settings"
+        >
+          Settings › Host
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={props.isPending}
+          onClick={props.onRetry}
+          data-testid="host-update-banner-retry"
+        >
+          Retry
+        </Button>
+      )}
       <Button
         type="button"
         variant="destructive-ghost"

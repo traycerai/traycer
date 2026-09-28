@@ -32,6 +32,16 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import type { DesktopHostControllerStatusBridge } from "@/lib/windows/types";
 import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 
+const openSettingsMock = vi.hoisted(() => vi.fn());
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({
+    openSettings: openSettingsMock,
+    openHistory: vi.fn(),
+    close: vi.fn(),
+    setSection: vi.fn(),
+  }),
+}));
+
 vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),
@@ -572,6 +582,71 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("host-update-banner-deferred")).toBeNull();
     });
+  });
+
+  describe("store-format floor refusal (terminal outcome)", () => {
+    const FLOOR_MESSAGE =
+      "Updating would install a host that cannot read this machine's data. Open Settings › Host to review it.";
+
+    async function clickUpdateWith(
+      applyStaged: () => Promise<MutationOutcome<ApplyStagedOk>>,
+    ): Promise<void> {
+      const management = makeManagement({ status: READY_STATUS, applyStaged });
+      renderBanner(makeHost(management));
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Update now/i }),
+      );
+      await screen.findByTestId("host-update-banner-deferred");
+    }
+
+    it("a failed outcome with the floor code shows its safe copy, no Retry and no CLI flag, and offers Settings › Host", async () => {
+      openSettingsMock.mockClear();
+      await clickUpdateWith(() =>
+        Promise.resolve({
+          kind: "failed" as const,
+          message: FLOOR_MESSAGE,
+          errorCode: "E_HOST_STORE_FORMAT_FLOOR",
+        }),
+      );
+
+      const text = screen.getByTestId(
+        "host-update-banner-deferred",
+      ).textContent;
+      expect(text).toContain("Settings › Host");
+      expect(text).not.toContain("--accept-store-format-loss");
+      expect(screen.queryByTestId("host-update-banner-retry")).toBeNull();
+
+      fireEvent.click(
+        screen.getByTestId("host-update-banner-open-host-settings"),
+      );
+      expect(openSettingsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ section: "host" }),
+      );
+    });
+
+    it.each([
+      ["another CLI code", "E_SOMETHING_ELSE"],
+      ["no code", null],
+    ])(
+      "a failed outcome with %s keeps its message and Retry, and offers no Settings action",
+      async (_name, errorCode) => {
+        await clickUpdateWith(() =>
+          Promise.resolve({
+            kind: "failed" as const,
+            message: "Something else went wrong.",
+            errorCode,
+          }),
+        );
+
+        expect(
+          screen.getByTestId("host-update-banner-deferred").textContent,
+        ).toContain("Something else went wrong.");
+        expect(screen.getByTestId("host-update-banner-retry")).toBeTruthy();
+        expect(
+          screen.queryByTestId("host-update-banner-open-host-settings"),
+        ).toBeNull();
+      },
+    );
   });
 
   // G6(i): a CONTROLLER-LANE terminal failure while the local rich view is

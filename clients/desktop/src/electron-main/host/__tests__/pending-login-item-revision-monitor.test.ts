@@ -63,6 +63,7 @@ describe("startPendingLoginItemRevisionMonitor", () => {
     const refresh = vi.fn(async (): Promise<Outcome> => ({
       kind: "failed",
       message: "refresh cycle failed",
+      errorCode: null,
     }));
     const isQuarantined = vi.fn(() => false);
     const monitor = startPendingLoginItemRevisionMonitor({

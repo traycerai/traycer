@@ -4,6 +4,7 @@ import {
   isValidHostVersion,
 } from "@traycer-clients/shared/host-version/compare-host-versions";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
+import { hostUpdateFailureMessage } from "@traycer-clients/shared/host-update/store-format-refusal-copy";
 import {
   attemptIdentityOf,
   isParkedPhase,
@@ -2010,9 +2011,14 @@ async function writeFailure(
       await writer.supersede();
       return;
     }
+    const code = err instanceof CliError ? err.code : "unexpected";
+    const message = err instanceof Error ? err.message : String(err);
+    // Older clients render this durable error verbatim. Keep the thrown CLI
+    // error intact for a terminal, but store safe copy for every client and
+    // for the progress marker that mirrors this record.
     await writer.fail({
-      code: err instanceof CliError ? err.code : "unexpected",
-      message: err instanceof Error ? err.message : String(err),
+      code,
+      message: hostUpdateFailureMessage(code, message),
       phase,
     });
   } catch {

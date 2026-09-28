@@ -4000,6 +4000,7 @@ describe("RunnerIpcBridge", () => {
     hostController.respawn = async () => ({
       kind: "failed",
       message: "Traycer needs approval in System Settings.",
+      errorCode: null,
     });
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),

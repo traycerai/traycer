@@ -1979,7 +1979,11 @@ describe("desktop-held cli-lock: two-process test", () => {
     // acquiring the lock, this would be `{kind: "ok"}` and
     // `registerHostLoginItem` would have been called against an install
     // that no longer exists.
-    expect(outcome).toEqual({ kind: "failed", message: "No host installed." });
+    expect(outcome).toEqual({
+      kind: "failed",
+      message: "No host installed.",
+      errorCode: null,
+    });
     expect(registerHostLoginItem).not.toHaveBeenCalled();
 
     expect(await workerExit).toBe(0);
@@ -4832,6 +4836,7 @@ describe("platform matrix", () => {
       expect(outcome).toEqual({
         kind: "failed",
         message: expect.stringContaining("unrecognized"),
+        errorCode: null,
       });
     });
 
@@ -5391,6 +5396,7 @@ describe("platform matrix", () => {
     await expect(first).resolves.toEqual({
       kind: "failed",
       message: expect.stringContaining("boom"),
+      errorCode: null,
     });
     await expect(second).resolves.toEqual({
       kind: "ok",
@@ -5511,7 +5517,11 @@ describe("platform matrix", () => {
 
     const outcome = await controller.registerService({ kind: "background" });
 
-    expect(outcome).toEqual({ kind: "failed", message: "No host installed." });
+    expect(outcome).toEqual({
+      kind: "failed",
+      message: "No host installed.",
+      errorCode: null,
+    });
     expect(registerHostLoginItem).not.toHaveBeenCalled();
   });
 
@@ -6380,6 +6390,7 @@ describe("convergeReadyCliOwned postSwapError + readiness (fixup B7)", () => {
       message: expect.stringContaining(
         "background service failed to start after the swap: launchctl bootstrap failed: 5: Input/output error",
       ),
+      errorCode: null,
     });
     expect(waitForHostReady).not.toHaveBeenCalled();
   });
@@ -6633,6 +6644,112 @@ describe("E_HOST_NOT_SERVICE_RUN classification", () => {
     });
 
     expectDeferredNotServiceRun(outcome);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The store-format refusal must survive the classifier hop. `host apply`
+// refuses with a `TraycerCliError` whose `code` is `E_HOST_STORE_FORMAT_FLOOR`;
+// `classifyMutationSubprocessError` is where that code used to be dropped, so
+// the renderer only ever saw `{kind: "failed", message}` and could not tell it
+// from any other failure. The failed outcome must carry the CLI code, and an
+// error with no code (a non-CLI throw) must carry `null`.
+// ---------------------------------------------------------------------------
+describe("failed outcomes carry the CLI error code", () => {
+  const FLOOR_CODE = "E_HOST_STORE_FORMAT_FLOOR";
+
+  // The CLI's own message names `--accept-store-format-loss`, an instruction
+  // to its caller that Desktop never passes; the outcome's `message` is shown
+  // by the menu/tray/banner alike, so it must be the safe Settings copy.
+  function expectSafeFloorOutcome(outcome: unknown): void {
+    expect(outcome).toMatchObject({ kind: "failed", errorCode: FLOOR_CODE });
+    const message = (outcome as { message: string }).message;
+    expect(message).toContain("Settings › Host");
+    expect(message).not.toContain("--accept-store-format-loss");
+    expect(message).not.toContain("store format refused by the floor");
+  }
+
+  function stageApplyRefusal(error: unknown): void {
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) return { data: {} };
+      throw error;
+    });
+  }
+
+  it("apply: a store-format floor refusal is failed with errorCode E_HOST_STORE_FORMAT_FLOOR and safe Settings › Host copy", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    stageApplyRefusal(
+      new TraycerCliError(
+        FLOOR_CODE,
+        "store format refused by the floor; pass --accept-store-format-loss",
+      ),
+    );
+
+    const outcome = await controller.applyStaged("manual", false);
+
+    expectSafeFloorOutcome(outcome);
+  });
+
+  it("install: the same refusal keeps its code through installVersion", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError(
+        FLOOR_CODE,
+        "store format refused by the floor; pass --accept-store-format-loss",
+      ),
+    );
+
+    const outcome = await controller.installVersion("1.8.0", false);
+
+    expectSafeFloorOutcome(outcome);
+  });
+
+  it("apply: any other CLI code is failed with THAT code, so the renderer can tell them apart", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    stageApplyRefusal(new TraycerCliError("E_SOMETHING_ELSE", "disk on fire"));
+
+    const outcome = await controller.applyStaged("manual", false);
+
+    expect(outcome).toEqual({
+      kind: "failed",
+      message: "disk on fire",
+      errorCode: "E_SOMETHING_ELSE",
+    });
+  });
+
+  it("apply: a non-CLI throw is failed with errorCode null", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    stageApplyRefusal(new Error("boom"));
+
+    const outcome = await controller.applyStaged("manual", false);
+
+    expect(outcome).toMatchObject({
+      kind: "failed",
+      message: "boom",
+      errorCode: null,
+    });
   });
 });
 
@@ -7042,6 +7159,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(outcome).toEqual({
       kind: "failed",
       message: expect.stringContaining("disabled by macOS"),
+      errorCode: null,
     });
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
     expect(waitForHostReady).not.toHaveBeenCalled();
@@ -7217,6 +7335,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(outcome).toEqual({
       kind: "failed",
       message: expect.stringContaining("did not become reachable in time"),
+      errorCode: null,
     });
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(false);
 
@@ -7574,10 +7693,12 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(monitorOutcome).toEqual({
       kind: "failed",
       message: expect.stringContaining("disabled by macOS"),
+      errorCode: null,
     });
     expect(convergenceOutcome).toEqual({
       kind: "failed",
       message: expect.stringContaining("disabled by macOS"),
+      errorCode: null,
     });
   });
 
@@ -10455,7 +10576,11 @@ describe("recoverIfDown", () => {
     );
 
     const outcome = await controller.recoverIfDown();
-    expect(outcome).toEqual({ kind: "failed", message: "connection refused" });
+    expect(outcome).toEqual({
+      kind: "failed",
+      message: "connection refused",
+      errorCode: null,
+    });
   });
 
   // Fixup B10: `recoverIfDown` drives its own restart, so it must stamp

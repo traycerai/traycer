@@ -271,7 +271,11 @@ export type MutationOutcome<TOk> =
   // ordinary successful apply: callers surface recovery rather than an
   // update-ready state.
   | { readonly kind: "installed-not-converged"; readonly message: string }
-  | { readonly kind: "failed"; readonly message: string };
+  | {
+      readonly kind: "failed";
+      readonly message: string;
+      readonly errorCode: string | null;
+    };
 
 // The lane-head identity guard refused a `user-repair` intent: the local host
 // is no longer the one the repair named, so the job mutated NOTHING.
@@ -374,7 +378,7 @@ export function backgroundMutationOutcome<TOk>(
   outcome: GuardedMutationOutcome<TOk>,
 ): MutationOutcome<TOk> {
   return outcome.kind === "abandoned"
-    ? { kind: "failed", message: outcome.message }
+    ? { kind: "failed", message: outcome.message, errorCode: null }
     : outcome;
 }
 

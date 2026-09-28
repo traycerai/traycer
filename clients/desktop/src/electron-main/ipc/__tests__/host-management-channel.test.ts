@@ -791,6 +791,7 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     bridge.options.hostController.registerServiceResult = {
       kind: "failed",
       message: "service registration failed",
+      errorCode: null,
     };
     mgmt.registerHostManagementIpc(bridge as never);
 
@@ -1209,6 +1210,7 @@ describe("host-management IPC - traycerHostConvergeReady delegates to HostContro
     bridge.options.hostController.convergeReadyResult = {
       kind: "failed",
       message: "no host installed",
+      errorCode: null,
     };
 
     const result = await bridge.handlers.get(
@@ -1218,6 +1220,7 @@ describe("host-management IPC - traycerHostConvergeReady delegates to HostContro
     expect(result).toEqual({
       kind: "failed",
       message: "no host installed",
+      errorCode: null,
     });
   });
 });

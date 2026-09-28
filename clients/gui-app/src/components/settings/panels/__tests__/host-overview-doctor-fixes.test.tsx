@@ -629,7 +629,11 @@ describe("Overview doctor — a local fix re-runs Doctor only when applied", () 
     const runDoctorRepairIfIdle = vi.fn((): Promise<DoctorRepairDispatch> =>
       Promise.resolve({
         kind: "dispatched",
-        outcome: { kind: "failed", message: "CLI exited nonzero." },
+        outcome: {
+          kind: "failed",
+          message: "CLI exited nonzero.",
+          errorCode: null,
+        },
       }),
     );
     renderDoctorLocalFix({

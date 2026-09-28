@@ -367,7 +367,7 @@ describe("the deferred-refusal route 1 — the watched RPC Doctor sheet's if-idl
     const runDoctorRepairIfIdle = vi.fn((): Promise<DoctorRepairDispatch> =>
       Promise.resolve({
         kind: "dispatched" as const,
-        outcome: { kind: "failed" as const, message: "boom" },
+        outcome: { kind: "failed" as const, message: "boom", errorCode: null },
       }),
     );
     const management = buildOverviewManagement({ runDoctorRepairIfIdle });

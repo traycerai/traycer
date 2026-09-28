@@ -2300,7 +2300,11 @@ export type MutationOutcome<TOk> =
   | { readonly kind: "deferred"; readonly message: string }
   | { readonly kind: "stage-fingerprint-mismatch"; readonly message: string }
   | { readonly kind: "installed-not-converged"; readonly message: string }
-  | { readonly kind: "failed"; readonly message: string };
+  | {
+      readonly kind: "failed";
+      readonly message: string;
+      readonly errorCode: string | null;
+    };
 
 export interface ConvergeReadyOk {
   readonly running: boolean;

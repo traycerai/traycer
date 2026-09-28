@@ -2347,7 +2347,7 @@ describe("createDesktopLocalHostEnsurePort", () => {
 
     // `failed` actually ran and concluded - the one arm allowed to arm the
     // engine's dead-lease cooldown.
-    controller.outcome = { kind: "failed", message: "boom" };
+    controller.outcome = { kind: "failed", message: "boom", errorCode: null };
     await expect(port.ensureReady()).resolves.toEqual({
       ok: false,
       reason: "failed",

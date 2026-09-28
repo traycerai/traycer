@@ -51,6 +51,7 @@ import {
   type UpdateMutationCapability,
 } from "@traycer-clients/shared/host-update";
 import type { HostUpdateAttemptPhase } from "@traycer/protocol/config/host-update-attempt";
+import { hostUpdateFailureMessage } from "@traycer-clients/shared/host-update/store-format-refusal-copy";
 import { readHostServiceOwner } from "./host-owner";
 import {
   runDesktopActivationSegment,
@@ -1417,7 +1418,14 @@ export class HostController {
     kind: Exclude<MutationKind, HostStartMutationKind>,
     coalesceKey: string,
     fn: () => Promise<R>,
-  ): Promise<R | { readonly kind: "failed"; readonly message: string }> {
+  ): Promise<
+    | R
+    | {
+        readonly kind: "failed";
+        readonly message: string;
+        readonly errorCode: string | null;
+      }
+  > {
     return this.enqueueLaneJob(kind, coalesceKey, fn);
   }
 
@@ -1439,7 +1447,11 @@ export class HostController {
   ): Promise<
     | R
     | HostStartSuspended
-    | { readonly kind: "failed"; readonly message: string }
+    | {
+        readonly kind: "failed";
+        readonly message: string;
+        readonly errorCode: string | null;
+      }
   > {
     if (this.automaticIntentsSuspended) {
       return Promise.resolve(this.hostStartSuspendedOutcome(kind));
@@ -1463,16 +1475,33 @@ export class HostController {
     kind: MutationKind,
     coalesceKey: string,
     fn: () => Promise<R>,
-  ): Promise<R | { readonly kind: "failed"; readonly message: string }> {
+  ): Promise<
+    | R
+    | {
+        readonly kind: "failed";
+        readonly message: string;
+        readonly errorCode: string | null;
+      }
+  > {
     const existing = this.inFlightMutations.get(coalesceKey);
     if (existing !== undefined) {
       return existing as Promise<
-        R | { readonly kind: "failed"; readonly message: string }
+        | R
+        | {
+            readonly kind: "failed";
+            readonly message: string;
+            readonly errorCode: string | null;
+          }
       >;
     }
     const job = this.mutationTail.then(
       async (): Promise<
-        R | { readonly kind: "failed"; readonly message: string }
+        | R
+        | {
+            readonly kind: "failed";
+            readonly message: string;
+            readonly errorCode: string | null;
+          }
       > => {
         this.mutationEpoch += 1;
         this.mutationStatus = {
@@ -1485,9 +1514,11 @@ export class HostController {
           return await fn();
         } catch (err) {
           log.warn("[host-controller] mutation intent threw", { kind, err });
+          const errorCode = err instanceof TraycerCliError ? err.code : null;
           return {
             kind: "failed",
-            message: describeError(err),
+            message: hostUpdateFailureMessage(errorCode, describeError(err)),
+            errorCode,
           };
         } finally {
           this.mutationEpoch += 1;
@@ -1713,11 +1744,13 @@ export class HostController {
         return {
           kind: "failed",
           message: `Host update state (${outcome.record.kind}) cannot be verified. Run host doctor before retrying.`,
+          errorCode: null,
         };
       case "capability-not-live":
         return {
           kind: "failed",
           message: `Host update coordination was lost (${outcome.verdict}); retry the operation.`,
+          errorCode: null,
         };
     }
   }
@@ -1998,6 +2031,7 @@ export class HostController {
         outcome: {
           kind: "failed",
           message: `Failed to register the host login item (status=${args.failedStatus}); the fallback service was registered but the host did not come up: ${describeError(err)}`,
+          errorCode: null,
         },
       };
     }
@@ -2158,7 +2192,11 @@ export class HostController {
     if (record === null) {
       return {
         phase: "terminal",
-        outcome: { kind: "failed", message: "No host installed." },
+        outcome: {
+          kind: "failed",
+          message: "No host installed.",
+          errorCode: null,
+        },
       };
     }
     if (!force) {
@@ -2185,7 +2223,11 @@ export class HostController {
     if (prePid !== null && readHostLoginItemStatus() === "requires-approval") {
       return {
         phase: "terminal",
-        outcome: { kind: "failed", message: approvalRequiredMessage() },
+        outcome: {
+          kind: "failed",
+          message: approvalRequiredMessage(),
+          errorCode: null,
+        },
       };
     }
     const expectedGeneration =
@@ -2204,6 +2246,7 @@ export class HostController {
         outcome: {
           kind: "failed",
           message: HOST_REMOVED_BY_USER_MESSAGE,
+          errorCode: null,
         },
       };
     }
@@ -3161,7 +3204,11 @@ export class HostController {
     }
     if (status === "requires-approval") {
       this.pendingRevisionRefreshQuarantined = true;
-      return { kind: "failed", message: approvalRequiredMessage() };
+      return {
+        kind: "failed",
+        message: approvalRequiredMessage(),
+        errorCode: null,
+      };
     }
     if (this.isCliTakeoverRecoverableStatus(status)) {
       this.pendingRevisionRefreshQuarantined = true;
@@ -3783,9 +3830,13 @@ export class HostController {
         // classifies `deferred` for every caller (see `lockBusyOutcome`).
         return this.hostBusyOutcome<T>(workloadBusyContinuation);
       }
-      return { kind: "failed", message: err.message };
+      return {
+        kind: "failed",
+        message: hostUpdateFailureMessage(err.code, err.message),
+        errorCode: err.code,
+      };
     }
-    return { kind: "failed", message: describeError(err) };
+    return { kind: "failed", message: describeError(err), errorCode: null };
   }
 
   // ---- stageLatest -----------------------------------------------------
@@ -4536,7 +4587,7 @@ export class HostController {
   ): Promise<MutationOutcome<ActivateInstalledOk>> {
     const record = await readDesktopHostInstallRecord(this.layout);
     if (record === null) {
-      return { kind: "failed", message: "No host installed." };
+      return { kind: "failed", message: "No host installed.", errorCode: null };
     }
     const prePid = (await readRunningHostIdentity(this.layout))?.pid ?? null;
     // `--defer-if-parked`, as every other desktop restart passes it. Without
@@ -4726,10 +4777,18 @@ export class HostController {
           }
           const registration = outcome.result;
           if (registration === null) {
-            return { kind: "failed", message: "No host installed." };
+            return {
+              kind: "failed",
+              message: "No host installed.",
+              errorCode: null,
+            };
           }
           if (registration.status === "requires-approval") {
-            return { kind: "failed", message: approvalRequiredMessage() };
+            return {
+              kind: "failed",
+              message: approvalRequiredMessage(),
+              errorCode: null,
+            };
           }
           if (registration.status === "parked") {
             // A park attempted NOTHING, so the login item is exactly what it
@@ -4763,6 +4822,7 @@ export class HostController {
                   refusal: takeover.refusal,
                   doctorMessage: `Traycer Host's login item could not be re-registered (status=${loginItemStatus}) - run \`traycer host doctor\` to recover.`,
                 }),
+                errorCode: null,
               };
             }
             // Enabled already, so the registration stands; what the parked
@@ -4809,6 +4869,7 @@ export class HostController {
           return {
             kind: "failed",
             message: `Failed to register the host login item (status=${registration.status}).`,
+            errorCode: null,
           };
         }
         let raw: unknown;

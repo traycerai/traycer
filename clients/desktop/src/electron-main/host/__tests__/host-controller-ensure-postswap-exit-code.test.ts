@@ -287,6 +287,7 @@ describe("convergeReadyCliOwned postSwapError mapping survives a real non-zero e
       message: expect.stringContaining(
         "background service failed to start after the swap: boom",
       ),
+      errorCode: null,
     });
   });
 });

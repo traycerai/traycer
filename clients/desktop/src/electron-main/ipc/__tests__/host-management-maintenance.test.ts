@@ -1834,6 +1834,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       Promise.resolve({
         kind: "failed" as const,
         message: "converge failed",
+        errorCode: null,
       });
     const handler = await registerHandler(
       bridge,
@@ -1847,7 +1848,11 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       }),
     ).resolves.toEqual({
       kind: "dispatched",
-      outcome: { kind: "failed", message: "converge failed" },
+      outcome: {
+        kind: "failed",
+        message: "converge failed",
+        errorCode: null,
+      },
     });
   });
 
@@ -2386,12 +2391,14 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       Promise.resolve({
         kind: "failed" as const,
         message: "converge failed",
+        errorCode: null,
       }),
     );
     bridge.options.hostController.registerService = vi.fn(() =>
       Promise.resolve({
         kind: "failed" as const,
         message: "register failed",
+        errorCode: null,
       }),
     );
     const handler = await registerHandler(
@@ -2485,7 +2492,11 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
     const invoke = RunnerHostInvoke;
     const bridge = makeBridge();
     bridge.options.hostController.refreshServiceDefinition = vi.fn(() =>
-      Promise.resolve({ kind: "failed" as const, message: "refresh failed" }),
+      Promise.resolve({
+        kind: "failed" as const,
+        message: "refresh failed",
+        errorCode: null,
+      }),
     );
     const handler = await registerHandler(
       bridge,
@@ -2711,6 +2722,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
           Promise.resolve({
             kind: "failed" as const,
             message: "uninstall failed",
+            errorCode: null,
           });
         const handler = await registerHandler(
           bridge,
@@ -2776,6 +2788,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
           Promise.resolve({
             kind: "failed" as const,
             message: "uninstall failed",
+            errorCode: null,
           });
         const handler = await registerHandler(
           bridge,
@@ -2851,6 +2864,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
           Promise.resolve({
             kind: "failed" as const,
             message: "free-port failed",
+            errorCode: null,
           });
         const handler = await registerHandler(
           bridge,

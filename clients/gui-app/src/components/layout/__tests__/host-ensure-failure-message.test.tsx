@@ -397,11 +397,18 @@ describe("host-ensure-failure-message", () => {
     // A holder, not a `let`: TypeScript does not see the executor's
     // assignment and would narrow a `let` to `null` where it is called.
     const converge: {
-      resolve: ((value: { kind: "failed"; message: string }) => void) | null;
+      resolve:
+        | ((value: {
+            kind: "failed";
+            message: string;
+            errorCode: string | null;
+          }) => void)
+        | null;
     } = { resolve: null };
     const convergePromise = new Promise<{
       kind: "failed";
       message: string;
+      errorCode: string | null;
     }>((resolve) => {
       converge.resolve = resolve;
     });
@@ -444,7 +451,11 @@ describe("host-ensure-failure-message", () => {
     // per the brief - that push is modelled directly as a `setQueryData` on
     // the exact key the real listener writes into
     // (`host-controller-status-listener.tsx`'s `onChange` handler).
-    converge.resolve?.({ kind: "failed", message: SENTENCE });
+    converge.resolve?.({
+      kind: "failed",
+      message: SENTENCE,
+      errorCode: null,
+    });
     act(() => {
       queryClient.setQueryData(
         runnerQueryKeys.hostControllerStatus(spy.management),

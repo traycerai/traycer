@@ -940,7 +940,11 @@ describe("useHostProvisioning lastProgress producer", () => {
     expect(readLifecycle()?.provisioning.lastProgress).toBeNull();
 
     await act(async () => {
-      deferred.resolve({ kind: "failed", message: "ensure failed" });
+      deferred.resolve({
+        kind: "failed",
+        message: "ensure failed",
+        errorCode: null,
+      });
       await deferred.promise.catch(() => undefined);
     });
 
@@ -1050,7 +1054,11 @@ describe("useHostProvisioning lastProgress producer", () => {
     });
 
     await act(async () => {
-      settles[0].resolve({ kind: "failed", message: "ensure failed" });
+      settles[0].resolve({
+        kind: "failed",
+        message: "ensure failed",
+        errorCode: null,
+      });
       await settles[0].promise.catch(() => undefined);
     });
     await waitFor(() => {
@@ -1086,7 +1094,11 @@ describe("useHostProvisioning lastProgress producer", () => {
     // Second attempt fails with no progress events: must not revive the old
     // stage (proves run() cleared the retained snapshot).
     await act(async () => {
-      settles[1].resolve({ kind: "failed", message: "ensure failed again" });
+      settles[1].resolve({
+        kind: "failed",
+        message: "ensure failed again",
+        errorCode: null,
+      });
       await settles[1].promise.catch(() => undefined);
     });
     await waitFor(() => {
@@ -1141,7 +1153,11 @@ describe("useHostProvisioning lastProgress producer", () => {
           },
         },
       );
-      deferred.resolve({ kind: "failed", message: "ensure failed" });
+      deferred.resolve({
+        kind: "failed",
+        message: "ensure failed",
+        errorCode: null,
+      });
       await deferred.promise.catch(() => undefined);
     });
 
@@ -1200,7 +1216,11 @@ describe("useHostProvisioning lastProgress producer", () => {
     });
 
     await act(async () => {
-      settles[0].resolve({ kind: "failed", message: "ensure failed" });
+      settles[0].resolve({
+        kind: "failed",
+        message: "ensure failed",
+        errorCode: null,
+      });
       await settles[0].promise.catch(() => undefined);
     });
     await waitFor(() => {
@@ -1223,7 +1243,11 @@ describe("useHostProvisioning lastProgress producer", () => {
 
     // Second attempt fails with no new progress push - only the leftover lane.
     await act(async () => {
-      settles[1].resolve({ kind: "failed", message: "ensure failed again" });
+      settles[1].resolve({
+        kind: "failed",
+        message: "ensure failed again",
+        errorCode: null,
+      });
       await settles[1].promise.catch(() => undefined);
     });
     await waitFor(() => {

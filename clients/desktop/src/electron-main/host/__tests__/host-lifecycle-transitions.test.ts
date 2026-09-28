@@ -982,6 +982,7 @@ describe("refreshDefinitionAfterWrite", () => {
     harness.controller.refreshOutcome = {
       kind: "failed",
       message: "refresh failed",
+      errorCode: null,
     };
 
     const result = await harness.service.setMode({ mode: "ask", stop: null });

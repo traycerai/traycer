@@ -12,6 +12,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { HOST_STORE_FORMAT_REFUSAL_MESSAGE } from "@traycer-clients/shared/host-update/store-format-refusal-copy";
 
 // HOME is redirected to a private temp dir BEFORE anything reads it: the
 // `store/paths` mock below overrides `hostHomeDir`/`hostInstallDir`/
@@ -3681,6 +3682,41 @@ describe("ported: update-progress marker (T16)", () => {
     expect(mocks.disk.current).toMatchObject({
       state: "failed",
       targetVersion: "2.0.0",
+    });
+  });
+
+  it("a store-format floor refusal from the apply half is recorded with Settings copy, never the CLI flag, while the thrown error keeps the flag", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    // The refusal `installer/apply.ts` throws from `assertHostStoreFormatFloor`
+    // (before the busy gate), reaching this arm through `applyHostWithAttempt`.
+    const flagMessage =
+      "host apply: refusing to install host 2.0.0 over 1.0.0 - it reads chat store format 1, and 1 epic on this machine carries a newer one. Install a host that can read them instead, or rerun with --accept-store-format-loss to install it anyway and lose access to those chats.";
+    mocks.applyHostWithAttempt.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+        message: flagMessage,
+        details: {},
+        exitCode: 1,
+      }),
+    );
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+      message: flagMessage,
+    });
+
+    const record = await requireRecord();
+    expect(record.phase).toBe("failed");
+    expect(record.error).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+    });
+    expect(record.error?.message).toBe(HOST_STORE_FORMAT_REFUSAL_MESSAGE);
+    expect(record.error?.message).not.toContain("--accept-store-format-loss");
+    // The legacy progress marker carries the same safe copy, not the flag.
+    expect(mocks.disk.current).toMatchObject({
+      state: "failed",
+      error: HOST_STORE_FORMAT_REFUSAL_MESSAGE,
     });
   });
 

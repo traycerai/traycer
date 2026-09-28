@@ -591,7 +591,10 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
   // had nobody left to re-register it and the machine stayed unreachable until
   // the next launch.
   it.each([
-    ["a failed apply", { kind: "failed" as const, message: "apply failed" }],
+    [
+      "a failed apply",
+      { kind: "failed" as const, message: "apply failed", errorCode: null },
+    ],
     [
       "a stage that no longer matches",
       { kind: "stage-fingerprint-mismatch" as const, message: "mismatch" },
@@ -928,6 +931,7 @@ describe("armLocalHostBootOnSignIn", () => {
             : {
                 kind: "failed" as const,
                 message: "installer could not write to the prefix",
+                errorCode: null,
               },
         );
       },
@@ -1364,6 +1368,7 @@ describe("armLocalHostBootOnSignIn", () => {
     let convergeOutcome: MutationOutcome<ConvergeReadyOk> = {
       kind: "failed",
       message: "installer could not write to the prefix",
+      errorCode: null,
     };
     const convergeReadyCalls: boolean[] = [];
     const controller: IpcHostController = {
@@ -1528,6 +1533,7 @@ describe("armLocalHostBootOnSignIn", () => {
         return Promise.resolve({
           kind: "failed" as const,
           message: "installer could not write to the prefix",
+          errorCode: null,
         });
       },
     };
@@ -1579,6 +1585,7 @@ describe("armLocalHostBootOnSignIn", () => {
         return Promise.resolve({
           kind: "failed" as const,
           message: "installer could not write to the prefix",
+          errorCode: null,
         });
       },
     };
@@ -1717,6 +1724,7 @@ describe("armLocalHostBootOnSignIn", () => {
     resolveConverge({
       kind: "failed",
       message: "installer could not write to the prefix",
+      errorCode: null,
     });
     // WITHOUT the fix (`settled` left false by `dispose()`), this advance
     // would let the resolved continuation's `scheduleRetry()` arm rung 0 and

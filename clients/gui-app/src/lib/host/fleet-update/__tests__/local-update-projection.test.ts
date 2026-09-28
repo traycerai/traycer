@@ -84,6 +84,7 @@ function recordObservation(
     targetVersion: "2.1.0",
     phase: "restarting",
     errorMessage: null,
+    errorCode: null,
     liveness: "unknown",
     livenessObservedAtMs: null,
     updatedAt: new Date(NOW_MS).toISOString(),

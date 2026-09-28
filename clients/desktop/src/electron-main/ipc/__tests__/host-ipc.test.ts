@@ -33,7 +33,7 @@ function outcome(
     case "abandoned":
       return { kind: "abandoned", message: message ?? "" };
     case "failed":
-      return { kind: "failed", message: message ?? "" };
+      return { kind: "failed", message: message ?? "", errorCode: null };
   }
 }
 

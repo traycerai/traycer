@@ -121,6 +121,7 @@ describe("respawnIfDown (fixup B3: automatic-intent lock-contention class)", () 
     const controller = fakeControllerWithRecoverOutcome({
       kind: "failed",
       message: "boom",
+      errorCode: null,
     });
     await expect(respawnIfDown(controller)).rejects.toThrow("boom");
   });
