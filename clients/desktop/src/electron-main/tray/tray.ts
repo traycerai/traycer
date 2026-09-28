@@ -317,6 +317,11 @@ export class DesktopTrayController {
    */
   showNotice(notice: DesktopTrayNotice): Promise<boolean> {
     if (nodePlatform === "win32") {
+      // A destroyed tray has no icon to anchor a balloon to, so nothing is
+      // shown.
+      if (this.tray.isDestroyed()) {
+        return Promise.resolve(false);
+      }
       return new Promise<boolean>((resolve) => {
         const timer = setTimeout(() => {
           this.tray.removeListener("balloon-show", onShown);
@@ -373,7 +378,13 @@ export class DesktopTrayController {
     this.tray.destroy();
   }
 
+  // Every tooltip write goes through here. A caller can land after `dispose()`:
+  // the lifecycle line is pushed from an async policy read that may resolve
+  // during quit. Electron throws on any call into a destroyed tray.
   private refreshToolTip(): void {
+    if (this.tray.isDestroyed()) {
+      return;
+    }
     const base = `Traycer (${this.indicator})`;
     const line = this.lifecycleLine();
     this.tray.setToolTip(line === null ? base : `${base}\n${line}`);

@@ -20,6 +20,7 @@ interface MockTrayInstanceLike {
   setToolTip(text: string): void;
   on(event: string, handler: () => void): void;
   setContextMenu(menu: unknown): void;
+  isDestroyed(): boolean;
   destroy(): void;
 }
 
@@ -66,6 +67,9 @@ vi.mock("electron", () => {
     }
     setContextMenu(menu: unknown): void {
       this.contextMenu = menu;
+    }
+    isDestroyed(): boolean {
+      return this.destroyed;
     }
     destroy(): void {
       this.destroyed = true;
@@ -933,5 +937,63 @@ describe("DesktopTrayController host lifecycle", () => {
 
     expect(mockMenuState.lastBuiltMenu).not.toBe(menu);
     expect(labels()).not.toContain("Restart Host");
+  });
+});
+
+// A caller can land after `dispose()`: the lifecycle line is pushed from an
+// async policy read that may resolve during quit, same as the indicator and
+// presentation setters. Electron throws on any call into a destroyed tray,
+// so `refreshToolTip` must leave a destroyed tray alone instead of crashing.
+describe("a destroyed tray is left alone by the host lifecycle line", () => {
+  beforeEach(() => {
+    mockAppState.appPath = REPO_DESKTOP_ROOT;
+    mockMenuState.lastBuiltMenu = null;
+    trayInstances.length = 0;
+    Object.defineProperty(process, "resourcesPath", {
+      configurable: true,
+      value: join(REPO_DESKTOP_ROOT, "resources"),
+    });
+  });
+
+  it("control: before dispose, a changed lifecycle line and setQuitStopping(true) each write a tooltip", () => {
+    const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+      onEpicSelected: null,
+      onCommand: null,
+    });
+    const tray = mostRecentTray();
+
+    const tipsBeforeLine = tray.toolTips.length;
+    controller.setHostLifecyclePresentation({
+      line: "Host: running · stops with app",
+      offerQuitAndStopHost: false,
+      offerRestartHost: true,
+    });
+    expect(tray.toolTips.length).toBeGreaterThan(tipsBeforeLine);
+
+    const tipsBeforeQuitStopping = tray.toolTips.length;
+    controller.setQuitStopping(true);
+    expect(tray.toolTips.length).toBeGreaterThan(tipsBeforeQuitStopping);
+  });
+
+  it("after dispose(), a changed lifecycle line and setQuitStopping(true) neither throw nor write a tooltip", () => {
+    const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+      onEpicSelected: null,
+      onCommand: null,
+    });
+    const tray = mostRecentTray();
+
+    controller.dispose();
+    expect(tray.isDestroyed()).toBe(true);
+
+    const tipsAfterDispose = tray.toolTips.length;
+    expect(() => {
+      controller.setHostLifecyclePresentation({
+        line: "Host: running · stops with app",
+        offerQuitAndStopHost: false,
+        offerRestartHost: true,
+      });
+      controller.setQuitStopping(true);
+    }).not.toThrow();
+    expect(tray.toolTips.length).toBe(tipsAfterDispose);
   });
 });

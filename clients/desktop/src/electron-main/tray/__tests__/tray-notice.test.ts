@@ -29,13 +29,19 @@ const recorded = vi.hoisted(() => ({
 vi.mock("electron", () => {
   class MockTray {
     private readonly listeners = new Map<string, Set<() => void>>();
+    private destroyed = false;
     constructor() {
       recorded.trays.push(this);
     }
     setToolTip(): void {}
     on(): void {}
     setContextMenu(): void {}
-    destroy(): void {}
+    isDestroyed(): boolean {
+      return this.destroyed;
+    }
+    destroy(): void {
+      this.destroyed = true;
+    }
     displayBalloon(options: {
       title: string;
       content: string;
@@ -117,6 +123,7 @@ const NOTICE = { title: "Traycer is still running", content: "In the tray." };
 
 async function trayOn(platform: NodeJS.Platform): Promise<{
   showNotice(notice: { title: string; content: string }): Promise<boolean>;
+  dispose(): void;
 }> {
   vi.resetModules();
   vi.doMock("node:process", () => ({ platform, default: { platform } }));
@@ -133,7 +140,10 @@ async function trayOn(platform: NodeJS.Platform): Promise<{
     onEpicSelected: null,
     onCommand: null,
   });
-  return { showNotice: (notice) => controller.showNotice(notice) };
+  return {
+    showNotice: (notice) => controller.showNotice(notice),
+    dispose: () => controller.dispose(),
+  };
 }
 
 afterEach(() => {
@@ -205,5 +215,29 @@ describe("DesktopTrayController.showNotice", () => {
     await expect(tray.showNotice(NOTICE)).resolves.toBe(false);
     expect(recorded.notifications).toEqual([]);
     expect(recorded.balloons).toEqual([]);
+  });
+});
+
+// A destroyed tray has no icon left to anchor a balloon to. The lifecycle
+// line landing after `dispose()` is the same hazard covered for the tooltip
+// in tray.test.ts - here it is `showNotice`'s win32 branch that must leave
+// the destroyed tray alone instead of calling into it.
+describe("DesktopTrayController.showNotice and a destroyed tray", () => {
+  it("win32: control - before dispose, showNotice still calls displayBalloon", async () => {
+    const tray = await trayOn("win32");
+    const promise = tray.showNotice(NOTICE);
+    expect(recorded.balloons).toEqual([
+      { title: NOTICE.title, content: NOTICE.content, iconType: "info" },
+    ]);
+    recorded.trays[0].emit("balloon-show");
+    await expect(promise).resolves.toBe(true);
+  });
+
+  it("win32: after dispose(), showNotice resolves false without calling displayBalloon", async () => {
+    const tray = await trayOn("win32");
+    tray.dispose();
+    const promise = tray.showNotice(NOTICE);
+    expect(recorded.balloons).toEqual([]);
+    await expect(promise).resolves.toBe(false);
   });
 });
