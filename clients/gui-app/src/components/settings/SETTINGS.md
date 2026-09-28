@@ -5886,9 +5886,13 @@ set-state-in-effect` forbids the effect form, and an effect would also
        someone, destructive on failure, success when done, neutral for a view
        the page can no longer vouch for (a retained failure stays red). Its one
        control is Restart, Force update… or Force restart…. Success reads
-       "Updated to v1.5.1" and collapses after 8 s or on dismiss; the
-       acknowledgement (`useHostUpdateCompletion`) runs at PANEL level, so the
-       card's own mount and unmount never restart its timer. It is the page's
+       "Updated to v1.5.1" and collapses after 8 s or on dismiss; a failure
+       stays until dismissed by hand, and dismissing hides the card only (the
+       record stays on the host, the Doctor card still reports it, and the
+       next attempt arrives undismissed because dismissals are keyed by
+       attempt id and shared with the landing banner). The acknowledgement
+       (`useHostUpdateCompletion`) runs at PANEL level, so the card's own
+       mount and unmount never restart its timer. It is the page's
        ONLY report of an update in flight: the header carries no update pill,
        and the version card goes quiet while it shows.
     3. **The account's wait** (`HostUpdateDrainGateRow`: "Waiting for 2
