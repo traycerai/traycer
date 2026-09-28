@@ -108,9 +108,13 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/browser-tile/browser-viewport-handles.tsx": 6,
   "gui-app/src/components/browser-tile/browser-viewport-toolbar.tsx": 5,
   "gui-app/src/components/chat/chat-messages.tsx": 10,
+  // Bare ArrowRight accepts an offered suggestion: a named platform
+  // navigation/acceptance key, not a registered physical chord.
+  "gui-app/src/components/chat/composer/chat-composer-editor-slot.tsx": 1,
   "gui-app/src/components/chat/composer/menu/github-mention-filter-popover.tsx": 3,
   "gui-app/src/components/chat/composer/picker/suggestion-render.ts": 5,
   "gui-app/src/components/chat/composer/profile-rate-limit-switch-banner.tsx": 3,
+  "gui-app/src/components/chat/composer/prompt-suggestion.ts": 1,
   "gui-app/src/components/chat/segments/pending-interview/use-interview-card.ts": 5,
   "gui-app/src/components/chat/segments/revert-on-edit-dialog.tsx": 1,
   "gui-app/src/components/chat/segments/steer-settings-conflict-dialog.tsx": 1,
