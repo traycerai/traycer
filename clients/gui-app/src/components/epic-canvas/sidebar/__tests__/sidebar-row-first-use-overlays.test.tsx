@@ -1262,6 +1262,15 @@ describe("sidebar row first-use overlays", () => {
     const dot = screen.getByTestId(`epic-sidebar-status-dot-${ART_A}`);
     const hovered = user.hover(dot);
     expect(overlayMounted.tooltipWrapper).toBe(0);
+    // The lazy leaf mounts its Radix root in a 0 ms task after the pointer
+    // enters; flush it in its own `act` so the mount commits before the real
+    // delay advance below, rather than only once that advance's own `act`
+    // scope closes (which would start Radix's delay timer too late).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(overlayMounted.tooltipWrapper).toBe(1);
+    expect(screen.queryByRole("tooltip")).toBeNull();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(TOOLTIP_DELAY_MS);
     });
@@ -1293,6 +1302,15 @@ describe("sidebar row first-use overlays", () => {
     );
     const hovered = user.hover(lock);
     expect(overlayMounted.tooltipWrapper).toBe(0);
+    // The lazy leaf mounts its Radix root in a 0 ms task after the pointer
+    // enters; flush it in its own `act` so the mount commits before the real
+    // delay advance below, rather than only once that advance's own `act`
+    // scope closes (which would start Radix's delay timer too late).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(overlayMounted.tooltipWrapper).toBe(1);
+    expect(screen.queryByRole("tooltip")).toBeNull();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(TOOLTIP_DELAY_MS);
     });
