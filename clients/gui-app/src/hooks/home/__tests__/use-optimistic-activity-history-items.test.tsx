@@ -177,6 +177,101 @@ describe("optimistic activity history projection", () => {
     ).toBe(300);
   });
 
+  it("keeps a pending edge when the server clock is ahead of the browser", () => {
+    const userId = `server-clock-ahead-${crypto.randomUUID()}`;
+    const epicId = "server-clock-ahead-epic";
+    const baseline = historyItem(epicId, 20_000, 20_000);
+    settleHistoryActivity(userId, [baseline]);
+    observeActiveHistoryEdges(userId, new Set([epicId]), 10_000);
+
+    settleHistoryActivity(userId, [baseline]);
+    const olderDurableRow = historyItem(epicId, 9_000, 9_000);
+    expect(
+      projectOptimisticHistoryItems(userId, [olderDurableRow], [], 20_000)[0]
+        ?.recentAtMs,
+    ).toBe(10_000);
+
+    settleHistoryActivity(userId, [historyItem(epicId, 21_000, 21_000)]);
+    expect(
+      projectOptimisticHistoryItems(userId, [olderDurableRow], [], 21_000)[0]
+        ?.recentAtMs,
+    ).toBe(9_000);
+  });
+
+  it("keeps an accepted record pending until a newer durable key arrives", () => {
+    const userId = `accepted-behind-durable-${crypto.randomUUID()}`;
+    const epicId = "accepted-behind-durable-epic";
+    const baseline = historyItem(epicId, 20_000, 20_000);
+    const olderDurableRow = historyItem(epicId, 9_000, 9_000);
+    settleHistoryActivity(userId, [baseline]);
+    observeActiveHistoryEdges(userId, new Set([epicId]), 10_000);
+    observeOwnHistoryRecordChange(userId, epicId, 3_000);
+
+    settleHistoryActivity(userId, [baseline]);
+    expect(
+      projectOptimisticHistoryItems(userId, [olderDurableRow], [], 20_000)[0]
+        ?.recentAtMs,
+    ).toBe(10_000);
+
+    settleHistoryActivity(userId, [historyItem(epicId, 21_000, 21_000)]);
+    expect(
+      projectOptimisticHistoryItems(userId, [olderDurableRow], [], 21_000)[0]
+        ?.recentAtMs,
+    ).toBe(9_000);
+  });
+
+  it("does not settle a legacy row from updatedAt without durable recency", () => {
+    const userId = `legacy-recency-${crypto.randomUUID()}`;
+    const epicId = "legacy-recency-epic";
+    observeActiveHistoryEdges(userId, new Set([epicId]), 10_000);
+    const advancedLegacyRow = {
+      ...historyItem(epicId, 20_000, 1_000),
+      recentAtMs: undefined,
+    };
+
+    settleHistoryActivity(userId, [advancedLegacyRow]);
+
+    expect(
+      projectOptimisticHistoryItems(
+        userId,
+        [{ ...historyItem(epicId, 9_000, 9_000), recentAtMs: undefined }],
+        [],
+        10_000,
+      )[0]?.recentAtMs,
+    ).toBe(10_000);
+  });
+
+  it("preserves server order for unstamped old-peer rows when lifting a stamped row", () => {
+    const userId = `server-order-${crypto.randomUUID()}`;
+    const authoritativeItems = [
+      { ...historyItem("server-first", 100, undefined), recentAtMs: undefined },
+      {
+        ...historyItem("server-second", 300, undefined),
+        recentAtMs: undefined,
+      },
+    ];
+
+    expect(
+      projectOptimisticHistoryItems(userId, authoritativeItems, [], 1_000).map(
+        (item) => item.epicId,
+      ),
+    ).toEqual(["server-first", "server-second"]);
+
+    observeOwnHistoryRecordChange(userId, "stamped-old-peer", 500);
+    const projected = projectOptimisticHistoryItems(
+      userId,
+      authoritativeItems,
+      [historyItem("stamped-old-peer", 50, undefined)],
+      1_000,
+    );
+
+    expect(projected.map((item) => item.epicId)).toEqual([
+      "stamped-old-peer",
+      "server-first",
+      "server-second",
+    ]);
+  });
+
   it("requests missing active rows in one context batch", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -388,7 +483,12 @@ describe("optimistic activity history projection", () => {
     rerender({
       items: [historyItem("accepted-before-edge", 3_000, 3_000)],
     });
-    expect(result.current[0]?.recentAtMs).toBe(3_000);
+    expect(result.current[0]?.recentAtMs).toBe(10_000);
+
+    rerender({
+      items: [historyItem("accepted-before-edge", 4_000, 4_000)],
+    });
+    expect(result.current[0]?.recentAtMs).toBe(4_000);
   });
 
   it("refreshes once when two consumers share the same user and host scope", async () => {

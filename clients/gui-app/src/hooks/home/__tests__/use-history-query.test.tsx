@@ -222,8 +222,18 @@ describe("useHistoryQuery", () => {
       Date.parse("2026-04-22T12:00:00.000Z"),
     );
     testState.tasks = [
-      taskLight("epic-alpha", "Alpha workbench", "traycer/gui-app"),
-      taskLight("epic-beta", "Beta search flow", "traycer/server"),
+      taskLightWithRecentAt(
+        "epic-alpha",
+        "Alpha workbench",
+        "traycer/gui-app",
+        Date.parse("2026-04-22T11:00:00.000Z"),
+      ),
+      taskLightWithRecentAt(
+        "epic-beta",
+        "Beta search flow",
+        "traycer/server",
+        Date.parse("2026-04-22T11:20:00.000Z"),
+      ),
     ];
     testState.response = { tasks: testState.tasks, hasMore: false };
     testState.isFetching = false;
@@ -646,6 +656,45 @@ describe("useHistoryQuery", () => {
         screen.getByRole("status", { name: "History titles" }).textContent,
       ).toBe("rank cloud B|rank extra|rank cloud A");
     });
+  });
+
+  it("preserves server Recent order when an older host omits activity timestamps", async () => {
+    // epic.listTasks@1.7 adds recentAt. An @1.6-or-earlier host omits that
+    // field but still returns the page in authoritative activity order. Task
+    // edit times can disagree with that order, so fallback sorting corrupts it.
+    const serverRecent = taskLightWithUpdatedAt(
+      "server-recent",
+      "server recent",
+      "traycer/gui-app",
+      Date.parse("2026-04-22T10:00:00.000Z"),
+    );
+    const serverOlderActivity = taskLightWithUpdatedAt(
+      "server-older-activity",
+      "server older activity",
+      "traycer/server",
+      Date.parse("2026-04-22T11:00:00.000Z"),
+    );
+    testState.tasks = [serverRecent, serverOlderActivity];
+    testState.response = { tasks: testState.tasks, hasMore: false };
+
+    const search = patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+      sort: "recent",
+      sortExplicit: true,
+    });
+    const { rerender } = render(<HistoryQueryHarness search={search} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("status", { name: "History titles" }).textContent,
+      ).toBe("server recent|server older activity");
+    });
+
+    testState.isFetching = true;
+    rerender(<HistoryQueryHarness search={search} />);
+
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("server recent|server older activity");
   });
 
   it("dedups a task matched by both the cloud query and a local worktree string", () => {

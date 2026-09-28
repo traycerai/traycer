@@ -29,6 +29,8 @@ interface ActivityStamp {
   readonly baselineAt: number | null;
   /** Own-record timestamp from the host stream, when one is available. */
   readonly acceptedAt: number | null;
+  /** A later turn still needs activity beyond this earlier accepted record. */
+  readonly turnAfterAcceptedAt: number | null;
 }
 const stamps = new Map<string, ActivityStamp>();
 const knownDurableAt = new Map<string, number>();
@@ -104,14 +106,20 @@ function removeExpiredStamps(at: number): boolean {
 }
 
 function stampActiveHistoryEdge(key: string, at: number): void {
-  // A record delta may arrive before the turn projection. Preserve its exact
-  // accepted timestamp so a different task edit cannot settle it early.
+  // A record delta can precede the turn projection. Its exact accepted time
+  // settles that record, but the later turn still needs a further durable key.
   const previous = stamps.get(key);
+  const acceptedAt = previous?.acceptedAt ?? null;
+  const priorTurnBarrier = previous?.turnAfterAcceptedAt ?? null;
   stamps.set(key, {
     at: Math.max(previous?.at ?? 0, at),
     expiresAt: Math.max(previous?.expiresAt ?? 0, at + STAMP_TTL_MS),
     baselineAt: previous?.baselineAt ?? knownDurableAt.get(key) ?? null,
-    acceptedAt: previous?.acceptedAt ?? null,
+    acceptedAt,
+    turnAfterAcceptedAt:
+      acceptedAt === null
+        ? priorTurnBarrier
+        : Math.max(priorTurnBarrier ?? acceptedAt, acceptedAt),
   });
   if (stamps.size > MAX_ACTIVE_ROWS) {
     const oldest = stamps.keys().next().value;
@@ -156,12 +164,17 @@ export function observeOwnHistoryRecordChange(
 ): void {
   const key = keyFor(userId, epicId);
   const previous = stamps.get(key);
+  const priorTurnBarrier = previous?.turnAfterAcceptedAt ?? null;
   stamps.delete(key);
   stamps.set(key, {
     at: Math.max(previous?.at ?? 0, at),
     expiresAt: Date.now() + STAMP_TTL_MS,
     baselineAt: previous?.baselineAt ?? knownDurableAt.get(key) ?? null,
     acceptedAt: Math.max(previous?.acceptedAt ?? 0, at),
+    turnAfterAcceptedAt:
+      priorTurnBarrier !== null && at <= priorTurnBarrier
+        ? priorTurnBarrier
+        : null,
   });
   if (stamps.size > MAX_ACTIVE_ROWS) {
     const oldest = stamps.keys().next().value;
@@ -192,15 +205,25 @@ export function settleHistoryActivity(
 ): void {
   let removed = false;
   for (const item of items) {
+    // Older negotiated peers omit the activity key. An edit timestamp cannot
+    // prove that the viewer's own chat or turn activity was persisted.
+    if (item.recentAtMs === undefined) continue;
     const key = keyFor(userId, item.epicId);
-    const durableAt = item.recentAtMs ?? item.updatedAtMs;
+    const durableAt = item.recentAtMs;
     const stamp = stamps.get(key);
     if (stamp !== undefined) {
-      const caughtUp =
-        stamp.acceptedAt !== null
-          ? durableAt >= stamp.acceptedAt
-          : durableAt >= stamp.at ||
-            (stamp.baselineAt !== null && durableAt > stamp.baselineAt);
+      let caughtUp: boolean;
+      if (stamp.acceptedAt !== null) {
+        caughtUp =
+          durableAt >= stamp.acceptedAt &&
+          (stamp.baselineAt === null || durableAt > stamp.baselineAt) &&
+          (stamp.turnAfterAcceptedAt === null ||
+            durableAt > stamp.turnAfterAcceptedAt);
+      } else if (stamp.baselineAt === null) {
+        caughtUp = durableAt >= stamp.at;
+      } else {
+        caughtUp = durableAt > stamp.baselineAt;
+      }
       if (caughtUp) {
         stamps.delete(key);
         removed = true;
@@ -215,7 +238,26 @@ export function settleHistoryActivity(
   if (removed) changed(null);
 }
 
-/** Pure loaded-row projection shared by the panel and the phone drawer. */
+interface ProjectedHistoryRow {
+  readonly item: HistoryItem;
+  readonly stampAt: number | null;
+}
+
+function compareLegacyProjectedRows(
+  left: ProjectedHistoryRow,
+  right: ProjectedHistoryRow,
+): number {
+  const pinned = Number(right.item.isPinned) - Number(left.item.isPinned);
+  if (pinned !== 0) return pinned;
+  const stamped =
+    Number(right.stampAt !== null) - Number(left.stampAt !== null);
+  if (stamped !== 0) return stamped;
+  // Older peers do not expose the server's activity key. Lift only rows with
+  // a local edge, then retain the server's order for every unstamped row.
+  return (right.stampAt ?? 0) - (left.stampAt ?? 0);
+}
+
+/** Loaded-row projection shared by the panel, drawer, and tray. */
 export function projectOptimisticHistoryItems(
   userId: string,
   pageItems: readonly HistoryItem[],
@@ -226,18 +268,35 @@ export function projectOptimisticHistoryItems(
   for (const item of backfilled) {
     if (!byEpic.has(item.epicId)) byEpic.set(item.epicId, item);
   }
-  const items = [...byEpic.values()].map((item) => {
+  const sourceItems = [...byEpic.values()];
+  const missingDurableKey = sourceItems.some(
+    (item) => item.recentAtMs === undefined,
+  );
+  const projected: ProjectedHistoryRow[] = sourceItems.map((item) => {
     const stamp = stamps.get(keyFor(userId, item.epicId));
-    if (stamp === undefined || stamp.expiresAt <= nowMs) return item;
+    if (stamp === undefined || stamp.expiresAt <= nowMs) {
+      return { item, stampAt: null };
+    }
     const recentAtMs = Math.max(item.recentAtMs ?? item.updatedAtMs, stamp.at);
     return {
-      ...item,
-      recentAtMs,
-      recentLabel: formatUpdatedLabel(recentAtMs),
-      recentBucket: toHistoryRecencyBucket(recentAtMs, nowMs),
+      item: {
+        ...item,
+        recentAtMs,
+        recentLabel: formatUpdatedLabel(recentAtMs),
+        recentBucket: toHistoryRecencyBucket(recentAtMs, nowMs),
+      },
+      stampAt: stamp.at,
     };
   });
-  return sortHistoryItems(items, "recent");
+  if (missingDurableKey) {
+    return projected
+      .toSorted(compareLegacyProjectedRows)
+      .map((row) => row.item);
+  }
+  return sortHistoryItems(
+    projected.map((row) => row.item),
+    "recent",
+  );
 }
 
 function hasUnsettledStamps(userId: string, now: number): boolean {

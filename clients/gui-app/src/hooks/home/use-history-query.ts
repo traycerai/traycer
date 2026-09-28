@@ -589,7 +589,7 @@ function settledHistoryItems(
   // Host-synthesized local homes belong on page one, while later cloud pages
   // remain cloud-owned. Sort the loaded union by the durable key even when a
   // filter or picker disables the optimistic active-row overlay.
-  if (sort === "recent") return sortHistoryItems(items, "recent");
+  if (sort === "recent") return sortProjectedHistoryItems(items, sort, query);
   if (contextExtrasCount > 0) {
     return sortProjectedHistoryItems(items, sort, query);
   }
@@ -721,6 +721,15 @@ function sortProjectedHistoryItems(
   query: string,
 ): ReadonlyArray<HistoryItem> {
   if ((sort === "relevance" && query.length > 0) || sort === "last-viewed") {
+    return prioritizePinnedHistoryItems(items);
+  }
+  // A pre-1.7 peer strips the activity key after ordering its page. Falling
+  // back to task edits here would reverse that authoritative server order.
+  // With no common key, preserve the loaded sequence within pin partitions.
+  if (
+    (sort === "recent" || sort === "relevance") &&
+    items.some((item) => item.recentAtMs === undefined)
+  ) {
     return prioritizePinnedHistoryItems(items);
   }
   return sortHistoryItems(items, sort);

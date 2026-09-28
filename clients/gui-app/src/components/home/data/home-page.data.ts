@@ -46,7 +46,7 @@ export interface HistoryItem {
   updatedAtMs: number;
   updatedLabel: string;
   updatedBucket: HistoryRecencyBucket;
-  /** Viewer-scoped task edit or own-chat activity; absent on older fixtures. */
+  /** Viewer-scoped task edit or own-chat activity; absent before listTasks@1.7. */
   recentAtMs?: number;
   recentLabel?: string;
   recentBucket?: HistoryRecencyBucket;
@@ -263,7 +263,7 @@ function buildHistoryItem(args: {
     updatedAtMs: light.updatedAt,
     updatedLabel: formatUpdatedLabel(light.updatedAt),
     updatedBucket: toHistoryRecencyBucket(light.updatedAt, nowMs),
-    recentAtMs: recentAt,
+    recentAtMs: task.recentAt === undefined ? undefined : recentAt,
     recentLabel: formatUpdatedLabel(recentAt),
     recentBucket: toHistoryRecencyBucket(recentAt, nowMs),
     linkedRepos: readTaskRepos(task),
