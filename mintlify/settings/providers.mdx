@@ -24,8 +24,8 @@ Select a provider to open its tabs.
 The switch in the provider's header reads **Enabled** or **Disabled**. Only enabled providers appear in the composer's model picker.
 
 - Claude Code and Codex are enabled in a new install.
-- Cursor, OpenRouter, Hugging Face, and Kilo Code turn on by themselves once Traycer confirms your key or sign-in.
-- Every other provider stays off until you turn it on.
+- Other providers, except Traycer Inference, can turn on automatically when the host starts and verifies their credentials. If verification fails, a later host start can try again. Signing in during a session does not turn a provider on by itself.
+- Once a provider has an enabled or disabled setting, host startup preserves it. You can change it with the switch.
 - **Traycer Inference** is opt-in. It uses Traycer credits, so only you can turn it on.
 
 At least one provider must stay enabled. A provider with managed profiles needs at least one enabled profile before you can turn it on.
@@ -98,7 +98,7 @@ What a new profile shares with the Terminal account depends on the provider:
 
 Grok profiles use separate `GROK_HOME` directories, so each profile keeps its OAuth account, configuration, and sessions isolated. New profiles start with an empty private store: ambient configuration, MCP credentials, plugins, skills, memory, and sessions are not copied. Ambient xAI API keys and external-auth commands are not inherited by managed Grok profiles.
 
-Each Antigravity profile signs in to its own Google account. Signing a profile out never touches the Terminal account.
+Antigravity’s Terminal account can use Google sign-in or inherit `GEMINI_API_KEY` from your shell. A managed profile uses its own Google sign-in or stored Gemini API key; it does not inherit the shell’s key. Signing a profile out never touches the Terminal account.
 
 To pick a profile for the next turn, use the profile dropdown in the composer's model picker. It appears once a provider has two or more profiles.
 
