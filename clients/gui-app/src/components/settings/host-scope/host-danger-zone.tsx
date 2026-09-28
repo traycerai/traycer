@@ -1,4 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
+import type { TraycerRemoved } from "@traycer-clients/shared/platform/runner-host";
 import { toast } from "sonner";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
@@ -194,6 +195,95 @@ export function LocalRecoveryDangerZone(): ReactNode {
   );
 }
 
+interface RemovedTraycerStatusProps {
+  readonly removed: TraycerRemoved;
+  readonly blockedReason: string | null;
+  readonly reasonId: string;
+  readonly onRetry: () => void;
+}
+
+function RemovedTraycerStatus(props: RemovedTraycerStatusProps): ReactNode {
+  const { removed, blockedReason, reasonId } = props;
+  const reasonHint =
+    blockedReason === null ? undefined : (
+      <span id={reasonId}>{blockedReason}</span>
+    );
+  // The host's Scheduled Task is not this account's (another Windows user's,
+  // or one whose owner could not be confirmed - main's copy says which): the
+  // removal left it alone on purpose and removed everything of this
+  // account's, so there is nothing to try again. Say so on the finished row.
+  if (removed.serviceWarning !== null) {
+    return (
+      <SettingsRow
+        row={HOST_OVERVIEW.definitions.removed}
+        hint={
+          <span data-testid="settings-remove-traycer-service-warning">
+            {removed.serviceWarning}
+          </span>
+        }
+        control={
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            data-testid="settings-quit-after-uninstall"
+            onClick={() => requestAppQuit()}
+          >
+            Quit Traycer
+          </Button>
+        }
+      />
+    );
+  }
+  if (removed.serviceRegistrationRetained === true) {
+    return (
+      <SettingsRow
+        row={HOST_OVERVIEW.definitions.removalIncomplete}
+        hint={reasonHint}
+        control={
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            disabled={blockedReason !== null}
+            aria-describedby={blockedReason === null ? undefined : reasonId}
+            data-testid="settings-retry-uninstall"
+            onClick={props.onRetry}
+          >
+            Try again
+          </Button>
+        }
+      />
+    );
+  }
+  if (removed.serviceRegistrationRetained === null) {
+    return (
+      <SettingsRow
+        row={HOST_OVERVIEW.definitions.removalUnverified}
+        control={
+          <span className="text-muted-foreground text-xs">Check terminal</span>
+        }
+      />
+    );
+  }
+  return (
+    <SettingsRow
+      row={HOST_OVERVIEW.definitions.removed}
+      control={
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          data-testid="settings-quit-after-uninstall"
+          onClick={() => requestAppQuit()}
+        >
+          Quit Traycer
+        </Button>
+      }
+    />
+  );
+}
+
 /**
  * Uninstalling the host is the most host-scoped action there is, so it lives
  * on the host's own page rather than beside app-global resets in General.
@@ -224,53 +314,12 @@ function RemoveTraycerRow(): ReactNode {
       ? uninstall.data
       : null;
   if (removed !== null) {
-    if (removed.serviceRegistrationRetained === true) {
-      return (
-        <SettingsRow
-          row={HOST_OVERVIEW.definitions.removalIncomplete}
-          hint={reasonHint}
-          control={
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              disabled={blockedReason !== null}
-              aria-describedby={blockedReason === null ? undefined : reasonId}
-              data-testid="settings-retry-uninstall"
-              onClick={() => uninstall.mutate()}
-            >
-              Try again
-            </Button>
-          }
-        />
-      );
-    }
-    if (removed.serviceRegistrationRetained === null) {
-      return (
-        <SettingsRow
-          row={HOST_OVERVIEW.definitions.removalUnverified}
-          control={
-            <span className="text-muted-foreground text-xs">
-              Check terminal
-            </span>
-          }
-        />
-      );
-    }
     return (
-      <SettingsRow
-        row={HOST_OVERVIEW.definitions.removed}
-        control={
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            data-testid="settings-quit-after-uninstall"
-            onClick={() => requestAppQuit()}
-          >
-            Quit Traycer
-          </Button>
-        }
+      <RemovedTraycerStatus
+        removed={removed}
+        blockedReason={blockedReason}
+        reasonId={reasonId}
+        onRetry={() => uninstall.mutate()}
       />
     );
   }

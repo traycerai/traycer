@@ -252,6 +252,7 @@ describe("HostDangerZone - Remove Traycer during a foreground host run", () => {
         removedHost: true,
         deregisteredService: false,
         serviceRegistrationRetained: true,
+        serviceWarning: null,
         removedLoginItem: false,
       } satisfies TraycerUninstallResult),
     );
@@ -286,6 +287,7 @@ describe("HostDangerZone - Remove Traycer during a foreground host run", () => {
         removedHost: true,
         deregisteredService: true,
         serviceRegistrationRetained: false,
+        serviceWarning: null,
         removedLoginItem: true,
       } satisfies TraycerUninstallResult),
     );
@@ -393,6 +395,7 @@ describe("HostDangerZone - Remove Traycer's declined-uninstall notice", () => {
         removedHost: true,
         deregisteredService: true,
         serviceRegistrationRetained: false,
+        serviceWarning: null,
         removedLoginItem: true,
       } satisfies TraycerUninstallResult),
     );

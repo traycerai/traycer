@@ -59,6 +59,7 @@ import {
   parseWindowsKillOutcomeJson,
   parseWindowsProcessDetailJson,
   parseWindowsProcessTableJson,
+  setWindowsAccountSidResolverForTests,
   setWindowsDefinitionDepsForTests,
   setWindowsStartEvidenceDepsForTests,
   setWindowsTaskInstallDepsForTests,
@@ -67,6 +68,7 @@ import {
   type ProcessRunner,
   type ScheduledTaskXmlQuery,
   type WindowsControllerDeps,
+  type WindowsDefinitionDeps,
   type WindowsKillMemory,
   type WindowsKillTarget,
   type WindowsKillVictim,
@@ -213,6 +215,18 @@ beforeEach(() => {
   mocks.requestCooperativeShutdownReporting.mockResolvedValue({
     kind: "no-metadata" as const,
   });
+  // The ownership gate reads the registered task before every verb that
+  // changes it (`windows-task-gate.ts`), and fails closed when it cannot tell
+  // whose the task is. Every fixture here runs as the account that owns the
+  // task unless it says otherwise; `windows-task-ownership.test.ts` covers a
+  // task that is not.
+  useOwnedTaskFixture();
+});
+
+afterEach(() => {
+  setWindowsTaskUserSidReaderForTests(null);
+  setWindowsAccountSidResolverForTests(null);
+  setWindowsDefinitionDepsForTests(null);
 });
 
 // The real logger appends to the invoking user's actual ~/.traycer log file -
@@ -5484,6 +5498,35 @@ describe("computeWindowsHostKillSet and the kill self-protection it drives", () 
 // own identity.
 const TEST_TASK_USER_SID = "S-1-5-21-1000-2000-3000-1001";
 
+/** A registered task whose principal is `TEST_TASK_USER_SID`, Settings Enabled. */
+const OWNED_TASK_XML = `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Principals>
+    <Principal id="Author"><UserId>${TEST_TASK_USER_SID}</UserId></Principal>
+  </Principals>
+  <Settings><Enabled>true</Enabled></Settings>
+  <Actions Context="Author"><Exec><Command>x</Command></Exec></Actions>
+</Task>`;
+
+/** The definition seams with the task registered and owned by this account. */
+function ownedDefinitionDeps(): WindowsDefinitionDeps {
+  return {
+    queryTaskXml: async () => ({ kind: "xml", xml: OWNED_TASK_XML }),
+    predictCli: async () => {
+      throw new Error("predictCli must not be called from these fixtures");
+    },
+    resolveCli: async () => {
+      throw new Error("resolveCli must not be called from these fixtures");
+    },
+  };
+}
+
+function useOwnedTaskFixture(): void {
+  setWindowsTaskUserSidReaderForTests(() => TEST_TASK_USER_SID);
+  setWindowsAccountSidResolverForTests(async () => null);
+  setWindowsDefinitionDepsForTests(ownedDefinitionDeps());
+}
+
 describe("Scheduled Task XML identity", () => {
   it("names Traycer as the task Author", () => {
     // Probed live on Windows 11: a task registered from this XML without an
@@ -5500,6 +5543,7 @@ describe("Scheduled Task XML identity", () => {
         },
       },
       TEST_TASK_USER_SID,
+      true,
     );
     expect(xml).toContain("<Author>Traycer</Author>");
   });
@@ -5554,6 +5598,7 @@ describe("Scheduled Task XML identity", () => {
         },
       },
       TEST_TASK_USER_SID,
+      true,
     );
     expect(xml).toContain(
       "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
@@ -5587,6 +5632,7 @@ describe("Scheduled Task XML identity", () => {
         },
       },
       TEST_TASK_USER_SID,
+      true,
     );
     expect(xml).toContain("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>");
   });
@@ -5647,6 +5693,7 @@ function definitionTaskXml(settingsEnabled: string | null): string {
   </Triggers>
   <Principals>
     <Principal id="Author">
+      <UserId>${TEST_TASK_USER_SID}</UserId>
       <LogonType>InteractiveToken</LogonType>
       <RunLevel>LeastPrivilege</RunLevel>
     </Principal>
@@ -5689,8 +5736,7 @@ describe("Windows startService post-/Run spawn verification", () => {
     mocks.removeHostPidMetadata.mockResolvedValue(undefined);
     setWindowsStartEvidenceDepsForTests(null);
     setWindowsTaskInstallDepsForTests(null);
-    setWindowsTaskUserSidReaderForTests(() => TEST_TASK_USER_SID);
-    setWindowsDefinitionDepsForTests(null);
+    useOwnedTaskFixture();
   });
 
   afterEach(() => {
@@ -5842,6 +5888,9 @@ describe("Windows startService post-/Run spawn verification", () => {
       details: expect.objectContaining({ registrationCommitted: false }),
     });
     expect(didServiceRegistrationCommit(caught)).toBe(false);
+    // R3: one read only - the ownership gate's, in front of `/Run`. The
+    // failure path's enabled-state check now reads the gate's own XML
+    // instead of querying the task again.
     expect(calls).toEqual(["\\Traycer\\Host-Staging"]);
   });
 
@@ -5904,12 +5953,23 @@ describe("Windows startService post-/Run spawn verification", () => {
   // "unknown", which the catch treats the same as enabled: a read that
   // cannot confirm the task is disabled never suppresses the wait.
   it("control: a /Run failure when the task-enabled query itself fails stays a committed registration", async () => {
-    const { queryTaskXml } = recordingQueryTaskXml({
-      kind: "failed",
-      reason: "schtasks /Query failed (exit 1: ERROR: Access is denied.)",
-    });
+    // The ownership gate's read in front of `/Run` sees the account's own
+    // task; the enabled-state read on the failure path is the one that fails.
+    const reads: ScheduledTaskXmlQuery[] = [
+      { kind: "xml", xml: OWNED_TASK_XML },
+      {
+        kind: "failed",
+        reason: "schtasks /Query failed (exit 1: ERROR: Access is denied.)",
+      },
+    ];
+    let readIndex = 0;
     setWindowsDefinitionDepsForTests({
-      queryTaskXml,
+      queryTaskXml: async () => {
+        const read = reads[Math.min(readIndex, reads.length - 1)];
+        readIndex += 1;
+        if (read === undefined) throw new Error("unreachable");
+        return read;
+      },
       predictCli: async () => {
         throw new Error("predictCli must not be called from /Run verification");
       },
@@ -6476,7 +6536,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
     // change what these launcher-restore tests exercise.
     vi.stubEnv("COMPUTERNAME", "");
     vi.stubEnv("USERDNSDOMAIN", "");
-    setWindowsTaskUserSidReaderForTests(() => null);
+    useOwnedTaskFixture();
     setWindowsTaskInstallDepsForTests(null);
     setWindowsStartEvidenceDepsForTests(null);
     LAUNCHER_RESTORE_FAILURE.readFile = null;
@@ -6809,7 +6869,7 @@ describe("Windows controller — installService fact: /Create's XML is built fre
     vi.stubEnv("USERNAME", "testuser");
     vi.stubEnv("COMPUTERNAME", "");
     vi.stubEnv("USERDNSDOMAIN", "");
-    setWindowsTaskUserSidReaderForTests(() => null);
+    useOwnedTaskFixture();
     setWindowsTaskInstallDepsForTests(null);
     setWindowsStartEvidenceDepsForTests(null);
   });

@@ -16,6 +16,8 @@ import { NO_INSTALL_PHASE_HOOKS, type SwapLockRecovery } from "../../installer";
 import { makeBarrierGate } from "../../__tests__/support/barrier-gate";
 import { epochMicrosNow } from "../platforms/windows";
 import { atServiceSpawnEdge } from "../spawn-edge";
+import { reportServiceInstallKeptDisabled } from "../registration-repair";
+import { SERVICE_KEPT_DISABLED_WARNING } from "../registration-owner";
 
 const mocks = vi.hoisted(() => ({
   createServiceControllerMock: vi.fn(),
@@ -340,6 +342,37 @@ describe("service install lifecycle re-registration", () => {
       override: null,
       allowSelfInvocation: true,
     });
+  });
+
+  // R5 §49a: the bootstrap branch (`priorState === "not-installed"`,
+  // `options.bootstrap !== null` - `host install` on a machine read as not
+  // installed) registers through `registerService` directly, NOT through
+  // `withServiceInstallReport` as the existing-registration branch does
+  // (compare the "reloads an existing ... registration" tests below), so a
+  // controller whose `install` reports kept-disabled has nowhere for that
+  // report to land.
+  //
+  // RED today: `state.postSwapWarning` stays `null`.
+  it("49a: a controller that reports kept-disabled on the bootstrap install still sets postSwapWarning to SERVICE_KEPT_DISABLED_WARNING", async () => {
+    const harness = makeController("not-installed");
+    harness.install.mockImplementation(async () => {
+      await atServiceSpawnEdge();
+      reportServiceInstallKeptDisabled();
+    });
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+    await handle.lifecycle.beforeSwap();
+    await handle.lifecycle.afterSwap();
+
+    expect(handle.state.postSwapAction).toBe("install");
+    expect(handle.state.postSwapWarning).toEqual(SERVICE_KEPT_DISABLED_WARNING);
+    expect(handle.state.postSwapError).toBeNull();
   });
 
   it("rechecks the mutation verifier at raw stop, start, and register actuators", async () => {

@@ -4,6 +4,10 @@ import { withCliUpdateContender } from "../host/update-contender";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { uninstallHostServiceWithAttempt } from "../host/update-mutation";
 import { findForegroundHostRun } from "../host/foreground-host-run";
+import {
+  readServiceRegistrationOwnership,
+  serviceTaskNotOwnedError,
+} from "../service/registration-owner";
 
 // `traycer host service uninstall` - deregister the OS service for the
 // current environment. Idempotent: a not-installed service resolves
@@ -26,6 +30,18 @@ export const serviceUninstallCommand: CommandFn = async (
   };
   return withCliUpdateContender(contenderOptions, async (capability) => {
     const label = serviceLabelFor(ctx.runtime.environment);
+    // This command asks for the service registration and nothing else, so
+    // when that registration is another user's there is nothing of this
+    // account's to remove, and "deregistered" would be false: it refuses
+    // before anything - stop, sweep, launcher, task - is touched. (`host
+    // uninstall` has work of its own and finishes it beside their task.)
+    const ownership = await readServiceRegistrationOwnership(
+      label,
+      process.platform,
+    );
+    if (ownership.kind === "not-owned") {
+      throw serviceTaskNotOwnedError(label, "delete", ownership.reason);
+    }
     // Read under the lock, which keeps the answer true: a new host is spawned
     // only under this same lock. A host a person started in a terminal is not
     // the service's, so removing the service leaves it running, on every

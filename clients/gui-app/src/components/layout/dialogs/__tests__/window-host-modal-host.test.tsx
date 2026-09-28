@@ -366,7 +366,7 @@ describe("<WindowHostModalHost />", () => {
         targetKind: "local",
         localBootIntent: true,
         canManageHost: true,
-        ensureFailure: SENTENCE,
+        ensureFailure: { message: SENTENCE, code: null },
       },
       false,
       new MockTraycerCli(),

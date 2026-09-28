@@ -10,6 +10,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type {
   ConvergeReadyOk,
   HostControllerStatus,
+  HostEnsureFailure,
   IRunnerHost,
   LocalHostSnapshot,
   MutationOutcome,
@@ -19,7 +20,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
-import { settledEnsureFailureMessage } from "@/lib/host/host-ensure-failure";
+import { settledEnsureFailure } from "@/lib/host/host-ensure-failure";
 import { runnerQueryKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import {
@@ -209,10 +210,10 @@ function laneProgressAdvanceKey(
 export interface HostProvisioning {
   readonly isProvisioning: boolean;
   readonly error: Error | null;
-  // The last failed ensure's message, from main's controller status, while
-  // no ensure is in flight - including the launch ensures this renderer never
-  // started (`settledEnsureFailureMessage`).
-  readonly ensureFailure: string | null;
+  // The last failed ensure's message and code, from main's controller status,
+  // while no ensure is in flight - including the launch ensures this renderer
+  // never started (`settledEnsureFailure`).
+  readonly ensureFailure: HostEnsureFailure | null;
   readonly progress: MutationProgress | null;
   // Last `progress` event observed during the current provisioning attempt,
   // non-null ONLY once that attempt has failed (when live `progress` has
@@ -503,7 +504,7 @@ function useHostProvisioning(args: {
       isProvisioning: hasManagement && convergeReady.isPending,
       error: hasManagement ? convergeReady.error : null,
       ensureFailure: hasManagement
-        ? settledEnsureFailureMessage(statusQuery.data, convergeReady.isPending)
+        ? settledEnsureFailure(statusQuery.data, convergeReady.isPending)
         : null,
       progress,
       lastProgress: hasManagement ? failedProgress : null,

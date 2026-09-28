@@ -401,12 +401,21 @@ export async function consumeHostStartAdoption(
       throw new Error("host-start adoption claim could not be read safely");
     }
     const parsed = parseAdoption(claimedRead.text);
-    if (parsed === null || adoptionGrantExpired(parsed.issuedAtMs)) {
+    // The pending read above parsed this path, so a claim that no longer
+    // parses is a file that changed under the claim: refused.
+    if (parsed === null) {
       await abandon();
-      return {
-        kind: "refused",
-        reason: "host-start adoption was malformed or expired",
-      };
+      return { kind: "refused", reason: "host-start adoption was malformed" };
+    }
+    // A proof that was inside the window at the pending read and is past it
+    // now crossed a clock boundary inside one `rename`; nothing about it is
+    // corrupt. It answers what an expired proof answers on every other path -
+    // absent, and ordinary admission - once this claim has removed it, so the
+    // next reader is not handed the same expired proof. Refusing here failed
+    // that one supervisor start for a grant nobody could use any more.
+    if (adoptionGrantExpired(parsed.issuedAtMs)) {
+      await abandon();
+      return { kind: "absent" };
     }
     if (
       parsed.serviceLabel !== serviceLabel ||
@@ -531,7 +540,8 @@ async function readPendingAdoption(path: string): Promise<PendingAdoptionRead> {
  * removes a refusal without granting anything a proof-less launch does not
  * already have. Without it, a publisher that died between publishing and its
  * child's consume refused every nonce-less launch until the proof expired -
- * and the grant window more than doubled, to 130s.
+ * and the grant window has grown from 60s to 175.25s
+ * (`HOST_START_ADOPTION_MAX_AGE_MS`).
  *
  * Deliberately the predicate `readHostStartAdoptionNonce` applies before it
  * hands a launcher a nonce, so a launch that got no nonce BECAUSE the parent

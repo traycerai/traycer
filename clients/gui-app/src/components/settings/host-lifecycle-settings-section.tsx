@@ -1,9 +1,15 @@
 import { useId, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type {
+  HostEnsureFailure,
   HostLifecycleMode,
   HostLifecycleView,
 } from "@traycer-clients/shared/platform/runner-host";
+import {
+  isServiceTaskNotOwnedMessage,
+  SERVICE_TASK_NOT_OWNED_CODE,
+  SERVICE_TASK_OWNER_UNCONFIRMED_MESSAGE,
+} from "@traycer-clients/shared/platform/host-service-notices";
 import { LocalHostRestartFlow } from "@/components/host/local-host-restart-flow";
 import { HostLifecycleNoneConfirmDialog } from "@/components/settings/host-lifecycle-none-confirm-dialog";
 import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
@@ -12,6 +18,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerHostLifecycleQuery } from "@/hooks/runner/use-runner-host-lifecycle-query";
 import { useRunnerHostLifecycleSetMutation } from "@/hooks/runner/use-runner-host-lifecycle-set-mutation";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
@@ -28,6 +35,7 @@ import {
   HOST_LIFECYCLE_RESTART_HOST_LABEL,
   HOST_LIFECYCLE_SUPERSEDED_DESCRIPTION,
   HOST_LIFECYCLE_SUPERSEDED_TITLE,
+  HOST_LIFECYCLE_TASK_NOT_OWNED_REASON,
   hostLifecycleCardSubtitle,
   hostLifecycleModeName,
   hostLifecycleOptionCopy,
@@ -68,6 +76,22 @@ export function HostLifecycleSettingsSection(): ReactNode {
   );
 }
 
+/**
+ * The card's notice when the last ensure was refused because the host's task
+ * is not this account's, or `null`. It is main's own copy for the reason -
+ * another Windows user's task, or one whose owner could not be confirmed - and
+ * a message this build does not recognise reads as unconfirmed, so the card
+ * never calls the task another user's unless main did.
+ */
+function taskNotOwnedNotice(failure: HostEnsureFailure | null): string | null {
+  if (failure === null || failure.code !== SERVICE_TASK_NOT_OWNED_CODE) {
+    return null;
+  }
+  return isServiceTaskNotOwnedMessage(failure.message)
+    ? failure.message
+    : SERVICE_TASK_OWNER_UNCONFIRMED_MESSAGE;
+}
+
 function HostLifecycleCard(): ReactNode {
   const machine = hostMachineNoun();
   const viewQuery = useRunnerHostLifecycleQuery();
@@ -81,6 +105,15 @@ function HostLifecycleCard(): ReactNode {
   // selectable either way (`desired` below).
   const noneBlockedByPlan =
     !admitted || (subscriptionStatus !== null && !isPaid(subscriptionStatus));
+  // The host's Scheduled Task is not this account's (the last ensure was
+  // refused `E_SERVICE_TASK_NOT_OWNED`): this account has no background host
+  // on this PC. The card says why (`taskNotOwnedNotice`), holds the modes that
+  // would run one here - the service refresh a switch between them makes is
+  // refused - and keeps `none`, the one choice that still means something.
+  const taskNotOwnedMessage = taskNotOwnedNotice(
+    useRunnerHostControllerStatusQuery().data?.lastEnsureFailure ?? null,
+  );
+  const taskNotOwned = taskNotOwnedMessage !== null;
   const [confirmNone, setConfirmNone] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
   const view = viewQuery.data;
@@ -123,6 +156,14 @@ function HostLifecycleCard(): ReactNode {
       <p className="text-ui-sm text-muted-foreground">
         {hostLifecycleCardSubtitle(machine)}
       </p>
+      {taskNotOwned ? (
+        <p
+          className="text-ui-sm text-warning-foreground"
+          data-testid="host-lifecycle-task-not-owned"
+        >
+          {taskNotOwnedMessage}
+        </p>
+      ) : null}
       {viewQuery.isError && view === undefined ? (
         <div className="flex flex-wrap items-center gap-2">
           <p
@@ -168,11 +209,12 @@ function HostLifecycleCard(): ReactNode {
             key={option.mode}
             option={option}
             pending={pendingMode === option.mode}
-            disabledReason={
-              option.mode === "none" && noneBlockedByPlan && desired !== "none"
-                ? HOST_LIFECYCLE_NONE_PLAN_REASON
-                : null
-            }
+            disabledReason={hostLifecycleOptionDisabledReason(
+              option.mode,
+              desired,
+              noneBlockedByPlan,
+              taskNotOwned,
+            )}
           />
         ))}
       </RadioGroup>
@@ -184,7 +226,9 @@ function HostLifecycleCard(): ReactNode {
           {inlineError}
         </p>
       )}
-      {view === undefined ? null : <HostLifecycleAppliedLine view={view} />}
+      {view === undefined ? null : (
+        <HostLifecycleAppliedLine view={view} taskNotOwned={taskNotOwned} />
+      )}
       <p className="border-t border-border/60 pt-3 text-ui-xs text-muted-foreground">
         Hosts you start from the terminal with{" "}
         <code className="font-mono">
@@ -202,6 +246,23 @@ function HostLifecycleCard(): ReactNode {
       />
     </div>
   );
+}
+
+/**
+ * Why a mode cannot be chosen, or `null`. A mode already chosen stays
+ * selectable (it is what the card shows as set).
+ */
+function hostLifecycleOptionDisabledReason(
+  mode: HostLifecycleMode,
+  desired: HostLifecycleMode | null,
+  noneBlockedByPlan: boolean,
+  taskNotOwned: boolean,
+): string | null {
+  if (mode === desired) return null;
+  if (mode === "none") {
+    return noneBlockedByPlan ? HOST_LIFECYCLE_NONE_PLAN_REASON : null;
+  }
+  return taskNotOwned ? HOST_LIFECYCLE_TASK_NOT_OWNED_REASON : null;
 }
 
 function HostLifecycleOption(props: {
@@ -262,6 +323,8 @@ function HostLifecycleOption(props: {
  */
 function HostLifecycleAppliedLine(props: {
   readonly view: HostLifecycleView;
+  /** No service host of this account's to restart: see `taskNotOwned`. */
+  readonly taskNotOwned: boolean;
 }): ReactNode {
   const [restartRequested, setRestartRequested] = useState(false);
   const reasonId = useId();
@@ -279,6 +342,18 @@ function HostLifecycleAppliedLine(props: {
     );
   }
   const foreground = isForegroundHostRun(view);
+  // Another Windows user's task: a restart would be refused before it touched
+  // anything, so none is offered. The card's notice already says why.
+  if (props.taskNotOwned) {
+    return (
+      <p
+        className="text-ui-sm text-info-foreground"
+        data-testid="host-lifecycle-applied-line"
+      >
+        Set to {name} · {HOST_LIFECYCLE_PENDING_RESTART_HOST}
+      </p>
+    );
+  }
   return (
     <div className="flex flex-wrap items-center gap-2">
       <p

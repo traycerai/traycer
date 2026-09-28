@@ -91,6 +91,16 @@ export function hostLifecycleCardSubtitle(machine: string): string {
 export const HOST_LIFECYCLE_NONE_PLAN_REASON =
   "Your plan doesn't include remote hosts, so Traycer needs a host on this machine.";
 
+/**
+ * Why the modes that run a host here are held while the host's Scheduled Task
+ * is not this account's: this account gets no background host on this PC, so
+ * there is nothing for them to change. True of both reasons - another Windows
+ * user's task, and one whose owner could not be confirmed - so it names no
+ * owner; the card's notice above says which.
+ */
+export const HOST_LIFECYCLE_TASK_NOT_OWNED_REASON =
+  "Unavailable while the Traycer Host task on this PC isn't confirmed as yours.";
+
 /** Short name of a mode, for the "Set to X" desired/applied line. */
 export function hostLifecycleModeName(mode: HostLifecycleMode): string {
   switch (mode) {

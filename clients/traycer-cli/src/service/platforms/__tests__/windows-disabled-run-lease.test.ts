@@ -49,6 +49,7 @@ import {
   createWindowsController,
   setWindowsDefinitionDepsForTests,
   setWindowsStartEvidenceDepsForTests,
+  setWindowsTaskUserSidReaderForTests,
   type ProcessRunner,
   type WindowsControllerDeps,
 } from "../windows";
@@ -99,6 +100,7 @@ function definitionTaskXml(settingsEnabled: string | null): string {
   </Triggers>
   <Principals>
     <Principal id="Author">
+      <UserId>S-1-5-21-1000-2000-3000-1001</UserId>
       <LogonType>InteractiveToken</LogonType>
       <RunLevel>LeastPrivilege</RunLevel>
     </Principal>
@@ -159,6 +161,9 @@ function makeLeaseThatTimesOutAck(): ServiceSpawnEdgeLease & {
 
 describe("Windows disabled-task /Run through the real spawn-edge lease", () => {
   beforeEach(() => {
+    // The ownership gate reads the task in front of `/Run`: it is this
+    // account's, whose SID is the fixture principal's.
+    setWindowsTaskUserSidReaderForTests(() => "S-1-5-21-1000-2000-3000-1001");
     setWindowsStartEvidenceDepsForTests({
       captureBaseline: async () => emptySpawnBaseline(),
       createEvidenceReader: () => ({ collect: async () => null }),
@@ -171,6 +176,7 @@ describe("Windows disabled-task /Run through the real spawn-edge lease", () => {
   afterEach(() => {
     setWindowsStartEvidenceDepsForTests(null);
     setWindowsDefinitionDepsForTests(null);
+    setWindowsTaskUserSidReaderForTests(null);
   });
 
   // End to end: a disabled task's `/Run` failure does not read as a committed

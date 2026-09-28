@@ -50,6 +50,18 @@ export interface RunOptions {
   readonly tolerateNonZeroExit: boolean;
 }
 
+/**
+ * {@link RunOptions} for a command that must never wait on its stdin:
+ * `runCommand` ends the child's stdin as soon as it is spawned, so a prompt
+ * the command may print reads EOF and returns at once instead of holding the
+ * call until its timeout. `schtasks /Create` without `/F` is the one user: on
+ * a task that already exists it refuses, and a build that asked "overwrite?
+ * (Y/N)" first would otherwise wait on the open pipe `execFile` leaves.
+ */
+export interface EndedStdinRunOptions extends RunOptions {
+  readonly endStdin: true;
+}
+
 // Promisified `child_process.execFile` with consistent error semantics
 // across platforms. Lifted from the Desktop service-installer so the
 // behaviour stays uniform after the move into the CLI.
@@ -158,6 +170,9 @@ export function runCommand(
     child.once("spawn", () => {
       spawned = true;
     });
+    if ("endStdin" in options && options.endStdin === true) {
+      child.stdin?.end();
+    }
     disarmEscalation = armTimeoutKillEscalation(child, options.timeoutMs);
   });
 }

@@ -1971,6 +1971,14 @@ export interface TraycerRemoved {
    */
   readonly serviceRegistrationRetained: boolean | null;
   readonly removedLoginItem: boolean;
+  /**
+   * A notice about the service registration the removal left in place, for
+   * the window, or `null`. Today one: the host's Scheduled Task is not this
+   * account's - another Windows user's, or one whose owner could not be
+   * confirmed, each in its own words - so it was left alone and everything of
+   * this account's was removed. Names no account.
+   */
+  readonly serviceWarning: string | null;
 }
 
 export interface HostInstalledRecord {
@@ -2243,6 +2251,32 @@ export interface HostControllerStatus {
    * own that outlives the failure.
    */
   readonly lastEnsureFailure: HostEnsureFailure | null;
+  /**
+   * Why the ready update (`updateReady`) is waiting instead of installing, or
+   * `null`: this account cannot start the service the launch apply would stop,
+   * so the apply leaves the stage in place rather than stop a host nothing
+   * could start again. Two reasons, told apart by `code` (Windows only): the
+   * host's Scheduled Task disabled in Task Scheduler by its owner, or the task
+   * not this account's - another Windows user's, or one whose owner could not
+   * be confirmed, each in its own `message`. Desktop main owns it: set when the launch
+   * apply is refused for that stage, gone once a different stage is ready,
+   * the background service is registered again from this app, or a day has
+   * passed and the next launch asks the CLI again. The update-ready row shows
+   * `message`, with an action that registers the service for a disabled task
+   * and none for another user's.
+   */
+  readonly updateDeferral: HostUpdateDeferral | null;
+}
+
+/** See `HostControllerStatus.updateDeferral`. */
+export interface HostUpdateDeferral {
+  /** Copy for the window; it names no account. */
+  readonly message: string;
+  /**
+   * The CLI's error code: `E_SERVICE_REGISTRATION_DISABLED` or
+   * `E_SERVICE_TASK_NOT_OWNED`.
+   */
+  readonly code: string;
 }
 
 /** See `HostControllerStatus.lastEnsureFailure`. */
@@ -2359,6 +2393,14 @@ export interface HostUninstalled {
    * `deregisteredService` when you need certainty.
    */
   readonly serviceRegistrationRetained: boolean | null;
+  /**
+   * A notice about the service registration the removal left in place, for
+   * the window, or `null`. Today one: the host's Scheduled Task is not this
+   * account's - another Windows user's, or one whose owner could not be
+   * confirmed, each in its own words - so it was left alone and everything of
+   * this account's was removed. Names no account.
+   */
+  readonly serviceWarning: string | null;
 }
 
 export interface HostLogsTailResult {

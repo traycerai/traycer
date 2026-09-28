@@ -44,6 +44,7 @@ export const FAKE_HOST_CONTROLLER_STATUS: HostControllerStatus = {
   localAttempt: null,
   removedByUser: false,
   lastEnsureFailure: null,
+  updateDeferral: null,
   checkedAt: "2026-01-01T00:00:00.000Z",
 };
 
@@ -129,6 +130,7 @@ export class FakeHostController implements IpcHostController {
         removedInstallDir: true,
         deregisteredService: true,
         serviceRegistrationRetained: null,
+        serviceWarning: null,
       },
     };
   }
@@ -139,6 +141,7 @@ export class FakeHostController implements IpcHostController {
         removedHost: true,
         deregisteredService: true,
         serviceRegistrationRetained: null,
+        serviceWarning: null,
         removedLoginItem: false,
       },
     };

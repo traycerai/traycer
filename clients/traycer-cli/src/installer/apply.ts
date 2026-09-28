@@ -21,6 +21,7 @@ import {
 } from "../host/store-format-floor";
 import type { ServiceState } from "../service";
 import { createServiceInstallLifecycle } from "../service/install-lifecycle";
+import type { ServiceRegistrationWarning } from "../service/registration-owner";
 import { reconcileHostStageWithAttempt } from "./stage-reconcile";
 import {
   commitInstallFromSource,
@@ -214,6 +215,12 @@ export type ApplyHostOutcome =
       // successful "applied" outcome, never a thrown error - "installed,
       // not converged", never "update ready".
       readonly postSwapError: string | null;
+      // Non-null iff the post-swap re-registration finished without starting
+      // the host for a reason that is not a failure - the registration is
+      // kept disabled as its owner left it, or is another user's
+      // (`ServiceInstallLifecycleState.postSwapWarning`). The bytes are
+      // committed and `runningActivated` is false.
+      readonly postSwapWarning: ServiceRegistrationWarning | null;
     }
   | {
       readonly outcome: "stage-fingerprint-mismatch";
@@ -442,9 +449,13 @@ export async function applyHost(
   // into-field behavior IS this function's no-rollback contract; no
   // separate try/catch needed here.
   const postSwapError = lifecycleHandle?.state.postSwapError ?? null;
+  const postSwapWarning = lifecycleHandle?.state.postSwapWarning ?? null;
+  // A re-registration kept disabled (or refused as another user's) started
+  // nothing, so it activated nothing either.
   const runningActivated =
     lifecycleHandle !== null &&
     postSwapError === null &&
+    postSwapWarning === null &&
     lifecycleHandle.state.postSwapAction !== "none";
   const serviceLifecycle: ApplyServiceLifecycleFacts | null =
     lifecycleHandle === null
@@ -481,5 +492,6 @@ export async function applyHost(
     installGeneration,
     serviceLifecycle,
     postSwapError,
+    postSwapWarning,
   };
 }

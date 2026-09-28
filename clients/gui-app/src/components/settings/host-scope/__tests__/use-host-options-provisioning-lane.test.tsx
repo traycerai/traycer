@@ -81,6 +81,7 @@ const IDLE_CONTROLLER_STATUS: HostControllerStatus = {
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
   lastEnsureFailure: null,
+  updateDeferral: null,
 };
 
 function controllerStatusWithLane(

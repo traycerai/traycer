@@ -91,6 +91,7 @@ describe("Windows: buildScheduledTaskXml and buildWindowsHiddenHostLauncher (win
     const xml = buildScheduledTaskXml(
       { label: productionLabel, cli: windowsCli },
       GOLDEN_TASK_USER_ID,
+      true,
     );
 
     expect(xml).toBe(golden("task.xml"));

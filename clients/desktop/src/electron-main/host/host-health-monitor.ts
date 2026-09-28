@@ -2,6 +2,7 @@ import { log } from "../app/logger";
 import {
   HostRecoveryDeferredError,
   HostRecoveryNotServiceRunError,
+  HostRecoveryTaskNotOwnedError,
 } from "../startup/host-health-respawn";
 import {
   canReachHostWebsocketUrl,
@@ -282,6 +283,12 @@ export function startHostHealthMonitor(
   // ladder. The first read that names anything else ends the hold and
   // recovery owns the host again.
   let terminalRunSupervisorPid: number | null = null;
+  // Set once a recovery was refused because the host's Scheduled Task is not
+  // this account's - another Windows user's, or one whose owner could not be
+  // confirmed (`HostRecoveryTaskNotOwnedError`). Nothing this process can do
+  // makes it this account's, so no recovery is asked for again
+  // - no governor grant, no CLI - until the app is relaunched.
+  let recoveryRetiredTaskNotOwned = false;
 
   const isDisposed = (): boolean => disposed || deps.host.isDisposed;
 
@@ -317,6 +324,10 @@ export function startHostHealthMonitor(
   const attemptRecovery = async (
     metadata: DesktopLocalHostSnapshot,
   ): Promise<void> => {
+    if (recoveryRetiredTaskNotOwned) {
+      recoveryPending = false;
+      return;
+    }
     if (deps.automaticRecoverySuspended()) {
       // Nothing may start a host right now, so there is nothing to ask the
       // governor for and nothing to log. Keep recovery ownership: a hold that
@@ -601,6 +612,17 @@ export function startHostHealthMonitor(
         // restart that did not happen.
         governor.releaseGrant();
         recoveryPending = true;
+        return;
+      }
+      if (err instanceof HostRecoveryTaskNotOwnedError) {
+        // Refused before anything was touched: the grant goes back, and
+        // recovery retires for this process (see the flag).
+        governor.releaseGrant();
+        recoveryPending = false;
+        recoveryRetiredTaskNotOwned = true;
+        log.info(
+          "[host-health] the host's Scheduled Task is not confirmed as this account's - automatic recovery retired until relaunch",
+        );
         return;
       }
       if (err instanceof HostRecoveryNotServiceRunError) {

@@ -304,6 +304,11 @@ import {
 import {
   HOST_NOT_SERVICE_RUN_MESSAGE,
   HOST_REMOVED_BY_USER_MESSAGE,
+  HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+  HOST_UPDATED_SERVICE_DISABLED_MESSAGE,
+  SERVICE_TASK_LEFT_IN_PLACE_MESSAGE,
+  SERVICE_TASK_NOT_OWNED_CODE,
+  SERVICE_TASK_NOT_OWNED_MESSAGE,
   type LifecycleAdmissionBlock,
   type LocalAttemptFacts,
   type MutationLaneStatus,
@@ -311,6 +316,15 @@ import {
   type ReprovisionGuardVerdict,
 } from "../host-controller-types";
 import { getHostFsLayout, cliLockPath } from "../host-paths";
+import {
+  HOST_UPDATE_PARK_LATCH_TTL_MS,
+  readHostUpdateParkLatch,
+  writeHostUpdateParkLatch,
+  type HostUpdateParkLatch,
+  type HostUpdateParkReason,
+} from "../host-update-park-latch";
+import { encodeStageFingerprint } from "@traycer-clients/shared/host-version/stage-fingerprint";
+import { HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE } from "@traycer/protocol/host/lifecycle-constants";
 import type { SupervisorRunRead } from "../host-lifecycle-policy";
 import { DEV_DESKTOP_SLOT_ENV } from "../dev-desktop-slot";
 import { acquireDesktopCliLock } from "../desktop-cli-lock";
@@ -12007,5 +12021,660 @@ describe("the packaged-Mac park kickstart, and CLI-owned --defer-if-parked", () 
 
     expect(outcome.kind).toBe("deferred");
     expect(waitForHostReady).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A host whose Scheduled Task another Windows user owns, or whose task its
+// owner disabled: the update WAITS (launch apply), the explicit apply reports
+// the task's state instead of "failed to start", and neither reaches the
+// failure table. These drive the controller's mapping of the CLI's typed
+// answers (`E_SERVICE_REGISTRATION_DISABLED` / exit 79, `postSwapWarning`,
+// `E_SERVICE_TASK_NOT_OWNED`); the CLI side is proved in traycer-cli's suites.
+// ---------------------------------------------------------------------------
+describe("service-registration states: disabled task and another user's task", () => {
+  const STAGE_ID = "stage-1.8.0";
+  // T08 ruling 13's sentences, spelled out rather than imported so a copy
+  // change is a visible test change.
+  const UNCONFIRMED =
+    "Traycer couldn't confirm that the Traycer Host task on this PC belongs to your Windows account, so it left the task alone. Try again, or run `traycer host doctor`.";
+  const UNCONFIRMED_LEFT_IN_PLACE =
+    "Traycer couldn't confirm that the Traycer Host task on this PC belongs to your Windows account, so it left the task in place; everything of yours was removed.";
+
+  function stageOverInstalled(controller: HostController): HostController {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    return controller;
+  }
+
+  const disabledRefusal = (): TraycerCliError =>
+    new TraycerCliError("E_SERVICE_REGISTRATION_DISABLED", "task is disabled");
+  // The file's `TraycerCliError` mock takes only (code, message); the real
+  // class's `exitCode` is stood in for by assigning it, with a code that is
+  // not the disabled one, so only the exit code can name the refusal.
+  const exitOnlyRefusal = (): TraycerCliError =>
+    Object.assign(new TraycerCliError("E_UNNAMED", "host update refused"), {
+      exitCode: HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE,
+    });
+
+  function applySpawns(): number {
+    return vi
+      .mocked(streamBundledTraycerCliJson)
+      .mock.calls.filter(([opts]) => opts.args.includes("apply")).length;
+  }
+
+  async function latchOnDisk(): Promise<HostUpdateParkLatch | null> {
+    return readHostUpdateParkLatch(getHostFsLayout("production"));
+  }
+
+  describe("14: the launch apply refused over a disabled task is a deferral", () => {
+    for (const [name, refusal] of [
+      ["the typed code", disabledRefusal],
+      ["the exit code alone (a CLI that names no code)", exitOnlyRefusal],
+    ] as const) {
+      it(`${name} resolves deferred with the update-waiting copy and records the latch for that stage`, async () => {
+        const controller = stageOverInstalled(newController("production"));
+        vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(refusal());
+
+        const outcome = await controller.applyStaged("launch", false);
+
+        expect(outcome).toEqual({
+          kind: "deferred",
+          message: HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+        });
+        expect(await latchOnDisk()).toEqual({
+          stageFingerprint: encodeStageFingerprint(STAGE_ID),
+          reason: "disabled",
+          latchedAtMs: expect.any(Number),
+        });
+      });
+    }
+
+    it("a manual apply refused the same way is a deferral too, and writes no latch", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
+        disabledRefusal(),
+      );
+
+      const outcome = await controller.applyStaged("manual", false);
+
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+      });
+      expect(await latchOnDisk()).toBeNull();
+    });
+
+    // R5 §G: `E_SERVICE_TASK_NOT_OWNED` outranks the bare-exit-code fallback
+    // in `unstartableServiceRefusal` - it names its own reason even carrying
+    // the disabled park's exit code (79, `host update`'s automatic path over
+    // a not-owned task that admitted no host - the "no-host" refusal still
+    // parks the same way a disabled one does).
+    it("a launch apply refused exit 79 with E_SERVICE_TASK_NOT_OWNED is a deferral with the not-owned copy, and latches reason: not-owned", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      const notOwnedRefusal = Object.assign(
+        new TraycerCliError(
+          "E_SERVICE_TASK_NOT_OWNED",
+          "not this account's task",
+        ),
+        {
+          exitCode: HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE,
+          details: { deferred: true, reason: "other-owner" },
+        },
+      );
+      vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(notOwnedRefusal);
+
+      const outcome = await controller.applyStaged("launch", false);
+
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: SERVICE_TASK_NOT_OWNED_MESSAGE,
+      });
+      expect(await latchOnDisk()).toEqual({
+        stageFingerprint: encodeStageFingerprint(STAGE_ID),
+        reason: "not-owned",
+        latchedAtMs: expect.any(Number),
+      });
+      expect((await controller.getStatus()).updateDeferral).toEqual({
+        message: SERVICE_TASK_NOT_OWNED_MESSAGE,
+        code: SERVICE_TASK_NOT_OWNED_CODE,
+      });
+    });
+
+    it("an explicit apply (Update now) refused exit 1 with E_SERVICE_TASK_NOT_OWNED is a deferral with the not-owned copy, and writes no latch", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      const notOwnedRefusal = Object.assign(
+        new TraycerCliError(
+          "E_SERVICE_TASK_NOT_OWNED",
+          "not this account's task",
+        ),
+        { exitCode: 1, details: { reason: "other-owner" } },
+      );
+      vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(notOwnedRefusal);
+
+      const outcome = await controller.applyStaged("manual", false);
+
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: SERVICE_TASK_NOT_OWNED_MESSAGE,
+      });
+      expect(await latchOnDisk()).toBeNull();
+    });
+
+    // T08 ruling 13: the same refusal over a task whose owner the CLI could
+    // not confirm is not another user's. It parks and latches exactly as
+    // before; the copy, on the outcome and on the update row, says that the
+    // owner could not be confirmed.
+    it("a launch apply refused exit 79 with E_SERVICE_TASK_NOT_OWNED, reason unconfirmed: the unconfirmed copy, latched as owner-unconfirmed, and the row says the same", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
+        Object.assign(
+          new TraycerCliError("E_SERVICE_TASK_NOT_OWNED", "the CLI's words"),
+          {
+            exitCode: HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE,
+            details: { deferred: true, reason: "unconfirmed" },
+          },
+        ),
+      );
+
+      const outcome = await controller.applyStaged("launch", false);
+
+      expect(outcome).toEqual({ kind: "deferred", message: UNCONFIRMED });
+      expect(await latchOnDisk()).toEqual({
+        stageFingerprint: encodeStageFingerprint(STAGE_ID),
+        reason: "owner-unconfirmed",
+        latchedAtMs: expect.any(Number),
+      });
+      expect((await controller.getStatus()).updateDeferral).toEqual({
+        message: UNCONFIRMED,
+        code: SERVICE_TASK_NOT_OWNED_CODE,
+      });
+      // And the next launch, skipping the spawn, says it from the latch.
+      expect(await controller.applyStaged("launch", false)).toEqual({
+        kind: "deferred",
+        message: UNCONFIRMED,
+      });
+      expect(applySpawns()).toBe(1);
+    });
+
+    it("an explicit apply refused with reason unconfirmed: the unconfirmed copy, never another Windows user", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
+        Object.assign(
+          new TraycerCliError("E_SERVICE_TASK_NOT_OWNED", "the CLI's words"),
+          { exitCode: 1, details: { reason: "unconfirmed" } },
+        ),
+      );
+
+      const outcome = await controller.applyStaged("manual", false);
+
+      expect(outcome).toEqual({ kind: "deferred", message: UNCONFIRMED });
+    });
+
+    it.each([
+      ["missing details", undefined],
+      ["missing reason", {}],
+      ["unknown reason", { reason: "future-reason" }],
+      ["invalid reason", { reason: 17 }],
+    ] as const)(
+      "a not-owned refusal with %s is not called another user's",
+      async (_label, details) => {
+        const controller = stageOverInstalled(newController("production"));
+        vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
+          Object.assign(
+            new TraycerCliError("E_SERVICE_TASK_NOT_OWNED", "the CLI's words"),
+            { exitCode: 1, details },
+          ),
+        );
+
+        const outcome = await controller.applyStaged("manual", false);
+
+        expect(outcome).toEqual({ kind: "deferred", message: UNCONFIRMED });
+      },
+    );
+  });
+
+  describe("15: the latch", () => {
+    async function latchTheStage(
+      ageMs: number,
+      reason: HostUpdateParkReason,
+    ): Promise<void> {
+      await writeHostUpdateParkLatch(getHostFsLayout("production"), {
+        stageFingerprint: encodeStageFingerprint(STAGE_ID),
+        reason,
+        latchedAtMs: Date.now() - ageMs,
+      });
+    }
+
+    it("a second launch apply for the same stage makes no CLI spawn", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
+        disabledRefusal(),
+      );
+      await controller.applyStaged("launch", false);
+      expect(applySpawns()).toBe(1);
+
+      const again = await controller.applyStaged("launch", false);
+
+      expect(again).toEqual({
+        kind: "deferred",
+        message: HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+      });
+      expect(applySpawns()).toBe(1);
+    });
+
+    it("a new stage fingerprint asks the CLI again", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      await latchTheStage(0, "disabled");
+      writeStagedRecord("production", "1.9.0", "1.9.0");
+      vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+        availableSnapshotFixture("1.9.0", ["1.9.0"]),
+      );
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { outcome: "no-op", installedVersion: "1.7.0" },
+      });
+
+      await controller.applyStaged("launch", false);
+
+      expect(applySpawns()).toBe(1);
+    });
+
+    it("a latch older than 24 hours asks the CLI again", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      await latchTheStage(HOST_UPDATE_PARK_LATCH_TTL_MS + 60_000, "disabled");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { outcome: "no-op", installedVersion: "1.7.0" },
+      });
+
+      await controller.applyStaged("launch", false);
+
+      expect(applySpawns()).toBe(1);
+    });
+
+    it("a manual apply ignores a latch that holds", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      await latchTheStage(0, "disabled");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { outcome: "no-op", installedVersion: "1.7.0" },
+      });
+
+      await controller.applyStaged("manual", false);
+
+      expect(applySpawns()).toBe(1);
+    });
+
+    it("a successful registerService clears the latch, so the next launch apply spawns", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      await latchTheStage(0, "disabled");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      const registered = await controller.registerService({
+        kind: "background",
+      });
+      expect(registered.kind).toBe("ok");
+      expect(await latchOnDisk()).toBeNull();
+
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { outcome: "no-op", installedVersion: "1.7.0" },
+      });
+      await controller.applyStaged("launch", false);
+      expect(applySpawns()).toBe(1);
+    });
+
+    it("a registerService that failed leaves the latch standing", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      await latchTheStage(0, "disabled");
+      vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
+        new TraycerCliError("E_SOMETHING_ELSE", "no"),
+      );
+
+      const registered = await controller.registerService({
+        kind: "background",
+      });
+
+      expect(registered.kind).not.toBe("ok");
+      expect(await latchOnDisk()).not.toBeNull();
+    });
+
+    it("getStatus().updateDeferral is set while the latch holds for the staged stage and an update is ready", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      await latchTheStage(0, "disabled");
+
+      expect((await controller.getStatus()).updateDeferral).toEqual({
+        message: HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+        code: "E_SERVICE_REGISTRATION_DISABLED",
+      });
+    });
+
+    it("getStatus().updateDeferral is null with no latch, for another stage, past the bound, and with no update ready", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      expect((await controller.getStatus()).updateDeferral).toBeNull();
+
+      await writeHostUpdateParkLatch(getHostFsLayout("production"), {
+        stageFingerprint: encodeStageFingerprint("stage-other"),
+        reason: "disabled",
+        latchedAtMs: Date.now(),
+      });
+      expect((await controller.getStatus()).updateDeferral).toBeNull();
+
+      await latchTheStage(HOST_UPDATE_PARK_LATCH_TTL_MS + 60_000, "disabled");
+      expect((await controller.getStatus()).updateDeferral).toBeNull();
+
+      await latchTheStage(0, "disabled");
+      writeInstallRecord("production", {
+        version: "1.8.0",
+        runtimeVersion: "1.8.0",
+      });
+      expect((await controller.getStatus()).updateDeferral).toBeNull();
+    });
+  });
+
+  describe("16: an explicit apply that left the task as it found it", () => {
+    function appliedWith(postSwapWarning: {
+      readonly code: string;
+      readonly message: string;
+      readonly details: unknown;
+    }): void {
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (opts) => {
+          if (opts.args.includes("download")) return { data: {} };
+          return {
+            data: {
+              outcome: "applied",
+              record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+              runningActivated: false,
+              installGeneration: null,
+              postSwapError: null,
+              postSwapWarning,
+            },
+          };
+        },
+      );
+    }
+
+    it("a disabled task is a deferral in the app's words, never installed-not-converged", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      appliedWith({
+        code: "E_SERVICE_REGISTRATION_DISABLED",
+        message: "the CLI's own words",
+        details: null,
+      });
+
+      const outcome = await controller.applyStaged("manual", false);
+
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: HOST_UPDATED_SERVICE_DISABLED_MESSAGE,
+      });
+    });
+
+    it("another user's task is a deferral with the not-owned copy", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      appliedWith({
+        code: "E_SERVICE_TASK_NOT_OWNED",
+        message: "the CLI's own words",
+        details: { reason: "other-owner" },
+      });
+
+      const outcome = await controller.applyStaged("manual", false);
+
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: SERVICE_TASK_NOT_OWNED_MESSAGE,
+      });
+    });
+
+    it("a task whose owner could not be confirmed is a deferral with the unconfirmed copy", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      appliedWith({
+        code: "E_SERVICE_TASK_NOT_OWNED",
+        message: "the CLI's own words",
+        details: { reason: "unconfirmed" },
+      });
+
+      const outcome = await controller.applyStaged("manual", false);
+
+      expect(outcome).toEqual({ kind: "deferred", message: UNCONFIRMED });
+    });
+
+    it("the disabled deferral ends a standing latch (the bytes are applied now)", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      await writeHostUpdateParkLatch(getHostFsLayout("production"), {
+        stageFingerprint: encodeStageFingerprint(STAGE_ID),
+        reason: "disabled",
+        latchedAtMs: Date.now(),
+      });
+      appliedWith({
+        code: "E_SERVICE_REGISTRATION_DISABLED",
+        message: "x",
+        details: null,
+      });
+
+      await controller.applyStaged("manual", false);
+
+      expect(await latchOnDisk()).toBeNull();
+    });
+
+    it("control: a postSwapError with no warning is still installed-not-converged", async () => {
+      const controller = stageOverInstalled(newController("production"));
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (opts) => {
+          if (opts.args.includes("download")) return { data: {} };
+          return {
+            data: {
+              outcome: "applied",
+              record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+              runningActivated: false,
+              installGeneration: null,
+              postSwapError: "boom",
+            },
+          };
+        },
+      );
+
+      const outcome = await controller.applyStaged("manual", false);
+
+      expect(outcome.kind).toBe("installed-not-converged");
+    });
+  });
+
+  describe("17: another user's task from ensure, and from a removal", () => {
+    it("E_SERVICE_TASK_NOT_OWNED from ensure is a deferral with the not-owned copy, and lastEnsureFailure records it", async () => {
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+        Object.assign(
+          new TraycerCliError(
+            "E_SERVICE_TASK_NOT_OWNED",
+            "the CLI's own words",
+          ),
+          { details: { verb: "run", reason: "other-owner" } },
+        ),
+      );
+
+      const outcome = await controller.convergeReady(
+        false,
+        { kind: "background" },
+        "keep-installed",
+      );
+
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: SERVICE_TASK_NOT_OWNED_MESSAGE,
+      });
+      expect((await controller.getStatus()).lastEnsureFailure).toEqual({
+        message: SERVICE_TASK_NOT_OWNED_MESSAGE,
+        code: "E_SERVICE_TASK_NOT_OWNED",
+      });
+    });
+
+    it("E_SERVICE_TASK_NOT_OWNED from ensure with reason unconfirmed: the unconfirmed copy, on the outcome and in lastEnsureFailure", async () => {
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+        Object.assign(
+          new TraycerCliError(
+            "E_SERVICE_TASK_NOT_OWNED",
+            "the CLI's own words",
+          ),
+          { details: { verb: "run", reason: "unconfirmed" } },
+        ),
+      );
+
+      const outcome = await controller.convergeReady(
+        false,
+        { kind: "background" },
+        "keep-installed",
+      );
+
+      expect(outcome).toEqual({ kind: "deferred", message: UNCONFIRMED });
+      expect((await controller.getStatus()).lastEnsureFailure).toEqual({
+        message: UNCONFIRMED,
+        code: "E_SERVICE_TASK_NOT_OWNED",
+      });
+    });
+
+    it("any other deferral leaves lastEnsureFailure as it was", async () => {
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+        new TraycerCliError("E_HOST_NOT_SERVICE_RUN", "not a service-run host"),
+      );
+
+      const outcome = await controller.convergeReady(
+        false,
+        { kind: "background" },
+        "keep-installed",
+      );
+
+      expect(outcome.kind).toBe("deferred");
+      expect((await controller.getStatus()).lastEnsureFailure).toBeNull();
+    });
+
+    it("uninstallHost carries the warning and reports no deregistration when the CLI left another user's task", async () => {
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: {
+          removedInstallDir: true,
+          serviceUninstalled: true,
+          serviceWarning: {
+            code: "E_SERVICE_TASK_NOT_OWNED",
+            message: "cli",
+            details: { reason: "other-owner" },
+          },
+        },
+      });
+
+      const outcome = await controller.uninstallHost(true);
+
+      expect(outcome).toMatchObject({
+        kind: "ok",
+        value: {
+          removedInstallDir: true,
+          deregisteredService: false,
+          serviceWarning: SERVICE_TASK_LEFT_IN_PLACE_MESSAGE,
+        },
+      });
+    });
+
+    it("uninstallHost over a task whose owner could not be confirmed carries the unconfirmed warning", async () => {
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: {
+          removedInstallDir: true,
+          serviceUninstalled: true,
+          serviceWarning: {
+            code: "E_SERVICE_TASK_NOT_OWNED",
+            message: "cli",
+            details: { reason: "unconfirmed" },
+          },
+        },
+      });
+
+      const outcome = await controller.uninstallHost(true);
+
+      expect(outcome).toMatchObject({
+        kind: "ok",
+        value: {
+          deregisteredService: false,
+          serviceWarning: UNCONFIRMED_LEFT_IN_PLACE,
+        },
+      });
+    });
+
+    it("removeTraycer carries the warning too", async () => {
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: {
+          removedInstallDir: true,
+          serviceUninstalled: true,
+          serviceWarning: {
+            code: "E_SERVICE_TASK_NOT_OWNED",
+            message: "cli",
+            details: { reason: "other-owner" },
+          },
+        },
+      });
+
+      const outcome = await controller.removeTraycer();
+
+      expect(outcome).toMatchObject({
+        kind: "ok",
+        value: { serviceWarning: SERVICE_TASK_LEFT_IN_PLACE_MESSAGE },
+      });
+    });
+
+    it("control: a removal with no warning carries none", async () => {
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { removedInstallDir: true, serviceUninstalled: true },
+      });
+
+      const outcome = await controller.uninstallHost(true);
+
+      expect(outcome).toMatchObject({
+        kind: "ok",
+        value: { deregisteredService: true, serviceWarning: null },
+      });
+    });
   });
 });

@@ -106,6 +106,7 @@ vi.mock("sonner", () => ({
     success: vi.fn(),
     error: vi.fn(),
     info: vi.fn(),
+    warning: vi.fn(),
     message: vi.fn(),
   },
 }));
@@ -155,6 +156,7 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { HOST_UPDATE_SERVICE_DISABLED_MESSAGE } from "@traycer-clients/shared/platform/host-service-notices";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostUpdateBanner } from "@/components/home/host-update-banner";
 import { HostOverviewOperationCard } from "@/components/settings/panels/host-overview-operation-card";
@@ -191,6 +193,7 @@ const UP_TO_DATE_STATUS: HostControllerStatus = {
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
   lastEnsureFailure: null,
+  updateDeferral: null,
 };
 
 function makeManagement(): IHostManagement {
@@ -1368,6 +1371,55 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     });
     // Never the attempt-driven copy - the unbound arm has no attempt to read.
     expect(screen.queryByTestId("host-update-banner-force-restart")).toBeNull();
+  });
+
+  // The launch apply waits over a service registration its owner switched off
+  // (`HostControllerStatus.updateDeferral`): the row says so and offers the ONE
+  // action that finishes it, fenced to this machine's host like any Doctor
+  // repair - Update now would swap the bytes and still leave the host stopped.
+  it("an update-ready row with an updateDeferral shows the message and Enable background service, not Update now; the click dispatches Doctor's register-service fenced to the local host", async () => {
+    bindLocalHost({ "host.status": () => attemptStatus({ kind: "none" }) });
+    const runDoctorRepairQueued = vi.fn(() =>
+      Promise.resolve({ kind: "applied" as const }),
+    );
+    const management: IHostManagement = {
+      ...makeManagement(),
+      getHostControllerStatus: vi.fn(() =>
+        Promise.resolve<HostControllerStatus>({
+          ...UP_TO_DATE_STATUS,
+          latestVersion: "1.4.2",
+          stagedVersion: "1.4.2",
+          updateReady: true,
+          updateDeferral: {
+            message: HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+            code: "E_SERVICE_REGISTRATION_DISABLED",
+          },
+        }),
+      ),
+      runDoctorRepairQueued,
+    };
+    renderBanner(createFakeRunnerHost({ hostManagement: management }));
+
+    const notice = await screen.findByTestId(
+      "host-update-banner-service-disabled",
+    );
+    expect(notice.textContent).toBe(HOST_UPDATE_SERVICE_DISABLED_MESSAGE);
+    expect(screen.queryByRole("button", { name: /Update now/i })).toBeNull();
+    // Not a failure: the info tint, never the destructive one.
+    const banner = screen.getByRole("status", {
+      name: /Traycer host update waiting/i,
+    });
+    expect(banner.className).not.toContain("destructive");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Enable background service/i }),
+    );
+    await waitFor(() => {
+      expect(runDoctorRepairQueued).toHaveBeenCalledWith({
+        repair: "register-service",
+        expectedHostId: LOCAL_HOST_ID,
+      });
+    });
   });
 
   // 9. The host-down window reaching THIS surface (Ticket 07 §5.2.7).

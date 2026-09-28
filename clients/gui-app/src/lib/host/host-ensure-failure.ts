@@ -1,8 +1,11 @@
-import type { HostControllerStatus } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostControllerStatus,
+  HostEnsureFailure,
+} from "@traycer-clients/shared/platform/runner-host";
 
 /**
- * The last failed ensure's own message, for a SETTLED failure surface, or
- * `null`.
+ * The last failed ensure - its own message and the CLI's code - for a SETTLED
+ * failure surface, or `null`.
  *
  * Read from main's `HostControllerStatus.lastEnsureFailure` rather than from
  * the renderer's converge error, because most ensures are not the renderer's:
@@ -21,14 +24,12 @@ import type { HostControllerStatus } from "@traycer-clients/shared/platform/runn
  * renderer's own converge - so a failure is never shown under an attempt that
  * may yet succeed.
  */
-export function settledEnsureFailureMessage(
+export function settledEnsureFailure(
   status: HostControllerStatus | undefined,
   convergePending: boolean,
-): string | null {
+): HostEnsureFailure | null {
   if (status === undefined || convergePending || status.mutation !== null) {
     return null;
   }
-  return status.lastEnsureFailure === null
-    ? null
-    : status.lastEnsureFailure.message;
+  return status.lastEnsureFailure;
 }

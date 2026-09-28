@@ -173,6 +173,7 @@ describe("host apply - activation", () => {
           postSwapAction: "restart",
         },
         postSwapError: null,
+        postSwapWarning: null,
       },
       {},
     );
@@ -202,6 +203,7 @@ describe("host apply - activation", () => {
           postSwapAction: "restart",
         },
         postSwapError: "launchctl kickstart failed",
+        postSwapWarning: null,
       },
       {},
     );
@@ -242,6 +244,7 @@ describe("host apply - activation", () => {
           postSwapAction: "none",
         },
         postSwapError: null,
+        postSwapWarning: null,
       },
       {},
     );
@@ -345,6 +348,7 @@ describe("host apply - respectHold", () => {
           postSwapAction: "restart",
         },
         postSwapError: null,
+        postSwapWarning: null,
       },
       { respectHold: true },
     );
@@ -376,6 +380,7 @@ describe("host apply - respectHold", () => {
           postSwapAction: "restart",
         },
         postSwapError: null,
+        postSwapWarning: null,
       },
       { respectHold: true },
     );
@@ -406,6 +411,7 @@ describe("host apply - respectHold", () => {
           postSwapAction: "restart",
         },
         postSwapError: null,
+        postSwapWarning: null,
       },
       { respectHold: true },
     );
@@ -430,6 +436,7 @@ describe("host apply - respectHold", () => {
           postSwapAction: "restart",
         },
         postSwapError: null,
+        postSwapWarning: null,
       },
       { respectHold: true },
     );
@@ -461,6 +468,7 @@ describe("host apply - respectHold", () => {
           postSwapAction: "restart",
         },
         postSwapError: null,
+        postSwapWarning: null,
       },
       { respectHold: false },
     );

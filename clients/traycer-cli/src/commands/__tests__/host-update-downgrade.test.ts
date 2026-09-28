@@ -212,6 +212,7 @@ vi.mock("../../service/install-lifecycle", () => ({
       stoppedBeforeSwap: false,
       postSwapAction: "none" as ServiceInstallLifecycleState["postSwapAction"],
       postSwapError: null as ServiceInstallLifecycleState["postSwapError"],
+      postSwapWarning: null as ServiceInstallLifecycleState["postSwapWarning"],
     };
     return {
       state,

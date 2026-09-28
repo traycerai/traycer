@@ -24,7 +24,10 @@ import { resolveServiceCliInvocation } from "../service/cli-binary";
 import {
   readServiceRegistrationDisabled,
   serviceRegistrationDisabledError,
+  type ServiceRegistrationDisabled,
 } from "../service/registration-disabled";
+import { withServiceInstallReport } from "../service/registration-repair";
+import { isServiceTaskNotOwnedError } from "../service/platforms/windows-task-gate";
 import {
   createBytesOnlyInstallLifecycle,
   createServiceInstallLifecycle,
@@ -1380,6 +1383,30 @@ async function commitInstall(
         : null,
     },
   );
+  // The bytes are in, but ensure promises a RUNNING host, and a registration
+  // refused as another user's or kept disabled as its owner left it starts
+  // none. `host install` reports that as a warning beside its success; ensure
+  // fails with the typed code, so the desktop can say why and stop asking -
+  // `E_SERVICE_REGISTRATION_DISABLED` is what ensure already answers over a
+  // disabled task on its start path.
+  if (handle !== null && handle.state.postSwapWarning !== null) {
+    throw cliError({
+      code:
+        handle.state.postSwapWarning.code ===
+        CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED
+          ? CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED
+          : CLI_ERROR_CODES.SERVICE_REGISTRATION_DISABLED,
+      message: handle.state.postSwapWarning.message,
+      details: {
+        environment: opts.runtime.environment,
+        version: result.record.version,
+        // The not-owned refusal's reason, carried through: which of another
+        // user's task or an unconfirmed owner this is.
+        ...handle.state.postSwapWarning.details,
+      },
+      exitCode: 1,
+    });
+  }
   const post = await readProvisionState(controller, label, opts.runtime);
   opts.runtime.logger.info("Host provisioning install branch completed", {
     environment: opts.runtime.environment,
@@ -1502,6 +1529,17 @@ interface ProvisionSegmentOptions {
 
 // `supervisor-relaunch-maintenance` only from `startOverUpdateAttempt`: the
 // one mutation that admission covers is this start.
+/**
+ * What a failed Windows start already knows about the task it could not run:
+ * its `/Run` refusal carries `registrationDisabled` from the ownership gate's
+ * read of that task. `null` for any failure that does not carry it.
+ */
+function startRefusedOverDisabledRegistration(error: unknown): boolean | null {
+  if (!(error instanceof CliError) || error.details === null) return null;
+  const verdict = error.details.registrationDisabled;
+  return typeof verdict === "boolean" ? verdict : null;
+}
+
 async function runStart(
   opts: ProvisionHostOptions,
   controller: ServiceController,
@@ -1538,15 +1576,25 @@ async function runStart(
     // to escalate. `provisionHost` waits for the relaunch.
     if (started.kind === "supervisor-relaunching") return started;
   } catch (firstError) {
+    // Another user's task under this name: the start was refused before any
+    // `/Run`, and the rewrite below is a `/Create /F` of that same task - the
+    // takeover the ownership gate exists to stop. Nothing to escalate, nothing
+    // else to read.
+    if (isServiceTaskNotOwnedError(firstError)) throw firstError;
     // A registration its owner switched off (Task Scheduler's "Disable") is
-    // theirs to turn back on. The rewrite below registers `<Enabled>true`
-    // (`buildTaskXmlForUser`), so it would re-enable the task behind their
-    // back: refuse and name the repairs instead. A read that fails keeps the
-    // escalation, as before this check.
-    const registration = await readServiceRegistrationDisabled(
-      label,
-      process.platform,
-    );
+    // theirs to turn back on. An automatic re-registration carries it over
+    // disabled and starts nothing, so the rewrite below could not bring the
+    // host up either: refuse and name the repairs instead. A read that fails
+    // keeps the escalation, as before this check. A Windows `/Run` refusal
+    // already says whether the task was disabled, from its own gate read, so
+    // only a failure that does not say costs a read here.
+    const startVerdict = startRefusedOverDisabledRegistration(firstError);
+    const registration: ServiceRegistrationDisabled =
+      startVerdict === null
+        ? await readServiceRegistrationDisabled(label, process.platform)
+        : startVerdict
+          ? { kind: "disabled" }
+          : { kind: "not-disabled" };
     if (registration.kind === "disabled") {
       opts.runtime.logger.warn(
         "Host provisioning start failed on a service registration its owner disabled; not re-registering it",
@@ -1597,18 +1645,22 @@ async function runStart(
       allowSelfInvocation: opts.allowSelfInvocation,
     });
     let rewriteError: unknown = null;
+    let rewriteKeptDisabled = false;
     try {
-      await installHostServiceWithAttempt(
-        capability,
-        contenderOptions,
-        opts.lifecycleOrigin,
-        controller,
-        {
-          label,
-          cli,
-          enableLinger: opts.enableLinger,
-        },
+      const report = await withServiceInstallReport(() =>
+        installHostServiceWithAttempt(
+          capability,
+          contenderOptions,
+          opts.lifecycleOrigin,
+          controller,
+          {
+            label,
+            cli,
+            enableLinger: opts.enableLinger,
+          },
+        ),
       );
+      rewriteKeptDisabled = report.keptDisabled;
     } catch (cause) {
       // A retry is valid only after the rewritten task was successfully
       // registered and its own `/Run`/verification failed. Retrying after a
@@ -1670,6 +1722,16 @@ async function runStart(
         );
         throw retryError;
       }
+    }
+    // The rewrite read the task itself, and a task its owner disabled was
+    // carried over disabled and not started (the read above could not tell):
+    // there is no host coming, so say why rather than wait for one.
+    if (rewriteError === null && rewriteKeptDisabled) {
+      throw serviceRegistrationDisabledError(
+        opts.runtime.environment,
+        label,
+        errorFromUnknown(firstError).message,
+      );
     }
     opts.runtime.logger.info(
       "Host provisioning start recovered via one-shot service rewrite",

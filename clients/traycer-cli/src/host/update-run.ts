@@ -54,6 +54,8 @@ import type { ProgressInfo } from "../runner/output";
 import { createServiceController, serviceLabelFor } from "../service";
 import { assertHostNotBusy } from "./busy-check";
 import { readHostPidMetadata } from "./pid-metadata";
+import { refuseUpdateOverUnstartableService } from "./update-service-unstartable";
+import type { ServiceRegistrationWarning } from "../service/registration-owner";
 import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
 import { hostHomeDir } from "../store/paths";
 import { LAUNCHD_THROTTLE_INTERVAL_SECONDS } from "../service/spawn-edge-bounds";
@@ -433,6 +435,19 @@ export async function runHostUpdate(
     // Parsed ONCE, here, beside the intent it qualifies: both are argv
     // authority, and both must be refused before anything is read or written.
     const expectedIdentity = parseBoundExpectedIdentity(args, intent);
+    // Every `host update` is an automatic path, whatever its trigger (the
+    // reconciler's detached run included): over a service this account could
+    // not start again - disabled by its owner, or another account's task under
+    // a host started through it - it parks here, after the argv checks and
+    // before the plan, the claim, a download or a stop, and the dispatcher's
+    // ack settles it as the refusal it is. Another account's task with no host
+    // of this account's running through it is not refused: the swap goes on,
+    // and this is the warning its verify leg ends on.
+    const preSwapWarning = await refuseUpdateOverUnstartableService(
+      environment,
+      logger,
+      "host update",
+    );
     const plan = await resolvePlan(args, intent, selection);
     const segment = await runLocalAttemptExecutorSegment(
       {
@@ -472,6 +487,7 @@ export async function runHostUpdate(
           claim,
           complete,
           advance,
+          preSwapWarning,
         }),
     );
     return await projectSegment({ args, settlement, selection, segment });
@@ -1924,6 +1940,12 @@ interface RunArmInput {
    * this file holds it any more.
    */
   readonly advance: AdvanceExecutorSegment;
+  /**
+   * The pre-claim refusal's answer when it let the run go on over a task
+   * another account owns: no host of this account's ran through that task,
+   * and none can start through it after the swap (`postSwapStartFailure`).
+   */
+  readonly preSwapWarning: ServiceRegistrationWarning | null;
 }
 
 async function runArm(input: RunArmInput): Promise<LegacyHostUpdateResult> {
@@ -2647,9 +2669,11 @@ async function applyArm(
   );
   if (outcome.outcome === "no-op") {
     // The stage this attempt was going to commit was gone by the time it held
-    // the lock: another actor consumed it - Desktop's launch converge runs
-    // `host apply --no-service`, which commits the bytes and restarts nothing.
-    //
+    // the lock: another actor consumed it - Desktop's launch converge, whose
+    // `host apply` commits the bytes. Only on packaged macOS is that
+    // `--no-service` (it restarts nothing); on Windows and Linux it is
+    // `host apply --respect-hold`, which runs the full service lifecycle
+    // (stop, swap, re-register, start).
     return settleDeliveredByAnotherActor(
       input,
       writer,
@@ -2700,7 +2724,11 @@ async function applyArm(
       exitCode: 1,
     });
   }
-  await verifyUnderClaim(input, writer, outcome.postSwapError);
+  await verifyUnderClaim(
+    input,
+    writer,
+    postSwapStartFailure(outcome, input.preSwapWarning),
+  );
   return projectApplied(outcome);
 }
 
@@ -3096,7 +3124,11 @@ async function downgradeArm(
       `host update: ${target} was already installed by another actor when the downgrade ran`,
     );
   }
-  await verifyUnderClaim(input, writer, outcome.postSwapError);
+  await verifyUnderClaim(
+    input,
+    writer,
+    postSwapStartFailure(outcome, input.preSwapWarning),
+  );
   return projectApplied(outcome);
 }
 
@@ -3479,6 +3511,50 @@ function refusedMessage(target: string, refusal: string): string {
   return `host update: applied ${target} and the host is running it, but it REFUSED this client's authenticated call, so the update could not be verified: ${refusal}. The bytes ARE committed at ${target}. ${plane} Run 'traycer host doctor' to inspect the credential plane; updating forward to a newer host is the recovery.`;
 }
 
+/** Why the swap's service step started no host: see `postSwapStartFailure`. */
+interface PostSwapStartFailure {
+  readonly reason: string;
+  /** What brings the host back, as a clause; `null` when `reason` says it. */
+  readonly remedy: string | null;
+}
+
+const SERVICE_START_REMEDY =
+  "run 'traycer host service install' and then 'traycer host service start'.";
+
+/**
+ * Why the swap's service step started no host, or `null` when it asked the
+ * service to start one: the verify leg's start error. A failure
+ * (`postSwapError`), or a registration that finished without a start - one
+ * its owner disabled (on this automatic run, a disable that landed during the
+ * swap's own registration: every earlier one parked the run before its
+ * claim), or another account's task (the re-registration refused, or the
+ * pre-claim refusal's own warning when no host of this account's ran through
+ * it). No host is coming either way, and waiting the whole verify budget for
+ * one ended as `verify-timeout`, "did not become healthy", for a host that
+ * was never started. Another account's task names its own way forward; the
+ * others name the service repair.
+ */
+function postSwapStartFailure(
+  outcome: {
+    readonly postSwapError: string | null;
+    readonly postSwapWarning: ServiceRegistrationWarning | null;
+  },
+  preSwapWarning: ServiceRegistrationWarning | null,
+): PostSwapStartFailure | null {
+  if (outcome.postSwapError !== null) {
+    return { reason: outcome.postSwapError, remedy: SERVICE_START_REMEDY };
+  }
+  const warning = outcome.postSwapWarning ?? preSwapWarning;
+  if (warning === null) return null;
+  return {
+    reason: warning.message,
+    remedy:
+      warning.code === CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED
+        ? null
+        : SERVICE_START_REMEDY,
+  };
+}
+
 /**
  * `verifying`, then the evidence loop, then the executor's terminal write.
  *
@@ -3490,8 +3566,9 @@ function refusedMessage(target: string, refusal: string): string {
 async function verifyUnderClaim(
   input: RunArmInput,
   writer: AttemptRecordWriter,
-  postSwapError: string | null,
+  startFailure: PostSwapStartFailure | null,
 ): Promise<void> {
+  const postSwapError = startFailure === null ? null : startFailure.reason;
   const { args } = input;
   await writer.phaseWrite("verifying", null);
   const home = hostHomeDir(args.environment);
@@ -3608,7 +3685,7 @@ async function verifyUnderClaim(
         ? refusedMessage(target, observation.runningRefusal ?? diagnosis)
         : postSwapError === null
           ? `host update: applied ${target} but the host did not become healthy at that version: ${diagnosis}`
-          : `host update: applied ${target} but the service start failed, so the host never came up: ${postSwapError}. The bytes ARE committed at ${target}; run 'traycer host service install' and then 'traycer host service start'. (probe: ${diagnosis})`;
+          : `host update: applied ${target} but the service start failed, so the host never came up: ${postSwapError}. The bytes ARE committed at ${target}${startFailure === null || startFailure.remedy === null ? "." : `; ${startFailure.remedy}`} (probe: ${diagnosis})`;
       await writer.fail({
         code: refused
           ? HOST_UPDATE_REFUSES_RPC_CODE

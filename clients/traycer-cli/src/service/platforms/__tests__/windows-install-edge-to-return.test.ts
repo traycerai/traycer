@@ -20,6 +20,7 @@ import {
   createWindowsController,
   setWindowsStartEvidenceDepsForTests,
   setWindowsTaskInstallDepsForTests,
+  setWindowsDefinitionDepsForTests,
   setWindowsTaskUserSidReaderForTests,
   type ProcessRunner,
 } from "../windows";
@@ -105,10 +106,22 @@ beforeEach(() => {
     verifyPollMs: WINDOWS_START_SPAWN_POLL_MS,
   });
   setWindowsTaskInstallDepsForTests(null);
+  // The ownership gate reads the task in front of `/Create` and `/Run`; a
+  // fresh install finds none, and the read costs no time on the edge's clock.
+  setWindowsDefinitionDepsForTests({
+    queryTaskXml: async () => ({ kind: "absent" }),
+    predictCli: async () => {
+      throw new Error("predictCli is not part of an install");
+    },
+    resolveCli: async () => {
+      throw new Error("resolveCli is not part of an install");
+    },
+  });
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  setWindowsDefinitionDepsForTests(null);
   setWindowsStartEvidenceDepsForTests(null);
   setWindowsTaskInstallDepsForTests(null);
   setWindowsTaskUserSidReaderForTests(null);

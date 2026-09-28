@@ -32,6 +32,10 @@ import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defe
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mutation";
 import { useRunnerActivateInstalled } from "@/hooks/runner/use-runner-activate-installed-mutation";
+import {
+  isHostServiceNotice,
+  toastHostServiceNotice,
+} from "@/lib/host/host-service-notice";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 type MenuUpdateIntent = "apply" | "activate";
@@ -133,10 +137,16 @@ export function MenuCommandListener() {
         });
         return;
       }
+      setBusy(null);
+      // A disabled task or another user's task: a notice, not a failed update.
+      if (outcome.kind === "deferred" && isHostServiceNotice(outcome.message)) {
+        toastHostServiceNotice(outcome.message);
+        invalidateHostUpdateQueries();
+        return;
+      }
       Analytics.getInstance().track(AnalyticsEvent.HostUpdateFailed, {
         blocker: "unknown",
       });
-      setBusy(null);
       toast.error(outcome.message);
     },
     [invalidateHostUpdateQueries],
@@ -159,10 +169,16 @@ export function MenuCommandListener() {
         });
         return;
       }
+      setBusy(null);
+      // A disabled task or another user's task: a notice, not a failed update.
+      if (outcome.kind === "deferred" && isHostServiceNotice(outcome.message)) {
+        toastHostServiceNotice(outcome.message);
+        invalidateHostUpdateQueries();
+        return;
+      }
       Analytics.getInstance().track(AnalyticsEvent.HostUpdateFailed, {
         blocker: "unknown",
       });
-      setBusy(null);
       toast.error(outcome.message);
     },
     [invalidateHostUpdateQueries],

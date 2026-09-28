@@ -34,7 +34,10 @@ import {
   respawnIfDown,
 } from "../../startup/host-health-respawn";
 import { __setAsyncProcessLivenessReaderForTest } from "../process-identity";
-import { HOST_NOT_SERVICE_RUN_MESSAGE } from "../host-controller-types";
+import {
+  HOST_NOT_SERVICE_RUN_MESSAGE,
+  SERVICE_TASK_NOT_OWNED_MESSAGE,
+} from "../host-controller-types";
 import { FakeHostController } from "../../ipc/__tests__/fake-host-controller";
 
 const INTERVAL_MS = 1_000;
@@ -1292,6 +1295,61 @@ describe("startHostHealthMonitor", () => {
       const callsAfterRelatch = recoverIfDown.mock.calls.length;
       await ticks(5);
       expect(recoverIfDown.mock.calls.length).toBe(callsAfterRelatch);
+    } finally {
+      killSpy.mockRestore();
+      monitor.dispose();
+    }
+  });
+
+  /**
+   * The host's Scheduled Task is another Windows user's: `respawnIfDown`
+   * raises `HostRecoveryTaskNotOwnedError`, and the monitor retires recovery
+   * for the process - no governor grant, no CLI - however many ticks follow,
+   * and the grant it took goes back.
+   */
+  it("a not-owned deferral retires automatic recovery: one recoverIfDown, then none, however long the host stays down", async () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    let snapshot: DesktopPublishedHostSnapshot | null = SNAPSHOT;
+    const readLiveness = (): Promise<HostProcessLiveness> =>
+      Promise.resolve("dead");
+    const reload = vi.fn(async () => {
+      snapshot = null;
+      return null;
+    });
+    const recoverIfDown = vi.fn(
+      async (): Promise<{ kind: "deferred"; message: string }> => ({
+        kind: "deferred",
+        message: SERVICE_TASK_NOT_OWNED_MESSAGE,
+      }),
+    );
+    const fakeController = new FakeHostController();
+    fakeController.recoverIfDown = recoverIfDown;
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({
+        getSnapshot: () => snapshot,
+        reloadSnapshotFromDisk: reload,
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => ({ ...SNAPSHOT, pid: 66221 })),
+      respawn: () => respawnIfDown(fakeController),
+      automaticRecoverySuspended: () => false,
+      governor: createHostRecoveryGovernor({ readLiveness, now: undefined }),
+      readLiveness,
+      readLiveSupervisorPid: () => Promise.resolve(null),
+    });
+
+    try {
+      await ticks(2);
+      expect(snapshot).toBeNull();
+      expect(recoverIfDown).toHaveBeenCalledTimes(1);
+      await ticks(20);
+      expect(recoverIfDown).toHaveBeenCalledTimes(1);
+      // Past every respawn backoff step (the last is five minutes): a
+      // governor that were merely backing off would grant again by now.
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await ticks(5);
+      expect(recoverIfDown).toHaveBeenCalledTimes(1);
     } finally {
       killSpy.mockRestore();
       monitor.dispose();

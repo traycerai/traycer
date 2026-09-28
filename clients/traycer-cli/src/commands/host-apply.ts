@@ -3,6 +3,7 @@ import { NO_INSTALL_PHASE_HOOKS } from "../installer/install";
 import { withCliUpdateContender } from "../host/update-contender";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
+import { refuseUpdateOverUnstartableService } from "../host/update-service-unstartable";
 import { hostHomeDir } from "../store/paths";
 import { applyHostWithAttempt } from "../host/update-mutation";
 import type { HostStartOrigin } from "../host/lifecycle-origin";
@@ -104,6 +105,23 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
       noService: args.noService,
       acceptStoreFormatLoss: args.acceptStoreFormatLoss,
     });
+    // Before the lock, the busy gate or the stop: an apply whose stop and
+    // restart go through a service this account could not start again.
+    // `--respect-hold` is the desktop's launch-time apply and nothing else, an
+    // AUTOMATIC path: it parks over a disabled task, or over another account's
+    // task under a host started through it, exactly as `host update` does. An
+    // explicit apply (no `--respect-hold`) is refused over the second, and
+    // goes on over the first: it swaps, keeps the task disabled and says so.
+    // Over another account's task with no host of this account's running
+    // through it, either apply goes on and says so (`preSwapWarning`).
+    // `--no-service` touches no service at all.
+    const preSwapWarning = args.noService
+      ? null
+      : await refuseUpdateOverUnstartableService(
+          ctx.runtime.environment,
+          ctx.runtime.logger,
+          args.respectHold ? "host apply --respect-hold" : "host apply",
+        );
     const adoption = await resolveAttemptAdoptionFromNonce(
       hostHomeDir(ctx.runtime.environment),
       args.attemptAdoption,
@@ -195,10 +213,19 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
         );
       },
     );
-    const activation = activationOf(outcome);
+    // The swap ran over another account's task with no host of this
+    // account's behind it: the lifecycle had no registration of its own to
+    // refuse, so the pre-claim read's warning is the one the result carries.
+    const reported: ApplyHostOutcome =
+      outcome.outcome === "applied" &&
+      outcome.postSwapWarning === null &&
+      preSwapWarning !== null
+        ? { ...outcome, postSwapWarning: preSwapWarning }
+        : outcome;
+    const activation = activationOf(reported);
     ctx.runtime.logger.info("Host apply command completed", {
       environment: ctx.runtime.environment,
-      outcome: outcome.outcome,
+      outcome: reported.outcome,
       activation,
     });
     return {
@@ -207,8 +234,8 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
       // answer "what happened to the service after the swap?" into one - the
       // question exit 0 does NOT answer here. See the success-contract note
       // above, and `activationOf` for why it is not called "converged".
-      data: { ...outcome, activation },
-      human: humanSummary(outcome),
+      data: { ...reported, activation },
+      human: humanSummary(reported),
       exitCode: 0,
     };
   };
@@ -273,6 +300,10 @@ function humanSummary(outcome: ApplyHostOutcome): string {
   // serving the old bytes, alive, while the start never ran.
   if (outcome.postSwapError !== null) {
     return `applied host ${outcome.record.version}, but the post-swap start/restart request failed: ${outcome.postSwapError} - liveness was not checked; run 'traycer host status' to see what is running, then 'traycer host doctor'`;
+  }
+  // Applied, and not a failure: the service was left as its owner has it.
+  if (outcome.postSwapWarning !== null) {
+    return `applied host ${outcome.record.version}. ${outcome.postSwapWarning.message}`;
   }
   if (!outcome.runningActivated) {
     return `applied host ${outcome.record.version}, but no start was run, so the new bytes are not active yet - run 'traycer host status' to see what is running`;

@@ -192,6 +192,11 @@ export const CLI_ERROR_CODES = {
   // re-register over that choice. Nothing was changed; the message names the
   // two repairs. Expected: it is the user's setting, not a defect.
   SERVICE_REGISTRATION_DISABLED: "E_SERVICE_REGISTRATION_DISABLED",
+  // The service registration is another account's (Windows: the machine-
+  // global Scheduled Task carries another user's principal, or its owner
+  // could not be confirmed), so a write on it was refused and nothing was
+  // changed. Expected: a second user on a shared PC, not a defect.
+  SERVICE_TASK_NOT_OWNED: "E_SERVICE_TASK_NOT_OWNED",
 
   // --- CLI install lifecycle (foundation only in NP-1) ---
   CLI_LOCK_BUSY: "E_CLI_LOCK_BUSY",
@@ -250,6 +255,7 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.CONFIG_MISSING_KEY,
     CLI_ERROR_CODES.CLI_LOCK_BUSY,
     CLI_ERROR_CODES.SERVICE_REGISTRATION_DISABLED,
+    CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
     CLI_ERROR_CODES.REGISTRY_UNAVAILABLE,
     CLI_ERROR_CODES.RELEASE_AUTHENTICATION_REQUIRED,
   ]);

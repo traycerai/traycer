@@ -1006,10 +1006,11 @@ function provisioningErrorFallback(
       <LocalHostBodyShell>
         <HostEnsureFailureMessage
           message={
-            presentation.ensureFailure ??
+            presentation.ensureFailure?.message ??
             presentation.provisioningError?.message ??
             "Could not start Traycer Host."
           }
+          code={presentation.ensureFailure?.code ?? null}
         />
         <LocalBootstrapAttempts />
         <BootstrapLogDisclosure

@@ -531,7 +531,10 @@ function buildBootBody(args: {
         {/* The failed ensure's own words first: they say why, where the
             attempt panel says what was tried. */}
         {args.presentation.ensureFailure === null ? null : (
-          <HostEnsureFailureMessage message={args.presentation.ensureFailure} />
+          <HostEnsureFailureMessage
+            message={args.presentation.ensureFailure.message}
+            code={args.presentation.ensureFailure.code}
+          />
         )}
         <LocalBootstrapAttempts />
         {/* No trailing peer: this arm HAS a real action row (Retry, Report

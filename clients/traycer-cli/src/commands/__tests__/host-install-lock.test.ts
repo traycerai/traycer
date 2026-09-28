@@ -160,6 +160,7 @@ vi.mock("../../service/install-lifecycle", () => ({
       stoppedBeforeSwap: false,
       postSwapAction: "none" as const,
       postSwapError: null,
+      postSwapWarning: null,
     },
     lifecycle: {
       beforeSwap: async () => {},

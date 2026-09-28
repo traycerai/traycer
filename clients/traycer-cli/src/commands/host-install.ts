@@ -385,9 +385,13 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
     // verifies the winner's credential rather than failing).
     // Best-effort throughout: any failure is a warning, never a failed
     // install - an unprovisioned host self-heals on the next minting client.
+    // A registration refused or kept disabled started no host, so there is
+    // nothing for the credential probe to dial.
     const credentialProvision = await maybeProvisionCredential(
       ctx,
-      handle !== null && handle.state.postSwapError === null
+      handle !== null &&
+        handle.state.postSwapError === null &&
+        handle.state.postSwapWarning === null
         ? handle.state.postSwapAction
         : "none",
       authPreflight,
@@ -399,11 +403,17 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             stoppedBeforeSwap: handle.state.stoppedBeforeSwap,
             postSwapAction: handle.state.postSwapAction,
             postSwapError: handle.state.postSwapError,
+            // Additive: a reader built before it sees the install succeed,
+            // as it did.
+            serviceWarning: handle.state.postSwapWarning,
           }
         : null;
     let human = `installed host ${result.record.version} (executable=${result.record.executablePath})`;
     if (handle !== null && handle.state.postSwapError !== null) {
       human = `${human}; ${formatServiceLifecycleWarning(handle.state.postSwapAction, handle.state.postSwapError)}`;
+    }
+    if (handle !== null && handle.state.postSwapWarning !== null) {
+      human = `${human}; ${handle.state.postSwapWarning.message}`;
     }
     // Restate the unauthenticated warning on the terminal line - the
     // pre-flight's copy printed before a potentially long download and

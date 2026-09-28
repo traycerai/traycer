@@ -17,6 +17,10 @@ import type {
   MutationOutcome,
   ServiceRegistrationOk,
 } from "@traycer-clients/shared/platform/runner-host";
+import {
+  HOST_UPDATED_SERVICE_DISABLED_MESSAGE,
+  SERVICE_TASK_NOT_OWNED_MESSAGE,
+} from "@traycer-clients/shared/platform/host-service-notices";
 import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
@@ -37,11 +41,15 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 
 const toastErrorMock = vi.hoisted(() => vi.fn());
+const toastWarningMock = vi.hoisted(() => vi.fn());
+const toastInfoMock = vi.hoisted(() => vi.fn());
 
 vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),
     error: toastErrorMock,
+    warning: toastWarningMock,
+    info: toastInfoMock,
     message: vi.fn(),
   },
 }));
@@ -87,6 +95,7 @@ const READY_STATUS: HostControllerStatus = {
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
   lastEnsureFailure: null,
+  updateDeferral: null,
 };
 
 const DEBT_STATUS: HostControllerStatus = {
@@ -143,6 +152,7 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
         removedInstallDir: true,
         deregisteredService: true,
         serviceRegistrationRetained: null,
+        serviceWarning: null,
       }),
     ),
     restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
@@ -152,6 +162,7 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
         removedHost: true,
         deregisteredService: true,
         serviceRegistrationRetained: null,
+        serviceWarning: null,
         removedLoginItem: false,
       }),
     ),
@@ -267,6 +278,8 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
     __resetTabNavigationControllerForTesting();
     navigateMock.mockClear();
     toastErrorMock.mockClear();
+    toastWarningMock.mockClear();
+    toastInfoMock.mockClear();
   });
   afterEach(() => {
     cleanup();
@@ -487,4 +500,44 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
     });
     expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
   });
+
+  // A disabled task the apply left off, or another Windows user's task: a
+  // notice (warning / info), never `toast.error`, and no busy dialog.
+  it.each([
+    [
+      "a disabled task",
+      HOST_UPDATED_SERVICE_DISABLED_MESSAGE,
+      toastWarningMock,
+    ],
+    [
+      "another Windows user's task",
+      SERVICE_TASK_NOT_OWNED_MESSAGE,
+      toastInfoMock,
+    ],
+  ] as const)(
+    "%s resolved by the tray's update is a notice toast, never toast.error",
+    async (_label, message, expectedToast) => {
+      const tray = createTray();
+      const applyStaged = vi.fn(() =>
+        Promise.resolve({ kind: "deferred" as const, message }),
+      );
+      const management = makeManagement({ status: READY_STATUS, applyStaged });
+      renderListener(makeHost(tray.bridge, management));
+      await waitFor(() => {
+        expect(management.getHostControllerStatus).toHaveBeenCalled();
+      });
+
+      act(() => {
+        tray.emit({ kind: "installUpdate", version: "1.5.0" });
+      });
+      await screen.findByTestId("confirm-destructive-dialog");
+      fireEvent.click(screen.getByTestId("confirm-action"));
+
+      await waitFor(() => {
+        expect(expectedToast).toHaveBeenCalledWith(message);
+      });
+      expect(toastErrorMock).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    },
+  );
 });

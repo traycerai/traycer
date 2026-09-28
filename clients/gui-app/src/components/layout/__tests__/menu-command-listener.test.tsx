@@ -23,6 +23,10 @@ import type {
   IHostManagement,
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
+import {
+  HOST_UPDATED_SERVICE_DISABLED_MESSAGE,
+  SERVICE_TASK_NOT_OWNED_MESSAGE,
+} from "@traycer-clients/shared/platform/host-service-notices";
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -68,6 +72,21 @@ const routerState = vi.hoisted(() => ({ pathname: "/" }));
 const authMock = vi.hoisted(() => ({
   signIn: vi.fn(() => Promise.resolve()),
   signOut: vi.fn(() => Promise.resolve()),
+}));
+
+const toastMocks = vi.hoisted(() => ({
+  error: vi.fn(),
+  warning: vi.fn(),
+  info: vi.fn(),
+}));
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    message: vi.fn(),
+    error: toastMocks.error,
+    warning: toastMocks.warning,
+    info: toastMocks.info,
+  },
 }));
 
 function latestNavigation(): CapturedNavigate {
@@ -328,6 +347,9 @@ describe("<MenuCommandListener />", () => {
     authMock.signIn.mockClear();
     authMock.signOut.mockClear();
     routerState.pathname = "/";
+    toastMocks.error.mockClear();
+    toastMocks.warning.mockClear();
+    toastMocks.info.mockClear();
     resetStores();
     useDesktopDialogStore.getState().close();
     useDesktopDialogStore.setState({ reportIssueAvailable: false });
@@ -646,6 +668,7 @@ describe("<MenuCommandListener />", () => {
       removedByUser: false,
       checkedAt: "2026-05-15T00:00:00Z",
       lastEnsureFailure: null,
+      updateDeferral: null,
     };
     const management = makeHostManagementFixture(status);
     const baseHost = createRunnerHost(menu);
@@ -682,6 +705,74 @@ describe("<MenuCommandListener />", () => {
     expect(management.activateInstalled).not.toHaveBeenCalled();
   });
 
+  // A disabled task the apply left off, or another Windows user's task, is a
+  // notice (warning / info) - never `toast.error` - from the native menu too.
+  it.each([
+    [
+      "a disabled task",
+      HOST_UPDATED_SERVICE_DISABLED_MESSAGE,
+      toastMocks.warning,
+    ],
+    [
+      "another Windows user's task",
+      SERVICE_TASK_NOT_OWNED_MESSAGE,
+      toastMocks.info,
+    ],
+  ] as const)(
+    "host.installUpdate over %s is a notice toast, never toast.error",
+    async (_label, message, expectedToast) => {
+      const menu = createMenu();
+      const status: HostControllerStatus = {
+        download: null,
+        mutation: null,
+        installedVersion: "1.1.0",
+        latestVersion: "1.2.3",
+        stagedVersion: "1.2.3",
+        installedRuntimeVersion: null,
+        runningRuntimeVersion: null,
+        updateReady: true,
+        activation: "activated",
+        reachable: true,
+        localAttempt: null,
+        removedByUser: false,
+        checkedAt: "2026-05-15T00:00:00Z",
+        lastEnsureFailure: null,
+        updateDeferral: null,
+      };
+      const management: IHostManagement = {
+        ...makeHostManagementFixture(status),
+        applyStaged: vi.fn(() =>
+          Promise.resolve({ kind: "deferred" as const, message }),
+        ),
+      };
+      const runnerHost: FakeRunnerHost = Object.assign(createRunnerHost(menu), {
+        hostManagement: management,
+      });
+      render(
+        <QueryClientProvider client={makeQueryClient()}>
+          <RunnerHostProvider runnerHost={runnerHost}>
+            <MenuCommandListener />
+          </RunnerHostProvider>
+        </QueryClientProvider>,
+      );
+      await waitFor(() => {
+        expect(management.getHostControllerStatus).toHaveBeenCalled();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      act(() => {
+        menu.emit("host.installUpdate");
+      });
+
+      await waitFor(() => {
+        expect(expectedToast).toHaveBeenCalledWith(message);
+      });
+      expect(toastMocks.error).not.toHaveBeenCalled();
+    },
+  );
+
   it("submits activateInstalled when host.installUpdate is dispatched with only activation debt", async () => {
     const menu = createMenu();
     const status: HostControllerStatus = {
@@ -699,6 +790,7 @@ describe("<MenuCommandListener />", () => {
       removedByUser: false,
       checkedAt: "2026-05-15T00:00:00Z",
       lastEnsureFailure: null,
+      updateDeferral: null,
     };
     const management = makeHostManagementFixture(status);
     const baseHost = createRunnerHost(menu);
@@ -752,6 +844,7 @@ describe("<MenuCommandListener />", () => {
       removedByUser: false,
       checkedAt: "2026-05-15T00:00:00Z",
       lastEnsureFailure: null,
+      updateDeferral: null,
     };
     const management = makeHostManagementFixture(status);
     const runnerHost: FakeRunnerHost = Object.assign(createRunnerHost(menu), {
@@ -801,6 +894,7 @@ describe("<MenuCommandListener />", () => {
       removedByUser: false,
       checkedAt: "2026-08-12T00:00:00Z",
       lastEnsureFailure: null,
+      updateDeferral: null,
     });
     const runnerHost = Object.assign(createRunnerHost(menu), {
       requestHostRespawn,

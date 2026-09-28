@@ -1,7 +1,9 @@
 import {
   SHUTDOWN_FORCE_EXIT_MS,
   STOP_EXIT_GRACE_MARGIN_MS,
+  WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS,
   WINDOWS_SCHTASKS_RUN_TIMEOUT_MS,
+  WINDOWS_START_SPAWN_POLL_MS,
   WINDOWS_START_SPAWN_VERIFY_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
 
@@ -277,6 +279,40 @@ export const SYSTEMCTL_INSTALL_SPAWN_EDGE_BOUND_MS =
 export const WINDOWS_SCHTASKS_CREATE_TIMEOUT_MS = 30_000;
 
 /**
+ * The runner timeout for the OS name lookup that resolves a task principal
+ * written as an account NAME to its SID (`NTAccount.Translate` through
+ * PowerShell, `service/platforms/windows.ts`).
+ */
+export const WINDOWS_ACCOUNT_SID_LOOKUP_TIMEOUT_MS = 15_000;
+
+/**
+ * The longest one ownership read of the host's task takes
+ * (`readWindowsTaskOwnership`): the `/Query /XML`, then the name lookup for a
+ * principal that reads back as a name - 10s + 15s = 25s.
+ *
+ * The caller's own SID is not a term: an install reads it once, in front of
+ * its install edge, and every ownership read it makes after the edge uses
+ * that answer rather than asking `whoami` again (10s). A failed read stays
+ * failed for the install, so a present task refuses as unconfirmed.
+ */
+export const WINDOWS_TASK_OWNERSHIP_READ_BOUND_MS =
+  WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS + WINDOWS_ACCOUNT_SID_LOOKUP_TIMEOUT_MS;
+
+/**
+ * B, the step budget of a gated `/Create` (`createGatedTask`), from the first
+ * staging to the create's return: one confirm-read and one create at their
+ * ceilings, 25s + 30s = 55s.
+ *
+ * A step starts only when it can finish at its own ceiling inside B. One that
+ * cannot fails the create closed before it writes (`E_SERVICE_INSTALL_FAILED`),
+ * so a pass after a restaging runs only on time a fast earlier pass left, and
+ * the create holds the grant's clock for at most B however often the task
+ * changes under it.
+ */
+export const WINDOWS_TASK_CREATE_BUDGET_MS =
+  WINDOWS_TASK_OWNERSHIP_READ_BOUND_MS + WINDOWS_SCHTASKS_CREATE_TIMEOUT_MS;
+
+/**
  * The longest a Windows start can take to launch its supervisor after its
  * spawn edge at `/Run`.
  *
@@ -294,13 +330,31 @@ export const WINDOWS_RUN_SPAWN_EDGE_BOUND_MS =
 
 /**
  * The longest Windows `installService` can run from its install edge, in front
- * of the launcher write and `/Create`, to the launch: the staging writes
- * (local files), `/Create`, then the verified `/Run` - 30s + 45s = 75s. The
- * task's `<UserId>` SID read (a synchronous `whoami`, 10s) runs in front of the
- * edge; after it, it cost the grant 10s this bound did not count.
+ * of the launcher write and `/Create`, to the launch - 55s + 25s + 45s = 125s:
+ *   - the gated `/Create` inside its budget (staging, confirm-reads, the
+ *     create);
+ *   - the `/Run` gate's ownership read, which an install makes after its
+ *     install edge, where a plain start makes it in front of its `/Run` edge;
+ *   - the verified `/Run`.
+ *
+ * The task's `<UserId>` SID read (a synchronous `whoami`, 10s) and the gate's
+ * first ownership read run in front of the edge.
  */
 export const WINDOWS_INSTALL_SPAWN_EDGE_BOUND_MS =
-  WINDOWS_SCHTASKS_CREATE_TIMEOUT_MS + WINDOWS_RUN_SPAWN_EDGE_BOUND_MS;
+  WINDOWS_TASK_CREATE_BUDGET_MS +
+  WINDOWS_TASK_OWNERSHIP_READ_BOUND_MS +
+  WINDOWS_RUN_SPAWN_EDGE_BOUND_MS;
+
+/**
+ * The latest Windows `installService` RETURNS after its install edge: a verify
+ * that fails returns one poll late and then reads the task's Last Run Result -
+ * 125s + 0.25s + 10s = 135.25s. It is the one call that returns later than
+ * every launch bound, so the grant bound below is sized by it.
+ */
+export const WINDOWS_INSTALL_CONTROLLER_RETURN_BOUND_MS =
+  WINDOWS_INSTALL_SPAWN_EDGE_BOUND_MS +
+  WINDOWS_START_SPAWN_POLL_MS +
+  WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS;
 
 // --- The host-start grant window ---------------------------------------------
 
@@ -340,24 +394,34 @@ export const SUPERVISOR_LAUNCH_MARGIN_MS =
 export const SUPERVISOR_SPAWN_ACK_MARGIN_MS = 10_000;
 
 /**
- * The longest any controller call takes from its first edge (where the grant
- * is published, `service/spawn-edge.ts`) to the launch of the supervisor that
- * consumes it: the max over every path's bound.
+ * The longest any controller call holds its grant's clock after its first
+ * edge (where the grant is published, `service/spawn-edge.ts`): the max over
+ * every path's launch of the supervisor that consumes the grant, and over the
+ * one return that comes later than every launch.
  *
- *   macOS install (install edge, bootout, reload race)  90s  the max
- *   Windows install (`/Create` + verified `/Run`)       75s
+ *   Windows install's return (the launch below,      135.25s  the max
+ *     then the failed verify's late poll and
+ *     its Last Run Result `/Query`)
+ *   Windows install (budgeted `/Create`, the `/Run`  125s
+ *     gate's read, verified `/Run`)
+ *   macOS install (install edge, bootout, reload race)  90s
  *   Linux install (`daemon-reload` + `enable --now`)    62s
  *   Linux start / restart job                           52s
  *   Windows start / restart (verified `/Run`)           45s
  *   macOS recycle (`kickstart -k`)                      40s
  *   macOS plain kickstart                               10s
  *
+ * The return belongs here because the parent's ack wait starts at the return,
+ * and the lease-end invariant below needs every return inside this bound.
+ *
  * Everything a call does BEFORE its first edge - ownership probes, a Desktop
  * host's cooperative stand-down, the Windows stop ladder, the Linux install's
- * `loginctl enable-linger`, the Windows install's `<UserId>` SID read - is off
- * the grant's clock, which is what makes this bound finite at all.
+ * `loginctl enable-linger`, the Windows install's `<UserId>` SID read and its
+ * gate's first ownership read - is off the grant's clock, which is what makes
+ * this bound finite at all.
  */
 export const HOST_START_ADOPTION_SPAWN_EDGE_BOUND_MS = Math.max(
+  WINDOWS_INSTALL_CONTROLLER_RETURN_BOUND_MS,
   LAUNCHCTL_INSTALL_SPAWN_EDGE_BOUND_MS,
   WINDOWS_INSTALL_SPAWN_EDGE_BOUND_MS,
   SYSTEMCTL_INSTALL_SPAWN_EDGE_BOUND_MS,
@@ -383,29 +447,36 @@ export function finiteDurationMs(name: string, value: number): number {
 }
 
 /**
- * How long a published grant stays usable: 90s + 40s = 130s. Derived, not
- * chosen - the latest a supervisor can be launched after its grant was
- * published, plus what its launcher takes to consume it.
+ * How long a published grant stays usable: 135.25s + 40s = 175.25s. Derived,
+ * not chosen - the longest a controller call holds the grant's clock after
+ * publishing it, plus what a launcher takes to consume it.
  *
- * It was 60s, and a longer window used to cost something: a proof whose
- * publisher died refused every nonce-less launch until it expired, so widening
- * the window widened that wedge. The consumer now reads a proof whose parent
- * capability is not live as absent on exactly those paths (see
- * `consumeHostStartAdoption`), so the window no longer bounds any refusal - it
- * bounds how long a LIVE publisher's grant can wait for its child, and how
- * long a proof whose cancel failed can outlive its lease.
+ * It was 60s through cli-v1.3.0 and 130s from #2097. Two things made it grow.
+ * The Windows install's gated `/Create` reads ownership again after the install
+ * edge and runs inside its budget. The install's `/Run` gate read comes after
+ * that edge too. So the Windows install's return outlasts every launch.
+ *
+ * A longer window used to cost something: a proof whose publisher died refused
+ * every nonce-less launch until it expired, so widening the window widened
+ * that wedge. The consumer now reads a proof whose parent capability is not
+ * live as absent on exactly those paths (see `consumeHostStartAdoption`). So
+ * the window no longer bounds any refusal. It bounds how long a LIVE
+ * publisher's grant can wait for its child, and how long a proof whose cancel
+ * failed can outlive its lease.
  *
  * A lease can outlive the window, by at most `SUPERVISOR_SPAWN_ACK_MARGIN_MS`.
  * The ack wait starts when the controller call returns - no earlier than the
  * launch it requested, and at most the bound above after the edge - so it
  * ends by bound + launch margin + ack margin = this window + the ack margin.
- * That holds only while no call keeps working past its last launch for longer
- * than the bound leaves room for, so every published call's end is named here
- * (edge to return, then the 50s ack wait; `host-start-adoption-window.test.ts`
- * pins each row):
+ * That holds only while every call's return stays inside the bound, so every
+ * published call's end is named here (edge to return, then the 50s ack wait;
+ * `host-start-adoption-window.test.ts` pins each row):
  *
- *   macOS install, kickstart times out              90s     -> 140s     the cap
- *   Windows install, verify fails, then `/Query`    85.25s  -> 135.25s
+ *   Windows install, verify fails, then `/Query`    135.25s -> 185.25s  the cap
+ *     (the budgeted `/Create` 55s, the `/Run`
+ *     gate's ownership read 25s, the verified
+ *     `/Run` 45s, one late poll, the `/Query` 10s)
+ *   macOS install, kickstart times out              90s     -> 140s
  *   Windows restart, same, then the stop-intent     69.75s  -> 119.75s
  *     retirement probe (`withStopIntent`: 1.5s
  *     activity probe + 13s process identity -
@@ -427,7 +498,11 @@ export function finiteDurationMs(name: string, value: number): number {
  * one poll late. A throw the service manager may still act on is marked
  * registration-committed and waited on like a return (every Windows throw
  * after `/Run`, the macOS install's kickstart); the others cancel the lease
- * at the throw, so their tails end no lease late.
+ * at the throw, so their tails end no lease late. That includes a Windows
+ * install whose `/Create` ran out of its budget, which throws before `/Run`
+ * and by 55s. An install that registered the task still disabled withdraws
+ * its grant (`withdrawServiceSpawnEdge`) and waits for no acknowledgement;
+ * it also returns by 55s.
  *
  * The Linux install once ran `loginctl enable-linger` AFTER its launch and
  * returned 30s later, ending its lease at 142s; the linger call now runs in
@@ -440,9 +515,9 @@ export function finiteDurationMs(name: string, value: number): number {
  *   - Untimed local work: file writes, authority re-checks against a held
  *     lock, each child's exit after its timeout fires (one that ignores the
  *     timeout's SIGTERM is SIGKILLed `PROCESS_TIMEOUT_KILL_GRACE_MS`, 2s,
- *     later - `service/process-runner.ts`). So the macOS install
- *     ends at <= 140s plus that fs/exit latency, and a supervisor its
- *     timed-out kickstart launched at the very edge can miss the window by it.
+ *     later - `service/process-runner.ts`). So the Windows install
+ *     ends at <= 185.25s plus that fs/exit latency, and a supervisor its
+ *     `/Run` launched at the very end of the verify can miss the window by it.
  *   - An ADOPTED capability (a child run with `--attempt-adoption`). Its
  *     authority re-check re-probes the parent's process identity on every
  *     call, uncached by design, so each post-edge check adds one probe:
@@ -451,9 +526,11 @@ export function finiteDurationMs(name: string, value: number): number {
  *     deliberately does not widen the window for every caller to cover it.
  *
  * Outliving the window is the safe direction. Every supervisor the window
- * admits consumes inside it and acknowledges inside the lease; a claim
+ * admits consumes inside it and acknowledges inside the lease. A claim
  * arriving after the window reads as expired and takes ordinary admission,
- * exactly as a launch with no proof does, and the parent waits at most the ack
+ * exactly as a launch with no proof does - including one whose proof expires
+ * between its pending read and its claim, which the claim removes (CLIs up to
+ * cli-v1.4.0-rc.2 refused that one start). The parent waits at most the ack
  * margin longer for an ack that cannot come, then cancels. The unsafe
  * direction - a valid proof that no parent honours any more - arises only
  * through a failed cancel, and this window is what bounds it.

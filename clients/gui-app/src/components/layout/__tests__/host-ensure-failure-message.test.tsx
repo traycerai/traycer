@@ -89,6 +89,7 @@ const IDLE_CONTROLLER_STATUS: HostControllerStatus = {
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
   lastEnsureFailure: null,
+  updateDeferral: null,
 };
 
 interface ManagementSpy {
@@ -162,6 +163,44 @@ function buildManagementSpy(options: {
       }),
   };
   return { management, convergeReadyCalls: () => convergeReadyCalls };
+}
+
+interface EnableServiceManagementSpy {
+  readonly management: IHostManagement;
+  readonly registerServiceCalls: () => readonly {
+    readonly expectedHostId: string;
+  }[];
+}
+
+/**
+ * Same shape as {@link buildManagementSpy}, plus a working
+ * `runDoctorRepairQueued` so the Enable-service tests below can click the
+ * button and read back what it dispatched.
+ */
+function buildManagementSpyWithRegisterService(
+  ensureFailure: HostEnsureFailure,
+): EnableServiceManagementSpy {
+  const calls: { readonly expectedHostId: string }[] = [];
+  const spy = buildManagementSpy({
+    getHostControllerStatus: () =>
+      Promise.resolve({
+        ...IDLE_CONTROLLER_STATUS,
+        reachable: false,
+        lastEnsureFailure: ensureFailure,
+      }),
+    convergeReady: () =>
+      Promise.reject(new Error("convergeReady must not run in this test")),
+  });
+  const management: IHostManagement = {
+    ...spy.management,
+    runDoctorRepairQueued: (input) => {
+      if (input.repair === "register-service") {
+        calls.push({ expectedHostId: input.expectedHostId });
+      }
+      return Promise.resolve({ kind: "applied" as const });
+    },
+  };
+  return { management, registerServiceCalls: () => calls };
 }
 
 function buildRunnerHost(
@@ -472,6 +511,61 @@ describe("host-ensure-failure-message", () => {
       expect(
         screen.queryByTestId("host-ensure-failure-message")?.textContent,
       ).toBe(SENTENCE);
+    });
+  });
+
+  // R5 §G cleanup: the Enable-background-service repair, gated on the
+  // ensure failure's code AND a known local host - neither alone is enough.
+  describe("the Enable background service repair", () => {
+    it("shows for E_SERVICE_REGISTRATION_DISABLED with a local host known, and clicking it dispatches register-service for that host", async () => {
+      const spy = buildManagementSpyWithRegisterService(ENSURE_FAILURE);
+
+      mountRealChainWithNarrator(spy.management, true);
+
+      const enableButton = await screen.findByTestId(
+        "host-ensure-failure-enable-service",
+      );
+      fireEvent.click(enableButton);
+
+      await waitFor(() => {
+        expect(spy.registerServiceCalls()).toEqual([
+          { expectedHostId: LOCAL_HOST_ID },
+        ]);
+      });
+    });
+
+    it("does not show for E_SERVICE_REGISTRATION_DISABLED with no local host known", async () => {
+      const spy = buildManagementSpyWithRegisterService(ENSURE_FAILURE);
+
+      mountRealChainWithNarrator(spy.management, false);
+
+      await waitFor(() => {
+        expect(
+          screen.queryByTestId("host-ensure-failure-message")?.textContent,
+        ).toBe(SENTENCE);
+      });
+      expect(
+        screen.queryByTestId("host-ensure-failure-enable-service"),
+      ).toBeNull();
+    });
+
+    it("does not show for a different code (E_SERVICE_TASK_NOT_OWNED), even with a local host known", async () => {
+      const notOwnedFailure: HostEnsureFailure = {
+        message: "not this account's task",
+        code: "E_SERVICE_TASK_NOT_OWNED",
+      };
+      const spy = buildManagementSpyWithRegisterService(notOwnedFailure);
+
+      mountRealChainWithNarrator(spy.management, true);
+
+      await waitFor(() => {
+        expect(
+          screen.queryByTestId("host-ensure-failure-message")?.textContent,
+        ).toBe(notOwnedFailure.message);
+      });
+      expect(
+        screen.queryByTestId("host-ensure-failure-enable-service"),
+      ).toBeNull();
     });
   });
 });

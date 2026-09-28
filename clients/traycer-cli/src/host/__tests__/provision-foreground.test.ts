@@ -379,6 +379,7 @@ beforeEach(() => {
       stoppedBeforeSwap: false,
       postSwapAction: "install",
       postSwapError: null,
+      postSwapWarning: null,
     },
     lifecycle: {
       beforeSwap: async () => {},

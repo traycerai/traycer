@@ -325,6 +325,7 @@ function sampleLifecycleHandle(): ServiceInstallLifecycleHandle {
       stoppedBeforeSwap: true,
       postSwapAction: "install",
       postSwapError: null,
+      postSwapWarning: null,
     },
     lifecycle: {
       beforeSwap: async () => {},
@@ -1481,6 +1482,7 @@ describe("buildHostInstallCommand", () => {
           stoppedBeforeSwap: true,
           postSwapAction: "start",
           postSwapError: "failed to start the host process",
+          postSwapWarning: null,
         },
         lifecycle: {
           beforeSwap: async () => {},
@@ -1514,6 +1516,7 @@ describe("buildHostInstallCommand", () => {
           stoppedBeforeSwap: true,
           postSwapAction: "start",
           postSwapError: "failed to start the host process",
+          postSwapWarning: null,
         },
         lifecycle: {
           beforeSwap: async () => {},
@@ -1535,9 +1538,71 @@ describe("buildHostInstallCommand", () => {
         serviceLifecycle: {
           postSwapAction: "start",
           postSwapError: "failed to start the host process",
+          serviceWarning: null,
         },
       });
     });
+
+    // The registration was refused (another user's task) or kept disabled (its
+    // owner's setting): the bytes are in and the install SUCCEEDED, so the exit
+    // is 0 - unlike a post-swap start failure - and the payload and the human
+    // line say why nothing started. Nothing started, so there is no host for the
+    // credential probe to dial.
+    it.each([
+      {
+        name: "another user's task",
+        warning: {
+          code: "E_SERVICE_TASK_NOT_OWNED",
+          message:
+            "The Traycer Host task on this PC is owned by another Windows user.",
+          details: { reason: "other-owner" },
+        },
+      },
+      {
+        name: "a task kept disabled",
+        warning: {
+          code: "E_SERVICE_REGISTRATION_DISABLED",
+          message:
+            "The host is stopped because the Traycer Host task is disabled in Task Scheduler.",
+          details: null,
+        },
+      },
+    ])(
+      "a registration left as it was ($name): exit 0, serviceWarning in the payload and the human line, no credential probe",
+      async ({ warning }) => {
+        mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+        mocks.createServiceInstallLifecycleMock.mockReturnValue({
+          state: {
+            priorState: "not-installed",
+            stoppedBeforeSwap: false,
+            postSwapAction: "install",
+            postSwapError: null,
+            postSwapWarning: warning,
+          },
+          lifecycle: {
+            beforeSwap: async () => {},
+            afterSwap: async () => {},
+            swapLockRecovery: null,
+          },
+        });
+        mocks.commitHostInstallSourceMock.mockResolvedValue({
+          record: sampleRecord("2.0.0"),
+          previous: null,
+          installGeneration: "id:install-2.0.0",
+        });
+
+        const result = await buildHostInstallCommand(baseArgs({}))(fakeCtx());
+
+        expect(result.exitCode).toBe(0);
+        expect(result.data).toMatchObject({
+          serviceLifecycle: { postSwapError: null, serviceWarning: warning },
+        });
+        expect(result.human ?? "").toContain(warning.message);
+        expect(
+          mocks.provisionInstalledHostCredentialMock,
+        ).not.toHaveBeenCalled();
+      },
+    );
 
     // The positive twins - a clean post-swap start, and the bytes-only
     // (`--no-service-register`) path where no service lifecycle ran at all -

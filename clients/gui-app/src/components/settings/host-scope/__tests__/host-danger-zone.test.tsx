@@ -75,6 +75,7 @@ const uninstallMock = vi.hoisted(() => ({
         // The completed arm of `TraycerUninstallResult`; the row switches on it.
         readonly kind: "removed";
         readonly serviceRegistrationRetained: boolean | null;
+        readonly serviceWarning: string | null;
       }
     | undefined,
   isSuccess: false,
@@ -223,7 +224,11 @@ describe("HostDangerZone", () => {
   it("offers retry when the service is positively retained", () => {
     runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
     uninstallMock.isSuccess = true;
-    uninstallMock.data = { kind: "removed", serviceRegistrationRetained: true };
+    uninstallMock.data = {
+      kind: "removed",
+      serviceRegistrationRetained: true,
+      serviceWarning: null,
+    };
 
     render(<LocalRecoveryDangerZone />);
 
@@ -242,7 +247,11 @@ describe("HostDangerZone", () => {
   it("reports unknown service teardown without offering a pointless retry", () => {
     runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
     uninstallMock.isSuccess = true;
-    uninstallMock.data = { kind: "removed", serviceRegistrationRetained: null };
+    uninstallMock.data = {
+      kind: "removed",
+      serviceRegistrationRetained: null,
+      serviceWarning: null,
+    };
 
     render(<LocalRecoveryDangerZone />);
 
@@ -253,6 +262,31 @@ describe("HostDangerZone", () => {
     expect(screen.queryByText("Traycer removed")).toBeNull();
     expect(screen.queryByTestId("settings-quit-after-uninstall")).toBeNull();
     expect(screen.queryByTestId("settings-retry-uninstall")).toBeNull();
+  });
+
+  // The host's Scheduled Task is another Windows user's: the removal left it
+  // alone on purpose and removed everything of this account's, so the row is
+  // the finished one with the warning - not "incomplete", no retry.
+  it("a removal that left another Windows user's task shows the removed row with the warning, Quit, and no retry", () => {
+    runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
+    uninstallMock.isSuccess = true;
+    const warning =
+      "The Traycer Host task on this PC is owned by another Windows user, so it was left in place; everything of yours was removed.";
+    uninstallMock.data = {
+      kind: "removed",
+      serviceRegistrationRetained: true,
+      serviceWarning: warning,
+    };
+
+    render(<LocalRecoveryDangerZone />);
+
+    expect(
+      screen.getByTestId("settings-remove-traycer-service-warning").textContent,
+    ).toBe(warning);
+    expect(screen.getByTestId("settings-quit-after-uninstall")).not.toBeNull();
+    expect(screen.queryByTestId("settings-retry-uninstall")).toBeNull();
+    expect(screen.queryByText("Traycer removal incomplete")).toBeNull();
+    expect(screen.queryByText("Traycer removal unverified")).toBeNull();
   });
 
   it("keeps remote account removal available while the host is unreachable", () => {

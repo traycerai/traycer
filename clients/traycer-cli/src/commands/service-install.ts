@@ -16,6 +16,7 @@ import {
   takeoverDesktopRegistrationWithAttempt,
 } from "../host/update-mutation";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
+import { runAsExplicitRegistrationRepair } from "../service/registration-repair";
 import {
   refuseDesktopDisruptionOfForegroundRun,
   refuseForegroundHostRun,
@@ -156,16 +157,22 @@ export function buildServiceInstallCommand(
           totalBytes: null,
           workUnits: null,
         });
-        await installHostServiceWithAttempt(
-          capability,
-          contenderOptions,
-          args.lifecycleOrigin,
-          controller,
-          {
-            label,
-            cli,
-            enableLinger: args.enableLinger,
-          },
+        // THE named repair, typed at a terminal or pressed as Doctor's
+        // Register service: the one install that writes a task its owner
+        // disabled back to enabled and starts it. Every other install carries
+        // the owner's setting over (`runAsExplicitRegistrationRepair`).
+        await runAsExplicitRegistrationRepair(() =>
+          installHostServiceWithAttempt(
+            capability,
+            contenderOptions,
+            args.lifecycleOrigin,
+            controller,
+            {
+              label,
+              cli,
+              enableLinger: args.enableLinger,
+            },
+          ),
         );
         const platform = process.platform;
         const manifestPath =

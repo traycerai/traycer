@@ -74,6 +74,7 @@ import { CliError } from "../runner/errors";
 import {
   createServiceController,
   serviceLabelFor,
+  type ServiceLabel,
   type ServiceStatus,
 } from "../service";
 import { smAppServiceAgentLabelId } from "../service/label";
@@ -85,6 +86,11 @@ import {
   readServiceRegistrationDisabled,
   SERVICE_REGISTRATION_DISABLED_MESSAGE,
 } from "../service/registration-disabled";
+import { readServiceRegistrationOwnership } from "../service/registration-owner";
+import {
+  SERVICE_TASK_NOT_OWNED_MESSAGE,
+  type WindowsTaskNotOwnedReason,
+} from "../service/platforms/windows-task-gate";
 import {
   SERVICE_REFRESH_COMMAND,
   SERVICE_REINSTALL_COMMAND,
@@ -200,8 +206,20 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   const label = serviceLabelFor(opts.environment);
   let serviceStatus: ServiceStatus | null = null;
   let stoppedServiceIssue: DoctorIssue | null = null;
+  // Whose registration this is comes first: a task another user owns is not
+  // this account's missing, stopped, stale or disabled service, and every fix
+  // those issues offer (Register service, Start host, Update service) is a
+  // write the ownership gate refuses. So it is the one service issue shown,
+  // with no fix, and the checks below that would offer one are skipped.
+  const taskNotOwnedReason = await serviceTaskNotOwnedBestEffort(label);
+  const taskNotOwned = taskNotOwnedReason !== null;
+  if (taskNotOwnedReason !== null) {
+    issues.push(serviceTaskNotOwnedIssue(taskNotOwnedReason));
+  }
   try {
-    serviceStatus = await createServiceController().status(label);
+    serviceStatus = taskNotOwned
+      ? null
+      : await createServiceController().status(label);
   } catch (err) {
     issues.push({
       code: DOCTOR_ISSUE_CODES.SERVICE_NOT_REGISTERED,
@@ -920,12 +938,62 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     hostProcessAlive,
   );
   issues.push(...lifecycleIssues(lifecycle, hostProcessAlive));
-  issues.push(
-    ...(await serviceDefinitionIssues(opts.environment, lifecycle.policy.mode)),
-  );
-  issues.push(...(await serviceRegistrationIssues(opts.environment)));
+  if (!taskNotOwned) {
+    issues.push(
+      ...(await serviceDefinitionIssues(
+        opts.environment,
+        lifecycle.policy.mode,
+      )),
+    );
+    issues.push(...(await serviceRegistrationIssues(opts.environment)));
+  }
 
   return { issues, lifecycle };
+}
+
+// Why the registration is not this account's, or `null` when it is (or there
+// is none). A read that cannot answer is not an issue: the other checks run as
+// before, and every write they could lead to still asks the gate itself.
+async function serviceTaskNotOwnedBestEffort(
+  label: ServiceLabel,
+): Promise<WindowsTaskNotOwnedReason | null> {
+  try {
+    const ownership = await readServiceRegistrationOwnership(
+      label,
+      process.platform,
+    );
+    return ownership.kind === "not-owned" ? ownership.reason : null;
+  } catch {
+    return null;
+  }
+}
+
+// Another user's task, or one whose owner could not be confirmed: the same
+// issue and the same "no fix", but only the first is said to be another
+// user's. Running the checks again is this card's own retry.
+const SERVICE_TASK_OWNER_UNCONFIRMED_DOCTOR_MESSAGE =
+  "Traycer couldn't confirm that the Traycer Host task on this PC belongs to your Windows account, so it left the task alone. Run the checks again.";
+
+function serviceTaskNotOwnedIssue(
+  reason: WindowsTaskNotOwnedReason,
+): DoctorIssue {
+  return {
+    code: DOCTOR_ISSUE_CODES.HOST_SERVICE_TASK_NOT_OWNED,
+    severity: "error",
+    title:
+      reason === "other-owner"
+        ? "Host task is owned by another user"
+        : "Couldn't confirm the host task is yours",
+    message:
+      reason === "other-owner"
+        ? SERVICE_TASK_NOT_OWNED_MESSAGE
+        : SERVICE_TASK_OWNER_UNCONFIRMED_DOCTOR_MESSAGE,
+    // Nothing this account runs repairs it: no button, and no command to
+    // copy that would only be refused.
+    fixAction: null,
+    terminalCommand: null,
+    details: null,
+  };
 }
 
 /**

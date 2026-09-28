@@ -12,6 +12,9 @@ import {
 } from "vitest";
 import type { RuntimeContext } from "../../runner/runtime";
 import { noopLogger } from "../../logger";
+import { reportServiceInstallKeptDisabled } from "../../service/registration-repair";
+import { SERVICE_TASK_NOT_OWNED_MESSAGE } from "../../service/platforms/windows-task-gate";
+import { SERVICE_KEPT_DISABLED_WARNING } from "../../service/registration-owner";
 
 // Pins the `host ensure` state machine: a lock-free fast no-op when the
 // host is already installed + registered + running, and the three
@@ -331,6 +334,7 @@ beforeEach(() => {
       stoppedBeforeSwap: false,
       postSwapAction: "install",
       postSwapError: null,
+      postSwapWarning: null,
     },
     lifecycle: {
       beforeSwap: vi.fn(),
@@ -1188,6 +1192,195 @@ describe("ensureHost", () => {
 
       expect(controller.install).toHaveBeenCalledTimes(1);
       expect(result.action).toBe("started");
+    });
+  });
+});
+
+describe("ensureHost over a service registration that is another user's, or kept disabled", () => {
+  const installedRecord = {
+    installId: "install-1.5.0",
+    version: "1.5.0",
+    runtimeVersion: null,
+    installedAt: "2026-01-01T00:00:00.000Z",
+    archiveSha256: "a".repeat(64),
+  };
+
+  function notOwnedError() {
+    return cliError({
+      code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+      message: SERVICE_TASK_NOT_OWNED_MESSAGE,
+      details: { task: "\\Traycer\\Host", verb: "run", reason: "other-owner" },
+      exitCode: 1,
+    });
+  }
+
+  // `ensure` promises a RUNNING host. A task another user owns is never
+  // started for this account, and the rewrite the escalation would try is the
+  // `/Create /F` takeover the ownership gate exists to stop: so the refusal is
+  // final on the first read - no re-registration, no retry, no second start.
+  it("a start refused as another user's task ends the run there: E_SERVICE_TASK_NOT_OWNED, install never called, the disabled switch never read", async () => {
+    readHostInstallRecordMock.mockResolvedValue(installedRecord);
+    const controller = makeController("stopped");
+    controller.start = vi.fn(async () => {
+      throw notOwnedError();
+    });
+    createServiceControllerMock.mockReturnValue(controller);
+
+    await expect(ensureHost(makeOpts({}))).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+      message: SERVICE_TASK_NOT_OWNED_MESSAGE,
+    });
+    expect(controller.start).toHaveBeenCalledTimes(1);
+    expect(controller.install).not.toHaveBeenCalled();
+    expect(readServiceRegistrationDisabledMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+  });
+
+  it("a re-registration refused as another user's task surfaces the same code and is not retried", async () => {
+    readHostInstallRecordMock.mockResolvedValue(installedRecord);
+    const controller = makeController("not-installed");
+    controller.install = vi.fn(async () => {
+      throw notOwnedError();
+    });
+    createServiceControllerMock.mockReturnValue(controller);
+
+    await expect(ensureHost(makeOpts({}))).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+    });
+    expect(controller.install).toHaveBeenCalledTimes(1);
+    expect(controller.start).not.toHaveBeenCalled();
+  });
+
+  // The escalation's rewrite of a task whose owner disabled it carries the
+  // switch over and starts nothing. The read that gated the rewrite could not
+  // tell (`unknown`), so the rewrite's own read is what says so: the outcome
+  // is the same typed refusal a start over a disabled task always gave.
+  it("a rewrite that kept a disabled task disabled fails E_SERVICE_REGISTRATION_DISABLED, without a retried start", async () => {
+    readHostInstallRecordMock.mockResolvedValue(installedRecord);
+    const controller = makeController("stopped");
+    controller.start = vi.fn(async () => {
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: "schtasks /Run failed",
+        details: null,
+        exitCode: 1,
+      });
+    });
+    controller.install = vi.fn(async () => {
+      reportServiceInstallKeptDisabled();
+    });
+    createServiceControllerMock.mockReturnValue(controller);
+    readServiceRegistrationDisabledMock.mockResolvedValue({
+      kind: "unknown",
+      reason: "schtasks /Query could not run",
+    });
+
+    await expect(ensureHost(makeOpts({}))).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_REGISTRATION_DISABLED,
+    });
+    expect(controller.install).toHaveBeenCalledTimes(1);
+    expect(controller.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("control: a rewrite that did not keep it disabled recovers as before", async () => {
+    readHostInstallRecordMock.mockResolvedValue(installedRecord);
+    const controller = makeController("stopped");
+    controller.start = vi.fn(async () => {
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: "schtasks /Run failed",
+        details: null,
+        exitCode: 1,
+      });
+    });
+    createServiceControllerMock.mockReturnValue(controller);
+    readServiceRegistrationDisabledMock.mockResolvedValue({
+      kind: "not-disabled",
+    });
+
+    const result = await ensureHost(makeOpts({}));
+    expect(result.action).toBe("started");
+    expect(controller.install).toHaveBeenCalledTimes(1);
+  });
+
+  // The install branch (no host installed): the bytes go in, but ensure
+  // promises a running host, and a registration that is refused or kept
+  // disabled starts none - so it FAILS with the typed code (`host install`
+  // reports the same facts as a warning beside its success).
+  for (const [name, warning, code] of [
+    [
+      "another user's task",
+      {
+        code: "E_SERVICE_TASK_NOT_OWNED",
+        message: SERVICE_TASK_NOT_OWNED_MESSAGE,
+        details: { reason: "other-owner" },
+      },
+      CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+    ],
+    [
+      "a task kept disabled",
+      SERVICE_KEPT_DISABLED_WARNING,
+      CLI_ERROR_CODES.SERVICE_REGISTRATION_DISABLED,
+    ],
+  ] as const) {
+    it(`the install branch over ${name}: the bytes are committed and ensure fails ${code}`, async () => {
+      readHostInstallRecordMock.mockResolvedValue(null);
+      const controller = makeController("not-installed");
+      createServiceControllerMock.mockReturnValue(controller);
+      createServiceInstallLifecycleMock.mockImplementation(() => ({
+        state: {
+          priorState: "not-installed",
+          stoppedBeforeSwap: false,
+          postSwapAction: "install",
+          postSwapError: null,
+          postSwapWarning: warning,
+        },
+        lifecycle: {
+          beforeSwap: vi.fn(),
+          beforeSwapCommit: vi.fn(),
+          afterSwap: vi.fn(),
+          swapLockRecovery: null,
+        },
+      }));
+
+      await expect(ensureHost(makeOpts({}))).rejects.toMatchObject({ code });
+      expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  // T08 ruling 13: the ensure failure carries the warning's reason, so a
+  // reader of the code alone can still tell an unconfirmed owner from another
+  // user's task, and its message is the unconfirmed copy verbatim.
+  it("the install branch over a task whose owner could not be confirmed: E_SERVICE_TASK_NOT_OWNED with details.reason unconfirmed and the unconfirmed copy", async () => {
+    const UNCONFIRMED =
+      "Traycer couldn't confirm that the Traycer Host task on this PC belongs to your Windows account, so it left the task alone. Try again, or run `traycer host doctor`.";
+    readHostInstallRecordMock.mockResolvedValue(null);
+    const controller = makeController("not-installed");
+    createServiceControllerMock.mockReturnValue(controller);
+    createServiceInstallLifecycleMock.mockImplementation(() => ({
+      state: {
+        priorState: "not-installed",
+        stoppedBeforeSwap: false,
+        postSwapAction: "install",
+        postSwapError: null,
+        postSwapWarning: {
+          code: "E_SERVICE_TASK_NOT_OWNED",
+          message: UNCONFIRMED,
+          details: { reason: "unconfirmed" },
+        },
+      },
+      lifecycle: {
+        beforeSwap: vi.fn(),
+        beforeSwapCommit: vi.fn(),
+        afterSwap: vi.fn(),
+        swapLockRecovery: null,
+      },
+    }));
+
+    await expect(ensureHost(makeOpts({}))).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+      message: UNCONFIRMED,
+      details: { reason: "unconfirmed" },
     });
   });
 });

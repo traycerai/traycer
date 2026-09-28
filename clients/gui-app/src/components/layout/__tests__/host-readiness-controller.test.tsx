@@ -172,6 +172,7 @@ describe("local-plane admission for the removal-sentinel read", () => {
           removedByUser: false,
           checkedAt: "2026-05-15T00:00:00Z",
           lastEnsureFailure: null,
+          updateDeferral: null,
           localAttempt: null,
         }),
       convergeReady: notImplemented("convergeReady"),

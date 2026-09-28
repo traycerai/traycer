@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { ArrowDownToLine, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -12,13 +12,25 @@ import type {
   ApplyStagedOk,
   BusyContinuation,
   HostControllerStatus,
+  HostUpdateDeferral,
   IHostManagement,
   MutationLaneStatus,
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
+import {
+  ENABLE_BACKGROUND_SERVICE_LABEL,
+  isServiceTaskNotOwnedMessage,
+  SERVICE_REGISTRATION_DISABLED_CODE,
+} from "@traycer-clients/shared/platform/host-service-notices";
+import {
+  isHostServiceNotice,
+  toastHostServiceNotice,
+} from "@/lib/host/host-service-notice";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mutation";
 import { useRunnerActivateInstalled } from "@/hooks/runner/use-runner-activate-installed-mutation";
+import { useRunnerRegisterService } from "@/hooks/runner/use-runner-register-service-mutation";
 import { useLocalHostForegroundUpdateLine } from "@/hooks/host/use-local-host-foreground-update-line";
 import {
   HOST_UPDATE_BANNER_SNOOZE_MS,
@@ -137,6 +149,62 @@ interface TerminalOutcomeState {
   readonly errorCode: string | null;
 }
 
+interface HostServiceNoticeActions {
+  /** Registers this machine's host service, or `null` with no local host. */
+  readonly enableService: (() => void) | null;
+  readonly enableServicePending: boolean;
+  /** Says a service-registration notice once, as a toast. */
+  readonly showServiceNotice: (message: string) => void;
+}
+
+/**
+ * The enable action for a service registration its owner switched off:
+ * Doctor's Register service (`host service install`, the one repair that turns
+ * the task back on), fenced to THIS machine's host like every Doctor repair,
+ * and `null` while no local host is known to fence it to. And the notice a
+ * deferred outcome carries instead of a failed update: said once, with that
+ * action where it helps, and never as the failure banner and Retry (retrying
+ * cannot change a disabled task or another user's task).
+ */
+function useHostServiceNoticeActions(
+  localEntry: HostDirectoryEntry | null,
+): HostServiceNoticeActions {
+  const registerServiceMutation = useRunnerRegisterService();
+  const localHostId = localEntry?.hostId ?? null;
+  const enableService =
+    localHostId === null
+      ? null
+      : (): void => {
+          registerServiceMutation.mutate({ expectedHostId: localHostId });
+        };
+  const showServiceNotice = (message: string): void => {
+    if (isServiceTaskNotOwnedMessage(message) || enableService === null) {
+      toastHostServiceNotice(message);
+      return;
+    }
+    toast.warning(message, {
+      action: {
+        label: ENABLE_BACKGROUND_SERVICE_LABEL,
+        onClick: enableService,
+      },
+    });
+  };
+  return {
+    enableService,
+    enableServicePending: registerServiceMutation.isPending,
+    showServiceNotice,
+  };
+}
+
+/** Why the ready update is waiting, while the row offers one. */
+function readyUpdateDeferral(
+  showUpdate: boolean,
+  status: HostControllerStatus | undefined,
+): HostUpdateDeferral | null {
+  if (!showUpdate || status === undefined) return null;
+  return status.updateDeferral;
+}
+
 function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   const { className } = props;
   const snoozeUntilByVersion = useHostUpdateBannerStore(
@@ -164,6 +232,8 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   const [busy, setBusy] = useState<BusyState | null>(null);
   const [terminalOutcome, setTerminalOutcome] =
     useState<TerminalOutcomeState | null>(null);
+  const { enableService, enableServicePending, showServiceNotice } =
+    useHostServiceNoticeActions(localEntry);
 
   const applyStagedMutation = useRunnerApplyStaged();
   const activateInstalledMutation = useRunnerActivateInstalled();
@@ -182,6 +252,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
     applyMutationOutcome("apply", outcome, {
       setBusy,
       setTerminalOutcome,
+      onServiceNotice: showServiceNotice,
       onOk: (value) => {
         toast.success(`Updated host to v${value.appliedVersion}`);
         useHostUpdateBannerStore.getState().clearSnooze(value.appliedVersion);
@@ -195,6 +266,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
     applyMutationOutcome("activate", outcome, {
       setBusy,
       setTerminalOutcome,
+      onServiceNotice: showServiceNotice,
       onOk: () => {
         toast.success("Host activated");
       },
@@ -326,10 +398,11 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
     branch === "operation"
       ? localUpdate.view.kind === "failed"
       : branch === "terminal-outcome";
+  const updateDeferral = readyUpdateDeferral(showUpdate, status);
   const bannerAriaLabel =
     branch === "operation"
       ? operationCopy.accessibleLabel
-      : deriveBannerAriaLabel(terminalOutcome, offeredVersion);
+      : deriveBannerAriaLabel(terminalOutcome, updateDeferral, offeredVersion);
   // Destructive styling tracks the FACT, from whichever source is speaking: a
   // terminal mutation outcome, or an attempt the host reports as failed.
   const bannerClassName = deriveBannerClassName(showsFailure, className);
@@ -388,6 +461,9 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
           isPending={isPending}
           showUpdate={showUpdate}
           foregroundUpdateLine={foregroundUpdateLine}
+          updateDeferral={updateDeferral}
+          enableServicePending={enableServicePending}
+          onEnableService={enableService}
           offeredVersion={offeredVersion}
           installedVersion={installedVersion}
           percent={percent}
@@ -550,6 +626,9 @@ interface BannerBodyProps {
   readonly isPending: boolean;
   readonly showUpdate: boolean;
   readonly foregroundUpdateLine: string | null;
+  readonly updateDeferral: HostUpdateDeferral | null;
+  readonly enableServicePending: boolean;
+  readonly onEnableService: (() => void) | null;
   readonly offeredVersion: string | null;
   readonly installedVersion: string | null;
   readonly percent: number | null;
@@ -602,6 +681,9 @@ function BannerBody(props: BannerBodyProps) {
         <UpdateOrDebtContent
           showUpdate={props.showUpdate}
           foregroundUpdateLine={props.foregroundUpdateLine}
+          updateDeferral={props.updateDeferral}
+          enableServicePending={props.enableServicePending}
+          onEnableService={props.onEnableService}
           offeredVersion={props.offeredVersion}
           installedVersion={props.installedVersion}
           isPending={props.isPending}
@@ -824,6 +906,7 @@ function OperationContent(props: OperationContentProps) {
 interface MutationOutcomeActions<TOk> {
   readonly setBusy: (busy: BusyState | null) => void;
   readonly setTerminalOutcome: (outcome: TerminalOutcomeState | null) => void;
+  readonly onServiceNotice: (message: string) => void;
   readonly onOk: (value: TOk) => void;
 }
 
@@ -845,6 +928,12 @@ function applyMutationOutcome<TOk>(
       continuation: outcome.continuation,
       message: outcome.message,
     });
+    return;
+  }
+  if (outcome.kind === "deferred" && isHostServiceNotice(outcome.message)) {
+    actions.setBusy(null);
+    actions.setTerminalOutcome(null);
+    actions.onServiceNotice(outcome.message);
     return;
   }
   Analytics.getInstance().track(AnalyticsEvent.HostUpdateFailed, {
@@ -933,10 +1022,14 @@ function deriveForceDialogProps(busy: BusyState | null): ForceDialogProps {
 
 function deriveBannerAriaLabel(
   terminalOutcome: TerminalOutcomeState | null,
+  updateDeferral: HostUpdateDeferral | null,
   offeredVersion: string | null,
 ): string {
   if (terminalOutcome !== null) {
     return `Traycer host update failed: ${terminalOutcome.message}`;
+  }
+  if (updateDeferral !== null) {
+    return `Traycer host update waiting: ${updateDeferral.message}`;
   }
   return `Traycer host update available: ${offeredVersion ?? ""}`;
 }
@@ -1035,12 +1128,66 @@ interface UpdateOrDebtContentProps {
    * host, the person updating it.
    */
   readonly foregroundUpdateLine: string | null;
+  /**
+   * Why the ready update is waiting (`HostControllerStatus.updateDeferral`),
+   * or `null`: this account cannot start the service the launch apply would
+   * stop, so it left the stage in place. The row says so instead of Update
+   * now, which could not finish either. For a disabled task it offers the one
+   * action that does - enabling the background service; for a task another
+   * Windows user owns there is none here to offer.
+   */
+  readonly updateDeferral: HostUpdateDeferral | null;
+  readonly enableServicePending: boolean;
+  readonly onEnableService: (() => void) | null;
   readonly offeredVersion: string | null;
   readonly installedVersion: string | null;
   readonly isPending: boolean;
   readonly percent: number | null;
   readonly onAction: () => void;
   readonly onSnooze: () => void;
+}
+
+interface DeferredUpdateContentProps {
+  readonly deferral: HostUpdateDeferral;
+  readonly onEnableService: (() => void) | null;
+  readonly isPending: boolean;
+  readonly enableServicePending: boolean;
+  readonly onSnooze: () => void;
+}
+
+function DeferredUpdateContent(props: DeferredUpdateContentProps): ReactNode {
+  return (
+    <>
+      <ArrowDownToLine className="size-3.5 shrink-0" aria-hidden />
+      <span
+        className="min-w-0 flex-1"
+        data-testid="host-update-banner-service-disabled"
+      >
+        {props.deferral.message}
+      </span>
+      {props.onEnableService === null ||
+      props.deferral.code !== SERVICE_REGISTRATION_DISABLED_CODE ? null : (
+        <Button
+          type="button"
+          size="sm"
+          variant="default"
+          disabled={props.isPending || props.enableServicePending}
+          onClick={props.onEnableService}
+          data-testid="host-update-banner-enable-service"
+        >
+          {props.enableServicePending ? (
+            <AgentSpinningDots
+              className="mr-2 size-3"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          {ENABLE_BACKGROUND_SERVICE_LABEL}
+        </Button>
+      )}
+      <SnoozeButton onSnooze={props.onSnooze} />
+    </>
+  );
 }
 
 function UpdateOrDebtContent(props: UpdateOrDebtContentProps) {
@@ -1058,6 +1205,18 @@ function UpdateOrDebtContent(props: UpdateOrDebtContentProps) {
       </>
     );
   }
+  if (props.showUpdate && props.updateDeferral !== null) {
+    return (
+      <DeferredUpdateContent
+        deferral={props.updateDeferral}
+        onEnableService={props.onEnableService}
+        isPending={props.isPending}
+        enableServicePending={props.enableServicePending}
+        onSnooze={props.onSnooze}
+      />
+    );
+  }
+
   return (
     <>
       <ArrowDownToLine className="size-3.5 shrink-0" aria-hidden />

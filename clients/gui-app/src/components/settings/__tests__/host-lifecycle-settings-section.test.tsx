@@ -130,6 +130,7 @@ import {
   HOST_LIFECYCLE_PENDING_RESTART_HOST,
   HOST_LIFECYCLE_SUPERSEDED_DESCRIPTION,
   HOST_LIFECYCLE_SUPERSEDED_TITLE,
+  HOST_LIFECYCLE_TASK_NOT_OWNED_REASON,
   HOST_NONE_CONFIRM_STOP_LABEL,
   HOST_NONE_CONFIRM_TITLE_BUSY,
   HOST_NONE_CONFIRM_TITLE_IDLE,
@@ -138,6 +139,10 @@ import {
   hostLifecycleOptionCopy,
   hostMachineNoun,
 } from "@/lib/host/host-lifecycle-copy";
+import {
+  SERVICE_TASK_NOT_OWNED_CODE,
+  SERVICE_TASK_NOT_OWNED_MESSAGE,
+} from "@traycer-clients/shared/platform/host-service-notices";
 import { setMobileApp } from "@/lib/mobile-app";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
@@ -1400,5 +1405,141 @@ describe("<HostLifecycleSettingsSection /> - presence", () => {
   it("is absent with no runner host at all", () => {
     renderSection(null);
     expect(screen.queryByTestId("settings-host-lifecycle")).toBeNull();
+  });
+});
+
+// The host's Scheduled Task is another Windows user's: the last ensure was
+// refused `E_SERVICE_TASK_NOT_OWNED` and `HostControllerStatus.lastEnsureFailure`
+// carries it. The card says why, holds the modes that would run a host here
+// (the service refresh a switch between them makes would be refused), keeps
+// `none` and the mode already chosen, and offers no restart.
+describe("<HostLifecycleSettingsSection /> - another Windows user's task", () => {
+  function managementWithEnsureFailure(code: string | null, message: string) {
+    return buildOverviewManagement({
+      getHostControllerStatus: vi.fn(() =>
+        Promise.resolve({
+          download: null,
+          mutation: null,
+          installedVersion: "1.5.0",
+          latestVersion: "1.5.0",
+          stagedVersion: null,
+          installedRuntimeVersion: "1.5.0",
+          runningRuntimeVersion: null,
+          updateReady: false,
+          activation: "unavailable" as const,
+          reachable: false,
+          localAttempt: null,
+          removedByUser: false,
+          checkedAt: "2026-08-12T00:00:00Z",
+          lastEnsureFailure: code === null ? null : { message, code },
+          updateDeferral: null,
+        }),
+      ),
+    });
+  }
+
+  it("shows the notice, holds every mode but the chosen one and none with the reason, and offers no Restart host", async () => {
+    const fixture = buildLifecycleHost(
+      view({
+        desired: { mode: "linked", rev: 2, updatedBy: null, updatedAt: null },
+        pending: "restart-host",
+      }),
+      () => Promise.resolve({ kind: "applied", view: view({}) }),
+    );
+    renderSection(
+      createFakeRunnerHost({
+        hostLifecycle: fixture.host,
+        hostManagement: managementWithEnsureFailure(
+          SERVICE_TASK_NOT_OWNED_CODE,
+          SERVICE_TASK_NOT_OWNED_MESSAGE,
+        ),
+      }),
+    );
+
+    const notice = await screen.findByTestId("host-lifecycle-task-not-owned");
+    expect(notice.textContent).toBe(SERVICE_TASK_NOT_OWNED_MESSAGE);
+    for (const option of OPTION_COPY) {
+      const heldByTask = option.mode !== "linked" && option.mode !== "none";
+      expect({
+        mode: option.mode,
+        disabled: radioDisabled(option.label),
+      }).toEqual({ mode: option.mode, disabled: heldByTask });
+    }
+    expect(
+      screen
+        .getAllByTestId("host-lifecycle-none-plan-reason")
+        .map((el) => el.textContent),
+    ).toEqual(
+      OPTION_COPY.filter((o) => o.mode !== "linked" && o.mode !== "none").map(
+        () => HOST_LIFECYCLE_TASK_NOT_OWNED_REASON,
+      ),
+    );
+    // The line still says what is pending, but no restart is offered: it would
+    // be refused before touching anything.
+    const line = screen.getByTestId("host-lifecycle-applied-line");
+    expect(line.textContent).toContain("Set to Linked");
+    expect(screen.queryByTestId("host-lifecycle-restart-host")).toBeNull();
+    expect(document.body.textContent).not.toMatch(/S-1-\d/);
+  });
+
+  // T08 ruling 13: the same refusal over a task whose owner could not be
+  // confirmed holds the card the same way, but says so in its own words -
+  // nothing on the card calls the task another user's.
+  it("an owner that could not be confirmed: the card shows that copy, holds the same modes, and never says another Windows user", async () => {
+    const UNCONFIRMED =
+      "Traycer couldn't confirm that the Traycer Host task on this PC belongs to your Windows account, so it left the task alone. Try again, or run `traycer host doctor`.";
+    const fixture = buildLifecycleHost(
+      view({
+        desired: { mode: "linked", rev: 2, updatedBy: null, updatedAt: null },
+        pending: "restart-host",
+      }),
+      () => Promise.resolve({ kind: "applied", view: view({}) }),
+    );
+    renderSection(
+      createFakeRunnerHost({
+        hostLifecycle: fixture.host,
+        hostManagement: managementWithEnsureFailure(
+          SERVICE_TASK_NOT_OWNED_CODE,
+          UNCONFIRMED,
+        ),
+      }),
+    );
+
+    const notice = await screen.findByTestId("host-lifecycle-task-not-owned");
+    expect(notice.textContent).toBe(UNCONFIRMED);
+    for (const option of OPTION_COPY) {
+      const heldByTask = option.mode !== "linked" && option.mode !== "none";
+      expect(radioDisabled(option.label)).toBe(heldByTask);
+    }
+    expect(document.body.textContent).not.toContain("another Windows user");
+    expect(screen.queryByTestId("host-lifecycle-restart-host")).toBeNull();
+  });
+
+  it("control: any other ensure failure (or none) leaves the card as it was - no notice, every mode selectable, Restart host offered", async () => {
+    for (const code of ["E_SERVICE_REGISTRATION_DISABLED", null]) {
+      const fixture = buildLifecycleHost(
+        view({
+          desired: { mode: "linked", rev: 2, updatedBy: null, updatedAt: null },
+          pending: "restart-host",
+        }),
+        () => Promise.resolve({ kind: "applied", view: view({}) }),
+      );
+      renderSection(
+        createFakeRunnerHost({
+          hostLifecycle: fixture.host,
+          hostManagement: managementWithEnsureFailure(code, "refused"),
+        }),
+      );
+      await screen.findByTestId("host-lifecycle-restart-host");
+      await waitFor(() => {
+        expect(
+          screen.queryByTestId("host-lifecycle-task-not-owned"),
+        ).toBeNull();
+      });
+      for (const option of OPTION_COPY) {
+        expect(radioDisabled(option.label)).toBe(false);
+      }
+      cleanup();
+    }
   });
 });

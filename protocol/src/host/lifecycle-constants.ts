@@ -18,6 +18,28 @@ export const SHUTDOWN_FORCE_EXIT_MS = 30_000;
 export const RESTART_EXIT_CODE = 87;
 
 /**
+ * The exit status of an AUTOMATIC host update that parked itself: this account
+ * cannot start the service it would stop - the task is disabled, or another
+ * account owns it. On Windows that is the host's Scheduled Task disabled in
+ * Task Scheduler by its owner (`E_SERVICE_REGISTRATION_DISABLED`), or the
+ * machine-global task owned by another Windows account while a host started
+ * through it is running (`E_SERVICE_TASK_NOT_OWNED`). `traycer host update` -
+ * every trigger, the host update reconciler's detached run included - and the
+ * desktop's launch-time `traycer host apply --respect-hold` are the automatic
+ * paths. Such a run claimed no attempt and downloaded, stopped, swapped and
+ * wrote nothing; the stage is kept, and the first automatic run after the
+ * registration can be started again applies it.
+ *
+ * Distinct from every other exit the CLI and the host supervisor use (0, 1, 2,
+ * 66, 69, 75, 76, 77, 87, 128) and outside sysexits' 64-78, so the host's
+ * update reconciler can latch on it rather than relaunch the refusal on every
+ * tick. Only that refusal returns it; a CLI that predates it never does, and a
+ * host that predates it reads it as any other failed run. The error code says
+ * which of the two it is.
+ */
+export const HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE = 79;
+
+/**
  * Extra headroom the CLI's stop/restart poll keeps ABOVE the watchdog. The CLI
  * grace (`SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS`) must stay above
  * the watchdog: if the CLI gives up first it reports a spurious "stop did not

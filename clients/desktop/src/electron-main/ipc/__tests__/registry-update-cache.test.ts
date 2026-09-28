@@ -253,6 +253,7 @@ function fakeHostController(updateReady: boolean): IpcHostController & {
         localAttempt: null,
         removedByUser: false,
         lastEnsureFailure: null,
+        updateDeferral: null,
         checkedAt: new Date().toISOString(),
       };
     },

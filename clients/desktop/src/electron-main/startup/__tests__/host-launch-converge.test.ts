@@ -3,6 +3,8 @@ import { log } from "../../app/logger";
 import {
   AUTOMATIC_INTENTS_HELD_MESSAGE,
   AUTOMATIC_INTENTS_QUIESCED_MESSAGE,
+  HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+  SERVICE_TASK_NOT_OWNED_MESSAGE,
 } from "../../host/host-controller-types";
 import type { IpcHostController } from "../../ipc/runner-ipc-bridge";
 import type {
@@ -127,6 +129,7 @@ function fakeStatus(
     reachable: true,
     removedByUser,
     lastEnsureFailure: null,
+    updateDeferral: null,
     checkedAt: new Date().toISOString(),
   };
 }
@@ -629,6 +632,41 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     expect(controller.convergeReadyCalls).toEqual([false]);
   });
 
+  // The launch apply that WAITS on a disabled service registration is not a
+  // failed apply: the same switch is why the host is down, and the ensure a
+  // recovery would run is refused by it, so recovery is not chased (the
+  // update-ready row carries the notice and the enable action).
+  it("does not chase an apply deferred over a disabled service registration with a recovery", async () => {
+    const controller = fakeHostController(
+      fakeStatus(true, "unavailable", false),
+      { kind: "deferred", message: HOST_UPDATE_SERVICE_DISABLED_MESSAGE },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.applyStagedCalls).toEqual([["launch", false]]);
+    expect(controller.convergeReadyCalls).toEqual([]);
+    expect(controller.activateInstalledCalls).toEqual([]);
+  });
+
+  it("does not chase an apply deferred over a task whose owner could not be confirmed", async () => {
+    const controller = fakeHostController(
+      fakeStatus(true, "unavailable", false),
+      {
+        kind: "deferred",
+        message:
+          "Traycer couldn't confirm that the Traycer Host task on this PC belongs to your Windows account, so it left the task alone. Try again, or run `traycer host doctor`.",
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.convergeReadyCalls).toEqual([]);
+    expect(controller.activateInstalledCalls).toEqual([]);
+  });
+
   // `busy` is the one pass-through: the controller's own gate says the host
   // has work in progress, and convergeReady consults the same gate. Note the
   // asymmetry with `deferred` above - that arm carries a non-contention
@@ -1058,6 +1096,56 @@ describe("armLocalHostBootOnSignIn", () => {
       expect(calls).toHaveLength(2);
       await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[3] * 2);
       expect(calls).toHaveLength(2);
+      expect(bootWarnCount()).toBe(0);
+      expect(gate.listenerCount()).toBe(0);
+    });
+
+    it("another Windows user's task retires the ladder: one call, no retry, no WARN, and the sign-in subscription is released", async () => {
+      vi.useFakeTimers();
+      vi.mocked(log.warn).mockClear();
+      const calls: boolean[] = [];
+      const gate = fakeSignedInGate(true);
+      armLocalHostBootOnSignIn(
+        controllerReturning(
+          [{ kind: "deferred", message: SERVICE_TASK_NOT_OWNED_MESSAGE }],
+          calls,
+        ),
+        gate,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(
+        LOCAL_HOST_BOOT_RETRY_LADDER_MS.reduce((sum, ms) => sum + ms, 0) * 2,
+      );
+      expect(calls).toHaveLength(1);
+      expect(bootWarnCount()).toBe(0);
+      expect(gate.listenerCount()).toBe(0);
+    });
+
+    // T08 ruling 13: the unconfirmed-owner copy retires the ladder the same way.
+    it("a task whose owner could not be confirmed retires the ladder the same way", async () => {
+      vi.useFakeTimers();
+      vi.mocked(log.warn).mockClear();
+      const calls: boolean[] = [];
+      const gate = fakeSignedInGate(true);
+      armLocalHostBootOnSignIn(
+        controllerReturning(
+          [
+            {
+              kind: "deferred",
+              message:
+                "Traycer couldn't confirm that the Traycer Host task on this PC belongs to your Windows account, so it left the task alone. Try again, or run `traycer host doctor`.",
+            },
+          ],
+          calls,
+        ),
+        gate,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(
+        LOCAL_HOST_BOOT_RETRY_LADDER_MS.reduce((sum, ms) => sum + ms, 0) * 2,
+      );
+      expect(calls).toHaveLength(1);
       expect(bootWarnCount()).toBe(0);
       expect(gate.listenerCount()).toBe(0);
     });

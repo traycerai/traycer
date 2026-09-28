@@ -73,6 +73,7 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     const xml = buildScheduledTaskXml(
       { label: serviceLabelFor("staging"), cli: sampleCli() },
       resolveScheduledTaskUserId(),
+      true,
     );
 
     expect(userIdsIn(xml)).toEqual([
@@ -99,6 +100,7 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     const xml = buildScheduledTaskXml(
       { label: serviceLabelFor("staging"), cli: sampleCli() },
       resolveScheduledTaskUserId(),
+      true,
     );
 
     expect(userIdsIn(xml)).toEqual([
@@ -125,6 +127,7 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     const xml = buildScheduledTaskXml(
       { label: serviceLabelFor("staging"), cli: sampleCli() },
       resolveScheduledTaskUserId(),
+      true,
     );
 
     expect(userIdsIn(xml)).toEqual([
@@ -150,6 +153,7 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     const xml = buildScheduledTaskXml(
       { label: serviceLabelFor("staging"), cli: sampleCli() },
       resolveScheduledTaskUserId(),
+      true,
     );
 
     expect(userIdsIn(xml)).toEqual([
@@ -175,6 +179,7 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     const withDomain = buildScheduledTaskXml(
       { label: serviceLabelFor("staging"), cli: sampleCli() },
       resolveScheduledTaskUserId(),
+      true,
     );
     expect(userIdsIn(withDomain)).toEqual([
       "<UserId>CORP\\alice</UserId>",
@@ -190,6 +195,7 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     const bare = buildScheduledTaskXml(
       { label: serviceLabelFor("staging"), cli: sampleCli() },
       resolveScheduledTaskUserId(),
+      true,
     );
     expect(userIdsIn(bare)).toEqual([
       "<UserId>alice</UserId>",
@@ -216,6 +222,7 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
       buildScheduledTaskXml(
         { label: serviceLabelFor("staging"), cli: sampleCli() },
         resolveScheduledTaskUserId(),
+        true,
       );
     } catch (error) {
       caught = error;
@@ -317,6 +324,7 @@ describe("Windows Task XML <UserId>: the real whoami SID reader", () => {
     const xml = buildScheduledTaskXml(
       { label: serviceLabelFor("staging"), cli: sampleCli() },
       resolveScheduledTaskUserId(),
+      true,
     );
 
     expect(userIdsIn(xml)).toEqual([
@@ -351,6 +359,7 @@ describe("Windows Task XML <UserId>: the real whoami SID reader", () => {
     const xml = buildScheduledTaskXml(
       { label: serviceLabelFor("staging"), cli: sampleCli() },
       resolveScheduledTaskUserId(),
+      true,
     );
 
     expect(userIdsIn(xml)).toEqual([
@@ -386,6 +395,7 @@ describe("Windows Task XML <UserId>: the real whoami SID reader", () => {
     const xml = buildScheduledTaskXml(
       { label: serviceLabelFor("staging"), cli: sampleCli() },
       resolveScheduledTaskUserId(),
+      true,
     );
 
     expect(userIdsIn(xml)).toEqual([
@@ -419,6 +429,7 @@ describe("Windows Task XML <UserId>: the real whoami SID reader", () => {
     const xml = buildScheduledTaskXml(
       { label: serviceLabelFor("staging"), cli: sampleCli() },
       resolveScheduledTaskUserId(),
+      true,
     );
 
     expect(userIdsIn(xml)).toEqual([
@@ -452,6 +463,7 @@ describe("Windows Task XML <UserId>: the real whoami SID reader", () => {
     const xml = buildScheduledTaskXml(
       { label: serviceLabelFor("staging"), cli: sampleCli() },
       resolveScheduledTaskUserId(),
+      true,
     );
 
     expect(userIdsIn(xml)).toEqual([

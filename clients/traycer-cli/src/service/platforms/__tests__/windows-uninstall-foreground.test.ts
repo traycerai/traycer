@@ -1,7 +1,10 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createWindowsController,
+  setWindowsAccountSidResolverForTests,
+  setWindowsDefinitionDepsForTests,
+  setWindowsTaskUserSidReaderForTests,
   type ProcessRunner,
   type WindowsControllerDeps,
 } from "../windows";
@@ -112,6 +115,32 @@ function convergingTableRunner(rows: readonly TableRowInput[]): {
 }
 
 const noTimingDeps: WindowsControllerDeps = { now: () => 0 };
+
+// The ownership gate reads the registered task in front of every verb that
+// changes it and fails closed when it cannot tell whose it is: the task under
+// test is registered by the account these tests run as.
+const CALLER_SID = "S-1-5-21-1000-2000-3000-1001";
+const OWN_TASK_XML = `<Task><Principals><Principal id="Author"><UserId>${CALLER_SID}</UserId></Principal></Principals><Settings><Enabled>true</Enabled></Settings><Actions Context="Author"><Exec><Command>x</Command></Exec></Actions></Task>`;
+
+beforeEach(() => {
+  setWindowsTaskUserSidReaderForTests(() => CALLER_SID);
+  setWindowsAccountSidResolverForTests(async () => null);
+  setWindowsDefinitionDepsForTests({
+    queryTaskXml: async () => ({ kind: "xml", xml: OWN_TASK_XML }),
+    predictCli: async () => {
+      throw new Error("predictCli is not part of an uninstall");
+    },
+    resolveCli: async () => {
+      throw new Error("resolveCli is not part of an uninstall");
+    },
+  });
+});
+
+afterEach(() => {
+  setWindowsTaskUserSidReaderForTests(null);
+  setWindowsAccountSidResolverForTests(null);
+  setWindowsDefinitionDepsForTests(null);
+});
 
 const LABEL = serviceLabelFor("staging");
 const TASK_NAME = windowsTaskName(LABEL);

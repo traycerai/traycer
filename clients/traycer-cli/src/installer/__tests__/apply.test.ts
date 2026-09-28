@@ -154,6 +154,7 @@ vi.mock("../../service/install-lifecycle", () => ({
       stoppedBeforeSwap: false,
       postSwapAction: "none" as "restart" | "start" | "install" | "none",
       postSwapError: null as string | null,
+      postSwapWarning: null,
     };
     return {
       state,

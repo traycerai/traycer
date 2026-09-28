@@ -11,7 +11,15 @@ import {
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   cliInvocationRecordPath,
   parseCliInvocationRecord,
@@ -109,6 +117,7 @@ import {
   inspectWindowsServiceDefinition,
   refreshWindowsServiceDefinition,
   setWindowsDefinitionDepsForTests,
+  setWindowsTaskUserSidReaderForTests,
   type ProcessRunner,
 } from "../windows";
 import { windowsTaskName, type ServiceLabel } from "../../label";
@@ -154,7 +163,7 @@ function labelFor(id: string): ServiceLabel {
 // its caller (the install resolves it in front of its install edge;
 // `windows-task-user-id.test.ts` covers that resolution), and no refresh here
 // resolves one, so a constant is the whole identity this file needs.
-const TEST_TASK_USER_ID = "traycer-test-user";
+const TEST_TASK_USER_ID = "S-1-5-21-1000-2000-3000-1001";
 
 const DIRECT_CLI_COMMAND = "C:\\Program Files\\Traycer\\traycer.exe";
 // `[...cli.args, "host", "start"].map(quoteWindowsArg).join(" ")` for
@@ -175,6 +184,9 @@ function execTaskXml(command: string, argumentsLine: string): string {
     .replace(/"/g, "&quot;");
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Principals>
+    <Principal id="Author"><UserId>${TEST_TASK_USER_ID}</UserId></Principal>
+  </Principals>
   <Actions Context="Author">
     <Exec>
       <Command>${escapedCommand}</Command>
@@ -254,8 +266,16 @@ function currentVbsBytes(cli: CliInvocation, label: ServiceLabel): Buffer {
   );
 }
 
+// The ownership gate compares the task's principal with the account running
+// the CLI, and refuses a task it cannot confirm as that account's. Every task
+// in this file carries `TEST_TASK_USER_ID` and every test runs as that account.
+beforeEach(() => {
+  setWindowsTaskUserSidReaderForTests(() => TEST_TASK_USER_ID);
+});
+
 afterEach(() => {
   setWindowsDefinitionDepsForTests(null);
+  setWindowsTaskUserSidReaderForTests(null);
   runCommandForBytesMock.impl = null;
 });
 
@@ -323,6 +343,7 @@ describe("W1: the CLI itself is the task action (direct-action, launcher-less)",
     const newExecBlock = buildScheduledTaskXml(
       { label, cli: resolvedCli },
       TEST_TASK_USER_ID,
+      true,
     ).match(/<Exec>[\s\S]*?<\/Exec>/)?.[0];
     if (newExecBlock === undefined) throw new Error("unreachable");
     expect(xmlCapture.text).toBe(
@@ -346,6 +367,9 @@ function execTaskXmlWithSettings(
     .replace(/"/g, "&quot;");
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Principals>
+    <Principal id="Author"><UserId>${TEST_TASK_USER_ID}</UserId></Principal>
+  </Principals>
   <Settings>
     <Enabled>false</Enabled>
     <DisallowStartIfOnBatteries>true</DisallowStartIfOnBatteries>
@@ -402,6 +426,7 @@ describe("refresh's /Create XML carries over the queried task's Settings, replac
     const freshXml = buildScheduledTaskXml(
       { label, cli: resolvedCli },
       TEST_TASK_USER_ID,
+      true,
     );
     const newExecBlock = freshXml.match(/<Exec>[\s\S]*?<\/Exec>/)?.[0];
     if (newExecBlock === undefined) throw new Error("unreachable");
@@ -434,6 +459,7 @@ describe("W2: the task action already runs the wscript launcher, but the launche
         xml: buildScheduledTaskXml(
           { label, cli: resolvedCli },
           TEST_TASK_USER_ID,
+          true,
         ),
       }),
       predictCli: async () => resolvedCli,
@@ -482,6 +508,7 @@ describe("current: no writes, no runner calls", () => {
         xml: buildScheduledTaskXml(
           { label, cli: resolvedCli },
           TEST_TASK_USER_ID,
+          true,
         ),
       }),
       predictCli: async () => resolvedCli,
@@ -732,6 +759,7 @@ describe("planning predicts the slot invocation without staging", () => {
     const queriedXml = buildScheduledTaskXml(
       { label, cli: { command: DIRECT_CLI_COMMAND, args: [] } },
       TEST_TASK_USER_ID,
+      true,
     );
     runCommandForBytesMock.impl = async () => ({
       stdout: Buffer.from(`﻿${queriedXml}`, "utf16le"),
@@ -768,6 +796,7 @@ describe("planning predicts the slot invocation without staging", () => {
     const queriedXml = buildScheduledTaskXml(
       { label, cli: { command: DIRECT_CLI_COMMAND, args: [] } },
       TEST_TASK_USER_ID,
+      true,
     );
     runCommandForBytesMock.impl = async () => ({
       stdout: Buffer.from(`﻿${queriedXml}`, "utf16le"),
@@ -868,7 +897,7 @@ describe("schtasks /Query /XML decode (reachable without the queryTaskXml seam)"
 // silently swallow as "nothing to refresh". Only stderr that actually NAMES
 // a missing task may still read as not-registered.
 describe("schtasks /Query non-zero exit disambiguated by stderr", () => {
-  it("access denied (exit 1): inspect is 'unrecognized' naming schtasks /Query, refresh rejects SERVICE_DEFINITION_REFRESH_FAILED - head misreads this as not-registered", async () => {
+  it("access denied (exit 1): inspect is 'unrecognized' naming schtasks /Query, refresh rejects E_SERVICE_TASK_NOT_OWNED (unconfirmed) - head misreads this as not-registered", async () => {
     const label = labelFor("w-f18-access-denied");
     runCommandForBytesMock.impl = async () => ({
       stdout: Buffer.alloc(0),
@@ -890,7 +919,12 @@ describe("schtasks /Query non-zero exit disambiguated by stderr", () => {
     ).catch((err: unknown) => err);
     expect(error).toBeInstanceOf(CliError);
     if (!(error instanceof CliError)) throw new Error("unreachable");
-    expect(error.code).toBe(CLI_ERROR_CODES.SERVICE_DEFINITION_REFRESH_FAILED);
+    // The refresh asks the ownership gate whose the task is before it plans
+    // anything, and a task that cannot even be read is not confirmed as this
+    // account's: it fails closed with the typed refusal (reason
+    // `unconfirmed`), never as a refresh that read the task as not-registered.
+    expect(error.code).toBe(CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED);
+    expect(error.details).toMatchObject({ reason: "unconfirmed" });
   });
 
   it("control: 'cannot find the file specified' (exit 1) still reads as not-registered", async () => {

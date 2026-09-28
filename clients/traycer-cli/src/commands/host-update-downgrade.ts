@@ -212,6 +212,7 @@ export async function installHostDowngradeInSegment(
           installGeneration: result.installGeneration,
           runningActivated:
             handle.state.postSwapError === null &&
+            handle.state.postSwapWarning === null &&
             handle.state.postSwapAction !== "none",
           serviceLifecycle: {
             priorServiceState: handle.state.priorState,
@@ -219,6 +220,7 @@ export async function installHostDowngradeInSegment(
             postSwapAction: handle.state.postSwapAction,
           },
           postSwapError: handle.state.postSwapError,
+          postSwapWarning: handle.state.postSwapWarning,
         } satisfies Extract<ApplyHostOutcome, { outcome: "applied" }>;
       },
     );

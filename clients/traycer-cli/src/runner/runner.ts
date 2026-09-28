@@ -1,4 +1,5 @@
 import * as Sentry from "@sentry/node";
+import { HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE } from "@traycer/protocol/host/lifecycle-constants";
 import { errorFromUnknown } from "../logger";
 import { withBoundedWaitProgress } from "./bounded-wait-progress";
 import {
@@ -106,15 +107,29 @@ export async function runCommand(
     } else {
       Sentry.captureException(err);
     }
-    runtime.logger.error(
-      "CLI command failed",
-      {
+    // An automatic update parked over a service this account cannot start
+    // again is an expected state, not a failure: one INFO line naming the
+    // code (which says why - disabled, or another account's task), never an
+    // ERROR with a stack. The park stays visible in the log once per run, and
+    // the host's reconciler latches on the exit, so it runs about once per
+    // state change (`host/update-service-unstartable.ts`).
+    if (cliErr.exitCode === HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE) {
+      runtime.logger.info("CLI command deferred", {
         code: cliErr.code,
         exitCode: cliErr.exitCode,
         emittedAsJson: runtime.json,
-      },
-      errorFromUnknown(err),
-    );
+      });
+    } else {
+      runtime.logger.error(
+        "CLI command failed",
+        {
+          code: cliErr.code,
+          exitCode: cliErr.exitCode,
+          emittedAsJson: runtime.json,
+        },
+        errorFromUnknown(err),
+      );
+    }
     output.emitError(cliErr.code, cliErr.message, cliErr.details);
     // The error envelope was just written to a possibly-piped stdout, and the
     // Sentry client is still live. `finishAndExit` flushes the first and shuts

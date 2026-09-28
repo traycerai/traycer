@@ -2670,7 +2670,7 @@ describe("service manifests never leak a flag `host start` does not have", () =>
     };
     // The install resolves the task's `<UserId>` and hands it to the builder;
     // any fixed identity serves a check of the XML's launch shape.
-    const xml = buildScheduledTaskXml({ label, cli }, "testuser");
+    const xml = buildScheduledTaskXml({ label, cli }, "testuser", true);
     const launcher = buildWindowsHiddenHostLauncher(cli, label);
     // The task must launch the GUI script host, not the console CLI, or
     // Task Scheduler flashes a window on every login.

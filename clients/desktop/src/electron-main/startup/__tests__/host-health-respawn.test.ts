@@ -4,8 +4,10 @@ import type {
   ActivateInstalledOk,
   MutationOutcome,
 } from "../../host/host-controller-types";
+import { SERVICE_TASK_NOT_OWNED_MESSAGE } from "../../host/host-controller-types";
 import {
   HostRecoveryDeferredError,
+  HostRecoveryTaskNotOwnedError,
   respawnIfDown,
 } from "../host-health-respawn";
 
@@ -135,5 +137,36 @@ describe("respawnIfDown (fixup B3: automatic-intent lock-contention class)", () 
     await expect(respawnIfDown(controller)).rejects.toThrow(
       "host has work in progress",
     );
+  });
+
+  // Terminal, and its own error: returning would read as a recovery that
+  // worked and leave the monitor asking again, and the retryable
+  // `HostRecoveryDeferredError` would leave it asking every tick.
+  it("throws the terminal not-owned signal when the host's task is another Windows user's - neither the retryable one nor a resolve", async () => {
+    const controller = fakeControllerWithRecoverOutcome({
+      kind: "deferred",
+      message: SERVICE_TASK_NOT_OWNED_MESSAGE,
+    });
+    const caught = await respawnIfDown(controller).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(caught).toBeInstanceOf(HostRecoveryTaskNotOwnedError);
+    expect(caught).not.toBeInstanceOf(HostRecoveryDeferredError);
+  });
+
+  // T08 ruling 13: a task whose owner could not be confirmed carries its own
+  // copy now, and is just as terminal - the behaviour does not change.
+  it("throws the same terminal signal for the unconfirmed-owner copy", async () => {
+    const controller = fakeControllerWithRecoverOutcome({
+      kind: "deferred",
+      message:
+        "Traycer couldn't confirm that the Traycer Host task on this PC belongs to your Windows account, so it left the task alone. Try again, or run `traycer host doctor`.",
+    });
+    const caught = await respawnIfDown(controller).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(caught).toBeInstanceOf(HostRecoveryTaskNotOwnedError);
   });
 });

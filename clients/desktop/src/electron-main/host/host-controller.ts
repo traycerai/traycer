@@ -52,6 +52,7 @@ import {
 } from "@traycer-clients/shared/host-update";
 import type { HostUpdateAttemptPhase } from "@traycer/protocol/config/host-update-attempt";
 import { hostUpdateFailureMessage } from "@traycer-clients/shared/host-update/store-format-refusal-copy";
+import { HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE } from "@traycer/protocol/host/lifecycle-constants";
 import { readHostServiceOwner } from "./host-owner";
 import {
   runDesktopActivationSegment,
@@ -105,6 +106,15 @@ import {
   AUTOMATIC_INTENTS_QUIESCED_MESSAGE,
   HOST_NOT_SERVICE_RUN_MESSAGE,
   HOST_REMOVED_BY_USER_MESSAGE,
+  HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+  SERVICE_REGISTRATION_DISABLED_CODE,
+  SERVICE_TASK_NOT_OWNED_CODE,
+  SERVICE_TASK_NOT_OWNED_MESSAGE,
+  SERVICE_TASK_OWNER_UNCONFIRMED_MESSAGE,
+  HOST_UPDATED_SERVICE_DISABLED_MESSAGE,
+  serviceTaskLeftInPlaceMessage,
+  serviceTaskNotOwnedMessage,
+  serviceTaskNotOwnedReason,
   type AbandonedByGuard,
   type ActivateInstalledOk,
   type ApplyStagedOk,
@@ -119,6 +129,7 @@ import {
   type HostStartMutationKind,
   type HostControllerStatus,
   type HostEnsureFailure,
+  type HostUpdateDeferral,
   type LocalAttemptFacts,
   type LocalAttemptLiveness,
   type InstallVersionOk,
@@ -137,6 +148,13 @@ import {
   type StopHostRequest,
   type UninstallOk,
 } from "./host-controller-types";
+import {
+  clearHostUpdateParkLatch,
+  readHostUpdateParkLatch,
+  standingHostUpdateParkLatch,
+  writeHostUpdateParkLatch,
+  type HostUpdateParkReason,
+} from "./host-update-park-latch";
 
 // Single main-process owner of every host-lifecycle mutation (Host Update
 // Layer Redesign Tech Plan, "Desktop main: HostController"). Every writer
@@ -185,6 +203,56 @@ const HOST_NOT_SERVICE_RUN_CODE = "E_HOST_NOT_SERVICE_RUN";
 // job launchd no longer has loaded, the start that is left is a register.
 const SERVICE_CONTROL_FAILED_CODE = "E_SERVICE_CONTROL_FAILED";
 const LOCK_BUSY_MESSAGE = "Another Traycer process is managing the host.";
+
+/**
+ * Why the CLI refused an apply because this account cannot start the service
+ * it would stop, or `null` for any other failure. By code: the task disabled
+ * by its owner (`E_SERVICE_REGISTRATION_DISABLED`), or a task that is not
+ * this account's (`E_SERVICE_TASK_NOT_OWNED`, whose `details.reason` says
+ * whether another Windows user owns it or its owner could not be confirmed) -
+ * the launch apply's park, exit `HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE`,
+ * and an explicit apply's refusal, exit 1, alike. The bundled CLI sends the
+ * code with the exit; the exit alone reads as the disabled park, the only one
+ * a CLI sent before the code could say otherwise. None stopped, swapped or
+ * wrote anything: the update is WAITING, not failed.
+ */
+function unstartableServiceRefusal(err: unknown): HostUpdateParkReason | null {
+  if (!(err instanceof TraycerCliError)) return null;
+  if (err.code === SERVICE_TASK_NOT_OWNED_CODE) {
+    return serviceTaskNotOwnedReason(err.details) === "other-owner"
+      ? "not-owned"
+      : "owner-unconfirmed";
+  }
+  if (
+    err.code === SERVICE_REGISTRATION_DISABLED_CODE ||
+    err.exitCode === HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE
+  ) {
+    return "disabled";
+  }
+  return null;
+}
+
+/** What the update-ready row and the apply outcome say for a parked update. */
+function parkedUpdateNotice(reason: HostUpdateParkReason): HostUpdateDeferral {
+  switch (reason) {
+    case "disabled":
+      return {
+        message: HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+        code: SERVICE_REGISTRATION_DISABLED_CODE,
+      };
+    case "not-owned":
+      return {
+        message: SERVICE_TASK_NOT_OWNED_MESSAGE,
+        code: SERVICE_TASK_NOT_OWNED_CODE,
+      };
+    case "owner-unconfirmed":
+      return {
+        message: SERVICE_TASK_OWNER_UNCONFIRMED_MESSAGE,
+        code: SERVICE_TASK_NOT_OWNED_CODE,
+      };
+  }
+}
+
 /** Where a detached CLI child's stdout/stderr files go, under the host home. */
 const DETACHED_CLI_OUTPUT_DIRNAME = "desktop-cli";
 
@@ -415,6 +483,14 @@ interface ApplyResultShape {
   readonly runningActivated: boolean;
   readonly installGeneration: string | null;
   readonly postSwapError: string | null;
+  // The CLI's typed notice about a service registration an applied swap left
+  // as it found it (`postSwapWarning {code, message, details}` on `host
+  // apply`'s `applied` payload): a task its owner disabled, kept disabled, or
+  // one that is not this account's, left alone - `details.reason` says
+  // whether another Windows user owns it or its owner could not be confirmed.
+  // `null` from a CLI built before it.
+  readonly postSwapWarningCode: string | null;
+  readonly postSwapWarningDetails: unknown;
   readonly stoppedBeforeSwap: boolean;
   readonly postSwapAction: string | null;
 }
@@ -454,6 +530,8 @@ function parseApplyResult(raw: unknown): ApplyResultShape {
       runningActivated: false,
       installGeneration: null,
       postSwapError: null,
+      postSwapWarningCode: null,
+      postSwapWarningDetails: null,
       stoppedBeforeSwap: false,
       postSwapAction: null,
     };
@@ -478,6 +556,14 @@ function parseApplyResult(raw: unknown): ApplyResultShape {
       typeof raw.installGeneration === "string" ? raw.installGeneration : null,
     postSwapError:
       typeof raw.postSwapError === "string" ? raw.postSwapError : null,
+    postSwapWarningCode:
+      isPlainObject(raw.postSwapWarning) &&
+      typeof raw.postSwapWarning.code === "string"
+        ? raw.postSwapWarning.code
+        : null,
+    postSwapWarningDetails: isPlainObject(raw.postSwapWarning)
+      ? raw.postSwapWarning.details
+      : null,
     stoppedBeforeSwap:
       lifecycle !== null && lifecycle.stoppedBeforeSwap === true,
     postSwapAction:
@@ -691,6 +777,7 @@ interface UninstallResultShape {
   readonly removedStagedDir: boolean;
   readonly serviceUninstalled: boolean;
   readonly serviceRegistrationRetained: boolean | null;
+  readonly serviceWarning: string | null;
 }
 
 // `all` mirrors the legacy IPC-layer `projectUninstallResult` leniency: an
@@ -709,15 +796,28 @@ function parseUninstallResult(
       removedStagedDir: false,
       serviceUninstalled: false,
       serviceRegistrationRetained: null,
+      serviceWarning: null,
     };
   }
+  // The CLI's `serviceWarning {code, message, details}`: the registration
+  // under the host's name is not this account's - another Windows user's, or
+  // one whose owner could not be confirmed (`details.reason`) - and the
+  // removal left it in place. Nothing of this account's was deregistered, so
+  // it is not reported as if it had been. Rendered in this app's words, not
+  // the CLI's.
+  const leftInPlace =
+    isPlainObject(raw.serviceWarning) &&
+    raw.serviceWarning.code === SERVICE_TASK_NOT_OWNED_CODE
+      ? raw.serviceWarning
+      : null;
   return {
     removedInstallDir:
       raw.removedInstallDir === true || raw.removedRecord === true,
     removedStagedDir: raw.removedStagedDir === true,
     serviceUninstalled:
-      raw.serviceUninstalled === true ||
-      (all && raw.serviceUninstalled !== false),
+      leftInPlace === null &&
+      (raw.serviceUninstalled === true ||
+        (all && raw.serviceUninstalled !== false)),
     // Additive tri-state from the CLI: `true` means its readback positively
     // found the registration still there. Carried through rather than
     // collapsed, because `serviceUninstalled` above cannot express "unknown"
@@ -728,6 +828,12 @@ function parseUninstallResult(
         : raw.serviceRegistrationRetained === false
           ? false
           : null,
+    serviceWarning:
+      leftInPlace === null
+        ? null
+        : serviceTaskLeftInPlaceMessage(
+            serviceTaskNotOwnedReason(leftInPlace.details),
+          ),
   };
 }
 
@@ -1329,6 +1435,10 @@ export class HostController {
     );
     const installedVersion = installed?.version ?? null;
     const installedRuntimeVersion = installed?.runtimeVersion ?? null;
+    const updateReady = deriveUpdateReady(
+      installedVersion,
+      staged?.version ?? null,
+    );
     // A reachable host answers whatever the last ensure failed on.
     if (runningRuntimeVersion !== null) this.lastEnsureFailure = null;
     return {
@@ -1340,7 +1450,7 @@ export class HostController {
       stagedVersion: staged?.version ?? null,
       installedRuntimeVersion,
       runningRuntimeVersion,
-      updateReady: deriveUpdateReady(installedVersion, staged?.version ?? null),
+      updateReady,
       activation: deriveActivationState(
         installedRuntimeVersion,
         runningRuntimeVersion,
@@ -1349,7 +1459,28 @@ export class HostController {
       removedByUser: await isHostRemovedByUser(),
       checkedAt: new Date().toISOString(),
       lastEnsureFailure: this.lastEnsureFailure,
+      updateDeferral:
+        updateReady && staged !== null
+          ? await this.readUpdateDeferral(staged.stageId)
+          : null,
     };
+  }
+
+  /**
+   * `HostControllerStatus.updateDeferral` for the stage on disk: the notice
+   * for why the launch apply parked while its latch stands for exactly this
+   * stage (see `host-update-park-latch.ts`), else `null`. A read, never a
+   * spawn - the row renders from what the last refused launch apply recorded.
+   */
+  private async readUpdateDeferral(
+    stageId: string | null,
+  ): Promise<HostUpdateDeferral | null> {
+    const latch = standingHostUpdateParkLatch(
+      await readHostUpdateParkLatch(this.layout),
+      stageId === null ? null : encodeStageFingerprint(stageId),
+      Date.now(),
+    );
+    return latch === null ? null : parkedUpdateNotice(latch.reason);
   }
 
   // ---- Mutation lane primitives -------------------------------------------
@@ -3579,9 +3710,10 @@ export class HostController {
    * `HostControllerStatus.lastEnsureFailure` from one ensure's outcome: an
    * `ok` clears it, a `failed` or `installed-not-converged` replaces it with
    * that outcome's message and the CLI code `classifyEnsureLikeError` saw (or
-   * `null` for a failure the CLI did not name), and every other outcome - a
-   * deferral, a busy host - leaves it as it was. Only the code reaches a log;
-   * the message is for the window.
+   * `null` for a failure the CLI did not name), a deferral on another Windows
+   * user's task does the same, and every other outcome - any other deferral,
+   * a busy host - leaves it as it was. Only the code reaches a log; the
+   * message is for the window.
    */
   private recordEnsureOutcome(outcome: MutationOutcome<ConvergeReadyOk>): void {
     const code = this.ensureFailureCode;
@@ -3594,6 +3726,15 @@ export class HostController {
       outcome.kind === "failed" ||
       outcome.kind === "installed-not-converged"
     ) {
+      this.lastEnsureFailure = { message: outcome.message, code };
+      return;
+    }
+    // A deferral is not a failure, but THIS one is the whole answer to "why
+    // is there no local host": a task that is not this account's holds the
+    // name - another Windows user's, or one whose owner could not be
+    // confirmed, each in its own words. The lifecycle card and the readiness
+    // surface read it from here.
+    if (outcome.kind === "deferred" && code === SERVICE_TASK_NOT_OWNED_CODE) {
       this.lastEnsureFailure = { message: outcome.message, code };
     }
   }
@@ -3821,6 +3962,28 @@ export class HostController {
           code: err.code,
         });
         return { kind: "deferred", message: HOST_NOT_SERVICE_RUN_MESSAGE };
+      }
+      if (err.code === SERVICE_TASK_NOT_OWNED_CODE) {
+        // The host's Scheduled Task is not this account's - another Windows
+        // user's, or one whose owner the CLI could not confirm - and the CLI
+        // refused before touching it. A deferral for the same reasons as the
+        // terminal run above: nothing is broken, and no Force changes it. The
+        // CLI's own text is not relayed - an older one's could differ - and
+        // no copy names an account; only a confirmed other owner is called
+        // another user.
+        const notOwnedReason = serviceTaskNotOwnedReason(err.details);
+        log.info("[host-controller] host mutation refused", {
+          kind: this.mutationStatus?.kind ?? null,
+          reason:
+            notOwnedReason === "other-owner"
+              ? "service-task-not-owned"
+              : "service-task-owner-unconfirmed",
+          code: err.code,
+        });
+        return {
+          kind: "deferred",
+          message: serviceTaskNotOwnedMessage(notOwnedReason),
+        };
       }
       if (err.code === HOST_BUSY_CODE) {
         // Fixup B8: a healthy host with active work is a busy-keep
@@ -4327,6 +4490,30 @@ export class HostController {
                 message: HOST_REMOVED_BY_USER_MESSAGE,
               };
             }
+            // A launch apply the CLI already parked for this stage - a
+            // disabled task, or another user's - is not asked again - no
+            // spawn - until the latch stops holding (a new stage, a
+            // registration from this app, or its time bound). The update-ready
+            // row shows why from the same latch. A person's Update now is not
+            // a launch apply and never reads it.
+            const parked =
+              trigger === "launch"
+                ? standingHostUpdateParkLatch(
+                    await readHostUpdateParkLatch(this.layout),
+                    eligibleStage.fingerprint,
+                    Date.now(),
+                  )
+                : null;
+            if (parked !== null) {
+              log.debug(
+                "[host-controller] launch apply skipped: the CLI parked it for this stage",
+                { reason: parked.reason },
+              );
+              return {
+                kind: "deferred",
+                message: parkedUpdateNotice(parked.reason).message,
+              };
+            }
             // An implicit LAUNCH apply respects the hold under the CLI lock
             // (the desktop preflight in `runLaunchHostConvergeReconcile` can be
             // stale against a terminal downgrade that raced the staging
@@ -4372,6 +4559,19 @@ export class HostController {
         ...(respectHold ? ["--respect-hold"] : []),
       ]);
     } catch (err) {
+      // The apply's refusal over a service this account cannot start again
+      // - the launch apply's park (`host apply --respect-hold`,
+      // `HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE`), or an Update now over
+      // another user's task - stopped, swapped and wrote nothing: the update
+      // is WAITING, not failed. It never reaches the failure table below.
+      const unstartable = unstartableServiceRefusal(err);
+      if (unstartable !== null) {
+        return this.deferUpdateOverUnstartableService(
+          expectedStageFingerprint,
+          respectHold,
+          unstartable,
+        );
+      }
       await this.reloadAfterServiceCycleFailure();
       return this.classifyApplyLikeError(err, "retry-with-force");
     }
@@ -4384,6 +4584,37 @@ export class HostController {
     }
     if (result.outcome === "no-op") {
       return this.noOpApplyOutcome(result.installedVersion ?? "");
+    }
+    // An explicit apply (Update now, no `--respect-hold`) over a task its
+    // owner disabled swaps the bytes and leaves the task off, so nothing
+    // started the host - by design, not a failed start. The same for a task
+    // that is not this account's, which the CLI never touches. Each says so
+    // in its own words rather than as "the service was not started".
+    if (result.postSwapWarningCode === SERVICE_REGISTRATION_DISABLED_CODE) {
+      await clearHostUpdateParkLatch(this.layout);
+      log.info(
+        "[host-controller] host applied; the background service is disabled, so it was not started",
+        { code: result.postSwapWarningCode },
+      );
+      return {
+        kind: "deferred",
+        message: HOST_UPDATED_SERVICE_DISABLED_MESSAGE,
+      };
+    }
+    if (result.postSwapWarningCode === SERVICE_TASK_NOT_OWNED_CODE) {
+      const notOwnedReason = serviceTaskNotOwnedReason(
+        result.postSwapWarningDetails,
+      );
+      log.info(
+        notOwnedReason === "other-owner"
+          ? "[host-controller] host applied; the background service is owned by another user, so it was not started"
+          : "[host-controller] host applied; the background service's owner could not be confirmed, so it was not started",
+        { code: result.postSwapWarningCode },
+      );
+      return {
+        kind: "deferred",
+        message: serviceTaskNotOwnedMessage(notOwnedReason),
+      };
     }
     if (result.postSwapError !== null) {
       return this.installedNotConverged(
@@ -4473,6 +4704,39 @@ export class HostController {
     continuation: BusyContinuation,
   ): MutationOutcome<T> {
     return this.classifyMutationSubprocessError(err, continuation);
+  }
+
+  /**
+   * The CLI refused this stage's apply because this account cannot start the
+   * service it would stop: `reason` says whether the task is disabled or
+   * another user's. A launch apply (`respectHold`) latches it for the stage so
+   * later launches skip the spawn (`host-update-park-latch.ts`); INFO here is
+   * therefore once per stage, not once per launch. Resolves `deferred` with
+   * the copy the update-ready row shows - never `failed`, never an "Update
+   * failed". Neither the copy nor the log names an account.
+   */
+  private async deferUpdateOverUnstartableService<T>(
+    stageFingerprint: string,
+    respectHold: boolean,
+    reason: HostUpdateParkReason,
+  ): Promise<MutationOutcome<T>> {
+    if (respectHold) {
+      await writeHostUpdateParkLatch(this.layout, {
+        stageFingerprint,
+        reason,
+        latchedAtMs: Date.now(),
+      });
+    }
+    const notice = parkedUpdateNotice(reason);
+    log.info(
+      reason === "disabled"
+        ? "[host-controller] host update deferred: the background service is disabled"
+        : reason === "not-owned"
+          ? "[host-controller] host update deferred: the background service is owned by another user"
+          : "[host-controller] host update deferred: the background service's owner could not be confirmed",
+      { code: notice.code, latched: respectHold },
+    );
+    return { kind: "deferred", message: notice.message };
   }
 
   // ---- activateInstalled -------------------------------------------------
@@ -4732,183 +4996,199 @@ export class HostController {
       // `convergeReady`'s key is.
       `register:${this.reprovisionCoalesceKeySuffix(intent)}`,
       async () => {
-        const abandoned = await this.admitReprovision(intent);
-        if (abandoned !== null) return abandoned;
-        if (await this.isPackagedMacOwned()) {
-          const outcome = await withDesktopUpdateContender(
-            {
-              hostHomeDir: this.layout.rootDir,
-              lockPath: this.lockPath,
-              reason: "host-controller-register",
-              waitMs: this.desktopLockWaitMs,
-              pollIntervalMs: this.desktopLockPollIntervalMs,
-              admission: "desktop-activation-maintenance",
-            },
-            async (capability) => {
-              // Fixup B12 (lock rule 3): re-read install state after
-              // acquisition - a terminal `host uninstall --all` may have
-              // won the lock, removed the install, and released it while
-              // this call waited its turn. Registering SMAppService against
-              // an absent install would report success for a host that no
-              // longer exists.
-              const record = await readDesktopHostInstallRecord(this.layout);
-              if (record === null) return null;
-              const prePid =
-                (await readRunningHostIdentity(this.layout))?.pid ?? null;
-              const expectedInstallGeneration =
-                record.runtimeVersion === null
-                  ? attestedInstallGenerationFromDisk(record)
-                  : null;
-              const status = await registerHostLoginItemWithAttempt(
-                capability,
-                this.layout.rootDir,
-                async () => true,
-              );
-              return {
-                status,
-                prePid,
-                expectedInstallGeneration,
-                expectedRuntimeVersion: record.runtimeVersion,
-              };
-            },
+        const outcome = await this.registerServiceJob(intent);
+        // `host service install` is the one repair that turns a disabled
+        // task back on, so a registration from this app (Doctor's Register
+        // service, the update-ready row's enable action) ends the park latch:
+        // the next launch asks the CLI to apply the stage again. Inside the
+        // lane job, so the status published when the job ends already reads
+        // it gone.
+        if (outcome.kind === "ok") {
+          await clearHostUpdateParkLatch(this.layout);
+        }
+        return outcome;
+      },
+    );
+  }
+
+  private async registerServiceJob(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ServiceRegistrationOk>> {
+    const abandoned = await this.admitReprovision(intent);
+    if (abandoned !== null) return abandoned;
+    if (await this.isPackagedMacOwned()) {
+      const outcome = await withDesktopUpdateContender(
+        {
+          hostHomeDir: this.layout.rootDir,
+          lockPath: this.lockPath,
+          reason: "host-controller-register",
+          waitMs: this.desktopLockWaitMs,
+          pollIntervalMs: this.desktopLockPollIntervalMs,
+          admission: "desktop-activation-maintenance",
+        },
+        async (capability) => {
+          // Fixup B12 (lock rule 3): re-read install state after
+          // acquisition - a terminal `host uninstall --all` may have
+          // won the lock, removed the install, and released it while
+          // this call waited its turn. Registering SMAppService against
+          // an absent install would report success for a host that no
+          // longer exists.
+          const record = await readDesktopHostInstallRecord(this.layout);
+          if (record === null) return null;
+          const prePid =
+            (await readRunningHostIdentity(this.layout))?.pid ?? null;
+          const expectedInstallGeneration =
+            record.runtimeVersion === null
+              ? attestedInstallGenerationFromDisk(record)
+              : null;
+          const status = await registerHostLoginItemWithAttempt(
+            capability,
+            this.layout.rootDir,
+            async () => true,
           );
-          if (outcome.kind !== "acquired") {
-            return this.desktopContenderRefusal(outcome);
-          }
-          const registration = outcome.result;
-          if (registration === null) {
-            return {
-              kind: "failed",
-              message: "No host installed.",
-              errorCode: null,
-            };
-          }
-          if (registration.status === "requires-approval") {
-            return {
-              kind: "failed",
-              message: approvalRequiredMessage(),
-              errorCode: null,
-            };
-          }
-          if (registration.status === "parked") {
-            // A park attempted NOTHING, so the login item is exactly what it
-            // was before this call. This method's promise is "registered",
-            // and two states can keep it: an item that already reads
-            // `enabled`, and - with nothing running - an item SMAppService can
-            // never manage, where the CLI-owned LaunchAgent is the only
-            // registration this machine can have and installing it is what a
-            // person would do next. A `requires-approval` or unreadable item
-            // is the user's (or `traycer host doctor`'s) to fix, and
-            // restarting the running host would cost it its connections
-            // without registering a thing. The status is read HERE, not taken
-            // from the snapshot the guard refused on: the guard also parks on
-            // the LEGACY label and the manifest, so the primary item can be
-            // enabled under a park.
-            const loginItemStatus = readHostLoginItemStatus();
-            if (loginItemStatus !== "enabled") {
-              const takeover = await this.takeOverParkedRegistrationIfDown(
-                registration.prePid,
-                registration.expectedRuntimeVersion,
-              );
-              if (takeover.kind === "attempted") {
-                return takeover.outcome.kind === "ok"
-                  ? { kind: "ok", value: { registered: true } }
-                  : takeover.outcome;
-              }
-              return {
-                kind: "failed",
-                message: parkedWithNoHostMessage({
-                  loginItemStatus,
-                  refusal: takeover.refusal,
-                  doctorMessage: `Traycer Host's login item could not be re-registered (status=${loginItemStatus}) - run \`traycer host doctor\` to recover.`,
-                }),
-                errorCode: null,
-              };
-            }
-            // Enabled already, so the registration stands; what the parked
-            // cycle left undone is the RESTART a register cycle implies. Same
-            // fallback as the activation cycle: ask the running host to
-            // restart onto the committed bytes through the CLI.
-            const activated = await this.activateAroundParkedRegistration(
-              {
-                phase: "parked",
-                prePid: registration.prePid,
-                expectedGeneration: registration.expectedInstallGeneration,
-                expectedRuntimeVersion: registration.expectedRuntimeVersion,
-              },
-              false,
-            );
-            return activated.kind === "ok"
+          return {
+            status,
+            prePid,
+            expectedInstallGeneration,
+            expectedRuntimeVersion: record.runtimeVersion,
+          };
+        },
+      );
+      if (outcome.kind !== "acquired") {
+        return this.desktopContenderRefusal(outcome);
+      }
+      const registration = outcome.result;
+      if (registration === null) {
+        return {
+          kind: "failed",
+          message: "No host installed.",
+          errorCode: null,
+        };
+      }
+      if (registration.status === "requires-approval") {
+        return {
+          kind: "failed",
+          message: approvalRequiredMessage(),
+          errorCode: null,
+        };
+      }
+      if (registration.status === "parked") {
+        // A park attempted NOTHING, so the login item is exactly what it
+        // was before this call. This method's promise is "registered",
+        // and two states can keep it: an item that already reads
+        // `enabled`, and - with nothing running - an item SMAppService can
+        // never manage, where the CLI-owned LaunchAgent is the only
+        // registration this machine can have and installing it is what a
+        // person would do next. A `requires-approval` or unreadable item
+        // is the user's (or `traycer host doctor`'s) to fix, and
+        // restarting the running host would cost it its connections
+        // without registering a thing. The status is read HERE, not taken
+        // from the snapshot the guard refused on: the guard also parks on
+        // the LEGACY label and the manifest, so the primary item can be
+        // enabled under a park.
+        const loginItemStatus = readHostLoginItemStatus();
+        if (loginItemStatus !== "enabled") {
+          const takeover = await this.takeOverParkedRegistrationIfDown(
+            registration.prePid,
+            registration.expectedRuntimeVersion,
+          );
+          if (takeover.kind === "attempted") {
+            return takeover.outcome.kind === "ok"
               ? { kind: "ok", value: { registered: true } }
-              : activated;
-          }
-          if (registration.status === "enabled") {
-            try {
-              await this.completeServiceStart(
-                registration.prePid,
-                registration.expectedInstallGeneration,
-                registration.expectedRuntimeVersion,
-              );
-            } catch (err) {
-              return this.failedAfterServiceCycle(err);
-            }
-            return { kind: "ok", value: { registered: true } };
-          }
-          if (this.isCliTakeoverRecoverableStatus(registration.status)) {
-            const recovery = await this.recoverRegistrationViaCliTakeover({
-              adoptionArgs: [],
-              failedStatus: registration.status,
-              prePid: registration.prePid,
-              expectedRuntimeVersion: registration.expectedRuntimeVersion,
-            });
-            if (!recovery.recovered) {
-              return recovery.outcome;
-            }
-            return { kind: "ok", value: { registered: true } };
+              : takeover.outcome;
           }
           return {
             kind: "failed",
-            message: `Failed to register the host login item (status=${registration.status}).`,
+            message: parkedWithNoHostMessage({
+              loginItemStatus,
+              refusal: takeover.refusal,
+              doctorMessage: `Traycer Host's login item could not be re-registered (status=${loginItemStatus}) - run \`traycer host doctor\` to recover.`,
+            }),
             errorCode: null,
           };
         }
-        let raw: unknown;
+        // Enabled already, so the registration stands; what the parked
+        // cycle left undone is the RESTART a register cycle implies. Same
+        // fallback as the activation cycle: ask the running host to
+        // restart onto the committed bytes through the CLI.
+        const activated = await this.activateAroundParkedRegistration(
+          {
+            phase: "parked",
+            prePid: registration.prePid,
+            expectedGeneration: registration.expectedInstallGeneration,
+            expectedRuntimeVersion: registration.expectedRuntimeVersion,
+          },
+          false,
+        );
+        return activated.kind === "ok"
+          ? { kind: "ok", value: { registered: true } }
+          : activated;
+      }
+      if (registration.status === "enabled") {
         try {
-          // Streaming, not the flat-45s JSON wrapper: `host service install`
-          // now runs the post-registration credential provisioning probe (up
-          // to 30s waiting for the host), which stacked on the CLI's 30s
-          // lock wait can exceed any flat bound - and a SIGKILL there
-          // reports a registration that already succeeded as failed. The
-          // idle timeout is re-armed by the command's own progress NDJSON
-          // (`register`, `host-credential`).
-          raw = await this.streamBundled<unknown>([
-            "host",
-            "service",
-            "install",
-            ...this.devServiceInstallExtras(),
-          ]);
-        } catch (err) {
-          await this.reloadAfterServiceCycleFailure();
-          return this.classifyMutationSubprocessError(err, "retry-with-force");
-        }
-        const result = parseServiceStartResult(raw);
-        try {
-          // Service registration can be an idempotent Linux
-          // `systemctl enable --now`: it may leave the current host PID in
-          // place. Only restart/cycle actions pass a pre-PID to readiness;
-          // treating registration as a guaranteed replacement converts a
-          // healthy same-PID service into a 60s false timeout.
           await this.completeServiceStart(
-            null,
-            result.runtimeWasNull ? result.installGeneration : null,
-            result.runtimeVersion,
+            registration.prePid,
+            registration.expectedInstallGeneration,
+            registration.expectedRuntimeVersion,
           );
         } catch (err) {
           return this.failedAfterServiceCycle(err);
         }
         return { kind: "ok", value: { registered: true } };
-      },
-    );
+      }
+      if (this.isCliTakeoverRecoverableStatus(registration.status)) {
+        const recovery = await this.recoverRegistrationViaCliTakeover({
+          adoptionArgs: [],
+          failedStatus: registration.status,
+          prePid: registration.prePid,
+          expectedRuntimeVersion: registration.expectedRuntimeVersion,
+        });
+        if (!recovery.recovered) {
+          return recovery.outcome;
+        }
+        return { kind: "ok", value: { registered: true } };
+      }
+      return {
+        kind: "failed",
+        message: `Failed to register the host login item (status=${registration.status}).`,
+        errorCode: null,
+      };
+    }
+    let raw: unknown;
+    try {
+      // Streaming, not the flat-45s JSON wrapper: `host service install`
+      // now runs the post-registration credential provisioning probe (up
+      // to 30s waiting for the host), which stacked on the CLI's 30s
+      // lock wait can exceed any flat bound - and a SIGKILL there
+      // reports a registration that already succeeded as failed. The
+      // idle timeout is re-armed by the command's own progress NDJSON
+      // (`register`, `host-credential`).
+      raw = await this.streamBundled<unknown>([
+        "host",
+        "service",
+        "install",
+        ...this.devServiceInstallExtras(),
+      ]);
+    } catch (err) {
+      await this.reloadAfterServiceCycleFailure();
+      return this.classifyMutationSubprocessError(err, "retry-with-force");
+    }
+    const result = parseServiceStartResult(raw);
+    try {
+      // Service registration can be an idempotent Linux
+      // `systemctl enable --now`: it may leave the current host PID in
+      // place. Only restart/cycle actions pass a pre-PID to readiness;
+      // treating registration as a guaranteed replacement converts a
+      // healthy same-PID service into a 60s false timeout.
+      await this.completeServiceStart(
+        null,
+        result.runtimeWasNull ? result.installGeneration : null,
+        result.runtimeVersion,
+      );
+    } catch (err) {
+      return this.failedAfterServiceCycle(err);
+    }
+    return { kind: "ok", value: { registered: true } };
   }
 
   async deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
@@ -5878,6 +6158,7 @@ export class HostController {
             removedInstallDir: result.removedInstallDir,
             deregisteredService: result.serviceUninstalled,
             serviceRegistrationRetained: result.serviceRegistrationRetained,
+            serviceWarning: result.serviceWarning,
           },
         };
       },
@@ -5936,6 +6217,7 @@ export class HostController {
           deregisteredService: result.serviceUninstalled,
           serviceRegistrationRetained: result.serviceRegistrationRetained,
           removedLoginItem,
+          serviceWarning: result.serviceWarning,
         },
       };
     });

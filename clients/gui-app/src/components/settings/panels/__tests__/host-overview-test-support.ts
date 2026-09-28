@@ -317,6 +317,7 @@ const NOT_INSTALLED_CONTROLLER_STATUS: HostControllerStatus = {
   removedByUser: false,
   checkedAt: "2026-08-12T00:00:00Z",
   lastEnsureFailure: null,
+  updateDeferral: null,
 };
 
 /**

@@ -326,6 +326,7 @@ function makeBridge(): HandlerBridge {
               removedHost: true,
               deregisteredService: true,
               serviceRegistrationRetained: null,
+              serviceWarning: null,
               removedLoginItem: true,
             },
           }),
@@ -336,6 +337,7 @@ function makeBridge(): HandlerBridge {
               removedInstallDir: true,
               deregisteredService: true,
               serviceRegistrationRetained: null,
+              serviceWarning: null,
             },
           }),
       },
@@ -2698,6 +2700,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
               removedHost: true,
               deregisteredService: true,
               serviceRegistrationRetained: null,
+              serviceWarning: null,
               removedLoginItem: true,
             },
           });
@@ -2711,6 +2714,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
           removedHost: true,
           deregisteredService: true,
           serviceRegistrationRetained: null,
+          serviceWarning: null,
           removedLoginItem: true,
         });
       });
@@ -2766,6 +2770,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
               removedInstallDir: true,
               deregisteredService: true,
               serviceRegistrationRetained: null,
+              serviceWarning: null,
             },
           });
         const handler = await registerHandler(
@@ -2778,6 +2783,7 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
           removedInstallDir: true,
           deregisteredService: true,
           serviceRegistrationRetained: null,
+          serviceWarning: null,
         });
       });
 

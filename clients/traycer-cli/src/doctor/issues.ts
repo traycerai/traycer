@@ -261,6 +261,13 @@ export const DOCTOR_ISSUE_CODES = {
   // (`E_SERVICE_REGISTRATION_DISABLED`). Enabling the task, or a full
   // re-registration, repairs it.
   HOST_SERVICE_REGISTRATION_DISABLED: "HOST_SERVICE_REGISTRATION_DISABLED",
+  // The service registration under this environment's name is another
+  // account's (Windows: the machine-global Scheduled Task carries another
+  // user's principal, or its owner could not be confirmed), so this account
+  // has no service host here and every write on that task is refused
+  // (`E_SERVICE_TASK_NOT_OWNED`). No fix: nothing this account runs can
+  // change it, so the card offers none.
+  HOST_SERVICE_TASK_NOT_OWNED: "HOST_SERVICE_TASK_NOT_OWNED",
 } as const;
 
 export type DoctorIssueCode =

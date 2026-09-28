@@ -4,6 +4,8 @@ import { isHostRemovedByUser } from "../host/host-removal-state";
 import {
   AUTOMATIC_INTENTS_HELD_MESSAGE,
   AUTOMATIC_INTENTS_QUIESCED_MESSAGE,
+  HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+  isServiceTaskNotOwnedMessage,
   backgroundMutationOutcome,
   type ActivateInstalledOk,
   type ApplyStagedOk,
@@ -373,6 +375,18 @@ export function armLocalHostBootOnSignIn(
             scheduleRetry();
             return;
           }
+          // The host's Scheduled Task is not this account's - another Windows
+          // user's, or one whose owner could not be confirmed. No rung
+          // changes that, so the ladder retires rather than re-asking at a
+          // five-minute ceiling; the lifecycle card shows why from
+          // `lastEnsureFailure`, and a relaunch asks again.
+          if (isServiceTaskNotOwnedMessage(outcome.message)) {
+            log.info("[host-controller] local host boot retired", {
+              reason: "service-task-not-owned",
+            });
+            settle();
+            return;
+          }
         }
         // A RESOLVED non-ok is not a running host, and `busy` is the one that
         // argues otherwise. It reads as "a live host with active work declined
@@ -648,6 +662,20 @@ async function recoverAfterFailedApply(
   applied: MutationOutcome<ApplyStagedOk>,
 ): Promise<MutationOutcome<ApplyStagedOk | ConvergeReadyOk>> {
   if (applied.kind === "ok" || applied.kind === "busy") {
+    return applied;
+  }
+  // The apply waits on a service this account cannot start: a registration
+  // its owner switched off, or a task that is not this account's. That is also
+  // why a host here would be down, and the ensure a recovery would run refuses
+  // on it (`E_SERVICE_REGISTRATION_DISABLED`, `E_SERVICE_TASK_NOT_OWNED`), so
+  // recovering here would only add a refused spawn to every launch the latch
+  // exists to keep quiet. The update-ready row carries the notice - and, for
+  // a disabled task, the enable action.
+  if (
+    applied.kind === "deferred" &&
+    (applied.message === HOST_UPDATE_SERVICE_DISABLED_MESSAGE ||
+      isServiceTaskNotOwnedMessage(applied.message))
+  ) {
     return applied;
   }
   const status = await hostController.getStatus();

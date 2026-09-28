@@ -156,6 +156,8 @@ export interface HostControllerStatus {
   readonly checkedAt: string;
   /** See the shared declaration: the last failed ensure, until one is `ok` or the host is reachable. */
   readonly lastEnsureFailure: HostEnsureFailure | null;
+  /** See the shared declaration: why the ready update is waiting, or `null`. */
+  readonly updateDeferral: HostUpdateDeferral | null;
 }
 
 /** Mirror of `@traycer-clients/shared`'s `HostEnsureFailure` - see there. */
@@ -163,6 +165,31 @@ export interface HostEnsureFailure {
   readonly message: string;
   readonly code: string | null;
 }
+
+/** Mirror of `@traycer-clients/shared`'s `HostUpdateDeferral` - see there. */
+export interface HostUpdateDeferral {
+  readonly message: string;
+  readonly code: string;
+}
+
+// The service-registration notices (a task that is not this account's -
+// another Windows user's, or one whose owner could not be confirmed; a task
+// its owner disabled): codes and this app's copy, shared with the renderer so
+// it can tell them from failures. See the shared module.
+export {
+  HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+  HOST_UPDATED_SERVICE_DISABLED_MESSAGE,
+  isServiceTaskNotOwnedMessage,
+  SERVICE_REGISTRATION_DISABLED_CODE,
+  SERVICE_TASK_LEFT_IN_PLACE_MESSAGE,
+  SERVICE_TASK_NOT_OWNED_CODE,
+  SERVICE_TASK_NOT_OWNED_MESSAGE,
+  SERVICE_TASK_OWNER_UNCONFIRMED_LEFT_IN_PLACE_MESSAGE,
+  SERVICE_TASK_OWNER_UNCONFIRMED_MESSAGE,
+  serviceTaskLeftInPlaceMessage,
+  serviceTaskNotOwnedMessage,
+  serviceTaskNotOwnedReason,
+} from "@traycer-clients/shared/platform/host-service-notices";
 
 // ---- Continuations ----------------------------------------------------
 //
@@ -485,6 +512,8 @@ export interface UninstallOk {
    * either way, `false` = verified absent (no platform produces this today).
    */
   readonly serviceRegistrationRetained: boolean | null;
+  /** See the shared `HostUninstalled.serviceWarning`. */
+  readonly serviceWarning: string | null;
 }
 
 export interface RemoveTraycerOk {
@@ -498,6 +527,8 @@ export interface RemoveTraycerOk {
    */
   readonly serviceRegistrationRetained: boolean | null;
   readonly removedLoginItem: boolean;
+  /** See the shared `TraycerRemoved.serviceWarning`. */
+  readonly serviceWarning: string | null;
 }
 
 export type ApplyStagedTrigger = "launch" | "manual";
