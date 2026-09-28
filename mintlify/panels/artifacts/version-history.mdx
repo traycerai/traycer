@@ -1,0 +1,84 @@
+---
+title: "Version history and recovery"
+description: "See how an artifact changed, restore an earlier version, and bring back deleted artifacts."
+---
+
+Traycer saves versions of each artifact as it is edited, whether by you, a collaborator, an agent, or a change to the file on disk. Version history is your safety net against a bad edit: you can compare any version with the one before it and restore it, and you can bring back artifacts that were deleted.
+
+Each host saves versions of the artifacts it has open, following its own [settings](#settings).
+
+## Open Version History
+
+Open an artifact and click **Version history**, the clock button in the top-right corner of its tile. The **Version history** panel opens beside the body.
+
+- Drag the panel's left edge to resize it, or click **Maximize panel** to cover the tile.
+- Click **Close history** to close it.
+
+Versions are listed newest first and grouped by day. Each one is labeled with where it came from:
+
+| Label                  | Meaning                                                  |
+| ---------------------- | -------------------------------------------------------- |
+| **Agent edit**         | An agent changed the artifact. The entry links to its chat. |
+| **Several agents**     | More than one agent changed it.                          |
+| **Your edit**          | Someone edited it in the app.                            |
+| **External edit**      | It changed from outside the app, such as an edit to its file on disk. |
+| **Restored version**   | An earlier version was restored.                         |
+| **Restored artifact**  | The artifact was brought back after being deleted.       |
+| **Deleted**            | The artifact was deleted.                                |
+
+A few other labels, such as **System capture** and **Remote merge**, mark versions Traycer saves on its own.
+
+Select a version to see what changed. The comparison is labeled "Compared with parent version", or "Initial version" for the first one. If only the title, status, or type changed, the body shows no difference.
+
+Click **Load older versions** at the bottom of the list to see more.
+
+## Restore a Version
+
+1. Select the version you want.
+2. Click **Restore this version**.
+3. Confirm with **Restore as new version**.
+
+The restored content becomes a new version at the top of the history. Nothing is deleted, so you can undo a restore by restoring the version before it.
+
+Before you confirm, the dialog warns about two things:
+
+- **Anchored comments.** Comments keep their text, but may lose their place in the body. A thread whose text is gone shows **Anchor missing** in the [Comments](/panels/comments) panel.
+- **Missing images.** If images from that version are no longer available, the button reads **Restore body only**, and the new version is marked **Body only — images missing**.
+
+Anyone with access can view version history. Restoring needs the **Editor** or **Owner** role.
+
+## Restore a Deleted Artifact
+
+Deleting an artifact moves it out of the tree, but its saved versions stay in version history.
+
+1. In the [Artifacts](/panels/artifacts) panel, open the **⋯** menu and choose **Deleted artifacts**. You can also find **Deleted artifacts** in the command palette.
+2. Pick an artifact from the list. Each entry shows when it was deleted and how many versions it has, and the preview shows its **Latest saved version**.
+3. Click **Restore artifact**.
+
+The artifact comes back with its latest saved content, under its original parent. If that parent is still deleted, the artifact comes back at the top level of the tree.
+
+Artifacts are restored one at a time. When you delete an artifact that has children, restore the parent first and then each child, so they return to their places.
+
+Restoring needs the **Editor** or **Owner** role. An artifact can be restored as long as its versions are still in version history, so the retention settings below also limit how long a deleted artifact can be brought back.
+
+## Settings
+
+Version history is set per host in **Settings › Host › Overview**, on the **Data** tab, under **Version history**. See [Overview](/settings/host).
+
+| Setting                     | What it does                                                                                     | Default         |
+| --------------------------- | ------------------------------------------------------------------------------------------------ | --------------- |
+| **Capture versions**        | Saves versions of artifact edits on this host.                                                   | On              |
+| **Retention**               | Keeps versions until any per-artifact limit is reached: **Days**, **Versions**, or **MB**. Click **Save retention** to apply. | 30 days, 200 versions, 8 MB |
+| **Clear version history…**  | Removes every saved version from this host.                                                      |                 |
+
+<Warning>
+  Edits made while **Capture versions** is off can never be restored. Tightening **Retention** removes versions beyond the new limits right away, and **Clear version history…** can't be undone. Undo for agent turns is not affected by either.
+</Warning>
+
+If capture is off, the history panel says "Version history is off — turn it on in Settings." Versions saved earlier stay available.
+
+## Related
+
+- [Artifacts](/panels/artifacts)
+- [Comments](/panels/comments)
+- [Undo a turn](/panels/agents/undo-a-turn)

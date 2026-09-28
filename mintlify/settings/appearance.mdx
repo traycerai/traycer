@@ -1,20 +1,88 @@
 ---
 title: "Appearance"
-description: "Configure Traycer Desktop theme and visual preferences."
+description: "Pick light and dark themes, create and import themes, and set the start page, zoom, fonts, motion, terminal, Agent office and icon colors."
 ---
 
-Appearance settings change how Traycer Desktop looks locally.
+**Appearance** changes how Traycer looks on this device. It sits in the **Application** group of [Settings](/settings), so it doesn't change with the host you are viewing, and it never changes Task content or shared artifacts.
 
-## Options
+Looking for the **Default**, **Compact** and **Detailed** presets? They set how much of the app's chrome shows, so they live in [Layout](/settings/layout#presets).
 
-| Setting | What it changes |
-|---|---|
-| **Theme** | Uses system, light, or dark appearance. |
-| **Preset** | Applies a visual preset. |
-| **Terminal preview** | Controls terminal preview behavior. |
-| **Use pointer cursors** | Changes whether interactive controls use pointer cursors. |
-| **Artifact icon colors** | Shows artifact icons by type color, or disables type coloring. |
-| **UI font size** | Changes app UI text size. |
-| **Code font size** | Changes code and editor text size. |
+## Themes
 
-Appearance preferences are local UI preferences. They do not change Task content or shared artifacts.
+**Theme mode** chooses when the app is light or dark:
+
+| Option | What it does |
+| --- | --- |
+| **Follow device** | Switches between your light theme and your dark theme with your device's appearance. This is the default. |
+| **Light** | Always uses your light theme. |
+| **Dark** | Always uses your dark theme. |
+
+**Light theme** and **Dark theme** each pick the theme for one mode. The one in use right now reads "Active". Open a picker to search your own themes and the 17 built-in ones: Neutral, Traycer Green, Amoled, Dracula, Catppuccin, GitHub, Gruvbox, Tokyo Night, Nord, Ayu, Everforest, Rose, Blue, Violet, Green, Orange and Pink. Both modes start on **Traycer Green**. The pencil button next to a picker edits that theme.
+
+Below the pickers:
+
+- **Create theme** opens the theme editor on a copy of the active theme. Changes preview immediately. **Save theme** keeps and selects your changes; **Cancel** restores your previous theme.
+- **Import theme** opens **Import themes**:
+  - **Browse themes** searches community color themes on the Open VSX extension registry.
+  - **Import files** takes `.json`, `.jsonc` or `.vsix` files, Traycer and VS Code themes alike, including whole extension packs. Drop them in, click **Choose files**, or paste theme JSON.
+- **Manage themes** lists your saved themes and imported packs. Each theme's menu has **Edit theme**, **Duplicate theme**, **Export theme** and **Delete theme**. Deleting a theme that a mode is using switches that mode back to a built-in theme.
+
+## Start Page
+
+These settings change the start page, where you begin a new Task.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Wallpaper** | None | **Choose image…** sets your own PNG, JPEG or WebP image. **Remove** clears it. |
+| **Traycer team curated wallpapers** | — | Pick a wallpaper from the curated gallery, or open the full catalog. Each one downloads when you apply it. |
+| **Wallpaper effect** | Dot pattern | **Photo** keeps the original, **Dot pattern** redraws it as dots, and **Film grain** adds grain. Shown once a wallpaper is set. |
+| **Effect strength** | 60% | How strongly the effect changes the photo, from Subtle to Strong. Shown once a wallpaper is set. |
+| **Tint wallpaper with theme accent color** | On | Paints the dot pattern in your theme's accent color. Shown for **Dot pattern** only. |
+| **Show greeting** | On | Shows a greeting on the start page. |
+| **Show tasks on the start page** | On | Lists your tasks on the start page. |
+
+## Interface
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Zoom** | 100% | Scales the whole app, from 67% to 300%. **Reset** returns to 100%. You can also press <kbd>Cmd</kbd> + <kbd>=</kbd>, <kbd>Cmd</kbd> + <kbd>-</kbd> and <kbd>Cmd</kbd> + <kbd>0</kbd> (<kbd>Ctrl</kbd> on Windows and Linux). Desktop app only. |
+| **Show a hand cursor over clickable controls** | On | Uses a hand cursor over buttons, links and other clickable controls. |
+
+Zoom scales everything; the font sizes below change only text.
+
+## Fonts And Text
+
+Each font picker lists the fonts installed on this computer and has its own reset.
+
+| Setting | Default | Sizes | What it sets |
+| --- | --- | --- | --- |
+| **Interface font** | Figtree, 15 px | 10–20 px | Text across the Traycer interface. |
+| **Code font** | System default monospace, 12 px | 10–24 px | Code blocks and diffs. |
+| **Prompt font** | Same as the interface font, 14 px | 10–24 px | Where you write prompts. |
+| **Use font ligatures** | On | — | Joins characters such as `!=` into one symbol in prompts and code, when the font supports it. The text itself doesn't change. |
+
+## Motion And Readability
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Panel animations** | On | Animates sidebars, menus and dialogs as they open and close. |
+| **Animation duration** | 100 ms | From 0 ms (instant) to 500 ms. Applies while panel animations are on. |
+| **Text and border contrast** | 100% | From 70% to 130%. 100% uses the theme's own colors; higher values make text and borders stand out more. **Reset** returns to 100%. |
+
+## Terminal
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Terminal font** | Same as the code font | Font and size (10–24 px) in terminals. Follows the **Code font** and its size until you set them. |
+| **Terminal cursor** | Block | The cursor shape: **Bar**, **Block** or **Underline**. |
+| **Blink cursor** | On | Blinks the cursor while the terminal is focused. |
+
+A preview beside these rows shows the terminal font, cursor and the current theme's terminal colors.
+
+## Agent Office
+
+**Default view** is the view the [Agent office](/concepts/agent-to-agent) opens in for Tasks where you haven't picked one: **Floor** (the default), **Building**, **Mission control** or **Campus**.
+
+## Icon Colors
+
+**Color icons by type** gives each kind of item its own icon color: Chat, Terminal Agent, Spec, Ticket, Story, Review and Terminal. It is on by default. Pick a color for each type, or click **Reset** to restore the defaults. Turn it off to use neutral icons.

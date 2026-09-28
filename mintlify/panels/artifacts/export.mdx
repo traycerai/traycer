@@ -1,0 +1,44 @@
+---
+title: "Export"
+description: "Save artifacts as Markdown or PDF files, one at a time or several in a ZIP."
+---
+
+Export saves artifacts outside Traycer, as Markdown or PDF. Anyone with access to the Task can export, including Viewers.
+
+## Export One Artifact
+
+In the [Artifacts](/panels/artifacts) panel, open the artifact's **⋯** menu, or right-click its row, and choose:
+
+- **Export as Markdown** for a `.md` file.
+- **Export as PDF** for a `.pdf` file.
+
+Choose where to save the file. The file is named after the artifact's title.
+
+## Export Several Artifacts
+
+<Steps>
+  <Step title="Select the artifacts">
+    Choose **Select artifacts** from the panel's **⋯** menu, or ⌘-click / Ctrl-click the rows you want.
+  </Step>
+  <Step title="Choose a format">
+    Click the export button in the panel header, then **Export as Markdown ZIP** or **Export as PDF ZIP**.
+  </Step>
+  <Step title="Save the ZIP">
+    Choose where to save it. The ZIP is named after the Task and holds one file per artifact.
+  </Step>
+</Steps>
+
+ZIP export needs at least two selected artifacts. For a single artifact, use the row menu.
+
+## What Gets Exported
+
+Each file holds the artifact's body at the moment you export it.
+
+In a PDF, [diagrams](/panels/artifacts/diagrams) and [wireframes](/panels/artifacts/wireframes) appear as their source, labeled "Mermaid source" and "UI preview source", rather than as rendered images.
+
+Comment threads are not included.
+
+## Related
+
+- [Artifacts on Disk](/panels/artifacts#artifacts-on-disk): Editors and Owners already have every artifact as a Markdown file on their host.
+- [Version history and recovery](/panels/artifacts/version-history)
