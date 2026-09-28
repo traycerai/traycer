@@ -1,5 +1,5 @@
 import type { SyntheticEvent } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Mail, RefreshCcw, ShieldCheck } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -70,6 +70,17 @@ export function StepUpChallengeDialog(props: {
   );
 }
 
+/**
+ * Where the emailed code stands. `sending` is the dialog's own record of the
+ * challenge request in flight, not `requestChallenge.isPending`: the first
+ * send fires from a mount effect, and under StrictMode (every dev build) that
+ * effect's setup -> cleanup -> setup unsubscribes the mutation's observer in
+ * between. TanStack then detaches the observer from the request already in
+ * flight and never re-attaches it, so its `isPending` stays true for good -
+ * which held `busy` on, disabled every button and never left "Sending code".
+ */
+type ChallengeStatus = "sending" | "sent" | "unsent";
+
 function StepUpChallengeDialogActive(props: {
   readonly request: StepUpPromptRequest;
   readonly onVerified: (credential: StepUpCredential) => void;
@@ -78,61 +89,70 @@ function StepUpChallengeDialogActive(props: {
   const requestChallenge = useAuthRequestStepUpChallenge();
   const verifyChallenge = useAuthVerifyStepUpChallenge();
   const [code, setCode] = useState("");
-  const [challengeSent, setChallengeSent] = useState(false);
+  // Opens `sending`: the mount effect below sends the first code.
+  const [challenge, setChallenge] = useState<ChallengeStatus>("sending");
   const [error, setError] = useState<string | null>(null);
-  const busy = requestChallenge.isPending || verifyChallenge.isPending;
+  const challengeSent = challenge === "sent";
+  // Verify only ever starts from a submit, long after the mount pass, so its
+  // observer stays attached and its `isPending` is sound.
+  const busy = challenge === "sending" || verifyChallenge.isPending;
   const requestChallengeMutateAsync = requestChallenge.mutateAsync;
   const mountedRef = useRef(true);
   const autoSentRef = useRef(false);
+  const sendAttemptRef = useRef(0);
   const { title, description } = dialogCopy(props.request);
 
+  // Set on every effect RUN, not only at declaration: StrictMode's cleanup
+  // between its two setups would otherwise leave this false for the life of
+  // the dialog - no sent code would ever be applied, and a verified one would
+  // never reach `onVerified`.
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
   }, []);
 
-  useEffect(() => {
-    // Guard the REQUEST, not just its state updates. StrictMode runs this
-    // effect setup -> cleanup -> setup on mount, and `active` only suppresses
-    // the second pass's `setChallengeSent`/`setError` - the mutation itself
-    // would already have gone out twice, i.e. two verification emails for one
-    // prompt. A ref rather than state because it must be read synchronously by
-    // the second setup, before any re-render. The parent keys this component
-    // on `request.id`, so a genuinely new prompt gets a fresh instance and a
-    // fresh ref; explicit re-sends go through `handleResend`.
-    if (autoSentRef.current) {
-      return undefined;
-    }
-    autoSentRef.current = true;
-    let active = true;
-    void requestChallengeMutateAsync()
-      .then(() => {
-        if (active) {
-          setChallengeSent(true);
-        }
-      })
-      .catch((caught: unknown) => {
-        if (active) {
-          setError(messageFromError(caught));
-        }
-      });
-    return () => {
-      active = false;
-    };
+  // One send's answer, applied only while it is still the latest send and the
+  // dialog is still open. The outcome travels on `mutateAsync`'s promise,
+  // which settles whatever the observer is doing, and every rejection is
+  // consumed here - the dialog says it inline, nothing toasts.
+  const sendChallenge = useCallback((): void => {
+    sendAttemptRef.current += 1;
+    const attempt = sendAttemptRef.current;
+    const current = (): boolean =>
+      attempt === sendAttemptRef.current && mountedRef.current;
+    void requestChallengeMutateAsync().then(
+      () => {
+        if (current()) setChallenge("sent");
+      },
+      (caught: unknown) => {
+        if (!current()) return;
+        setChallenge("unsent");
+        setError(messageFromError(caught));
+      },
+    );
   }, [requestChallengeMutateAsync]);
+
+  useEffect(() => {
+    // Guard the REQUEST: StrictMode runs this effect setup -> cleanup ->
+    // setup on mount, and without the latch the second setup would send a
+    // second verification email for one prompt. A ref rather than state
+    // because the second setup must read it synchronously, before any
+    // re-render. No per-setup `active` flag: the cleanup between the two
+    // setups would clear it for the one request that is actually in flight.
+    // The parent keys this component on `request.id`, so a genuinely new
+    // prompt gets a fresh instance and a fresh ref; explicit re-sends go
+    // through `handleResend`.
+    if (autoSentRef.current) return;
+    autoSentRef.current = true;
+    sendChallenge();
+  }, [sendChallenge]);
 
   const handleResend = (): void => {
     setError(null);
-    setChallengeSent(false);
-    void requestChallenge
-      .mutateAsync()
-      .then(() => {
-        setChallengeSent(true);
-      })
-      .catch((caught: unknown) => {
-        setError(messageFromError(caught));
-      });
+    setChallenge("sending");
+    sendChallenge();
   };
 
   const handleSubmit = (event: SyntheticEvent<HTMLFormElement>): void => {
@@ -199,7 +219,7 @@ function StepUpChallengeDialogActive(props: {
                 }}
               />
             </div>
-            {requestChallenge.isPending ? (
+            {challenge === "sending" ? (
               <p className="flex items-center gap-2 text-ui-xs text-muted-foreground">
                 <AgentSpinningDots
                   className={undefined}
