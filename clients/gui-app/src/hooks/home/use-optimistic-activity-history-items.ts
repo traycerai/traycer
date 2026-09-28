@@ -14,6 +14,7 @@ import {
 import { useOwnTurnEpicIds } from "@/stores/use-own-turn-epic-ids";
 
 const MAX_ACTIVE_ROWS = 64;
+const MAX_KNOWN_DURABLE_KEYS = MAX_ACTIVE_ROWS * 4;
 const MAX_SETTLED_REFRESH_SCOPES = 64;
 const STAMP_TTL_MS = 10 * 60_000;
 const REFRESH_DEBOUNCE_MS = 750;
@@ -21,10 +22,19 @@ const REFRESH_RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
 const EMPTY_ITEMS: readonly HistoryItem[] = [];
 const listeners = new Set<() => void>();
 const activeSeen = new Set<string>();
-const stamps = new Map<string, { at: number; expiresAt: number }>();
+interface ActivityStamp {
+  readonly at: number;
+  readonly expiresAt: number;
+  /** Durable key observed before this edge, in the server's clock domain. */
+  readonly baselineAt: number | null;
+  /** Own-record timestamp from the host stream, when one is available. */
+  readonly acceptedAt: number | null;
+}
+const stamps = new Map<string, ActivityStamp>();
+const knownDurableAt = new Map<string, number>();
 interface ActivitySnapshot {
   readonly revision: number;
-  readonly stamps: ReadonlyMap<string, { at: number; expiresAt: number }>;
+  readonly stamps: ReadonlyMap<string, ActivityStamp>;
 }
 const EMPTY_SNAPSHOT: ActivitySnapshot = { revision: 0, stamps: new Map() };
 let currentSnapshot: ActivitySnapshot = EMPTY_SNAPSHOT;
@@ -48,6 +58,17 @@ const refreshes = new Map<string, RefreshState>();
 
 function keyFor(userId: string, epicId: string): string {
   return JSON.stringify([userId, epicId]);
+}
+
+function rememberDurableKey(key: string, at: number): void {
+  const previous = knownDurableAt.get(key);
+  if (previous !== undefined && previous >= at) return;
+  knownDurableAt.delete(key);
+  knownDurableAt.set(key, at);
+  if (knownDurableAt.size > MAX_KNOWN_DURABLE_KEYS) {
+    const oldest = knownDurableAt.keys().next().value;
+    if (oldest !== undefined) knownDurableAt.delete(oldest);
+  }
 }
 
 function changed(userId: string | null): void {
@@ -99,7 +120,12 @@ export function observeActiveHistoryEdges(
     const key = keyFor(userId, epicId);
     if (activeSeen.has(key)) continue;
     activeSeen.add(key);
-    stamps.set(key, { at, expiresAt: at + STAMP_TTL_MS });
+    stamps.set(key, {
+      at,
+      expiresAt: at + STAMP_TTL_MS,
+      baselineAt: knownDurableAt.get(key) ?? null,
+      acceptedAt: null,
+    });
     added = true;
     if (stamps.size > MAX_ACTIVE_ROWS) {
       const oldest = stamps.keys().next().value;
@@ -127,6 +153,8 @@ export function observeOwnHistoryRecordChange(
   stamps.set(key, {
     at: Math.max(previous?.at ?? 0, at),
     expiresAt: Date.now() + STAMP_TTL_MS,
+    baselineAt: previous?.baselineAt ?? knownDurableAt.get(key) ?? null,
+    acceptedAt: Math.max(previous?.acceptedAt ?? 0, at),
   });
   if (stamps.size > MAX_ACTIVE_ROWS) {
     const oldest = stamps.keys().next().value;
@@ -150,7 +178,7 @@ export function requestHistoryActivityRefresh(userId: string): void {
   changed(userId);
 }
 
-/** Removes an optimistic key once a returned durable key reaches its edge. */
+/** Settles in the durable clock domain; the browser clock only places the row. */
 export function settleHistoryActivity(
   userId: string,
   items: readonly HistoryItem[],
@@ -158,11 +186,24 @@ export function settleHistoryActivity(
   let removed = false;
   for (const item of items) {
     const key = keyFor(userId, item.epicId);
+    const durableAt = item.recentAtMs ?? item.updatedAtMs;
     const stamp = stamps.get(key);
-    if (stamp === undefined) continue;
-    if ((item.recentAtMs ?? item.updatedAtMs) < stamp.at) continue;
-    stamps.delete(key);
-    removed = true;
+    if (stamp !== undefined) {
+      const caughtUp =
+        stamp.acceptedAt !== null
+          ? durableAt >= stamp.acceptedAt
+          : durableAt >= stamp.at ||
+            (stamp.baselineAt !== null && durableAt > stamp.baselineAt);
+      if (caughtUp) {
+        stamps.delete(key);
+        removed = true;
+      } else if (stamp.baselineAt === null) {
+        // A task that was off-page at the edge has no prior key. Establish the
+        // first returned value as its baseline; only a later change settles it.
+        stamps.set(key, { ...stamp, baselineAt: durableAt });
+      }
+    }
+    rememberDurableKey(key, durableAt);
   }
   if (removed) changed(null);
 }

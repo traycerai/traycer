@@ -94,7 +94,7 @@ function publishWorking(agentIds: readonly string[]): void {
   ]);
 }
 
-function registerOwnedWarmChat() {
+function registerOwnedWarmChat(accessPending: boolean) {
   const handle = __getChatSessionRegistryForTests().acquire(
     {
       epicId: EPIC_ID,
@@ -137,7 +137,9 @@ function registerOwnedWarmChat() {
     updatedAtMs: 1,
   };
   handle.store.setState({
-    access: { role: "owner", ownerUserId: "viewer", canAct: true },
+    access: accessPending
+      ? null
+      : { role: "owner", ownerUserId: "viewer", canAct: true },
     managedCommands: [shell],
   });
   return handle;
@@ -286,7 +288,7 @@ describe("useOwnTurnEpicIds", () => {
         byId: { [AGENT_ID]: chatProjection(AGENT_ID, "viewer") },
       },
     });
-    const chat = registerOwnedWarmChat();
+    const chat = registerOwnedWarmChat(false);
     const { result } = renderHook(() => useOwnTurnEpicIds("viewer"));
 
     act(() => publishWorking([AGENT_ID]));
@@ -294,6 +296,30 @@ describe("useOwnTurnEpicIds", () => {
 
     act(() => {
       chat.store.setState({ runStatus: "running", turnInProgress: true });
+    });
+    expect(result.current.has(EPIC_ID)).toBe(true);
+  });
+
+  it("uses the owned epic projection while chat access is still hydrating", () => {
+    const epic = registerSessionHoldingAgents([AGENT_ID]);
+    epic.store.setState({
+      chats: {
+        allIds: [AGENT_ID],
+        byId: { [AGENT_ID]: chatProjection(AGENT_ID, "viewer") },
+      },
+    });
+    const chat = registerOwnedWarmChat(true);
+    const { result } = renderHook(() => useOwnTurnEpicIds("viewer"));
+
+    act(() => publishWorking([AGENT_ID]));
+    expect(result.current.has(EPIC_ID)).toBe(false);
+
+    act(() => {
+      chat.store.setState({
+        access: { role: "owner", ownerUserId: "viewer", canAct: true },
+        runStatus: "running",
+        turnInProgress: true,
+      });
     });
     expect(result.current.has(EPIC_ID)).toBe(true);
   });

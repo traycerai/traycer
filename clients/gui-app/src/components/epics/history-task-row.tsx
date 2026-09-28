@@ -61,6 +61,7 @@ const WIDEST_ACTIVITY_LABEL = "activity about 23 hours ago";
 
 export interface HistoryTaskRowProps {
   readonly item: HistoryItem;
+  readonly timeLabel: string;
   readonly organization: { readonly canEdit: boolean } | null;
   readonly selectionMode: boolean;
   readonly selectionDisabled: boolean;
@@ -199,7 +200,7 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
         <HistoryRowTrailingMetadata
           epicId={props.item.epicId}
           selectionMode={props.selectionMode}
-          updatedLabel={props.item.recentLabel ?? props.item.updatedLabel}
+          updatedLabel={props.timeLabel}
           worktrees={props.worktrees}
           provenance={historyRowProvenance(props.item)}
         />
@@ -266,7 +267,7 @@ function HistoryRowTrailingMetadata(props: {
             "transition-opacity md:group-hover/list-row:opacity-0 md:group-focus-within/list-row:opacity-0",
         )}
       >
-        activity {props.updatedLabel}
+        {props.updatedLabel}
         {props.provenance === null ? null : (
           <span
             data-testid={`epics-list-row-coarse-provenance-label-${props.provenance}`}

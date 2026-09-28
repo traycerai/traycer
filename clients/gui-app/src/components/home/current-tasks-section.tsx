@@ -8,7 +8,10 @@ import {
   useRef,
   useState,
 } from "react";
-import type { HistoryItem } from "@/components/home/data/home-page.data";
+import {
+  historyRowTimeLabel,
+  type HistoryItem,
+} from "@/components/home/data/home-page.data";
 import { HistoryTaskRow } from "@/components/epics/history-task-row";
 import { historyItemDisplayTitle } from "@/components/epics/history-item-title";
 import { EpicsListLoading } from "@/components/epics/epics-list-shared";
@@ -228,6 +231,7 @@ function CurrentTaskRow(props: {
     <HistoryTaskRow
       organization={null}
       item={item}
+      timeLabel={historyRowTimeLabel(item, "recent")}
       selectionMode={false}
       selectionDisabled={false}
       selectedForDelete={false}

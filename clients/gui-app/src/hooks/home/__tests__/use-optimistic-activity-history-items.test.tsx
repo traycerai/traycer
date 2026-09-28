@@ -257,6 +257,101 @@ describe("optimistic activity history projection", () => {
     expect(result.current[0]?.recentAtMs).toBe(10_500);
   });
 
+  it("settles only rows whose durable recency changed after the active edge", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const userId = `clock-skew-${crypto.randomUUID()}`;
+    const initialItems = [
+      historyItem("changed-durable", 1_000, 1_000),
+      historyItem("unchanged-durable", 1_000, 1_000),
+    ];
+    hookState.workingEpicIds = new Set();
+    const { result, rerender } = renderHook(
+      ({ working, items }) => {
+        hookState.workingEpicIds = working;
+        return useOptimisticActivityHistoryItems({
+          items,
+          userId,
+          hostId: "host-clock-skew",
+          enabled: true,
+          refetch: vi.fn(() => Promise.resolve()),
+        });
+      },
+      { initialProps: { working: new Set<string>(), items: initialItems } },
+    );
+
+    rerender({
+      working: new Set(["changed-durable", "unchanged-durable"]),
+      items: initialItems,
+    });
+    rerender({ working: new Set(), items: initialItems });
+
+    expect(
+      result.current.find((item) => item.epicId === "changed-durable")
+        ?.recentAtMs,
+    ).toBe(10_000);
+    expect(
+      result.current.find((item) => item.epicId === "unchanged-durable")
+        ?.recentAtMs,
+    ).toBe(10_000);
+
+    rerender({
+      working: new Set(),
+      items: [
+        historyItem("changed-durable", 2_000, 2_000),
+        historyItem("unchanged-durable", 1_000, 1_000),
+      ],
+    });
+
+    expect(
+      result.current.find((item) => item.epicId === "changed-durable")
+        ?.recentAtMs,
+    ).toBe(2_000);
+    expect(
+      result.current.find((item) => item.epicId === "unchanged-durable")
+        ?.recentAtMs,
+    ).toBe(10_000);
+  });
+
+  it("waits for the accepted own-record timestamp before settling", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const userId = `accepted-at-${crypto.randomUUID()}`;
+    const initialItems = [historyItem("accepted-epic", 1_000, 1_000)];
+    const { result, rerender } = renderHook(
+      ({ working, items }) => {
+        hookState.workingEpicIds = working;
+        return useOptimisticActivityHistoryItems({
+          items,
+          userId,
+          hostId: "host-accepted-at",
+          enabled: true,
+          refetch: vi.fn(() => Promise.resolve()),
+        });
+      },
+      { initialProps: { working: new Set<string>(), items: initialItems } },
+    );
+
+    rerender({
+      working: new Set(["accepted-epic"]),
+      items: initialItems,
+    });
+    rerender({ working: new Set(), items: initialItems });
+    act(() => observeOwnHistoryRecordChange(userId, "accepted-epic", 3_000));
+
+    rerender({
+      working: new Set(),
+      items: [historyItem("accepted-epic", 2_000, 2_000)],
+    });
+    expect(result.current[0]?.recentAtMs).toBe(10_000);
+
+    rerender({
+      working: new Set(),
+      items: [historyItem("accepted-epic", 3_000, 3_000)],
+    });
+    expect(result.current[0]?.recentAtMs).toBe(3_000);
+  });
+
   it("refreshes once when two consumers share the same user and host scope", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(20_000);

@@ -83,6 +83,15 @@ export interface HistoryItem {
   isPreservedOrphan?: boolean;
 }
 
+/** The row's timestamp describes the key used by its time-based sort. */
+export function historyRowTimeLabel(
+  item: HistoryItem,
+  sort: HistorySortOption,
+): string {
+  if (sort === "oldest") return `updated ${item.updatedLabel}`;
+  return `activity ${item.recentLabel ?? item.updatedLabel}`;
+}
+
 export interface HistoryFilters {
   repoNames: ReadonlyArray<string>;
   repoMatchMode: HistoryMatchMode;

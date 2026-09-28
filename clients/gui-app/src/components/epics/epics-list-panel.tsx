@@ -63,12 +63,14 @@ import {
 import { ClearFiltersButton } from "@/components/home/toolbar/clear-filters-button";
 import type {
   HistoryItem,
+  HistorySortOption,
   HistoryWorkspaceRef,
 } from "@/components/home/data/home-page.data";
 import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   canDeleteHistoryItem,
   canEditHistoryItemTitle,
+  historyRowTimeLabel,
 } from "@/components/home/data/home-page.data";
 import {
   EpicsListChatHostFilterUnsupported,
@@ -816,6 +818,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       >
         <NotificationIndicatorsProvider indicators={notificationIndicators}>
           <HistoryListBody
+            sort={search.sort}
             isCountPending={isCountPending}
             scope={selectionMode ? "tasks" : props.scope}
             onScopeChange={selectionMode ? () => {} : props.onScopeChange}
@@ -1185,6 +1188,7 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
         {props.pageSearch}
         {props.chrome}
         <MobileHistoryList
+          sort={props.sort}
           error={props.error}
           isPending={props.isPending}
           isFetching={props.isFetching}
@@ -1217,6 +1221,7 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
   const { messageHits, rowsScopeRef } = props;
   const taskList = (
     <EpicsListBody
+      sort={props.sort}
       error={props.error}
       isPending={props.isPending}
       isFetching={props.isFetching}
@@ -1295,6 +1300,7 @@ function historyTaskCount(props: HistoryListBodyProps): HistoryCount {
 }
 
 interface EpicsListBodyProps {
+  readonly sort: HistorySortOption;
   readonly error: Error | null;
   readonly isPending: boolean;
   readonly isFetching: boolean;
@@ -1343,6 +1349,7 @@ interface EpicsListBodyProps {
 
 function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   const {
+    sort,
     error,
     isPending,
     isFetching,
@@ -1422,6 +1429,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     );
   }
   const rowProps = {
+    sort,
     selectionMode,
     selectionEnabled,
     selectedIds,
@@ -1472,6 +1480,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
             <EpicsListRow
               key={item.id}
               item={item}
+              sort={sort}
               selectionMode={selectionMode}
               selectionEnabled={selectionEnabled}
               isSelected={selectedIds.has(item.epicId)}
@@ -1509,6 +1518,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
 
 interface EpicsListRowProps {
   readonly item: HistoryItem;
+  readonly sort: HistorySortOption;
   readonly selectionMode: boolean;
   /** False for the read-only `variant="picker"` embed - disables the sweep
    * affordance instead of leaving it live-looking but inert. */
@@ -1541,6 +1551,7 @@ const ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE = "data-history-row-target-own-tooltip";
 const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const {
     item,
+    sort,
     selectionMode,
     selectionEnabled,
     isSelected,
@@ -1783,6 +1794,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   return (
     <HistoryTaskRow
       item={item}
+      timeLabel={historyRowTimeLabel(item, sort)}
       selectionMode={selectionMode}
       selectionDisabled={selectionDisabled}
       selectedForDelete={historySelectedForDelete({

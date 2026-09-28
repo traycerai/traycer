@@ -1615,4 +1615,33 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(screen.queryByTestId("epics-list-row-tray")).toBeNull();
     });
   });
+
+  describe("oldest sort timestamp", () => {
+    it.each([
+      ["phone", MOBILE_VIEWPORT_WIDTH],
+      ["desktop", DESKTOP_VIEWPORT_WIDTH],
+    ] as const)(
+      "shows the updated timestamp on %s rows",
+      async (_label, width) => {
+        setViewportWidth(width);
+        testState.items = [
+          historyItem({
+            recentAtMs: 1_700_000_100_000,
+            recentLabel: "just now",
+            updatedLabel: "about 2 hours ago",
+          }),
+        ];
+        useHistorySearchStore.setState({
+          search: { ...DEFAULT_HISTORY_SEARCH, sort: "oldest" },
+        });
+
+        renderPanel("page", "/");
+
+        expect(
+          await screen.findByText("updated about 2 hours ago"),
+        ).not.toBeNull();
+        expect(screen.queryByText("activity just now")).toBeNull();
+      },
+    );
+  });
 });

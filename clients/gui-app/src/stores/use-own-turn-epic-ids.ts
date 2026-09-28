@@ -52,13 +52,13 @@ function ownedWarmTiers(
   for (const handle of warm) {
     if (liveIds !== null && !liveIds.has(handle.chatId)) continue;
     const state = handle.store.getState();
+    const activity = chatSessionActivity(state);
+    // The shell tier can arrive before chat access hydrates. It still
+    // suppresses this id's unclassified host turn; it never proves ownership.
+    if (activity === "background") background.add(handle.chatId);
     if (state.access?.ownerUserId !== userId) continue;
     if (knownOwnerOfAgent(handle.chatId, epicState, warm) !== userId) continue;
-    const activity = chatSessionActivity(state);
     if (activity === "turn") return { turn: true, background };
-    // A warm background tier is authoritative for this chat. Older hosts
-    // conservatively copy all working agents into the published turn tier.
-    if (activity === "background") background.add(handle.chatId);
   }
   return { turn: false, background };
 }
