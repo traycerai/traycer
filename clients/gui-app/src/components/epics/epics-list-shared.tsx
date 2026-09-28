@@ -361,6 +361,7 @@ export function EpicsListNoRows(props: {
   readonly onRetry: () => void;
   readonly hasNextPage: boolean;
   readonly isFetchingNextPage: boolean;
+  readonly isBulkSelectionPending?: boolean;
   readonly onLoadMore: () => void;
 }): ReactNode {
   if (props.cloudPagePending) return <EpicsListLoading />;
@@ -381,6 +382,7 @@ export function EpicsListNoRows(props: {
       <EpicsListShowMore
         hasNextPage={props.hasNextPage}
         isFetchingNextPage={props.isFetchingNextPage}
+        isBulkSelectionPending={props.isBulkSelectionPending}
         onLoadMore={props.onLoadMore}
       />
     </>
@@ -403,6 +405,7 @@ export function EpicsListFilteredEmpty(): ReactNode {
 export interface EpicsListShowMoreProps {
   readonly hasNextPage: boolean;
   readonly isFetchingNextPage: boolean;
+  readonly isBulkSelectionPending?: boolean;
   readonly onLoadMore: () => void;
 }
 
@@ -414,7 +417,7 @@ export function EpicsListShowMore(props: EpicsListShowMoreProps): ReactNode {
         type="button"
         variant="ghost"
         size="sm"
-        disabled={props.isFetchingNextPage}
+        disabled={props.isFetchingNextPage || props.isBulkSelectionPending}
         onClick={props.onLoadMore}
         data-testid="epics-list-show-more"
       >

@@ -253,13 +253,32 @@ export function usePendingDeleteEpicIds(): ReadonlySet<string> {
     select: (mutation) => mutation.state.variables,
   });
   return useMemo(
-    () =>
-      new Set(
-        pendingVariables.flatMap((variables) =>
-          isBatchDeleteEpicVariables(variables) ? variables.ids : [],
-        ),
-      ),
+    () => pendingDeleteEpicIdsFromVariables(pendingVariables),
     [pendingVariables],
+  );
+}
+
+/** Reads pending deletes at callback time, avoiding a render-time snapshot. */
+export function readPendingDeleteEpicIds(
+  queryClient: QueryClient,
+): ReadonlySet<string> {
+  const pendingVariables = queryClient
+    .getMutationCache()
+    .findAll({
+      mutationKey: epicMutationKeys.batchDelete(),
+      status: "pending",
+    })
+    .map((mutation) => mutation.state.variables);
+  return pendingDeleteEpicIdsFromVariables(pendingVariables);
+}
+
+function pendingDeleteEpicIdsFromVariables(
+  pendingVariables: ReadonlyArray<unknown>,
+): ReadonlySet<string> {
+  return new Set(
+    pendingVariables.flatMap((variables) =>
+      isBatchDeleteEpicVariables(variables) ? variables.ids : [],
+    ),
   );
 }
 

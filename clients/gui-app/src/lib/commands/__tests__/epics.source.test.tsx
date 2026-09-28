@@ -73,7 +73,9 @@ function historyResult(
     currentUserId: "user-1",
     refetch: () => Promise.resolve(),
     fetchNextPage: () => undefined,
+    fetchAllItems: () => Promise.resolve([]),
     hasNextPage: false,
+    hasUnloadedItems: false,
     isFetchingNextPage: false,
     // Same reasoning as `completeness` above: the palette source never reads
     // it, so `false` is the quiet fixture rather than a claim that a cloud

@@ -218,6 +218,148 @@ describe("useCloudEpicTasksQuery", () => {
     resetNegotiatedManifests();
   });
 
+  it("fetches all matching cursor pages and deduplicates their tasks", async () => {
+    const pages: ListTasksResponse[] = [
+      { tasks: [taskLight("first", "First")], hasMore: true, nextCursor: "a" },
+      {
+        tasks: [taskLight("first", "Duplicate"), taskLight("second", "Second")],
+        hasMore: true,
+        nextCursor: "b",
+      },
+      { tasks: [taskLight("third", "Third")], hasMore: false },
+    ];
+    mockHostClient.request.mockImplementation((_method, params) => {
+      let index = 0;
+      if (params.cursor === "a") index = 1;
+      if (params.cursor === "b") index = 2;
+      const page = pages.at(index);
+      if (page === undefined) throw new Error("Expected fixture page");
+      return Promise.resolve(page);
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const { result } = renderHook(
+      () => useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+    await waitFor(() => expect(result.current.hasNextPage).toBe(true));
+    await act(async () => {
+      const tasks = await result.current.fetchAllPages(
+        new AbortController().signal,
+      );
+      expect(tasks?.map((task) => task.epic?.light?.title)).toEqual([
+        "First",
+        "Second",
+        "Third",
+      ]);
+    });
+    expect(listTasksCalls().map(([, params]) => params)).toEqual([
+      expect.objectContaining(LIST_CLOUD_TASKS_REQUEST),
+      expect.objectContaining({ ...LIST_CLOUD_TASKS_REQUEST, cursor: "a" }),
+      expect.objectContaining({ ...LIST_CLOUD_TASKS_REQUEST, cursor: "b" }),
+    ]);
+    expect(taskLightIds(result.current.tasks)).toEqual([
+      "first",
+      "second",
+      "third",
+    ]);
+  });
+
+  it.each(["repeated cursor", "missing cursor", "request error"])(
+    "refuses an incomplete bulk result after %s",
+    async (failure) => {
+      mockHostClient.request.mockImplementation((_method, params) => {
+        if (params.cursor === undefined)
+          return Promise.resolve({
+            tasks: [taskLight("first", "First")],
+            hasMore: true,
+            nextCursor: "a",
+          });
+        if (failure === "request error")
+          return Promise.reject(new Error("Cannot load page"));
+        return Promise.resolve({
+          tasks: [taskLight("second", "Second")],
+          hasMore: true,
+          nextCursor: failure === "repeated cursor" ? "a" : undefined,
+        });
+      });
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      const { result } = renderHook(
+        () =>
+          useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
+        { wrapper: makeWrapper(queryClient) },
+      );
+      await waitFor(() => expect(result.current.hasNextPage).toBe(true));
+      await act(async () => {
+        expect(
+          await result.current.fetchAllPages(new AbortController().signal),
+        ).toBeNull();
+      });
+      expect(listTasksCalls()).toHaveLength(2);
+    },
+  );
+
+  it.each(["cancel", "refresh", "authorization withdrawn"])(
+    "drops bulk results and stops paging after %s",
+    async (transition) => {
+      const tail = createDeferred<ListTasksResponse>();
+      mockHostClient.request.mockImplementation((_method, params) =>
+        params.cursor === undefined
+          ? Promise.resolve({
+              tasks: [taskLight("first", "First")],
+              hasMore: true,
+              nextCursor: "a",
+            })
+          : tail.promise,
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      const { result } = renderHook(
+        () =>
+          useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
+        { wrapper: makeWrapper(queryClient) },
+      );
+      await waitFor(() => expect(result.current.hasNextPage).toBe(true));
+      const controller = new AbortController();
+      const allPages = result.current.fetchAllPages(controller.signal);
+      await waitFor(() => expect(listTasksCalls()).toHaveLength(2));
+      act(() => {
+        if (transition === "cancel") controller.abort();
+        if (transition === "refresh") {
+          const store = useCloudEpicTasksPagesStore.getState();
+          Object.keys(store.generationByIdentity).forEach(store.resetIdentity);
+        }
+        if (transition === "authorization withdrawn")
+          useAuthStore.setState({ status: "unverified" });
+      });
+      await act(async () => {
+        tail.resolve({
+          tasks: [taskLight("second", "Second")],
+          hasMore: true,
+          nextCursor: "b",
+        });
+        expect(await allPages).toBeNull();
+      });
+      expect(listTasksCalls()).toHaveLength(2);
+      if (transition !== "authorization withdrawn") {
+        expect(taskLightIds(result.current.tasks)).toEqual(["first"]);
+      }
+    },
+  );
+
   it("admits #4's unverified stored identity to local-first History", async () => {
     // The cohort this whole feature exists for: a stored identity on disk that
     // authn could not confirm. `root-landing-page.tsx` renders `/epics` for it,

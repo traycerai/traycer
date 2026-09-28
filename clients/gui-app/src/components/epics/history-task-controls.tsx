@@ -2,6 +2,7 @@ import { OrganizationHistoryOverflow } from "@/components/organization/organizat
 import { useCallback, type ReactNode } from "react";
 import { ListChecks, Paintbrush, Trash2, X } from "lucide-react";
 import { RefreshIcon } from "@/components/refresh-icon";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { EpicsSortMenu } from "@/components/epics/epics-sort-menu";
 import { EpicsFilterPopover } from "@/components/epics/epics-filter-popover";
@@ -33,6 +34,7 @@ type PanelSelectionControls =
       readonly kind: "active";
       readonly canSelect: boolean;
       readonly selectedCount: number;
+      readonly isSelectAllPending: boolean;
       readonly allVisibleSelected: boolean;
       readonly isDeletePending: boolean;
       /** At least one selected task owns a worktree the dialog could list. */
@@ -146,13 +148,23 @@ function ActiveSelectionControls(props: {
         type="button"
         variant="ghost"
         size="sm"
-        disabled={!props.selection.canSelect}
+        disabled={
+          !props.selection.canSelect || props.selection.isSelectAllPending
+        }
         onClick={
           props.selection.allVisibleSelected
             ? props.selection.onDeselectAll
             : props.selection.onSelectAll
         }
       >
+        {props.selection.isSelectAllPending ? (
+          <AgentSpinningDots
+            variant="dots"
+            className={undefined}
+            testId={undefined}
+            tone="muted"
+          />
+        ) : null}
         {props.selection.allVisibleSelected ? "Deselect all" : "Select all"}
       </Button>
       <Button
@@ -175,7 +187,10 @@ function ActiveSelectionControls(props: {
         }
         aria-haspopup="dialog"
         data-testid="epics-list-sweep-selected"
-        disabled={!props.selection.canSweepSelected}
+        disabled={
+          !props.selection.canSweepSelected ||
+          props.selection.isSelectAllPending
+        }
         onClick={props.selection.onSweepSelected}
       >
         <Paintbrush />
@@ -191,7 +206,9 @@ function ActiveSelectionControls(props: {
         }
         data-testid="epics-list-delete-selected"
         disabled={
-          props.selection.selectedCount === 0 || props.selection.isDeletePending
+          props.selection.selectedCount === 0 ||
+          props.selection.isDeletePending ||
+          props.selection.isSelectAllPending
         }
         onClick={props.selection.onDeleteSelected}
       >

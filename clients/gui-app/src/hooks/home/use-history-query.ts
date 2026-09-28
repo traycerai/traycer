@@ -86,7 +86,11 @@ export interface UseHistoryQueryResult {
   readonly currentUserId: string | null;
   refetch: () => Promise<unknown>;
   fetchNextPage: () => void;
+  fetchAllItems: (
+    signal: AbortSignal,
+  ) => Promise<readonly HistoryItem[] | null>;
   hasNextPage: boolean;
+  hasUnloadedItems: boolean;
   isFetchingNextPage: boolean;
   /**
    * True while the local-first revalidation leg is outstanding - the rendered
@@ -157,7 +161,9 @@ export function useHistoryQuery(
     tasks,
     query: tasksQuery,
     fetchNextPage,
+    fetchAllPages,
     hasNextPage,
+    hasUnloadedItems,
     isFetchingNextPage,
     // The GUARDED refresh, not `tasksQuery.refetch`. TanStack's own `refetch`
     // overrides `enabled` and resets the page identity before the dispatch-time
@@ -429,6 +435,39 @@ export function useHistoryQuery(
   const isHydratingSearchMatches =
     (isPullRequestNumberQuery && activityIndex.isFetching) ||
     taskContexts.isFetching;
+  const fetchAllItems = useCallback(
+    async (signal: AbortSignal) => {
+      if (
+        isQueryDebouncing ||
+        tasksQuery.isPlaceholderData ||
+        isHydratingSearchMatches
+      ) {
+        return null;
+      }
+      const allTasks = await fetchAllPages(signal);
+      if (allTasks === null || signal.aborted) return null;
+      const loadedItems = buildHistoryItemsFromTasks(
+        allTasks,
+        nowMs,
+        currentUserId,
+        EMPTY_LOCAL_HOMED_TASK_IDS,
+      );
+      const seen = new Set(loadedItems.map((item) => item.id));
+      return [
+        ...loadedItems,
+        ...contextItems.filter((item) => !seen.has(item.id)),
+      ];
+    },
+    [
+      contextItems,
+      currentUserId,
+      fetchAllPages,
+      isHydratingSearchMatches,
+      isQueryDebouncing,
+      nowMs,
+      tasksQuery.isPlaceholderData,
+    ],
+  );
 
   return {
     data,
@@ -458,6 +497,8 @@ export function useHistoryQuery(
     currentUserId,
     refetch,
     fetchNextPage,
+    fetchAllItems,
+    hasUnloadedItems,
     // Pagination follows the plain cloud query; id-fetched local matches are
     // complete per query (not paginated). Keep the guard so "Show more"
     // cannot fetch against a stale request during debouncing / placeholder
