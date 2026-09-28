@@ -1,7 +1,23 @@
-import { useCallback, useRef, type ReactNode } from "react";
-import { Bot, FileDiff, type LucideIcon } from "lucide-react";
+import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
+import { cn } from "@/lib/utils";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import * as m from "motion/react-m";
+import { Bot, FileDiff, ListChecks, type LucideIcon } from "lucide-react";
 import { MessageSquareClock } from "@/components/notifications/message-square-clock";
-import { ChatDockCompactChip } from "@/components/chat/chat-dock-compact-chip";
+import {
+  ChatDockChipArrival,
+  ChatDockCompactChip,
+} from "@/components/chat/chat-dock-compact-chip";
+import { CHAT_DOCK_SECTION_NAME } from "@/lib/chat/chat-dock-sections";
+import { LAYOUT_CLUSTER_ATTRIBUTE } from "@/components/layout-editor/canvas/region-drag";
+import { LayoutClusterContextMenu } from "@/components/layout-editor/region-quick-verbs";
+import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
 import {
   STATUS_ANIMATION_PULSE_CADENCE_MS,
   useStatusAnimation,
@@ -10,6 +26,7 @@ import {
   ChatDockCompactStripContext,
   useChatDockCompactStrip,
   type ChatDockCompactChipGlyph,
+  type ChatDockCompactChipModel,
   type ChatDockCompactStripValue,
 } from "@/components/chat/chat-dock-compact-context";
 
@@ -17,11 +34,11 @@ export type {
   ChatDockCompactChipGlyph,
   ChatDockCompactChipModel,
   ChatDockCompactStripValue,
-  ChatDockSection,
 } from "@/components/chat/chat-dock-compact-context";
 
 export function ChatDockCompactStripProvider(props: {
-  readonly value: ChatDockCompactStripValue;
+  /** `null` is "no dock on this surface", the context's own resting value. */
+  readonly value: ChatDockCompactStripValue | null;
   readonly children: ReactNode;
 }): ReactNode {
   return (
@@ -35,11 +52,15 @@ const GLYPH_ICONS: Readonly<Record<ChatDockCompactChipGlyph, LucideIcon>> = {
   filesChanged: FileDiff,
   activeAgents: Bot,
   // The section's own mark, resting and working alike - the same
-  // chat-with-a-clock `BackgroundActivityGlyph` draws for background-only
+  // chat-with-a-clock `StatusGlyph` draws for background-only
   // activity elsewhere. Never a per-kind icon and never a pause: what the rows
   // are is the panel's to draw, and whether a shell is held is stated in this
   // chip's sentence.
   background: MessageSquareClock,
+  // The todo's own mark, the one its full row's header already prints beside
+  // the count: a pill and the row it folds have to be recognisable as the same
+  // member.
+  todo: ListChecks,
 };
 
 /**
@@ -140,38 +161,216 @@ function ChipGlyph(props: {
 }
 
 /**
- * The compact chips, at the tail of the composer's bottom strip - after the
- * host and workspace chips, hard against the context-usage cluster. They come
- * and go with what the chat is doing, and the tail is where that can happen
- * without the pickers on the left shifting under the pointer.
+ * A pill arriving, in the values the rest of the window already keeps: the
+ * leader badge's 140ms `easeOut`.
+ *
+ * `0.96` rather than `0` because a pill that grows from nothing reads as a
+ * thing being BUILT beside the input; 4% is the smallest amount that still
+ * says "this was not here a moment ago" while the pill stays the same object
+ * throughout. Only `transform` and `opacity` move, so nothing here reflows the
+ * composer underneath.
+ *
+ * Arrival only. A leaving pill goes in the frame it was removed in, and that
+ * is deliberate (staging round 4): an exit animation needs `AnimatePresence`
+ * to hold the element in the document, and a pill whose section came back
+ * before every exit in its batch had finished was revived as that same node,
+ * in flow, at the exit's `opacity: 0` - an invisible pill holding its width
+ * and pushing the pills after it off the composer's left edge. A pill that
+ * mounts fresh every time it arrives cannot be revived half-gone.
+ */
+const PILL_HIDDEN = { opacity: 0, scale: 0.96 } as const;
+const PILL_SHOWN = { opacity: 1, scale: 1 } as const;
+const PILL_ENTER_TRANSITION = { duration: 0.14, ease: "easeOut" } as const;
+
+/**
+ * One pill, and the element the Customize editor knows it by.
+ *
+ * The region marking is on the INNER span rather than on the animated one: the
+ * drag's own transforms are written there, the arrival's on its parent, and
+ * they compose rather than fight. Nothing arrives mid-drag anyway - a drag
+ * reorders the members that are there - so the two never run on the same
+ * element at the same time.
+ */
+function ChatDockCompactPill(props: {
+  readonly chip: ChatDockCompactChipModel;
+  readonly editing: boolean;
+  readonly expanded: boolean;
+  readonly controls: string | null;
+  readonly onToggle: () => void;
+}): ReactNode {
+  // Destructured before it reaches a `ref=`: `react-hooks/refs` reads a ref
+  // callback taken off a props BAG as a ref access during render.
+  const { hotspotRef } = props.chip;
+  return (
+    <span
+      // `contents` at rest, a real box while a session is live: the hotspot
+      // ref lands here, and a `display: contents` node has no rect for the
+      // hover outline or the travelling ring to measure (C-06).
+      className={cn(props.editing ? "inline-flex items-center" : "contents")}
+      ref={hotspotRef}
+    >
+      <ChatDockCompactChip
+        icon={
+          <ChipGlyph glyph={props.chip.glyph} working={props.chip.working} />
+        }
+        text={props.chip.text}
+        working={props.chip.working}
+        lineDeltas={props.chip.lineDeltas}
+        label={props.chip.label}
+        // The tooltip's first line is the member's own name, read off the
+        // dock's one name table rather than carried per chip (L-153): the
+        // pill, the panel header and the layout form must all call a member
+        // the same thing, and a model field would be a fourth place to say
+        // so. The counts beside it are the model's, because only the tile
+        // that built the chip knows them.
+        tooltipLines={{
+          name: CHAT_DOCK_SECTION_NAME[props.chip.section],
+          detail: props.chip.detail,
+        }}
+        pulseToken={props.chip.pulseToken}
+        expanded={props.expanded}
+        controls={props.controls}
+        testId={`chat-dock-chip-${props.chip.section}`}
+        onClick={props.onToggle}
+      />
+    </span>
+  );
+}
+
+/**
+ * The compact chips, side by side ABOVE the composer at its left edge (A12,
+ * L-97) - the one thing the owner kept from the artifact's compact composer.
+ *
+ * They used to close the composer's workspace ROW, at its right edge, where
+ * `overflow-hidden` clipped anything that overhung and a chip could only ever
+ * appear between the workspace picker and the context-usage cluster. Above the
+ * input they read as what they are: the dock's own members, folded, adjacent to
+ * the rows they open.
+ *
+ * It wraps rather than truncates: a narrow tile gets a second line of pills,
+ * which costs 24px of the transcript and is what a chip-sized member is for.
  *
  * Renders nothing outside a chat tile, and nothing inside one whose every row
  * is either on screen or empty.
+ *
+ * The pills are a SWITCHER (L-142): at most one of them has its panel attached
+ * above the composer, clicking another replaces it, and clicking the open one
+ * closes it. `actionsRef` is the node that open panel's actions are portalled
+ * into - it holds the row's right end, so pills never move when actions appear
+ * and never move back when they go.
+ *
+ * ONE quick-verb menu for the whole row (L-115, L-144), naming whichever pill
+ * the pointer was over. The pills are regions like any other piece of
+ * customizable chrome and the owner asked for them to answer a right-click
+ * like one; a root per pill would be five roots per tile for a gesture used a
+ * handful of times a session, which is the arithmetic G3-10 already settled.
  */
-export function ChatDockCompactStrip(): ReactNode {
+export function ChatDockCompactStrip(props: {
+  readonly actionsRef: (node: HTMLDivElement | null) => void;
+  /**
+   * Whether this chat's snapshot has landed - the dock's hydration signal,
+   * passed down rather than read here because the dock owns it already.
+   */
+  readonly snapshotLoaded: boolean;
+  /**
+   * Called once the latch below flips, so the dock can gate the attached
+   * panel's grow on the same fact the pills gate their ring on (L-152).
+   *
+   * Reported rather than read: "this component has committed at least once"
+   * is the one thing a render cannot compute, and this file is where that is
+   * already reasoned about and where the lint rule for it is already
+   * answered. Must be stable - it is an effect dependency.
+   */
+  readonly onSettled: () => void;
+}): ReactNode {
+  // Destructured before it reaches a `ref=`: `react-hooks/refs` reads a ref
+  // callback taken off a props BAG as a ref access during render.
+  const { actionsRef } = props;
+  const editing = useLayoutEditorStore((state) => state.session !== null);
   const value = useChatDockCompactStrip();
-  if (value === null || value.chips.length === 0) return null;
+  const motionEnabled = useMotionEnabled();
+  const hasChips = value !== null && value.chips.length > 0;
+  // The strip arms itself one commit after it has drawn a pill over SETTLED
+  // data, and suppresses the pulse of every pill until then. Opening a chat is
+  // not an arrival: five pills reaching their first paint together rang five
+  // rings at once beside the input, for nothing that had happened. A pill that
+  // arrives after this has flipped still rings exactly as before, because the
+  // chip reads it once in its own state initializer.
+  //
+  // Both halves of the condition are load-bearing, and each answers a hole the
+  // other leaves. "This strip has COMMITTED" is not enough: the strip mounts
+  // whenever the dock renders at all, including for a chat that has rows and
+  // no pills, so an empty first commit would arm it and the next burst - every
+  // pill a turn brings at once - would ring together, which is L-148's failure
+  // through the other door. And "the snapshot has LOADED" is not enough
+  // either, because the pills are built from independently arriving sources in
+  // `chat-tile-lower-surfaces.tsx`: the background rows come from the host's
+  // own stream, which does not wait for the snapshot, so a strip can hold a
+  // pill before the snapshot lands and would then be armed for the burst the snapshot brings
+  // with it (`changesPresent` and `todoHasContent` are both gated on it).
+  // Requiring both means the arming commit is the first one in which this dock
+  // has real data AND something to draw, and everything arriving in it is
+  // hydration by construction.
+  //
+  // "Has committed once" is the one fact a render cannot compute, which is why
+  // `react-hooks/set-state-in-effect` is turned off for this file in
+  // `eslint.config.mjs` rather than worked around; the reasoning is there.
+  const [settled, setSettled] = useState(false);
+  const snapshotLoaded = props.snapshotLoaded;
+  const onSettled = props.onSettled;
+  useEffect(() => {
+    if (!snapshotLoaded || !hasChips) return;
+    setSettled(true);
+    onSettled();
+  }, [snapshotLoaded, hasChips, onSettled]);
+  if (value === null || !hasChips) return null;
   return (
-    <div
-      data-testid="chat-dock-compact-strip"
-      className="ml-auto flex min-w-0 shrink-0 items-center gap-1"
-    >
-      {value.chips.map((chip) => (
-        <ChatDockCompactChip
-          key={chip.section}
-          icon={<ChipGlyph glyph={chip.glyph} working={chip.working} />}
-          text={chip.text}
-          working={chip.working}
-          lineDeltas={chip.lineDeltas}
-          label={chip.label}
-          pulseToken={chip.pulseToken}
-          expanded={value.expanded.has(chip.section)}
-          testId={`chat-dock-chip-${chip.section}`}
-          onClick={() => {
-            value.onToggle(chip.section);
-          }}
+    <LayoutClusterContextMenu>
+      <div
+        data-testid="chat-dock-compact-strip"
+        {...{ [LAYOUT_CLUSTER_ATTRIBUTE]: "" }}
+        className="flex min-w-0 flex-wrap items-center gap-1.5"
+      >
+        <ChatDockChipArrival suppressed={!settled}>
+          {/* Gated on `settled` for the same reason the ring is: without it
+              a chat opening would animate every pill it opens with, which is
+              the same first-paint noise the pulse suppression above removes.
+              `initial` is read once, at mount, so a pill already drawn never
+              replays it. And no `layout` prop anywhere here: this row is
+              `flex-wrap` directly above the composer, so a layout animation
+              across a wrap boundary would move the input. */}
+          {value.chips.map((chip) => (
+            <m.span
+              key={chip.section}
+              className="inline-flex shrink-0 items-center"
+              initial={motionEnabled && settled ? PILL_HIDDEN : false}
+              animate={PILL_SHOWN}
+              transition={PILL_ENTER_TRANSITION}
+            >
+              <ChatDockCompactPill
+                chip={chip}
+                editing={editing}
+                expanded={value.openSection === chip.section}
+                controls={
+                  value.openSection === chip.section ? value.panelId : null
+                }
+                onToggle={() => {
+                  value.onToggle(chip.section);
+                }}
+              />
+            </m.span>
+          ))}
+        </ChatDockChipArrival>
+        {/* Always mounted, empty while nothing is open: `ml-auto` on an empty
+            box takes the row's slack and nothing else, so the pills sit where
+            they sat before the panel opened. It wraps with the pills on a
+            narrow tile rather than squeezing them. */}
+        <div
+          ref={actionsRef}
+          data-testid="chat-dock-pill-actions"
+          className="ml-auto flex shrink-0 items-center gap-1"
         />
-      ))}
-    </div>
+      </div>
+    </LayoutClusterContextMenu>
   );
 }

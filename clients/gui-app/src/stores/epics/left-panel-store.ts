@@ -1,7 +1,30 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import {
+  basePersistOptions,
+  installCrossWindowRehydrate,
+  persistKey,
+  STORE_KEYS,
+} from "@/lib/persist";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import { panelVisibilityOverridesFromValues } from "@/lib/layout/rail";
+import { effectiveLayoutValues } from "@/lib/layout/layout-presets";
+// Imported for its module-load side effect, and for that reason only: the
+// shipped-key carry (L-49, L-61) reads this store's record RAW, and zustand's
+// `persist` rewrites that record through the current `partialize` the moment
+// `create()` runs below. Capturing it first has to be strictly earlier than
+// this module's body, which an import is and a bootstrap call is not.
+import "@/lib/layout/legacy-layout-records";
+import { useLayoutStore } from "@/stores/layout/layout-store";
+import {
+  currentMaxRailNaturalWidthPx,
+  useMaxRailNaturalWidthPx,
+} from "@/stores/epics/sidebar-rail-width-store";
+import {
+  isLeftPanelId,
+  type LeftPanelId,
+  type PanelVisibilityOverrideById,
+} from "@/lib/left-panel-ids";
 import {
   DEFAULT_SORT_MODE,
   isDefaultSort,
@@ -10,20 +33,6 @@ import {
   type SortField,
   type SortMode,
 } from "@/lib/epic-sort";
-
-export const LEFT_PANEL_IDS = [
-  "chats",
-  "terminals",
-  "browsers",
-  "artifacts",
-  "git-diff",
-  "pull-requests",
-  "file-tree",
-  "sharing",
-  "comments",
-] as const;
-
-export type LeftPanelId = (typeof LEFT_PANEL_IDS)[number];
 
 // The two panels that own a root-create affordance and a reparent drop target
 // (the chat/agent tree and the artifact tree). Kept as a runtime tuple so DnD
@@ -182,7 +191,7 @@ export const DEFAULT_LEFT_PANEL_ID: LeftPanelId = "chats";
 // ─── Sidebar width (global) ────────────────────────────────────────────────
 // One persisted px width shared by every epic tab: the sidebar is a single
 // hoisted app-level surface (see `epic-sidebar-column.tsx`), so its width is a
-// user layout preference like the rail grouping, not per-tab view chrome.
+// user layout preference like the rail's own order, not per-tab view chrome.
 // Bounds ported from paseo's panel store; the resize handle additionally caps
 // the live drag at half the layout row so the canvas always keeps space.
 export const DEFAULT_SIDEBAR_WIDTH_PX = 320;
@@ -197,16 +206,19 @@ export function clampSidebarWidthPx(widthPx: number): number {
   );
 }
 
-export const DEFAULT_LEFT_PANEL_GROUPS: ReadonlyArray<LeftPanelGroup> = [
-  { panelIds: ["chats", "artifacts"] },
-  { panelIds: ["terminals"] },
-  { panelIds: ["browsers"] },
-  { panelIds: ["git-diff"] },
-  { panelIds: ["pull-requests"] },
-  { panelIds: ["file-tree"] },
-  { panelIds: ["sharing"] },
-  { panelIds: ["comments"] },
-];
+/**
+ * `MIN_SIDEBAR_WIDTH_PX` widened by whichever mounted tab's rail currently
+ * needs the most room (`sidebar-rail-width-store.ts`), capped at the same
+ * ceiling a manual drag already respects - a rail with enough panels to
+ * outgrow it scrolls internally rather than pushing the sidebar past the
+ * width the rest of the layout was sized for.
+ */
+export function dynamicMinSidebarWidthPx(): number {
+  return Math.min(
+    MAX_SIDEBAR_WIDTH_PX,
+    Math.max(MIN_SIDEBAR_WIDTH_PX, currentMaxRailNaturalWidthPx()),
+  );
+}
 
 export interface LeftPanelRootCreatePending {
   readonly name: string;
@@ -217,17 +229,11 @@ export interface LeftPanelAcknowledgedRootCreatePending {
   readonly name: string;
 }
 
-export interface LeftPanelGroup {
-  readonly panelIds: ReadonlyArray<LeftPanelId>;
-}
-
 type RootCreatePendingByPanel<T> = Readonly<
   Partial<Record<string, Readonly<Partial<Record<RootCreatePanelId, T>>>>>
 >;
+
 type PanelSectionCollapsedByPanelId = Readonly<
-  Partial<Record<LeftPanelId, boolean>>
->;
-export type PanelVisibilityOverrideById = Readonly<
   Partial<Record<LeftPanelId, boolean>>
 >;
 type PanelSectionWeightsByPanelId = Readonly<
@@ -236,25 +242,28 @@ type PanelSectionWeightsByPanelId = Readonly<
 
 interface LeftPanelStore {
   readonly activePanelIdByTabId: Readonly<Record<string, LeftPanelId>>;
-  readonly panelGroups: ReadonlyArray<LeftPanelGroup>;
   readonly mainCollapsedByTabId: Readonly<Record<string, boolean>>;
   readonly sidebarWidthPx: number;
+  /**
+   * Per-section collapse, for a panel that is one of a STACKED PAIR and only
+   * then (L-166). A collapsed section hands its space to its partner, so the
+   * sidebar body is never empty because of it - which is the defect R5R-01
+   * found when the body drew one section and still read this flag. A panel
+   * standing alone is never collapsible and draws no chevron; "collapse the
+   * sidebar" has one owner in {@link LeftPanelStore.mainCollapsedByTabId}.
+   */
   readonly panelSectionCollapsedByPanelId: PanelSectionCollapsedByPanelId;
+  /**
+   * How a stacked pair splits the body, as a weight per panel.
+   *
+   * Arbitrary-sum numbers rather than a fraction, and keyed by panel rather
+   * than by stack, because that is the shape the SHIPPED build wrote and it is
+   * still in users' records: keeping it means a dogfooder who dragged the
+   * handle to give Artifacts two thirds of the column gets that split back
+   * with no migration at all.
+   */
   readonly panelSectionWeightsByPanelId: PanelSectionWeightsByPanelId;
   readonly commentsPanelRevealedByTabId: Readonly<Record<string, boolean>>;
-  /**
-   * Explicit show/hide chosen from the rail context menu, keyed by panel. An
-   * entry wins over the panel's own availability rule: `true` keeps the icon in
-   * the rail even when the rule would drop it (a PR-less epic, an artifact with
-   * no comments), `false` hides a panel that would otherwise be there. An
-   * absent entry means "follow the rule", which is why the map is sparse rather
-   * than a full record - see `isLeftPanelVisible`.
-   *
-   * Global (not per tab or per epic) because it expresses a durable preference
-   * about the rail's shape, the same way `panelGroups` does: hiding a panel in
-   * one epic should not have to be repeated in the next.
-   */
-  readonly panelVisibilityOverrideById: PanelVisibilityOverrideById;
   readonly localRootCreatePendingByEpicPanel: RootCreatePendingByPanel<LeftPanelRootCreatePending>;
   readonly acknowledgedRootCreatePendingByEpicPanel: RootCreatePendingByPanel<LeftPanelAcknowledgedRootCreatePending>;
   readonly chatFilterByEpicId: Readonly<Record<string, ChatFilter>>;
@@ -278,27 +287,11 @@ interface LeftPanelStore {
     panelId: LeftPanelId,
   ) => void;
   readonly copyTabState: (sourceTabId: string, targetTabId: string) => void;
-  readonly getPanelGroups: () => ReadonlyArray<LeftPanelGroup>;
-  /**
-   * Atomic panel-groups write for the rail/section DnD commit layer: callers
-   * resolve the next groups with the pure `moveLeftPanel*` helpers (see
-   * `resolveLeftPanelGroupsForDrop` in `root-dnd-commits.ts`) and apply the
-   * result here. Normalizes the input and keeps slice identity when the
-   * result is structurally unchanged.
-   */
-  readonly applyPanelGroups: (
-    nextGroups: ReadonlyArray<LeftPanelGroup>,
-  ) => void;
 
   readonly isMainCollapsed: (tabId: string) => boolean;
   readonly setMainCollapsed: (tabId: string, collapsed: boolean) => void;
   readonly toggleMainCollapsed: (tabId: string) => void;
   readonly setSidebarWidthPx: (widthPx: number) => void;
-  readonly isPanelSectionCollapsed: (panelId: LeftPanelId) => boolean;
-  readonly setPanelSectionCollapsed: (
-    panelId: LeftPanelId,
-    collapsed: boolean,
-  ) => void;
   readonly togglePanelSectionCollapsed: (panelId: LeftPanelId) => void;
   readonly setPanelSectionWeights: (
     weights: ReadonlyArray<{ panelId: LeftPanelId; weight: number }>,
@@ -306,17 +299,6 @@ interface LeftPanelStore {
 
   readonly isCommentsPanelRevealed: (tabId: string) => boolean;
   readonly revealCommentsPanel: (tabId: string) => void;
-
-  /**
-   * `null` drops the override so the panel goes back to following its own
-   * availability rule. Callers pass `null` whenever the value they are setting
-   * already matches that rule, keeping the persisted map to real preferences.
-   */
-  readonly setPanelVisibilityOverride: (
-    panelId: LeftPanelId,
-    override: boolean | null,
-  ) => void;
-  readonly clearPanelVisibilityOverrides: () => void;
 
   readonly getLocalRootCreatePending: (
     epicId: string,
@@ -372,10 +354,6 @@ interface LeftPanelStore {
 }
 
 const PERSIST_KEY = persistKey(STORE_KEYS.leftPanel);
-
-function isLeftPanelId(value: unknown): value is LeftPanelId {
-  return LEFT_PANEL_IDS.some((panelId) => panelId === value);
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
@@ -446,110 +424,15 @@ export function migrateLeftPanelPersistedState(persisted: unknown): unknown {
   return migrated;
 }
 
-function isPersistedPanelGroupShape(
-  value: unknown,
-): value is { readonly panelIds: ReadonlyArray<unknown> } {
-  if (!isRecord(value)) return false;
-  return Array.isArray(value.panelIds);
-}
-
-/**
- * Sidebar grouping as some build of the app wrote it. Only structure is
- * rejected here; an id this build does not know is dropped, and the group with
- * it once nothing is left in it.
- *
- * Removing a panel has to be as gentle as adding one. Rejecting the whole
- * value over one unknown id sends a user who had ever rearranged their sidebar
- * straight back to defaults on the release that retires a panel - and every
- * such user carries the retired id, because it shipped in the defaults.
- */
-function readPersistedPanelGroups(
-  value: unknown,
-): ReadonlyArray<LeftPanelGroup> | null {
-  if (!Array.isArray(value)) return null;
-  if (!value.every(isPersistedPanelGroupShape)) return null;
-  return value.flatMap((group) => {
-    const panelIds = group.panelIds.filter(isLeftPanelId);
-    return panelIds.length === 0 ? [] : [{ panelIds }];
-  });
-}
-
-function getPersistedPanelSectionCollapsedByPanelId(
-  panelSectionCollapsedByPanelId: PanelSectionCollapsedByPanelId,
+function getPersistedPanelSectionCollapsed(
+  collapsedByPanelId: PanelSectionCollapsedByPanelId,
 ): PanelSectionCollapsedByPanelId {
-  return Object.entries(panelSectionCollapsedByPanelId).reduce<
+  return Object.entries(collapsedByPanelId).reduce<
     Partial<Record<LeftPanelId, boolean>>
-  >((nextPanelState, [panelId, collapsed]) => {
-    if (isLeftPanelId(panelId) && collapsed) {
-      nextPanelState[panelId] = true;
-    }
-    return nextPanelState;
+  >((next, [panelId, collapsed]) => {
+    if (isLeftPanelId(panelId) && collapsed) next[panelId] = true;
+    return next;
   }, {});
-}
-
-/**
- * Drop entries a newer/older build (or a hand-edited localStorage) could have
- * left behind: an unknown panel id, or a non-boolean where the override map
- * only ever holds `true`/`false`.
- */
-function getPersistedPanelVisibilityOverrides(
-  panelVisibilityOverrideById: PanelVisibilityOverrideById,
-): PanelVisibilityOverrideById {
-  return Object.entries(panelVisibilityOverrideById).reduce<
-    Partial<Record<LeftPanelId, boolean>>
-  >((nextOverrides, [panelId, visible]) => {
-    if (isLeftPanelId(panelId) && typeof visible === "boolean") {
-      nextOverrides[panelId] = visible;
-    }
-    return nextOverrides;
-  }, {});
-}
-
-// `normalizeLeftPanelGroups` returns its input untouched only when the stored
-// value is ALREADY normalized; otherwise it builds a new array. Persisted
-// groups written before a panel id existed can never be already-normalized -
-// the missing group is appended on every call - so the uncached function
-// returns a different reference each time it runs.
-//
-// `useLeftPanelGroups` feeds that value straight into `useSyncExternalStore`,
-// and zustand v5 calls `getSnapshot` as `() => selector(getState())` with no
-// memoization of its own. An unstable reference therefore reads as "the store
-// changed" on every commit, so React re-renders forever and throws "Maximum
-// update depth exceeded" (minified error #185) - which is what every user
-// carrying pre-Pull-Requests sidebar state hit on opening an epic.
-//
-// Keyed by the stored array's identity rather than held as ONE last-input
-// slot: a single slot only guarantees stability while every reader passes the
-// same input, so two readers alternating between two identities (a rehydrated
-// persisted array and the live slice, say) would each miss and hand
-// `useSyncExternalStore` a fresh array on every commit again - the exact
-// condition above. A WeakMap keeps every observed input stable and lets the
-// entry die with the array it belongs to.
-const storedPanelGroupsCache = new WeakMap<
-  object,
-  ReadonlyArray<LeftPanelGroup>
->();
-
-function normalizeStoredPanelGroups(
-  groups: unknown,
-): ReadonlyArray<LeftPanelGroup> {
-  const storedGroups = readPersistedPanelGroups(groups);
-  return storedGroups === null
-    ? DEFAULT_LEFT_PANEL_GROUPS
-    : normalizeLeftPanelGroups(storedGroups);
-}
-
-function getStoredPanelGroups(groups: unknown): ReadonlyArray<LeftPanelGroup> {
-  // A non-object input cannot key a WeakMap, but it also cannot be normalized
-  // to anything but the default constant, which is already a stable reference.
-  if (typeof groups !== "object" || groups === null) {
-    return normalizeStoredPanelGroups(groups);
-  }
-  const cached = storedPanelGroupsCache.get(groups);
-  if (cached !== undefined) return cached;
-  const normalizedGroups = normalizeStoredPanelGroups(groups);
-  storedPanelGroupsCache.set(groups, normalizedGroups);
-  return normalizedGroups;
 }
 
 function getPersistedActivePanelIds(
@@ -565,6 +448,45 @@ function getPersistedActivePanelIds(
   }, {});
 }
 
+/**
+ * The default shallow merge, except that a tab currently showing the Comments
+ * panel keeps showing it.
+ *
+ * `getPersistedActivePanelIds` deliberately never writes a `"comments"` entry:
+ * the Comments panel is a TRANSIENT reveal, opened by following a comment, and
+ * a restart is meant to land back on the durable panel underneath. That was
+ * harmless while hydration happened once at start-up, because there was no live
+ * selection to lose.
+ *
+ * Cross-window rehydrate broke exactly that assumption. The listener runs this
+ * merge against a RUNNING store, so any write from another window - a sidebar
+ * resize, a panel reorder - replaced the live map with one that, by
+ * construction, cannot contain the Comments entry. The user's open Comments
+ * panel silently became Chats because a different window changed its sidebar
+ * width.
+ *
+ * So the persisted map wins for everything it can express, and the one value it
+ * cannot express is layered back on from the live state. Only `"comments"` -
+ * every other panel id round-trips, so taking those from `current` would be
+ * ignoring the remote write this merge exists to apply.
+ */
+function mergeLeftPanelPersistedState(
+  persistedState: unknown,
+  currentState: LeftPanelStore,
+): LeftPanelStore {
+  if (!isRecord(persistedState)) return currentState;
+  const merged: LeftPanelStore = { ...currentState, ...persistedState };
+  const activePanelIdByTabId: Record<string, LeftPanelId> = {
+    ...merged.activePanelIdByTabId,
+  };
+  for (const [tabId, panelId] of Object.entries(
+    currentState.activePanelIdByTabId,
+  )) {
+    if (panelId === "comments") activePanelIdByTabId[tabId] = panelId;
+  }
+  return { ...merged, activePanelIdByTabId };
+}
+
 function getPersistedMainCollapsedByTabId(
   mainCollapsedByTabId: Readonly<Record<string, boolean>>,
 ): Readonly<Record<string, boolean>> {
@@ -575,12 +497,6 @@ function getPersistedMainCollapsedByTabId(
     },
     {},
   );
-}
-
-function getPersistedPanelGroups(
-  groups: ReadonlyArray<LeftPanelGroup>,
-): ReadonlyArray<LeftPanelGroup> {
-  return normalizeLeftPanelGroups(groups);
 }
 
 // Persist only active filters so localStorage doesn't accumulate empty entries.
@@ -597,309 +513,19 @@ function filterActiveByEpic<T>(
   );
 }
 
-function findPanelGroupIndex(
-  groups: ReadonlyArray<LeftPanelGroup>,
-  panelId: LeftPanelId,
-): number {
-  return groups.findIndex((group) => group.panelIds.includes(panelId));
-}
-
-function findPanelLocation(
-  groups: ReadonlyArray<LeftPanelGroup>,
-  panelId: LeftPanelId,
-): { readonly groupIndex: number; readonly panelIndex: number } | null {
-  const groupIndex = findPanelGroupIndex(groups, panelId);
-  if (groupIndex < 0) return null;
-  const panelIndex = groups[groupIndex].panelIds.indexOf(panelId);
-  if (panelIndex < 0) return null;
-  return { groupIndex, panelIndex };
-}
-
-export function areLeftPanelGroupsEqual(
-  left: ReadonlyArray<LeftPanelGroup>,
-  right: ReadonlyArray<LeftPanelGroup>,
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((group, groupIndex) => {
-      const rightGroup = right[groupIndex];
-      return (
-        group.panelIds.length === rightGroup.panelIds.length &&
-        group.panelIds.every(
-          (panelId, panelIndex) => rightGroup.panelIds[panelIndex] === panelId,
-        )
-      );
-    })
+/**
+ * The nine rail regions' show/hide, for this store's OWN activation guard.
+ *
+ * A read, deliberately not a write: the rail's shape belongs to the layout
+ * store and `lib/layout/rail-view.ts` owns the writers (G1-09). What this
+ * store still needs to know is which panels a user has switched off, because
+ * it must not make one of them the active panel.
+ */
+function currentPanelVisibilityOverrides(): PanelVisibilityOverrideById {
+  const state = useLayoutStore.getState();
+  return panelVisibilityOverridesFromValues(
+    effectiveLayoutValues(state.basePreset, state.overrides),
   );
-}
-
-export function updateLeftPanelGroups(
-  currentGroups: ReadonlyArray<LeftPanelGroup>,
-  nextGroups: ReadonlyArray<LeftPanelGroup>,
-): ReadonlyArray<LeftPanelGroup> {
-  if (nextGroups === currentGroups) return currentGroups;
-  if (areLeftPanelGroupsEqual(nextGroups, currentGroups)) return currentGroups;
-  return nextGroups;
-}
-
-function setPanelGroupsState(
-  currentGroups: ReadonlyArray<LeftPanelGroup>,
-  nextGroups: ReadonlyArray<LeftPanelGroup>,
-): Pick<LeftPanelStore, "panelGroups"> | null {
-  const updatedGroups = updateLeftPanelGroups(currentGroups, nextGroups);
-  if (updatedGroups === currentGroups) return null;
-  return { panelGroups: updatedGroups };
-}
-
-function normalizeLeftPanelGroups(
-  groups: ReadonlyArray<LeftPanelGroup>,
-): ReadonlyArray<LeftPanelGroup> {
-  const seen = new Set<LeftPanelId>();
-  const nextGroups = groups.flatMap((group) => {
-    const panelIds = group.panelIds.filter((panelId) => {
-      if (!isLeftPanelId(panelId)) return false;
-      if (seen.has(panelId)) return false;
-      seen.add(panelId);
-      return true;
-    });
-    return panelIds.length === 0 ? [] : [{ panelIds }];
-  });
-  const missingGroups = LEFT_PANEL_IDS.flatMap((panelId) =>
-    seen.has(panelId) ? [] : [{ panelIds: [panelId] }],
-  );
-  const normalizedGroups = [...nextGroups, ...missingGroups];
-  const alreadyNormalized =
-    missingGroups.length === 0 &&
-    normalizedGroups.length === groups.length &&
-    normalizedGroups.every((group, groupIndex) => {
-      const originalGroup = groups[groupIndex];
-      return (
-        group.panelIds.length === originalGroup.panelIds.length &&
-        group.panelIds.every(
-          (panelId, panelIndex) =>
-            originalGroup.panelIds[panelIndex] === panelId,
-        )
-      );
-    });
-  return alreadyNormalized ? groups : normalizedGroups;
-}
-
-export function moveLeftPanelGroup(
-  groups: ReadonlyArray<LeftPanelGroup>,
-  sourcePanelId: LeftPanelId,
-  targetPanelId: LeftPanelId,
-  position: "before" | "after" | "combine",
-): ReadonlyArray<LeftPanelGroup> {
-  const normalizedGroups = normalizeLeftPanelGroups(groups);
-  const sourceIndex = findPanelGroupIndex(normalizedGroups, sourcePanelId);
-  const targetIndex = findPanelGroupIndex(normalizedGroups, targetPanelId);
-  if (sourceIndex < 0 || targetIndex < 0) return normalizedGroups;
-  if (sourceIndex === targetIndex) return normalizedGroups;
-
-  const sourceGroup = normalizedGroups[sourceIndex];
-  const targetGroup = normalizedGroups[targetIndex];
-  const groupsWithoutSource = normalizedGroups.filter(
-    (_group, index) => index !== sourceIndex,
-  );
-  const adjustedTargetIndex =
-    sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
-
-  if (position === "combine") {
-    return groupsWithoutSource.map((group, index) =>
-      index === adjustedTargetIndex
-        ? {
-            panelIds: [...targetGroup.panelIds, ...sourceGroup.panelIds],
-          }
-        : group,
-    );
-  }
-
-  const insertIndex =
-    position === "before" ? adjustedTargetIndex : adjustedTargetIndex + 1;
-  return [
-    ...groupsWithoutSource.slice(0, insertIndex),
-    sourceGroup,
-    ...groupsWithoutSource.slice(insertIndex),
-  ];
-}
-
-export function moveLeftPanelGroupToEnd(
-  groups: ReadonlyArray<LeftPanelGroup>,
-  sourcePanelId: LeftPanelId,
-): ReadonlyArray<LeftPanelGroup> {
-  const normalizedGroups = normalizeLeftPanelGroups(groups);
-  const sourceIndex = findPanelGroupIndex(normalizedGroups, sourcePanelId);
-  if (sourceIndex < 0 || sourceIndex === normalizedGroups.length - 1) {
-    return normalizedGroups;
-  }
-  const sourceGroup = normalizedGroups[sourceIndex];
-  return [
-    ...normalizedGroups.filter((_group, index) => index !== sourceIndex),
-    sourceGroup,
-  ];
-}
-
-function removePanelFromGroups(
-  groups: ReadonlyArray<LeftPanelGroup>,
-  sourcePanelId: LeftPanelId,
-): ReadonlyArray<LeftPanelGroup> {
-  return groups.flatMap((group) => {
-    const panelIds = group.panelIds.filter(
-      (panelId) => panelId !== sourcePanelId,
-    );
-    return panelIds.length === 0 ? [] : [{ panelIds }];
-  });
-}
-
-function insertPanelIdsAtPanelPosition(
-  groups: ReadonlyArray<LeftPanelGroup>,
-  panelIds: ReadonlyArray<LeftPanelId>,
-  targetPanelId: LeftPanelId,
-  position: "before" | "after",
-): ReadonlyArray<LeftPanelGroup> | null {
-  const targetLocation = findPanelLocation(groups, targetPanelId);
-  if (targetLocation === null) return null;
-  const targetGroup = groups[targetLocation.groupIndex];
-  const insertIndex =
-    position === "before"
-      ? targetLocation.panelIndex
-      : targetLocation.panelIndex + 1;
-  const nextPanelIds = [
-    ...targetGroup.panelIds.slice(0, insertIndex),
-    ...panelIds,
-    ...targetGroup.panelIds.slice(insertIndex),
-  ];
-  return groups.map((group, index) =>
-    index === targetLocation.groupIndex ? { panelIds: nextPanelIds } : group,
-  );
-}
-
-export function moveLeftPanelToGroup(
-  groups: ReadonlyArray<LeftPanelGroup>,
-  sourcePanelId: LeftPanelId,
-  targetPanelId: LeftPanelId,
-): ReadonlyArray<LeftPanelGroup> {
-  if (sourcePanelId === targetPanelId) return normalizeLeftPanelGroups(groups);
-  const normalizedGroups = normalizeLeftPanelGroups(groups);
-  const sourceIndex = findPanelGroupIndex(normalizedGroups, sourcePanelId);
-  const targetIndex = findPanelGroupIndex(normalizedGroups, targetPanelId);
-  if (sourceIndex < 0 || targetIndex < 0) return normalizedGroups;
-  if (sourceIndex === targetIndex) return normalizedGroups;
-  const groupsWithoutSource = removePanelFromGroups(
-    normalizedGroups,
-    sourcePanelId,
-  );
-  const targetIndexAfterRemoval = findPanelGroupIndex(
-    groupsWithoutSource,
-    targetPanelId,
-  );
-  if (targetIndexAfterRemoval < 0) return normalizedGroups;
-
-  return groupsWithoutSource.map((group, index) =>
-    index === targetIndexAfterRemoval
-      ? { panelIds: [...group.panelIds, sourcePanelId] }
-      : group,
-  );
-}
-
-export function moveLeftPanelGroupToPanelPosition(
-  groups: ReadonlyArray<LeftPanelGroup>,
-  sourcePanelId: LeftPanelId,
-  targetPanelId: LeftPanelId,
-  position: "before" | "after",
-): ReadonlyArray<LeftPanelGroup> {
-  const normalizedGroups = normalizeLeftPanelGroups(groups);
-  const sourceIndex = findPanelGroupIndex(normalizedGroups, sourcePanelId);
-  const targetIndex = findPanelGroupIndex(normalizedGroups, targetPanelId);
-  if (sourceIndex < 0 || targetIndex < 0) return normalizedGroups;
-  if (sourceIndex === targetIndex) return normalizedGroups;
-  const sourceGroup = normalizedGroups[sourceIndex];
-  return (
-    insertPanelIdsAtPanelPosition(
-      normalizedGroups.filter((_group, index) => index !== sourceIndex),
-      sourceGroup.panelIds,
-      targetPanelId,
-      position,
-    ) ?? normalizedGroups
-  );
-}
-
-export function moveLeftPanelToPanelPosition(
-  groups: ReadonlyArray<LeftPanelGroup>,
-  sourcePanelId: LeftPanelId,
-  targetPanelId: LeftPanelId,
-  position: "before" | "after",
-): ReadonlyArray<LeftPanelGroup> {
-  if (sourcePanelId === targetPanelId) return normalizeLeftPanelGroups(groups);
-  const normalizedGroups = normalizeLeftPanelGroups(groups);
-  const sourceIndex = findPanelGroupIndex(normalizedGroups, sourcePanelId);
-  const targetIndex = findPanelGroupIndex(normalizedGroups, targetPanelId);
-  if (sourceIndex < 0 || targetIndex < 0) return normalizedGroups;
-  return (
-    insertPanelIdsAtPanelPosition(
-      removePanelFromGroups(normalizedGroups, sourcePanelId),
-      [sourcePanelId],
-      targetPanelId,
-      position,
-    ) ?? normalizedGroups
-  );
-}
-
-export function moveLeftPanelToGroupPosition(
-  groups: ReadonlyArray<LeftPanelGroup>,
-  sourcePanelId: LeftPanelId,
-  targetPanelId: LeftPanelId,
-  position: "before" | "after",
-): ReadonlyArray<LeftPanelGroup> {
-  const normalizedGroups = normalizeLeftPanelGroups(groups);
-  const sourceIndex = findPanelGroupIndex(normalizedGroups, sourcePanelId);
-  const targetIndex = findPanelGroupIndex(normalizedGroups, targetPanelId);
-  if (sourceIndex < 0 || targetIndex < 0) return normalizedGroups;
-  const sourceGroup = normalizedGroups[sourceIndex];
-  if (sourcePanelId === targetPanelId && sourceGroup.panelIds.length === 1) {
-    return normalizedGroups;
-  }
-  const groupsWithoutSource = removePanelFromGroups(
-    normalizedGroups,
-    sourcePanelId,
-  );
-  const targetIndexAfterRemoval =
-    sourcePanelId === targetPanelId
-      ? sourceIndex
-      : findPanelGroupIndex(groupsWithoutSource, targetPanelId);
-  if (targetIndexAfterRemoval < 0) return normalizedGroups;
-  if (targetIndexAfterRemoval >= groupsWithoutSource.length) {
-    return [...groupsWithoutSource, { panelIds: [sourcePanelId] }];
-  }
-  const insertIndex =
-    position === "before"
-      ? targetIndexAfterRemoval
-      : targetIndexAfterRemoval + 1;
-  return [
-    ...groupsWithoutSource.slice(0, insertIndex),
-    { panelIds: [sourcePanelId] },
-    ...groupsWithoutSource.slice(insertIndex),
-  ];
-}
-
-export function moveLeftPanelToEnd(
-  groups: ReadonlyArray<LeftPanelGroup>,
-  sourcePanelId: LeftPanelId,
-): ReadonlyArray<LeftPanelGroup> {
-  const normalizedGroups = normalizeLeftPanelGroups(groups);
-  const sourceIndex = findPanelGroupIndex(normalizedGroups, sourcePanelId);
-  if (sourceIndex < 0) return normalizedGroups;
-  const sourceGroup = normalizedGroups[sourceIndex];
-  if (
-    sourceIndex === normalizedGroups.length - 1 &&
-    sourceGroup.panelIds.length === 1
-  ) {
-    return normalizedGroups;
-  }
-  return [
-    ...removePanelFromGroups(normalizedGroups, sourcePanelId),
-    { panelIds: [sourcePanelId] },
-  ];
 }
 
 function setPanelRootPending<T>(
@@ -949,13 +575,11 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
   persist(
     (set, get) => ({
       activePanelIdByTabId: {},
-      panelGroups: DEFAULT_LEFT_PANEL_GROUPS,
       mainCollapsedByTabId: {},
       sidebarWidthPx: DEFAULT_SIDEBAR_WIDTH_PX,
       panelSectionCollapsedByPanelId: {},
       panelSectionWeightsByPanelId: {},
       commentsPanelRevealedByTabId: {},
-      panelVisibilityOverrideById: {},
       localRootCreatePendingByEpicPanel: {},
       acknowledgedRootCreatePendingByEpicPanel: {},
       chatFilterByEpicId: {},
@@ -991,32 +615,30 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
           // Only an explicit `false` blocks: a presence-gated panel that is
           // merely absent is not a user decision, and its own reveal path
           // (`revealCommentsPanel`) makes it visible in the same turn.
-          if (state.panelVisibilityOverrideById[panelId] === false) {
+          if (currentPanelVisibilityOverrides()[panelId] === false) {
             return state;
           }
           const currentPanelId =
             state.activePanelIdByTabId[tabId] ?? DEFAULT_LEFT_PANEL_ID;
           const currentCollapsed = state.mainCollapsedByTabId[tabId] ?? false;
-          const currentSectionCollapsed =
+          // Focusing a panel un-collapses its SECTION too, which is what
+          // makes clicking either icon of a stacked pair open the stack with
+          // that panel showing (L-167) - and the way back out of a section
+          // the user collapsed and then navigated to.
+          const sectionCollapsed =
             state.panelSectionCollapsedByPanelId[panelId] ?? false;
           const panelChanged = currentPanelId !== panelId;
-          const collapseChanged = currentCollapsed;
-          const sectionCollapseChanged = currentSectionCollapsed;
-          if (!panelChanged && !collapseChanged && !sectionCollapseChanged) {
+          if (!panelChanged && !currentCollapsed && !sectionCollapsed)
             return state;
-          }
           return {
             activePanelIdByTabId: panelChanged
               ? { ...state.activePanelIdByTabId, [tabId]: panelId }
               : state.activePanelIdByTabId,
-            mainCollapsedByTabId: collapseChanged
+            mainCollapsedByTabId: currentCollapsed
               ? { ...state.mainCollapsedByTabId, [tabId]: false }
               : state.mainCollapsedByTabId,
-            panelSectionCollapsedByPanelId: sectionCollapseChanged
-              ? {
-                  ...state.panelSectionCollapsedByPanelId,
-                  [panelId]: false,
-                }
+            panelSectionCollapsedByPanelId: sectionCollapsed
+              ? { ...state.panelSectionCollapsedByPanelId, [panelId]: false }
               : state.panelSectionCollapsedByPanelId,
           };
         });
@@ -1073,18 +695,6 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
         });
       },
 
-      getPanelGroups: () => getStoredPanelGroups(get().panelGroups),
-
-      applyPanelGroups: (nextGroups) => {
-        set((state) => {
-          const currentGroups = getStoredPanelGroups(state.panelGroups);
-          const normalizedNextGroups = normalizeLeftPanelGroups(nextGroups);
-          return (
-            setPanelGroupsState(currentGroups, normalizedNextGroups) ?? state
-          );
-        });
-      },
-
       isMainCollapsed: (tabId) => get().mainCollapsedByTabId[tabId] ?? false,
 
       setMainCollapsed: (tabId, collapsed) => {
@@ -1111,40 +721,24 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
 
       setSidebarWidthPx: (widthPx) => {
         set((state) => {
-          const next = clampSidebarWidthPx(widthPx);
+          const next = Math.max(
+            clampSidebarWidthPx(widthPx),
+            dynamicMinSidebarWidthPx(),
+          );
           if (next === state.sidebarWidthPx) return state;
           return { sidebarWidthPx: next };
         });
       },
 
-      isPanelSectionCollapsed: (panelId) =>
-        get().panelSectionCollapsedByPanelId[panelId] ?? false,
-
-      setPanelSectionCollapsed: (panelId, collapsed) => {
-        set((state) => {
-          const current =
-            state.panelSectionCollapsedByPanelId[panelId] ?? false;
-          if (current === collapsed) return state;
-          return {
-            panelSectionCollapsedByPanelId: {
-              ...state.panelSectionCollapsedByPanelId,
-              [panelId]: collapsed,
-            },
-          };
-        });
-      },
-
       togglePanelSectionCollapsed: (panelId) => {
-        set((state) => {
-          const current =
-            state.panelSectionCollapsedByPanelId[panelId] ?? false;
-          return {
-            panelSectionCollapsedByPanelId: {
-              ...state.panelSectionCollapsedByPanelId,
-              [panelId]: !current,
-            },
-          };
-        });
+        set((state) => ({
+          panelSectionCollapsedByPanelId: {
+            ...state.panelSectionCollapsedByPanelId,
+            [panelId]: !(
+              state.panelSectionCollapsedByPanelId[panelId] ?? false
+            ),
+          },
+        }));
       },
 
       setPanelSectionWeights: (weights) => {
@@ -1175,30 +769,6 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
             },
           };
         });
-      },
-
-      setPanelVisibilityOverride: (panelId, override) => {
-        set((state) => {
-          const current = state.panelVisibilityOverrideById;
-          if (override === null) {
-            if (!Object.hasOwn(current, panelId)) return state;
-            const next = { ...current };
-            delete next[panelId];
-            return { panelVisibilityOverrideById: next };
-          }
-          if (current[panelId] === override) return state;
-          return {
-            panelVisibilityOverrideById: { ...current, [panelId]: override },
-          };
-        });
-      },
-
-      clearPanelVisibilityOverrides: () => {
-        set((state) =>
-          Object.keys(state.panelVisibilityOverrideById).length === 0
-            ? state
-            : { panelVisibilityOverrideById: {} },
-        );
       },
 
       getLocalRootCreatePending: (epicId, panelId) =>
@@ -1533,19 +1103,16 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
         activePanelIdByTabId: getPersistedActivePanelIds(
           state.activePanelIdByTabId,
         ),
-        panelGroups: getPersistedPanelGroups(state.panelGroups),
         mainCollapsedByTabId: getPersistedMainCollapsedByTabId(
           state.mainCollapsedByTabId,
         ),
         sidebarWidthPx: state.sidebarWidthPx,
-        panelSectionCollapsedByPanelId:
-          getPersistedPanelSectionCollapsedByPanelId(
-            state.panelSectionCollapsedByPanelId,
-          ),
-        panelSectionWeightsByPanelId: state.panelSectionWeightsByPanelId,
-        panelVisibilityOverrideById: getPersistedPanelVisibilityOverrides(
-          state.panelVisibilityOverrideById,
+        // Only the collapsed ones, so an expanded section is the absence of a
+        // record rather than a `false` in every user's blob.
+        panelSectionCollapsedByPanelId: getPersistedPanelSectionCollapsed(
+          state.panelSectionCollapsedByPanelId,
         ),
+        panelSectionWeightsByPanelId: state.panelSectionWeightsByPanelId,
         chatFilterByEpicId: filterActiveByEpic(
           state.chatFilterByEpicId,
           isChatFilterActive,
@@ -1568,9 +1135,18 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
         ),
       }),
       migrate: (persisted) => migrateLeftPanelPersistedState(persisted),
+      merge: mergeLeftPanelPersistedState,
     },
   ),
 );
+
+/**
+ * Another window's rail change - a reorder, a group, a hidden panel - reaches
+ * this one live. The rehydrate runs this store's `migrate` exactly as a start-up
+ * hydration does, so a blob written by an older build is still repaired on the
+ * way in.
+ */
+installCrossWindowRehydrate(useLeftPanelStore, PERSIST_KEY);
 
 export const useEpicLeftPanelStore = useLeftPanelStore;
 
@@ -1616,8 +1192,36 @@ export function useActiveLeftPanelId(tabId: string): LeftPanelId {
   );
 }
 
-export function useLeftPanelGroups(): ReadonlyArray<LeftPanelGroup> {
-  return useLeftPanelStore((s) => getStoredPanelGroups(s.panelGroups));
+/**
+ * Both members of a new pair drawn open (L-170).
+ *
+ * Called wherever a join is MADE - the inspector's row action and the rail's
+ * combine drop - rather than wherever one is broken, because that is the one
+ * moment the rule can be stated as a fact about the result: a new stack opens
+ * with both sections showing.
+ *
+ * It matters because the flag outlives the pair. While two panels are apart
+ * neither draws a chevron, so a collapse recorded inside an old pair has no
+ * control that could clear it and would otherwise come back, persisted, on a
+ * rejoin the user made days later.
+ */
+export function expandJoinedPanelSections(
+  first: LeftPanelId,
+  second: LeftPanelId,
+): void {
+  useLeftPanelStore.setState((state) => {
+    const collapsed = state.panelSectionCollapsedByPanelId;
+    if (collapsed[first] !== true && collapsed[second] !== true) {
+      return state;
+    }
+    return {
+      panelSectionCollapsedByPanelId: {
+        ...collapsed,
+        [first]: false,
+        [second]: false,
+      },
+    };
+  });
 }
 
 export function useMainPanelCollapsed(tabId: string): boolean {
@@ -1628,9 +1232,11 @@ export function useSidebarWidthPx(): number {
   return useLeftPanelStore((s) => s.sidebarWidthPx);
 }
 
-export function useLeftPanelSectionCollapsed(panelId: LeftPanelId): boolean {
-  return useLeftPanelStore(
-    (s) => s.panelSectionCollapsedByPanelId[panelId] ?? false,
+/** Reactive counterpart of {@link dynamicMinSidebarWidthPx}. */
+export function useMinSidebarWidthPx(): number {
+  return Math.min(
+    MAX_SIDEBAR_WIDTH_PX,
+    Math.max(MIN_SIDEBAR_WIDTH_PX, useMaxRailNaturalWidthPx()),
   );
 }
 
@@ -1638,10 +1244,6 @@ export function useCommentsPanelRevealed(tabId: string): boolean {
   return useLeftPanelStore(
     (s) => s.commentsPanelRevealedByTabId[tabId] ?? false,
   );
-}
-
-export function usePanelVisibilityOverrides(): PanelVisibilityOverrideById {
-  return useLeftPanelStore((s) => s.panelVisibilityOverrideById);
 }
 
 export function useLocalRootCreatePending(

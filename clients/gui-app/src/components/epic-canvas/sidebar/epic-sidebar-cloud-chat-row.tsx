@@ -18,11 +18,12 @@ import {
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useChatTreeSurface } from "@/components/epic-canvas/sidebar/chat-tree-surface";
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
   makePublishedChatTileRef,
   publishedChatTileId,
 } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { LazySidebarTooltipWrapper } from "@/components/epic-canvas/sidebar/lazy-sidebar-hover";
 import { TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import {
   BASE_PAD_LEFT,
@@ -68,6 +69,7 @@ export function EpicSidebarCloudChatRow(
 ): ReactNode {
   const { chat } = props;
   const title = chat.title ?? "Untitled chat";
+  const placement = useColumnOverlayPlacement("row");
   // The Epic SESSION's host - not `useTabHostId()`, and not the app-wide one.
   // The sidebar is not a tab (it sits outside every `<TabHostProvider>`, so a
   // tab-scoped read throws here - it did), and it is not an app-wide surface
@@ -255,11 +257,11 @@ export function EpicSidebarCloudChatRow(
               reach - so it travels with the row rather than with a section, and
               it is absent when that is not true of this chat. */}
           {ownerReachable ? null : (
-            <TooltipWrapper
+            <LazySidebarTooltipWrapper
               label={lockCopy.tooltip}
-              side="right"
+              side={placement?.side ?? "right"}
               sideOffset={undefined}
-              align={undefined}
+              align={placement?.align}
             >
               <Lock
                 className="size-3 shrink-0 text-muted-foreground"
@@ -269,7 +271,7 @@ export function EpicSidebarCloudChatRow(
                 // button contributes nothing but noise.
                 aria-hidden="true"
               />
-            </TooltipWrapper>
+            </LazySidebarTooltipWrapper>
           )}
           <CloudRowIdleTime
             publishedAt={cloudChatRowLastActiveAt(

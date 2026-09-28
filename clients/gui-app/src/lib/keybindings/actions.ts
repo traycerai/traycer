@@ -1,4 +1,4 @@
-import type { ChordString } from "@/lib/keybindings/chord";
+import { canonicalChord, type ChordString } from "@/lib/keybindings/chord";
 import { isMac } from "@/lib/keybindings/platform";
 
 /**
@@ -48,6 +48,8 @@ export const ACTION_IDS = [
   "tile.find.replace",
   "app.sidebar.toggle",
   "app.status-bar.toggle",
+  "app.tabs.vertical.toggle",
+  "app.tabs.vertical.collapse",
   "nav.back",
   "nav.forward",
   "app.resources.open",
@@ -134,24 +136,38 @@ export interface ActionMeta {
   readonly desktopOnly: boolean;
 }
 
-/** The platform-effective default chord for an action (`null` when unbound). */
+/**
+ * The platform-effective default chord for an action (`null` when unbound), in
+ * canonical form for a `chord` action (a `digit` action's is a modifier mask).
+ */
 export function resolveActionDefaultChord(
   meta: ActionMeta,
 ): ChordString | null {
-  const def = meta.defaultChord;
-  if (def === null || typeof def === "string") return def;
-  return isMac() ? def.mac : def.other;
+  return resolveChord(meta, meta.defaultChord);
 }
 
 /** The platform-effective secondary chord for an action, if one exists. */
 export function resolveActionSecondaryChord(
   meta: ActionMeta,
 ): ChordString | null {
-  const def = meta.secondaryChord;
-  if (def === undefined || def === null || typeof def === "string") {
-    return def ?? null;
-  }
-  return isMac() ? def.mac : def.other;
+  return resolveChord(meta, meta.secondaryChord ?? null);
+}
+
+function resolveChord(
+  meta: ActionMeta,
+  def: ActionDefaultChord,
+): ChordString | null {
+  if (def === null) return null;
+  if (typeof def === "string") return canonicalBinding(meta, def);
+  return canonicalBinding(meta, isMac() ? def.mac : def.other);
+}
+
+/** A binding for this action in the form the dispatcher compares. */
+export function canonicalBinding(
+  meta: ActionMeta,
+  chord: ChordString,
+): ChordString {
+  return meta.kind === "chord" ? canonicalChord(chord) : chord;
 }
 
 export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
@@ -538,7 +554,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "app.status-bar.toggle",
     label: "Toggle status bar",
     description:
-      "Move usage limits and the resource monitor between the header and the status bar.",
+      "Send the status bar's readings to the header, and bring the same ones back on the next press.",
     category: "app",
     kind: "chord",
     // Unbound by default: the surfaces it moves between are both always
@@ -552,6 +568,43 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     // the usage gauge and the resource monitor - so the placement this flips
     // has only one reachable value there. See the Layout page's own mobile
     // collapse (`layout-settings-panel.tsx`), which states the same fact.
+    desktopOnly: true,
+  },
+  "app.tabs.vertical.toggle": {
+    id: "app.tabs.vertical.toggle",
+    label: "Toggle vertical tabs",
+    description:
+      "Move the task tabs from the top to a vertical strip at the left, or from either side back to the top.",
+    category: "app",
+    kind: "chord",
+    // Unbound by default: a layout change made now and then earns a palette
+    // row, not one of the few chords left that a terminal does not want.
+    defaultChord: null,
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    // The installed mobile app always draws its own header, so the placement
+    // this flips has no effect there.
+    desktopOnly: true,
+  },
+  "app.tabs.vertical.collapse": {
+    id: "app.tabs.vertical.collapse",
+    label: "Collapse vertical tabs",
+    description:
+      "Collapse the vertical tab strip to its icon rail, or expand it back. Available while the tabs are at the side.",
+    category: "app",
+    kind: "chord",
+    // S for strip: every B chord is taken (⌘B the left panel, ⌘⇧B the
+    // notification center, ⌘⌥B a new browser tab). ⌘⌃S on macOS; elsewhere
+    // Shift+Alt+S, because Ctrl+Alt is AltGr there (AltGr+S types a letter on
+    // several layouts).
+    defaultChord: { mac: "mod+ctrl+s", other: "shift+alt+s" },
+    secondaryChord: undefined,
+    // `app`, like the panel toggles that must work from a focused terminal
+    // (`app.browser.new`): the strip sits beside every terminal.
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    // The installed mobile app never draws the vertical strip.
     desktopOnly: true,
   },
   "nav.back": {

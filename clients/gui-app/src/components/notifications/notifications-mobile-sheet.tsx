@@ -56,6 +56,7 @@ export function NotificationsMobileSheet(): ReactNode {
         <DrawerTitle className="sr-only">Notifications</DrawerTitle>
         <div className="flex min-h-0 flex-1 overflow-hidden">
           <NotificationsPopover
+            variant="center"
             onNavigate={() => setOpen(false)}
             headingRef={headingRef}
             shellRef={shellRef}

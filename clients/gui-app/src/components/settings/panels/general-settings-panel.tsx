@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Switch } from "@/components/ui/switch";
 import { runnerMutationKeys } from "@/lib/query-keys";
-import { clearAllPersistedStores } from "@/lib/persist";
+import { clearAllPersistedStores } from "@/lib/persist/wipe";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import type {
   DesktopJsonValue,

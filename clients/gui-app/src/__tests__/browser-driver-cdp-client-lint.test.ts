@@ -45,18 +45,16 @@ const CDP_CLIENT_FILE = "cdp-client.mjs";
 
 /**
  * Files allowed to construct their own `WebSocket`, each with the reason
- * written beside it. Both predate the shared client, drive a fundamentally
- * different event surface than `send`/`close` models, and already fail their
- * own pending requests on socket close/error - so neither is the hang this
- * guard exists to prevent; they are just not migrated, on purpose.
+ * written beside it. Both predate the shared client's `on` and already fail
+ * their own pending requests on socket close/error - so neither is the hang
+ * this guard exists to prevent; they are just not migrated, on purpose.
  */
 const WEBSOCKET_ALLOWLIST: readonly string[] = [
   // A manual driver - not run by CI or `run-tests.ts` - whose client also
-  // captures `Runtime.exceptionThrown` events, which the shared send/close
-  // client does not model.
+  // captures `Runtime.exceptionThrown` events.
   "tab-recovery-browser-regression.mjs",
   // A development tool that attaches to the LIVE desktop app over CDP (not a
-  // test); same event-capturing mismatch as the driver above.
+  // test), with its own event capture like the driver above.
   "seed-canvas-fixture-browser.mjs",
 ];
 

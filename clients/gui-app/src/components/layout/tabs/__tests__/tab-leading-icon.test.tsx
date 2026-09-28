@@ -166,5 +166,12 @@ describe("TabLeadingIcon status and manual icon", () => {
     );
     expect(screen.getByTestId("header-tab-activity-tab-4")).toBeTruthy();
     expect(document.querySelector('[data-slot="tab-custom-icon"]')).toBeNull();
+    // Drawn through the shared glyph set, like the side strip row (F3).
+    const status = document.querySelector('[data-slot="tab-status-icon"]');
+    expect(
+      status
+        ?.querySelector("[data-status-glyph]")
+        ?.getAttribute("data-status-glyph"),
+    ).toBe("running");
   });
 });

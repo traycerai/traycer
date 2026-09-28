@@ -9,9 +9,9 @@ import { HarnessModelPickerModelSettingsFooter } from "@/components/home/pickers
 import { PortalConcealmentProvider } from "@/components/ui/portal-concealment-context";
 import { resetStatusAnimationClockForTests } from "@/lib/animation/status-animation-clock";
 import {
-  DEFAULT_COMPOSER_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
+} from "@/stores/layout/layout-store";
 
 // The shared clock is observed through what it actually does - the ONE
 // `setInterval` it holds while any writer is subscribed, and the inline style a
@@ -189,12 +189,12 @@ function withFakeTimers(body: () => void): void {
 }
 
 beforeEach(() => {
-  useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
 
 afterEach(() => {
   cleanup();
-  useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   resetStatusAnimationClockForTests();
   vi.unstubAllGlobals();
 });
@@ -275,12 +275,9 @@ describe("reasoning slider max treatment", () => {
     });
 
     it("leaves the list's own height alone", () => {
-      useLayoutStore.setState({
-        composer: {
-          ...DEFAULT_COMPOSER_LAYOUT,
-          reasoningFooterControl: "list",
-        },
-      });
+      useLayoutStore
+        .getState()
+        .setRegionValues("model", { reasoningControl: "list" });
       mount({ value: "ultra" });
 
       const footer = screen
@@ -348,12 +345,9 @@ describe("reasoning slider max treatment", () => {
     });
 
     it("draws nothing under the list control", () => {
-      useLayoutStore.setState({
-        composer: {
-          ...DEFAULT_COMPOSER_LAYOUT,
-          reasoningFooterControl: "list",
-        },
-      });
+      useLayoutStore
+        .getState()
+        .setRegionValues("model", { reasoningControl: "list" });
       withFakeTimers(() => {
         mount({ value: "ultra" });
 

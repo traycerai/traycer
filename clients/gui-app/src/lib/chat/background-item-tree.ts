@@ -193,42 +193,55 @@ export function buildBackgroundTree(
     .map((node) => backgroundTreeNodeFromNested(node));
 }
 
-export function treeHasRunningTask(node: BackgroundTreeNode): boolean {
+function treeHasRunningTask(node: BackgroundTreeNode): boolean {
   if (node.item !== null && node.item.kind !== "wakeup") return true;
   return node.children.some((child) => treeHasRunningTask(child));
 }
 
+function waitingWakeCount(nodes: ReadonlyArray<BackgroundTreeNode>): number {
+  return nodes.reduce(
+    (count, node) =>
+      count +
+      (node.item?.kind === "wakeup" ? 1 : 0) +
+      waitingWakeCount(node.children),
+    0,
+  );
+}
+
+export interface BackgroundSectionCounts {
+  readonly runningCount: number;
+  readonly heldCount: number;
+  readonly waitingWakeCount: number;
+  readonly portForwardCount: number;
+  /** Every group of rows the section lists: the chip's number. */
+  readonly total: number;
+}
+
 /**
- * The running half of the Background header's summary: how many rows the
- * section would show as running right now.
- *
- * It re-derives the tree from the DELIVERED items alone, where the panel's own
- * tree additionally carries forward parents it has seen before. That history
- * only ever MERGES roots - it supplies a vanished parent's own parent link, and
- * a remembered-only node has no item of its own to count - so this number can
- * come out HIGHER than the panel's, never lower. Two running children whose
- * parents have both dropped out of the delivered list are one group to a panel
- * that remembers their shared grandparent and two groups here.
- *
- * Rare, transient, and it converges on the panel's next render; recorded
- * because the direction of the skew is the part a future reader will take on
- * trust.
+ * The one count of what the Background section lists, shared by the panel's
+ * header and the compact chip so the two cannot drift apart again. `tree` is
+ * the section's tree over the deduped delivered items. Held shells win over
+ * running ones, because the panel renders a shell that is both ONCE, as held.
  */
-export function backgroundRunningRowCount(input: {
-  readonly items: ReadonlyArray<BackgroundItem>;
+export function backgroundSectionCounts(input: {
+  readonly tree: ReadonlyArray<BackgroundTreeNode>;
   readonly runningManagedCommandIds: ReadonlyArray<string>;
   readonly heldManagedCommandIds: ReadonlyArray<string>;
-}): number {
-  const items = dedupeByTaskId(input.items);
-  const tree = buildBackgroundTree(
-    items,
-    buildRememberedBackgroundNodes(items, new Map()),
-  );
+  readonly portForwardCount: number;
+}): BackgroundSectionCounts {
   const held = new Set(input.heldManagedCommandIds);
-  return (
-    tree.filter(treeHasRunningTask).length +
-    input.runningManagedCommandIds.filter((id) => !held.has(id)).length
-  );
+  const runningCount =
+    input.tree.filter(treeHasRunningTask).length +
+    input.runningManagedCommandIds.filter((id) => !held.has(id)).length;
+  const heldCount = input.heldManagedCommandIds.length;
+  const waiting = waitingWakeCount(input.tree);
+  return {
+    runningCount,
+    heldCount,
+    waitingWakeCount: waiting,
+    portForwardCount: input.portForwardCount,
+    total: runningCount + heldCount + waiting + input.portForwardCount,
+  };
 }
 
 /**

@@ -178,12 +178,11 @@ function findUnitsFor(
     runState: null,
     segments,
   };
-  return buildChatFindRows(
-    [model],
-    TILE_INSTANCE_ID,
-    new Set(),
-    handle.store.getState().queuePauseReasonProtocolSupported,
-  ).flatMap((row) => row.units);
+  return buildChatFindRows([model], TILE_INSTANCE_ID, new Set(), {
+    hideReasoning: false,
+    queuePauseReasonProtocolSupported:
+      handle.store.getState().queuePauseReasonProtocolSupported,
+  }).flatMap((row) => row.units);
 }
 
 describe.each([

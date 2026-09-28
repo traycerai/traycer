@@ -6,7 +6,7 @@ import { landingDraftDisplayTitle } from "@/lib/composer/landing-draft-title";
 import { draftRoute, draftPathname } from "@/lib/routes";
 import { draftTabIntent } from "@/lib/tab-navigation/intents";
 import type { TabKindModule } from "@/stores/tabs/types";
-import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import { TAB_KIND_SPLIT_ELIGIBILITY } from "@/stores/tabs/tab-kind-policy";
 
 const landingDraftSurface = lazy(() =>
   import("@/components/home/landing-draft-surface").then((module) => ({
@@ -46,7 +46,7 @@ export const draftTabModule: TabKindModule<"draft", LandingDraftTab> = {
     surface: {
       render: (tab) => renderDraftSurface(tab.id),
       canonicalRoute: (tab) => tab.route,
-      splitEligibility: "eligible",
+      splitEligibility: TAB_KIND_SPLIT_ELIGIBILITY.draft,
       duplication: "forbidden",
       singleton: "per-instance",
       newWindow: "move",
@@ -59,11 +59,8 @@ export const draftTabModule: TabKindModule<"draft", LandingDraftTab> = {
     activate: (intent) => {
       useLandingDraftStore.getState().setActiveDraft(intent.draftId);
     },
-    requestClose: (tab) => {
-      tabCommandCoordinator.closeRefAfterConfirmed({
-        kind: "draft",
-        id: tab.id,
-      });
+    requestClose: (tab, close) => {
+      close({ kind: "draft", id: tab.id });
     },
     requiresCloseConfirm: () => false,
     openInNewWindow: (tab, deps) => {

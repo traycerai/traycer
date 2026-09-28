@@ -25,6 +25,7 @@ import {
 import { openShellSettings } from "@/lib/commands/actions/open-shell-settings";
 import { resolveShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { closeLayoutEditorForCloseTabChord } from "@/lib/layout/editor-session";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { LocalHostRestartFlow } from "@/components/host/local-host-restart-flow";
@@ -407,6 +408,7 @@ function handleMenuCommand(
     return;
   }
   if (payload.command === "epic.closeTab") {
+    if (closeLayoutEditorForCloseTabChord()) return;
     handlers.closeActiveTab();
     return;
   }

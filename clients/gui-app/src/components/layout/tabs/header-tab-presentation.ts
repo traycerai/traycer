@@ -30,7 +30,7 @@ export function useHeaderTabTitle(tab: HeaderTab): HeaderTabTitle {
   };
 }
 
-interface HeaderTabIndicators {
+export interface HeaderTabIndicators {
   readonly epicIds: ReadonlyArray<string>;
   readonly indicators: SurfaceNotificationIndicators;
   readonly chatEpicIds: Readonly<Record<string, string>>;

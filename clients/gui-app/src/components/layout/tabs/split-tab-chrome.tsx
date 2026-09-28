@@ -1,16 +1,21 @@
-import type { CSSProperties } from "react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import { TabChromeBackground } from "./tab-chrome-background";
+import { TabChromeBackground, TabColorMark } from "./tab-chrome-background";
+import { TAB_BOX_CLASS } from "./tab-chrome-tokens";
+import { useWhollyInTabStrip } from "./use-wholly-in-tab-strip";
 
 const SPLIT_ROW_PADDING_CLASS = "pr-[clamp(0.75rem,5%,1.5rem)] pl-2";
 const SPLIT_CONTROL_WIDTH_CLASS = "w-11";
 
 interface SplitTabLayoutProps {
-  readonly leftColor: string | null;
-  readonly rightColor: string | null;
   readonly splitId: string;
   readonly selectedSide: "left" | "right" | null;
+  /**
+   * Whether the active pair runs into the sheet below as one tab: the pair
+   * owns both surfaces under it, so the join is the group's
+   * box and the focused member keeps its own box inside it.
+   */
+  readonly joined: boolean;
   readonly control: ReactNode;
   readonly left: ReactNode;
   readonly right: ReactNode;
@@ -18,6 +23,8 @@ interface SplitTabLayoutProps {
 
 /** Shared group layout keeps both member footprints equal in the strip and overlay. */
 export function SplitTabLayout(props: SplitTabLayoutProps): ReactNode {
+  const [node, setNode] = useState<HTMLSpanElement | null>(null);
+  const inStrip = useWhollyInTabStrip(node, props.joined);
   return (
     <div className="relative flex w-full min-w-0 items-end">
       <div
@@ -26,6 +33,15 @@ export function SplitTabLayout(props: SplitTabLayoutProps): ReactNode {
           SPLIT_ROW_PADDING_CLASS,
         )}
       >
+        {props.joined ? (
+          <span
+            aria-hidden
+            data-testid={`split-tab-joined-${props.splitId}`}
+            ref={setNode}
+            data-sheet-joined={inStrip ? "top" : undefined}
+            className={cn(TAB_BOX_CLASS, "border border-transparent")}
+          />
+        ) : null}
         <span
           className={cn(
             "relative z-20 flex shrink-0 items-center",
@@ -54,75 +70,7 @@ export function SplitTabLayout(props: SplitTabLayoutProps): ReactNode {
           {props.right}
         </div>
       </div>
-      <SplitGroupUnderline
-        leftColor={props.leftColor}
-        rightColor={props.rightColor}
-        splitId={props.splitId}
-        selectedSide={props.selectedSide}
-      />
     </div>
-  );
-}
-
-function SplitGroupUnderline(props: {
-  readonly leftColor: string | null;
-  readonly rightColor: string | null;
-  readonly splitId: string;
-  readonly selectedSide: "left" | "right" | null;
-}): ReactNode {
-  return (
-    <span
-      aria-hidden="true"
-      data-testid={`split-tab-group-underline-${props.splitId}`}
-      className={cn(
-        "pointer-events-none absolute inset-x-0 bottom-0 z-30 flex h-[1.5px] text-primary",
-        SPLIT_ROW_PADDING_CLASS,
-      )}
-    >
-      <span
-        data-testid={`split-tab-group-underline-control-${props.splitId}`}
-        className={cn(
-          "relative shrink-0 rounded-l-full bg-current",
-          SPLIT_CONTROL_WIDTH_CLASS,
-          props.selectedSide === "left" &&
-            "after:absolute after:inset-y-0 after:-right-0.5 after:w-0.5 after:bg-current",
-        )}
-      />
-      <span
-        data-testid={`split-tab-group-underline-left-${props.splitId}`}
-        style={
-          {
-            "--swatch": props.leftColor ?? "var(--color-primary)",
-          } as CSSProperties
-        }
-        className={cn(
-          "relative min-w-0 flex-1 rounded-l-full text-[var(--swatch)]",
-          props.selectedSide !== "left" && "bg-current",
-          props.selectedSide === "right" &&
-            "after:absolute after:inset-y-0 after:-right-0.5 after:w-0.5 after:bg-current",
-        )}
-      />
-      <span
-        className={cn(
-          "shrink-0",
-          props.selectedSide === null ? "w-px bg-current" : "w-0",
-        )}
-      />
-      <span
-        data-testid={`split-tab-group-underline-right-${props.splitId}`}
-        style={
-          {
-            "--swatch": props.rightColor ?? "var(--color-primary)",
-          } as CSSProperties
-        }
-        className={cn(
-          "relative min-w-0 flex-1 rounded-r-full text-[var(--swatch)]",
-          props.selectedSide !== "right" && "bg-current",
-          props.selectedSide === "left" &&
-            "before:absolute before:inset-y-0 before:-left-0.5 before:w-0.5 before:bg-current",
-        )}
-      />
-    </span>
   );
 }
 
@@ -170,9 +118,10 @@ export function SplitFocusIcon(props: {
 }
 
 /**
- * Selection treatment for one member of a split group. The focused member uses
- * the same raised silhouette as an ordinary selected tab; group membership is
- * communicated independently by the split group's accent underline.
+ * Selection treatment for one member of a split group. The focused member is
+ * the same box as an ordinary selected tab, and a hover and a colour the same
+ * box and mark as an ordinary tab's. The pair is one strip item under one
+ * split control, which is what says they belong together.
  */
 export function SplitMemberChrome(props: {
   readonly focused: boolean;
@@ -183,16 +132,23 @@ export function SplitMemberChrome(props: {
       <TabChromeBackground
         fill="var(--color-background)"
         borderColor={props.color ?? "var(--color-primary)"}
-        coversBaseline
+        joined={false}
         className={undefined}
       />
     );
   }
 
   return (
-    <span
-      aria-hidden
-      className="pointer-events-none absolute inset-x-px inset-y-1 rounded-sm transition-colors duration-200 ease-out group-hover/tab:bg-accent/20"
-    />
+    <>
+      <span
+        aria-hidden
+        data-testid="tab-hover-box"
+        className={cn(
+          TAB_BOX_CLASS,
+          "transition-colors duration-150 ease-out group-hover/tab:bg-foreground/5",
+        )}
+      />
+      {props.color === null ? null : <TabColorMark color={props.color} />}
+    </>
   );
 }

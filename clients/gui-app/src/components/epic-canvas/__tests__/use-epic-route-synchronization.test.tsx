@@ -23,10 +23,11 @@ import type {
 import type { EpicCanvasStore } from "@/stores/epics/canvas/store";
 import { getCurrentNestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
+import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import {
-  DEFAULT_LEFT_PANEL_GROUPS,
-  useLeftPanelStore,
-} from "@/stores/epics/left-panel-store";
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import {
   requestNestedRoutePrimaryEditorFocus,
   resetNestedRouteDomFocusForTests,
@@ -364,11 +365,10 @@ function resetStores(): void {
   resetNestedFocusNavigationIntentsForTests();
   resetPaneActivationFocusIntentsForTests();
   window.localStorage.clear();
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   useLeftPanelStore.setState({
     activePanelIdByTabId: {},
-    panelGroups: DEFAULT_LEFT_PANEL_GROUPS,
     mainCollapsedByTabId: {},
-    panelSectionCollapsedByPanelId: {},
     commentsPanelRevealedByTabId: {},
     localRootCreatePendingByEpicPanel: {},
     acknowledgedRootCreatePendingByEpicPanel: {},

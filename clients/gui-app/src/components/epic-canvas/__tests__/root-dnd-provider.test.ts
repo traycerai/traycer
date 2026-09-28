@@ -220,7 +220,7 @@ describe("epicRootCollisionDetection", () => {
           activeData: ARTIFACT_TAB_SOURCE_DATA,
           droppables: [
             droppableOfKind("rail-item", "left-panel-rail-item"),
-            droppableOfKind("rail-group", "left-panel-group"),
+            droppableOfKind("rail-body", "left-panel-body"),
           ],
           pointer: POINTER,
         }),
@@ -465,22 +465,16 @@ describe("dnd-store preview tick suppression", () => {
   it("treats matching left-panel and empty-shell previews as equal", () => {
     expect(
       epicCanvasDropPreviewEqual(
-        { kind: "left-panel-rail", panelId: "chats", position: "combine" },
-        { kind: "left-panel-rail", panelId: "chats", position: "combine" },
+        { kind: "left-panel-rail", panelId: "chats", position: "after" },
+        { kind: "left-panel-rail", panelId: "chats", position: "after" },
       ),
     ).toBe(true);
     expect(
       epicCanvasDropPreviewEqual(
-        { kind: "left-panel-rail", panelId: "chats", position: "combine" },
+        { kind: "left-panel-rail", panelId: "chats", position: "after" },
         { kind: "left-panel-rail", panelId: "chats", position: "before" },
       ),
     ).toBe(false);
-    expect(
-      epicCanvasDropPreviewEqual(
-        { kind: "left-panel-section", panelId: "chats", position: "before" },
-        { kind: "left-panel-section", panelId: "chats", position: "before" },
-      ),
-    ).toBe(true);
     expect(
       epicCanvasDropPreviewEqual(
         { kind: "left-panel-rail-list" },

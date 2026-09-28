@@ -6,7 +6,10 @@ import {
   SETTINGS_SEARCH_FIXTURES,
   type SettingsSearchFixtureSection,
 } from "@/components/settings/__tests__/settings-search-fixture-registry";
-import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
+import {
+  assertSettingsSearchTargets,
+  assertSettingsSearchTargetsByNavigation,
+} from "@/components/settings/__tests__/settings-search-targets";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-diagnostics-settings-panel";
 import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
@@ -23,9 +26,10 @@ import { setMobileApp } from "@/lib/mobile-app";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import {
-  DEFAULT_STATUS_BAR_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
+} from "@/stores/layout/layout-store";
+import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 
 // Layout's provider list is read through the WATCHED host's scope. It carries
 // no anchors - the set exists only for providers a host has reported - so the
@@ -81,6 +85,28 @@ vi.mock(
   },
 );
 
+// The Layout panel wraps itself directly in the shared watched-usage read
+// (`LayoutUsageProvider`), which resolves a host scope through a real
+// `HostRuntimeProvider` this suite never mounts. A pass-through here, mocked
+// at the same boundary `layout-settings-panel.test.tsx` uses, keeps the anchor
+// rows drawing for real without standing up that scope.
+vi.mock(
+  "@/components/layout-editor/inspector/provider-limit-windows",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/layout-editor/inspector/provider-limit-windows")
+    >()),
+    ProviderLimitWindowsReader: (props: {
+      readonly children: (limits: {
+        windows: ReadonlyArray<never>;
+        drawnKeys: ReadonlyArray<never>;
+      }) => ReactNode;
+    }) => props.children({ windows: [], drawnKeys: [] }),
+    LayoutUsageProvider: (props: { readonly children: ReactNode }) =>
+      props.children,
+  }),
+);
+
 // General's replay button and Sounds' host link navigate; nothing here clicks
 // them, but both hooks need a router to be CALLED.
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
@@ -121,7 +147,12 @@ afterEach(() => {
   hostScopeState.current = null;
   setMobileApp(false);
   setFeatureSettingsBridge(null);
-  setMobileFooter(DEFAULT_STATUS_BAR_LAYOUT.mobileFooter);
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useSettingsSearchStore.setState({
+    query: "",
+    pendingReveal: null,
+    handoffPending: false,
+  });
 });
 
 describe("settings search fixtures", () => {
@@ -141,7 +172,14 @@ describe("settings search fixtures", () => {
         // The context the contract is judged by must be the shell the panel
         // actually resolved, or the zero-target half proves nothing.
         expect(mounted).toEqual(shell.context);
-        assertSettingsSearchTargets(fixture.section, shell.context, container);
+        // Layout (G6) shows only one tab's rows at a time, so its anchors
+        // cannot all be judged visible from this one static mount - each is
+        // checked after navigating to it, the way a real search result would.
+        const assert =
+          fixture.section === "layout"
+            ? assertSettingsSearchTargetsByNavigation
+            : assertSettingsSearchTargets;
+        assert(fixture.section, shell.context, container);
         executed.add(`${fixture.section} / ${shell.name}`);
       });
     }
@@ -168,7 +206,6 @@ function mountInShell(
 ): HTMLElement {
   setMobileApp(context.mobileApp);
   setFeatureSettingsBridge(context.featureSettings);
-  setMobileFooter(context.mobileFooter);
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
@@ -206,17 +243,4 @@ function setFeatureSettingsBridge(
 ): void {
   (globalThis as { runnerHost?: unknown }).runnerHost =
     featureSettings === null ? undefined : { platform: { featureSettings } };
-}
-
-/**
- * The one shell fact that lives in a store rather than on the window or the
- * runner host. Written straight into `layout-store` so the panel and the
- * probe below resolve the same value the registry names - the mobile footer
- * decides whether that build has a strip at all, and the whole group's gate
- * reads it.
- */
-function setMobileFooter(mobileFooter: boolean): void {
-  useLayoutStore.setState((state) => ({
-    statusBar: { ...state.statusBar, mobileFooter },
-  }));
 }

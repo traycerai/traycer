@@ -1,4 +1,5 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
 import { statusBarUsageScrollKey } from "@/components/layout/status-bar/status-bar-usage-display";
 import type { StatusBarRateLimitCluster } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
@@ -49,6 +50,30 @@ import { cn } from "@/lib/utils";
  * percentage update - because that happens every minute and would throw away
  * where the user scrolled to. A DOM write from an effect rather than state:
  * the position is the scroller's to keep, and nothing rendered depends on it.
+ *
+ * The ROW is also `usageLimits`'s canvas node (C-02). Usage limits is ONE
+ * region however many accounts it draws, so it registers ONCE here instead of
+ * once per provider segment: the editor stamps `data-selected` on every
+ * instance of a region by design (L-23), so a registration per segment drew
+ * the travelling ring around the first account and a separate white box around
+ * each of the others, where the artifact draws one ring around the whole
+ * cluster.
+ *
+ * The row and not the scrollport, which is where this differs from the audit's
+ * recommendation and from the prototype's own `.usage-cluster-wrap`. That
+ * wrapper hugs its readings and clips only when it must; the scrollport here
+ * is `flex-1` because it is the strip's grower (`app-status-bar.tsx`), so it
+ * is as wide as everything the resource readout leaves - and a ring around it
+ * would enclose half the status bar rather than the cluster. The row is the
+ * natural-width cluster, which is the box the artifact rings. The cost is the
+ * overflow case: with more readings than the strip is wide, the ring is drawn
+ * around the whole row and runs past the strip's edge. That case is rare, it
+ * still names the right thing, and the ring re-measures every frame so it
+ * tracks the scroll.
+ *
+ * Only the live strip mounts this; every passive picture of the cluster (the
+ * specimen stage, the Settings preview, a ghost) renders `StatusBarUsageReadings`
+ * directly, so there is no `interactive` gate to thread through.
  */
 export function StatusBarUsageScroller(props: {
   /** The host the readings belong to, `null` while none is resolved. */
@@ -67,6 +92,19 @@ export function StatusBarUsageScroller(props: {
   const edges = useHorizontalScrollEdges(scrollerRef, rowRef);
   const handleWheel = useHorizontalWheelScroll();
   const scrollKey = statusBarUsageScrollKey(props.hostId, props.cluster);
+  const { ref: regionRef } = useLayoutRegion({
+    regionId: "usageLimits",
+    instanceId: null,
+  });
+  // One node with two owners: the fade reads the row's width through
+  // `rowRef`, and the editor registers the same element as the region.
+  const setRow = useCallback(
+    (node: HTMLSpanElement | null) => {
+      rowRef.current = node;
+      regionRef(node);
+    },
+    [regionRef],
+  );
   useEffect(() => {
     const scroller = scrollerRef.current;
     if (scroller !== null) scroller.scrollLeft = 0;
@@ -81,7 +119,7 @@ export function StatusBarUsageScroller(props: {
         horizontalScrollFadeClass(edges),
       )}
     >
-      <span ref={rowRef} className="flex shrink-0 items-center">
+      <span ref={setRow} className="flex shrink-0 items-center">
         {props.children}
       </span>
     </span>

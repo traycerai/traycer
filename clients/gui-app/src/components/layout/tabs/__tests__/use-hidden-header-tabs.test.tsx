@@ -15,7 +15,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { useHiddenHeaderTabs } from "@/components/layout/tabs/use-hidden-header-tabs";
-import type { TaskTabLayout } from "@/stores/settings/settings-store";
+import type { TaskTabLayout } from "@/lib/layout/layout-arrangement";
 
 interface Box {
   readonly left: number;

@@ -186,7 +186,6 @@ function TerminalNodeTabIcon(props: {
       style={undefined}
       runningTitle={props.runningTitle}
       defaultIcon={props.defaultIcon}
-      statusPresentation="message"
       agentSurface="tui"
     />
   );

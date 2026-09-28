@@ -45,7 +45,6 @@ function renderIcon(
       style={undefined}
       runningTitle="Task activity in progress"
       defaultIcon={<span data-testid="default-icon" />}
-      statusPresentation="message"
       agentSurface="gui"
     />,
   );

@@ -4,14 +4,22 @@ import {
   commitResolvedCanvasDrop,
   isLeftPanelDropNoop,
   resolveCanvasDropPreview,
-  resolveLeftPanelGroupsForDrop,
+  resolveRailForDrop,
 } from "@/components/epic-canvas/dnd/root-dnd-commits";
 import type { EpicCanvasDragSourceData } from "@/components/epic-canvas/dnd/dnd";
+import type { LeftPanelId } from "@/lib/left-panel-ids";
+import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import {
-  DEFAULT_LEFT_PANEL_GROUPS,
-  moveLeftPanelGroup,
-  useLeftPanelStore,
-} from "@/stores/epics/left-panel-store";
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
+import { currentLayoutArrangement } from "@/lib/layout/rail-view";
+import {
+  DEFAULT_RAIL,
+  visibleRailPanelIds,
+  type RailEntry,
+} from "@/lib/layout/rail";
+import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
 import { useEpicSidebarExpansionStore } from "@/stores/epics/epic-sidebar-expansion-store";
 import { makeGitFileDiffTile } from "@/lib/git/git-diff-tile";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
@@ -251,7 +259,7 @@ function seedCanvasWithTerminalTile(): void {
 }
 
 function railSource(
-  panelId: "artifacts" | "git-diff" | "file-tree",
+  panelId: LeftPanelId,
   origin: "rail" | "panel-section",
 ): Extract<
   EpicCanvasDragSourceData,
@@ -265,21 +273,6 @@ function railSource(
   };
 }
 
-function makeRectElement(
-  id: string,
-  rect: {
-    readonly x: number;
-    readonly y: number;
-    readonly width: number;
-    readonly height: number;
-  },
-): Element {
-  const element = document.createElement("section");
-  element.setAttribute("data-left-panel-section-id", id);
-  element.getBoundingClientRect = () => DOMRect.fromRect(rect);
-  return element;
-}
-
 function resetStores(): void {
   window.localStorage.clear();
   testState.canvasStore.canvasByTabId = {};
@@ -290,11 +283,10 @@ function resetStores(): void {
     vi.fn<(viewTabId: string, args: TabStripMoveArgs) => void>();
   testState.canvasStore.splitPaneWithTab =
     vi.fn<(viewTabId: string, args: TabSplitArgs) => void>();
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   useLeftPanelStore.setState({
     activePanelIdByTabId: {},
-    panelGroups: DEFAULT_LEFT_PANEL_GROUPS,
     mainCollapsedByTabId: {},
-    panelSectionCollapsedByPanelId: {},
     commentsPanelRevealedByTabId: {},
     localRootCreatePendingByEpicPanel: {},
     acknowledgedRootCreatePendingByEpicPanel: {},
@@ -309,17 +301,7 @@ describe("root dnd commits - left panel", () => {
   beforeEach(resetStores);
   afterEach(resetStores);
 
-  it("extracts a grouped section to the rail end from the rail background", () => {
-    useLeftPanelStore
-      .getState()
-      .applyPanelGroups(
-        moveLeftPanelGroup(
-          useLeftPanelStore.getState().getPanelGroups(),
-          "artifacts",
-          "chats",
-          "combine",
-        ),
-      );
+  it("moves a panel to the rail end from a section-origin drop on the rail background", () => {
     const source = railSource("artifacts", "panel-section");
     const target = { kind: "left-panel-rail-list" } as const;
     const preview = resolveCanvasDropPreview({
@@ -327,63 +309,30 @@ describe("root dnd commits - left panel", () => {
       target,
       point: { x: 20, y: 220 },
       targetRect: null,
-      targetElement: null,
       activeRect: null,
     });
 
     expect(isLeftPanelDropNoop(source, preview)).toBe(false);
     commitResolvedCanvasDrop({ source, target, preview }, rawNestedFocus);
 
-    expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
-      { panelIds: ["chats"] },
-      { panelIds: ["terminals"] },
-      { panelIds: ["browsers"] },
-      { panelIds: ["git-diff"] },
-      { panelIds: ["pull-requests"] },
-      { panelIds: ["file-tree"] },
-      { panelIds: ["sharing"] },
-      { panelIds: ["comments"] },
-      { panelIds: ["artifacts"] },
+    expect(
+      visibleRailPanelIds(currentLayoutArrangement().rail, () => true),
+    ).toEqual([
+      "chats",
+      "terminals",
+      "browsers",
+      "git-diff",
+      "pull-requests",
+      "file-tree",
+      "sharing",
+      "comments",
+      "artifacts",
     ]);
-  });
-
-  it("flags same-group middle-band section drops as no-ops", () => {
-    useLeftPanelStore
-      .getState()
-      .applyPanelGroups(
-        moveLeftPanelGroup(
-          useLeftPanelStore.getState().getPanelGroups(),
-          "artifacts",
-          "chats",
-          "combine",
-        ),
-      );
-    const source = railSource("artifacts", "panel-section");
-    const target = {
-      kind: "left-panel-rail-item",
-      panelId: "chats",
-      orientation: "vertical",
-    } as const;
-    const preview = resolveCanvasDropPreview({
-      source,
-      target,
-      point: { x: 18, y: 18 },
-      targetRect: { left: 0, top: 0, width: 36, height: 36 },
-      targetElement: null,
-      activeRect: null,
-    });
-
-    expect(preview).toEqual({
-      kind: "left-panel-rail",
-      panelId: "chats",
-      position: "combine",
-    });
-    expect(isLeftPanelDropNoop(source, preview)).toBe(true);
   });
 
   // A rail slot is square, so the pointer below sits in the middle band of one
   // axis and the leading band of the other. Which one is read is the whole
-  // difference between reordering the rail and nesting into it.
+  // difference between a "before" reorder and a "combine" join (L-168).
   const RAIL_SLOT_RECT = { left: 0, top: 0, width: 36, height: 36 };
   const LEADING_X_MIDDLE_Y = { x: 4, y: 18 };
 
@@ -401,7 +350,6 @@ describe("root dnd commits - left panel", () => {
           target,
           point: { x: LEADING_X_MIDDLE_Y.x, y },
           targetRect: RAIL_SLOT_RECT,
-          targetElement: null,
           activeRect: null,
         }),
       ).toEqual({
@@ -415,145 +363,277 @@ describe("root dnd commits - left panel", () => {
       target,
       point: LEADING_X_MIDDLE_Y,
       targetRect: RAIL_SLOT_RECT,
-      targetElement: null,
       activeRect: null,
     });
 
     expect(isLeftPanelDropNoop(source, preview)).toBe(false);
     commitResolvedCanvasDrop({ source, target, preview }, rawNestedFocus);
 
-    expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
-      { panelIds: ["chats", "artifacts"] },
-      { panelIds: ["file-tree"] },
-      { panelIds: ["terminals"] },
-      { panelIds: ["browsers"] },
-      { panelIds: ["git-diff"] },
-      { panelIds: ["pull-requests"] },
-      { panelIds: ["sharing"] },
-      { panelIds: ["comments"] },
+    expect(
+      visibleRailPanelIds(currentLayoutArrangement().rail, () => true),
+    ).toEqual([
+      "chats",
+      "artifacts",
+      "file-tree",
+      "terminals",
+      "browsers",
+      "git-diff",
+      "pull-requests",
+      "sharing",
+      "comments",
     ]);
   });
 
-  it("still nests a vertical rail drop at that same point", () => {
+  it("reorders a vertical rail drop from the pointer's y, whatever its width", () => {
     const source = railSource("file-tree", "rail");
     const target = {
       kind: "left-panel-rail-item",
       panelId: "terminals",
       orientation: "vertical",
     } as const;
+    for (const x of [2, 18, 34]) {
+      expect(
+        resolveCanvasDropPreview({
+          source,
+          target,
+          point: { x, y: 4 },
+          targetRect: RAIL_SLOT_RECT,
+          activeRect: null,
+        }),
+      ).toEqual({
+        kind: "left-panel-rail",
+        panelId: "terminals",
+        position: "before",
+      });
+    }
+    // The middle band of y is the combine band (L-168), even where x sits in
+    // its leading band.
+    expect(
+      resolveCanvasDropPreview({
+        source,
+        target,
+        point: LEADING_X_MIDDLE_Y,
+        targetRect: RAIL_SLOT_RECT,
+        activeRect: null,
+      }),
+    ).toEqual({
+      kind: "left-panel-rail",
+      panelId: "terminals",
+      position: "combine",
+    });
     const preview = resolveCanvasDropPreview({
       source,
       target,
-      point: LEADING_X_MIDDLE_Y,
+      point: { x: 4, y: 34 },
       targetRect: RAIL_SLOT_RECT,
-      targetElement: null,
       activeRect: null,
     });
 
     expect(preview).toEqual({
       kind: "left-panel-rail",
       panelId: "terminals",
+      position: "after",
+    });
+    commitResolvedCanvasDrop({ source, target, preview }, rawNestedFocus);
+
+    expect(
+      visibleRailPanelIds(currentLayoutArrangement().rail, () => true),
+    ).toEqual([
+      "chats",
+      "artifacts",
+      "terminals",
+      "file-tree",
+      "browsers",
+      "git-diff",
+      "pull-requests",
+      "sharing",
+      "comments",
+    ]);
+  });
+
+  it("resolves a rail-icon drop on the open body to a combine on the stack's top panel, joining it (L-182)", () => {
+    // The body is ONE drop target for the whole stack it draws: a drop
+    // anywhere on it means the same middle-band join a drop on the stack's
+    // own rail icon (Chats, the top of the shipped pair) would mean.
+    const source = railSource("terminals", "rail");
+    const target = { kind: "left-panel-body", panelId: "chats" } as const;
+
+    const preview = resolveCanvasDropPreview({
+      source,
+      target,
+      point: { x: 120, y: 700 },
+      targetRect: null,
+      activeRect: null,
+    });
+
+    expect(preview).toEqual({
+      kind: "left-panel-rail",
+      viewTabId: undefined,
+      panelId: "chats",
       position: "combine",
     });
-    commitResolvedCanvasDrop({ source, target, preview }, rawNestedFocus);
-
-    expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
-      { panelIds: ["chats", "artifacts"] },
-      { panelIds: ["terminals", "file-tree"] },
-      { panelIds: ["browsers"] },
-      { panelIds: ["git-diff"] },
-      { panelIds: ["pull-requests"] },
-      { panelIds: ["sharing"] },
-      { panelIds: ["comments"] },
-    ]);
-  });
-
-  it("inserts a rail group into a single-panel group via section bounds", () => {
-    useLeftPanelStore.setState({
-      panelGroups: [
-        { panelIds: ["chats"] },
-        { panelIds: ["artifacts"] },
-        { panelIds: ["terminals"] },
-        { panelIds: ["git-diff"] },
-        { panelIds: ["pull-requests"] },
-        { panelIds: ["file-tree"] },
-        { panelIds: ["sharing"] },
-        { panelIds: ["comments"] },
-      ],
-    });
-    const groupElement = document.createElement("div");
-    groupElement.append(
-      makeRectElement("chats", { x: 0, y: 0, width: 320, height: 900 }),
-    );
-    const source = railSource("file-tree", "rail");
-    const target = {
-      kind: "left-panel-group",
-      panelIds: ["chats"],
-    } as const;
-    const preview = resolveCanvasDropPreview({
-      source,
-      target,
-      point: { x: 120, y: 760 },
-      targetRect: null,
-      targetElement: groupElement,
-      activeRect: null,
-    });
 
     commitResolvedCanvasDrop({ source, target, preview }, rawNestedFocus);
 
-    expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
-      { panelIds: ["chats", "file-tree"] },
-      { panelIds: ["artifacts"] },
-      { panelIds: ["terminals"] },
-      { panelIds: ["git-diff"] },
-      { panelIds: ["pull-requests"] },
-      { panelIds: ["sharing"] },
-      { panelIds: ["comments"] },
-      { panelIds: ["browsers"] },
+    expect(currentLayoutArrangement().rail.map((entry) => entry.id)).toEqual([
+      "railAgents",
+      "stack:railAgents+railArtifacts+railTerminals",
+      "railArtifacts",
+      "railTerminals",
+      "railBrowsers",
+      "railGitDiff",
+      "railPullRequests",
+      "railFileTree",
+      "railSharing",
+      "railComments",
     ]);
   });
 
-  it("inserts a rail group at the nearest grouped-section boundary", () => {
-    useLeftPanelStore
-      .getState()
-      .applyPanelGroups(
-        moveLeftPanelGroup(
-          useLeftPanelStore.getState().getPanelGroups(),
-          "artifacts",
-          "chats",
-          "combine",
-        ),
-      );
-    const groupElement = document.createElement("div");
-    groupElement.append(
-      makeRectElement("chats", { x: 0, y: 0, width: 320, height: 300 }),
-      makeRectElement("artifacts", { x: 0, y: 300, width: 320, height: 300 }),
-    );
+  it("refuses a body drop onto a stack already at the max, drawing the refusal rather than a quiet no-op (L-181, L-182)", () => {
+    const fourMember = [
+      { kind: "panel" as const, id: "railAgents" as const },
+      {
+        kind: "stack" as const,
+        id: "stack:railAgents+railArtifacts+railTerminals+railBrowsers",
+      },
+      { kind: "panel" as const, id: "railArtifacts" as const },
+      { kind: "panel" as const, id: "railTerminals" as const },
+      { kind: "panel" as const, id: "railBrowsers" as const },
+      { kind: "panel" as const, id: "railGitDiff" as const },
+      { kind: "panel" as const, id: "railPullRequests" as const },
+      { kind: "panel" as const, id: "railFileTree" as const },
+      { kind: "panel" as const, id: "railSharing" as const },
+      { kind: "panel" as const, id: "railComments" as const },
+    ];
+    useLayoutStore.setState({
+      ...DEFAULT_LAYOUT_SNAPSHOT,
+      arrangement: { ...DEFAULT_ARRANGEMENT, rail: fourMember },
+    });
     const source = railSource("git-diff", "rail");
-    const target = {
-      kind: "left-panel-group",
-      panelIds: ["chats", "artifacts"],
-    } as const;
+    const target = { kind: "left-panel-body", panelId: "chats" } as const;
     const preview = resolveCanvasDropPreview({
       source,
       target,
-      point: { x: 20, y: 310 },
+      point: { x: 120, y: 700 },
       targetRect: null,
-      targetElement: groupElement,
+      activeRect: null,
+    });
+
+    expect(isLeftPanelDropNoop(source, preview)).toBe(false);
+    const committed = commitResolvedCanvasDrop(
+      { source, target, preview },
+      rawNestedFocus,
+    );
+
+    expect(committed).toBe(false);
+    expect(useLayoutStore.getState().arrangement.rail).toEqual(fourMember);
+  });
+
+  it("is a no-op for a section-origin drop onto the body of the stack the panel already belongs to", () => {
+    const source = railSource("artifacts", "panel-section");
+    const target = { kind: "left-panel-body", panelId: "chats" } as const;
+    const preview = resolveCanvasDropPreview({
+      source,
+      target,
+      point: { x: 120, y: 700 },
+      targetRect: null,
+      activeRect: null,
+    });
+
+    expect(isLeftPanelDropNoop(source, preview)).toBe(true);
+    const before = useLayoutStore.getState().arrangement.rail;
+    commitResolvedCanvasDrop({ source, target, preview }, rawNestedFocus);
+    expect(useLayoutStore.getState().arrangement.rail).toBe(before);
+  });
+
+  it("carries a WHOLE stack onto another stack's body, appending all its members (L-181, L-182)", () => {
+    // Terminals+Browsers, dragged by ITS icon, lands on the shipped
+    // Agents+Artifacts body: both members join, growing the 2-member stack to
+    // 4 rather than replacing or refusing it.
+    const rail: ReadonlyArray<RailEntry> = [
+      { kind: "panel", id: "railAgents" },
+      { kind: "stack", id: "stack:railAgents+railArtifacts" },
+      { kind: "panel", id: "railArtifacts" },
+      { kind: "panel", id: "railTerminals" },
+      { kind: "stack", id: "stack:railTerminals+railBrowsers" },
+      { kind: "panel", id: "railBrowsers" },
+      { kind: "panel", id: "railGitDiff" },
+      { kind: "panel", id: "railPullRequests" },
+      { kind: "panel", id: "railFileTree" },
+      { kind: "panel", id: "railSharing" },
+      { kind: "panel", id: "railComments" },
+    ];
+    useLayoutStore.setState({
+      ...DEFAULT_LAYOUT_SNAPSHOT,
+      arrangement: { ...DEFAULT_ARRANGEMENT, rail },
+    });
+    const source = railSource("terminals", "rail");
+    const target = { kind: "left-panel-body", panelId: "chats" } as const;
+    const preview = resolveCanvasDropPreview({
+      source,
+      target,
+      point: { x: 120, y: 700 },
+      targetRect: null,
       activeRect: null,
     });
 
     commitResolvedCanvasDrop({ source, target, preview }, rawNestedFocus);
 
-    expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
-      { panelIds: ["chats", "git-diff", "artifacts"] },
-      { panelIds: ["terminals"] },
-      { panelIds: ["browsers"] },
-      { panelIds: ["pull-requests"] },
-      { panelIds: ["file-tree"] },
-      { panelIds: ["sharing"] },
-      { panelIds: ["comments"] },
+    expect(currentLayoutArrangement().rail.map((entry) => entry.id)).toEqual([
+      "railAgents",
+      "stack:railAgents+railArtifacts+railTerminals+railBrowsers",
+      "railArtifacts",
+      "railTerminals",
+      "railBrowsers",
+      "railGitDiff",
+      "railPullRequests",
+      "railFileTree",
+      "railSharing",
+      "railComments",
     ]);
+  });
+
+  it("refuses a whole-stack body join that would pass the max (L-181, L-182)", () => {
+    // Agents+Artifacts+GitDiff (3) plus Terminals+Browsers (2) would be 5:
+    // refused, and the stored rail is untouched.
+    const rail: ReadonlyArray<RailEntry> = [
+      { kind: "panel", id: "railAgents" },
+      {
+        kind: "stack",
+        id: "stack:railAgents+railArtifacts+railGitDiff",
+      },
+      { kind: "panel", id: "railArtifacts" },
+      { kind: "panel", id: "railGitDiff" },
+      { kind: "panel", id: "railTerminals" },
+      { kind: "stack", id: "stack:railTerminals+railBrowsers" },
+      { kind: "panel", id: "railBrowsers" },
+      { kind: "panel", id: "railPullRequests" },
+      { kind: "panel", id: "railFileTree" },
+      { kind: "panel", id: "railSharing" },
+      { kind: "panel", id: "railComments" },
+    ];
+    useLayoutStore.setState({
+      ...DEFAULT_LAYOUT_SNAPSHOT,
+      arrangement: { ...DEFAULT_ARRANGEMENT, rail },
+    });
+    const source = railSource("terminals", "rail");
+    const target = { kind: "left-panel-body", panelId: "chats" } as const;
+    const preview = resolveCanvasDropPreview({
+      source,
+      target,
+      point: { x: 120, y: 700 },
+      targetRect: null,
+      activeRect: null,
+    });
+
+    expect(isLeftPanelDropNoop(source, preview)).toBe(false);
+    const committed = commitResolvedCanvasDrop(
+      { source, target, preview },
+      rawNestedFocus,
+    );
+
+    expect(committed).toBe(false);
+    expect(useLayoutStore.getState().arrangement.rail).toEqual(rail);
   });
 });
 
@@ -567,7 +647,6 @@ describe("root dnd commits - full-pane tile split affordances", () => {
         target: paneBodyTarget("group-1"),
         point: panePoint,
         targetRect: PANE_RECT,
-        targetElement: null,
         activeRect: null,
       }),
     ).toEqual({
@@ -584,7 +663,6 @@ describe("root dnd commits - full-pane tile split affordances", () => {
         target: paneBodyTarget("group-2"),
         point: panePoint,
         targetRect: PANE_RECT,
-        targetElement: null,
         activeRect: null,
       }),
     ).toEqual({
@@ -599,158 +677,259 @@ describe("root dnd commits - left panel drop resolver", () => {
   beforeEach(resetStores);
   afterEach(resetStores);
 
-  const SPLIT_GROUPS = [
-    { panelIds: ["chats"] },
-    { panelIds: ["artifacts"] },
-    { panelIds: ["terminals"] },
-    { panelIds: ["git-diff"] },
-    { panelIds: ["pull-requests"] },
-    { panelIds: ["file-tree"] },
-    { panelIds: ["sharing"] },
-    { panelIds: ["comments"] },
-  ] as const;
-
-  it("moves a whole rail group before another group", () => {
+  it("reorders WITHIN its own stack rather than treating a stacked source as a no-op (L-181)", () => {
+    // A section header carries one panel (L-181): dropped beside its own
+    // stack partner, Artifacts moves to the top of the pair and stays a
+    // member.
     expect(
-      resolveLeftPanelGroupsForDrop(
+      resolveRailForDrop(
+        railSource("artifacts", "panel-section"),
+        { kind: "left-panel-rail", panelId: "chats", position: "before" },
+        DEFAULT_ARRANGEMENT,
+      ),
+    ).toEqual([
+      { kind: "panel", id: "railArtifacts" },
+      { kind: "stack", id: "stack:railArtifacts+railAgents" },
+      { kind: "panel", id: "railAgents" },
+      { kind: "panel", id: "railTerminals" },
+      { kind: "panel", id: "railBrowsers" },
+      { kind: "panel", id: "railGitDiff" },
+      { kind: "panel", id: "railPullRequests" },
+      { kind: "panel", id: "railFileTree" },
+      { kind: "panel", id: "railSharing" },
+      { kind: "panel", id: "railComments" },
+    ]);
+  });
+
+  it("is a no-op for a rail icon dropped WITHIN its own stack, which carries the whole block (L-181)", () => {
+    // A rail icon carries the whole stack (L-181): dropped beside its own
+    // partner, the target is already inside the carried block, so nothing
+    // moves.
+    expect(
+      resolveRailForDrop(
         railSource("artifacts", "rail"),
         { kind: "left-panel-rail", panelId: "chats", position: "before" },
-        SPLIT_GROUPS,
+        DEFAULT_ARRANGEMENT,
+      ),
+    ).toEqual(DEFAULT_RAIL);
+  });
+
+  it("moves a section-origin drop beside another panel", () => {
+    expect(
+      resolveRailForDrop(
+        railSource("artifacts", "panel-section"),
+        { kind: "left-panel-rail", panelId: "git-diff", position: "after" },
+        DEFAULT_ARRANGEMENT,
       ),
     ).toEqual([
-      { panelIds: ["artifacts"] },
-      { panelIds: ["chats"] },
-      { panelIds: ["terminals"] },
-      { panelIds: ["git-diff"] },
-      { panelIds: ["pull-requests"] },
-      { panelIds: ["file-tree"] },
-      { panelIds: ["sharing"] },
-      { panelIds: ["comments"] },
-      { panelIds: ["browsers"] },
+      { kind: "panel", id: "railAgents" },
+      { kind: "panel", id: "railTerminals" },
+      { kind: "panel", id: "railBrowsers" },
+      { kind: "panel", id: "railGitDiff" },
+      { kind: "panel", id: "railArtifacts" },
+      { kind: "panel", id: "railPullRequests" },
+      { kind: "panel", id: "railFileTree" },
+      { kind: "panel", id: "railSharing" },
+      { kind: "panel", id: "railComments" },
     ]);
   });
 
-  it("combines an extracted section into another rail group", () => {
+  it("returns an equal rail for a drop that lands a panel where it already is", () => {
     expect(
-      resolveLeftPanelGroupsForDrop(
+      resolveRailForDrop(
         railSource("artifacts", "panel-section"),
-        { kind: "left-panel-rail", panelId: "git-diff", position: "combine" },
-        SPLIT_GROUPS,
+        { kind: "left-panel-rail", panelId: "chats", position: "after" },
+        DEFAULT_ARRANGEMENT,
       ),
-    ).toEqual([
-      { panelIds: ["chats"] },
-      { panelIds: ["terminals"] },
-      { panelIds: ["git-diff", "artifacts"] },
-      { panelIds: ["pull-requests"] },
-      { panelIds: ["file-tree"] },
-      { panelIds: ["sharing"] },
-      { panelIds: ["comments"] },
-      { panelIds: ["browsers"] },
-    ]);
+    ).toEqual(DEFAULT_RAIL);
   });
 
-  it("returns structurally equal groups when a section combines into its own group", () => {
-    const groups = [
-      { panelIds: ["chats", "artifacts"] },
-      { panelIds: ["terminals"] },
-      { panelIds: ["git-diff"] },
-      { panelIds: ["pull-requests"] },
-      { panelIds: ["file-tree"] },
-      { panelIds: ["sharing"] },
-      { panelIds: ["comments"] },
-    ] as const;
+  it("moves the WHOLE stack to the rail's end via its icon, or ONE panel via its section header (L-181)", () => {
+    // Rail-icon origin: the whole stack carries to the end, together.
     expect(
-      resolveLeftPanelGroupsForDrop(
-        railSource("artifacts", "panel-section"),
-        { kind: "left-panel-rail", panelId: "chats", position: "combine" },
-        groups,
-      ),
-    ).toEqual([...groups, { panelIds: ["browsers"] }]);
-  });
-
-  it("moves a rail group and a section to the rail end", () => {
-    expect(
-      resolveLeftPanelGroupsForDrop(
+      resolveRailForDrop(
         railSource("artifacts", "rail"),
         { kind: "left-panel-rail-list" },
-        SPLIT_GROUPS,
+        DEFAULT_ARRANGEMENT,
       ),
     ).toEqual([
-      { panelIds: ["chats"] },
-      { panelIds: ["terminals"] },
-      { panelIds: ["git-diff"] },
-      { panelIds: ["pull-requests"] },
-      { panelIds: ["file-tree"] },
-      { panelIds: ["sharing"] },
-      { panelIds: ["comments"] },
-      { panelIds: ["browsers"] },
-      { panelIds: ["artifacts"] },
+      { kind: "panel", id: "railTerminals" },
+      { kind: "panel", id: "railBrowsers" },
+      { kind: "panel", id: "railGitDiff" },
+      { kind: "panel", id: "railPullRequests" },
+      { kind: "panel", id: "railFileTree" },
+      { kind: "panel", id: "railSharing" },
+      { kind: "panel", id: "railComments" },
+      { kind: "panel", id: "railAgents" },
+      { kind: "stack", id: "stack:railAgents+railArtifacts" },
+      { kind: "panel", id: "railArtifacts" },
     ]);
+    // Section-origin: Artifacts alone leaves its group, Agents stays put.
     expect(
-      resolveLeftPanelGroupsForDrop(
+      resolveRailForDrop(
         railSource("artifacts", "panel-section"),
         { kind: "left-panel-rail-list" },
-        [{ panelIds: ["chats", "artifacts"] }, ...SPLIT_GROUPS.slice(2)],
+        DEFAULT_ARRANGEMENT,
       ),
     ).toEqual([
-      { panelIds: ["chats"] },
-      { panelIds: ["terminals"] },
-      { panelIds: ["git-diff"] },
-      { panelIds: ["pull-requests"] },
-      { panelIds: ["file-tree"] },
-      { panelIds: ["sharing"] },
-      { panelIds: ["comments"] },
-      { panelIds: ["browsers"] },
-      { panelIds: ["artifacts"] },
+      { kind: "panel", id: "railAgents" },
+      { kind: "panel", id: "railTerminals" },
+      { kind: "panel", id: "railBrowsers" },
+      { kind: "panel", id: "railGitDiff" },
+      { kind: "panel", id: "railPullRequests" },
+      { kind: "panel", id: "railFileTree" },
+      { kind: "panel", id: "railSharing" },
+      { kind: "panel", id: "railComments" },
+      { kind: "panel", id: "railArtifacts" },
     ]);
   });
 
-  it("inserts at a section boundary inside another group", () => {
+  it("stacks the two panels for a drop in the middle band (L-168)", () => {
     expect(
-      resolveLeftPanelGroupsForDrop(
-        railSource("git-diff", "rail"),
+      resolveRailForDrop(
+        railSource("terminals", "rail"),
         {
-          kind: "left-panel-section",
-          panelId: "artifacts",
-          position: "before",
+          kind: "left-panel-rail",
+          panelId: "browsers",
+          position: "combine",
         },
-        [{ panelIds: ["chats", "artifacts"] }, ...SPLIT_GROUPS.slice(2)],
+        DEFAULT_ARRANGEMENT,
       ),
     ).toEqual([
-      { panelIds: ["chats", "git-diff", "artifacts"] },
-      { panelIds: ["terminals"] },
-      { panelIds: ["pull-requests"] },
-      { panelIds: ["file-tree"] },
-      { panelIds: ["sharing"] },
-      { panelIds: ["comments"] },
-      { panelIds: ["browsers"] },
+      { kind: "panel", id: "railAgents" },
+      { kind: "stack", id: "stack:railAgents+railArtifacts" },
+      { kind: "panel", id: "railArtifacts" },
+      { kind: "panel", id: "railBrowsers" },
+      { kind: "stack", id: "stack:railBrowsers+railTerminals" },
+      { kind: "panel", id: "railTerminals" },
+      { kind: "panel", id: "railGitDiff" },
+      { kind: "panel", id: "railPullRequests" },
+      { kind: "panel", id: "railFileTree" },
+      { kind: "panel", id: "railSharing" },
+      { kind: "panel", id: "railComments" },
+    ]);
+  });
+
+  it("only reorders for a drop in an outer band", () => {
+    const after = resolveRailForDrop(
+      railSource("terminals", "rail"),
+      { kind: "left-panel-rail", panelId: "browsers", position: "after" },
+      DEFAULT_ARRANGEMENT,
+    );
+
+    expect(after).not.toBeNull();
+    expect(after?.filter((entry) => entry.kind === "stack")).toEqual([
+      { kind: "stack", id: "stack:railAgents+railArtifacts" },
+    ]);
+    expect(after?.map((entry) => entry.id).slice(3, 5)).toEqual([
+      "railBrowsers",
+      "railTerminals",
+    ]);
+  });
+
+  it("lets a stacked SOURCE dragged by its rail icon carry its WHOLE stack onto a new target (L-170, L-181)", () => {
+    // A rail icon carries the whole stack (L-181): dragged off it, BOTH
+    // Agents and Artifacts leave the shipped pair together and join
+    // Terminals, unlike the section-origin case right below, which carries
+    // Agents alone.
+    const next = resolveRailForDrop(
+      railSource("chats", "rail"),
+      { kind: "left-panel-rail", panelId: "terminals", position: "combine" },
+      DEFAULT_ARRANGEMENT,
+    );
+
+    expect(next?.map((entry) => entry.id)).toEqual([
+      "railTerminals",
+      "stack:railTerminals+railAgents+railArtifacts",
+      "railAgents",
+      "railArtifacts",
+      "railBrowsers",
+      "railGitDiff",
+      "railPullRequests",
+      "railFileTree",
+      "railSharing",
+      "railComments",
+    ]);
+  });
+
+  it("lets a stacked SOURCE dragged by its section leave its old pair and join a new one (L-170)", () => {
+    // Grabbed by the panel's own section header rather than the rail's group
+    // icon (asGroups is false), so the whole-stack carry above does not
+    // apply: the panel alone leaves its old pair and Artifacts stands alone.
+    const next = resolveRailForDrop(
+      railSource("chats", "panel-section"),
+      { kind: "left-panel-rail", panelId: "terminals", position: "combine" },
+      DEFAULT_ARRANGEMENT,
+    );
+
+    expect(next?.map((entry) => entry.id)).toEqual([
+      "railArtifacts",
+      "railTerminals",
+      "stack:railTerminals+railAgents",
+      "railAgents",
+      "railBrowsers",
+      "railGitDiff",
+      "railPullRequests",
+      "railFileTree",
+      "railSharing",
+      "railComments",
+    ]);
+  });
+
+  it("joins a target that is already stacked, growing the stack (L-181)", () => {
+    // Artifacts is the shipped rail's stacked panel: dropping a third member
+    // onto it grows the stack rather than refusing, since two is no longer
+    // the max.
+    expect(
+      resolveRailForDrop(
+        railSource("terminals", "rail"),
+        {
+          kind: "left-panel-rail",
+          panelId: "artifacts",
+          position: "combine",
+        },
+        DEFAULT_ARRANGEMENT,
+      ),
+    ).toEqual([
+      { kind: "panel", id: "railAgents" },
+      { kind: "stack", id: "stack:railAgents+railArtifacts+railTerminals" },
+      { kind: "panel", id: "railArtifacts" },
+      { kind: "panel", id: "railTerminals" },
+      { kind: "panel", id: "railBrowsers" },
+      { kind: "panel", id: "railGitDiff" },
+      { kind: "panel", id: "railPullRequests" },
+      { kind: "panel", id: "railFileTree" },
+      { kind: "panel", id: "railSharing" },
+      { kind: "panel", id: "railComments" },
     ]);
   });
 
   it("returns null for non-left-panel previews", () => {
     expect(
-      resolveLeftPanelGroupsForDrop(
+      resolveRailForDrop(
         railSource("artifacts", "rail"),
         { kind: "empty-shell" },
-        SPLIT_GROUPS,
+        DEFAULT_ARRANGEMENT,
       ),
     ).toBeNull();
     expect(
-      resolveLeftPanelGroupsForDrop(
+      resolveRailForDrop(
         railSource("artifacts", "rail"),
         { kind: "artifact-tab-strip", groupId: "group-a", index: 0 },
-        SPLIT_GROUPS,
+        DEFAULT_ARRANGEMENT,
       ),
     ).toBeNull();
   });
 
   it("never dispatches a store write for a noop drop commit", () => {
-    const before = useLeftPanelStore.getState().panelGroups;
+    const before = useLayoutStore.getState().arrangement.rail;
     const source = railSource("artifacts", "panel-section");
+    // Artifacts already sits immediately after Chats in the default rail, so
+    // landing it "after chats" again is a no-op.
     const preview = {
       kind: "left-panel-rail",
       panelId: "chats",
-      position: "combine",
+      position: "after",
     } as const;
 
     expect(isLeftPanelDropNoop(source, preview)).toBe(true);
@@ -761,13 +940,15 @@ describe("root dnd commits - left panel drop resolver", () => {
           kind: "left-panel-rail-item",
           panelId: "chats",
           orientation: "vertical",
+          // Agents ships joined to Artifacts (L-166); an outer-band reorder is
+          // offered on a stacked icon all the same.
         },
         preview,
       },
       rawNestedFocus,
     );
 
-    expect(useLeftPanelStore.getState().panelGroups).toBe(before);
+    expect(useLayoutStore.getState().arrangement.rail).toBe(before);
   });
 });
 

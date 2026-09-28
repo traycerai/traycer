@@ -36,6 +36,17 @@ describe("useKeybindingStore", () => {
     );
   });
 
+  // The dispatcher and every conflict/persistence read compare bindings as
+  // plain strings, so a non-canonical chord (a reordered modifier, or `ctrl`
+  // off mac where the encoder reads Control as `mod`) has to be normalized
+  // before it lands in the store, not just at match time.
+  it("setBinding stores the canonical form of a non-canonical chord", () => {
+    useKeybindingStore.getState().setBinding("epic.new", "ctrl+alt+t");
+    expect(useKeybindingStore.getState().bindings["epic.new"]).toBe(
+      isMac() ? "ctrl+alt+t" : "mod+alt+t",
+    );
+  });
+
   it("clearBinding sets the action to null", () => {
     useKeybindingStore.getState().clearBinding("epic.switch.byDigit");
     expect(
@@ -109,6 +120,51 @@ describe("useKeybindingStore", () => {
     expect(bindings["group.split.horizontal"]).toBe("mod+alt+h");
     expect(bindings["group.split.vertical"]).toBeNull();
     expect(Object.hasOwn(bindings, "unknown.action")).toBe(false);
+  });
+
+  it("canonicalizes a persisted chord-kind binding on read", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            ...getDefaultBindings(),
+            "composer.model-picker.toggle": "alt+shift+m",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    // Reordering has no platform branch (only the ctrl-off-mac conversion
+    // does, and this chord has no ctrl token), so this holds on either
+    // platform this suite runs on.
+    expect(
+      useKeybindingStore.getState().bindings["composer.model-picker.toggle"],
+    ).toBe("shift+alt+m");
+  });
+
+  it("leaves a persisted digit-kind mask exactly as stored", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            ...getDefaultBindings(),
+            "epic.switch.byDigit": "shift+alt",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(useKeybindingStore.getState().bindings["epic.switch.byDigit"]).toBe(
+      "shift+alt",
+    );
   });
 
   it("migrates legacy nav.back/nav.forward arrow defaults to mod+shift+, and mod+shift+.", async () => {

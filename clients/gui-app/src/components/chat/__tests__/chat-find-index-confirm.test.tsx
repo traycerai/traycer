@@ -566,18 +566,16 @@ function renderFind(input: {
 // ---------------------------------------------------------------------------
 // Painting (copied verbatim from chat-find-index-backed.test.tsx).
 
-/** `mountRow` threads `support` through as `buildChatFindRows`'s 4th argument. */
+/** `mountRow` threads `support` through as `buildChatFindRows`'s 5th argument. */
 function mountRow(
   scroller: HTMLElement,
   message: ChatMessageModel,
   support: boolean | null,
 ): string {
-  const [row] = buildChatFindRows(
-    [message],
-    TILE_INSTANCE_ID,
-    EMPTY_PROMOTED,
-    support,
-  );
+  const [row] = buildChatFindRows([message], TILE_INSTANCE_ID, EMPTY_PROMOTED, {
+    hideReasoning: false,
+    queuePauseReasonProtocolSupported: support,
+  });
   const element = document.createElement("div");
   element.dataset.messageId = message.id;
   for (const unit of row.units) {
@@ -2510,7 +2508,7 @@ describe("chat find: census of index text the transcript does not paint", () => 
         [row.hydratedModel],
         TILE_INSTANCE_ID,
         EMPTY_PROMOTED,
-        null,
+        { hideReasoning: false, queuePauseReasonProtocolSupported: null },
       ).flatMap((projectedRow) => projectedRow.units);
       const anyUnitMatches = hydratedUnits.some((unit) =>
         asciiLower(unit.text).includes(asciiLower(row.query)),

@@ -17,6 +17,12 @@ import { useOpenLink } from "@/lib/links/open-link";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import { BASE_PAD_LEFT } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import {
+  CHAT_DOCK_PANEL_ROW,
+  CHAT_DOCK_PANEL_ROW_CONTENT,
+  CHAT_DOCK_PANEL_ROW_TEXT,
+  chatDockPanelRowTreeInset,
+} from "@/components/chat/chat-dock-panel-row";
+import {
   keyedPortForwardEventsNewestFirst,
   portForwardEventLabel,
   portForwardListenPort,
@@ -73,22 +79,32 @@ export function PortForwardRow(props: {
     <li className="m-0">
       <Collapsible open={open} onOpenChange={setOpen}>
         <div
-          className="group flex min-w-0 items-center gap-2 rounded-md py-1 pr-2 hover:bg-foreground/8"
-          style={{ paddingLeft: `${BASE_PAD_LEFT}px` }}
+          className={cn("group", CHAT_DOCK_PANEL_ROW, "hover:bg-foreground/8")}
+          style={{ paddingLeft: chatDockPanelRowTreeInset(0) }}
         >
           <CollapsibleTrigger
             data-testid={`port-forward-row-${forward.forwardId}`}
-            className="flex min-w-0 flex-1 items-center text-left"
+            className={CHAT_DOCK_PANEL_ROW_CONTENT}
           >
-            <ChevronRight
-              aria-hidden
+            {/* One cluster, not two row items: the twisty belongs to the
+                kind glyph it opens, and the recipe's `gap-2` between them read
+                the chevron as a sibling of the label (R6H-08). */}
+            <span className="flex shrink-0 items-center gap-1">
+              <ChevronRight
+                aria-hidden
+                className={cn(
+                  "size-3 text-muted-foreground/70 transition-transform",
+                  open ? "rotate-90" : null,
+                )}
+              />
+              <Cable aria-hidden className="size-3.5 text-primary/80" />
+            </span>
+            <span
               className={cn(
-                "size-3 shrink-0 text-muted-foreground/70 transition-transform",
-                open ? "rotate-90" : null,
+                "block min-w-0 flex-1 truncate text-foreground/85",
+                CHAT_DOCK_PANEL_ROW_TEXT,
               )}
-            />
-            <Cable aria-hidden className="size-3.5 shrink-0 text-primary/80" />
-            <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
+            >
               {forward.description}
             </span>
             <Badge variant="muted" size="xs">

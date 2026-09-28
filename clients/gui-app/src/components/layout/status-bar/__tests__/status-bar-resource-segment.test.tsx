@@ -6,10 +6,10 @@ import {
   type GlobalResourceProjection,
 } from "@/stores/resources/resources-registry";
 import {
-  DEFAULT_STATUS_BAR_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-  type ResourceMetric,
-} from "@/stores/settings/layout-store";
+} from "@/stores/layout/layout-store";
+import type { ResourceMetric } from "@/lib/layout/layout-values";
 
 /**
  * What the segment does with the data it is handed — attribution above all,
@@ -36,12 +36,6 @@ vi.mock("@/stores/resources/resources-registry", async (importOriginal) => {
     useGlobalResourceProjection: () => registry.projection,
   };
 });
-
-const desktopAppResourceUsageMock = vi.hoisted(() => vi.fn(() => null));
-
-vi.mock("@/hooks/resources/use-desktop-app-resource-usage", () => ({
-  useDesktopAppResourceUsage: desktopAppResourceUsageMock,
-}));
 
 vi.mock("@/hooks/resources/use-global-resources-unsupported", () => ({
   useGlobalResourcesUnsupported: () => registry.unsupported,
@@ -84,6 +78,7 @@ function renderSegment(props: { readonly hasExplicitPick: boolean }): void {
         hostId="host-b"
         hostLabel="Office Linux"
         hasExplicitPick={props.hasExplicitPick}
+        interactive={false}
       />
     </TooltipProvider>,
   );
@@ -97,39 +92,12 @@ describe("<StatusBarResourceSegment />", () => {
   beforeEach(() => {
     registry.projection = EMPTY_GLOBAL_RESOURCE_PROJECTION;
     registry.unsupported = false;
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
-    desktopAppResourceUsageMock.mockClear();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
   afterEach(() => {
     cleanup();
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
-    desktopAppResourceUsageMock.mockClear();
-  });
-
-  it("subscribes desktop-app usage only under the desktop-app scope, never host-tree", () => {
-    // The sampler starts a once-a-second IPC poll on its first subscriber, so
-    // asking for it under the default host-tree scope - where the strip never
-    // renders it - would run that poll all session for a number nothing shows.
-    renderSegment({ hasExplicitPick: false });
-
-    expect(desktopAppResourceUsageMock).toHaveBeenCalledWith(false);
-  });
-
-  it("enables the sampler under the desktop-app scope", () => {
-    useLayoutStore.setState({
-      statusBar: {
-        ...DEFAULT_STATUS_BAR_LAYOUT,
-        resources: {
-          ...DEFAULT_STATUS_BAR_LAYOUT.resources,
-          scope: "desktop-app",
-        },
-      },
-    });
-
-    renderSegment({ hasExplicitPick: false });
-
-    expect(desktopAppResourceUsageMock).toHaveBeenCalledWith(true);
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
   it("renders the watched host's numbers", () => {
@@ -195,11 +163,11 @@ describe("<StatusBarResourceSegment />", () => {
   it("says so when every metric is switched off", () => {
     // Reachable from Settings, which has one switch per metric. An icon with no
     // readout beside it is what a broken segment looks like.
-    useLayoutStore.setState({
-      statusBar: {
-        ...DEFAULT_STATUS_BAR_LAYOUT,
-        resources: { ...DEFAULT_STATUS_BAR_LAYOUT.resources, metrics: [] },
-      },
+    useLayoutStore.getState().setRegionValues("resourceMonitor", {
+      cpu: false,
+      memory: false,
+      processes: false,
+      ramShare: false,
     });
 
     renderSegment({ hasExplicitPick: false });
