@@ -11,9 +11,11 @@ import type { GuiAgentModelOption } from "./unary-schemas";
  * no longer string-equals any row. Exact equality answers "absent" and every
  * caller reads that as "the model is gone".
  *
- * Resolution is therefore two passes: exact `slug` first, then the row whose
+ * Resolution is therefore three passes: exact `slug` first, then the row whose
  * `metadata.resolvedModel` (the adapter-published canonical wire id) equals
- * the input. Exact-first is load-bearing, not a preference - rows DUPLICATE
+ * the input, then a match that tolerates a trailing tier marker (`[1m]`)
+ * present on only one side.
+ * Exact-first is load-bearing, not a preference - rows DUPLICATE
  * `resolvedModel` (Claude's `default` and `opus[1m]` both resolve to the same
  * canonical id), so alias matching alone cannot be a unique index.
  */
@@ -96,7 +98,129 @@ export function catalogServedStale(
 const NO_MATCH: ModelMatch = { kind: "none" };
 
 /**
- * Two-pass resolution of `slug` against `models`.
+ * The bracketed tier grammar: digits plus at most one unit letter (`[1m]`,
+ * `[200k]`). Deliberately NOT "any trailing bracket" - `model[preview]` is a
+ * real, distinct id and must not fold onto `model`. The same grammar as the
+ * host's rate-catalog tier fallback; private here so this module's exported
+ * surface is unchanged.
+ */
+const TIER_MARKER_PATTERN = /\[\d+[a-z]?\]$/i;
+
+interface TierSplit {
+  readonly bare: string;
+  /** Lowercased, since the grammar is case-insensitive; `null` when absent. */
+  readonly marker: string | null;
+}
+
+function splitTierMarker(value: string): TierSplit {
+  const match = TIER_MARKER_PATTERN.exec(value);
+  if (match === null) return { bare: value, marker: null };
+  return {
+    bare: value.slice(0, match.index),
+    marker: match[0].toLowerCase(),
+  };
+}
+
+/**
+ * How closely `candidate` names the model `input` names, once markers are set
+ * aside: `2` for the same marker on both sides (reachable only through a
+ * case-only difference, since identical strings match in pass 1 or 2), `1` for
+ * a marker on one side only, `0` for no match. Two different markers (`[1m]`,
+ * `[200k]`) name two different tiers and never match.
+ */
+function tierMatchRank(input: TierSplit, candidate: string): number {
+  const other = splitTierMarker(candidate);
+  if (other.bare !== input.bare) return 0;
+  if (input.marker === null || other.marker === null) return 1;
+  return input.marker === other.marker ? 2 : 0;
+}
+
+/**
+ * Whether any field of the row names a tier other than the one `input` names.
+ * A row's `slug` and `resolvedModel` describe one model, so a conflicting marker
+ * on the field that is not being compared still disqualifies it.
+ */
+function rowNamesOtherTier(
+  input: TierSplit,
+  slug: string,
+  resolved: string,
+): boolean {
+  if (input.marker === null) return false;
+  return [slug, resolved].some((value) => {
+    const marker = splitTierMarker(value).marker;
+    return marker !== null && marker !== input.marker;
+  });
+}
+
+/**
+ * How many distinct tiers the rows name across both fields. More than one
+ * means the rows are the same id at different tiers, not one model.
+ */
+function distinctTierCount(rows: readonly GuiAgentModelOption[]): number {
+  const markers = new Set<string>();
+  for (const row of rows) {
+    for (const value of [row.slug, modelResolvedModel(row)]) {
+      if (value === null) continue;
+      const marker = splitTierMarker(value).marker;
+      if (marker !== null) markers.add(marker);
+    }
+  }
+  return markers.size;
+}
+
+/**
+ * The rows whose `field` is the closest tier match for `input`. Only a row that
+ * publishes `resolvedModel` takes part: that is the signal of an adapter whose
+ * catalog decorates slugs, and every other row stays on exact-only matching.
+ */
+function closestTierMatches(
+  models: readonly GuiAgentModelOption[],
+  input: TierSplit,
+  field: (model: GuiAgentModelOption) => string | null,
+): GuiAgentModelOption[] {
+  let bestRank = 0;
+  let best: GuiAgentModelOption[] = [];
+  for (const candidate of models) {
+    const resolved = modelResolvedModel(candidate);
+    if (resolved === null) continue;
+    if (rowNamesOtherTier(input, candidate.slug, resolved)) continue;
+    const value = field(candidate);
+    if (value === null) continue;
+    const rank = tierMatchRank(input, value);
+    if (rank === 0 || rank < bestRank) continue;
+    if (rank > bestRank) {
+      bestRank = rank;
+      best = [];
+    }
+    best.push(candidate);
+  }
+  return best;
+}
+
+/**
+ * Three-pass resolution of `slug` against `models`.
+ *
+ * 1. exact `slug`;
+ * 2. the row whose `metadata.resolvedModel` equals `slug`;
+ * 3. the rows that agree with `slug` once a trailing tier marker (`[1m]`) is
+ *    set aside - provided the marker is on at most one side or is the same on
+ *    both. Two different markers are two different tiers and never match, on
+ *    whichever of the row's two fields the conflicting marker sits. It keeps
+ *    the earlier passes' precedence: rows matching on `slug` before rows
+ *    matching on `resolvedModel`, and within each, the same marker before a
+ *    missing one. An unmarked input whose matches name more than one tier is
+ *    left unresolved. Only rows that publish `resolvedModel` take part: that
+ *    is the signal of an adapter whose catalog decorates slugs, and every
+ *    other row keeps exact-only matching.
+ *
+ * Pass 3 exists because a catalog can gain or lose the marker between two
+ * provider CLI releases: Claude's 2.1.280 listed `opus[1m]` and
+ * `claude-fable-5-1[1m]`, and 2.1.282 lists `opus` and `claude-fable-5-1` for
+ * the same account. A slug persisted under either form is in neither field of
+ * the other, so passes 1 and 2 answer "the model is gone" for a model that is
+ * still listed. It only runs after both earlier passes miss, so a match they
+ * would have made is unchanged. Its result is an `alias` like pass 2's: held
+ * verbatim, never written back, and the CLI still receives the persisted slug.
  *
  * `models` must already be scoped to one harness - slugs are only unique
  * within a harness's catalog. Use {@link modelsForHarness} when the caller
@@ -116,8 +240,29 @@ export function resolveModelBySlug(
     (candidate) => modelResolvedModel(candidate) === slug,
   );
   const first = tied.at(0);
-  if (first === undefined) return NO_MATCH;
-  return { kind: "alias", model: first, ambiguous: tied.length > 1, tied };
+  if (first !== undefined) {
+    return { kind: "alias", model: first, ambiguous: tied.length > 1, tied };
+  }
+  const input = splitTierMarker(slug);
+  if (input.bare.length === 0) return NO_MATCH;
+  // Slug before resolvedModel, as in passes 1 and 2: merging the two into one
+  // tie would pick between different models by catalog order.
+  const bySlug = closestTierMatches(models, input, (row) => row.slug);
+  const tierTied =
+    bySlug.length > 0
+      ? bySlug
+      : closestTierMatches(models, input, modelResolvedModel);
+  const tierFirst = tierTied.at(0);
+  if (tierFirst === undefined) return NO_MATCH;
+  // An unmarked input tied across rows that name different tiers says nothing
+  // about which tier it means, so it stays unresolved rather than covered.
+  if (distinctTierCount(tierTied) > 1) return NO_MATCH;
+  return {
+    kind: "alias",
+    model: tierFirst,
+    ambiguous: tierTied.length > 1,
+    tied: tierTied,
+  };
 }
 
 /** Scope a mixed catalog to one harness before resolving. */
