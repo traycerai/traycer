@@ -265,11 +265,16 @@ describe("scheduleFinalizationHelper", () => {
     expect(spawnCall?.options.stdio).toBe("ignore");
     expect(spawnCall?.options.windowsHide).toBe(true);
 
-    // The launcher hands the script to a second, hidden PowerShell.
+    // The launcher hands off via a CreateProcessW P/Invoke with
+    // CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW, not Start-Process:
+    // Start-Process gave the freeze-9 job a way to silently inherit
+    // whatever job the launcher itself never explicitly broke out of.
     const launcher = decodeLauncher(spawnCall?.args ?? []);
-    expect(launcher).toContain("Start-Process");
-    expect(launcher).toContain("-WindowStyle Hidden");
-    expect(launcher).toContain("-PassThru");
+    expect(launcher).not.toContain("Start-Process");
+    expect(launcher).toContain("CreateProcessW");
+    expect(launcher).toContain("0x01000000"); // CREATE_BREAKAWAY_FROM_JOB
+    expect(launcher).toContain("0x08000000"); // CREATE_NO_WINDOW
+    expect(launcher).toMatch(/CloseHandle/);
     expect(launcher).toContain(
       powershellSingleQuoted(harness.writeCalls[0]?.path ?? ""),
     );
@@ -291,6 +296,183 @@ describe("scheduleFinalizationHelper", () => {
     expect(body).toContain("$StagedBinary cli finalize-upgrade");
     expect(body).not.toContain("Move-Item -Force -LiteralPath $StagedBinary");
     expect(body).not.toContain("Start-Service");
+  });
+
+  it("sizes the launcher's STARTUPINFO via the instance Marshal.SizeOf overload, not the Type-literal one", async () => {
+    // Windows PowerShell 5.1's `Marshal::SizeOf` cannot marshal a
+    // `[TraycerStartupInfo]` type literal as the argument - that overload
+    // resolves to `SizeOf(Type)`, and passing a `RuntimeType` object through
+    // PowerShell's type coercion throws. `SizeOf($startupInfo)` (the actual
+    // struct instance) resolves to the `SizeOf(Object)` overload instead,
+    // which works. The launcher must size `.cb` off the instance it already
+    // constructed, never off the type.
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    const launcher = decodeLauncher(harness.spawnCalls[0]?.args ?? []);
+    expect(launcher).toMatch(/Marshal\]::SizeOf\(\$\w+\)/);
+    expect(launcher).not.toMatch(/Marshal\]::SizeOf\(\[\w+\]\)/);
+  });
+
+  it("captures CreateProcessW's failure code inside the compiled C# wrapper, never via a separate PowerShell-side Marshal.GetLastWin32Error call", async () => {
+    // Confirmed on a Windows PowerShell 5.1 VM: querying
+    // [Marshal]::GetLastWin32Error() from PowerShell AFTER the CreateProcessW
+    // P/Invoke returns reads a clobbered value (123 / 203 observed instead of
+    // the real 5/ACCESS_DENIED) - the PowerShell interpreter's own intervening
+    // calls (evaluating the `if`, formatting, etc.) overwrite the thread's
+    // last-error slot before the script gets to read it. The only reliable
+    // capture point is IMMEDIATELY after the native call, inside the same
+    // compiled C# method - no PowerShell interpreter frames run in between -
+    // so the failure code must come back as an output of a C# wrapper call
+    // (e.g. an out-parameter), never from the PowerShell script re-querying
+    // GetLastWin32Error on its own afterwards.
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    const launcher = decodeLauncher(harness.spawnCalls[0]?.args ?? []);
+    const typeDefMatch = /Add-Type -TypeDefinition @'([\s\S]*?)'@/.exec(
+      launcher,
+    );
+    expect(typeDefMatch).not.toBeNull();
+    const csharpType = typeDefMatch?.[1] ?? "";
+    const orchestration = launcher.slice(
+      (typeDefMatch?.index ?? 0) + (typeDefMatch?.[0]?.length ?? 0),
+    );
+    // The compiled C# type must itself call GetLastWin32Error - proving the
+    // capture happens in native-adjacent, uninterrupted code.
+    expect(csharpType).toMatch(/GetLastWin32Error/);
+    // The PowerShell orchestration around the Add-Type block must NOT query
+    // it again itself - that second, later query is the unreliable one.
+    expect(orchestration).not.toMatch(/Marshal\]::GetLastWin32Error/);
+  });
+
+  it("gates the Windows helper's arm write on IsProcessInJob, deriving a sibling '.not-armed' path for the still-in-a-job and query-error branches", async () => {
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    const body = harness.writeCalls[0]?.body ?? "";
+    const armedPath = result.armedPath ?? "";
+    const notArmedPath = armedPath.replace(/\.armed$/, ".not-armed");
+    expect(notArmedPath).not.toBe(armedPath);
+    expect(notArmedPath.endsWith(".not-armed")).toBe(true);
+
+    // Breakaway is a request the confining job can silently refuse - the
+    // freeze-9 failure mode: CREATE_BREAKAWAY_FROM_JOB can succeed at
+    // creating the process while the new process is still a job member,
+    // because the job's own policy never granted the break. The helper
+    // proves it actually escaped before it ever claims to own the
+    // finalize; QueryInformationJobObject isn't needed for that proof.
+    expect(body).toContain("IsProcessInJob");
+    expect(body).not.toContain("QueryInformationJobObject");
+    expect(body).toContain(powershellSingleQuoted(notArmedPath));
+    expect(body).toContain("in-job");
+    expect(body).toContain("job-check-failed");
+    expect(body).toContain("# END ARM GUARD");
+
+    // The armed write is reachable only through the not-in-a-job branch:
+    // the job check comes first, the sentinel write follows it.
+    const jobCheckIdx = body.indexOf("IsProcessInJob");
+    const armWriteIdx = body.indexOf(powershellSingleQuoted(armedPath));
+    const guardEndIdx = body.indexOf("# END ARM GUARD");
+    expect(jobCheckIdx).toBeGreaterThan(-1);
+    expect(armWriteIdx).toBeGreaterThan(jobCheckIdx);
+    expect(guardEndIdx).toBeGreaterThan(armWriteIdx);
+  });
+
+  it("reports failed promptly, without waiting out the arm budget, when the helper writes '.not-armed' (in-job)", async () => {
+    const writeCalls: Array<{ path: string; body: string }> = [];
+    const spawnImpl = (
+      _command: string,
+      _args: readonly string[],
+      _options: unknown,
+    ) => {
+      const scriptPath = writeCalls[0]?.path ?? "";
+      const notArmedPath = scriptPath.replace(/\.(ps1|sh)$/, ".not-armed");
+      writeFileSync(notArmedPath, "in-job");
+      return {
+        pid: 1,
+        unref: () => undefined,
+        kill: () => undefined,
+        exited: Promise.resolve(LAUNCHER_OK),
+      };
+    };
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl,
+      writeImpl: async (path, body) => {
+        writeCalls.push({ path, body });
+      },
+      armWait: clock.deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("in-job");
+    // The helper already announced it never armed - there is no reason to
+    // burn the 10 s budget waiting it out. One launcher-exit poll tick is
+    // the bound, not the full deadline.
+    expect(clock.elapsedMs()).toBeLessThanOrEqual(100);
+  });
+
+  it("reports failed promptly with a job-check-failed reason when the helper's job-membership query itself errors", async () => {
+    const writeCalls: Array<{ path: string; body: string }> = [];
+    const spawnImpl = (
+      _command: string,
+      _args: readonly string[],
+      _options: unknown,
+    ) => {
+      const scriptPath = writeCalls[0]?.path ?? "";
+      const notArmedPath = scriptPath.replace(/\.(ps1|sh)$/, ".not-armed");
+      writeFileSync(notArmedPath, "job-check-failed");
+      return {
+        pid: 1,
+        unref: () => undefined,
+        kill: () => undefined,
+        exited: Promise.resolve(LAUNCHER_OK),
+      };
+    };
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl,
+      writeImpl: async (path, body) => {
+        writeCalls.push({ path, body });
+      },
+      armWait: clock.deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("job-check-failed");
+    expect(clock.elapsedMs()).toBeLessThanOrEqual(100);
   });
 
   it("reports failed within the wait bound, and abandons the helper, when the script never writes its armed sentinel", async () => {
@@ -408,7 +590,7 @@ describe("scheduleFinalizationHelper", () => {
     expect(elapsedMs).toBeLessThanOrEqual(10_500);
   });
 
-  it("writes the Windows helper script to disk with a UTF-8 BOM, then the line that arms it", async () => {
+  it("writes the Windows helper script to disk with a UTF-8 BOM, gated arming (IsProcessInJob before the write), then '# END ARM GUARD'", async () => {
     const harness = makeHarness({
       sentinel: "4321",
       exited: Promise.resolve(LAUNCHER_OK),
@@ -428,12 +610,23 @@ describe("scheduleFinalizationHelper", () => {
     expect(result.scriptPath).not.toBeNull();
     const bytes = readFileSync(result.scriptPath ?? "");
     expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
-    const firstLine = bytes.subarray(3).toString("utf8").split("\n")[0];
-    expect(firstLine).toBe(
+    const text = bytes.subarray(3).toString("utf8");
+    // The write that arms it is gated on IsProcessInJob (a breakaway can
+    // silently fail to escape the job it targeted), so it is no longer
+    // unconditionally the very first line - but it is still the first
+    // thing the guard can DO, ahead of the rest of the script, and the
+    // guard still ends at the stable `# END ARM GUARD` anchor tests key
+    // off of.
+    const jobCheckIdx = text.indexOf("IsProcessInJob");
+    const armWriteIdx = text.indexOf(
       `[System.IO.File]::WriteAllText(${powershellSingleQuoted(
         result.armedPath ?? "",
       )}, [string]$PID)`,
     );
+    const guardEndIdx = text.indexOf("# END ARM GUARD");
+    expect(jobCheckIdx).toBeGreaterThan(-1);
+    expect(armWriteIdx).toBeGreaterThan(jobCheckIdx);
+    expect(guardEndIdx).toBeGreaterThan(armWriteIdx);
   });
 
   it("carries a script path with an apostrophe and non-ASCII characters through the encoded launcher unchanged", async () => {
@@ -457,6 +650,8 @@ describe("scheduleFinalizationHelper", () => {
     expect(scriptPath.startsWith(oddDir)).toBe(true);
     const args = harness.spawnCalls[0]?.args ?? [];
     const launcher = decodeLauncher(args);
+    expect(launcher).not.toContain("Start-Process");
+    expect(launcher).toContain("CreateProcessW");
     // The single-quoted literal between the concatenated pieces.
     const literal = /-File "' \+ '((?:[^']|'')*)' \+ '"'\)/.exec(launcher);
     expect(literal).not.toBeNull();

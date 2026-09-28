@@ -33,10 +33,11 @@ import {
 //      script to a temp path, with the parent CLI's pid baked in, and
 //      launches it so that it outlives the CLI (see "Launching on
 //      Windows" below for why that is not a detached spawn there).
-//   2. The script's FIRST line writes an "armed" sentinel beside it. The
-//      CLI waits up to `HELPER_ARM_WAIT_MS` for that file and reports
-//      `armed` only once it exists: the one outcome on which `host
-//      restart` leaves the service start to the helper. Anything else is
+//   2. On Windows the script first proves it is outside every job object,
+//      then writes an "armed" sentinel beside it. The CLI waits up to
+//      `HELPER_ARM_WAIT_MS` for that file and reports `armed` only once it
+//      exists: the one outcome on which `host restart` leaves the service
+//      start to the helper. Anything else is
 //      `failed`, and the restart relaunches the host itself - a helper
 //      that never ran must not leave the host stopped. A failure after
 //      the launch also writes an "abandoned" file the script checks
@@ -82,24 +83,28 @@ import {
 // exits 0 without running a line of the script. That was measured on
 // Windows Server 2022 from node and bun, over ssh and in the console
 // session, and it is why this helper used to never run. So the CLI
-// spawns a NON-detached `powershell.exe` launcher and awaits it; the
-// launcher's one job is `Start-Process -WindowStyle Hidden -PassThru` on
-// the helper script:
+// spawns a NON-detached `powershell.exe` launcher and awaits it. The
+// launcher calls CreateProcessW with CREATE_BREAKAWAY_FROM_JOB |
+// CREATE_NO_WINDOW on the helper script:
 //
-//  - The launcher gets a console without a window (`windowsHide` with no
-//    inherited stdio is CREATE_NO_WINDOW, `process.c:1034-1043`), so it
-//    runs; `Start-Process` gives the helper a console of its own, hidden.
-//  - The helper outlives the CLI. libuv assigns every non-detached child
-//    to a job object that kills its members when the CLI exits
-//    (`process.c:1082-1100`, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE at
-//    `process.c:92-96`), but the same job sets
-//    JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK, so "only the processes that we
-//    explicitly add are affected, and *their* subprocesses are not"
-//    (`process.c:77-83`). The launcher is a member; the helper it starts
-//    is not.
+//  - The launcher runs without a console window (`windowsHide` with no
+//    inherited stdio is CREATE_NO_WINDOW, `process.c:1034-1043`). The
+//    helper also uses CREATE_NO_WINDOW; neither process inherits the
+//    CLI's stdio handles.
+//  - libuv assigns the launcher to a kill-on-close job
+//    (`process.c:1082-1100`), and an outer supervisor may assign the CLI
+//    to another. Win32-OpenSSH, for example, puts an exec-mode session in
+//    a KILL_ON_JOB_CLOSE | BREAKAWAY_OK job. SILENT_BREAKAWAY_OK on libuv's
+//    job alone does not release the helper from that outer ssh job.
+//    Explicit breakaway requests escape from each permitting job in the
+//    chain. Before writing `armed`, the helper checks IsProcessInJob with
+//    a NULL job handle, which tests membership in ANY job. If it remains
+//    in a job or the check fails, it writes a fixed `.not-armed` reason
+//    and exits. The CLI then relaunches the host with the upgrade pending.
 //  - The launcher's own script travels as `-EncodedCommand` (UTF-16LE,
-//    base64), so no path is ever quoted for a command line. The helper
-//    path inside it is a PowerShell single-quoted literal.
+//    base64), so the CLI never quotes a path on its command line. The
+//    helper path inside it is a PowerShell single-quoted literal before
+//    the launcher passes it as a quoted argument to CreateProcessW.
 //  - Its stdio is ignored, never piped. A helper that inherited a pipe
 //    would hold it open, and the CLI could not exit until the helper did
 //    - while the helper waits for the CLI to exit.
@@ -164,9 +169,11 @@ export interface HelperArmWaitDeps {
   readonly pollIntervalMs: number;
 }
 
-// About 25 times the 405 ms the helper took to reach its first line on the
-// review VM: room for a cold PowerShell start under antivirus, while a
-// restart whose helper never runs still brings the host back in seconds.
+// On the Windows review VM, six Node -> launcher -> breakaway runs with a
+// stand-in child that compiles the same job check and calls IsProcessInJob
+// reached its marker in 687.51-718.77 ms (15.6 ms clock resolution).
+// Keep the 10 s bound for slow PowerShell starts under antivirus, while a
+// helper that never runs still brings the host back in seconds.
 // The whole wait runs with the host stopped and the CLI lock held.
 export const HELPER_ARM_WAIT_MS = 10_000;
 
@@ -184,14 +191,14 @@ export const defaultHelperArmWaitDeps: HelperArmWaitDeps = {
 };
 
 export interface ScheduleHelperResult {
-  // `armed`: the helper script is running - its first line wrote the
-  // sentinel - and owns the swap and the service start from here.
+  // `armed`: the helper script proved it is outside every job, wrote the
+  // sentinel, and owns the swap and the service start from here.
   // `failed`: no running helper could be confirmed, so the caller still
   // owns the service start.
   readonly status: "armed" | "skipped" | "failed";
   readonly platform: NodeJS.Platform;
   readonly scriptPath: string | null;
-  // The sentinel the script's first line writes.
+  // The sentinel the script writes only after it has escaped every job.
   readonly armedPath: string | null;
   readonly markerPath: string;
   // The helper script's own pid, as it wrote it into the sentinel.
@@ -272,6 +279,7 @@ export async function scheduleFinalizationHelper(
           livePath: opts.livePath,
           markerPath,
           armedPath: files.armedPath,
+          notArmedPath: files.notArmedPath,
           abandonedPath: files.abandonedPath,
           timeoutSeconds: opts.parentExitTimeoutSeconds,
         })
@@ -303,6 +311,7 @@ export async function scheduleFinalizationHelper(
   const spawnDescriptor = buildSpawnDescriptor({
     platform,
     scriptPath: files.scriptPath,
+    notArmedPath: files.notArmedPath,
   });
   let launched: SpawnedProcess;
   try {
@@ -319,6 +328,7 @@ export async function scheduleFinalizationHelper(
     platform,
     launched,
     armedPath: files.armedPath,
+    notArmedPath: files.notArmedPath,
     wait: opts.armWait,
   });
   if (armed.status === "armed") {
@@ -347,11 +357,12 @@ export async function scheduleFinalizationHelper(
 }
 
 // Wait, within one `wait.waitMs` budget, for the launcher to exit (Windows
-// only) and then for the script's first line to write `armedPath`.
+// only) and then for the helper to write `armedPath` or `notArmedPath`.
 async function awaitHelperArmed(opts: {
   readonly platform: NodeJS.Platform;
   readonly launched: SpawnedProcess;
   readonly armedPath: string;
+  readonly notArmedPath: string;
   readonly wait: HelperArmWaitDeps;
 }): Promise<
   Pick<ScheduleHelperResult, "status" | "helperPid" | "errorMessage">
@@ -359,9 +370,8 @@ async function awaitHelperArmed(opts: {
   const { launched, wait } = opts;
   const deadline = wait.now() + wait.waitMs;
   if (opts.platform === "win32") {
-    // Awaited: the launcher exits as soon as Start-Process returns, and a
-    // non-zero exit is a Start-Process that failed, so there is no helper
-    // to wait for.
+    // Awaited: the launcher exits as soon as CreateProcessW returns. A
+    // non-zero exit means the helper could not be created.
     const launcher: { exit: SpawnedProcessExit | null } = { exit: null };
     void launched.exited.then((exit) => {
       launcher.exit = exit;
@@ -379,11 +389,14 @@ async function awaitHelperArmed(opts: {
       await wait.sleep(wait.pollIntervalMs);
     }
     if (launcher.exit.exitCode !== 0) {
+      const reason = await readNotArmedReason(opts.notArmedPath);
       return {
         status: "failed",
         helperPid: null,
         errorMessage: `the finalize helper launcher failed (${
-          launcher.exit.errorMessage ?? `exit code ${launcher.exit.exitCode}`
+          reason ??
+          launcher.exit.errorMessage ??
+          `exit code ${launcher.exit.exitCode}`
         })`,
       };
     }
@@ -392,6 +405,16 @@ async function awaitHelperArmed(opts: {
     launched.unref();
   }
   for (;;) {
+    if (opts.platform === "win32") {
+      const reason = await readNotArmedReason(opts.notArmedPath);
+      if (reason !== null) {
+        return {
+          status: "failed",
+          helperPid: null,
+          errorMessage: `the finalize helper did not arm (${reason})`,
+        };
+      }
+    }
     const sentinel = await readArmedSentinel(opts.armedPath);
     if (sentinel.armed) {
       return { status: "armed", helperPid: sentinel.pid, errorMessage: null };
@@ -407,9 +430,40 @@ async function awaitHelperArmed(opts: {
   }
 }
 
-// The sentinel existing is the proof the script runs. Its pid is
-// best-effort: the CLI can read the file between its creation and the
-// write. Any read error counts as "not yet"; the deadline bounds that.
+type NotArmedReason =
+  | "in-job"
+  | "job-check-failed"
+  | "create-denied"
+  | "create-failed"
+  | "unrecognized-refusal";
+
+// The helper and launcher write only these fixed reason codes. Treat any
+// other contents as an unrecognized refusal, never echoing a temp-file
+// payload into the restart result.
+async function readNotArmedReason(
+  path: string,
+): Promise<NotArmedReason | null> {
+  let reason: string;
+  try {
+    reason = (await readFile(path, "utf8")).trim();
+  } catch {
+    return null;
+  }
+  if (
+    reason === "in-job" ||
+    reason === "job-check-failed" ||
+    reason === "create-denied" ||
+    reason === "create-failed"
+  ) {
+    return reason;
+  }
+  return "unrecognized-refusal";
+}
+
+// On Windows the sentinel exists only after the helper proved it is
+// outside every job. Its pid is best-effort: the CLI can read the file
+// between its creation and the write. Any read error counts as "not yet";
+// the deadline bounds that.
 async function readArmedSentinel(
   armedPath: string,
 ): Promise<
@@ -429,14 +483,16 @@ async function readArmedSentinel(
   };
 }
 
-// The script and the two files it shares with the CLI, side by side:
-// `<stem>.ps1` (or `.sh`), `<stem>.armed`, `<stem>.abandoned`.
+// The script and its sidecar files, side by side:
+// `<stem>.ps1` (or `.sh`), `<stem>.armed`, `<stem>.not-armed`,
+// `<stem>.abandoned`.
 function makeHelperFilePaths(
   environment: Environment,
   platform: NodeJS.Platform,
 ): {
   readonly scriptPath: string;
   readonly armedPath: string;
+  readonly notArmedPath: string;
   readonly abandonedPath: string;
 } {
   const ext = platform === "win32" ? ".ps1" : ".sh";
@@ -445,6 +501,7 @@ function makeHelperFilePaths(
   return {
     scriptPath: `${stem}${ext}`,
     armedPath: `${stem}.armed`,
+    notArmedPath: `${stem}.not-armed`,
     abandonedPath: `${stem}.abandoned`,
   };
 }
@@ -452,6 +509,7 @@ function makeHelperFilePaths(
 function buildSpawnDescriptor(opts: {
   readonly platform: NodeJS.Platform;
   readonly scriptPath: string;
+  readonly notArmedPath: string;
 }): {
   readonly command: string;
   readonly args: readonly string[];
@@ -467,7 +525,9 @@ function buildSpawnDescriptor(opts: {
         "-ExecutionPolicy",
         "Bypass",
         "-EncodedCommand",
-        encodePowerShellCommand(renderWindowsLauncherScript(opts.scriptPath)),
+        encodePowerShellCommand(
+          renderWindowsLauncherScript(opts.scriptPath, opts.notArmedPath),
+        ),
       ],
       options: {
         detached: false,
@@ -490,17 +550,109 @@ function buildSpawnDescriptor(opts: {
   };
 }
 
+// Add-Type compiles this in the short-lived launcher. CreateProcessW is
+// needed because Start-Process does not request breakaway from an outer job
+// (notably an ssh session's kill-on-close job). The STARTUPINFO layout is
+// the documented Win32 layout on both 32- and 64-bit Windows.
+const WINDOWS_CREATE_PROCESS_TYPE = `using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+[StructLayout(LayoutKind.Sequential)]
+public struct TraycerStartupInfo {
+    public uint cb;
+    public IntPtr lpReserved;
+    public IntPtr lpDesktop;
+    public IntPtr lpTitle;
+    public uint dwX;
+    public uint dwY;
+    public uint dwXSize;
+    public uint dwYSize;
+    public uint dwXCountChars;
+    public uint dwYCountChars;
+    public uint dwFillAttribute;
+    public uint dwFlags;
+    public ushort wShowWindow;
+    public ushort cbReserved2;
+    public IntPtr lpReserved2;
+    public IntPtr hStdInput;
+    public IntPtr hStdOutput;
+    public IntPtr hStdError;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct TraycerProcessInformation {
+    public IntPtr hProcess;
+    public IntPtr hThread;
+    public uint dwProcessId;
+    public uint dwThreadId;
+}
+
+public static class TraycerCreateProcess {
+    public const uint CREATE_BREAKAWAY_FROM_JOB = 0x01000000;
+    public const uint CREATE_NO_WINDOW = 0x08000000;
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateProcessW", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateProcessNative(
+        string applicationName, StringBuilder commandLine,
+        IntPtr processAttributes, IntPtr threadAttributes,
+        [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,
+        uint creationFlags, IntPtr environment, IntPtr currentDirectory,
+        ref TraycerStartupInfo startupInfo,
+        out TraycerProcessInformation processInformation);
+
+    public static bool TryCreateProcess(
+        string applicationName, StringBuilder commandLine,
+        IntPtr processAttributes, IntPtr threadAttributes,
+        bool inheritHandles,
+        uint creationFlags, IntPtr environment, IntPtr currentDirectory,
+        ref TraycerStartupInfo startupInfo,
+        out TraycerProcessInformation processInformation,
+        out int win32Error) {
+        bool created = CreateProcessNative(
+            applicationName, commandLine, processAttributes,
+            threadAttributes, inheritHandles, creationFlags, environment,
+            currentDirectory, ref startupInfo, out processInformation);
+        win32Error = created ? 0 : Marshal.GetLastWin32Error();
+        return created;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool CloseHandle(IntPtr handle);
+}`;
+
 // The Windows launcher's whole script. `Join-Path $PSHOME` starts the
-// helper under the same Windows PowerShell as the launcher.
-// `-ArgumentList` is ONE string because Windows PowerShell 5.1 joins an
-// array with spaces and quotes no element; a Windows path cannot contain
-// `"`. `-PassThru` makes a Start-Process that produced no process a
-// launcher failure rather than another silent exit 0.
-function renderWindowsLauncherScript(scriptPath: string): string {
+// helper under the same Windows PowerShell as the launcher. The encoded
+// launcher is the only command-line argument the CLI constructs; the
+// helper path becomes a quoted UTF-16 argument inside it. Windows paths
+// cannot contain a double quote.
+function renderWindowsLauncherScript(
+  scriptPath: string,
+  notArmedPath: string,
+): string {
   return [
     "$ErrorActionPreference = 'Stop'",
-    `$helper = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ${psString(scriptPath)} + '"') -WindowStyle Hidden -PassThru`,
-    "if ($null -eq $helper) { exit 1 }",
+    "Add-Type -TypeDefinition @'",
+    WINDOWS_CREATE_PROCESS_TYPE,
+    "'@",
+    "$powershellExe = Join-Path $PSHOME 'powershell.exe'",
+    `$commandLine = [System.Text.StringBuilder]::new('"' + $powershellExe + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ${psString(scriptPath)} + '"')`,
+    `$notArmedPath = ${psString(notArmedPath)}`,
+    "$startupInfo = [TraycerStartupInfo]::new()",
+    "$startupInfo.cb = [uint32][System.Runtime.InteropServices.Marshal]::SizeOf($startupInfo)",
+    "$processInfo = [TraycerProcessInformation]::new()",
+    "$createError = 0",
+    "$flags = [uint32]([TraycerCreateProcess]::CREATE_BREAKAWAY_FROM_JOB -bor [TraycerCreateProcess]::CREATE_NO_WINDOW)",
+    "$created = [TraycerCreateProcess]::TryCreateProcess($powershellExe, $commandLine, [IntPtr]::Zero, [IntPtr]::Zero, $false, $flags, [IntPtr]::Zero, [IntPtr]::Zero, [ref]$startupInfo, [ref]$processInfo, [ref]$createError)",
+    "if (-not $created) {",
+    "  $reason = if ($createError -eq 5) { 'create-denied' } else { 'create-failed' }",
+    "  [System.IO.File]::WriteAllText($notArmedPath, $reason)",
+    "  exit 1",
+    "}",
+    "[TraycerCreateProcess]::CloseHandle($processInfo.hThread) | Out-Null",
+    "[TraycerCreateProcess]::CloseHandle($processInfo.hProcess) | Out-Null",
     "exit 0",
   ].join("\n");
 }
@@ -513,27 +665,63 @@ function encodePowerShellCommand(script: string): string {
 
 const UTF8_BOM = "\uFEFF";
 
+// IsProcessInJob with a NULL job handle tests membership in any job,
+// including a nested outer job inherited after the breakaway request.
+const WINDOWS_JOB_CHECK_TYPE = `using System;
+using System.Runtime.InteropServices;
+
+public static class TraycerJobCheck {
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetCurrentProcess();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsProcessInJob(
+        IntPtr processHandle, IntPtr jobHandle,
+        [MarshalAs(UnmanagedType.Bool)] out bool inJob);
+}`;
+
 // PowerShell helper. Polls `Get-Process -Id <pid>` until the parent CLI
 // exits, then hands off the binary swap + service start to the staged
 // CLI's own hidden `cli finalize-upgrade` command - see the module doc
 // comment above for why (own PID + start-time identity for the cli-lock
 // acquisition).
 //
-// Starts with a UTF-8 BOM, then the line that arms it: see the module doc
-// comment.
+// Starts with a UTF-8 BOM, then checks all job membership before arming:
+// a helper that will die with a job cannot take over the service start.
 function renderWindowsHelperScript(opts: {
   readonly parentPid: number;
   readonly stagedBinaryPath: string;
   readonly livePath: string;
   readonly markerPath: string;
   readonly armedPath: string;
+  readonly notArmedPath: string;
   readonly abandonedPath: string;
   readonly timeoutSeconds: number;
 }): string {
-  return `${UTF8_BOM}[System.IO.File]::WriteAllText(${psString(opts.armedPath)}, [string]$PID)
-# traycer-cli pending-upgrade finalize helper (Windows). The line above
-# runs first: the CLI that launched this script reports it armed, and
-# leaves the service start to it, only once that file exists.
+  return `${UTF8_BOM}$ErrorActionPreference = 'Stop'
+$NotArmedPath = ${psString(opts.notArmedPath)}
+try {
+  Add-Type -TypeDefinition @'
+${WINDOWS_JOB_CHECK_TYPE}
+'@
+  $inJob = $false
+  if (-not [TraycerJobCheck]::IsProcessInJob([TraycerJobCheck]::GetCurrentProcess(), [IntPtr]::Zero, [ref]$inJob)) {
+    [System.IO.File]::WriteAllText($NotArmedPath, 'job-check-failed')
+    exit 1
+  }
+  if ($inJob) {
+    [System.IO.File]::WriteAllText($NotArmedPath, 'in-job')
+    exit 0
+  }
+} catch {
+  [System.IO.File]::WriteAllText($NotArmedPath, 'job-check-failed')
+  exit 1
+}
+[System.IO.File]::WriteAllText(${psString(opts.armedPath)}, [string]$PID)
+# END ARM GUARD
+# traycer-cli pending-upgrade finalize helper (Windows). Only a helper
+# outside every job owns the service start; otherwise the CLI relaunches.
 $ErrorActionPreference = "Continue"
 $ParentPid = ${opts.parentPid}
 $StagedBinary = ${psString(opts.stagedBinaryPath)}

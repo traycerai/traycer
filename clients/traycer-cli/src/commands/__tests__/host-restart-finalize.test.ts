@@ -400,8 +400,12 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
   // Locked Windows case: the in-process renameSync fails with EACCES (we
   // simulate by stripping write perm on the parent dir, which is how the
   // helper test on POSIX exercises tryReplaceLiveBinary's "locked" branch).
-  // `armSentinel` plays the helper script's first line, or not.
-  async function runWindowsStillLocked(armSentinel: boolean) {
+  // `sentinel` plays what the helper script's guard wrote before the CLI's
+  // arm wait gave up: "armed" (the guard's first line ran and it escaped),
+  // "not-armed" (the guard ran but refused - still job-confined, or its own
+  // job-membership check errored), or "none" (the script never even started).
+  type HelperSentinel = "armed" | "not-armed" | "none";
+  async function runWindowsStillLocked(sentinel: HelperSentinel) {
     const lockedDir = join(workHome, "locked-bin");
     mkdirSync(lockedDir, { recursive: true });
     const liveBinaryPath = join(lockedDir, "traycer.exe");
@@ -414,7 +418,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
 
     const { chmodSync, rmSync } = await import("node:fs");
     chmodSync(lockedDir, 0o555);
-    const armedFiles: string[] = [];
+    const sentinelFiles: string[] = [];
     try {
       const calls: StubCalls = { calls: [], relaunchStop: null };
       const controller = makeStubController(calls);
@@ -425,13 +429,20 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       const writeCalls: Array<{ path: string; body: string }> = [];
       const spawnStub: RestartArgsBaseline["spawnImpl"] = (command, args) => {
         spawnCalls.push({ command, args });
-        if (armSentinel) {
+        if (sentinel === "armed") {
           const armedPath = (writeCalls[0]?.path ?? "").replace(
             /\.ps1$/,
             ".armed",
           );
           writeFileSync(armedPath, "99001");
-          armedFiles.push(armedPath);
+          sentinelFiles.push(armedPath);
+        } else if (sentinel === "not-armed") {
+          const notArmedPath = (writeCalls[0]?.path ?? "").replace(
+            /\.ps1$/,
+            ".not-armed",
+          );
+          writeFileSync(notArmedPath, "in-job");
+          sentinelFiles.push(notArmedPath);
         }
         return {
           pid: 1,
@@ -465,7 +476,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       };
     } finally {
       chmodSync(lockedDir, 0o755);
-      for (const f of armedFiles) rmSync(f, { force: true });
+      for (const f of sentinelFiles) rmSync(f, { force: true });
     }
   }
 
@@ -473,7 +484,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     if (process.platform === "win32") return; // chmod-based simulation not portable to Windows
     if (typeof process.getuid === "function" && process.getuid() === 0) return; // root bypasses 0o555
 
-    const run = await runWindowsStillLocked(true);
+    const run = await runWindowsStillLocked("armed");
     // The helper takes over the start.
     expect(run.calls.calls).toEqual(["stopForRestart"]);
     expect(run.result.helper).not.toBeNull();
@@ -499,8 +510,25 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     if (process.platform === "win32") return; // chmod-based simulation not portable to Windows
     if (typeof process.getuid === "function" && process.getuid() === 0) return; // root bypasses 0o555
 
-    const run = await runWindowsStillLocked(false);
+    const run = await runWindowsStillLocked("none");
     expect(run.result.helper?.status).toBe("failed");
+    expect(run.result.helperOwnsServiceStart).toBe(false);
+    expect(run.calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
+  });
+
+  // The freeze-9 fix: a helper whose guard found itself still job-confined
+  // (breakaway silently failed to escape) must write `.not-armed` instead of
+  // `.armed`, and that must make the SAME "the caller still owns the
+  // service start" fallback apply as a helper that never ran at all - never
+  // treated as `armed` and never left to finalize behind a relaunch it
+  // cannot outlive.
+  it("on Windows still-locked, a helper whose guard refuses to arm (still job-confined) leaves the relaunch to this command", async () => {
+    if (process.platform === "win32") return; // chmod-based simulation not portable to Windows
+    if (typeof process.getuid === "function" && process.getuid() === 0) return; // root bypasses 0o555
+
+    const run = await runWindowsStillLocked("not-armed");
+    expect(run.result.helper?.status).toBe("failed");
+    expect(run.result.helper?.errorMessage).toContain("in-job");
     expect(run.result.helperOwnsServiceStart).toBe(false);
     expect(run.calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
   });
