@@ -1,0 +1,60 @@
+---
+title: "Review agent changes"
+description: "Check what an agent changed, get a written review, send fixes back, and roll back what you don't want."
+---
+
+Use this guide when an agent has finished work and you want to check it before you keep it, commit it, or merge it. You can look at the changes one turn at a time or all at once, ask a second agent for a written review, send fixes back to the agent that made the change, and roll back any file or turn.
+
+## Before You Start
+
+- An agent that has changed files.
+- To roll back changes, you must be the agent's owner, be on the host the agent ran on, and wait until no turn is running.
+- For pull requests, the GitHub CLI on the host: install `gh` and run `gh auth login`.
+
+## Review the Work
+
+<Steps>
+  <Step title="See what each turn changed">
+    A turn that changed files or artifacts ends with a **Changes** card, for example "Changes · 3 files · 1 artifact".
+  </Step>
+  <Step title="Open all of the agent's changes">
+    The **Files changed** panel above the composer lists every file the agent changed, with line counts. Click **Review all** to open them in one diff. The button is hidden while a turn is running.
+  </Step>
+  <Step title="Check the folder or worktree in Git Diff">
+    Open **Git Diff** and pick the folder or worktree in its workspace picker. Click a file to see its diff, or the diff icon on a section heading to see the whole section at once. The diff toolbar switches between **Split view** and **Unified view**. For a small fix, click into an unstaged file's diff and edit it there. See [Git Diff](/panels/git-diff).
+  </Step>
+  <Step title="Get a written review">
+    Start a new agent on the same folder or worktree (**Existing worktree**) and run:
+
+    ```text
+    $traycer-review Review the changes on this branch.
+    ```
+
+    It writes a **review** artifact with prioritized findings. For a large change, `$traycer-changeset-walkthrough` writes a guide to what changed, why, and the order to review it in.
+  </Step>
+  <Step title="Send fixes back">
+    In the review artifact, select a finding, click **Send to chat**, and pick the agent that made the change. The quote is added to that chat's draft; add your instructions and send. Or comment on the findings and ask the agent to address the open threads. See [Send to Chat](/panels/artifacts/editing#send-to-chat).
+  </Step>
+  <Step title="Roll back what you don't want">
+    - **One file:** hover it in **Files changed** and click its undo icon. It doesn't ask first.
+    - **One turn:** click **Undo** on the turn's **Changes** card, then **Restore**. Later changes to the same files are reverted too.
+    - **Everything:** click **Undo all** in **Files changed**, then confirm with **Undo all**.
+
+    Artifacts are reverted too unless you clear **Also revert N artifacts**. The conversation stays as it is. See [Undo a turn](/panels/agents/undo-a-turn).
+  </Step>
+  <Step title="Follow the pull request">
+    When the agent opens a pull request, it appears in the **Pull Requests** panel. Open it and check **Overview** for what blocks the merge. **Fix in chat** puts a failing check or a review comment into the agent's composer, ready to send. See [Pull Requests](/panels/pull-requests).
+  </Step>
+</Steps>
+
+<Note>
+  Git Diff doesn't stage, commit, or discard. Commit from your terminal or editor, or ask the agent to.
+</Note>
+
+## Related
+
+- [Git Diff](/panels/git-diff)
+- [Undo a turn](/panels/agents/undo-a-turn)
+- [Pull Requests](/panels/pull-requests)
+- [Version history and recovery](/panels/artifacts/version-history): restore an artifact to an earlier version.
+- [Artifact workflow](/concepts/artifact-workflow)

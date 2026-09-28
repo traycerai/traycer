@@ -1,192 +1,429 @@
 ---
 title: "CLI"
-description: "Use the Traycer CLI for host control, auth, workspace, worktree, and agent workflows."
+description: "Reference for the traycer command: sign-in, running and updating the host, configuration, worktrees, and agent automation."
 ---
 
-The Traycer CLI binary is `traycer`. It is used for host control, authentication, workspace/worktree operations, and agent automation.
+The Traycer CLI is the `traycer` command. Use it to sign in, run and update the host on a machine, configure the shell Traycer uses, manage worktrees, and let agents work with other agents in a Task.
 
 ## Installation
 
-The desktop app bundles the CLI, so you only need to install it separately for standalone, automation, or CI use.
+Traycer Desktop comes with the CLI, so you only need to install it yourself to use it on its own: on a remote machine, in scripts, or from your own terminal.
 
-Install with npm (requires Node.js 20.18+):
+<Tabs>
+<Tab title="npm">
+
+Requires Node.js 22.13 or later.
 
 ```bash
 npm install -g @traycerai/cli
 ```
 
-Or with [Homebrew](https://brew.sh) on macOS and Linux:
+The npm package is [`@traycerai/cli`](https://www.npmjs.com/package/@traycerai/cli).
+
+</Tab>
+<Tab title="Homebrew">
+
+On macOS and Linux. Homebrew installs a standalone binary, so Node.js is not needed.
 
 ```bash
 brew install traycerai/traycer/traycer
 ```
 
-Verify the install:
+</Tab>
+</Tabs>
+
+Check the install:
 
 ```bash
 traycer --version
 ```
 
-The npm package is [`@traycerai/cli`](https://www.npmjs.com/package/@traycerai/cli).
+### Use the CLI That Comes With Desktop
+
+Traycer keeps a copy of the CLI at `~/.traycer/cli/bin/traycer` (`%USERPROFILE%\.traycer\cli\bin\traycer.exe` on Windows). The agents and terminals that Traycer launches already have this directory on their `PATH`. Your own terminal does not. To run `traycer` there, add the directory to your `PATH`, or install the CLI with npm or Homebrew.
+
+```bash
+export PATH="$HOME/.traycer/cli/bin:$PATH"
+```
+
+### Upgrading
+
+| Installed with | Upgrade with |
+| --- | --- |
+| npm | `npm install -g @traycerai/cli@latest` |
+| Homebrew | `brew upgrade traycer` |
+| Traycer Desktop, or by hand | `traycer cli upgrade` |
+
+`traycer cli upgrade` does not replace a CLI that a package manager installed. It prints that package manager's upgrade command instead.
 
 ## Global Flags
 
-| Flag             | Purpose                                        |
-| ---------------- | ---------------------------------------------- |
-| `--json`         | Print machine-readable output where supported. |
-| `--quiet`        | Reduce normal output.                          |
-| `--no-progress`  | Disable progress output.                       |
-| `--no-bootstrap` | Skip automatic bootstrap behavior.             |
+`--json`, `--quiet`, and `--no-progress` work with every command.
+
+| Flag | Purpose |
+| --- | --- |
+| `--json` | Write machine-readable NDJSON to stdout. See [JSON Output](#json-output). |
+| `--quiet` | Hide non-essential human-readable output. |
+| `--no-progress` | Hide progress output. |
+| `-h`, `--help` | Show help for any command. |
+| `-V`, `--version` | Print the CLI version. |
 
 ## Auth Commands
 
-| Command                         | Purpose                        |
-| ------------------------------- | ------------------------------ |
-| `traycer login`                 | Authenticate the CLI.          |
-| `traycer login --token <token>` | Authenticate with a token.     |
-| `traycer login --token -`       | Read the token from stdin.     |
-| `traycer logout`                | Remove stored CLI credentials. |
-| `traycer whoami`                | Show the authenticated user.   |
+| Command | Purpose |
+| --- | --- |
+| `traycer login` | Sign in with a device code. The CLI prints a URL and a short code, tries to open the URL in your browser, and waits until you approve. You can approve on any device, so this also works over SSH. |
+| `traycer logout` | Sign out. Removes the stored credentials, which also signs Traycer Desktop out on this machine, and clears the local cache of chat content. A host that is already running keeps its own credential until it stops. |
+| `traycer whoami` | Check the stored sign-in with Traycer and print the signed-in user. This can refresh the stored credentials. |
+| `traycer whoami --local` | Print the stored identity without contacting Traycer. It cannot tell whether the session has expired or been revoked. |
+| `traycer link-phone` | Sign in the [Traycer mobile app](/account/mobile-app) by scanning a code. Needs an existing sign-in and an interactive terminal. It waits until you approve or reject the phone that scanned the code. |
+| `traycer link-phone --no-qr` | Print only the code to type, for terminals that garble the QR code. |
 
-CLI credentials are stored under `~/.traycer/cli/credentials`.
+CLI credentials are stored in `~/.traycer/cli/credentials`, which Traycer Desktop shares.
 
 ## Host Commands
 
-| Command                        | Purpose                       |
-| ------------------------------ | ----------------------------- |
-| `traycer host start`           | Start the host.               |
-| `traycer host status`          | Show host status.             |
-| `traycer host doctor`          | Diagnose host setup.          |
-| `traycer host restart`         | Restart the host.             |
-| `traycer host stop`            | Stop the host.                |
-| `traycer host install`         | Install the host.             |
-| `traycer host ensure`          | Ensure the host is available. |
-| `traycer host update`          | Update the host.              |
-| `traycer host uninstall`       | Uninstall the host.           |
-| `traycer host uninstall --all` | Remove all host installs.     |
-| `traycer host available`       | List available host versions. |
-| `traycer host logs`            | Show host logs.               |
-| `traycer host logs --tail <n>` | Show the last `n` log lines.  |
-| `traycer host logs --follow`   | Follow host logs.             |
+The host is the background process that runs agents, terminals, and Tasks on a machine. Traycer Desktop manages it for you. Use these commands on a machine without Desktop, or to troubleshoot.
 
-Useful options:
+### Check and Run
 
-| Command                                     | Purpose                                              |
-| ------------------------------------------- | ---------------------------------------------------- |
-| `traycer host start --cwd <path>`           | Start the host with a specific working directory.    |
-| `traycer host install --release <version>`  | Install a specific registry release.                 |
-| `traycer host install --from <path>`        | Install from a local host archive.                   |
-| `traycer host ensure --force`               | Restart the host even if it reports active work.     |
-| `traycer host ensure --no-service-register` | Install the host without registering the OS service. |
+| Command | Purpose |
+| --- | --- |
+| `traycer host status` | Show whether the host is running, with its process, address, and recent activity. It only reads; it never installs or starts anything. |
+| `traycer host doctor` | Diagnose the host and CLI install. For a problem it can name, it prints the command that fixes it. |
+| `traycer host logs` | Print the last 200 lines of the host log. |
+| `traycer host logs --tail <n>` | Print the last `n` lines. |
+| `traycer host logs --follow` | Keep printing new lines as they are written. Ignored with `--json`. |
+| `traycer host start` | Run the host in the foreground until you press Ctrl-C. To start it in the background instead, use `traycer host service start`. |
+| `traycer host start --cwd <path>` | Run the host with a specific working directory. The default is the install directory. |
+| `traycer host restart` | Restart the host service. If a CLI upgrade is waiting to be applied, the restart also tries to apply it, which can replace the `traycer` binary. |
+| `traycer host stop` | Stop the host service. |
+| `traycer host restart --force`, `traycer host stop --force` | Restart or stop even when the host is busy. Running terminal sessions and agent work are killed. |
+| `traycer host free-port-and-restart --pid <pid> --port <port>` | Stop the process that holds the host's port, then restart the host. This is the fix `host doctor` prints for a port conflict. Nothing is stopped if that process no longer holds the port. |
+| `traycer host capabilities` | List the capabilities this CLI supports, as plain text or, with `--json`, a single JSON document. |
+| `traycer host capabilities --has <capability>` | Exit 0 if this CLI supports the capability, and non-zero otherwise. |
 
-The CLI discovers host connection metadata under `~/.traycer/host/`. `host install` and `host ensure` accept either `--release` or `--from`, not both.
+### Install, Update, and Remove
 
-## Service Commands
+| Command | Purpose |
+| --- | --- |
+| `traycer host ensure` | Make sure the host is installed, registered as a service, and running, and install or start it if not. Safe to run repeatedly. |
+| `traycer host install` | Install the latest host, register the OS service, and start the host. If you are signed out and the terminal can ask, it offers sign-in first. |
+| `traycer host update` | Update to the latest compatible host, then check that the host comes back. Fails if the updated host does not answer. |
+| `traycer host download [version]` | Download and stage a host version without touching the running host. Defaults to the latest. |
+| `traycer host apply` | Install the staged version. It succeeds once the files are in place and does not check that the host came back; use `host update` for that. |
+| `traycer host available` | List the host versions you can install. Prereleases are listed only when the installed host is a prerelease. |
+| `traycer host available --include-pre-releases` | Include prereleases. `--no-include-pre-releases` leaves them out. |
+| `traycer host uninstall` | Remove the installed and staged host files. The OS service stays registered, and a running host keeps running. |
+| `traycer host uninstall --all` | Deregister the OS service, ask the host to stop, then remove the host files. On Windows the host is stopped straight away, even when it is busy. |
 
-| Command                                           | Purpose                                                            |
-| ------------------------------------------------- | ------------------------------------------------------------------ |
-| `traycer service install`                         | Install the OS service integration.                                |
-| `traycer service install --no-linger`             | Linux only: skip `loginctl enable-linger`.                         |
-| `traycer service install --allow-self-invocation` | Development only: register the current CLI as the service command. |
-| `traycer service status`                          | Show service status.                                               |
-| `traycer service uninstall`                       | Remove the service integration.                                    |
+Neither form of `host uninstall` touches your data or credentials under `~/.traycer`.
+
+Options for these commands:
+
+| Option | Applies to | Purpose |
+| --- | --- | --- |
+| `--release <version>` | `install`, `ensure`, `update` | Install this registry version instead of the default. |
+| `--from <path>` | `install`, `ensure` | Install from a local host archive. Cannot be combined with `--release`. |
+| `--allow-downgrade` | `update` | Let `--release` replace a newer installed host. |
+| `--force` | `install`, `ensure`, `update`, `apply` | Go ahead even when the host is busy. Running terminal sessions and agent work are killed. |
+| `--no-service-register` | `install`, `ensure` | Install the files only, without registering or starting the OS service. `host install` does not support it on Windows. |
+| `--keep-installed` | `ensure` | Keep whichever host version is installed instead of moving to this CLI's default. |
+| `--no-linger` | `install`, `ensure`, `host service install` | Linux only: skip `loginctl enable-linger`. |
+| `--accept-store-format-loss` | `install`, `ensure`, `update`, `apply` | Install a host even though chats on this machine were saved in a newer format than it can read. Those chats are unavailable while that host is installed. |
+
+The CLI reads the host's connection details from `~/.traycer/host/`.
+
+### Background Service
+
+The `host service` commands manage the OS registration that keeps the host running: launchd on macOS, a systemd user service on Linux, and a Scheduled Task on Windows.
+
+| Command | Purpose |
+| --- | --- |
+| `traycer host service install` | Register the OS service and start the host. If you are signed out and the terminal can ask, it offers sign-in first. |
+| `traycer host service install --takeover` | macOS only: move host management from Traycer Desktop to the CLI. Stops the host Desktop runs, removes Desktop's registration, and registers the CLI's own. |
+| `traycer host service start` | Start the registered service in the background and return. |
+| `traycer host service status` | Show the registration and whether the host is running. It only reads. |
+| `traycer host service uninstall` | Deregister the service, which also asks the host to stop. The host files stay installed; `traycer host uninstall` removes them. |
 
 ## CLI Commands
 
-| Command                                                                    | Purpose                                                    |
-| -------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `traycer cli upgrade`                                                      | Upgrade the CLI.                                           |
-| `traycer cli upgrade --dry-run`                                            | Show what would upgrade.                                   |
-| `traycer cli upgrade --target <version>`                                   | Upgrade to a target version.                               |
-| `traycer cli re-anchor`                                                    | Re-anchor the CLI install.                                 |
-| `traycer cli re-anchor --binary-path <path> --installed-version <version>` | Point upgrade tracking at a manually installed CLI binary. |
+| Command | Purpose |
+| --- | --- |
+| `traycer cli upgrade` | Download and install the CLI version Traycer currently publishes. For a CLI installed by npm, Homebrew, or another package manager, it prints that package manager's upgrade command instead. If the binary is in use, usually because the host runs from it, the upgrade finishes on the next `traycer host restart`. |
+| `traycer cli upgrade --dry-run` | Show the version and download URL without installing anything. |
+| `traycer cli upgrade --target <version>` | Fail unless the published version is exactly `<version>`. It does not install older versions. |
+| `traycer cli re-anchor --binary-path <path> --installed-version <version>` | Point upgrade tracking at a CLI binary you installed or moved by hand. Use it when `cli upgrade` reports that there is no recorded install. |
 
 ## Config Commands
 
-| Command                                               | Purpose                                                                     |
-| ----------------------------------------------------- | --------------------------------------------------------------------------- |
-| `traycer config shell get`                            | Show shell config.                                                          |
-| `traycer config shell list`                           | List shell config.                                                          |
-| `traycer config shell set`                            | Set shell path or args.                                                     |
-| `traycer config shell set --path <path>`              | Set shell executable path.                                                  |
-| `traycer config shell set --path <path> -- <args...>` | Store shell startup args. Pass args after `--` when they start with dashes. |
-| `traycer config shell set --clear-args`               | Clear shell startup args.                                                   |
-| `traycer config shell reset`                          | Reset shell config.                                                         |
-| `traycer config env list`                             | List configured environment overrides.                                      |
-| `traycer config env get --key <name>`                 | Show one env override.                                                      |
-| `traycer config env set --key <name> --value <value>` | Set an env override.                                                        |
-| `traycer config env unset --key <name>`               | Explicitly unset an inherited environment variable.                         |
-| `traycer config env delete --key <name>`              | Delete a configured override entry.                                         |
+The shell and environment settings apply when Traycer starts the host and opens terminals. They are the same settings as [Settings › Shell](/settings/shell), stored in `~/.traycer/cli/config.json`.
 
-CLI config is stored under `~/.traycer/cli/config.json`.
+| Command | Purpose |
+| --- | --- |
+| `traycer config shell get` | Show the shell settings in effect. |
+| `traycer config shell list` | List the shells found on this machine. |
+| `traycer config shell set --path <path>` | Select a shell. Its default flags apply. |
+| `traycer config shell set --path <path> -- <args...>` | Select a shell and store its startup flags. Put flags after `--` so ones that start with a dash are not read as options. |
+| `traycer config shell set -- <args...>` | Store startup flags for the selected shell. |
+| `traycer config shell set --path <path> --clear-args` | Store an empty list of startup flags. |
+| `traycer config shell add --path <path>` | Remember a shell (any executable) and select it. The file must exist and be executable. |
+| `traycer config shell remove --path <path>` | Forget a shell you added. If it was selected, the system default shell is used. |
+| `traycer config shell revert-args --path <path>` | Restore a remembered shell's default flags. |
+| `traycer config shell reset` | Go back to the system default shell. Remembered shells and their flags are kept. |
+| `traycer config env list` | List environment variable overrides. |
+| `traycer config env get --key <name>` | Show one override. |
+| `traycer config env set --key <name> --value <value>` | Set an override. The name must start with a letter or underscore and contain only letters, digits, and underscores. |
+| `traycer config env unset --key <name>` | Remove an inherited variable from the environment. |
+| `traycer config env delete --key <name>` | Delete an override. Fails if it is not set. |
 
-Provider credentials are not CLI env vars. Configure provider credentials in **Settings → Providers**.
+Provider credentials are not set here. Configure them in [Settings › Providers](/settings/providers).
 
 ## Workspace and Worktree Commands
 
-| Command                                            | Purpose                                             |
-| -------------------------------------------------- | --------------------------------------------------- |
-| `traycer workspace list`                           | List known workspaces.                              |
-| `traycer workspace list --epic-id <id>`            | List workspaces for a specific Task id.             |
-| `traycer worktree create`                          | Create a worktree for agent work.                   |
-| `traycer worktree create --workspace <path>`       | Create from a workspace path.                       |
-| `traycer worktree create --source-branch <branch>` | Choose the source branch.                           |
-| `traycer worktree create --branch <branch>`        | Choose the new worktree branch.                     |
-| `traycer worktree create --existing <branch>`      | Check out an existing branch into a fresh worktree. |
-| `traycer worktree create --carry-uncommitted`      | Carry uncommitted changes into the worktree.        |
+| Command | Purpose |
+| --- | --- |
+| `traycer workspace list` | List the folders and worktrees bound to the current Task, and which agents hold each one. Needs [agent context](#agent-context). |
+| `traycer worktree list` | List every worktree Traycer manages on this machine. |
+| `traycer worktree list --include-activity` | Also show when each worktree was last active and whether its branch is ahead, behind, or merged. Slower. |
+| `traycer worktree list --limit <n> --cursor <path>` | Page through a long list: at most `n` worktrees, starting after `<path>`. |
+| `traycer worktree create --workspace <path> --branch <name>` | Create a worktree on a new branch. The branch forks from the workspace's current branch, or from `--source-branch <branch>`. |
+| `traycer worktree create --workspace <path> --existing <branch>` | Check out an existing branch into a new worktree. |
+| `traycer worktree create ... --carry-uncommitted` | Also bring tracked and untracked changes over from the source workspace. Best effort; check the new worktree. |
+| `traycer worktree delete --path <path>` | Delete a worktree. Runs its teardown script and shows the output. A worktree that is in use is not deleted. |
+
+For `worktree create`:
+
+- `--workspace` is required.
+- Pass exactly one of `--branch` or `--existing`.
+- `--source-branch` and `--carry-uncommitted` work only with `--branch`.
+
+`worktree create` prints the new worktree's path. Pass it to `traycer agent create --cwd` to run an agent there. Traycer creates worktrees under `~/.traycer/worktrees/`. See [Worktrees](/concepts/worktrees) and [Setup and Teardown Scripts](/concepts/worktrees/scripts).
+
+## Terminal and Comment Commands
+
+These commands need [agent context](#agent-context).
+
+| Command | Purpose |
+| --- | --- |
+| `traycer terminal list` | List the Task's terminals you can read, including ones whose process has exited. |
+| `traycer terminal output <terminal-id>` | Write a terminal's output to a file and print the file's path. Run it again to refresh the file. An id prefix of 4 or more characters works. |
+| `traycer comments list [artifact-path...]` | List comment threads on the artifacts you name, or on every artifact in the Task. Filter with `--status open`, `--status resolved`, or `--status all` (the default). |
+| `traycer comments set-status --artifact <path> --status <status> <thread-id...>` | Set threads to `open` or `resolved`. |
 
 ## Agent Commands
 
-| Command                             | Purpose                                         |
-| ----------------------------------- | ----------------------------------------------- |
-| `traycer agent list`                | List reachable agents.                          |
-| `traycer agent create`              | Create a child agent.                           |
-| `traycer agent fork`                | Fork an agent from its latest checkpoint.       |
-| `traycer agent configure`           | Change a GUI agent's settings for future turns. |
-| `traycer agent send`                | Send a message to another agent.                |
-| `traycer agent transcript`          | Read an agent transcript.                       |
-| `traycer agent inbox`               | Inspect pending agent messages.                 |
-| `traycer agent selection-guide`     | Read the agent selection guide.                 |
-| `traycer agent list-harness-models` | List models for a harness.                      |
-| `traycer monitor`                   | Stream this agent's inter-agent inbox messages. |
+Agent commands are for agents that Traycer launches. They read the Task and the calling agent from the environment; see [Agent Context](#agent-context). For how agents coordinate, see [Agent-to-Agent](/concepts/agent-to-agent).
 
-Supported harness ids include `claude`, `codex`, `opencode`, `traycer`, and `cursor`. Supported surfaces are `gui` and `tui`; Cursor is GUI-only.
+| Command | Purpose |
+| --- | --- |
+| `traycer agent list` | List your agents in the Task, with the settings each one runs with. |
+| `traycer agent list --all` | Include other people's agents in the Task. |
+| `traycer agent create` | Create a child agent of the calling agent. See [Create Options](#create-options). |
+| `traycer agent fork --agent-id <id>` | Copy an agent on this host into a new agent, starting from its latest checkpoint. Works for Chat-interface agents and Claude Code Terminal agents. See [Fork Options](#fork-options). |
+| `traycer agent configure` | Change the coding agent, model, and account a Chat-interface agent uses from its next turn. See [Configure Options](#configure-options). |
+| `traycer agent stop --agent-id <id>` | Stop an agent's current turn. The agent is not deleted; a later message wakes it again. Add `--cascade` to also stop the agents it delegated to. |
+| `traycer agent archive --agent-id <id>` | Archive an agent. A working agent cannot be archived; stop it first. A later message to the agent unarchives it. |
+| `traycer agent archive --agent-id <id> --unarchive` | Unarchive an agent. |
+| `traycer agent send --to <id> --message <text>` | Send a message to another agent. |
+| `traycer agent send ... --expect-reply` | Ask for a reply. Without it, the other agent never reports back. |
+| `traycer agent send ... --response-id <id>` | Answer a request you received from that agent. |
+| `traycer agent transcript --agent-id <id>` | Print another agent's conversation. |
+| `traycer agent inbox` | Print the messages recently delivered to this agent, in full. `--after <cursor>` continues from the previous page, and `--agent-id <id>` reads a different agent's inbox. |
+| `traycer monitor` | Stream this agent's incoming messages as they arrive. It keeps running, and each message it prints is marked as delivered. `--agent-id <id>` monitors a different agent. |
+| `traycer agent selection-guide` | Print the agent selection guide, which says which coding agent, model, and reasoning effort to use. See [Settings › Agent selection](/settings/agents). |
+| `traycer agent list-harnesses` | List the coding agents enabled on this host, with the ids `--harness` accepts. |
+| `traycer agent list-harness-models <harness>` | List a coding agent's models and their options. |
+| `traycer agent list-profiles <harness>` | List the accounts available for a coding agent, with their cached usage status. |
+| `traycer agent profile-rate-limits <harness> --profile <profile>` | Read current usage limits for one account. |
 
-Common agent options:
+`agent stop` and `agent archive` need the full agent id. `agent fork` accepts an unambiguous id prefix.
 
-| Option                                  | Applies To                                                                                       | Purpose                                                                            |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| `--epic-id <id>`                        | Most `agent` commands, `monitor`, `workspace list`                                               | Task context. Defaults to `TRAYCER_EPIC_ID` when the command runs inside an agent. |
-| `--sender-agent-id <id>`                | `agent list`, `agent create`, `agent selection-guide`, `agent list-harness-models`, `agent send` | Calling agent. Defaults to `TRAYCER_AGENT_ID`.                                     |
-| `--all`                                 | `agent list`                                                                                     | List all agents in the Task, not just agents belonging to the current user.        |
-| `--surface <surface>`                   | `agent create`                                                                                   | Child surface: `gui` or `tui`.                                                     |
-| `--harness <id>`                        | `agent create`                                                                                   | Coding agent: `claude`, `codex`, `opencode`, `traycer`, or `cursor`.               |
-| `--model <id>`                          | `agent create`                                                                                   | Model id for the child agent.                                                      |
-| `--reasoning-effort <effort>`           | `agent create`                                                                                   | Reasoning effort for supported models.                                             |
-| `--fast`                                | `agent create`                                                                                   | Request fast mode for supported GUI models.                                        |
-| `--cwd <path>`                          | `agent create`                                                                                   | Primary working directory for the child agent.                                     |
-| `--workspace-path <path>`               | `agent create`                                                                                   | Additional existing workspace path. Repeatable.                                    |
-| `--workspace-entry <workspace=path>`    | `agent create`                                                                                   | Exact workspace binding. Repeatable.                                               |
-| `--permission-mode <mode>`              | `agent create`, `agent fork`, `agent configure`                                                  | GUI permission mode: `supervised`, `auto_accept_edits`, `auto`, or `full_access`. Defaults to `full_access`. |
-| `--to <agentId>` / `--message <text>`   | `agent send`                                                                                     | Required receiver and message.                                                     |
-| `--expect-reply` / `--response-id <id>` | `agent send`                                                                                     | Open a reply thread, or close one with the final reply.                            |
-| `--agent-id <id>`                       | `agent transcript`, `agent inbox`, `monitor`                                                     | Target agent. `inbox` and `monitor` default to `TRAYCER_AGENT_ID`.                 |
+### Create Options
 
-`auto` is [Auto mode](/panels/agents#auto-mode): a judge approves routine commands and sends risky ones to you. On `agent configure`, the mode applies from the agent's next turn. Omitting `--permission-mode` there does not keep the agent's current mode: it resets the agent to `full_access`. Not every coding agent supports every mode; see [Agents & Models](/agents-and-models/coding-agents).
+The new agent's parent is the calling agent. Settings you leave out are inherited from the calling agent where they apply, and the permission mode defaults to `full_access`.
 
-Provider hook commands such as `agent title-from-hook`, `agent activity-from-hook`, and `agent turn-ended-from-hook` are used by Traycer-launched agents on the Terminal interface. They are not normal user workflows.
+| Option | Purpose |
+| --- | --- |
+| `--surface <surface>` | `gui` for the Chat interface or `tui` for the Terminal interface. `tui` works only with `--harness claude`. Without `--surface`, the new agent uses the calling agent's interface. |
+| `--harness <id>` | Coding agent. `traycer agent list-harnesses` lists the ids. Without it, the new agent uses the calling agent's coding agent. |
+| `--model <id>` | Model. `traycer agent list-harness-models <harness>` lists them. |
+| `--name <name>` | Display name. |
+| `--reasoning-effort <effort>` | Reasoning effort, for models that support it. |
+| `--fast` | Fast mode, for supported models on the Chat interface. It can use more credits. |
+| `--profile <profile>` | Account: `ambient` for the coding agent's own CLI sign-in, or a profile id from `traycer agent list-profiles`. Without it, the last-used account is used. |
+| `--cwd <path>` | Absolute path of the working directory, such as a path from `traycer worktree create`. |
+| `--workspace-path <path>` | Another existing folder the agent can use. Repeatable. |
+| `--workspace-entry <source>=<run>` | Exact binding of a workspace to the worktree the agent runs in. A path on its own binds that folder as is. Repeatable. |
+| `--permission-mode <mode>` | `supervised`, `auto_accept_edits`, `auto`, or `full_access`. The default is `full_access`. |
+
+`auto` is [Auto mode](/panels/agents#auto-mode), which is experimental: a judge approves routine commands and sends risky ones to you. Not every coding agent supports every mode; see [Agents & Models](/agents-and-models/coding-agents).
+
+### Fork Options
+
+| Option | Purpose |
+| --- | --- |
+| `--agent-id <id>` | Required. The agent to fork. |
+| `--name <name>` | Display name for the new agent. |
+| `--permission-mode <mode>` | Permission mode for the new agent. The default is `full_access`. |
+| `--profile <profile>` | Account for the new agent. Without it, the new agent keeps the source agent's account. |
+| `--cwd`, `--workspace-path`, `--workspace-entry` | Folders, as for `agent create`. Leave out all three to keep the source agent's folders. |
+
+### Configure Options
+
+`agent configure` requires `--agent-id`, `--harness`, `--model`, and `--profile`. The changes apply from the agent's next turn.
+
+| Option | Purpose |
+| --- | --- |
+| `--reasoning-effort <effort>` | Reasoning effort. Leaving it out sets no reasoning effort. |
+| `--fast` | Fast mode. Leaving it out turns fast mode off. |
+| `--permission-mode <mode>` | Permission mode. Leaving it out sets `full_access`. |
+
+<Warning>
+  `agent configure` does not keep the agent's current optional settings. Any of these options you leave out is reset, so pass every one you want to keep.
+</Warning>
+
+### Agent Roles
+
+These commands exist only when **Agent roles** is turned on in [Settings › General](/settings/general), under **Experimental**.
+
+| Command | Purpose |
+| --- | --- |
+| `traycer agent role claim --role <name> --scope <scope>` | Claim a named role in the Task, so other agents can see who owns what. |
+| `traycer agent role list` | List the roles your account's live agents hold in the Task. |
+| `traycer agent role relinquish --claim-id <id>` | Give up a role. `agent role list` shows the claim id. |
+
+## Agent Context
+
+Traycer sets two environment variables for every agent it launches:
+
+- `TRAYCER_EPIC_ID` is the Task the agent belongs to.
+- `TRAYCER_AGENT_ID` is the agent itself.
+
+There is no flag for the Task. Commands that need these values read them from the environment, and a few accept `--agent-id` in place of `TRAYCER_AGENT_ID`:
+
+| Needs | Commands |
+| --- | --- |
+| `TRAYCER_EPIC_ID` | `workspace list`, `terminal list`, `terminal output`, `comments list`, `comments set-status`, `agent stop`, `agent archive`, `agent transcript`, and `agent role list` |
+| `TRAYCER_EPIC_ID` and `TRAYCER_AGENT_ID` | `agent list`, `create`, `fork`, `configure`, `send`, `selection-guide`, `list-profiles`, and `profile-rate-limits` |
+| `TRAYCER_EPIC_ID`, and `TRAYCER_AGENT_ID` or `--agent-id` | `agent inbox`, `agent role claim`, `agent role relinquish`, and `monitor` |
+| Neither | `agent list-harnesses` and `agent list-harness-models` |
+
+Run outside an agent, these commands fail with "epic id required - set TRAYCER_EPIC_ID." or "sender agent id required - set TRAYCER_AGENT_ID." `monitor` checks the agent first: "agent id required — pass --agent-id or set TRAYCER_AGENT_ID."
+
+### Read-Only Agents
+
+Traycer sets `TRAYCER_AGENT_CLI_SURFACE=readonly` for Codex and OpenCode agents on the Terminal interface. These agents can list agents and read transcripts, but these commands are hidden from their help and refused if they run them: `agent create`, `agent fork`, `agent configure`, `agent stop`, `agent archive`, `agent send`, `agent role claim`, `agent role relinquish`, and `worktree delete`.
+
+## JSON Output
+
+With `--json`, the CLI writes NDJSON to stdout: one JSON object per line. A command writes zero or more `progress` lines, then exactly one `result` line.
+
+| Line | Fields |
+| --- | --- |
+| Progress | `type: "progress"`, `stage`, `message`, `percent`, `bytes`, `totalBytes`, `timestamp` |
+| Success | `type: "result"`, `status: "ok"`, `data`, `timestamp` |
+| Failure | `type: "result"`, `status: "error"`, `error` with `code`, `message`, and `details`, and `timestamp` |
+
+For example, an agent command run outside an agent ends with:
+
+```json
+{"type":"result","status":"error","error":{"code":"E_INVALID_ARGUMENT","message":"traycer: epic id required - set TRAYCER_EPIC_ID.","details":null},"timestamp":"2026-09-27T10:00:00.000Z"}
+```
+
+- `--no-progress` drops the `progress` lines. Setting `CI` or `TRAYCER_NONINTERACTIVE` does the same.
+- `--help` and `--version` with `--json` return one `result` line with the text in `data.output`.
+- A few commands differ: `monitor` ignores `--json`, `link-phone` does not support it, `host logs` ignores `--follow` with it, and `host capabilities --json` prints a single JSON document instead of NDJSON.
+
+### Exit Codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success. |
+| `1` | The command failed. With `--json`, the `result` line carries the error code. |
+| `2` | The Traycer sign-in service could not be reached (`login`, `whoami`, `link-phone`). |
+| `75` | Another Traycer command, such as a host install or update, is already in progress. Try again when it finishes. |
+
+## Paths and Logs
+
+| Path | Contents |
+| --- | --- |
+| `~/.traycer/cli/credentials` | Your sign-in, shared with Traycer Desktop. |
+| `~/.traycer/cli/config.json` | Shell, environment, and log-level settings. |
+| `~/.traycer/cli/cli.log` | The CLI log. |
+| `~/.traycer/cli/bin/traycer` | The copy of the CLI that the host and its agents run. |
+| `~/.traycer/host/` | The host's install, state, and connection details. |
+| `~/.traycer/host/host.log` | The host log, which `traycer host logs` prints. Older logs are kept as `host.log.1` and `host.log.2`. |
+| `~/.traycer/worktrees/` | Worktrees that Traycer creates. |
+
+On Windows, the same paths are under `%USERPROFILE%\.traycer\`.
+
+To change how much the CLI and the host log, use **CLI log level** and **Host log level** in [Settings › Host › Diagnostics](/settings/host-diagnostics).
 
 ## Environment Variables
 
-The CLI uses runtime environment variables for noninteractive behavior and agent context.
+| Variable | Purpose |
+| --- | --- |
+| `TRAYCER_EPIC_ID` | The current Task. Set by Traycer for the agents it launches. |
+| `TRAYCER_AGENT_ID` | The current agent. Set by Traycer for the agents it launches. |
+| `TRAYCER_AGENT_CLI_SURFACE` | Set to `readonly` by Traycer to limit an agent to [read-only commands](#read-only-agents). |
+| `CI`, `TRAYCER_NONINTERACTIVE` | Any value other than empty, `0`, or `false` turns on non-interactive mode: no progress output and no prompts. |
+| `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` | Proxy settings for the CLI's network requests. The lowercase names work too. |
+| `NO_COLOR` | Turn off colored output. |
+| `HOME` / `USERPROFILE` | Where the CLI finds `~/.traycer`. |
 
-| Variable                 | Purpose                                 |
-| ------------------------ | --------------------------------------- |
-| `CI`                     | Signals CI/noninteractive environments. |
-| `TRAYCER_NONINTERACTIVE` | Forces noninteractive behavior.         |
-| `TRAYCER_CLI_VERSION`    | Build-provided CLI version.             |
-| `TRAYCER_AGENT_ID`       | Current agent id in agent-run contexts. |
-| `TRAYCER_EPIC_ID`        | Current Task id in agent-run contexts.  |
-| `HOME` / `USERPROFILE`   | Used to resolve local Traycer paths.    |
+Provider API keys and model credentials belong in [Settings › Providers](/settings/providers), not in the CLI's environment.
 
-Provider API keys and model credentials belong in provider setup, not in this CLI reference.
+## Examples
+
+### Set Up a Host on Another Machine
+
+On a machine without Traycer Desktop, such as a server you reach over SSH:
+
+```bash
+traycer login        # open the printed URL on any device and enter the code
+traycer host ensure  # install, register, and start the host
+traycer host status
+```
+
+Then connect to it from the app. See [Remote hosts](/concepts/hosts/remote-hosts).
+
+### Start a Child Agent on a New Worktree
+
+Inside an agent session, create a worktree on a new branch, then start a Codex agent there:
+
+```bash
+WORKTREE=$(traycer worktree create --workspace "$PWD" --branch fix/login --json \
+  | jq -r 'select(.type == "result") | .data.entries[0].path')
+
+traycer agent create --surface gui --harness codex --model <model-id> \
+  --cwd "$WORKTREE" --name "login fix"
+```
+
+`agent create` prints the new agent's id. Use `traycer agent list-harness-models codex` to find a model id.
+
+### Send a Message and Get a Reply
+
+```bash
+traycer agent send --to <agent-id> \
+  --message "Review the migration in db/ and list any blockers." --expect-reply
+```
+
+The reply arrives in the sending agent's inbox. `traycer monitor` streams inbox messages as they arrive, and `traycer agent inbox` prints recent ones in full. To answer a request you received, pass its id with `--response-id`.
+
+### Diagnose the Host
+
+```bash
+traycer host doctor
+traycer host logs --tail 500
+traycer host logs --follow
+```
+
+### Clean Up Worktrees
+
+```bash
+traycer worktree list --include-activity
+traycer worktree delete --path <worktree-path>
+```
+
+To review and remove many worktrees at once from the app, see [Sweep](/concepts/sweep).

@@ -1,0 +1,61 @@
+---
+title: "Pull Requests"
+description: "See the pull requests your Task's agents opened, check their CI and reviews, and send review feedback back to an agent."
+keywords: ['pull requests', 'pr', 'github', 'gh', 'checks', 'review required', 'fix in chat', 'quote']
+---
+
+The **Pull Requests** panel lists the GitHub pull requests for the branches your Task's chats worked on, with their checks and review state. From a pull request you can send a failing check or a review comment straight to the agent that wrote the branch.
+
+<Note>
+  The panel reads pull requests through the GitHub CLI on the host. Install `gh` on that machine and run `gh auth login`. Without it, the panel shows "GitHub CLI unavailable" and keeps showing the rows it already has, which may be out of date.
+</Note>
+
+## When The Panel Appears
+
+The panel appears in the rail once Traycer finds a pull request for one of the Task's chats. To keep it in the rail before then, right-click the rail and check **Pull Requests**; the menu notes "No PRs yet". See [Show and hide panels](/panels#show-and-hide-panels).
+
+## The Panel
+
+- **Host.** A host picker at the top chooses which host's pull requests you see. **Refresh pull requests** checks GitHub again.
+- **Repositories.** Pull requests are grouped by repository. Click a repository's header to collapse it.
+- **Nothing yet.** If none of the Task's chats has a pull request, the panel says so.
+
+If the host is too old for the panel, it shows "Update required to view pull requests". Update the host from [Overview](/settings/host).
+
+## Pull Request Rows
+
+Each row has four lines:
+
+1. **Badges.**
+   - The pull request number, tinted by its state (**Open**, **Merged** or **Closed**). Click it to open the pull request on GitHub.
+   - A checks summary: "3 passed", "1 failing", "2 running", or a count of checks. Hover it for the breakdown.
+   - The review decision: **Approved**, **Changes requested** or **Review required**.
+   - The comment count and when the pull request last changed.
+2. **Title.**
+3. **Branches**, as `base ← head`.
+4. **Chats.** The chats the pull request came from. Click one to open it, or hover the row to see them all.
+
+**Not live** marks a pull request on a GitHub server that Traycer doesn't refresh, such as GitHub Enterprise. Its row shows the last data Traycer found.
+
+## Pull Request Details
+
+Click a row to open the pull request in a tile. Its header shows the state (**Open**, **Draft**, **Merged** or **Closed**), **Open on GitHub**, **Refresh pull request**, and when it was last updated.
+
+| Tab | What it shows |
+|---|---|
+| **Overview** | What needs you before the pull request can merge, such as failing checks, requested changes or a required review. It reads "Nothing blocking" when nothing does. Below it is the description. |
+| **Feedback** | Reviews, comments and inline review threads. |
+| **Checks** | Every check and its result. Click a check's name to open its details. |
+| **Files** | The changed files. You can open a diff when this machine has a worktree for the pull request. |
+| **Commits** | The pull request's commits. |
+
+A side card sums up **Health**, **Reviewers**, **Change** and the **Chats** the pull request came from.
+
+## Send Feedback To An Agent
+
+The pull request view sends feedback to the agent the pull request came from. If that agent is gone, it uses the Task's most recently active agent.
+
+- **Fix in chat.** Each item under **Overview** has a **Fix in chat** button. It puts the full item, such as a failing check's output or a reviewer's comments, into that agent's composer and opens the chat, ready for you to send.
+- **Quote.** The description, each comment and review thread, and each changed file have a quote button. It adds that item to the same composer without leaving the pull request, so you can collect several before you go.
+
+Nothing is sent until you send it from the composer.

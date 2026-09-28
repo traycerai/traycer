@@ -1,0 +1,126 @@
+---
+title: "Layout"
+description: "Apply a Default, Compact or Detailed preset, and set up the status bar, tabs, composer, chat and sidebar."
+---
+
+**Layout** decides where the app's own controls sit and how much of them shows. It sits in the **Application** group of [Settings](/settings), so it applies to this app on this device. Changes save as you make them.
+
+## Presets
+
+**Preset** applies one set of detail choices to every group on this page:
+
+| Setting | Default | Compact | Detailed |
+| --- | --- | --- | --- |
+| Usage limit readings | Percentage, label, reset timer and mini bar | Percentage only | Percentage, label, reset timer and mini bar |
+| Resource monitor metrics | CPU, Processes | CPU | CPU, Memory, Processes, RAM share |
+| **Files changed**, **Active agents**, **Background**, **Access** | Visible | Compact | Visible |
+| **Microphone**, **Compact conversation** | Visible | Hidden | Visible |
+| **Attach image** | Visible | Visible | Visible |
+| **Reasoning level** | Text | Bars | Bars + text |
+| **Pin context breakdown** | Off | Off | On, every field |
+| **Context indicator** | Text | Ring only | Text |
+| **Resource chips on sidebar rows** | None | None | CPU, Memory, Processes |
+
+- When your settings match no preset, the row shows **Custom**. Change any row below and the preset reads **Custom** until the values match one again.
+- A preset leaves the status bar's **Placement**, **Reasoning control**, and the sidebar's panel order and visibility as they are.
+- **Reset to defaults** puts the whole page back, including those. It doesn't ask first.
+
+## Status Bar
+
+The status bar shows your usage limits and the [resource monitor](/concepts/hosts/resource-monitor). A preview at the top of the group shows the result as you change it.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Placement** | Status bar | Where usage limits and the resource monitor live: the **Status bar** at the bottom of the window, or the **Header**. |
+| **Show resource monitor in header** | On | Shows the resource monitor in the header, beside the usage gauge. Shown when **Placement** is **Header**, in narrow windows, and in the mobile app. |
+| **Footer status bar** | Off | Shows the status bar at the bottom on phones and narrow windows. It hides while the keyboard or the navigation drawer is open. Shown in the mobile app and narrow windows, in place of **Placement**. With it off, the header still shows usage limits and the resource monitor. |
+
+The rest of this group configures the status bar, so in the mobile app it appears only once **Footer status bar** is on.
+
+### Usage Limits
+
+The **Usage limits** switch (on by default) shows one segment per provider that reports a usage limit.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Percentage** | Used | Show how much of each limit is **Used**, or how much is **Remaining**. |
+| **Show used / remaining label** | On | Spells out "used" or "remaining" after each percentage. |
+| **Show reset timer** | On | Counts down to each limit's reset. Off shows the limit's name instead, such as `5h` or `wk`. |
+| **Show mini bar** | On | Draws a small fill bar ahead of each limit. |
+
+Below these, **Providers on …** lists each provider that reports limits on the host the status bar is watching:
+
+- Its switch hides or shows that provider's segment.
+- **Limits** chooses what the segment shows: **Tightest limit (automatic)**, which is whichever limit is closest to running out, plus any specific limits you check. At least one stays checked; use the provider's switch to hide it.
+
+For what these readings mean and what happens when a limit runs out, see [Usage limits and model routing](/agents-and-models/usage-limits-and-routing).
+
+### Resource Monitor
+
+The **Resource monitor** switch (on by default) shows CPU, memory and process numbers.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Scope** | Host | **Host** measures Traycer's processes on the host the status bar is watching. **Desktop app** measures this app. |
+| **Metrics** | CPU, Processes | Which numbers to show: **CPU**, **Memory**, **Processes** and **RAM share**. RAM share is only available for the Host scope. |
+
+## Tabs
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Task tab layout** | Scroll | **Scroll** keeps Task tab titles readable and scrolls the strip. **Shrink to fit** makes tabs narrower as you open more. |
+| **Home tab** | Off | Shows a fixed Home tab with everything running across your Tasks. See [Search and navigation](/concepts/search-and-navigation). |
+
+## Composer
+
+These rows change the controls around the chat composer. Rows set to **Compact** keep every action they had, in a smaller form. Rows that can be **Hidden** have another way to do the same thing.
+
+**Below the input:**
+
+| Setting | Options | What **Compact** or **Hidden** does |
+| --- | --- | --- |
+| **Files changed** | Visible, Compact | Folds the row into a chip with its line counts. Click the chip to open the full panel. |
+| **Active agents** | Visible, Compact | Folds the row, and the responses received from other agents, into a chip that counts what is running. |
+| **Background** | Visible, Compact | Folds the row into a chip that counts what is running in the background. |
+
+**Toolbar:**
+
+| Setting | Options | What **Compact** or **Hidden** does |
+| --- | --- | --- |
+| **Attach image** | Visible, Hidden | Removes the button. Pasting or dropping an image still attaches it. |
+| **Access** | Visible, Compact | Shows the permission mode as its icon alone, with the name on hover. |
+| **Microphone** | Visible, Hidden | Removes the button. The dictation shortcut still starts voice input; this doesn't turn **Voice input** off in [General](/settings/general). |
+| **Compact conversation** | Visible, Hidden | Removes the button beside the context reading. The command palette and `/compact` still compact a conversation. |
+
+Two more rows set how reasoning effort is shown:
+
+| Setting | Options | Default | What it does |
+| --- | --- | --- | --- |
+| **Reasoning level** | Text, Bars, Bars + text | Text | How the model chip shows the thinking effort. **Bars** draws one bar per level the model offers, filled up to the current one; the level's name stays in the chip's tooltip. |
+| **Reasoning control** | Slider, List | Slider | How the model picker offers reasoning levels. **List** shows every level as a button. |
+
+All composer rows default to **Visible**.
+
+## Chat
+
+A preview at the top of the group shows the context reading.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Pin context breakdown** | Off | Keeps the context window breakdown visible near the composer when usage data is available. **Fields** chooses what it shows: **Used**, **Fresh**, **Cache read**, **Cache write** and **Output**. The remaining percentage always comes first, and at least one field stays selected. |
+| **Context indicator** | Text | How the chip beside the composer shows the context left while the breakdown isn't pinned: **Text**, **Ring**, or **Ring only**. |
+| **Minimap position** | Right | Where minimaps appear: **Right**, **Left**, or **Hidden**. Minimaps are compact overviews for moving around chats and artifacts. |
+
+## Sidebar
+
+**Resource chips on sidebar rows** shows compact live readings on rows in the Task navigator. Pick any of **CPU**, **Memory** and **Processes**. None are on by default.
+
+**Panels** arranges the panel rail in a Task's sidebar. It is the same arrangement you can change on the rail itself; see [Panels](/panels).
+
+- Drag icons in the strip to reorder them.
+- Drop one icon onto another to make a tabbed panel.
+- Uncheck a panel to keep it out of the rail. The last visible panel can't be unchecked.
+- Each panel's menu has **Move up**, **Move down**, **Group with panel above**, and **Move out of group**, for arranging panels without dragging.
+- **Reset panel visibility** and **Reset order** undo your changes.
+
+In windows too narrow to show the sidebar, **Panels** shows a note instead.
