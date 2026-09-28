@@ -814,6 +814,10 @@ function useJudgePicker(props: JudgeTilesProps): JudgePicker {
       providerSwitchModel,
       selectionMarked,
       openRef,
+      closeRef: null,
+      followSelectionRef: null,
+      onOpenChange: null,
+      footer: null,
     }),
     [face, providerSwitchModel, selectionMarked],
   );

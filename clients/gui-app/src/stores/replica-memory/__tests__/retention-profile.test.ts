@@ -52,6 +52,9 @@ describe("RetentionProfile", () => {
     expect(MOBILE_RETENTION_PROFILE.maxLingeringPlainTerminals).toBeLessThan(
       DESKTOP_RETENTION_PROFILE.maxLingeringPlainTerminals,
     );
+    expect(MOBILE_RETENTION_PROFILE.transcriptImageCacheBytes).toBeLessThan(
+      DESKTOP_RETENTION_PROFILE.transcriptImageCacheBytes,
+    );
   });
 
   it("keeps the live-epic cap above the retained-surface count on mobile too", () => {

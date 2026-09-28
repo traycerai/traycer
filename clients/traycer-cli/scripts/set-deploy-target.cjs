@@ -86,7 +86,7 @@ try {
 const production = {
   cloud: {
     authnApiUrl: "https://authn.traycer.ai",
-    cloudUiBaseUrl: "https://platform.traycer.ai",
+    cloudUiBaseUrl: "https://traycer.ai",
   },
   hostDiscoveryTag: "released-host-versions",
   cliFeedTag: "cli-manifest",

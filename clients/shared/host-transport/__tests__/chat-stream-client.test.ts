@@ -541,6 +541,26 @@ describe("ChatStreamClient protocol capability getters", () => {
     expect(client.draftBlobBridgeSupported()).toBe(false);
     client.close();
   });
+
+  it.each([
+    [{ major: 1, minor: 17 }, false],
+    [{ major: 1, minor: 18 }, true],
+    [null, false],
+  ] as const)(
+    "N5: reports queue-pause-reason support from this session's negotiated version (%j)",
+    (version, expected) => {
+      const { wsStreamClient } = stubClientAtVersion(version);
+      const client = new ChatStreamClient({
+        wsStreamClient,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        callbacks: makeNoopCallbacks(() => undefined),
+      });
+
+      expect(client.queuePauseReasonProtocolSupported()).toBe(expected);
+      client.close();
+    },
+  );
 });
 
 describe("ChatStreamClient", () => {

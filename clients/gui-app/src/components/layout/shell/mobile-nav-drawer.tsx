@@ -27,9 +27,8 @@ import { MobileNavDrawerSurface } from "@/components/layout/shell/mobile-nav-dra
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { isMobileApp } from "@/lib/mobile-app";
 import { computeInitials } from "@/lib/auth/compute-initials";
-import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
+import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { useOpenLink } from "@/lib/links/open-link";
-import { useRunnerHost } from "@/providers/use-runner-host";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { openEpicFromList } from "@/lib/commands/actions/open-epic-from-list";
 import {
@@ -78,7 +77,7 @@ export function MobileNavDrawer(): ReactNode {
   const navigate = useNavigate();
   const profile = useAuthStore((state) => state.profile);
   const { openSettings } = useSystemTabModalActions();
-  const runnerHost = useRunnerHost();
+  const billingUrl = usePlatformBillingUrl();
   const openLink = useOpenLink();
   const [signOutOpen, setSignOutOpen] = useState(false);
   const homeTabEnabled = useRegionShown("homeTab");
@@ -116,11 +115,7 @@ export function MobileNavDrawer(): ReactNode {
   };
   const handleManageSubscription = () => {
     close();
-    void openLink(
-      resolvePlatformBaseUrl(runnerHost.signInUrl),
-      "account",
-      null,
-    );
+    void openLink(billingUrl, "account", null);
     Analytics.getInstance().track(AnalyticsEvent.SubscriptionManagementOpened, {
       source: "direct_ui",
     });

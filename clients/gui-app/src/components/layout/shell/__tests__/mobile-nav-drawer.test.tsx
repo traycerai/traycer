@@ -177,6 +177,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TestRouterProvider } from "../../../../__tests__/with-test-router";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
 import { setMobileApp } from "@/lib/mobile-app";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
@@ -303,7 +304,8 @@ describe("MobileNavDrawer", () => {
     cleanup();
     vi.useRealTimers();
     useMobileNavStore.setState({ open: false });
-    useAuthStore.setState({ profile: null });
+    useAuthStore.setState({ profile: null, shareableTeams: [] });
+    useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
     setMobileApp(false);
     useDesktopDialogStore.getState().close();
   });
@@ -795,11 +797,12 @@ describe("MobileNavDrawer", () => {
         await screen.findByTestId("mobile-nav-manage-subscription"),
       );
 
-      // `resolvePlatformBaseUrl` takes the origin of the shell's own
-      // `signInUrl`, so this tracks whatever deployment is configured rather
-      // than rewriting a hostname label.
+      // The origin is that of the shell's own `signInUrl`, so this tracks
+      // whatever deployment is configured rather than rewriting a hostname
+      // label; the path is the Billing page, since the origin's root is the
+      // marketing homepage.
       expect(openLink).toHaveBeenCalledExactlyOnceWith(
-        "https://platform.test",
+        "https://platform.test/billing",
         "account",
         null,
       );
@@ -810,6 +813,25 @@ describe("MobileNavDrawer", () => {
         { source: "direct_ui" },
       );
       expect(useMobileNavStore.getState().open).toBe(false);
+    });
+
+    it("opens the selected team's Billing page", async () => {
+      useAuthStore.setState({
+        shareableTeams: [{ teamId: "team-1", slug: "acme", avatarUrl: null }],
+      });
+      useAccountContextStore.setState({
+        accountContext: { type: "TEAM", teamId: "team-1" },
+      });
+      renderDrawer();
+      fireEvent.click(
+        await screen.findByTestId("mobile-nav-manage-subscription"),
+      );
+
+      expect(openLink).toHaveBeenCalledExactlyOnceWith(
+        "https://platform.test/team/acme/billing",
+        "account",
+        null,
+      );
     });
 
     it("confirms before signing out, then closes the drawer", async () => {

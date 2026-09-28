@@ -24,6 +24,7 @@ import type {
   InterviewSegment,
   MessageSegment,
 } from "@/stores/composer/chat-store";
+import { QUEUE_PAUSED_AFTER_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import { makeMessage } from "./chat-message-fixtures";
 
 const TILE_INSTANCE_ID = "chat-find-test-tile";
@@ -38,12 +39,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const completedQuestion = row.units.find(
       (unit) =>
         unit.unitId ===
@@ -111,7 +110,7 @@ describe("chat find projection", () => {
       ],
       TILE_INSTANCE_ID,
       new Set(),
-      false,
+      { hideReasoning: false, queuePauseReasonProtocolSupported: null },
     )[0];
 
     expect(
@@ -214,12 +213,10 @@ describe("chat find projection", () => {
       ...makeMessage(4, "assistant"),
       segments: [segment],
     };
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const model = deriveInterviewReviewModel({
       blockId: segment.id,
       status: segment.status,
@@ -377,7 +374,7 @@ describe("chat find projection", () => {
       [user, assistant],
       TILE_INSTANCE_ID,
       new Set(),
-      false,
+      { hideReasoning: false, queuePauseReasonProtocolSupported: null },
     );
     const joined = rows.map((row) => rowSearchText(row)).join("\n");
 
@@ -415,7 +412,10 @@ describe("chat find projection", () => {
       },
     };
 
-    const joined = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), false)
+    const joined = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })
       .map((row) => rowSearchText(row))
       .join("\n");
 
@@ -469,12 +469,10 @@ describe("chat find projection", () => {
       segments,
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(rowSearchText(row)).toContain("Read 1 file, edited 1 file");
     expect(rowSearchText(row)).toContain("src/components/search-bar.tsx");
@@ -496,12 +494,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(rowSearchText(row)).toContain("Thought for 2s");
     expect(rowSearchText(row)).not.toContain("private chain of thought");
@@ -521,12 +517,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(rowSearchText(row)).toContain("Thinking");
     expect(rowSearchText(row)).not.toContain(
@@ -555,7 +549,10 @@ describe("chat find projection", () => {
     };
 
     const text = rowSearchText(
-      buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), false)[0],
+      buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: null,
+      })[0],
     );
 
     expect(text).toContain("Thought");
@@ -606,12 +603,10 @@ describe("chat find projection", () => {
     };
 
     const promoted = new Set(["tool-live-promoted"]);
-    const unitIds = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      promoted,
-      false,
-    )[0].units.map((unit) => unit.unitId);
+    const unitIds = buildChatFindRows([assistant], TILE_INSTANCE_ID, promoted, {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0].units.map((unit) => unit.unitId);
 
     // The run starts at the reasoning block, because the tool stands alone.
     // Probed through the group SUMMARY unit: the group's sole reasoning block
@@ -648,12 +643,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     // Exactly once - in the group summary ("Thought for 2s"). The label is
     // still findable; it is just not counted twice.
@@ -706,7 +699,7 @@ describe("chat find projection", () => {
       [assistant],
       TILE_INSTANCE_ID,
       new Set(["command-backgrounded"]),
-      false,
+      { hideReasoning: false, queuePauseReasonProtocolSupported: null },
     )[0];
 
     expect(row.units.map((unit) => unit.unitId)).not.toContain(
@@ -752,12 +745,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toContain(
       chatFindActivityGroupChildHeaderUnitId(
@@ -794,7 +785,7 @@ describe("chat find projection", () => {
       [assistant],
       TILE_INSTANCE_ID,
       new Set(),
-      false,
+      { hideReasoning: false, queuePauseReasonProtocolSupported: null },
     )
       .flatMap((row) => row.units)
       .map((unit) => unit.unitId);
@@ -834,12 +825,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const renderId = derivePromotedSubagentRenderId(subagentId);
     const headerUnit = row.units.find(
       (unit) => unit.unitId === chatFindSubagentHeaderUnitId(renderId),
@@ -897,12 +886,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const renderId = derivePromotedSubagentRenderId(subagentId);
     const bodyUnit = row.units.find(
       (unit) => unit.unitId === chatFindSubagentBodyUnitId(renderId),
@@ -944,12 +931,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const headerUnit = row.units.find(
       (unit) =>
         unit.unitId ===
@@ -994,12 +979,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(rowSearchText(row)).toContain("1 of 3 Done");
     // Completed item renders its plain text, never its active form.
@@ -1051,12 +1034,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(rowSearchText(row)).toContain("Refactor the search index");
     // The status badge LABEL is indexed, not the raw enum value.
@@ -1099,12 +1080,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const joined = buildChatFindRows(
-      [grouped],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )
+    const joined = buildChatFindRows([grouped], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })
       .map((row) => rowSearchText(row))
       .join("\n");
 
@@ -1128,6 +1107,7 @@ describe("chat find projection", () => {
         {
           id: "notice-top",
           kind: "provider_notice",
+          receipt: null,
           status: "completed",
           noticeKind: "model_rerouted",
           tone: "warning",
@@ -1139,12 +1119,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const noticeUnit = row.units.find(
       (unit) => unit.unitId === chatFindSegmentUnitId("notice-top"),
     );
@@ -1160,6 +1138,50 @@ describe("chat find projection", () => {
     expect(noticeUnit?.owningChain).toEqual([]);
   });
 
+  it("indexes a fallback_applied notice's title and detail rows but not its message, and keeps another kind's message", () => {
+    const APPLIED_MESSAGE = "zqroute claude/sonnet to claude/opus";
+    const noticeSegment = (
+      id: string,
+      noticeKind: "fallback_applied" | "fallback_settled" | "model_rerouted",
+    ): MessageSegment => ({
+      id,
+      kind: "provider_notice",
+      receipt: null,
+      status: "completed",
+      noticeKind,
+      tone: "info",
+      title: `Title of ${id}`,
+      message: APPLIED_MESSAGE,
+      details: [{ label: "From", value: `zqdetail-${id}` }],
+      parentId: null,
+    });
+    const assistant: ChatMessageModel = {
+      ...makeMessage(25, "assistant"),
+      segments: [
+        noticeSegment("applied-notice", "fallback_applied"),
+        noticeSegment("settled-notice-null-receipt", "fallback_settled"),
+        noticeSegment("harness-notice", "model_rerouted"),
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
+    const textOf = (id: string): string | undefined =>
+      row.units.find((unit) => unit.unitId === chatFindSegmentUnitId(id))?.text;
+
+    const applied = textOf("applied-notice");
+    expect(applied).toContain("Title of applied-notice");
+    expect(applied).toContain("From");
+    expect(applied).toContain("zqdetail-applied-notice");
+    expect(applied).not.toContain("zqroute");
+    // Controls: every other kind still indexes its message, so the negative
+    // above can fail.
+    expect(textOf("settled-notice-null-receipt")).toContain(APPLIED_MESSAGE);
+    expect(textOf("harness-notice")).toContain(APPLIED_MESSAGE);
+  });
+
   it("indexes only the visible title for a retry provider notice", () => {
     const assistant: ChatMessageModel = {
       ...makeMessage(24, "assistant"),
@@ -1167,6 +1189,7 @@ describe("chat find projection", () => {
         {
           id: "retry-notice",
           kind: "provider_notice",
+          receipt: null,
           status: "streaming",
           noticeKind: "harness_message",
           presentation: "retry",
@@ -1181,12 +1204,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const retryUnit = row.units.find(
       (unit) => unit.unitId === chatFindSegmentUnitId("retry-notice"),
     );
@@ -1221,6 +1242,7 @@ describe("chat find projection", () => {
             {
               id: "notice-nested",
               kind: "provider_notice",
+              receipt: null,
               status: "completed",
               noticeKind: "model_rerouted",
               tone: "info",
@@ -1236,12 +1258,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
     const renderId = derivePromotedSubagentRenderId(subagentId);
     const bodyUnit = row.units.find(
       (unit) => unit.unitId === chatFindSubagentBodyUnitId(renderId),
@@ -1279,12 +1299,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [user],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindMessageContentUnitId(user.id),
@@ -1316,12 +1334,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [user],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([user], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindMessageContentUnitId(user.id),
@@ -1344,12 +1360,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindSegmentUnitId("assistant-text-0"),
@@ -1376,12 +1390,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [synthesized],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([synthesized], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindSegmentUnitId("forked-1"),
@@ -1408,12 +1420,10 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [synthesized],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([synthesized], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
       chatFindSegmentUnitId("imported-1"),
@@ -1445,14 +1455,353 @@ describe("chat find projection", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [synthesized],
-      TILE_INSTANCE_ID,
-      new Set(),
-      false,
-    )[0];
+    const row = buildChatFindRows([synthesized], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    })[0];
 
     expect(row.units).toEqual([]);
+  });
+
+  describe("the settled routing card's units", () => {
+    const NOTICE_TITLE = "Routing stopped zqtitle";
+    const NOTICE_MESSAGE = "Every account said no zqmessage.";
+    const ERROR_MESSAGE = "Provider blew up zqerror";
+    const ERROR_CODE = "ZQ_ERROR_CODE";
+    const DETAIL_VALUE = "zqdetailvalue";
+
+    function settledRow(ids: {
+      readonly routingSettledNoticeId: string | null;
+      readonly manualRungAnchorId: string | null;
+    }): ChatMessageModel {
+      const base: ChatMessageModel = {
+        ...makeMessage(60, "assistant"),
+        segments: [
+          {
+            id: "settled-text",
+            kind: "text",
+            markdown: "Other segment zqtext stays findable.",
+            isStreaming: false,
+          },
+          {
+            id: "settled-error",
+            kind: "error",
+            message: ERROR_MESSAGE,
+            recoverable: true,
+            code: ERROR_CODE,
+            failure: null,
+          },
+          {
+            id: "settled-notice",
+            kind: "provider_notice",
+            receipt: {
+              causeLabel: "Rate limit reached",
+              steps: [],
+            },
+            status: "completed",
+            // The kind a receipt rides on: the settlement notice.
+            noticeKind: "fallback_settled",
+            tone: "warning",
+            title: NOTICE_TITLE,
+            message: NOTICE_MESSAGE,
+            details: [{ label: "Reported by", value: DETAIL_VALUE }],
+            parentId: null,
+          },
+        ],
+      };
+      return {
+        ...base,
+        ...(ids.routingSettledNoticeId === null
+          ? {}
+          : { routingSettledNoticeId: ids.routingSettledNoticeId }),
+        ...(ids.manualRungAnchorId === null
+          ? {}
+          : { manualRungAnchorId: ids.manualRungAnchorId }),
+      };
+    }
+
+    it("indexes the notice's title and message under its own unit, and nothing of the error or the notice's details", () => {
+      const row = buildChatFindRows(
+        [
+          settledRow({
+            routingSettledNoticeId: "settled-notice",
+            manualRungAnchorId: "settled-error",
+          }),
+        ],
+        TILE_INSTANCE_ID,
+        new Set(),
+        { hideReasoning: false, queuePauseReasonProtocolSupported: null },
+      )[0];
+
+      const noticeUnit = row.units.find(
+        (unit) => unit.unitId === chatFindSegmentUnitId("settled-notice"),
+      );
+      expect(noticeUnit?.text).toBe(`${NOTICE_TITLE} ${NOTICE_MESSAGE}`);
+      expect(noticeUnit?.owningChain).toEqual([]);
+
+      const text = rowSearchText(row);
+      expect(text).not.toContain("zqerror");
+      expect(text).not.toContain(ERROR_CODE);
+      expect(text).not.toContain(DETAIL_VALUE);
+      expect(
+        row.units.some(
+          (unit) => unit.unitId === chatFindSegmentUnitId("settled-error"),
+        ),
+      ).toBe(false);
+    });
+
+    it("still indexes every other segment on the row", () => {
+      const row = buildChatFindRows(
+        [
+          settledRow({
+            routingSettledNoticeId: "settled-notice",
+            manualRungAnchorId: "settled-error",
+          }),
+        ],
+        TILE_INSTANCE_ID,
+        new Set(),
+        { hideReasoning: false, queuePauseReasonProtocolSupported: null },
+      )[0];
+
+      expect(rowSearchText(row)).toContain("zqtext");
+    });
+
+    it.each([
+      ["the notice id without an anchor id", "settled-notice", null],
+      ["the anchor id without a notice id", null, "settled-error"],
+      ["neither id", null, null],
+    ] as const)(
+      "indexes the notice as its divider and the error as its own row with %s",
+      (_name, noticeId, anchorId) => {
+        const row = buildChatFindRows(
+          [
+            settledRow({
+              routingSettledNoticeId: noticeId,
+              manualRungAnchorId: anchorId,
+            }),
+          ],
+          TILE_INSTANCE_ID,
+          new Set(),
+          { hideReasoning: false, queuePauseReasonProtocolSupported: null },
+        )[0];
+        const text = rowSearchText(row);
+
+        // The same tokens the settled case above hides are findable here, so
+        // those negatives can fail.
+        expect(text).toContain("zqerror");
+        expect(text).toContain(ERROR_CODE);
+        expect(text).toContain(NOTICE_TITLE);
+        expect(text).toContain(DETAIL_VALUE);
+        // A settlement divider prints its message inline, so it is indexed;
+        // only `fallback_applied` drops it (its own test above).
+        expect(text).toContain(NOTICE_MESSAGE);
+      },
+    );
+  });
+
+  describe("a queue-pause error block", () => {
+    const HELD = "1 queued message was held";
+
+    function errorSegment(id: string, code: string) {
+      return {
+        id,
+        kind: "error" as const,
+        message: HELD,
+        recoverable: true,
+        code,
+        failure: null,
+      };
+    }
+
+    it("has no find unit, and its text is not findable when the session says the protocol IS supported", () => {
+      const assistant: ChatMessageModel = {
+        ...makeMessage(70, "assistant"),
+        segments: [errorSegment("queue-pause", QUEUE_PAUSED_AFTER_ERROR_CODE)],
+      };
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: true,
+      })[0];
+
+      expect(
+        row.units.some(
+          (unit) => unit.unitId === chatFindSegmentUnitId("queue-pause"),
+        ),
+      ).toBe(false);
+      expect(rowSearchText(row)).not.toContain("queued message was held");
+    });
+
+    it("is findable under any other code (control: the negative can fail)", () => {
+      const assistant: ChatMessageModel = {
+        ...makeMessage(71, "assistant"),
+        segments: [errorSegment("not-queue-pause", "RUNTIME")],
+      };
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: true,
+      })[0];
+
+      expect(rowSearchText(row)).toContain("queued message was held");
+    });
+
+    // N1-find: a session that says the protocol is NOT supported is the one
+    // case the queue notice must be findable in.
+    it("N1-find: is findable when the session says the protocol is NOT supported", () => {
+      const assistant: ChatMessageModel = {
+        ...makeMessage(72, "assistant"),
+        segments: [
+          errorSegment("queue-pause-n1", QUEUE_PAUSED_AFTER_ERROR_CODE),
+        ],
+      };
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: false,
+      })[0];
+
+      expect(
+        row.units.some(
+          (unit) => unit.unitId === chatFindSegmentUnitId("queue-pause-n1"),
+        ),
+      ).toBe(true);
+      expect(rowSearchText(row)).toContain("queued message was held");
+    });
+
+    // N3-find: no session (`null`) drops it, same as a supported session.
+    it("N3-find: is not findable when the 4th argument is null", () => {
+      const assistant: ChatMessageModel = {
+        ...makeMessage(73, "assistant"),
+        segments: [
+          errorSegment("queue-pause-n3", QUEUE_PAUSED_AFTER_ERROR_CODE),
+        ],
+      };
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: null,
+      })[0];
+
+      expect(
+        row.units.some(
+          (unit) => unit.unitId === chatFindSegmentUnitId("queue-pause-n3"),
+        ),
+      ).toBe(false);
+      expect(rowSearchText(row)).not.toContain("queued message was held");
+    });
+  });
+
+  describe("a fallback-cancellation notice", () => {
+    const CANCEL_TITLE =
+      "Fallback ended - no further providers will be tried for this turn";
+    const CANCEL_MESSAGE = "What was tried is recorded below.";
+
+    function cancellationNotice(input: {
+      readonly id: string;
+      readonly codeValue: string;
+      readonly causeValue: string;
+    }): MessageSegment {
+      return {
+        id: input.id,
+        kind: "provider_notice",
+        status: "completed",
+        noticeKind: "fallback_settled",
+        tone: "info",
+        title: CANCEL_TITLE,
+        message: CANCEL_MESSAGE,
+        details: [
+          { label: "Code", value: input.codeValue },
+          { label: "Cause", value: input.causeValue },
+        ],
+        receipt: null,
+        parentId: null,
+      };
+    }
+
+    it.each([
+      ["true", true],
+      ["false", false],
+    ] as const)(
+      "X-find: is NOT indexed with the 4th argument %s",
+      (_label, protocolSupported) => {
+        const assistant: ChatMessageModel = {
+          ...makeMessage(80, "assistant"),
+          segments: [
+            cancellationNotice({
+              id: "fallback-settled:xfind",
+              codeValue: "FALLBACK_CANCELLED",
+              causeValue: "You chose not to switch",
+            }),
+          ],
+        };
+        const row = buildChatFindRows(
+          [assistant],
+          TILE_INSTANCE_ID,
+          new Set(),
+          {
+            hideReasoning: false,
+            queuePauseReasonProtocolSupported: protocolSupported,
+          },
+        )[0];
+
+        expect(
+          row.units.some(
+            (unit) =>
+              unit.unitId === chatFindSegmentUnitId("fallback-settled:xfind"),
+          ),
+        ).toBe(false);
+        expect(rowSearchText(row)).not.toContain(CANCEL_TITLE);
+      },
+    );
+
+    it("the FALLBACK_EXHAUSTED variant IS indexed", () => {
+      const assistant: ChatMessageModel = {
+        ...makeMessage(81, "assistant"),
+        segments: [
+          cancellationNotice({
+            id: "fallback-settled:exhausted",
+            codeValue: "FALLBACK_EXHAUSTED",
+            causeValue: "Every step was tried",
+          }),
+        ],
+      };
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: true,
+      })[0];
+
+      expect(
+        row.units.some(
+          (unit) =>
+            unit.unitId === chatFindSegmentUnitId("fallback-settled:exhausted"),
+        ),
+      ).toBe(true);
+      expect(rowSearchText(row)).toContain(CANCEL_TITLE);
+    });
+
+    // The hide keys ONLY on the Code field, never on the Cause prose.
+    it("a Code=EXHAUSTED notice whose Cause prose mentions cancellation IS indexed", () => {
+      const assistant: ChatMessageModel = {
+        ...makeMessage(82, "assistant"),
+        segments: [
+          cancellationNotice({
+            id: "fallback-settled:cause-prose",
+            codeValue: "FALLBACK_EXHAUSTED",
+            causeValue: "You chose to cancel this run",
+          }),
+        ],
+      };
+      const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+        hideReasoning: false,
+        queuePauseReasonProtocolSupported: true,
+      })[0];
+
+      expect(
+        row.units.some(
+          (unit) =>
+            unit.unitId ===
+            chatFindSegmentUnitId("fallback-settled:cause-prose"),
+        ),
+      ).toBe(true);
+      expect(rowSearchText(row)).toContain(CANCEL_TITLE);
+    });
   });
 });
 
@@ -1474,12 +1823,10 @@ describe("buildChatFindRows - hideReasoning", () => {
       ],
     };
 
-    const row = buildChatFindRows(
-      [assistant],
-      TILE_INSTANCE_ID,
-      new Set(),
-      true,
-    )[0];
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: true,
+    })[0];
 
     expect(row.units).toEqual([]);
     expect(rowSearchText(row)).not.toContain("Thought");

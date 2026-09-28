@@ -80,6 +80,37 @@ describe("<ProviderNoticeSegment />", () => {
     );
   });
 
+  // jsdom has no layout, so the wrap/shrink contract is asserted on the merged
+  // class list: the size must displace the base `shrink-0` / `whitespace-nowrap`
+  // for a long title to wrap instead of overflowing the row.
+  it("draws the title toggle with the wrapping inline size", () => {
+    render(
+      <ProviderNoticeSegment
+        status="completed"
+        noticeKind="model_rerouted"
+        tone="warning"
+        title="Model changed"
+        message={null}
+        details={[{ label: "Reason", value: "highRiskCyberActivity" }]}
+        findUnitId={null}
+      />,
+    );
+
+    const toggle = screen.getByRole("button");
+    expect(toggle.getAttribute("data-size")).toBe("inline-xs-wrap");
+    const tokens = Array.from(toggle.classList);
+    for (const token of [
+      "min-w-0",
+      "max-w-full",
+      "shrink",
+      "whitespace-normal",
+    ]) {
+      expect(tokens, token).toContain(token);
+    }
+    expect(tokens).not.toContain("shrink-0");
+    expect(tokens).not.toContain("whitespace-nowrap");
+  });
+
   it("does not render an expand toggle when there are no details", () => {
     render(
       <ProviderNoticeSegment

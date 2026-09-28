@@ -181,13 +181,13 @@
       },
       {
         "label": "Contact Us",
-        "href": "https://traycer.ai/contact"
+        "href": "https://traycer.ai/contact-us"
       }
     ],
     "primary": {
       "type": "button",
       "label": "Login",
-      "href": "https://platform.traycer.ai"
+      "href": "https://traycer.ai/settings"
     }
   },
   "contextual": {

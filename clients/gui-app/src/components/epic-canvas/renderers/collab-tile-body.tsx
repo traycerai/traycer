@@ -853,11 +853,15 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
  * is missing, and saying "Reconnecting to this document…" over one the host
  * already holds is the state this strip replaced.
  *
- * The same sweep and the same words as every other surface that says it is
- * syncing, escalated the same way: after `LINK_DOWN_ESCALATION_MS` the bar
- * stops moving and the label becomes "Still syncing…". A sync that is paused
- * (a credential the host is waiting to see rotated) would otherwise animate for
- * as long as the tile is open.
+ * The same sweep as every other surface that says it is syncing, escalated the
+ * same way: after `LINK_DOWN_ESCALATION_MS` the bar stops moving. A sync that
+ * is paused (a credential the host is waiting to see rotated) would otherwise
+ * animate for as long as the tile is open.
+ *
+ * The bar is the whole visible signal; the words are for assistive tech only.
+ * A visible caption had nowhere to go: the tile's top-right corner belongs to
+ * the version-history button, which covered it on every artifact kind, and a
+ * moving bar at the tile edge already says what the word said.
  */
 function CollabTileBodySyncStrip(props: {
   readonly artifactId: string;
@@ -874,14 +878,17 @@ function CollabTileBodySyncStrip(props: {
       data-testid={`${props.testId}-body-syncing`}
       role="status"
       aria-live="polite"
-      className="pointer-events-none absolute inset-x-0 top-0 z-10 flex flex-col items-end"
+      className="pointer-events-none absolute inset-x-0 top-0 z-10"
     >
       <SyncingSweepBar
         settled={escalated}
         testId={`${props.testId}-body-syncing-bar`}
         className={undefined}
       />
-      <span className="mt-1 mr-3 text-ui-xs text-muted-foreground">
+      <span
+        data-testid={`${props.testId}-body-syncing-label`}
+        className="sr-only"
+      >
         {streamSyncingLabel(escalated)}
       </span>
     </div>

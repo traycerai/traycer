@@ -16,9 +16,14 @@
  * row is hydrated.
  *
  * An index hit is only ever a MESSAGE-level claim ("this older message
- * contains the text"). Navigating to one hydrates the row, and from then on
- * the client scan owns it - which is what makes the highlight and the
- * within-message positions exact.
+ * contains the text"), and not one find repeats unread: the index holds text
+ * the transcript never paints (a hidden notice, an approval's input summary,
+ * a link's target, a `$` chip indexed as `/name`), so a hit is a CANDIDATE
+ * until its record has been read. Stepping onto one reads its rows without
+ * moving the viewport (`ChatFindIndexRead`), and the client scan - the same
+ * projection that decides what paints - confirms it into exact matches or
+ * drops it. Only confirmed hits are counted; the rest are the caveat's "may
+ * match".
  */
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import { assistantRowTurnKey } from "@traycer/protocol/persistence/chat-transcript/row-projection";
@@ -111,6 +116,16 @@ export class ChatFindIndexDemandSource {
   }
 }
 
+/**
+ * A candidate's rows to hydrate WITHOUT moving the viewport, so the client
+ * scan can confirm or drop it. `target` is what an index jump would take: the
+ * row id when the window names the record's row, else the message id.
+ */
+export interface ChatFindIndexRead {
+  readonly messageId: string;
+  readonly target: string;
+}
+
 /** One matching index document, reduced to what find reads. */
 export interface ChatFindIndexHit {
   /** The persisted message id - a record id, not a row id. */
@@ -178,6 +193,26 @@ export type ChatFindIndexHitPlacement =
 
 /** What find reads about the transcript's shape: the window, on its line. */
 export interface ChatFindTranscriptPlacement {
+  /**
+   * The window's coordinate epoch; `null` on the legacy line. A re-base can
+   * rewrite records, so a verdict reached in one epoch is not kept into the
+   * next.
+   */
+  readonly epoch: number | null;
+  /**
+   * Whether the skeleton names every row. Only then does `loaded` mean a
+   * record is held whole: over a partial skeleton a turn can have slices no
+   * one has named yet, and a match in one of them is still out of reach.
+   */
+  readonly complete: boolean;
+  /**
+   * Changes whenever the skeleton names a row it did not name before
+   * (`TranscriptWindow.skeletonRevision` - a chunk beyond a dropped one
+   * included, which moves nothing else here), completes, or the transcript
+   * gains rows - within an epoch. What could not be concluded over a partial
+   * skeleton holds only while this is unchanged.
+   */
+  readonly skeletonState: string;
   placeHit(hit: ChatFindIndexHit): ChatFindIndexHitPlacement;
   /** A rendered row's skeleton ordinal; `null` for a row not placed yet. */
   rowSortKey(rowId: string): number | null;
@@ -188,6 +223,9 @@ export interface ChatFindTranscriptPlacement {
  * loaded, and nothing asks the index there anyway.
  */
 export const FULLY_LOADED_TRANSCRIPT: ChatFindTranscriptPlacement = {
+  epoch: null,
+  complete: true,
+  skeletonState: "complete",
   placeHit: () => ({ kind: "loaded" }),
   rowSortKey: () => null,
 };
@@ -289,6 +327,9 @@ export function chatFindTranscriptPlacement(
   if (cached !== undefined) return cached;
   let index: WindowPlacementIndex | null = null;
   const placement: ChatFindTranscriptPlacement = {
+    epoch: window.epoch,
+    complete: window.skeletonComplete,
+    skeletonState: `${window.skeletonRevision}:${window.rowCount}:${window.skeletonStreamCoveredThrough}:${window.skeletonComplete}`,
     placeHit: (hit) => {
       index ??= buildWindowPlacementIndex(window);
       return placeHitInWindow(window, index, hit);
@@ -411,6 +452,8 @@ export interface ChatFindOlderHit {
   readonly held: boolean;
   readonly sortKey: number;
   readonly targets: ReadonlyArray<string>;
+  /** The index's hit, to place again as its read hydrates the record. */
+  readonly source: ChatFindIndexHit;
 }
 
 /**
@@ -461,6 +504,7 @@ export function olderChatFindIndexHits(input: {
       held: placed.held,
       sortKey: placed.sortKey,
       targets: placed.targets,
+      source: hit,
     });
   }
   return [...byMessage.values()].sort(
@@ -471,10 +515,11 @@ export function olderChatFindIndexHits(input: {
 }
 
 /**
- * The bar's caveat once the index has named older matches. It replaces the
- * "not loaded" caveat, and it still has a job: the index does not hold every
- * kind of text, so "N older messages match" over the index is a count over a
- * narrower corpus than the loaded rows were scanned in.
+ * The bar's caveat once the index has named older messages that have not been
+ * read. It replaces the "not loaded" caveat. "May" because an unread hit is a
+ * candidate, not a match: the index holds text the transcript does not paint.
+ * The tail still has a job: the index does not hold every kind of text, so
+ * the count is over a narrower corpus than the loaded rows were scanned in.
  *
  * `more` is "the index has pages past the last one read": the count is then
  * a floor, and says so.
@@ -484,7 +529,10 @@ export function chatFindIndexCoverageMessage(
   more: boolean,
 ): string {
   const count = olderMessages.toLocaleString();
-  const noun = olderMessages === 1 ? "message matches" : "messages match";
+  const noun = olderMessages === 1 ? "message" : "messages";
   const lead = more ? `At least ${count}` : count;
-  return `${lead} older ${noun}; older reasoning, subagent and tool output are not indexed.`;
+  return `${lead} older ${noun} may match; older reasoning, subagent and tool output are not indexed.`;
 }
+
+/** The caveat while a step waits on a candidate's read. */
+export const CHAT_FIND_INDEX_CHECKING_MESSAGE = "Checking an older message…";

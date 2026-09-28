@@ -22,6 +22,8 @@ import {
 } from "@/components/ui/popover";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { setMobileApp } from "@/lib/mobile-app";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 /** Concealed-or-absent: the gate's claim for children in a non-usable state. */
 function expectHiddenFromView(node: Element | null): void {
@@ -79,6 +81,8 @@ describe("<HostScopeGate /> empty and failed states", () => {
   afterEach(() => {
     cleanup();
     setMobileApp(false);
+    useAuthStore.setState({ shareableTeams: [] });
+    useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
   });
 
   it("renders the panel body once the scope is ready", () => {
@@ -107,8 +111,28 @@ describe("<HostScopeGate /> empty and failed states", () => {
     expectHiddenFromView(screen.queryByTestId("body"));
 
     fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
+    // The Billing page, never the bare origin: that is the marketing homepage.
     await waitFor(() => {
-      expect(runnerHost.openedExternalLinks.length).toBe(1);
+      expect(runnerHost.openedExternalLinks).toEqual([
+        "https://auth.example/billing",
+      ]);
+    });
+  });
+
+  it("offers the selected team's Billing page as the upgrade", async () => {
+    useAuthStore.setState({
+      shareableTeams: [{ teamId: "team-1", slug: "acme", avatarUrl: null }],
+    });
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-1" },
+    });
+    const runnerHost = renderPlanRestrictedGate();
+
+    fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
+    await waitFor(() => {
+      expect(runnerHost.openedExternalLinks).toEqual([
+        "https://auth.example/team/acme/billing",
+      ]);
     });
   });
 

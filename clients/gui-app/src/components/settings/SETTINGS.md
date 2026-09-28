@@ -1259,12 +1259,11 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     library - selection, editing, import/export - lives in `ThemeGallery`,
     backed by `stores/settings/theme-library-store.ts` and applied by
     `lib/theme-applier.ts`. `themePreset` remains the built-in-palette
-    fallback the gallery clears on a custom selection. See
-    `docs/theme-customization.md`. Anything that bakes theme colours into a
-    non-CSS surface (a canvas, xterm, a worker) subscribes to
-    `useThemeRevision()` (`providers/use-theme-revision.ts`) rather than to
-    the mode/preset fields, because a custom theme repaints the cascade
-    without changing either.
+    fallback the gallery clears on a custom selection. Anything that bakes
+    theme colours into a non-CSS surface (a canvas, xterm, a worker)
+    subscribes to `useThemeRevision()` (`providers/use-theme-revision.ts`)
+    rather than to the mode/preset fields, because a custom theme repaints
+    the cascade without changing either.
     Shared menu, dialog and composer surfaces use solid theme fills.
     Background opacity remains retired after reproduced renderer flickering;
     old saved opacity values are ignored when the theme library is read.
@@ -2563,9 +2562,10 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     plus the Bundle bar. The extension's live "Artifact Used" bar is omitted -
     `totalTokens`/`remainingTokens` come from the inference `GetRateLimitUsage`
     gRPC, which the gui-app/daemon stack doesn't expose. Also a "Manage
-    subscription" link (opens the platform URL via
-    `resolvePlatformBaseUrl(runnerHost.signInUrl)`, reused from
-    `user-menu.tsx`), and a refresh icon. A global account-context selector
+    subscription" link (opens the Billing page of the selected account via
+    `resolvePlatformBillingUrl` - `/team/<slug>/billing` for a team,
+    `/billing` otherwise - the same page `user-menu.tsx` opens), and a
+    refresh icon. A global account-context selector
     (Personal / each Team, shown only when the user has `teamSubscriptions`)
     chooses which subscription is displayed - the selection persists in the
     `account-context-store` (localStorage), defaulting to Personal when nothing

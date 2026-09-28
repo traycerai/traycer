@@ -21,7 +21,7 @@ import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/
  * a pong after a stall, and a first dial is neither.
  *
  * What is restored here is the GUARANTEE, not the bytes. The sweep runs
- * through `HostClient.invalidateHostScopeUnannounced`, which honours the
+ * through `HostClient.invalidateHostScopeAfterKeyRotation`, which honours the
  * query invalidator's two documented carve-outs (harness catalogs, the cloud
  * epic-tasks history) - `bind()`'s sweep ignored both, and force-refetching
  * the epic-tasks list drops optimistically-inserted local-first epics.

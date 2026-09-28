@@ -1018,7 +1018,12 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       changes.push(snapshot?.hostId ?? null);
     });
     try {
-      await lifecycle.bootstrap({ hostInstalled: true });
+      // Seed with a plain reload, not `bootstrap()`: this test counts probes, so
+      // it must own every reload. `bootstrap()` installs the real pid.json
+      // watcher, and macOS FSEvents can replay the fixture write above into it
+      // after install. That extra reload supersedes a manual one mid-flight, so
+      // the manual one skips its fold and the assertion reads the old verdict.
+      await lifecycle.reloadSnapshotFromDisk();
       expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
       expect(changes).toEqual(["same-host"]);
       // The explicit reloads below drive both failures; frozen timers keep the

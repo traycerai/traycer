@@ -172,7 +172,9 @@ import {
   resolveApprovalJumpLanding,
   messageIdForTranscriptTarget,
   sentMessageAnchorId,
+  TRANSCRIPT_JUMP_TTL_MS,
 } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
+import { TranscriptQueuePauseReasonSupportContext } from "@/components/chat/use-transcript-queue-pause-reason-support";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
 import { useHostBinding } from "@/lib/host";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
@@ -821,14 +823,6 @@ function resolveBackgroundClickTarget(
 }
 
 /**
- * How long a parked cross-tile transcript jump waits for its target row to
- * stream in before it is dropped. Generous enough to cover a cold tile pulling
- * a large transcript, short enough that a stale request cannot fire minutes
- * later and yank the reader somewhere they no longer expect.
- */
-const TRANSCRIPT_JUMP_TTL_MS = 30_000;
-
-/**
  * Which open-store a cross-tile block jump should expand. A block that names a
  * live background item follows that item's card kind; anything else (a settled
  * tool card - the usual shape for a file-write anchor) opens as a tool card.
@@ -910,6 +904,21 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       viewHandle.store.getState().reportVisibleTranscriptRange(range);
     },
     [viewHandle],
+  );
+  // Find → hydration bridge: the row chat find reads to confirm an index hit.
+  // Required hydration beside the viewport's, never a move of it.
+  const onFindReadOrdinalChange = useCallback(
+    (ordinal: number | null): void => {
+      viewHandle.store.getState().requestFindReadOrdinal(ordinal);
+    },
+    [viewHandle],
+  );
+  // The transcript's hidden-row rule reads its OWN session's answer, from
+  // whichever handle this view renders - a published or replica handle is
+  // never registered, so this is the only route that reaches it.
+  const queuePauseReasonSupport = useStore(
+    viewHandle.store,
+    (s) => s.queuePauseReasonProtocolSupported,
   );
   const hostId = useTabHostId();
   // Chat image byte reads are scoped here, once per tile, rather than per
@@ -1487,66 +1496,51 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
              * get a definite height (h-full on LegendList needs a real
              * containing block all the way up). The overlay dock below is
              * absolutely positioned, so it does not participate in this flex
-             * layout regardless.
-             *
-             * It is also THE CHAT PANE (L-145): the box that bounds the
-             * transcript, the dock and the composer, whether this chat is one
-             * tile among several or a full tab. An opened dock pill panel
-             * takes its height as a share of it (`chat-dock-panel-height.ts`),
-             * which needs a size container - safe here, and only here in this
-             * chain, because this element's height comes from `flex-1` in a
-             * definite-height column (the tile root is `h-full` inside a
-             * record the surface host sizes in pixels) and never from its
-             * contents, so containing its size changes nothing it measures.
-             *
-             * `container-type: size` also computes `contain: layout style`,
-             * which has two effects beyond sizing. The pane becomes a
-             * containing block for `position: fixed` descendants, so a fixed
-             * overlay rendered inline under the transcript or the composer
-             * would be positioned against this tile rather than against the
-             * viewport - the app's overlay primitives portal out of the tree
-             * by rule, and anything new that does not must. And it becomes a
-             * stacking context, which `position: relative` alone was not, so
-             * the lower-surfaces overlay's `z-10` below is scoped to the pane
-             * instead of competing with anything outside it. */}
+             * layout regardless. The definite flex height also makes this a
+             * size container for the dock panel's proportional height. */}
             <div
               data-chat-pane=""
               className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
             >
-              <ChatSessionMessagesSurface
-                snapshotLoaded={view.snapshotLoaded}
-                connectionStatus={view.connectionStatus}
-                fatalClose={view.fatalClose}
-                preSnapshotRetries={view.preSnapshotRetries}
-                preSnapshotReloadStartedAt={view.preSnapshotReloadStartedAt}
-                onRetry={view.onChatRetryFromUser}
-                preContent={view.preContent}
-                restoreContext={view.restoreContext}
-                node={view.node}
-                taskTitle={view.taskTitle}
-                epicId={view.currentEpicId}
-                viewTabId={view.viewTabId}
-                tabHostId={view.tabHostId}
-                workspaceRoots={view.linkResolutionRoots}
-                messages={view.messages}
-                activeTurnId={view.activeTurnId}
-                transcriptWindow={view.transcriptWindow}
-                onVisibleOrdinalRangeChange={onVisibleOrdinalRangeChange}
-                baselineEpoch={view.transcriptBaselineEpoch}
-                hydrationSequence={view.transcriptHydrationSequence}
-                coldRewrittenMessageIds={view.coldRewrittenMessageIds}
-                backgroundItems={view.lower.backgroundItems}
-                scrollRequest={backgroundScrollRequest}
-                onScrollRequestSettled={onScrollRequestSettled}
-                surfaceVisible={view.surfaceVisible}
-                systemOverlayActive={systemOverlayActive}
-                getMessageActions={view.getMessageActions}
-                nextStepActions={view.nextStepActions}
-                planActions={view.planActions}
-                composerOverlayHeight={
-                  lowerSurfacesElement === null ? 0 : lowerSurfacesHeight
-                }
-              />
+              <TranscriptQueuePauseReasonSupportContext
+                value={queuePauseReasonSupport}
+              >
+                <ChatSessionMessagesSurface
+                  snapshotLoaded={view.snapshotLoaded}
+                  connectionStatus={view.connectionStatus}
+                  fatalClose={view.fatalClose}
+                  preSnapshotRetries={view.preSnapshotRetries}
+                  preSnapshotReloadStartedAt={view.preSnapshotReloadStartedAt}
+                  onRetry={view.onChatRetryFromUser}
+                  preContent={view.preContent}
+                  restoreContext={view.restoreContext}
+                  node={view.node}
+                  taskTitle={view.taskTitle}
+                  epicId={view.currentEpicId}
+                  viewTabId={view.viewTabId}
+                  tabHostId={view.tabHostId}
+                  workspaceRoots={view.linkResolutionRoots}
+                  messages={view.messages}
+                  activeTurnId={view.activeTurnId}
+                  transcriptWindow={view.transcriptWindow}
+                  onVisibleOrdinalRangeChange={onVisibleOrdinalRangeChange}
+                  onFindReadOrdinalChange={onFindReadOrdinalChange}
+                  baselineEpoch={view.transcriptBaselineEpoch}
+                  hydrationSequence={view.transcriptHydrationSequence}
+                  coldRewrittenMessageIds={view.coldRewrittenMessageIds}
+                  backgroundItems={view.lower.backgroundItems}
+                  scrollRequest={backgroundScrollRequest}
+                  onScrollRequestSettled={onScrollRequestSettled}
+                  surfaceVisible={view.surfaceVisible}
+                  systemOverlayActive={systemOverlayActive}
+                  getMessageActions={view.getMessageActions}
+                  nextStepActions={view.nextStepActions}
+                  planActions={view.planActions}
+                  composerOverlayHeight={
+                    lowerSurfacesElement === null ? 0 : lowerSurfacesHeight
+                  }
+                />
+              </TranscriptQueuePauseReasonSupportContext>
               {/*
                * SurfaceActivityProvider narrows catalog/provider query subscriptions
                * to the one focused pane+tab. A visible split partner keeps rendering
@@ -3770,6 +3764,8 @@ interface ChatSessionMessagesSurfaceProps {
   readonly transcriptWindow: TranscriptWindow | null;
   /** Viewport-driven hydration report; see `ChatMessagesProps`. */
   readonly onVisibleOrdinalRangeChange: (range: OrdinalRange | null) => void;
+  /** Chat find's index-read hydration; see `ChatMessagesProps`. */
+  readonly onFindReadOrdinalChange: (ordinal: number | null) => void;
   /** Which connection's snapshot established `messages`; see `ChatMessages`. */
   readonly baselineEpoch: number;
   /** Whether a range seated these rows; see `ChatMessages`. */
@@ -3883,6 +3879,7 @@ function ChatSessionMessagesSurface(
               messages={props.messages}
               transcriptWindow={props.transcriptWindow}
               onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
+              onFindReadOrdinalChange={props.onFindReadOrdinalChange}
               baselineEpoch={props.baselineEpoch}
               hydrationSequence={props.hydrationSequence}
               coldRewrittenMessageIds={props.coldRewrittenMessageIds}

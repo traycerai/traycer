@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import { userEvent } from "@testing-library/user-event";
 import { resetPaneActivationFocusIntentsForTests } from "@/components/epic-canvas/pane-activation";
 
 // The picker's provider-settings gear opens the settings modal through router
@@ -99,6 +108,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { matchDigitAction } from "@/lib/keybindings/dispatch";
 import type {
@@ -893,6 +903,10 @@ function providerCliStateWithProfiles(input: {
     profiles: input.profiles,
   };
 }
+
+const PICKER_BODY_HEIGHT =
+  "h-[min(var(--radix-popover-content-available-height),23rem)]";
+const WIDTH_CLASS = /w-\[min\(86vw,30rem\)\]/;
 
 function codexModels(): ReadonlyArray<ModelOption> {
   return [
@@ -4897,6 +4911,10 @@ describe("<HarnessModelPicker />", () => {
         providerSwitchModel: embeddingSwitchModel,
         selectionMarked: input.selectionMarked,
         openRef: input.openRef,
+        closeRef: null,
+        followSelectionRef: null,
+        onOpenChange: null,
+        footer: null,
       };
     }
 
@@ -5154,6 +5172,228 @@ describe("<HarnessModelPicker />", () => {
           .getByRole("option", { name: /GPT-5\.5/ })
           .getAttribute("aria-selected"),
       ).toBe("true");
+    });
+
+    describe("with a footer and open/close hooks", () => {
+      interface FooterSpies {
+        readonly onOpenChange: Mock<(open: boolean) => void>;
+      }
+
+      function footerEmbedding(input: {
+        readonly spies: FooterSpies;
+        readonly closeRef: RefObject<(() => void) | null> | null;
+        readonly footer: ReactNode | null;
+      }): HarnessModelPickerEmbedding {
+        return {
+          trigger: <button type="button">Routing face</button>,
+          providerSwitchModel: embeddingSwitchModel,
+          selectionMarked: true,
+          openRef: { current: null },
+          closeRef: input.closeRef,
+          followSelectionRef: null,
+          onOpenChange: input.spies.onOpenChange,
+          footer: input.footer,
+        };
+      }
+
+      function renderFooter(input: {
+        readonly closeRef: RefObject<(() => void) | null> | null;
+        readonly footer: ReactNode | null;
+      }): PickerHarness & { readonly spies: FooterSpies } {
+        const spies: FooterSpies = { onOpenChange: vi.fn() };
+        const harness = renderPicker({
+          embedding: footerEmbedding({ ...input, spies }),
+          storeModels: codexModels(),
+          selection: {
+            harnessId: "codex",
+            modelSlug: "gpt-5.5",
+            profileId: null,
+          },
+        });
+        return { ...harness, spies };
+      }
+
+      function activeOptionText(input: HTMLInputElement): string {
+        const id = input.getAttribute("aria-activedescendant");
+        if (id === null) throw new Error("no active descendant");
+        const element = document.getElementById(id);
+        if (element === null) throw new Error("active descendant not found");
+        return element.textContent;
+      }
+
+      it("renders the footer inside the popover, under the list, and outside the body that carries the list's height", async () => {
+        renderFooter({ closeRef: null, footer: <div>Routing footer</div> });
+        expect(screen.queryByText("Routing footer")).toBeNull();
+        await openPickerByTriggerName("Routing face");
+
+        const dialog = screen.getByRole("dialog", { name: "Select model" });
+        const footer = within(dialog).getByText("Routing footer");
+        const slot = footer.closest("[data-picker-embedding-footer]");
+        expect(slot).not.toBeNull();
+        const body = dialog.querySelector(`[class*="${PICKER_BODY_HEIGHT}"]`);
+        expect(body).not.toBeNull();
+        expect(body?.contains(footer)).toBe(false);
+        expect(body?.contains(screen.getByRole("listbox"))).toBe(true);
+      });
+
+      it("reports every visible open and close - trigger, Escape, an outside press and closeRef - and nothing on mount", async () => {
+        const closeRef: RefObject<(() => void) | null> = { current: null };
+        const { spies } = renderFooter({ closeRef, footer: null });
+        expect(spies.onOpenChange).not.toHaveBeenCalled();
+        expect(closeRef.current).not.toBeNull();
+
+        const input = await openPickerByTriggerName("Routing face");
+        expect(spies.onOpenChange.mock.calls).toEqual([[true]]);
+
+        fireEvent.keyDown(input, { key: "Escape" });
+        await waitFor(() => {
+          expect(spies.onOpenChange.mock.calls).toEqual([[true], [false]]);
+        });
+
+        await openPickerByTriggerName("Routing face");
+        expect(spies.onOpenChange).toHaveBeenLastCalledWith(true);
+        act(() => {
+          closeRef.current?.();
+        });
+        await waitFor(() => {
+          expect(spies.onOpenChange).toHaveBeenLastCalledWith(false);
+        });
+        expect(spies.onOpenChange).toHaveBeenCalledTimes(4);
+
+        await openPickerByTriggerName("Routing face");
+        expect(spies.onOpenChange).toHaveBeenCalledTimes(5);
+        // Radix arms its outside-press listener a tick after mounting.
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+        const outside = document.createElement("div");
+        document.body.append(outside);
+        fireEvent.pointerDown(outside, { button: 0, pointerType: "mouse" });
+        fireEvent.mouseDown(outside);
+        fireEvent.click(outside);
+        await waitFor(() => {
+          expect(spies.onOpenChange).toHaveBeenCalledTimes(6);
+        });
+        expect(spies.onOpenChange).toHaveBeenLastCalledWith(false);
+        outside.remove();
+      });
+
+      it("reports a close once when it unmounts while open, and nothing when it unmounts closed", async () => {
+        const opened = renderFooter({ closeRef: null, footer: null });
+        await openPickerByTriggerName("Routing face");
+        expect(opened.spies.onOpenChange.mock.calls).toEqual([[true]]);
+        opened.spies.onOpenChange.mockClear();
+
+        cleanup();
+
+        expect(opened.spies.onOpenChange.mock.calls).toEqual([[false]]);
+
+        const closed = renderFooter({ closeRef: null, footer: null });
+        cleanup();
+
+        expect(closed.spies.onOpenChange).not.toHaveBeenCalled();
+      });
+
+      it("clears closeRef on unmount", () => {
+        const closeRef: RefObject<(() => void) | null> = { current: null };
+        const spies: FooterSpies = { onOpenChange: vi.fn() };
+        const harness = pickerHarness({
+          embedding: footerEmbedding({ spies, closeRef, footer: null }),
+        });
+        const { unmount } = render(harness.element(false, undefined));
+        expect(closeRef.current).not.toBeNull();
+        unmount();
+        expect(closeRef.current).toBeNull();
+      });
+
+      it("Enter on a focused footer button is the button's own activation: the spy fires once, and the list's active row is not picked", async () => {
+        const onFooterAction = vi.fn();
+        const { store, selections } = renderFooter({
+          closeRef: null,
+          footer: (
+            <button type="button" onClick={onFooterAction}>
+              Footer action
+            </button>
+          ),
+        });
+        const input = await openPickerByTriggerName("Routing face");
+        const before = store.getState().selection;
+        // Walk the active row off the marked one, so a list handler that saw
+        // this Enter would pick something visible.
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        expect(activeOptionText(input)).toContain("GPT-4.1");
+
+        act(() => {
+          screen.getByRole("button", { name: "Footer action" }).focus();
+        });
+        await userEvent.keyboard("{Enter}");
+
+        expect(onFooterAction).toHaveBeenCalledTimes(1);
+        expect(selections).toEqual([]);
+        expect(store.getState().selection).toEqual(before);
+      });
+
+      // jsdom does no layout and Virtuoso is mocked, so the height tests below
+      // are STRUCTURAL proofs: which element carries the height class, and what
+      // sits inside it. Whether the box then measures 23rem is the browser's.
+      describe("the popover's height", () => {
+        /** The element that carries the list's height: the popover itself in the composer, the body wrapper in an embedding. */
+        function heightBox(dialog: HTMLElement): HTMLElement {
+          if (dialog.className.includes(PICKER_BODY_HEIGHT)) return dialog;
+          const box = dialog.querySelector(`[class*="${PICKER_BODY_HEIGHT}"]`);
+          if (!(box instanceof HTMLElement)) {
+            throw new Error("no element carries the picker's height class");
+          }
+          return box;
+        }
+
+        it("the composer's popover carries the height class itself and has no embedding footer", async () => {
+          renderPicker({});
+          await openPicker();
+
+          const dialog = screen.getByRole("dialog", { name: "Select model" });
+          expect(dialog.className).toContain(PICKER_BODY_HEIGHT);
+          expect(
+            dialog.querySelector("[data-picker-embedding-footer]"),
+          ).toBeNull();
+        });
+
+        it("an embedding with a footer keeps the composer's list box: same option count, same height class on the list's ancestor, same width, and the popover itself only capped", async () => {
+          renderPicker({});
+          await openPicker();
+          const composer = screen.getByRole("dialog", { name: "Select model" });
+          const composerOptions = screen.getAllByRole("option").length;
+          const composerBox = heightBox(composer);
+          expect(composerBox.contains(screen.getByRole("listbox"))).toBe(true);
+          const composerWidth = WIDTH_CLASS.exec(composer.className)?.[0];
+          const composerHeightClass = composerBox.className
+            .split(" ")
+            .find((token) => token.startsWith("h-[min("));
+          cleanup();
+
+          renderFooter({ closeRef: null, footer: <div>Routing footer</div> });
+          await openPickerByTriggerName("Routing face");
+          const embedded = screen.getByRole("dialog", { name: "Select model" });
+          const embeddedBox = heightBox(embedded);
+
+          expect(screen.getAllByRole("option")).toHaveLength(composerOptions);
+          expect(embeddedBox.contains(screen.getByRole("listbox"))).toBe(true);
+          expect(
+            embeddedBox.className
+              .split(" ")
+              .find((t) => t.startsWith("h-[min(")),
+          ).toBe(composerHeightClass);
+          expect(WIDTH_CLASS.exec(embedded.className)?.[0]).toBe(composerWidth);
+          // The popover carries only the cap, never the body's fixed height.
+          expect(embedded.className).not.toContain(PICKER_BODY_HEIGHT);
+          expect(embedded.className).toContain(
+            "max-h-[var(--radix-popover-content-available-height)]",
+          );
+          expect(
+            embeddedBox.contains(within(embedded).getByText("Routing footer")),
+          ).toBe(false);
+        });
+      });
     });
   });
 });

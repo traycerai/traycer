@@ -123,6 +123,7 @@ import {
   chatRangeResponseSchemaPreMessageDelivery,
   chatRangeResponseSchemaPreBrowser,
   chatRangeResponseSchemaPreFallback,
+  chatRangeResponseSchemaPreReceipt,
   chatRangeResponseSchemaPreShellHost,
   chatRecordSchema,
   chatSkeletonChunkSchema,
@@ -132,6 +133,7 @@ import {
   chatTranscriptWindowSchemaPreMessageDelivery,
   chatTranscriptWindowSchemaPreBrowser,
   chatTranscriptWindowSchemaPreFallback,
+  chatTranscriptWindowSchemaPreReceipt,
   chatTranscriptWindowSchemaPreShellHost,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
@@ -736,9 +738,43 @@ export const chatQueueStateSchema = lazySchema(() =>
   z.object({
     status: z.enum(["idle", "running", "paused"]),
     items: z.array(chatQueuedItemSchema),
+    // Why the queue is paused, as the host knows it (`chat.subscribe@1.18`):
+    // `"turn_error"`, `"routing"`, `"queued_prompt"`, `"managed_command"`,
+    // `"user"`, and whatever the host adds later. An OPEN string, not an enum:
+    // a reason a released client has never heard of must still leave it a
+    // queue it can decode, and a client that does not recognise one renders
+    // the generic paused pill. Lines `1.13`-`1.17` bind hand-frozen queue
+    // states without the key (`chatQueueStateSchemaPrePausedReason` and the
+    // older freezes below), so a peer on one of them strips it.
+    //
+    // `null` means the host says the queue is not paused; ABSENT means NOT
+    // RECORDED - a host too old to say, or a queue this client built itself.
+    // A reader folds both with `?? null` and renders the generic pill.
+    // Spelled `.optional()` rather than `.default(null)`, as
+    // `assistantMessageSchema.turnProfile` is: a defaulted key is REQUIRED on
+    // the inferred type, and a queue state is built as an object literal
+    // across the host, the GUI and their suites. What that costs is the
+    // compiler's help on a COPY: a rebuild that picks fields
+    // (`{ status: queue.status, items }`) now drops the reason silently
+    // instead of failing to compile, so every rebuild must spread the queue
+    // (`{ ...queue, items }`) - the GUI's `chat-queue-utils.ts` and
+    // `chat-tile-lower-surfaces.tsx` rebuilds among them.
+    pausedReason: z.string().nullable().optional(),
   }),
 );
 export type ChatQueueState = z.infer<typeof chatQueueStateSchema>;
+
+// Wire-freeze of the queue as `chat.subscribe@1.17` ships it: the live three
+// arms and the live prompt item (sender host included), without the
+// `pausedReason` that `1.18` added. A hand-copied object, NOT `.omit()` off the
+// live one, so a later key cannot reach `1.17` through it. Bound to that
+// line's snapshot and `queueChanged` frames.
+const chatQueueStateSchemaPrePausedReason = lazySchema(() =>
+  z.object({
+    status: z.enum(["idle", "running", "paused"]),
+    items: z.array(chatQueuedItemSchema),
+  }),
+);
 
 /**
  * Wire-freeze copy of the queued prompt item as every line from
@@ -1382,7 +1418,22 @@ export const pendingFallbackSchema = lazySchema(() =>
      * released client has not heard of - for a field it only renders as a label.
      */
     reason: z.string(),
-    /** The tuple that failed. Never the chat's current settings, which a hop may already have moved. */
+    /**
+     * The tuple the step on screen is moving the chat FROM - never the chat's
+     * current settings, which a hop may already have moved.
+     *
+     * On a `switching` frame that is not a wait's resume (the host's
+     * `commit_settings`, `restamp_queue` and `redispatch` phases, none of which
+     * the wire names) it is the tuple the hop is LEAVING: on the first hop the
+     * tuple whose turn failed, on a later hop the previous destination - the one
+     * that failed last. After A -> B failed, the hop to C names B.
+     *
+     * `hold`, `choosing`, `waiting`, `retrying` and a wait's resume carry the
+     * traversal's original failed tuple - a wait waits for that tuple's reset
+     * and resumes onto it.
+     *
+     * An older host always sends the original failed tuple, on every frame.
+     */
     failedTuple: chatRunSettingsSchema,
     /**
      * The tuple a switch is heading for, once one is COMMITTED.
@@ -1603,55 +1654,54 @@ export type FallbackWaitDisposition = z.infer<
 >;
 
 /**
- * Whether this chat has anywhere to switch TO (`chat.subscribe@1.10`).
+ * Whether this chat's failed attempt may be switched (`chat.subscribe@1.10`).
  *
- * HOST-AUTHORED and, unlike {@link fallbackWaitDispositionSchema}, decided ONCE
- * when the failure was recorded rather than per frame. It has to be: answering
- * it means walking the user's equivalence groups against live provider
- * catalogs, which is async, and the DTO is derived synchronously per frame.
- * The verdict is stored on the failed attempt's durable envelope beside the
- * rest of its replay facts, so a chat that was idle-evicted and reopened still
- * carries it.
+ * HOST-AUTHORED, and it once carried a verdict a renderer could not derive:
+ * whether the user's setup named any other destination for the model that
+ * failed, decided ONCE when the failure was recorded (walking the user's
+ * equivalence groups against live provider catalogs is async, and the DTO is
+ * derived synchronously per frame) and stored on the attempt's durable
+ * envelope. That verdict existed because the failed-turn card's "Switch…"
+ * opened a menu of routing destinations, which could list nothing.
  *
- * ## Why a client must not derive this
+ * It no longer does. "Switch to…" opens the full model picker, and
+ * `chat.fallback.runManualRung` validates the target it is handed, so a
+ * current host emits only `eligible` (the chat has settings) and `unknown`
+ * (it has none) - never `no_destination`. That member stays in the enum
+ * because attempts recorded, and hosts built, before the change still carry
+ * and send it, and older GUIs still read it.
  *
- * The question is "does this user's setup name any other destination for the
- * model that just failed" - the answer lives in the fallback policy's model
- * groups and in the set of enabled accounts on the failed provider, neither of
- * which a renderer holds. The shipped default makes it matter: Claude Code's
- * `default` row is a real, extremely common chat tuple whose model FAMILY lives
- * only in its catalog label (`Default (Sonnet 4.5)`), while group membership is
- * matched on the slug alone - so `default` belongs to no group, and a chat on
- * it has no equivalent-model destination at all. Without this field the error
- * card offered "Switch…" onto a menu that could list nothing, and said nothing
- * about why.
+ * No current GUI reads this value: `eligibleRungs` is the only source of the
+ * Switch control (see `lastFailedAttemptSchema.switchDisposition`).
  */
 export const fallbackSwitchDispositionSchema = lazySchema(() =>
   z.enum([
-    /** A destination exists - `switch` is in `eligibleRungs`. */
+    /**
+     * The chat can be switched - `switch` is in `eligibleRungs`. A current host
+     * emits this whenever the chat has settings to switch from.
+     */
     "eligible",
     /**
-     * This chat's own setup names NO destination: no other enabled account on
-     * the failed provider, and the failed model belongs to no equivalence group.
-     * `switch` is withheld and the surface says so in the user's own terms.
+     * LEGACY - written only by hosts before the full-picker change, and still
+     * found on attempts they recorded. It meant this chat's own setup named NO
+     * routing destination: no other enabled account on the failed provider,
+     * and the failed model in no equivalence group. `switch` was withheld.
      *
-     * A statement about CONFIGURATION, never about the world - deliberately, and
-     * it is what makes a verdict frozen at failure time sound. "Signed out",
-     * "rate limited" and "provider not runnable" can all become false while the
-     * card is on screen, so none of them reaches this value; a destination that
-     * merely cannot be used right now still counts as a destination, and its
-     * menu row carries the host's own reason.
+     * It was a statement about CONFIGURATION, never about the world, which is
+     * what made a verdict frozen at failure time sound: "signed out", "rate
+     * limited" and "provider not runnable" can all become false while the card
+     * is on screen, so none of them ever produced it.
      */
     "no_destination",
     /**
-     * No verdict is available for this attempt: it was recorded by a build that
-     * predates the field, the envelope is missing, a catalog or account registry
-     * could not be read, or the chat carries no settings to switch from.
+     * From a current host: the chat carries no settings to switch from, so
+     * `switch` is not in `eligibleRungs` (and neither is `retry`).
      *
-     * `switch` is still OFFERED here (where the chat has settings at all).
-     * "We could not check" is not "you have nothing set up", and a card that
-     * withheld the control on doubt would tell a user their setup is incomplete
-     * on no evidence.
+     * From an older host it could also mean no verdict was available - the
+     * attempt predates the field, the envelope was missing, or a catalog or
+     * account registry could not be read - and `switch` was still OFFERED
+     * wherever the chat had settings: "we could not check" is not "you have
+     * nothing set up".
      */
     "unknown",
   ]),
@@ -1681,9 +1731,11 @@ export const lastFailedAttemptSchema = lazySchema(() =>
      * limit that is no reset at all: the post-limit probe that learns one
      * answers after the stamp. So whenever {@link waitDisposition} was decided
      * against a verified boundary (`eligible`, `beyond_cap`), the host writes
-     * THAT boundary's `resetsAt` / `resetsAtSource` / `scope` here - the time the
-     * wait would be armed for - and a card naming it cannot disagree with the
-     * verdict it names it under. Otherwise this is the stamp, unchanged.
+     * THAT boundary's `resetsAt` / `resetsAtSource` / `scope` here - the
+     * boundary the wait is armed FROM - and a card naming it cannot disagree
+     * with the verdict it names it under. Otherwise this is the stamp,
+     * unchanged. The time the wait RESUMES at is later, by a margin and a
+     * per-chat jitter, and is {@link waitResumesAt}.
      */
     failure: agentFailureSchema,
     /**
@@ -1749,11 +1801,19 @@ export const lastFailedAttemptSchema = lazySchema(() =>
      * Why `switch` is absent from {@link eligibleRungs}, or `eligible` when it is
      * present - {@link fallbackSwitchDispositionSchema}.
      *
-     * The same shape as {@link waitDisposition} and the same invariant: `switch`
-     * is in the array iff this is not `no_destination` (and the chat has settings
-     * to switch from, which is also what removes `retry`). `unknown` OFFERS the
-     * control, because a check the host could not complete is not evidence about
-     * the user's setup.
+     * A current host emits `eligible` when the chat has settings and `unknown`
+     * when it has none - never `no_destination`: the chooser is the full model
+     * picker, and `chat.fallback.runManualRung` validates the target it is
+     * named. `no_destination` is kept for attempts recorded, and hosts built,
+     * before that change.
+     *
+     * The same shape as {@link waitDisposition} and the same invariant, true of
+     * old hosts and new: `switch` is in the array iff this is not
+     * `no_destination` and the chat has settings to switch from (which is also
+     * what removes `retry`).
+     *
+     * No current GUI reads this field. {@link eligibleRungs} is the only source
+     * of the Switch control.
      */
     switchDisposition: fallbackSwitchDispositionSchema,
     /**
@@ -1761,21 +1821,65 @@ export const lastFailedAttemptSchema = lazySchema(() =>
      * gone (the same absence {@link waitDisposition}'s `attempt_unavailable`
      * reports).
      *
-     * Carried so a surface explaining a withheld `switch` can NAME the chat's
-     * provider and model - "No other model is set up for Claude Code · default" -
-     * instead of a subject-less sentence. Resolved client-side through
-     * `fallback-identity.ts`, which is where every other fallback surface turns a
-     * tuple into words, so the card and the destination menu cannot end up
-     * calling one chat two things.
+     * Two readers in the GUI. The failed-turn card seeds the routing picker
+     * with it (the chat's persisted settings stand in when it is `null`): the
+     * picker seeds its store from that tuple until the host's target listing
+     * names the failed tuple itself, and opens on the failed tuple whenever the
+     * listing recommends no other account. And the composer's rate-limit
+     * banner compares it with the composer's own selection, to decide whether
+     * a settled routing card already covers the limit the banner would name.
      *
      * The FAILED tuple specifically, never the chat's current settings: the card
      * is bound to an attempt, and a chat reconfigured since the failure would
      * otherwise be explained in terms of a model that never ran.
      */
     failedTuple: chatRunSettingsSchema.nullable(),
+    /**
+     * When a `wait_once` pressed now would resume the chat
+     * (`chat.subscribe@1.18`): the HOST's deadline, not the provider's
+     * boundary.
+     *
+     * The host arms the wait FROM the boundary {@link failure} carries, plus a
+     * margin for the provider's approximate clock and this chat's place in a
+     * jitter window (so a user's parked chats do not all resume in the same
+     * second). That sum is the one derivation the waiting card and its
+     * countdown read once the wait is running, so a card offering the wait
+     * names THIS time and the card the press opens names the same one. Naming
+     * `failure.resetsAt` instead offered a time minutes earlier than the one
+     * the press armed.
+     *
+     * A number exactly when {@link eligibleRungs} offers `wait_once`, `null`
+     * otherwise. ABSENT means a host too old to publish it: a card falls back
+     * to `failure.resetsAt`, the boundary, which is early by the margin and the
+     * jitter but is the closest time that host gives it. Computed at frame
+     * time, like {@link eligibleRungs}: `chat.fallback.runManualRung` arms the
+     * deadline, and this value only names it in advance.
+     *
+     * Lines `1.10`-`1.17` bind the hand-frozen
+     * `lastFailedAttemptSchemaPreWaitResume` below, which does not carry it.
+     */
+    waitResumesAt: z.number().nullable().optional(),
   }),
 );
 export type LastFailedAttempt = z.infer<typeof lastFailedAttemptSchema>;
+
+// Wire-freeze of the failed-attempt DTO as every line from `chat.subscribe@1.10`
+// through `@1.17` ships it: the live DTO without the `waitResumesAt` that
+// `1.18` added. A hand-copied object, NOT `.omit()` off the live one, so a
+// later key cannot reach those lines through it. `1.13`-`1.17` bind it
+// directly (the windowed snapshot and the turn-state frame); `1.10`-`1.12`
+// reach it through `lastFailedAttemptSchemaPreAuto`, which narrows its tuple.
+const lastFailedAttemptSchemaPreWaitResume = lazySchema(() =>
+  z.object({
+    userMessageId: z.string(),
+    turnId: z.string(),
+    failure: agentFailureSchema,
+    eligibleRungs: z.array(z.enum(["retry", "switch", "wait_once"])),
+    waitDisposition: fallbackWaitDispositionSchema,
+    switchDisposition: fallbackSwitchDispositionSchema,
+    failedTuple: chatRunSettingsSchema.nullable(),
+  }),
+);
 
 // ─── Pre-`auto` freezes of the provider-fallback tuples ─────────────────────
 //
@@ -1810,7 +1914,7 @@ const pendingReturnSchemaPreAuto = lazySchema(() =>
   }),
 );
 const lastFailedAttemptSchemaPreAuto = lazySchema(() =>
-  lastFailedAttemptSchema.extend({
+  lastFailedAttemptSchemaPreWaitResume.extend({
     failedTuple: chatRunSettingsSchemaPreAuto.nullable(),
   }),
 );
@@ -2115,6 +2219,16 @@ const chatSubscribeTurnStateChangedServerFrameSchemaPreAuto = lazySchema(() =>
     pendingReturn: pendingReturnSchemaPreAuto.optional(),
     lastFailedAttempt: lastFailedAttemptSchemaPreAuto.optional(),
   }),
+);
+
+// The same frame as `1.13`-`1.17` ship it: the live frame with the failed
+// attempt frozen before `1.18`'s `waitResumesAt`. `.extend` over the existing
+// key keeps its position, so the shape moves by that nested key alone.
+const chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume = lazySchema(
+  () =>
+    chatSubscribeTurnStateChangedServerFrameSchema.extend({
+      lastFailedAttempt: lastFailedAttemptSchemaPreWaitResume.optional(),
+    }),
 );
 
 /**
@@ -2704,8 +2818,25 @@ const chatSubscribeCommonServerFrameSchemasV116 =
     },
   });
 
-// The live common frames (`chat.subscribe@1.17`): the queued prompt item
-// names the machine it was sent from.
+// `chat.subscribe@1.17`'s common frames: the live set with the queue as it was
+// before `1.18` added `pausedReason`, the one axis `1.18` adds here.
+const chatSubscribeCommonServerFrameSchemasV117 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchema,
+    queue: chatQueueStateSchemaPrePausedReason,
+    event: chatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchema,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
+  });
+
+// The live common frames (`chat.subscribe@1.18`): the queue says why it is
+// paused.
 const chatSubscribeCommonServerFrameSchemas =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
@@ -2817,6 +2948,15 @@ const chatSubscribeSharedServerFrameSchemasV115 = [
 const chatSubscribeSharedServerFrameSchemasV116 = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasV116,
+  blockDeltaServerFrameSchema(runtimeEventSchema),
+];
+// `chat.subscribe@1.17`'s shared frames: the live list with the
+// pre-`pausedReason` queue. `blockDelta` stays live: `provider_notice.upsert`
+// carries its own field list, not the notice metadata, so `1.18`'s receipt
+// never reaches it.
+const chatSubscribeSharedServerFrameSchemasV117 = [
+  messageDeliveryChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasV117,
   blockDeltaServerFrameSchema(runtimeEventSchema),
 ];
 const chatSubscribeSharedServerFrameSchemas = [
@@ -4859,10 +4999,11 @@ const chatWindowedSnapshotSchemaV113 = lazySchema(() =>
     derived: chatTranscriptDerivedSchema,
     // Re-widened here and only here: `1.10` froze the fallback tuples pre-`auto`
     // and `1.11` inherited that freeze, so `1.13` is where a tuple may name the
-    // mode again.
+    // mode again. The failed attempt binds its pre-`waitResumesAt` freeze,
+    // which `1.14`-`1.17` inherit and only the live line re-widens.
     pendingFallback: pendingFallbackSchema.optional(),
     pendingReturn: pendingReturnSchema.optional(),
-    lastFailedAttempt: lastFailedAttemptSchema.optional(),
+    lastFailedAttempt: lastFailedAttemptSchemaPreWaitResume.optional(),
   }),
 );
 
@@ -4881,10 +5022,12 @@ const chatWindowedSnapshotSchemaV114 = lazySchema(() =>
 );
 // The windowed snapshot as `chat.subscribe@1.15` ships it: `1.14` plus the
 // message delivery state and the delivery-aware tail, with the pre-tier card.
+// The tail is the pre-receipt one, which `1.16` and `1.17` inherit and only
+// the live line re-widens.
 const chatWindowedSnapshotSchemaV115 = lazySchema(() =>
   chatWindowedSnapshotSchemaV114.extend({
     messageDelivery: chatMessageDeliverySchema.nullable().optional(),
-    tail: chatTranscriptWindowSchema,
+    tail: chatTranscriptWindowSchemaPreReceipt,
   }),
 );
 // The windowed snapshot as `chat.subscribe@1.16` ships it: `1.15` with the
@@ -4896,11 +5039,23 @@ const chatWindowedSnapshotSchemaV116 = lazySchema(() =>
     pendingApprovals: z.array(chatApprovalStateSchema),
   }),
 );
-// The live windowed snapshot (`chat.subscribe@1.17`): `1.16` with the queue
-// re-widened so its prompt item names the machine it was sent from.
-export const chatWindowedSnapshotSchema = lazySchema(() =>
+// The windowed snapshot as `chat.subscribe@1.17` ships it: `1.16` with the
+// queue re-widened so its prompt item names the machine it was sent from, but
+// without the `pausedReason` `1.18` added to the queue.
+const chatWindowedSnapshotSchemaV117 = lazySchema(() =>
   chatWindowedSnapshotSchemaV116.extend({
+    queue: chatQueueStateSchemaPrePausedReason,
+  }),
+);
+// The live windowed snapshot (`chat.subscribe@1.18`): `1.17` with the queue's
+// `pausedReason`, a tail whose notices may carry a settled `receipt`, and a
+// failed attempt that names when its wait would resume (`waitResumesAt`). All
+// three are existing keys, so `.extend` keeps their positions.
+export const chatWindowedSnapshotSchema = lazySchema(() =>
+  chatWindowedSnapshotSchemaV117.extend({
     queue: chatQueueStateSchema,
+    tail: chatTranscriptWindowSchema,
+    lastFailedAttempt: lastFailedAttemptSchema.optional(),
   }),
 );
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
@@ -5026,6 +5181,18 @@ const chatSubscribeRangeServerFrameSchemaPreBrowser = lazySchema(() =>
   }),
 );
 
+// The same frame as `1.15`-`1.17` ship it: a scrolled-back row is the second
+// channel a settled notice's `receipt` could reach those lines on, frozen for
+// the reason the snapshot's `tail` is.
+const chatSubscribeRangeServerFrameSchemaPreReceipt = lazySchema(() =>
+  z.object({
+    kind: z.literal("range"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    range: chatRangeResponseSchemaPreReceipt,
+  }),
+);
+
 const chatRangeResponseSchemaV18 = lazySchema(() =>
   z.object({
     // Reuse this unchanged scalar validator, not the live response's field set.
@@ -5052,7 +5219,7 @@ const chatSubscribeServerFrameSchemaV114 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -5061,7 +5228,8 @@ const chatSubscribeServerFrameSchemaV114 = lazySchema(() =>
 );
 
 // `chat.subscribe@1.15`'s server frames: the live union with the pre-tier
-// approval card, on the snapshot and on the approval frames alike.
+// approval card, on the snapshot and on the approval frames alike, and the
+// pre-receipt message bodies on the tail and on `range`.
 const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchema.extend({
@@ -5070,8 +5238,8 @@ const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
     chatSubscribeSkeletonChunkServerFrameSchema,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchema,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPreReceipt,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -5080,7 +5248,8 @@ const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
 );
 
 // `chat.subscribe@1.16`'s server frames: the live union with the
-// pre-sender-host prompt item, on the snapshot and on the queue frames alike.
+// pre-sender-host prompt item, on the snapshot and on the queue frames alike,
+// and the pre-receipt message bodies.
 const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchema.extend({
@@ -5089,12 +5258,34 @@ const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
     chatSubscribeSkeletonChunkServerFrameSchema,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchema,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPreReceipt,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasV116,
+  ]),
+);
+
+// `chat.subscribe@1.17`'s server frames: the live union without the three keys
+// `1.18` added - the queue's `pausedReason` (on the snapshot and on
+// `queueChanged`), a notice's `receipt` (on the tail and on `range`), and the
+// failed attempt's `waitResumesAt` (on the snapshot and on `turnStateChanged`,
+// a freeze `1.13`-`1.16` share).
+const chatSubscribeServerFrameSchemaV117 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV117,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaPreReceipt,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV117,
   ]),
 );
 
@@ -5265,7 +5456,7 @@ const chatSubscribeServerFrameSchemaV113 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasV113,
@@ -5747,10 +5938,68 @@ export const chatSubscribeV116 = defineStreamRpcContract({
  * a peer whether the key can be present - and because the checkpoint gate
  * freezes every line but the newest, so adding the key to `1.13`–`1.16` in
  * place moved their captured surfaces.
+ *
+ * Frozen at the pre-`pausedReason` queue and the pre-receipt message bodies
+ * since `1.18` opened above it (`chatSubscribeServerFrameSchemaV117`). Its
+ * client frames are `1.18`'s, unchanged: both keys are host-authored.
  */
 export const chatSubscribeV117 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 17 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV117,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The model-routing line.
+ *
+ * `1.18` adds three optional keys, and deliberately no union member:
+ *
+ *   - `receipt` on a provider notice's metadata
+ *     (`providerNoticeMetadataSchema`): the structured account of a traversal
+ *     that ended - the rendered cause and one row per hop - carried on the one
+ *     `fallback_settled` notice a failure settlement writes. Every superseded
+ *     `fallback_settled` notice carries `null` and every other notice `null`
+ *     or nothing, which is what lets the settled card key on the receipt
+ *     rather than the kind;
+ *   - `pausedReason` on the queue (`chatQueueStateSchema`): why the host paused
+ *     it, as an open string, so a client stops inferring "paused after an
+ *     error" from state that cannot tell it from a hand pause;
+ *   - `waitResumesAt` on the failed attempt (`lastFailedAttemptSchema`): when
+ *     the card's wait would resume, the host's deadline rather than the
+ *     provider's boundary, so the card offers the time the press arms.
+ *
+ * What an old DECODER tolerates: all three keys. Each is
+ * `.nullable().optional()` inside a non-strict object, so a `<=1.17` peer's
+ * decoder - the frozen `1.13`-`1.17` schemas, which hold none of them, and for
+ * `waitResumesAt` the `1.10`-`1.12` ones as well - drops a key it does not
+ * know as an unknown member and keeps the row, the queue and the card. A new
+ * notice KIND or metadata ARM would instead fail an old peer's whole row,
+ * which is why neither is used.
+ *
+ * What the PRODUCER sends differs by key. `receipt` and `pausedReason` are
+ * written at every minor and nothing projects them away, so that tolerance is
+ * what a `<=1.17` peer actually exercises: the settled notice degrades to the
+ * divider it rendered before, the pill to the generic one. `waitResumesAt` is
+ * sent from `1.18` only - the host's per-line projection withholds it below
+ * that minor, by name - so a `<=1.17` peer of a current host never receives
+ * it and keeps the wait button on the provider's boundary; its decoder's
+ * tolerance covers only a producer that did send it.
+ *
+ * A `1.18` client reading a `<=1.17` host's frame sees the keys absent:
+ * `receipt` and `pausedReason` it reads as `null`, and a missing
+ * `waitResumesAt` sends the card back to `failure.resetsAt`.
+ *
+ * Optional rather than defaulted for the `turnProfile` reason (see the keys'
+ * own comments): absence means "not recorded", and a defaulted key would be
+ * required on every object literal of its type.
+ *
+ * The client frames are `1.17`'s, unchanged.
+ */
+export const chatSubscribeV118 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 18 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

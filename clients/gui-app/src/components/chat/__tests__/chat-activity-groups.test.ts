@@ -1749,6 +1749,7 @@ function providerNoticeSegment(
   return {
     id,
     kind: "provider_notice",
+    receipt: null,
     status: "completed",
     noticeKind: "model_rerouted",
     tone: "info",

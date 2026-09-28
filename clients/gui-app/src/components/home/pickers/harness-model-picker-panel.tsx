@@ -29,8 +29,10 @@ import {
   useCallback,
   useState,
   type KeyboardEvent,
+  type ReactNode,
   type RefObject,
 } from "react";
+import { cn } from "@/lib/utils";
 import {
   HarnessModelPickerModelSettingsFooter,
   type ReasoningFooterConfig,
@@ -134,7 +136,18 @@ interface HarnessModelPickerPanelProps extends HarnessModelPickerPanelBodyProps 
    * returns focus to the surface's face instead.
    */
   readonly closeFocusesComposer: boolean;
+  /** An embedding's own footer, under the effort footer; `null` for none. */
+  readonly footer: ReactNode | null;
 }
+
+/**
+ * The picker's own box: search, rail, list and effort footer. A composer's
+ * popover IS this box; an embedding's footer goes under it rather than inside
+ * it, so the popover grows by the footer and the list keeps the composer's
+ * height. Written once so the two can never disagree.
+ */
+const PICKER_BODY_HEIGHT =
+  "h-[min(var(--radix-popover-content-available-height),23rem)]";
 
 /** The picker's popover: the body in its Radix surface. */
 export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
@@ -145,6 +158,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     onQueryChange,
     onKeyDown,
     closeFocusesComposer,
+    footer,
     ...body
   } = props;
 
@@ -161,7 +175,12 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
       // `isAnyDialogOpen` in keybinding-provider.tsx).
       data-leader-scope={LEADER_SCOPE_MODEL_PICKER}
       layout="panel"
-      className="h-[min(var(--radix-popover-content-available-height),23rem)] w-[min(86vw,30rem)]"
+      className={cn(
+        footer === null
+          ? PICKER_BODY_HEIGHT
+          : "max-h-[var(--radix-popover-content-available-height)]",
+        "w-[min(86vw,30rem)]",
+      )}
       // Return focus to the composer editor (not the trigger pill) on close so
       // the user can keep typing after picking a model. No-op on surfaces with
       // no registered composer (e.g. the terminal launcher), where Radix's
@@ -177,7 +196,10 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
       // open-autofocus takes it whether or not the panel's search effect runs.
       // Both halves have to move together or the gate is a no-op.
       onOpenAutoFocus={coarseOpenAutoFocus}
-      onKeyDown={onKeyDown}
+      onKeyDown={(event) => {
+        if (isInsideEmbeddingFooter(event.target)) return;
+        onKeyDown(event);
+      }}
       onEscapeKeyDown={(event) => {
         if (trimmedQuery.length === 0) return;
         event.preventDefault();
@@ -187,7 +209,21 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
         if (isProfileUsageSidecarTarget(event.target)) event.preventDefault();
       }}
     >
-      <HarnessModelPickerPanelBody {...body} onQueryChange={onQueryChange} />
+      {footer === null ? (
+        <HarnessModelPickerPanelBody {...body} onQueryChange={onQueryChange} />
+      ) : (
+        <>
+          <div className={cn("flex min-h-0 flex-col", PICKER_BODY_HEIGHT)}>
+            <HarnessModelPickerPanelBody
+              {...body}
+              onQueryChange={onQueryChange}
+            />
+          </div>
+          <div data-picker-embedding-footer="" className="shrink-0">
+            {footer}
+          </div>
+        </>
+      )}
     </PopoverContent>
   );
 }
@@ -370,5 +406,15 @@ export function HarnessModelPickerPanelBody(
         </div>
       </div>
     </>
+  );
+}
+
+/** The embedding footer's subtree, which the list key handling skips. */
+const EMBEDDING_FOOTER_SELECTOR = "[data-picker-embedding-footer]";
+
+function isInsideEmbeddingFooter(target: EventTarget): boolean {
+  return (
+    target instanceof Element &&
+    target.closest(EMBEDDING_FOOTER_SELECTOR) !== null
   );
 }

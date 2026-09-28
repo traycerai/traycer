@@ -468,7 +468,15 @@ function lastFailedAttemptFixture() {
     // a fixture that used it would round-trip the ABSENCE of a tuple and never
     // prove the nested `chatRunSettings` shape survives this line.
     failedTuple: chatRunSettingsFixture("claude-sonnet-5"),
+    // Later than `resetsAt` (boundary + 60 s margin + per-chat jitter) and in a
+    // different minute, so a client that named the boundary instead is visible.
+    waitResumesAt: 1_700_000_600_000 + 60_000 + 45_000,
   };
+}
+
+function lastFailedAttemptFixtureWithoutWaitResumesAt() {
+  const { waitResumesAt: _omitted, ...rest } = lastFailedAttemptFixture();
+  return rest;
 }
 
 function assertLastFailedFixtureMatchesSchema() {
@@ -482,7 +490,7 @@ describe("chat.subscribe@1.10 carries a fully-populated lastFailedAttempt", () =
     assertLastFailedFixtureMatchesSchema();
   });
 
-  it("round-trips lastFailedAttempt intact on a snapshot frame", () => {
+  it("round-trips lastFailedAttempt on a snapshot frame, less 1.18's waitResumesAt", () => {
     const lastFailedAttempt = lastFailedAttemptFixture();
     const parsed = chatSubscribeV110.serverFrameSchema.parse(
       frame("snapshot", {
@@ -490,10 +498,16 @@ describe("chat.subscribe@1.10 carries a fully-populated lastFailedAttempt", () =
       }),
     );
     if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
-    expect(parsed.snapshot.lastFailedAttempt).toEqual(lastFailedAttempt);
+    // 1.10 is frozen: it strips `waitResumesAt`, everything else survives.
+    expect(parsed.snapshot.lastFailedAttempt).toEqual(
+      lastFailedAttemptFixtureWithoutWaitResumesAt(),
+    );
+    expect(
+      Object.hasOwn(parsed.snapshot.lastFailedAttempt ?? {}, "waitResumesAt"),
+    ).toBe(false);
   });
 
-  it("round-trips lastFailedAttempt intact on a turnStateChanged frame", () => {
+  it("round-trips lastFailedAttempt on a turnStateChanged frame, less 1.18's waitResumesAt", () => {
     const lastFailedAttempt = lastFailedAttemptFixture();
     const parsed = chatSubscribeV110.serverFrameSchema.parse(
       frame("turnStateChanged", {
@@ -505,7 +519,12 @@ describe("chat.subscribe@1.10 carries a fully-populated lastFailedAttempt", () =
     if (parsed.kind !== "turnStateChanged") {
       throw new Error("expected turnStateChanged");
     }
-    expect(parsed.lastFailedAttempt).toEqual(lastFailedAttempt);
+    expect(parsed.lastFailedAttempt).toEqual(
+      lastFailedAttemptFixtureWithoutWaitResumesAt(),
+    );
+    expect(Object.hasOwn(parsed.lastFailedAttempt ?? {}, "waitResumesAt")).toBe(
+      false,
+    );
   });
 
   it("chatWindowedSnapshotSchema retains lastFailedAttempt intact", () => {
@@ -604,6 +623,86 @@ describe("every frozen chat.subscribe line tolerates lastFailedAttempt without g
         ).toBe(false);
       });
     });
+  }
+});
+
+// ─── `waitResumesAt` on lastFailedAttempt ─────────────────────────────────
+//
+// Additive on the LIVE line 1.18 only. Lines 1.10-1.17 bind a hand-frozen
+// `lastFailedAttemptSchemaPreWaitResume`, so they parse the key and strip it.
+
+function waitResumesFrames(waitResumesAt: number | null) {
+  const lastFailedAttempt = { ...lastFailedAttemptFixture(), waitResumesAt };
+  return {
+    snapshot: frame("snapshot", {
+      snapshot: { ...baseWindowedSnapshot(), lastFailedAttempt },
+    }),
+    turnStateChanged: frame("turnStateChanged", {
+      runStatus: "running",
+      activeTurn: null,
+      lastFailedAttempt,
+    }),
+  };
+}
+
+function lastFailedAttemptOf(parsed: unknown): object {
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new Error("expected a frame object");
+  }
+  const direct =
+    "lastFailedAttempt" in parsed ? parsed.lastFailedAttempt : null;
+  const viaSnapshot =
+    "snapshot" in parsed &&
+    typeof parsed.snapshot === "object" &&
+    parsed.snapshot !== null &&
+    "lastFailedAttempt" in parsed.snapshot
+      ? parsed.snapshot.lastFailedAttempt
+      : null;
+  const found = direct ?? viaSnapshot;
+  if (typeof found !== "object" || found === null) {
+    throw new Error("expected lastFailedAttempt on the parsed frame");
+  }
+  return found;
+}
+
+describe("frozen chat.subscribe@1.10-1.17 strip lastFailedAttempt.waitResumesAt", () => {
+  for (const minor of [10, 11, 12, 13, 14, 15, 16, 17]) {
+    describe(`chat.subscribe@1.${minor}`, () => {
+      const { contract } = chatSubscribeLine.versions[minor];
+
+      for (const kind of ["snapshot", "turnStateChanged"] as const) {
+        it(`parses a ${kind} frame carrying waitResumesAt and strips the key`, () => {
+          const result = contract.serverFrameSchema.safeParse(
+            waitResumesFrames(1_700_000_705_000)[kind],
+          );
+          expect(result.success).toBe(true);
+          if (!result.success) return;
+          const attempt = lastFailedAttemptOf(result.data);
+          expect(Object.hasOwn(attempt, "waitResumesAt")).toBe(false);
+          // The rest of the attempt survived: only the one key was dropped.
+          expect(Object.hasOwn(attempt, "eligibleRungs")).toBe(true);
+        });
+      }
+    });
+  }
+});
+
+describe("live chat.subscribe@1.18 carries lastFailedAttempt.waitResumesAt intact", () => {
+  const { contract } = chatSubscribeLine.versions[18];
+
+  for (const value of [1_700_000_705_000, null]) {
+    for (const kind of ["snapshot", "turnStateChanged"] as const) {
+      it(`round-trips waitResumesAt=${String(value)} on a ${kind} frame`, () => {
+        const parsed = contract.serverFrameSchema.parse(
+          waitResumesFrames(value)[kind],
+        );
+        const attempt = lastFailedAttemptOf(parsed);
+        expect(Object.hasOwn(attempt, "waitResumesAt")).toBe(true);
+        expect(
+          "waitResumesAt" in attempt ? attempt.waitResumesAt : undefined,
+        ).toBe(value);
+      });
+    }
   }
 });
 

@@ -140,6 +140,8 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
     "boolean included in the fixed store charge",
   autoPermissionModeProtocolSupported:
     "small scalar included in the fixed store charge",
+  queuePauseReasonProtocolSupported:
+    "small scalar included in the fixed store charge",
   turnInProgress: "boolean included in the fixed store charge",
   pendingApprovals: "charged by chatWholeSetSliceBytes",
   pendingFileEditApprovals: "charged by chatWholeSetSliceBytes",
@@ -150,6 +152,7 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   accumulatedFileChangeCount: "counter included in the fixed store charge",
   coldRewrittenMessageIds: true,
   jumpTargetOrdinal: "ordinal included in the fixed store charge",
+  findReadOrdinal: "ordinal included in the fixed store charge",
   accumulatedFileChangeSummaries: true,
   accumulatedSummaryGenerationSeated:
     "boolean included in the fixed store charge",

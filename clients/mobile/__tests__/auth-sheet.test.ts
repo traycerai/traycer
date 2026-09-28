@@ -315,7 +315,7 @@ describe("MobileAuthSheet", () => {
       sheet.onReturn(handler);
       await flush();
 
-      app.fire("https://platform.traycer.ai/link?code=ABCDE-FGHJK");
+      app.fire("https://traycer.ai/link?code=ABCDE-FGHJK");
       app.fire("traycer-staging://auth/callback");
 
       expect(handler).not.toHaveBeenCalled();

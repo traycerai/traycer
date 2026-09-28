@@ -29,8 +29,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import { computeInitials } from "@/lib/auth/compute-initials";
-import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -82,13 +81,12 @@ export function UserMenuAvatar(props: {
  */
 export function UserMenu(props: UserMenuProps) {
   const placement = useColumnOverlayPlacement("foot");
-  const runnerHost = useRunnerHost();
   const openLink = useOpenLink();
   const [open, setOpen] = useState<boolean>(false);
   const [signOutOpen, setSignOutOpen] = useState<boolean>(false);
   const settingsChord = useBindingForAction("app.settings.open");
   useTitleBarDragSuppression("user-menu", open);
-  const manageSubscriptionUrl = resolvePlatformBaseUrl(runnerHost.signInUrl);
+  const manageSubscriptionUrl = usePlatformBillingUrl();
   return (
     <>
       {/* Outside the menu, which Radix unmounts on select - the confirm has to

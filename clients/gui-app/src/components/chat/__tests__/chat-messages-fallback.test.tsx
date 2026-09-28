@@ -6,6 +6,7 @@ import {
   renderHook,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";
@@ -72,6 +73,7 @@ import { FRESH_SESSION_HELPER } from "@/components/chat/fallback/fallback-copy";
 import { usePublishConfirmedManualFallbackAction } from "@/components/chat/fallback/use-confirmed-manual-action";
 import { usePublishUnattendedFallbackOutcome } from "@/components/chat/fallback/use-unattended-fallback-outcome";
 import { useFallbackRunManualRung } from "@/components/chat/fallback/use-fallback-actions";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
 import { ChatComposerFallbackBanners } from "@/components/chat/fallback/chat-composer-fallback-banners";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -290,6 +292,7 @@ function providerNoticeSegment(input: {
   return {
     id: input.id,
     kind: "provider_notice",
+    receipt: null,
     status: "completed",
     noticeKind: input.noticeKind,
     tone: "info",
@@ -698,7 +701,7 @@ const runManualRungState = vi.hoisted(() => ({
   // working unchanged; only the unmount-survival test below swaps in a
   // controllable deferred promise.
   handler: (): Promise<RunManualRungResponse> =>
-    Promise.resolve({ outcome: "applied" }),
+    Promise.resolve({ outcome: "applied", detail: null }),
   callCount: { current: 0 },
 }));
 
@@ -748,9 +751,62 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+// The routing chooser (opened from the waiting card's "Choose another model…")
+// reads the host through these hooks. The picker suites' shared doubles stand
+// in for them here, and nothing else changes: the store, the announcer and the
+// pick's mutation lifecycle - what this file proves - stay real.
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", async () =>
+  (await import("../fallback/__tests__/routing-picker-kit")).catalogModule(),
+);
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).providersEnsurePackModule(),
+);
+vi.mock(
+  "@/hooks/providers/use-providers-set-profile-enabled-mutation",
+  async () =>
+    (
+      await import("../fallback/__tests__/routing-picker-kit")
+    ).providersSetProfileEnabledModule(),
+);
+vi.mock("@/hooks/host/use-reactive-host-readiness", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).reactiveHostReadinessModule(),
+);
+vi.mock("@/hooks/agent/use-host-reachability", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).hostReachabilityModule(),
+);
+vi.mock("@/hooks/host/use-addressable-host-id", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).addressableHostIdModule(),
+);
+vi.mock("@/hooks/host/use-host-directory-entry", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).hostDirectoryEntryModule(),
+);
+vi.mock("@/hooks/host/use-host-directory-list-query", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).hostDirectoryListModule(),
+);
+vi.mock("@/hooks/rate-limits/use-profile-usage-comparison", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).usageComparisonModule(),
+);
+vi.mock("react-virtuoso", async () =>
+  (await import("../fallback/__tests__/routing-picker-kit")).virtuosoModule(),
+);
+
 /**
  * `useFallbackModelLabels` alone, kept real everywhere else in the module -
- * same double as `fallback-grace-card.test.tsx`, and for the same reason:
+ * same double as the retired grace-card suite used, and for the same reason:
  * this file's real `HostClient`/`MockHostMessenger` has no
  * `agent.gui.listHarnesses`/`agent.gui.listModels` handler, so the real hook
  * would hit an unhandled-method `HostRpcError` on every mount - which is
@@ -763,6 +819,16 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
  */
 const modelLabelOverride = vi.hoisted(() => ({
   value: null as ReadonlyMap<string, string> | null,
+  // The real catalogues hook resolves only the harnesses its caller asked
+  // for at render. Off by default so every other case keeps resolving any
+  // tuple; the case that pins the announcer's render-time subjects turns it on.
+  askedOnly: false,
+  // Every `useFallbackModelCatalogues` call, in order: what was asked about
+  // and whether the reads were enabled.
+  calls: [] as Array<{
+    readonly harnessIds: ReadonlyArray<string>;
+    readonly enabled: boolean;
+  }>,
 }));
 
 /**
@@ -800,6 +866,27 @@ vi.mock(
       >();
     const labelFor = (harnessId: string, model: string): string =>
       modelLabelOverride.value?.get(`${harnessId}:${model}`) ?? model;
+    // One resolver per asked-for set, so its identity is as stable as the
+    // real hook's and a re-render does not read as a catalogue landing.
+    const askedResolvers = new Map<
+      string,
+      (harnessId: string, model: string) => string
+    >();
+    const labelForAsked = (
+      harnessIdsInPlay: ReadonlyArray<string | null>,
+    ): ((harnessId: string, model: string) => string) => {
+      const key = harnessIdsInPlay
+        .flatMap((id) => (id === null ? [] : [id]))
+        .sort()
+        .join(" ");
+      const known = askedResolvers.get(key);
+      if (known !== undefined) return known;
+      const asked = new Set(key.split(" "));
+      const resolver = (harnessId: string, model: string): string =>
+        asked.has(harnessId) ? labelFor(harnessId, model) : model;
+      askedResolvers.set(key, resolver);
+      return resolver;
+    };
     return {
       ...actual,
       // BOTH exports, deliberately. `useFallbackModelLabels` is a thin wrapper
@@ -810,10 +897,24 @@ vi.mock(
       // (that the two cannot print one tuple two ways) resting on two
       // different resolvers, which is the agreement it exists to disprove.
       useFallbackModelLabels: () => labelFor,
-      useFallbackModelCatalogues: () => ({
-        labelFor,
-        settledFor: catalogueSettled.settledFor,
-      }),
+      useFallbackModelCatalogues: (
+        _client: unknown,
+        harnessIdsInPlay: ReadonlyArray<string | null>,
+        enabled: boolean,
+      ) => {
+        modelLabelOverride.calls.push({
+          harnessIds: harnessIdsInPlay.flatMap((id) =>
+            id === null ? [] : [id],
+          ),
+          enabled,
+        });
+        return {
+          labelFor: modelLabelOverride.askedOnly
+            ? labelForAsked(harnessIdsInPlay)
+            : labelFor,
+          settledFor: catalogueSettled.settledFor,
+        };
+      },
     };
   },
 );
@@ -848,7 +949,10 @@ vi.mock("@/components/chat/fallback/use-fallback-targets", () => ({
   useFallbackListTargets: () => ({
     data: CHOOSE_TARGET_LIST_DATA,
     isPending: false,
+    isFetching: false,
     isError: false,
+    // The picker refetches on open; the listing here is fixed.
+    refetch: () => Promise.resolve(),
   }),
 }));
 
@@ -958,6 +1062,7 @@ function chatScene(
           messages={state.messages}
           transcriptWindow={state.transcriptWindow}
           onVisibleOrdinalRangeChange={() => undefined}
+          onFindReadOrdinalChange={() => undefined}
           baselineEpoch={state.baselineEpoch}
           hydrationSequence={state.hydrationSequence}
           coldRewrittenMessageIds={state.coldRewrittenMessageIds}
@@ -1029,18 +1134,20 @@ function renderBanners(
 ) {
   const result = render(
     <QueryClientProvider client={queryClient}>
-      <ChatComposerBannerPortalProvider>
-        <ChatComposerFallbackBanners
-          topBannerKind="fallback"
-          fallback={{ pending, pendingReturn: undefined }}
-          rateLimitAdvisory={null}
-          client={liveHostClient}
-          chatId={CHAT_ID}
-          epicId={EPIC_ID}
-          hostId={HOST_ID}
-          canAct
-        />
-      </ChatComposerBannerPortalProvider>
+      <TabHostProvider hostId={HOST_ID}>
+        <ChatComposerBannerPortalProvider>
+          <ChatComposerFallbackBanners
+            topBannerKind="fallback"
+            fallback={{ pending, pendingReturn: undefined }}
+            rateLimitAdvisory={null}
+            client={liveHostClient}
+            chatId={CHAT_ID}
+            epicId={EPIC_ID}
+            hostId={HOST_ID}
+            canAct
+          />
+        </ChatComposerBannerPortalProvider>
+      </TabHostProvider>
     </QueryClientProvider>,
   );
   return {
@@ -1048,18 +1155,20 @@ function renderBanners(
     rerenderWith: (nextPending: PendingFallback | undefined) => {
       result.rerender(
         <QueryClientProvider client={queryClient}>
-          <ChatComposerBannerPortalProvider>
-            <ChatComposerFallbackBanners
-              topBannerKind="fallback"
-              fallback={{ pending: nextPending, pendingReturn: undefined }}
-              rateLimitAdvisory={null}
-              client={liveHostClient}
-              chatId={CHAT_ID}
-              epicId={EPIC_ID}
-              hostId={HOST_ID}
-              canAct
-            />
-          </ChatComposerBannerPortalProvider>
+          <TabHostProvider hostId={HOST_ID}>
+            <ChatComposerBannerPortalProvider>
+              <ChatComposerFallbackBanners
+                topBannerKind="fallback"
+                fallback={{ pending: nextPending, pendingReturn: undefined }}
+                rateLimitAdvisory={null}
+                client={liveHostClient}
+                chatId={CHAT_ID}
+                epicId={EPIC_ID}
+                hostId={HOST_ID}
+                canAct
+              />
+            </ChatComposerBannerPortalProvider>
+          </TabHostProvider>
         </QueryClientProvider>,
       );
     },
@@ -1252,9 +1361,12 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // default (right, shown) is what this file always wanted here.
     useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     useSettingsStore.setState({ quoteReplyEnabled: false });
-    runManualRungState.handler = () => Promise.resolve({ outcome: "applied" });
+    runManualRungState.handler = () =>
+      Promise.resolve({ outcome: "applied", detail: null });
     runManualRungState.callCount.current = 0;
     modelLabelOverride.value = null;
+    modelLabelOverride.askedOnly = false;
+    modelLabelOverride.calls = [];
     catalogueSettled.value = true;
     catalogueSettled.settledFor = mintCatalogueSettledFor();
     disposeAllChatSessions();
@@ -1312,10 +1424,9 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     await flushAnnouncer();
     const holdText = liveRegionText();
     expect(holdText).toContain(`The chat will switch to ${TARGET_IDENTITY}.`);
-    expect(holdText).toContain(FRESH_SESSION_HELPER);
-    expect(holdText).toContain(
-      "2 queued messages will run on the new settings too.",
-    );
+    // The card's count clause as a sentence; never a sentence the card cut.
+    expect(holdText).toContain("2 queued messages move with it.");
+    expect(holdText).not.toContain(FRESH_SESSION_HELPER);
     expect(holdText).toContain("You have 12 seconds to cancel.");
     // No focus theft: the announcer is a live region, not a focus target.
     expect(document.activeElement).toBe(focusProbe);
@@ -1388,12 +1499,9 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // (not span presence) also catches the real queue joining several
     // pending entries into ONE span and duplicating the sentence inside it,
     // either within a single batch or across separate commits.
-    expect(
-      countSentenceOccurrences(
-        noticeCommits,
-        `Switched providers. To: ${TARGET_IDENTITY}`,
-      ),
-    ).toBe(1);
+    expect(countSentenceOccurrences(noticeCommits, "Switched providers")).toBe(
+      1,
+    );
 
     // A RETURN offer - independent channel, names the preferred identity.
     setTurnState(
@@ -1408,9 +1516,9 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     );
     await flushAnnouncer();
     const returnText = liveRegionText();
-    expect(returnText).toContain(PREFERRED_IDENTITY);
-    expect(returnText).toContain("is available again");
-    expect(returnText).toContain("and moves 1 queued message back");
+    expect(returnText).toContain(`Switch back to ${PREFERRED_IDENTITY}?`);
+    expect(returnText).toContain("Switching back moves 1 queued message back.");
+    expect(returnText).not.toContain(FRESH_SESSION_HELPER);
 
     // Falsification: drop the `impendingAction.target` fallback in F5's
     // `pendingFallbackDestinationTuple` identity helper and the HOLD
@@ -2015,7 +2123,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // the QueryClient's mutation cache, not by the unmounted component) is
     // what must still fire.
     await act(async () => {
-      firstDeferred.resolve({ outcome: "applied" });
+      firstDeferred.resolve({ outcome: "applied", detail: null });
       await firstDeferred.promise;
     });
     await flushAnnouncer();
@@ -2054,7 +2162,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     });
     secondTrigger.unmount();
     await act(async () => {
-      secondDeferred.resolve({ outcome: "applied" });
+      secondDeferred.resolve({ outcome: "applied", detail: null });
       await secondDeferred.promise;
     });
     await flushAnnouncer();
@@ -2345,7 +2453,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
     const chat = renderChat(baselineEpoch, undefined);
     runManualRungState.handler = () =>
-      Promise.resolve({ outcome: "no_active_traversal" });
+      Promise.resolve({ outcome: "no_active_traversal", detail: null });
     const trigger = renderTrigger(
       {
         userMessageId: "user-msg-refused",
@@ -2420,11 +2528,13 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       const deferred = makeDeferred<ChooseTargetResponse>();
       chooseTargetState.handler = () => deferred.promise;
 
-      fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Choose another model…" }),
+      );
+      // The chooser stages a pick and the footer's Switch sends it.
+      fireEvent.click(screen.getByRole("option", { name: /GPT-4\.1/ }));
       act(() => {
-        fireEvent.click(
-          screen.getByRole("button", { name: /gpt-6-astra-mini/ }),
-        );
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
       });
 
       // The RPC stays unresolved. The PARENT transitions to "switching" -
@@ -2433,9 +2543,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       // point of this pin is that production transition, not a test-driven
       // teardown.
       banners.rerenderWith(switchingPending(2));
-      expect(
-        screen.queryByRole("button", { name: /gpt-6-astra-mini/ }),
-      ).toBeNull();
+      expect(screen.queryByRole("option", { name: /GPT-4\.1/ })).toBeNull();
 
       const commits = await captureLiveRegionCommits(() => {
         deferred.resolve({ outcome: "traversal_advanced" });
@@ -2482,11 +2590,13 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       const deferred = makeDeferred<ChooseTargetResponse>();
       chooseTargetState.handler = () => deferred.promise;
 
-      fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Choose another model…" }),
+      );
+      // The chooser stages a pick and the footer's Switch sends it.
+      fireEvent.click(screen.getByRole("option", { name: /GPT-4\.1/ }));
       act(() => {
-        fireEvent.click(
-          screen.getByRole("button", { name: /gpt-6-astra-mini/ }),
-        );
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
       });
       banners.rerenderWith(switchingPending(2));
 
@@ -2513,11 +2623,13 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       const deferred = makeDeferred<ChooseTargetResponse>();
       chooseTargetState.handler = () => deferred.promise;
 
-      fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Choose another model…" }),
+      );
+      // The chooser stages a pick and the footer's Switch sends it.
+      fireEvent.click(screen.getByRole("option", { name: /GPT-4\.1/ }));
       act(() => {
-        fireEvent.click(
-          screen.getByRole("button", { name: /gpt-6-astra-mini/ }),
-        );
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
       });
       // Deliberately NO parent transition here - the menu stays mounted and
       // OPEN (`inlineMenuOpen: true`) for the whole test, which is what stops
@@ -2531,8 +2643,15 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       expect(
         harness.handle.store.getState().unattendedFallbackOutcome,
       ).toBeNull();
-      // The menu's OWN inline line is what actually reports this refusal.
-      expect(screen.getByText("This chat already resumed.")).toBeDefined();
+      // The menu's OWN inline line is what actually reports this refusal: its
+      // live region (the visible copy beside it is aria-hidden).
+      expect(
+        within(screen.getByRole("dialog"))
+          .getAllByRole("status")
+          .some(
+            (region) => region.textContent === "This chat already resumed.",
+          ),
+      ).toBe(true);
     });
   });
 
@@ -2603,7 +2722,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       sequence: 1,
     };
   }
-  const D224_HELD_TEXT = `Switched providers. To: ${TARGET_IDENTITY}`;
+  const D224_HELD_TEXT = "Switched providers";
 
   // A genuinely different block, used only by the negative case's retained
   // "still speaks live afterward" tail.
@@ -2618,7 +2737,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       sequence: 7,
     };
   }
-  const D224_FOLLOWUP_TEXT = `Fallback settled. Now on: ${TARGET_IDENTITY}`;
+  const D224_FOLLOWUP_TEXT = "Fallback settled";
 
   it("D224 (unchanged epoch): a real unmount with NO reconnect while gone, remounted, then a genuinely DEFERRED (unhydrated-tail) held outcome speaks exactly once, and completing the tail afterward does not replay it", async () => {
     const { harness, epoch } = establishD224Baseline();
@@ -2848,7 +2967,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       sequence: 1,
     };
   }
-  const R1_EVENTUAL_TEXT = `Switched providers. To: ${TARGET_IDENTITY}`;
+  const R1_EVENTUAL_TEXT = "Switched providers";
 
   const R1_ASSISTANT_SENDER: AgentSender = {
     type: "agent",
@@ -3121,9 +3240,220 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // and (module-mocked) the exact same resolver function the announcer
     // above just read.
     renderBanners(pending, chat.queryClient);
-    const card = screen.getByTestId("fallback-grace-card").textContent;
+    const card = screen.getByTestId("routing-card").textContent;
     expect(card).toContain("Astra Mini");
     expect(card).not.toContain(TARGET_TUPLE.model);
+  });
+
+  it("a countdown whose first frame already names its destination is announced once, by its resolved name - never the slug first", async () => {
+    // Falsification: observe the store event against the resolvers of the
+    // render BEFORE it (asked about no harness) and the plan is spoken twice,
+    // "gpt-6-astra-mini · high" and then "Astra Mini · high" (seen live).
+    modelLabelOverride.askedOnly = true;
+    modelLabelOverride.value = new Map([
+      [`${TARGET_TUPLE.harnessId}:${TARGET_TUPLE.model}`, "Astra Mini"],
+    ]);
+    const harness = createHarness();
+    registerHarness(harness);
+    const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+    renderChat(baselineEpoch, undefined);
+
+    const commits = await captureLiveRegionCommits(() => {
+      setTurnState(
+        harness,
+        pendingFallback({
+          state: "hold",
+          traversalId: "trav-named",
+          revision: 1,
+          deadline: Date.now() + 15_000,
+          targetTuple: null,
+          impendingAction: impendingAction({
+            planId: "plan-named",
+            rung: "tier",
+            target: TARGET_TUPLE,
+            resumesAt: null,
+            pending: null,
+          }),
+          queuedItemsMoving: 0,
+        }),
+        undefined,
+        undefined,
+      );
+    });
+    expect(countSentenceOccurrences(commits, "The chat will switch to")).toBe(
+      1,
+    );
+    expect(
+      countSentenceOccurrences(
+        commits,
+        `The chat will switch to Astra Mini · high on ${TARGET_PROFILE_LABEL}.`,
+      ),
+    ).toBe(1);
+    expect(commits.join(" ")).not.toContain(TARGET_TUPLE.model);
+  });
+
+  /**
+   * F8: a burst that INTRODUCES a harness and moves past it before React
+   * renders. The deferred frame naming it is drained by the render of the
+   * burst's LAST state, so its harness has to be asked about by that render
+   * even though the final state no longer names it - otherwise a catalogue
+   * already warm in the cache is never read and the slug is spoken.
+   */
+  describe("F8: a deferred frame's harness is asked about until the frame is spoken", () => {
+    const B_TUPLE: ChatRunSettings = {
+      harnessId: "claude",
+      model: "claude-opus-5",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: "acct-south",
+    };
+    const C_TUPLE: ChatRunSettings = {
+      harnessId: "opencode",
+      model: "grok-code-fast",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: "acct-south",
+    };
+    const B_SENTENCE = `Switching this chat to Claude Code · Opus 5 on ${TARGET_PROFILE_LABEL}.`;
+
+    function waitingOnA(): PendingFallback {
+      return pendingFallback({
+        state: "waiting",
+        traversalId: "trav-f8",
+        revision: 1,
+        deadline: Date.now() + 3_600_000,
+        targetTuple: null,
+        impendingAction: null,
+        queuedItemsMoving: 0,
+      });
+    }
+
+    function switchingToB(): PendingFallback {
+      return pendingFallback({
+        state: "switching",
+        traversalId: "trav-f8",
+        revision: 2,
+        deadline: null,
+        targetTuple: B_TUPLE,
+        impendingAction: null,
+        queuedItemsMoving: 0,
+      });
+    }
+
+    async function renderWaitingOnA(
+      labels: ReadonlyMap<string, string>,
+    ): Promise<Harness> {
+      modelLabelOverride.askedOnly = true;
+      modelLabelOverride.value = labels;
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(
+        harness,
+        waitingOnA(),
+        undefined,
+        undefined,
+      );
+      renderChat(baselineEpoch, undefined);
+      await flushAnnouncer();
+      return harness;
+    }
+
+    const WARM_LABELS: ReadonlyMap<string, string> = new Map([
+      [`${B_TUPLE.harnessId}:${B_TUPLE.model}`, "Opus 5"],
+      [`${C_TUPLE.harnessId}:${C_TUPLE.model}`, "Grok Code Fast"],
+    ]);
+
+    it("A → B → cleared in one batch: B's switch is spoken once, by its label", async () => {
+      const harness = await renderWaitingOnA(WARM_LABELS);
+      const commits = await captureLiveRegionCommits(() => {
+        setTurnState(harness, switchingToB(), undefined, undefined);
+        setTurnState(harness, undefined, undefined, undefined);
+      });
+      // Falsification: drain the deferred frame with resolvers asked only
+      // about the final (fallback-free) state and this reads
+      // "Switching this chat to Claude Code · claude-opus-5 on acct-sou."
+      expect(countSentenceOccurrences(commits, "Switching this chat to")).toBe(
+        1,
+      );
+      expect(countSentenceOccurrences(commits, B_SENTENCE)).toBe(1);
+      expect(commits.join(" ")).not.toContain(B_TUPLE.model);
+    });
+
+    it("the drain render asks about B with its reads on, and B is let go once the frame is spoken", async () => {
+      const harness = await renderWaitingOnA(WARM_LABELS);
+      modelLabelOverride.calls = [];
+      await captureLiveRegionCommits(() => {
+        setTurnState(harness, switchingToB(), undefined, undefined);
+        setTurnState(harness, undefined, undefined, undefined);
+      });
+      await flushAnnouncer();
+      const calls = modelLabelOverride.calls;
+      // The final state names no fallback, so only the queued frame can have
+      // put B in the request - and with the reads on, or a cold slot never
+      // loads.
+      expect(
+        calls.some(
+          (call) => call.enabled && call.harnessIds.includes(B_TUPLE.harnessId),
+        ),
+      ).toBe(true);
+      // Released: the last render asks about nobody and reads nothing.
+      expect(calls.at(-1)).toEqual({ harnessIds: [], enabled: false });
+    });
+
+    it("a catalogue still cold when the frame is spoken names the slug once - the announcement is not held for it", async () => {
+      // No label for B: asked about, not answered. A countdown is not held for
+      // a network read; the frame is spoken now, once, in order.
+      const harness = await renderWaitingOnA(new Map());
+      const commits = await captureLiveRegionCommits(() => {
+        setTurnState(harness, switchingToB(), undefined, undefined);
+        setTurnState(harness, undefined, undefined, undefined);
+      });
+      expect(commits).toEqual([
+        `Switching this chat to Claude Code · ${B_TUPLE.model} on ${TARGET_PROFILE_LABEL}.`,
+      ]);
+    });
+
+    it("A → B → C in one batch: both destinations are spoken by label, in order", async () => {
+      const harness = await renderWaitingOnA(WARM_LABELS);
+      const commits = await captureLiveRegionCommits(() => {
+        setTurnState(harness, switchingToB(), undefined, undefined);
+        setTurnState(
+          harness,
+          pendingFallback({
+            state: "hold",
+            traversalId: "trav-f8",
+            revision: 3,
+            deadline: Date.now() + 15_000,
+            targetTuple: null,
+            impendingAction: impendingAction({
+              planId: "plan-f8-c",
+              rung: "tier",
+              target: C_TUPLE,
+              resumesAt: null,
+              pending: null,
+            }),
+            queuedItemsMoving: 0,
+          }),
+          undefined,
+          undefined,
+        );
+      });
+      const joined = commits.join(" ");
+      expect(countSentenceOccurrences(commits, B_SENTENCE)).toBe(1);
+      expect(countSentenceOccurrences(commits, "The chat will switch to")).toBe(
+        1,
+      );
+      expect(joined).toContain("Grok Code Fast");
+      expect(joined.indexOf(B_SENTENCE)).toBeLessThan(
+        joined.indexOf("The chat will switch to"),
+      );
+      expect(joined).not.toContain(B_TUPLE.model);
+      expect(joined).not.toContain(C_TUPLE.model);
+    });
   });
 
   /**

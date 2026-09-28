@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -26,6 +27,7 @@ import {
 } from "@/lib/host";
 import { setMobileApp } from "@/lib/mobile-app";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
@@ -154,6 +156,7 @@ describe("<UserMenu />", () => {
     cleanup();
     setMobileApp(false);
     useAuthStore.getState().setSignedOut();
+    useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
     useTitleBarDragStore.setState({ suppressors: new Set() });
     useDesktopDialogStore.getState().close();
     restoreFetch();
@@ -249,6 +252,66 @@ describe("<UserMenu />", () => {
     await screen.findByTestId("user-menu-identity");
 
     expect(screen.getByTestId("user-menu-manage-subscription")).toBeTruthy();
+    result.cleanupClient();
+  });
+
+  it("opens the personal Billing page from Manage subscription", async () => {
+    const host = buildHost();
+    const result = mountMenu(
+      host,
+      <UserMenu
+        userName="Ada Lovelace"
+        email="ada@example.com"
+        avatarUrl={null}
+        showAppSettings={false}
+        trigger={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId("user-menu-trigger"));
+    fireEvent.click(await screen.findByTestId("user-menu-manage-subscription"));
+
+    // The platform origin's root is the marketing homepage, so the item names
+    // the Billing page on the shell's configured origin.
+    await waitFor(() => {
+      expect(host.openedExternalLinks).toEqual([
+        "https://auth.traycer.invalid/billing",
+      ]);
+    });
+    result.cleanupClient();
+  });
+
+  it("opens the selected team's Billing page from Manage subscription", async () => {
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-1" },
+    });
+    const host = buildHost();
+    const result = mountMenu(
+      host,
+      <UserMenu
+        userName="Ada Lovelace"
+        email="ada@example.com"
+        avatarUrl={null}
+        showAppSettings={false}
+        trigger={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId("user-menu-trigger"));
+    // Set once mounted: this harness's auth bootstrap settles on signed-out,
+    // which clears the projected teams it finds at mount.
+    act(() => {
+      useAuthStore.setState({
+        shareableTeams: [{ teamId: "team-1", slug: "acme", avatarUrl: null }],
+      });
+    });
+    fireEvent.click(await screen.findByTestId("user-menu-manage-subscription"));
+
+    await waitFor(() => {
+      expect(host.openedExternalLinks).toEqual([
+        "https://auth.traycer.invalid/team/acme/billing",
+      ]);
+    });
     result.cleanupClient();
   });
 
