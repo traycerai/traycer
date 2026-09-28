@@ -298,14 +298,14 @@ describe("scheduleFinalizationHelper", () => {
     expect(body).not.toContain("Start-Service");
   });
 
-  it("sizes the launcher's STARTUPINFO via the instance Marshal.SizeOf overload, not the Type-literal one", async () => {
-    // Windows PowerShell 5.1's `Marshal::SizeOf` cannot marshal a
-    // `[TraycerStartupInfo]` type literal as the argument - that overload
-    // resolves to `SizeOf(Type)`, and passing a `RuntimeType` object through
-    // PowerShell's type coercion throws. `SizeOf($startupInfo)` (the actual
-    // struct instance) resolves to the `SizeOf(Object)` overload instead,
-    // which works. The launcher must size `.cb` off the instance it already
-    // constructed, never off the type.
+  it("sizes the launcher's native STARTUPINFO/PROCESS_INFORMATION buffers off a fixed pointer-width byte count, never a marshaled struct", async () => {
+    // The launcher no longer marshals a `TraycerStartupInfo` struct at all -
+    // Windows PowerShell 5.1's `Marshal::SizeOf` cannot marshal a type
+    // literal (`SizeOf(Type)` chokes on a `RuntimeType` argument), so the
+    // native-binding rewrite sidesteps the whole struct-marshaling path:
+    // STARTUPINFO/PROCESS_INFORMATION are raw `AllocHGlobal` buffers sized
+    // off the documented x86/x64 byte layout, never a `[SomeType]::new()` +
+    // `Marshal]::SizeOf(...)` struct instance.
     const harness = makeHarness({
       sentinel: "4321",
       exited: Promise.resolve(LAUNCHER_OK),
@@ -319,11 +319,13 @@ describe("scheduleFinalizationHelper", () => {
       armWait: fakeArmWait(10_000).deps,
     });
     const launcher = decodeLauncher(harness.spawnCalls[0]?.args ?? []);
-    expect(launcher).toMatch(/Marshal\]::SizeOf\(\$\w+\)/);
-    expect(launcher).not.toMatch(/Marshal\]::SizeOf\(\[\w+\]\)/);
+    expect(launcher).not.toMatch(/Marshal\]::SizeOf/);
+    expect(launcher).not.toContain("StartupInfo]::new()");
+    expect(launcher).toMatch(/\$startupSize\s*=\s*if\s*\(\[IntPtr\]::Size/);
+    expect(launcher).toContain("AllocHGlobal($startupSize)");
   });
 
-  it("captures CreateProcessW's failure code inside the compiled C# wrapper, never via a separate PowerShell-side Marshal.GetLastWin32Error call", async () => {
+  it("captures CreateProcessW's failure code inside the emitted native wrapper, never via a separate PowerShell-side Marshal.GetLastWin32Error call", async () => {
     // Confirmed on a Windows PowerShell 5.1 VM: querying
     // [Marshal]::GetLastWin32Error() from PowerShell AFTER the CreateProcessW
     // P/Invoke returns reads a clobbered value (123 / 203 observed instead of
@@ -331,10 +333,14 @@ describe("scheduleFinalizationHelper", () => {
     // calls (evaluating the `if`, formatting, etc.) overwrite the thread's
     // last-error slot before the script gets to read it. The only reliable
     // capture point is IMMEDIATELY after the native call, inside the same
-    // compiled C# method - no PowerShell interpreter frames run in between -
-    // so the failure code must come back as an output of a C# wrapper call
-    // (e.g. an out-parameter), never from the PowerShell script re-querying
-    // GetLastWin32Error on its own afterwards.
+    // emitted method - no PowerShell interpreter frames run in between - so
+    // the failure code must come back as that method's own return value,
+    // never from the PowerShell script re-querying GetLastWin32Error itself
+    // afterwards. The bindings are now built via in-memory
+    // `System.Reflection.Emit`, not `Add-Type`, so the emitted-method body
+    // and the surrounding PowerShell orchestration are told apart by the
+    // `New-TraycerNativeType` function boundary rather than an
+    // `Add-Type -TypeDefinition` block.
     const harness = makeHarness({
       sentinel: "4321",
       exited: Promise.resolve(LAUNCHER_OK),
@@ -348,20 +354,250 @@ describe("scheduleFinalizationHelper", () => {
       armWait: fakeArmWait(10_000).deps,
     });
     const launcher = decodeLauncher(harness.spawnCalls[0]?.args ?? []);
-    const typeDefMatch = /Add-Type -TypeDefinition @'([\s\S]*?)'@/.exec(
+    const emitFnMatch = /function New-TraycerNativeType \{[\s\S]*?\n\}/.exec(
       launcher,
     );
-    expect(typeDefMatch).not.toBeNull();
-    const csharpType = typeDefMatch?.[1] ?? "";
+    expect(emitFnMatch).not.toBeNull();
+    const emitScript = emitFnMatch?.[0] ?? "";
     const orchestration = launcher.slice(
-      (typeDefMatch?.index ?? 0) + (typeDefMatch?.[0]?.length ?? 0),
+      (emitFnMatch?.index ?? 0) + (emitFnMatch?.[0]?.length ?? 0),
     );
-    // The compiled C# type must itself call GetLastWin32Error - proving the
+    // The emitted IL must itself call GetLastWin32Error - proving the
     // capture happens in native-adjacent, uninterrupted code.
-    expect(csharpType).toMatch(/GetLastWin32Error/);
-    // The PowerShell orchestration around the Add-Type block must NOT query
-    // it again itself - that second, later query is the unreliable one.
+    expect(emitScript).toMatch(/GetLastWin32Error/);
+    // The PowerShell orchestration that invokes the emitted method must NOT
+    // query it again itself - that second, later query is the unreliable one.
     expect(orchestration).not.toMatch(/Marshal\]::GetLastWin32Error/);
+  });
+
+  it("builds the Windows launcher's native bindings with in-memory Reflection.Emit, never Add-Type/csc", async () => {
+    // Windows PowerShell 5.1's `Add-Type -TypeDefinition` shells out to
+    // csc.exe, which writes compiler temp files under the process TEMP
+    // path. Confirmed on a Windows VM: when that TEMP path contains CJK
+    // characters, `Add-Type` throws a Win32Exception before the launcher
+    // ever gets a chance to write any marker - the failure is silent and
+    // undiagnosable. The launcher must build its native P/Invoke bindings
+    // entirely via `System.Reflection.Emit` (an in-memory dynamic assembly),
+    // with zero dependency on an external compiler process or its temp
+    // files.
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    const launcher = decodeLauncher(harness.spawnCalls[0]?.args ?? []);
+    expect(launcher).not.toContain("Add-Type");
+    expect(launcher).not.toContain("-TypeDefinition");
+    expect(launcher).toMatch(/System\.Reflection\.Emit/);
+    expect(launcher).toMatch(/DefineDynamicAssembly/);
+  });
+
+  it("writes a fixed 'launcher-failed' marker for a runtime failure that happens before CreateProcessW is ever attempted", async () => {
+    // Building the native bindings in-memory still runs PowerShell code
+    // that can throw (e.g. a hostile CLR policy, an out-of-memory
+    // DefineDynamicAssembly call) before CreateProcessW is reached. That
+    // failure must land as a prompt, fixed, recognized `.not-armed` reason
+    // - never a raw, unbounded exception message - so the reader can act on
+    // it the same way it acts on `create-denied`/`create-failed`.
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    const launcher = decodeLauncher(harness.spawnCalls[0]?.args ?? []);
+    // The whole native-binding + CreateProcessW attempt must be wrapped so
+    // any failure before (or during) it falls through to one fixed write,
+    // not an echo of whatever `$_` the runtime threw.
+    expect(launcher).toContain("try {");
+    expect(launcher).toContain("} catch {");
+    expect(launcher).toMatch(
+      /WriteAllText\(\$notArmedPath,\s*'launcher-failed'\)/,
+    );
+    // The catch-all write must sit inside the outer catch block (the first
+    // one in the script), not inline with the CreateProcessW-specific
+    // create-denied/create-failed branch.
+    const catchIdx = launcher.indexOf("} catch {");
+    const launcherFailedIdx = launcher.indexOf("launcher-failed");
+    expect(catchIdx).toBeGreaterThan(-1);
+    expect(launcherFailedIdx).toBeGreaterThan(catchIdx);
+  });
+
+  it("recognizes the launcher's fixed 'launcher-failed' reason as a distinct, known refusal - not the generic unrecognized-content fallback", async () => {
+    // `readNotArmedReason` maps a closed set of fixed strings written by the
+    // launcher/helper to known reasons, and anything else to a fixed
+    // `unrecognized-refusal` label - it never echoes arbitrary file content
+    // into the result. `launcher-failed` must be a first-class member of
+    // that known set (distinguishable from both `create-failed` and the
+    // unrecognized-content fallback), since it identifies a fundamentally
+    // different failure point (before CreateProcessW is ever attempted).
+    const writeCalls: Array<{ path: string; body: string }> = [];
+    const spawnImpl = (
+      _command: string,
+      _args: readonly string[],
+      _options: unknown,
+    ) => {
+      const scriptPath = writeCalls[0]?.path ?? "";
+      const notArmedPath = scriptPath.replace(/\.(ps1|sh)$/, ".not-armed");
+      writeFileSync(notArmedPath, "launcher-failed");
+      return {
+        pid: 1,
+        unref: () => undefined,
+        kill: () => undefined,
+        exited: Promise.resolve(LAUNCHER_OK),
+      };
+    };
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl,
+      writeImpl: async (path, body) => {
+        writeCalls.push({ path, body });
+      },
+      armWait: clock.deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("launcher-failed");
+    expect(result.errorMessage).not.toContain("unrecognized-refusal");
+    expect(clock.elapsedMs()).toBeLessThanOrEqual(100);
+  });
+
+  it("falls back to a fixed unrecognized-refusal label, never echoing raw file content, for an unknown '.not-armed' reason", async () => {
+    const writeCalls: Array<{ path: string; body: string }> = [];
+    const secretLookingPayload =
+      "unexpected PowerShell trace: password=hunter2 at line 42";
+    const spawnImpl = (
+      _command: string,
+      _args: readonly string[],
+      _options: unknown,
+    ) => {
+      const scriptPath = writeCalls[0]?.path ?? "";
+      const notArmedPath = scriptPath.replace(/\.(ps1|sh)$/, ".not-armed");
+      writeFileSync(notArmedPath, secretLookingPayload);
+      return {
+        pid: 1,
+        unref: () => undefined,
+        kill: () => undefined,
+        exited: Promise.resolve(LAUNCHER_OK),
+      };
+    };
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl,
+      writeImpl: async (path, body) => {
+        writeCalls.push({ path, body });
+      },
+      armWait: clock.deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("unrecognized-refusal");
+    expect(result.errorMessage).not.toContain(secretLookingPayload);
+    expect(result.errorMessage).not.toContain("hunter2");
+  });
+
+  it("builds the Windows helper's job-membership check with in-memory Reflection.Emit, never Add-Type/csc", async () => {
+    // Same CJK-TEMP failure mode as the launcher applies to the helper's
+    // own `IsProcessInJob` guard: `Add-Type` there must also be replaced
+    // with in-memory `System.Reflection.Emit` bindings, so a hostile TEMP
+    // path can't take down the arm guard before it ever runs.
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    const body = harness.writeCalls[0]?.body ?? "";
+    expect(body).not.toContain("Add-Type");
+    expect(body).not.toContain("-TypeDefinition");
+    expect(body).toMatch(/System\.Reflection\.Emit/);
+    expect(body).toMatch(/DefineDynamicAssembly/);
+    expect(body).toContain("IsProcessInJob");
+  });
+
+  it("emits each native P/Invoke method via DefineMethod + a complete DllImport attribute, never DefinePInvokeMethod (W-H5)", async () => {
+    // W-H5 (conclusive): `TypeBuilder.DefinePInvokeMethod` and a
+    // hand-attached `DllImportAttribute` custom attribute on the SAME
+    // method are two independent, overlapping descriptions of the same
+    // P/Invoke - `DefinePInvokeMethod` already implies its own interop
+    // metadata from the arguments it's given (entry point, calling
+    // convention, char set), and layering a second, manually built
+    // `DllImportAttribute` on top of that is undefined/fragile. The fix is
+    // to stop using `DefinePInvokeMethod` entirely and build every native
+    // method as a plain `DefineMethod` (flagged `PinvokeImpl`) carrying
+    // exactly ONE complete, manually constructed `DllImportAttribute` that
+    // itself carries every field that matters here: `EntryPoint`,
+    // `CharSet`, `CallingConvention`, `ExactSpelling` and `SetLastError`.
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    const launcher = decodeLauncher(harness.spawnCalls[0]?.args ?? []);
+    const helperBody = harness.writeCalls[0]?.body ?? "";
+    for (const [label, script] of [
+      ["launcher", launcher],
+      ["helper", helperBody],
+    ] as const) {
+      expect(script, `${label}: must not use DefinePInvokeMethod`).not.toMatch(
+        /DefinePInvokeMethod/,
+      );
+      expect(
+        script,
+        `${label}: must build native methods via DefineMethod`,
+      ).toMatch(/DefineMethod\(/);
+      expect(
+        script,
+        `${label}: the emitted native method must be flagged PinvokeImpl`,
+      ).toMatch(/MethodAttributes\]::PinvokeImpl/);
+      // One complete DllImportAttribute, every field named:
+      for (const field of [
+        "EntryPoint",
+        "CharSet",
+        "CallingConvention",
+        "ExactSpelling",
+        "SetLastError",
+      ]) {
+        expect(
+          script,
+          `${label}: DllImportAttribute must carry ${field}`,
+        ).toMatch(new RegExp(`GetField\\(['"]${field}['"]\\)`));
+      }
+      expect(
+        script,
+        `${label}: must reference DllImportAttribute itself`,
+      ).toMatch(/DllImportAttribute/);
+    }
   });
 
   it("gates the Windows helper's arm write on IsProcessInJob, deriving a sibling '.not-armed' path for the still-in-a-job and query-error branches", async () => {
@@ -652,8 +888,12 @@ describe("scheduleFinalizationHelper", () => {
     const launcher = decodeLauncher(args);
     expect(launcher).not.toContain("Start-Process");
     expect(launcher).toContain("CreateProcessW");
-    // The single-quoted literal between the concatenated pieces.
-    const literal = /-File "' \+ '((?:[^']|'')*)' \+ '"'\)/.exec(launcher);
+    // The single-quoted literal between the concatenated pieces. The
+    // concatenation now spans a line break between the operator and the
+    // literal, so whitespace (including the newline) separates them.
+    const literal = /-File "'\s*\+\s*'((?:[^']|'')*)'\s*\+\s*'"'/.exec(
+      launcher,
+    );
     expect(literal).not.toBeNull();
     const undoubled = (literal?.[1] ?? "").replace(/(['‘-‛])\1/g, "$1");
     expect(undoubled).toBe(scriptPath);

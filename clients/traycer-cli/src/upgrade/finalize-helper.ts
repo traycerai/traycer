@@ -169,9 +169,10 @@ export interface HelperArmWaitDeps {
   readonly pollIntervalMs: number;
 }
 
-// On the Windows review VM, six Node -> launcher -> breakaway runs with a
-// stand-in child that compiles the same job check and calls IsProcessInJob
-// reached its marker in 687.51-718.77 ms (15.6 ms clock resolution).
+// On the Windows review VM, four runs of the exact generated launcher and a
+// stand-in helper using the production arm guard reached `.armed` in
+// 725.96-1028.60 ms (upper bounds from Node invocation), including CJK TEMP.
+// This measures the fixture handoff, not the full production helper.
 // Keep the 10 s bound for slow PowerShell starts under antivirus, while a
 // helper that never runs still brings the host back in seconds.
 // The whole wait runs with the host stopped and the CLI lock held.
@@ -435,6 +436,7 @@ type NotArmedReason =
   | "job-check-failed"
   | "create-denied"
   | "create-failed"
+  | "launcher-failed"
   | "unrecognized-refusal";
 
 // The helper and launcher write only these fixed reason codes. Treat any
@@ -453,7 +455,8 @@ async function readNotArmedReason(
     reason === "in-job" ||
     reason === "job-check-failed" ||
     reason === "create-denied" ||
-    reason === "create-failed"
+    reason === "create-failed" ||
+    reason === "launcher-failed"
   ) {
     return reason;
   }
@@ -550,111 +553,160 @@ function buildSpawnDescriptor(opts: {
   };
 }
 
-// Add-Type compiles this in the short-lived launcher. CreateProcessW is
-// needed because Start-Process does not request breakaway from an outer job
-// (notably an ssh session's kill-on-close job). The STARTUPINFO layout is
-// the documented Win32 layout on both 32- and 64-bit Windows.
-const WINDOWS_CREATE_PROCESS_TYPE = `using System;
-using System.Runtime.InteropServices;
-using System.Text;
-
-[StructLayout(LayoutKind.Sequential)]
-public struct TraycerStartupInfo {
-    public uint cb;
-    public IntPtr lpReserved;
-    public IntPtr lpDesktop;
-    public IntPtr lpTitle;
-    public uint dwX;
-    public uint dwY;
-    public uint dwXSize;
-    public uint dwYSize;
-    public uint dwXCountChars;
-    public uint dwYCountChars;
-    public uint dwFillAttribute;
-    public uint dwFlags;
-    public ushort wShowWindow;
-    public ushort cbReserved2;
-    public IntPtr lpReserved2;
-    public IntPtr hStdInput;
-    public IntPtr hStdOutput;
-    public IntPtr hStdError;
-}
-
-[StructLayout(LayoutKind.Sequential)]
-public struct TraycerProcessInformation {
-    public IntPtr hProcess;
-    public IntPtr hThread;
-    public uint dwProcessId;
-    public uint dwThreadId;
-}
-
-public static class TraycerCreateProcess {
-    public const uint CREATE_BREAKAWAY_FROM_JOB = 0x01000000;
-    public const uint CREATE_NO_WINDOW = 0x08000000;
-
-    [DllImport("kernel32.dll", EntryPoint = "CreateProcessW", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CreateProcessNative(
-        string applicationName, StringBuilder commandLine,
-        IntPtr processAttributes, IntPtr threadAttributes,
-        [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,
-        uint creationFlags, IntPtr environment, IntPtr currentDirectory,
-        ref TraycerStartupInfo startupInfo,
-        out TraycerProcessInformation processInformation);
-
-    public static bool TryCreateProcess(
-        string applicationName, StringBuilder commandLine,
-        IntPtr processAttributes, IntPtr threadAttributes,
-        bool inheritHandles,
-        uint creationFlags, IntPtr environment, IntPtr currentDirectory,
-        ref TraycerStartupInfo startupInfo,
-        out TraycerProcessInformation processInformation,
-        out int win32Error) {
-        bool created = CreateProcessNative(
-            applicationName, commandLine, processAttributes,
-            threadAttributes, inheritHandles, creationFlags, environment,
-            currentDirectory, ref startupInfo, out processInformation);
-        win32Error = created ? 0 : Marshal.GetLastWin32Error();
-        return created;
+// Build only in-memory P/Invoke metadata. Windows PowerShell 5.1's Add-Type
+// invokes a compiler through TEMP, which can fail before the launcher runs
+// when a user profile or chosen TEMP path contains non-ASCII characters.
+const WINDOWS_NATIVE_EMIT_SCRIPT = `function New-TraycerNativeType {
+  param([string]$Name, [object[]]$Methods)
+  $assemblyName = [System.Reflection.AssemblyName]::new($Name)
+  $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly(
+    $assemblyName, [System.Reflection.Emit.AssemblyBuilderAccess]::Run)
+  $module = $assembly.DefineDynamicModule($Name)
+  $typeFlags = [System.Reflection.TypeAttributes]::Public -bor
+    [System.Reflection.TypeAttributes]::Sealed -bor
+    [System.Reflection.TypeAttributes]::Abstract
+  $builder = $module.DefineType($Name, $typeFlags)
+  $methodFlags = [System.Reflection.MethodAttributes]::Public -bor
+    [System.Reflection.MethodAttributes]::Static -bor
+    [System.Reflection.MethodAttributes]::PinvokeImpl
+  $importCtor = [System.Runtime.InteropServices.DllImportAttribute].GetConstructor([type[]]@([string]))
+  $importFields = [System.Reflection.FieldInfo[]]@(
+    [System.Runtime.InteropServices.DllImportAttribute].GetField('SetLastError'),
+    [System.Runtime.InteropServices.DllImportAttribute].GetField('EntryPoint'),
+    [System.Runtime.InteropServices.DllImportAttribute].GetField('CharSet'),
+    [System.Runtime.InteropServices.DllImportAttribute].GetField('CallingConvention'),
+    [System.Runtime.InteropServices.DllImportAttribute].GetField('ExactSpelling'))
+  $createMethod = $null
+  $createParameters = $null
+  foreach ($spec in $Methods) {
+    $parameters = [type[]]$spec.ParameterTypes
+    # The convenience P/Invoke API writes an import map before SetCustomAttribute.
+    # On .NET Framework that first map keeps SetLastError=false even when
+    # the later DllImport attribute says true. DefineMethod plus ONE full
+    # import attribute preserves the native error for the immediate wrapper.
+    $method = $builder.DefineMethod(
+      $spec.Name, $methodFlags, $spec.ReturnType, $parameters)
+    $import = [System.Reflection.Emit.CustomAttributeBuilder]::new(
+      $importCtor, [object[]]@('kernel32.dll'), $importFields,
+      [object[]]@(
+        $true, $spec.EntryPoint,
+        [System.Runtime.InteropServices.CharSet]::Unicode,
+        [System.Runtime.InteropServices.CallingConvention]::Winapi, $true))
+    $method.SetCustomAttribute($import)
+    $method.SetImplementationFlags(
+      $method.GetMethodImplementationFlags() -bor
+      [System.Reflection.MethodImplAttributes]::PreserveSig)
+    if ($spec.Name -eq 'CreateProcessNative') {
+      $createMethod = $method
+      $createParameters = $parameters
     }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool CloseHandle(IntPtr handle);
+  }
+  if ($null -ne $createMethod) {
+    # Capture Marshal's saved native error in the same emitted method as
+    # CreateProcessW. PowerShell calls between the P/Invoke and a later
+    # GetLastWin32Error query clobber it on Windows PowerShell 5.1.
+    $wrapperFlags = [System.Reflection.MethodAttributes]::Public -bor
+      [System.Reflection.MethodAttributes]::Static
+    $wrapper = $builder.DefineMethod(
+      'TryCreateProcess', $wrapperFlags, [int], $createParameters)
+    $il = $wrapper.GetILGenerator()
+    for ($index = 0; $index -lt $createParameters.Length; $index++) {
+      $il.Emit([System.Reflection.Emit.OpCodes]::Ldarg_S, [byte]$index)
+    }
+    $il.Emit([System.Reflection.Emit.OpCodes]::Call, $createMethod)
+    $failed = $il.DefineLabel()
+    $il.Emit([System.Reflection.Emit.OpCodes]::Brfalse_S, $failed)
+    $il.Emit([System.Reflection.Emit.OpCodes]::Ldc_I4_0)
+    $il.Emit([System.Reflection.Emit.OpCodes]::Ret)
+    $il.MarkLabel($failed)
+    $errorMethod = [System.Runtime.InteropServices.Marshal].GetMethod(
+      'GetLastWin32Error', [type[]]@())
+    $il.Emit([System.Reflection.Emit.OpCodes]::Call, $errorMethod)
+    $il.Emit([System.Reflection.Emit.OpCodes]::Ret)
+  }
+  return $builder.CreateType()
 }`;
 
-// The Windows launcher's whole script. `Join-Path $PSHOME` starts the
-// helper under the same Windows PowerShell as the launcher. The encoded
-// launcher is the only command-line argument the CLI constructs; the
-// helper path becomes a quoted UTF-16 argument inside it. Windows paths
-// cannot contain a double quote.
+// The command and STARTUPINFO are allocated as native Unicode buffers.
+// Keeping the P/Invoke signature primitive avoids another emitted struct
+// layout, while the offsets below are the documented x86/x64 Win32 layouts.
 function renderWindowsLauncherScript(
   scriptPath: string,
   notArmedPath: string,
 ): string {
-  return [
-    "$ErrorActionPreference = 'Stop'",
-    "Add-Type -TypeDefinition @'",
-    WINDOWS_CREATE_PROCESS_TYPE,
-    "'@",
-    "$powershellExe = Join-Path $PSHOME 'powershell.exe'",
-    `$commandLine = [System.Text.StringBuilder]::new('"' + $powershellExe + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ${psString(scriptPath)} + '"')`,
-    `$notArmedPath = ${psString(notArmedPath)}`,
-    "$startupInfo = [TraycerStartupInfo]::new()",
-    "$startupInfo.cb = [uint32][System.Runtime.InteropServices.Marshal]::SizeOf($startupInfo)",
-    "$processInfo = [TraycerProcessInformation]::new()",
-    "$createError = 0",
-    "$flags = [uint32]([TraycerCreateProcess]::CREATE_BREAKAWAY_FROM_JOB -bor [TraycerCreateProcess]::CREATE_NO_WINDOW)",
-    "$created = [TraycerCreateProcess]::TryCreateProcess($powershellExe, $commandLine, [IntPtr]::Zero, [IntPtr]::Zero, $false, $flags, [IntPtr]::Zero, [IntPtr]::Zero, [ref]$startupInfo, [ref]$processInfo, [ref]$createError)",
-    "if (-not $created) {",
-    "  $reason = if ($createError -eq 5) { 'create-denied' } else { 'create-failed' }",
-    "  [System.IO.File]::WriteAllText($notArmedPath, $reason)",
-    "  exit 1",
-    "}",
-    "[TraycerCreateProcess]::CloseHandle($processInfo.hThread) | Out-Null",
-    "[TraycerCreateProcess]::CloseHandle($processInfo.hProcess) | Out-Null",
-    "exit 0",
-  ].join("\n");
+  return `$ErrorActionPreference = 'Stop'
+$notArmedPath = ${psString(notArmedPath)}
+$application = [IntPtr]::Zero
+$command = [IntPtr]::Zero
+$startup = [IntPtr]::Zero
+$processInfo = [IntPtr]::Zero
+$exitCode = 1
+try {
+${WINDOWS_NATIVE_EMIT_SCRIPT}
+  $native = New-TraycerNativeType 'TraycerLauncherNative' @(
+    @{
+      Name = 'CreateProcessNative'
+      EntryPoint = 'CreateProcessW'
+      ReturnType = [int]
+      ParameterTypes = [type[]]@(
+        [IntPtr], [IntPtr], [IntPtr], [IntPtr], [int], [uint32],
+        [IntPtr], [IntPtr], [IntPtr], [IntPtr])
+    },
+    @{
+      Name = 'CloseHandle'
+      EntryPoint = 'CloseHandle'
+      ReturnType = [int]
+      ParameterTypes = [type[]]@([IntPtr])
+    })
+  $powershellExe = Join-Path $PSHOME 'powershell.exe'
+  $commandLine = '"' + $powershellExe +
+    '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+    ${psString(scriptPath)} + '"'
+  $application = [System.Runtime.InteropServices.Marshal]::StringToHGlobalUni($powershellExe)
+  $command = [System.Runtime.InteropServices.Marshal]::StringToHGlobalUni($commandLine)
+  $startupSize = if ([IntPtr]::Size -eq 8) { 104 } else { 68 }
+  $processInfoSize = if ([IntPtr]::Size -eq 8) { 24 } else { 16 }
+  $startup = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($startupSize)
+  $processInfo = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($processInfoSize)
+  $zeroBytes = [byte[]]([System.Array]::CreateInstance([byte], $startupSize))
+  [System.Runtime.InteropServices.Marshal]::Copy($zeroBytes, 0, $startup, $startupSize)
+  [System.Runtime.InteropServices.Marshal]::Copy($zeroBytes, 0, $processInfo, $processInfoSize)
+  [System.Runtime.InteropServices.Marshal]::WriteInt32($startup, $startupSize)
+  $flags = [uint32](0x01000000 -bor 0x08000000)
+  $createError = [int]$native.GetMethod('TryCreateProcess').Invoke(
+    $null, [object[]]@(
+      $application, $command, [IntPtr]::Zero, [IntPtr]::Zero, [int]0,
+      $flags, [IntPtr]::Zero, [IntPtr]::Zero, $startup, $processInfo))
+  if ($createError -ne 0) {
+    $reason = if ($createError -eq 5) { 'create-denied' } else { 'create-failed' }
+    [System.IO.File]::WriteAllText($notArmedPath, $reason)
+  } else {
+    $processHandle = [System.Runtime.InteropServices.Marshal]::ReadIntPtr($processInfo, 0)
+    $threadHandle = [System.Runtime.InteropServices.Marshal]::ReadIntPtr(
+      $processInfo, [IntPtr]::Size)
+    [void]$native.GetMethod('CloseHandle').Invoke($null, [object[]]@($threadHandle))
+    [void]$native.GetMethod('CloseHandle').Invoke($null, [object[]]@($processHandle))
+    $exitCode = 0
+  }
+} catch {
+  # A binding, allocation or setup failure must also be a prompt, fixed
+  # refusal. The scheduler then relaunches the host with upgrade pending.
+  try { [System.IO.File]::WriteAllText($notArmedPath, 'launcher-failed') } catch {}
+} finally {
+  if ($application -ne [IntPtr]::Zero) {
+    [System.Runtime.InteropServices.Marshal]::FreeHGlobal($application)
+  }
+  if ($command -ne [IntPtr]::Zero) {
+    [System.Runtime.InteropServices.Marshal]::FreeHGlobal($command)
+  }
+  if ($startup -ne [IntPtr]::Zero) {
+    [System.Runtime.InteropServices.Marshal]::FreeHGlobal($startup)
+  }
+  if ($processInfo -ne [IntPtr]::Zero) {
+    [System.Runtime.InteropServices.Marshal]::FreeHGlobal($processInfo)
+  }
+}
+exit $exitCode`;
 }
 
 // `powershell.exe -EncodedCommand` takes base64 of the script's UTF-16LE
@@ -667,19 +719,6 @@ const UTF8_BOM = "\uFEFF";
 
 // IsProcessInJob with a NULL job handle tests membership in any job,
 // including a nested outer job inherited after the breakaway request.
-const WINDOWS_JOB_CHECK_TYPE = `using System;
-using System.Runtime.InteropServices;
-
-public static class TraycerJobCheck {
-    [DllImport("kernel32.dll")]
-    public static extern IntPtr GetCurrentProcess();
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool IsProcessInJob(
-        IntPtr processHandle, IntPtr jobHandle,
-        [MarshalAs(UnmanagedType.Bool)] out bool inJob);
-}`;
 
 // PowerShell helper. Polls `Get-Process -Id <pid>` until the parent CLI
 // exits, then hands off the binary swap + service start to the staged
@@ -701,22 +740,49 @@ function renderWindowsHelperScript(opts: {
 }): string {
   return `${UTF8_BOM}$ErrorActionPreference = 'Stop'
 $NotArmedPath = ${psString(opts.notArmedPath)}
+$jobCheckFailed = $false
+$inJob = $true
+$resultPtr = [IntPtr]::Zero
 try {
-  Add-Type -TypeDefinition @'
-${WINDOWS_JOB_CHECK_TYPE}
-'@
-  $inJob = $false
-  if (-not [TraycerJobCheck]::IsProcessInJob([TraycerJobCheck]::GetCurrentProcess(), [IntPtr]::Zero, [ref]$inJob)) {
-    [System.IO.File]::WriteAllText($NotArmedPath, 'job-check-failed')
-    exit 1
-  }
-  if ($inJob) {
-    [System.IO.File]::WriteAllText($NotArmedPath, 'in-job')
-    exit 0
+${WINDOWS_NATIVE_EMIT_SCRIPT}
+  $native = New-TraycerNativeType 'TraycerHelperNative' @(
+    @{
+      Name = 'GetCurrentProcess'
+      EntryPoint = 'GetCurrentProcess'
+      ReturnType = [IntPtr]
+      ParameterTypes = [type[]]@()
+    },
+    @{
+      Name = 'IsProcessInJob'
+      EntryPoint = 'IsProcessInJob'
+      ReturnType = [int]
+      ParameterTypes = [type[]]@([IntPtr], [IntPtr], [IntPtr])
+    })
+  $resultPtr = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+  [System.Runtime.InteropServices.Marshal]::WriteInt32($resultPtr, 0)
+  $current = $native.GetMethod('GetCurrentProcess').Invoke(
+    $null, [object[]]@())
+  $ok = $native.GetMethod('IsProcessInJob').Invoke(
+    $null, [object[]]@($current, [IntPtr]::Zero, $resultPtr))
+  if ([int]$ok -eq 0) {
+    $jobCheckFailed = $true
+  } else {
+    $inJob = [System.Runtime.InteropServices.Marshal]::ReadInt32($resultPtr) -ne 0
   }
 } catch {
+  $jobCheckFailed = $true
+} finally {
+  if ($resultPtr -ne [IntPtr]::Zero) {
+    [System.Runtime.InteropServices.Marshal]::FreeHGlobal($resultPtr)
+  }
+}
+if ($jobCheckFailed) {
   [System.IO.File]::WriteAllText($NotArmedPath, 'job-check-failed')
   exit 1
+}
+if ($inJob) {
+  [System.IO.File]::WriteAllText($NotArmedPath, 'in-job')
+  exit 0
 }
 [System.IO.File]::WriteAllText(${psString(opts.armedPath)}, [string]$PID)
 # END ARM GUARD
