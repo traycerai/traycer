@@ -2883,6 +2883,35 @@ describe("ChatMessages scroll policy", () => {
       ).toBe(true);
     });
 
+    // The view covers the transcript visually only: without `inert`, Shift+Tab
+    // walks back into the hidden timeline's controls and a screen reader reads
+    // both conversations at once.
+    it("makes the covered timeline and its scroll pill inert while the view is open", async () => {
+      // The pill is aria-hidden while it has nothing to show, and a hidden
+      // element has no accessible name, so it is found by its label attribute.
+      const pill = (): HTMLButtonElement => {
+        const node = document.querySelector<HTMLButtonElement>(
+          'button[aria-label="Scroll to end"]',
+        );
+        if (node === null) throw new Error("scroll-to-end pill is missing");
+        return node;
+      };
+      await openView("drill-inert");
+      expect(getScrollNode().closest("[inert]")).not.toBeNull();
+      expect(pill().closest("[inert]")).not.toBeNull();
+      expect(
+        screen.getByTestId("subagent-chat-view").closest("[inert]"),
+      ).toBeNull();
+
+      fireEvent.click(screen.getByTestId("subagent-chat-back"));
+      expect(getScrollNode().closest("[inert]")).toBeNull();
+      expect(pill().closest("[inert]")).toBeNull();
+      // Focus goes back to the opening control, which is no longer inert.
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: `open ${CARD_ID}` }),
+      );
+    });
+
     it("closes on Escape and returns focus to the card's open control", async () => {
       await openView("drill-escape");
       fireEvent.keyDown(screen.getByRole("heading", { name: "Drill" }), {

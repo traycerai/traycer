@@ -4117,65 +4117,74 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               onPointerDown={handleTranscriptPointerDown}
               className="relative flex-1 overflow-hidden"
             >
-              <ChatTimeline
-                rows={listRows}
-                onVisibleRowRangeChange={onChatTimelineVisibleRowsChange}
-                taskTitle={taskTitle}
-                backgroundToolBlockIds={backgroundToolBlockIds}
-                getMessageActions={getMessageActions}
-                nextStepActions={nextStepActions}
-                listRef={chatTimelineRef}
-                onScroll={handleScroll}
-                initialScrollAtEnd={initialScrollAtEnd}
-                initialScrollIndex={initialScrollIndexAnchor}
-                contentInsetEndAdjustment={endInset}
-                onFollowIntentChange={onFollowIntentChange}
-                onReaderGesture={handleTimelineReaderGesture}
-                followLatchRef={followLatchRef}
-                isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
-                resolveSuppressedEndLanding={resolveSuppressedEndLanding}
-                navigationHighlightedMessageId={
-                  navigationHighlight?.messageId ?? null
-                }
-                navigationHighlightedBlockId={
-                  navigationHighlight?.blockId ?? null
-                }
-                rowHeightMemory={rowHeightMemory}
-                onItemSizeChanged={onChatTimelineItemSizeChanged}
-                onRowMount={onChatTimelineRowMount}
-                onListMetricsChange={onListMetricsChange}
-                data-testid="chat-messages-scroll"
-                data-scroll-mode={scrollMode}
-              />
-              {/* The minimap rail is untappable on touch and its hover-expand
+              {/* What an open-as-chat view covers is inert while it is open:
+                  covering it is visual only, so without this Shift+Tab walks
+                  back into the hidden timeline and a screen reader reads both
+                  conversations. `contents` leaves the layout untouched. The
+                  quote popover stays outside: it serves selections in the
+                  view too. Closing drops `inert` in the same commit, before
+                  the view's layout effect returns focus to the open control. */}
+              <div className="contents" inert={subagentDrillIn.openId !== null}>
+                <ChatTimeline
+                  rows={listRows}
+                  onVisibleRowRangeChange={onChatTimelineVisibleRowsChange}
+                  taskTitle={taskTitle}
+                  backgroundToolBlockIds={backgroundToolBlockIds}
+                  getMessageActions={getMessageActions}
+                  nextStepActions={nextStepActions}
+                  listRef={chatTimelineRef}
+                  onScroll={handleScroll}
+                  initialScrollAtEnd={initialScrollAtEnd}
+                  initialScrollIndex={initialScrollIndexAnchor}
+                  contentInsetEndAdjustment={endInset}
+                  onFollowIntentChange={onFollowIntentChange}
+                  onReaderGesture={handleTimelineReaderGesture}
+                  followLatchRef={followLatchRef}
+                  isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
+                  resolveSuppressedEndLanding={resolveSuppressedEndLanding}
+                  navigationHighlightedMessageId={
+                    navigationHighlight?.messageId ?? null
+                  }
+                  navigationHighlightedBlockId={
+                    navigationHighlight?.blockId ?? null
+                  }
+                  rowHeightMemory={rowHeightMemory}
+                  onItemSizeChanged={onChatTimelineItemSizeChanged}
+                  onRowMount={onChatTimelineRowMount}
+                  onListMetricsChange={onListMetricsChange}
+                  data-testid="chat-messages-scroll"
+                  data-scroll-mode={scrollMode}
+                />
+                {/* The minimap rail is untappable on touch and its hover-expand
                 never fires; hide it below md and reclaim the right edge.
                 `contents` keeps the absolutely-positioned rail's layout
                 identical on desktop (>=768px). The `side` setting is a user
                 preference, not a viewport rule, so it cannot stand in for this. */}
-              {showTurnMinimap ? (
-                <div className="contents max-md:hidden">
-                  <ChatTurnMinimap
-                    ref={minimapHotspotRef}
-                    rows={listRows}
-                    transcriptWindow={transcriptWindow}
-                    inViewRefreshRef={minimapInViewRefreshRef}
-                    listRef={chatTimelineRef}
-                    topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
-                    viewportRef={transcriptContainerRef}
-                    bottomInset={endInset}
-                    onSelect={onMinimapItemSelect}
-                    shown={minimapShown}
-                    side={minimapSide}
+                {showTurnMinimap ? (
+                  <div className="contents max-md:hidden">
+                    <ChatTurnMinimap
+                      ref={minimapHotspotRef}
+                      rows={listRows}
+                      transcriptWindow={transcriptWindow}
+                      inViewRefreshRef={minimapInViewRefreshRef}
+                      listRef={chatTimelineRef}
+                      topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
+                      viewportRef={transcriptContainerRef}
+                      bottomInset={endInset}
+                      onSelect={onMinimapItemSelect}
+                      shown={minimapShown}
+                      side={minimapSide}
+                    />
+                  </div>
+                ) : null}
+                {hasContent ? (
+                  <ScrollToEndPill
+                    state={scrollToEndPillState}
+                    onClick={() => scrollToEnd(true)}
+                    bottomOffsetPx={endInset + 4}
                   />
-                </div>
-              ) : null}
-              {hasContent ? (
-                <ScrollToEndPill
-                  state={scrollToEndPillState}
-                  onClick={() => scrollToEnd(true)}
-                  bottomOffsetPx={endInset + 4}
-                />
-              ) : null}
+                ) : null}
+              </div>
               {quoteSelection.snapshot !== null ? (
                 <QuoteSelectionPopover
                   taskId={taskId}
