@@ -726,6 +726,13 @@ export class HostLifecycle extends EventEmitter {
       return;
     }
     const targetBasename = basename(this.options.layout.pidMetadataFile);
+    // This watcher is a LOSSY edge source on macOS, never the only way back to
+    // a host. libuv arms the FSEvents stream on its own thread after `watch()`
+    // returns, so a write in the first few ms is not reported. Starting any
+    // other `fs.watch` in this process rebuilds libuv's one shared stream and
+    // drops edges that land during the rebuild. A loaded fseventsd delays and
+    // drops edges too. The health monitor's null-snapshot re-read is the
+    // level-triggered backstop for all three.
     try {
       const watcher = watch(this.options.layout.rootDir, (_event, filename) => {
         if (filename === null) {

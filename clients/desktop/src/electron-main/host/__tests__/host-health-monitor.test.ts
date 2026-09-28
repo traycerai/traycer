@@ -16,6 +16,7 @@ vi.mock("electron-log", () => ({
   },
 }));
 
+import log from "electron-log";
 import {
   startHostHealthMonitor,
   type HostHealthMonitor,
@@ -693,6 +694,36 @@ describe("startHostHealthMonitor", () => {
 
     await ticks(3);
     expect(reload).toHaveBeenCalled();
+    monitor.dispose();
+  });
+
+  it("finds a host on disk without respawning when the backstop reload surfaces one", async () => {
+    // The mirror of the test above: this time the backstop reload FINDS a
+    // host, e.g. one whose pid.json edge the lossy watcher never delivered.
+    // The reload's own `change` event carries convergence; this branch must
+    // not decide to respawn, and its debug line is a discovery, not an
+    // incident.
+    const reload = vi.fn(async () => SNAPSHOT);
+    const respawn = vi.fn(async () => {});
+    const monitor = startMonitor({
+      host: fakeHost({
+        getSnapshot: () => null,
+        reloadSnapshotFromDisk: reload,
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => null),
+      respawn,
+    });
+
+    await ticks(1);
+
+    expect(reload).toHaveBeenCalled();
+    expect(respawn).not.toHaveBeenCalled();
+    expect(vi.mocked(log.debug)).toHaveBeenCalledWith(
+      "[host-health] null-snapshot backstop found a host on disk",
+      { pid: SNAPSHOT.pid },
+    );
     monitor.dispose();
   });
 
