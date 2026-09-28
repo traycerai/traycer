@@ -11,9 +11,10 @@ import type { GuiAgentModelOption } from "./unary-schemas";
  * no longer string-equals any row. Exact equality answers "absent" and every
  * caller reads that as "the model is gone".
  *
- * Resolution is therefore two passes: exact `slug` first, then the row whose
+ * Resolution is therefore three passes: exact `slug` first, then the row whose
  * `metadata.resolvedModel` (the adapter-published canonical wire id) equals
- * the input. Exact-first is load-bearing, not a preference - rows DUPLICATE
+ * the input, then a match that ignores a trailing tier marker (`[1m]`).
+ * Exact-first is load-bearing, not a preference - rows DUPLICATE
  * `resolvedModel` (Claude's `default` and `opus[1m]` both resolve to the same
  * canonical id), so alias matching alone cannot be a unique index.
  */
@@ -96,7 +97,34 @@ export function catalogServedStale(
 const NO_MATCH: ModelMatch = { kind: "none" };
 
 /**
- * Two-pass resolution of `slug` against `models`.
+ * The bracketed tier grammar: digits plus at most one unit letter (`[1m]`,
+ * `[200k]`). Deliberately NOT "any trailing bracket" - `model[preview]` is a
+ * real, distinct id and must not fold onto `model`. The same grammar as the
+ * host's rate-catalog tier fallback; private here so this module's exported
+ * surface is unchanged.
+ */
+const TIER_MARKER_PATTERN = /\[\d+[a-z]?\]$/i;
+
+function withoutTierMarker(value: string): string {
+  return value.replace(TIER_MARKER_PATTERN, "");
+}
+
+/**
+ * Three-pass resolution of `slug` against `models`.
+ *
+ * 1. exact `slug`;
+ * 2. the row whose `metadata.resolvedModel` equals `slug`;
+ * 3. the rows that agree with `slug` once a trailing tier marker (`[1m]`) is
+ *    dropped from both sides, on either their `slug` or their `resolvedModel`.
+ *
+ * Pass 3 exists because a catalog can gain or lose the marker between two
+ * provider CLI releases: Claude's 2.1.280 listed `opus[1m]` and
+ * `claude-fable-5-1[1m]`, and 2.1.282 lists `opus` and `claude-fable-5-1` for
+ * the same account. A slug persisted under either form is in neither field of
+ * the other, so passes 1 and 2 answer "the model is gone" for a model that is
+ * still listed. It only runs after both earlier passes miss, so a match they
+ * would have made is unchanged. Its result is an `alias` like pass 2's: held
+ * verbatim, never written back, and the CLI still receives the persisted slug.
  *
  * `models` must already be scoped to one harness - slugs are only unique
  * within a harness's catalog. Use {@link modelsForHarness} when the caller
@@ -116,8 +144,24 @@ export function resolveModelBySlug(
     (candidate) => modelResolvedModel(candidate) === slug,
   );
   const first = tied.at(0);
-  if (first === undefined) return NO_MATCH;
-  return { kind: "alias", model: first, ambiguous: tied.length > 1, tied };
+  if (first !== undefined) {
+    return { kind: "alias", model: first, ambiguous: tied.length > 1, tied };
+  }
+  const bare = withoutTierMarker(slug);
+  if (bare.length === 0) return NO_MATCH;
+  const tierTied = models.filter((candidate) => {
+    if (withoutTierMarker(candidate.slug) === bare) return true;
+    const resolved = modelResolvedModel(candidate);
+    return resolved !== null && withoutTierMarker(resolved) === bare;
+  });
+  const tierFirst = tierTied.at(0);
+  if (tierFirst === undefined) return NO_MATCH;
+  return {
+    kind: "alias",
+    model: tierFirst,
+    ambiguous: tierTied.length > 1,
+    tied: tierTied,
+  };
 }
 
 /** Scope a mixed catalog to one harness before resolving. */
