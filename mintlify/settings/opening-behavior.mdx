@@ -1,0 +1,60 @@
+---
+title: "Opening behavior"
+description: "Choose whether links open in Traycer or your default browser, and whether new tiles open in the current pane or a new split."
+---
+
+**Opening behavior** decides where links and new tiles land when you open them. It sits in the **Application** group of [Settings](/settings).
+
+## Links
+
+**Open links** sets where a link opens when you click it:
+
+| Option | What it does |
+| --- | --- |
+| **In Traycer** | Opens the link in Traycer's [in-app browser](/panels/browsers). This is the default. |
+| **In default browser** | Opens the link in your computer's default browser. |
+| **Per link type** | Shows one row per kind of link, each set to **In Traycer** or **In default browser**. |
+
+With **Per link type**, the rows are:
+
+| Link type | Covers |
+| --- | --- |
+| **Markdown** | Links in chat, artifacts, the communication graph and Markdown previews. |
+| **Terminal** | URLs and hyperlinks a terminal prints. |
+| **GitHub** | Pull request rows and headers, commits, and worktree pull request chips. |
+| **Images** | Images opened from the image viewer. |
+
+## Tile Placement
+
+**Open new tiles** sets where a newly opened tile goes:
+
+| Option | What it does |
+| --- | --- |
+| **Per tile type** | Shows one row per kind of tile, each set to **In this pane** or **In a new split**. This is the default. |
+| **In this pane** | Opens every new tile as a tab in the current pane. |
+| **In a new split** | Opens every new tile in a new pane beside the current one. |
+
+With **Per tile type**, the rows and their defaults are:
+
+| Tile type | Covers | Default |
+| --- | --- | --- |
+| **Files, diffs & artifacts** | Files, diffs, pull requests, artifacts, command output and the communication graph. | In this pane |
+| **Agents & terminals** | Chats, agents and terminal sessions. | In this pane |
+| **Side chats** | Asides started with `/btw` or `/side`, placed next to the chat they were asked from. | In a new split |
+
+Browser tabs have their own placement, **Open browser tabs**, on the [Browser](/settings/browser#browser-placement) settings page.
+
+Windows too narrow to show more than one tile open everything in the current pane, whatever these settings say.
+
+## Modifier Clicks
+
+Modifier keys override these settings for one click:
+
+| Click | What it does |
+| --- | --- |
+| <kbd>Cmd</kbd>-click / <kbd>Ctrl</kbd>-click | Opens a link in your default browser. |
+| <kbd>Opt</kbd>-click / <kbd>Alt</kbd>-click | Opens a link the other way from your **Open links** setting. |
+| <kbd>Shift</kbd>-click | Opens a tile in a new split. |
+| Middle-click | Opens a tile in the background. |
+
+For how panes, tabs and splits work, see [Panels](/panels).

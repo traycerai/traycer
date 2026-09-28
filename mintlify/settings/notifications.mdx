@@ -1,0 +1,175 @@
+---
+title: "Notifications (Host)"
+sidebarTitle: "Notifications"
+description: "Choose which notifications a host creates, and run a script or call a URL when they happen."
+---
+
+**Notifications** settings decide which events a host turns into notifications, and what its automation receives. The page is in the Host group of Settings, so it applies to the host selected in the [host picker](/settings#host-picker). Each host keeps its own settings and hooks.
+
+For how notifications reach you (the notification center, tab indicators, OS and phone notifications), see [Notifications](/concepts/notifications). Chimes are chosen per app in [Sounds](/settings/sounds), and OS banners are managed in your operating system's notification settings.
+
+## In-App Notifications
+
+Each severity has a switch:
+
+| Severity | Covers | Default |
+|---|---|---|
+| **Needs action** | Approvals and interviews, and browser steps only you can complete, such as a sign-in. | On |
+| **Failure** | Errored turns, stalls, crashes, and rate limits. | On |
+| **Done** | Completed or intentionally stopped turns. | On |
+| **Info** | Background host operations, including worktree cleanup. | Off |
+
+Turning a severity off stops the host creating that kind of notification at all. It no longer appears in the notification center, lights a tab indicator, alerts you, or runs a hook.
+
+## Notification Hooks
+
+A hook runs when the host creates a notification of a severity you choose. Use it to forward notifications to a chat tool, a phone, or your own script.
+
+The toolbar shows the number of hooks, the path of the hooks file with a copy button, **Refresh**, and **Add hook**.
+
+### Add A Hook
+
+<Steps>
+  <Step title="Open the editor">
+    Click **Add hook**.
+  </Step>
+  <Step title="Name it and pick an action">
+    Enter a **Name**, then choose an **Action**: **Run a script** or **POST to a URL**.
+  </Step>
+  <Step title="Fill in the action">
+    For a script, enter the **Executable** and its **Arguments**. For a URL, enter the **URL** and any **Headers**. See the sections below.
+  </Step>
+  <Step title="Choose severities">
+    Under **Severities**, turn on **Needs action**, **Failure** and **Done** as needed. At least one is required.
+  </Step>
+  <Step title="Enable and save">
+    Turn on **Enabled**, which starts off for a new hook, then click **Save hook**.
+  </Step>
+</Steps>
+
+Each hook row shows its action, its severities, and its last result. Use the switch to turn a hook on or off, **Test** to send it a test event, **Edit** to change it, and **Delete** to remove it. **Test** is available only while the hook is enabled.
+
+The last result is the outcome of the latest test or delivery, such as `HTTP 200`, `exit 0` or `timed out`. It reads "No test yet" until the hook has run, and it resets when the host restarts.
+
+### Run A Script
+
+The host runs the executable on the host machine, passing each line of **Arguments** as one argument. No shell is involved, so shell syntax such as pipes, redirects, variables or `~` isn't expanded.
+
+- The event JSON arrives on the script's standard input.
+- The script runs with the host's shell environment.
+- Exit code `0` counts as success. Any other exit code is a failure, and the last result shows the start of the script's error output.
+- A script that runs longer than 10 seconds is stopped and recorded as timed out. Scripts are not retried.
+
+### POST To A URL
+
+The host sends the event JSON as the body of a `POST` request with `content-type: application/json`.
+
+- The URL must be an absolute `http` or `https` URL. Put credentials in a header, not in the URL; a URL with a user name or password is refused.
+- Enter headers one `name: value` per line.
+- In header values, `$VAR` and `${VAR}` are read from the host's shell environment when the request is sent. The value is never stored in the hooks file or shown in the app. If a referenced variable isn't set, nothing is sent and the hook fails with "env var NAME is not set".
+- A request times out after 5 seconds.
+- A timeout, a network error, a `429`, or a `5xx` response is retried twice, after 1 second and then 5 seconds. Other error responses are not retried. Retries are not kept across a host restart.
+
+For example, to send a bearer token without writing it into the file:
+
+```text
+authorization: Bearer $MY_TOKEN
+```
+
+### Event Payload
+
+Scripts and URLs receive the same JSON:
+
+```json
+{
+  "schemaVersion": 1,
+  "event": "agent.stopped",
+  "severity": "done",
+  "occurredAt": 1790000000000,
+  "epicId": "…",
+  "chatId": "…",
+  "title": "…",
+  "message": "…",
+  "test": false
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `schemaVersion` | Always `1`. New fields may be added. |
+| `event` | The kind of notification (see below). |
+| `severity` | `needs_action`, `failure`, `done`, or `info`. |
+| `occurredAt` | When it happened, in milliseconds since the Unix epoch. |
+| `epicId` | The Task's ID, or `null` when the notification isn't about a Task. |
+| `chatId` | The agent's ID, or `null`. |
+| `title` | The notification's title, as the app shows it, or `null`. |
+| `message` | The notification's text, or `null`. |
+| `test` | `true` when the event was sent by **Test**. |
+
+`event` is one of:
+
+| Event | When |
+|---|---|
+| `approval.requested` | An agent is waiting for your approval. |
+| `interview.requested` | An agent is waiting for your answer. |
+| `browser.human.needed` | An agent's browser tab needs you to finish a step. |
+| `agent.stopped` | An agent finished, was stopped, or ended with an error. |
+| `agent.stalled` | An agent stopped making progress. |
+| `workspace.operation.failed` | A workspace operation for an agent failed. |
+| `host.operation.finished` | A host operation finished, such as a worktree cleanup. |
+
+A test event has `"test": true`, `"event": "agent.stopped"`, `"severity": "info"`, the title "Test notification", the message "Sent from Traycer", and `null` Task and agent IDs.
+
+### The Hooks File
+
+Hooks live in `notification-hooks.json` in the host's data folder. For the standard install that is:
+
+```text
+~/.traycer/host/notification-hooks.json
+```
+
+The toolbar shows the exact path for the selected host. The file can be edited by hand, and the host picks up changes without a restart. A missing file means no hooks.
+
+```json
+{
+  "version": 1,
+  "hooks": [
+    {
+      "id": "slack-alerts",
+      "name": "Slack alerts",
+      "enabled": true,
+      "severities": ["needs_action", "failure"],
+      "action": {
+        "type": "http",
+        "url": "https://hooks.example.com/traycer",
+        "headers": { "authorization": "Bearer $MY_TOKEN" }
+      }
+    },
+    {
+      "id": "local-notify",
+      "enabled": true,
+      "action": {
+        "type": "command",
+        "command": "/usr/local/bin/notify",
+        "args": ["--channel", "builds"]
+      }
+    }
+  ]
+}
+```
+
+| Field | Notes |
+|---|---|
+| `id` | Required and unique within the file. |
+| `name` | Optional. The app shows the `id` when it's missing. |
+| `enabled` | Required. |
+| `severities` | Optional list of `needs_action`, `failure`, `done` and `info`. Leave it out to match every severity. A hook fires for a severity only while that severity is turned on under **In-app notifications**. |
+| `action` | `{"type": "command", "command": …, "args": […]}` or `{"type": "http", "url": …, "headers": {…}}`. `args` and `headers` are optional. |
+
+Unknown fields are not allowed.
+
+<Warning>
+  If the file doesn't parse, **every hook on the host is disabled** until you fix it. The page shows "Hooks are disabled and editing is unavailable until the file parses", followed by the problem.
+</Warning>
+
+Saving from Settings rewrites the whole file from the hooks the page last loaded. If you edit the file by hand while Settings is open, click **Refresh** before changing hooks there, or your hand edits are replaced.
