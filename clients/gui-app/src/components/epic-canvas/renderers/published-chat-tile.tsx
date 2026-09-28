@@ -175,16 +175,17 @@ function ownerHostIsServingHost(
 const OWNER_RECOVERY_CACHE_SUFFIX = ["offline-owner-recovery"];
 
 /**
- * Only a ready session overturns a cloud `offline`, and nothing dials a
- * confirmed-offline owner, so a running owner the cloud misreports would keep
- * this copy on screen - and the canvas's substitution for a live tab with it -
- * until an unrelated surface happened to dial that machine. One bounded
+ * Only a ready session overturns a cloud `offline`, and nothing on this tab
+ * dials a confirmed-offline owner, so a running owner the cloud misreports
+ * would keep this copy on screen - and the canvas's substitution for a live tab
+ * with it - until some other surface happened to dial that machine. One bounded
  * `host.status` read to the OWNER while the tab is on screen opens that
  * session; the verdict then follows it.
  *
- * No poll: an owner that really comes back is reported `connectable` by the
- * directory's own refresh. Visibility rather than `isActive`, because a tab in
- * an unfocused split pane is still on screen.
+ * No poll: each time the read becomes armed it asks once, and an owner that
+ * really comes back is reported `connectable` by the directory's own refresh.
+ * Visibility rather than `isActive`, because a tab in an unfocused split pane
+ * is still on screen.
  */
 function useOfflineOwnerRecoveryRead(
   ownerHostId: string,
@@ -230,9 +231,9 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   const servingHostId = useTabHostId();
   const servingReachability = useHostReachability(servingHostId);
   // The SAME reachability source the live dead-tile banner reads, so the two
-  // surfaces can never describe one host two ways. Only the label is used here:
-  // this tile is opened precisely because the owner is out of reach, and it
-  // stays readable if that host returns (the row then offers the live tab).
+  // surfaces can never describe one host two ways. This tile is opened
+  // precisely because the owner is out of reach, and it stays readable if that
+  // host returns (the row then offers the live tab).
   const ownerReachability = useHostReachability(node.ownerHostId);
   useOfflineOwnerRecoveryRead(node.ownerHostId, ownerReachability);
   const identity = useMemo(
