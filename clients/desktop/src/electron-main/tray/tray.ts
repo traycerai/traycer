@@ -218,6 +218,9 @@ export class DesktopTrayController {
 
   setIndicator(state: DesktopTrayIndicatorState): void {
     this.indicator = state;
+    if (this.tray.isDestroyed()) {
+      return;
+    }
     this.tray.setToolTip(`Traycer (${state})`);
   }
 
@@ -235,6 +238,9 @@ export class DesktopTrayController {
   }
 
   dispose(): void {
+    if (this.tray.isDestroyed()) {
+      return;
+    }
     this.tray.destroy();
   }
 
@@ -249,6 +255,14 @@ export class DesktopTrayController {
   }
 
   private rebuildMenu(): void {
+    // The controller outlives its tray: the epic list, the presentation and
+    // the summon accelerator are all pushed from subscriptions that can still
+    // fire after `dispose()`, during quit. Electron throws `Tray is
+    // destroyed` on any call into a destroyed tray, so the state above is
+    // kept and the native menu is left alone.
+    if (this.tray.isDestroyed()) {
+      return;
+    }
     // Text-forward, grouped layout that mirrors the native system menus:
     // primary action, the recent-epic list (overflow folds into a "More"
     // submenu), quick actions, the signed-in identity beside Sign Out, and
