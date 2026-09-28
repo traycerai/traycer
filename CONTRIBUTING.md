@@ -43,6 +43,20 @@ bunx nx run @traycer-clients/traycer-cli:build
 | `clients/gui-app/`     | GUI renderer                                    |
 | `clients/desktop/`     | Electron shell                                  |
 
+## Config targets and releases
+
+Each client's `src/config.ts` holds the **dev** values in source. Release
+builds run that client's `scripts/set-deploy-target.cjs` to stamp staging or
+production values into the file, then restore it, so those values are never
+committed. The CLI's source config already trusts Traycer's production
+host-signing key, so a build from source verifies released hosts;
+`~/.traycer/cli/host-trusted-pubkeys` can add keys without a rebuild.
+
+Releases are built and signed in Traycer's internal repository and published
+to this repo's [Releases](https://github.com/traycerai/traycer/releases).
+Signing secrets never enter this repository, so you need no secrets to build
+or test the code here.
+
 ## Pre-commit hooks
 
 We use [pre-commit](https://pre-commit.com) for hygiene and local workspace

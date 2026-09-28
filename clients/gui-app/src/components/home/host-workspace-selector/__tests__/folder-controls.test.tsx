@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderWithLibrary,
   screen,
   waitFor,
   within,
@@ -124,6 +125,17 @@ import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 const NOOP = (): void => undefined;
 const NOOP_ADD = (): Promise<boolean> => Promise.resolve(false);
 const EMPTY_COUNTS: ReadonlyMap<string, number> = new Map();
+
+function render(ui: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return renderWithLibrary(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
 
 function tabForward(): void {
   const focusable = Array.from(

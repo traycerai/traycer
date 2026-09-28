@@ -34,7 +34,7 @@ import {
   TraycerSubscriptionView,
 } from "@/components/settings/panels/traycer-subscription-views";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
-import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
+import { resolvePlatformBillingUrl } from "@/lib/auth/platform-base-url";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   accountContextValue,
@@ -71,7 +71,13 @@ export function TraycerSubscriptionSection() {
   const resolved = resolveAccountContext(stored, teamIds);
   const subscription = selectSubscription(user, resolved, teams);
 
-  const manageUrl = resolvePlatformBaseUrl(runnerHost.signInUrl);
+  // The Billing page of the account the picker below shows, resolved against
+  // the same team list, so the link and the card can never disagree.
+  const manageUrl = resolvePlatformBillingUrl(
+    runnerHost.signInUrl,
+    resolved,
+    teams.map((t) => ({ teamId: t.team.id, slug: t.team.slug })),
+  );
 
   return (
     <div className="mb-3 flex flex-col gap-3 rounded-lg border border-border/60 p-3">

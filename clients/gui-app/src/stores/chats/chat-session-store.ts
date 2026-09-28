@@ -284,6 +284,8 @@ export type ChatStreamClientHandle = Pick<
       // `auto`, and collapsing the two would veto the mode across every
       // fixture that predates it.
       | "autoPermissionModeProtocolSupported"
+      // Optional, and absent reads as `null`, for the same reason.
+      | "queuePauseReasonProtocolSupported"
     >
   >;
 
@@ -1236,6 +1238,20 @@ export interface ChatSessionState {
    */
   readonly autoPermissionModeProtocolSupported: boolean | null;
   /**
+   * Whether THIS tab's negotiated `chat.subscribe` line publishes the queue's
+   * `pausedReason` (`@1.18`), or `null` while the session cannot say.
+   *
+   * It decides whether the transcript draws the host's queue-pause notice
+   * (`queuePausedNoticeHidden`), which an older line's user needs and a newer
+   * line's pill already says. So it gates what a PAST row shows rather than
+   * what a frame may carry, and unlike the flags above it keeps its answer
+   * through `reconnecting`: dropping to `null` there would take an older
+   * host's notices off screen on every reconnect and put them back on the next
+   * `open`. The next `open` re-answers it; `retry()` and `dispose()` clear it
+   * with the rest.
+   */
+  readonly queuePauseReasonProtocolSupported: boolean | null;
+  /**
    * The host's own `isTurnInProgress()`: is a turn genuinely active or
    * activating right now? Narrower than `runStatus !== "idle"`, which also
    * reads "running" for a pending queued item or visible background work
@@ -1292,6 +1308,20 @@ export interface ChatSessionState {
    * See {@link requiredHydrationOrdinalsOf}.
    */
   readonly jumpTargetOrdinal: number | null;
+  /**
+   * The one row chat find needs hydrated to confirm an index hit, or `null`.
+   *
+   * The host's find index counts text the client may never paint, so an index
+   * hit is a CANDIDATE until the client scan reads the row. This names that
+   * row's ordinal as required hydration - never a viewport move: the reader
+   * stays where they are while find reads.
+   *
+   * Separate from {@link jumpTargetOrdinal} rather than sharing it, because the
+   * two are held by different surfaces with different lifetimes: a reader's
+   * jump must not clobber a find read, or the reverse. See
+   * {@link requiredHydrationOrdinalsOf}.
+   */
+  readonly findReadOrdinal: number | null;
   /**
    * The accumulated-change SUMMARIES, assembled from the chunk frames.
    *
@@ -1764,6 +1794,8 @@ export interface ChatSessionState {
    */
   /** See the implementation - names the ordinal a pending jump is waiting on. */
   requestTranscriptOrdinal: (ordinal: number | null) => void;
+  /** See the implementation - names the ordinal a find index read needs. */
+  requestFindReadOrdinal: (ordinal: number | null) => void;
   retry: () => void;
   /**
    * {@link retry}, escalated to a transport re-dial first when - and only
@@ -6279,6 +6311,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           accumulatedFileChangeCount: 0,
           coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
           jumpTargetOrdinal: null,
+          findReadOrdinal: null,
           accumulatedFileChangeSummaries: [],
           accumulatedSummaryGenerationSeated: false,
           accumulatedSummaryAssemblyStarted: false,
@@ -9189,6 +9222,15 @@ export function createChatSessionStoreWithNotificationDependencies(
               streamClient?.autoPermissionModeProtocolSupported?.() ?? null
             );
           };
+          // Three states like the auto flag, but KEPT off `open`: it decides
+          // whether past rows show, not what a frame may carry (see the
+          // field).
+          const resolveQueuePauseReasonProtocolSupported = () => {
+            if (status !== "open") {
+              return state.queuePauseReasonProtocolSupported;
+            }
+            return streamClient?.queuePauseReasonProtocolSupported?.() ?? null;
+          };
           // One attempt that failed before delivering a snapshot, counted for
           // the tile's bounded loading gate (see `PreSnapshotRetryEvidence`).
           //
@@ -9235,6 +9277,8 @@ export function createChatSessionStoreWithNotificationDependencies(
               resolveInterviewDeliveryRetryProtocolSupported(),
             autoPermissionModeProtocolSupported:
               resolveAutoPermissionModeProtocolSupported(),
+            queuePauseReasonProtocolSupported:
+              resolveQueuePauseReasonProtocolSupported(),
             fatalClose: resolveFatalClose(),
             preSnapshotRetries: resolvePreSnapshotRetries(),
           };
@@ -9487,6 +9531,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       // `null`, not `false` - no session has answered yet, so the catalog line
       // decides alone rather than the mode being vetoed before a handshake.
       autoPermissionModeProtocolSupported: null,
+      queuePauseReasonProtocolSupported: null,
       turnInProgress: undefined,
       pendingApprovals: [],
       pendingFileEditApprovals: [],
@@ -9497,6 +9542,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       accumulatedFileChangeCount: 0,
       coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
       jumpTargetOrdinal: null,
+      findReadOrdinal: null,
       accumulatedFileChangeSummaries: [],
       accumulatedSummaryGenerationSeated: false,
       accumulatedSummaryAssemblyStarted: false,
@@ -9551,6 +9597,20 @@ export function createChatSessionStoreWithNotificationDependencies(
         set({ jumpTargetOrdinal: ordinal });
         if (ordinal !== null) requestPlannedHydration();
       },
+
+      /**
+       * Name (or clear) the ordinal a chat find index read is waiting on.
+       *
+       * The same shape as `requestTranscriptOrdinal`, for the same reason: the
+       * row is outside the viewport, and hydration is otherwise driven by the
+       * viewport. Unlike a jump, a find read never moves the viewport at all,
+       * so this is the ONLY thing that will ever fetch the row.
+       */
+      requestFindReadOrdinal: (ordinal: number | null) => {
+        if (get().findReadOrdinal === ordinal) return;
+        set({ findReadOrdinal: ordinal });
+        if (ordinal !== null) requestPlannedHydration();
+      },
       wake: () => {
         if (disposed) return;
         // No state written, deliberately. The status stays whatever the
@@ -9590,6 +9650,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           draftBlobBridgeSupported: false,
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
+          queuePauseReasonProtocolSupported: null,
           fatalClose: null,
           snapshotLoaded: false,
           // A LATER pre-snapshot wait begins here, and the tile's anchor
@@ -11244,6 +11305,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           draftBlobBridgeSupported: false,
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
+          queuePauseReasonProtocolSupported: null,
         });
       },
     };
@@ -12383,9 +12445,10 @@ function refusalCauseOf(
  *
  * `status: "rejected"` becomes `refused` rather than `null`, deliberately. The
  * menu has to tell "the host declined this hold" from "no hold was ever asked
- * for": the first closes the menu and says the chat has moved on, the second is
- * the ordinary closed state, and collapsing them would make a refusal look like
- * a menu that simply never opened.
+ * for": the first puts "Couldn't pause the countdown." on the chooser's footer
+ * - no cause, since a refusal proves no advancement (D220) - the second is the
+ * ordinary closed state, and collapsing them would make a refusal look like a
+ * menu that simply never opened.
  */
 function reconcileFallbackChoiceAck(
   lease: ChatSessionState["fallbackChoiceLease"],
@@ -13220,15 +13283,18 @@ function pendingInterviewOrdinals(
  * The ordinals hydration must reach beyond the viewport, as the STORE currently
  * holds them.
  *
- * Two sources, and they are here together because `planTranscriptHydration`
- * takes one list: the pending interviews' answer cards, and a transcript JUMP
- * whose target is cold.
+ * Three sources, and they are here together because `planTranscriptHydration`
+ * takes one list: the pending interviews' answer cards, a transcript JUMP
+ * whose target is cold, and the row a chat find index read must confirm.
  *
  * The jump one is not an optimization. A cross-tile jump waits for its target
  * to appear before it scrolls, and a scroll is what moves the viewport, which
  * is what drives hydration - so for a target outside the retained spans the
  * request waits on a row that nothing will ever ask for, and the jump parks
  * forever. Naming the ordinal here is what breaks that circle.
+ *
+ * The find read is the same circle with no scroll at all at the end of it: it
+ * never moves the viewport, so nothing but this list will ever fetch its row.
  */
 function requiredHydrationOrdinalsOf(
   state: ChatSessionState,
@@ -13239,9 +13305,12 @@ function requiredHydrationOrdinalsOf(
       : state.transcriptDerived.interviewAnswerability,
     state.pendingInterviews,
   );
-  const jump = state.jumpTargetOrdinal;
-  if (jump === null) return interviews;
-  return interviews.includes(jump) ? interviews : [...interviews, jump];
+  let ordinals = interviews;
+  for (const extra of [state.jumpTargetOrdinal, state.findReadOrdinal]) {
+    if (extra === null || ordinals.includes(extra)) continue;
+    ordinals = [...ordinals, extra];
+  }
+  return ordinals;
 }
 
 /**

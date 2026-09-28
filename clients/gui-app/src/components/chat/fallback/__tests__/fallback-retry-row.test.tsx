@@ -38,6 +38,10 @@ vi.mock(
 );
 
 function retryingPending() {
+  return retryingPendingAt(2);
+}
+
+function retryingPendingAt(attempt: number) {
   return pendingFallback({
     state: "retrying",
     reason: "rate_limit",
@@ -45,7 +49,7 @@ function retryingPending() {
     targetTuple: TARGET_CODEX_TUPLE,
     impendingAction: null,
     deadline: null,
-    attempt: 2,
+    attempt,
     maxAttempts: 4,
     queuedItemsMoving: 0,
     siblingSwitching: 0,
@@ -66,7 +70,9 @@ describe("FallbackRetryRow", () => {
   it("renders for retrying with the failed tuple and attempt counts", () => {
     render(<FallbackRetryRow pending={retryingPending()} client={null} />);
     const row = screen.getByTestId("fallback-retry-row");
-    expect(row.getAttribute("role")).toBe("status");
+    // The live region is the persistent sr-only node, not the visual row.
+    expect(row.getAttribute("role")).toBeNull();
+    expect(screen.getAllByRole("status")).toHaveLength(1);
     expect(row.textContent).toMatch(/Retrying on Claude Code · failed01/);
     expect(row.textContent).toMatch(/attempt 2 of 4/);
     // Falsification: read pending.targetTuple in fallback-retry-row.tsx and THIS assertion must go red.
@@ -98,9 +104,37 @@ describe("FallbackRetryRow", () => {
         />,
       );
       expect(screen.queryByTestId("fallback-retry-row")).toBeNull();
+      expect(screen.getByTestId("fallback-retry-status").textContent).toBe("");
       unmount();
     }
     render(<FallbackRetryRow pending={undefined} client={null} />);
+    expect(screen.queryByTestId("fallback-retry-row")).toBeNull();
+    expect(screen.getByTestId("fallback-retry-status").textContent).toBe("");
+  });
+
+  it("keeps one retry live region mounted across the whole traversal", () => {
+    const { rerender } = render(
+      <FallbackRetryRow pending={undefined} client={null} />,
+    );
+    const region = screen.getByTestId("fallback-retry-status");
+    expect(region.getAttribute("role")).toBe("status");
+    expect(region.textContent).toBe("");
+
+    rerender(<FallbackRetryRow pending={retryingPending()} client={null} />);
+    expect(screen.getByTestId("fallback-retry-status")).toBe(region);
+    expect(region.textContent).toContain("Retrying on Claude Code · failed01");
+    expect(region.textContent).toContain("attempt 2 of 4");
+    const row = screen.getByTestId("fallback-retry-row");
+    expect(row.getAttribute("role")).toBeNull();
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+
+    rerender(<FallbackRetryRow pending={retryingPendingAt(3)} client={null} />);
+    expect(screen.getByTestId("fallback-retry-status")).toBe(region);
+    expect(region.textContent).toContain("attempt 3 of 4");
+
+    rerender(<FallbackRetryRow pending={undefined} client={null} />);
+    expect(screen.getByTestId("fallback-retry-status")).toBe(region);
+    expect(region.textContent).toBe("");
     expect(screen.queryByTestId("fallback-retry-row")).toBeNull();
   });
 });

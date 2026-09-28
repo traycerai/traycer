@@ -5,6 +5,28 @@ description: "Track the latest updates and improvements to Traycer Desktop."
 rss: true
 ---
 
+<Update label="v1.4.0">
+Model routing, Auto mode, version history for artifacts, machines that work together, themes, labels, Antigravity, and a faster Host.
+
+- **Model routing** — when a chat hits a usage limit, gets signed out, or its provider is down, Traycer can move it to an equivalent model in the same tier. For a usage limit or a sign-out it can also switch to another account for the same agent, and for a usage limit it can wait for the limit to reset. Before it switches or starts waiting, a countdown lets you cancel or pick a different model. Turn on **Route automatically** in **Settings › Model routing**.
+- **Auto mode** — a new permission mode: a judge approves routine commands and asks you about risky ones. Choose the judge's model and add your own rules in **Settings › Permissions**. For Claude Code, you can use Claude Code's own classifier instead, in **Settings › Providers › Claude Code**.
+- **Version history** — changes to specs, stories, tickets, and reviews are saved as versions, labelled by who made them. Compare a version with the one before it, restore any version as a new one, and bring back deleted artifacts. Retention settings are in **Settings › Host › Overview › Data**.
+- **Your machines, working together** — agents can forward ports between your machines, so a dev server started on a remote Host opens at localhost on yours. They can also message and create agents on your other machines, run commands there, and copy files between them. A remote agent's browser tab can open in the desktop app you messaged it from. See and stop forwards in the chat's Background panel or **Settings › Host › Overview › Ports**.
+- **Remote sign-in** — sign a remote Host in to Claude Code, Codex, Grok, or Kimi with a one-time code.
+- **Themes and layout** — separate light and dark themes (Dracula, Catppuccin, Tokyo Night, Nord, Gruvbox and more), VS Code theme import and Open VSX, and a theme editor with **Pick from interface**. Themes and Start page wallpapers (with Dot pattern or Film grain) are in **Settings › Appearance**; a usage status bar and composer and sidebar options are in **Settings › Layout**. Right-click a tab to color it or add it to a tab group.
+- **Labels** — tag Tasks with labels that everyone on the Task sees, and filter History by label. Imported sessions get an **Imported** label.
+- **Antigravity** — Google's Antigravity coding agent is now available. Sign in with Google or use an API key, pick from your account's models with the effort slider, and, with a Google sign-in, see 5-hour and weekly limits for each model group. Available on Apple silicon Macs, Linux, and Windows.
+- **Search every chat** — ⌘⇧F / Ctrl+Shift+F searches your prompts, agent replies, and notices across all your chats on the current machine (terminal agents aren't included), and matching messages also appear in History.
+- **Drafts** — your unsent Start page and chat drafts, in one searchable list. Open it from the avatar menu. On the Start page, ⌘S / Ctrl+S shows that page's drafts.
+- **In-app browser** — browser tabs on the Start page (⌘⌥B / Ctrl+Alt+B), device presets for testing at phone and tablet sizes, and a new **Settings › Browser** page for search engine, tab placement, and agent access.
+- **Home tab** — everything that needs you and everything that's running, across all your Tasks. Turn it on in **Settings › Layout › Tabs**.
+- **Faster and lighter** — the Host's storage was rebuilt: database queries run in the background instead of blocking the Host, and chats are saved row by row instead of rewriting the whole conversation. Separately, big chats open much faster after a restart, the app uses less memory, and on a Mac the Host uses less memory and closing a big Task is much smoother.
+- **Mobile** — Android on Google Play and iPhone on TestFlight. The latest iPhone beta signs in through the system sign-in sheet, opens with a short guided tour, has a pull-up composer for long messages, shows artifact version history and export, and lets you request account deletion.
+- **Agents** — Grok supports editing earlier messages, native `/compact`, and image attachments; Claude Opus 5.5, GPT-6 Astra, GPT-6 Sol, GPT-6 Luna, and Grok 4.7 are on Traycer Inference; the model picker has a reasoning slider; Stop now works even when the agent's provider has stopped responding; and signing in to a provider account no longer interrupts running chats.
+- **Worktrees** — optional automatic cleanup of inactive worktrees whose work is merged or pushed, with no uncommitted changes, open PR, or active session, per machine, in **Settings › Worktrees**.
+- **Fixes** — chats stay open while the Host restarts; edits to an artifact are no longer dropped when its file names a different kind; the Host no longer replays old terminal output after a Mac restart, which kept the CPU busy; terminal agent arguments on Windows keep their backslashes; and the microphone no longer opens while Voice input is off.
+</Update>
+
 <Update label="v1.3.0">
 A browser inside Traycer, the mobile app, and importing your Claude Code and Codex sessions.
 

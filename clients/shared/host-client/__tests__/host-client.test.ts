@@ -353,6 +353,52 @@ describe("HostClient", () => {
     expect(events).toEqual([]);
   });
 
+  it.each(["rotation-first", "availability-first"] as const)(
+    "preserves the key-rotation replay override when coalesced (%s)",
+    async (order) => {
+      const { client, invalidator, events } = buildHostClientWithMock();
+      if (order === "rotation-first") {
+        client.invalidateHostScopeAfterKeyRotation("mock-local");
+        client.notifyHostAvailabilityRecovered("mock-local", "reconnect");
+      } else {
+        client.notifyHostAvailabilityRecovered("mock-local", "reconnect");
+        client.invalidateHostScopeAfterKeyRotation("mock-local");
+      }
+      await flushAvailabilityCoalescing();
+
+      expect(invalidator.calls).toEqual(["mock-local"]);
+      expect(invalidator.options).toEqual([
+        {
+          refetchActive: true,
+          recovery: "reconnect",
+          ignoreWorktreeReplayCoverage: true,
+        },
+      ]);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        currentHostId: "mock-local",
+        reason: "availability-recovered",
+      });
+    },
+  );
+
+  it("a key-rotation sweep alone carries the replay override without announcing", async () => {
+    const { client, invalidator, events } = buildHostClientWithMock();
+
+    client.invalidateHostScopeAfterKeyRotation("mock-local");
+    await flushAvailabilityCoalescing();
+
+    expect(invalidator.calls).toEqual(["mock-local"]);
+    expect(invalidator.options).toEqual([
+      {
+        refetchActive: true,
+        recovery: "reconnect",
+        ignoreWorktreeReplayCoverage: true,
+      },
+    ]);
+    expect(events).toEqual([]);
+  });
+
   it("coalesces same-tick availability reports per host into one invalidation and at most one change event", async () => {
     const { client, invalidator, events } = buildHostClientWithMock();
 

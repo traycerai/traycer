@@ -47,12 +47,12 @@ const RELAY_BASE_URL = "wss://relay.traycer.ai/attach";
 const SHIPPED_ENVIRONMENTS = {
   staging: {
     authnBaseUrl: "https://authn.dev.traycer.ai",
-    cloudUiBaseUrl: "https://platform.dev.traycer.ai",
+    cloudUiBaseUrl: "https://dev.traycer.ai",
     relayBaseUrl: "wss://relay.dev.traycer.ai/attach",
   },
   production: {
     authnBaseUrl: "https://authn.traycer.ai",
-    cloudUiBaseUrl: "https://platform.traycer.ai",
+    cloudUiBaseUrl: "https://traycer.ai",
     relayBaseUrl: RELAY_BASE_URL,
   },
 } as const;

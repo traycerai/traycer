@@ -636,6 +636,39 @@ describe("chat-session-store - real windowed -> legacy transcript downgrade", ()
     }
   });
 
+  // F14-8: `findReadOrdinal` is reset at the SAME downgrade site as
+  // `jumpTargetOrdinal` - both are "the rest of the windowed line's aux
+  // state, back to its initial values" in the same `applyAuthoritativeSnapshot`
+  // call (`chat-session-store.ts`, the windowed -> legacy downgrade branch).
+  // Mirrors the cell above almost verbatim, substituting
+  // `requestFindReadOrdinal` for `requestTranscriptOrdinal`.
+  it("resets findReadOrdinal (alongside jumpTargetOrdinal) on the same windowed -> legacy downgrade", () => {
+    const harness = createConsumerHarness();
+    try {
+      harness.session.emitStatus("open", null);
+      harness.session.fireServerFrame(windowedSnapshotEnvelope());
+      harness.session.fireServerFrame(accumulatedChangesEnvelope());
+      harness.handle.store.getState().requestTranscriptOrdinal(10);
+      harness.handle.store.getState().requestFindReadOrdinal(15);
+
+      const primed = harness.handle.store.getState();
+      expect(primed.jumpTargetOrdinal).toBe(10);
+      expect(primed.findReadOrdinal).toBe(15);
+
+      // The physical stream reconnects and renegotiates onto the older line.
+      harness.session.emitStatus("reconnecting", null);
+      harness.session.negotiatedVersion = LEGACY_VERSION;
+      harness.session.emitStatus("open", null);
+      harness.session.fireServerFrame(capturedLegacySnapshotEnvelope());
+
+      const afterDowngrade = harness.handle.store.getState();
+      expect(afterDowngrade.jumpTargetOrdinal).toBeNull();
+      expect(afterDowngrade.findReadOrdinal).toBeNull();
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
   it("a windowed frame that reaches the consumer after the downgrade remains inert", () => {
     const harness = createConsumerHarness();
     try {
