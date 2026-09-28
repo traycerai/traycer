@@ -294,6 +294,74 @@ describe("optimistic activity history projection", () => {
     second.unmount();
   });
 
+  it("does not replay a completed generation when a scope remounts", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(22_000);
+    const userId = `remount-settled-${crypto.randomUUID()}`;
+    const refetch = vi.fn(() => Promise.resolve());
+    const renderScope = () =>
+      renderHook(() =>
+        useOptimisticActivityHistoryItems({
+          items: [historyItem("epic-a", 1, 22_000)],
+          userId,
+          hostId: "host-remount-settled",
+          enabled: true,
+          refreshScope: "recent:all",
+          refetch,
+        }),
+      );
+
+    observeOwnHistoryRecordChange(userId, "epic-a", 22_000);
+    const first = renderScope();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750 + 2_000 + 5_000);
+    });
+    expect(refetch).toHaveBeenCalledTimes(3);
+    first.unmount();
+
+    const second = renderScope();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750 + 2_000 + 5_000);
+    });
+    expect(refetch).toHaveBeenCalledTimes(3);
+
+    act(() => observeOwnHistoryRecordChange(userId, "epic-a", Date.now()));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+    expect(refetch).toHaveBeenCalledTimes(4);
+    second.unmount();
+  });
+
+  it("restarts a canceled refresh when a scope remounts", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(23_000);
+    const userId = `remount-canceled-${crypto.randomUUID()}`;
+    const refetch = vi.fn(() => Promise.resolve());
+    const renderScope = () =>
+      renderHook(() =>
+        useOptimisticActivityHistoryItems({
+          items: [],
+          userId,
+          hostId: "host-remount-canceled",
+          enabled: true,
+          refreshScope: "recent:all",
+          refetch,
+        }),
+      );
+
+    observeOwnHistoryRecordChange(userId, "epic-a", 23_000);
+    const first = renderScope();
+    first.unmount();
+
+    const second = renderScope();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+    expect(refetch).toHaveBeenCalledTimes(1);
+    second.unmount();
+  });
+
   it("uses a nonzero retry delay when a new edge arrives during an in-flight refresh", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(25_000);

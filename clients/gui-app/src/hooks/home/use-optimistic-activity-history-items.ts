@@ -14,6 +14,7 @@ import {
 import { useTurnEpicIds } from "@/stores/use-working-epic-ids";
 
 const MAX_ACTIVE_ROWS = 64;
+const MAX_SETTLED_REFRESH_SCOPES = 64;
 const STAMP_TTL_MS = 10 * 60_000;
 const REFRESH_DEBOUNCE_MS = 750;
 const REFRESH_RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
@@ -30,6 +31,7 @@ let currentSnapshot: ActivitySnapshot = EMPTY_SNAPSHOT;
 const generations = new Map<string, number>();
 const ownerlessRefreshDeadlines = new Map<string, number>();
 const scheduledGenerations = new Map<string, number>();
+const settledGenerations = new Map<string, number>();
 const scopeSubscribers = new Map<string, number>();
 interface RefreshState {
   readonly scope: string;
@@ -366,8 +368,21 @@ export function useOptimisticActivityHistoryItems(
         return;
       }
       scopeSubscribers.delete(scope);
-      scheduledGenerations.delete(scope);
       const state = refreshes.get(scope);
+      const generation = scheduledGenerations.get(scope);
+      // A completed cycle has already consumed this generation. Keep its
+      // watermark across navigation, but let a canceled cycle restart when
+      // the scope remounts. Bound the inactive watermarks independently of
+      // the number of scopes that are currently mounted.
+      if (state === undefined && generation !== undefined) {
+        settledGenerations.delete(scope);
+        settledGenerations.set(scope, generation);
+        if (settledGenerations.size > MAX_SETTLED_REFRESH_SCOPES) {
+          const oldest = settledGenerations.keys().next().value;
+          if (oldest !== undefined) settledGenerations.delete(oldest);
+        }
+      }
+      scheduledGenerations.delete(scope);
       if (state?.timer !== null && state?.timer !== undefined) {
         window.clearTimeout(state.timer);
       }
@@ -380,7 +395,12 @@ export function useOptimisticActivityHistoryItems(
     if (!refreshEnabled) return;
     const scope = JSON.stringify([input.hostId, input.userId, refreshScope]);
     const generation = generations.get(input.userId) ?? 0;
-    if (generation > (scheduledGenerations.get(scope) ?? 0)) {
+    const consumedGeneration = Math.max(
+      scheduledGenerations.get(scope) ?? 0,
+      settledGenerations.get(scope) ?? 0,
+    );
+    if (generation > consumedGeneration) {
+      settledGenerations.delete(scope);
       queueActivityRefresh(scope, input.userId, generation, input.refetch);
     } else {
       const state = refreshes.get(scope);
