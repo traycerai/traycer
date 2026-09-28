@@ -77,10 +77,9 @@ import {
   type ProfileEligibilityGate,
 } from "./use-profile-eligibility-gate";
 import { ChatComposerBannerPortal } from "./chat-composer-banner-portal";
-import { ComposerPromptSuggestion } from "./prompt-suggestion-chip";
 import {
   fillComposerWithSuggestion,
-  promptSuggestionChipAllowed,
+  promptSuggestionAllowed,
 } from "./prompt-suggestion";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
 import { useComposerReingestOnReplacement } from "./use-composer-reingest-on-replacement";
@@ -700,17 +699,23 @@ function ChatComposerImpl(props: ChatComposerProps) {
     editorRef.current?.removeImageAttachmentById(id);
   }, []);
 
-  // The suggestion chip FILLS and focuses - it never sends.
+  // Accepting the suggestion (→, or a tap on touch) FILLS and focuses - it
+  // never sends.
   const fillSuggestedPrompt = useCallback((suggestion: string) => {
     fillComposerWithSuggestion(editorRef.current, suggestion);
   }, []);
-  const suggestionChipAllowed = promptSuggestionChipAllowed({
-    topBannerKind,
-    sendDisabled: sendBlocked,
-    workspaceBlocked,
-    draftHasText,
-    draftHasImages,
-  });
+  const offeredSuggestion =
+    suggestedPrompt !== undefined &&
+    suggestedPrompt.trim() !== "" &&
+    promptSuggestionAllowed({
+      topBannerKind,
+      sendDisabled: sendBlocked,
+      workspaceBlocked,
+      draftHasText,
+      draftHasImages,
+    })
+      ? suggestedPrompt
+      : null;
 
   // Excludes the model-resolution gate: ComposerToolbarRight ANDs the
   // store-derived `modelResolved` onto the send button, and the submit hook
@@ -752,11 +757,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
         epicId={currentEpicId}
         hostId={tabHostId}
         canAct={fallbackControlsCanAct(sendDisabled)}
-      />
-      <ComposerPromptSuggestion
-        suggestedPrompt={suggestedPrompt}
-        allowed={suggestionChipAllowed}
-        onFill={fillSuggestedPrompt}
       />
       {topBannerKind === "rate-limit" ? (
         <ChatComposerBannerPortal>
@@ -864,6 +864,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     onSelectionChange={handleSelectionChange}
                     onSubmit={handleSubmitDraft}
                     steerHintActive={steerHintActive}
+                    suggestedPrompt={offeredSuggestion}
+                    onAcceptSuggestion={fillSuggestedPrompt}
                     onPaste={onPaste}
                     onDragOver={onDragOver}
                     onDrop={onDrop}

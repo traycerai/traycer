@@ -14,7 +14,7 @@ import { selectActiveThinkingTokensEstimate } from "@/stores/chats/chat-thinking
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
- * T14 pins: the prompt-suggestion chip (`suggestedPrompt`) and the
+ * T14 pins: the prompt suggestion (`suggestedPrompt`) and the
  * thinking-token estimate (`thinkingTokens`) as live store state.
  */
 

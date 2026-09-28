@@ -68,7 +68,7 @@ describe("fillComposerWithSuggestion", () => {
     expect(fake.calls).toEqual(["isReady"]);
   });
 
-  // "The chip never sends" is structural, not something a test can exercise
+  // "Accepting a suggestion never sends" is structural, not something a test can exercise
   // here: `SuggestionFillTarget` is a `Pick<ComposerPromptEditorHandle,
   // "isReady" | "setContent" | "focusAtEnd">`, so no send-shaped member is
   // even reachable from a value of this type - there is no call path to

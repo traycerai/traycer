@@ -3,22 +3,23 @@ import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 import { plainTextPromptContent } from "@/components/epic-canvas/renderers/chat-tile-session-state";
 
 /**
- * Whether the composer has room for the suggestion chip at all, before asking
- * whether there is a suggestion to show.
+ * Whether the composer may offer the suggestion at all, before asking whether
+ * there is one to offer. The suggestion is the empty composer's placeholder,
+ * and → (or a tap on a touch device) fills it.
  *
- * - **Only when no banner holds the slot.** The banner chain is strictly one at
- *   a time and the chip is below every entry in it: a fallback card or a
- *   re-auth prompt is something the user has to deal with, a suggestion is
- *   not.
+ * - **Only when no banner is up.** A fallback card or a re-auth prompt is
+ *   something the user has to deal with; a suggestion is not, and it does not
+ *   compete for their attention with one.
  * - **Only when this surface can send.** Filling a composer that cannot send
  *   offers an action the user cannot finish. Two gates, because the
  *   composer's `sendBlocked` does not carry the workspace one: a missing or
  *   unavailable workspace refuses the send button through its own check.
- * - **Only over an empty draft.** Filling REPLACES the document, so a chip
- *   over a draft would be one click from destroying it. Typing hides the chip;
- *   clearing the draft brings it back while the suggestion still stands.
+ * - **Only over an empty draft.** Filling REPLACES the document. A placeholder
+ *   shows only over an empty document anyway, but the gate also keeps the
+ *   accept key inert under a draft: typing hides the suggestion, and clearing
+ *   the draft brings it back while the suggestion still stands.
  */
-export function promptSuggestionChipAllowed(input: {
+export function promptSuggestionAllowed(input: {
   readonly topBannerKind: ComposerTopBannerKind;
   readonly sendDisabled: boolean;
   readonly workspaceBlocked: boolean;
@@ -36,13 +37,43 @@ export function promptSuggestionChipAllowed(input: {
 
 /**
  * The editor calls a fill makes, and nothing else: no send path is reachable
- * from here, which is what makes "the chip never sends" structural rather than
- * a convention the call site has to keep.
+ * from here, which is what makes "accepting a suggestion never sends"
+ * structural rather than a convention the call site has to keep.
  */
 export type SuggestionFillTarget = Pick<
   ComposerPromptEditorHandle,
   "isReady" | "setContent" | "focusAtEnd"
 >;
+
+/**
+ * The key that accepts the suggestion: a bare →, the inline-autosuggestion
+ * convention. It is only ever consulted over an empty composer, where → has
+ * nothing else to do. A modified → (word or line jumps, selection) is never
+ * taken, and neither is one still composing an IME candidate.
+ */
+export function isPromptSuggestionAcceptKey(event: {
+  readonly key: string;
+  readonly altKey: boolean;
+  readonly ctrlKey: boolean;
+  readonly metaKey: boolean;
+  readonly shiftKey: boolean;
+  readonly isComposing: boolean;
+}): boolean {
+  return (
+    event.key === "ArrowRight" &&
+    !event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.shiftKey &&
+    !event.isComposing
+  );
+}
+
+/**
+ * How far a touch may travel between down and up and still count as a tap on
+ * the composer, not a scroll or a drag that happened to start there.
+ */
+export const PROMPT_SUGGESTION_TAP_SLOP_PX = 10;
 
 /**
  * Fills the composer with the suggestion and focuses it. `setContent` is the
