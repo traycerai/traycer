@@ -1,7 +1,9 @@
+import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
 export const AGENT_SELECTION = defineSettingsSection("agents", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Agent selection",
     description:
       "How Traycer picks a coding agent, model, and reasoning effort when it spawns child agents.",

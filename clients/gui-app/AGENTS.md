@@ -66,13 +66,18 @@ Generated — don't hand-edit: `src/routeTree.gen.ts`, `dist/`, `.tanstack/`.
 - **`cn(...)`** from `@/lib/utils` for all composed `className`s. No template
   literals / `+` / `.join(" ")`. Static single strings OK.
 - **Fluid layout sizing** — `w-full`, `max-w-*`, viewport caps. No fixed px/rem
-  for layout surfaces (icons / touch targets OK). One recorded exception:
-  Settings ▸ Layout's status-bar preview frame
-  (`panels/layout/status-bar-preview.tsx`) is a SIMULATED viewport whose width
-  control names a pixel width, so it draws `w-[480px]` / `w-[880px]` /
-  `w-[920px]` — always under `max-w-full`, since a frame wider than the
-  ~944px Settings pane silently pushes the strip's right-hand cluster
-  off-screen. A new fixed-px layout width needs the same kind of argument.
+  for layout surfaces (icons / touch targets OK). One recorded exception, a
+  SIMULATED viewport, where the pixel size is the thing being simulated
+  rather than a layout choice:
+  - The layout inspector is 380px wide (`layout-editor.css`), always under
+    `max-width: 100%`. It is an instrument panel like DevTools: a fluid width
+    would change the measured width of the specimen stage, which is the thing
+    the user is judging.
+
+  A new fixed-px layout width needs the same kind of argument.
+  (The previous entry named `panels/layout/status-bar-preview.tsx`, deleted
+  with the legacy Layout page.)
+
 - **Safe area** — never write `env(safe-area-inset-*)`; `index.css` owns the
   only reads. `#root` reserves the top and both horizontal insets app-wide
   (landscape is supported, so the sensor housing can be on either side), which
@@ -180,7 +185,8 @@ Host scope: tab tiles use `useTabHostId()` / `useTabHostClient()`; app-wide
 surfaces use `useEffectiveHostId()` / `useHostClient()`. Don't mix.
 `useEffectiveHostId()` is the selection authority's DERIVED host (selection
 model §1) — one decider per app, delivered to every window. Settings ▸ Activate
-is the only UI gesture that changes it; no picker anywhere writes it, and
+and the account menu's Host section are the only UI gestures that change it,
+both through the one seam (`useMakeActiveHost`); no other picker writes it, and
 `HostDirectoryService.selectById` is lint-restricted to the one authority
 bridge. Surface pickers write a per-surface pin (`useSurfaceHostPin`), and a
 surface with no usable pin resolves its default before `useEffectiveHostId()`.

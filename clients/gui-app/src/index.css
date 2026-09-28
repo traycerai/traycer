@@ -179,19 +179,304 @@
    Deliberately no reduced-motion override. The base layer already collapses
    every animation to 0.01ms, which still fires `animationend` - and that event
    is what takes `data-pulse` back off. `animation: none` would suppress it and
-   leave the attribute set for good, so the chip could never pulse again. */
+   leave the attribute set for good, so the chip could never pulse again.
+
+   Two knobs, both read off the animated element so a variant can set them with
+   one declaration. `--dock-chip-ring-duration` is the decay this ring is
+   allowed: 620ms is the value the whole app's timing family tops out at, and a
+   longer glow keeps a running animation beside the composer for that much
+   longer, so it is a variable rather than a literal precisely so the two can
+   be compared on pixels. It is a separate longhand after the shorthand on
+   purpose - a `var()` inside the `animation` shorthand makes the WHOLE
+   declaration invalid-at-computed-value if the variable ever is, which would
+   take `forwards` with it and leave `data-pulse` set for good.
+   `--dock-chip-ring-color` is the ring's tone; a background item that FAILED
+   radiates the destructive role instead of the primary one, because a failure
+   is the one arrival on this strip that is not simply news. */
 @keyframes chat-dock-chip-pulse {
   from {
     box-shadow: 0 0 0 0
-      color-mix(in srgb, var(--color-primary) 55%, transparent);
+      color-mix(
+        in srgb,
+        var(--dock-chip-ring-color, var(--color-primary)) 55%,
+        transparent
+      );
   }
   to {
     box-shadow: 0 0 0 5px transparent;
   }
 }
 
-[data-chat-dock-chip][data-pulse="true"] {
+[data-chat-dock-chip][data-pulse="true"],
+[data-chat-dock-chip][data-pulse="failure"] {
   animation: chat-dock-chip-pulse 620ms ease-out forwards;
+  animation-duration: var(--dock-chip-ring-duration, 620ms);
+}
+
+[data-chat-dock-chip][data-pulse="failure"] {
+  --dock-chip-ring-color: var(--color-destructive);
+}
+
+/* The side strip's meter: a running agent's pip breathes. The component sets
+   `data-breathing` only while motion is enabled, so reduced motion and the
+   app's animation switch leave the pip static at full strength. */
+@keyframes side-strip-pip-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+[data-pip][data-breathing="true"] {
+  animation: side-strip-pip-breathe 1.6s ease-in-out infinite;
+  animation-delay: var(--pip-delay);
+}
+
+/* A task going into waiting: its row or tile rings out twice in the warning
+   role, 1.2s in total, then stays still. Set only on the transition, and
+   only while motion is enabled. */
+@keyframes side-strip-waiting-pulse {
+  from {
+    box-shadow: 0 0 0 0
+      color-mix(in srgb, var(--color-warning) 55%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
+[data-side-tab][data-waiting-pulse="true"] {
+  animation: side-strip-waiting-pulse 600ms ease-out 2;
+}
+
+/* The sheet join: the active task tab (top), row, tile or split pair (side)
+   runs into its task's surface, so the tab and everything the task owns read
+   as one shape. The joined element takes the fill of the pane it meets and
+   the canvas border, open on the surface side; the bridge, anchored to it,
+   runs that fill onto the surface, 1px over its edge (opening the epic
+   canvas's own border where the canvas meets the strip), and its
+   pseudo-elements are the concave corners that flare out along the
+   surface's edge. One mechanism for both placements.
+
+   The fill is the pane's: `data-join-pane` names it (the epic panel, its
+   collapsed rail, or the canvas, the default and the only one a top tab
+   meets by rule).
+
+   Arc geometry: absolute offsets resolve against the bridge's padding box.
+   At 100%, each arc already overlaps its 1px border, landing on the border's
+   inner edge. Subtracting 1px again pushes the arc into the joined fill.
+
+   Unlayered, so the fill beats the element's `bg-*` utility; sheets exist
+   only from md, and so does the join. */
+[data-sheet-join-bridge] {
+  display: none;
+}
+
+@variant md {
+  [data-sheet-joined] {
+    --join-fill: var(--canvas);
+    anchor-name: --sheet-joined;
+    background-color: var(--join-fill);
+  }
+
+  [data-sheet-joined][data-join-pane="panel"],
+  :has([data-sheet-joined][data-join-pane="panel"]) > [data-sheet-join-bridge] {
+    --join-fill: var(--sidebar);
+  }
+
+  [data-sheet-joined][data-join-pane="rail"],
+  :has([data-sheet-joined][data-join-pane="rail"]) > [data-sheet-join-bridge] {
+    --join-fill: var(--background);
+  }
+
+  /* A header tab's box already carries its border; it only opens at the
+     bottom. */
+  [data-sheet-joined="top"] {
+    border-color: var(--canvas-border);
+    border-bottom-width: 0;
+    border-end-start-radius: 0;
+    border-end-end-radius: 0;
+  }
+
+  [data-sheet-joined="left"],
+  [data-sheet-joined="right"] {
+    position: relative;
+
+    &::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border: 1px solid var(--canvas-border);
+      border-radius: inherit;
+      pointer-events: none;
+    }
+  }
+
+  [data-sheet-joined="left"] {
+    border-start-end-radius: 0;
+    border-end-end-radius: 0;
+
+    &::before {
+      border-inline-end-width: 0;
+    }
+  }
+
+  [data-sheet-joined="right"] {
+    border-start-start-radius: 0;
+    border-end-start-radius: 0;
+
+    &::before {
+      border-inline-start-width: 0;
+    }
+  }
+
+  :has([data-sheet-joined]) > [data-sheet-join-bridge] {
+    --join-fill: var(--canvas);
+    --join-radius: var(--radius-lg);
+    display: block;
+    /* The dragged anchor lives in a fixed DragOverlay in this scope. */
+    position: fixed;
+    position-anchor: --sheet-joined;
+    position-visibility: anchors-visible;
+    /* Over the strip's resize handle (z-20), whose hover line would otherwise
+       cut the joined band in two; the handle still takes the pointer here. */
+    z-index: 21;
+    background-color: var(--join-fill);
+    pointer-events: none;
+
+    /* Each corner is a box whose one rounded corner, the one facing the
+       bridge (at --arc-x, --arc-y), is the arc: its border there is the
+       outline and a shadow the fill beyond. A rounded box is anti-aliased
+       like every convex corner; a gradient's hard stops are not, and
+       stair-step. The box sits at fractional device pixels, where a clip's
+       edge pixels are part-covered, so the clip stays off every edge but the
+       sheet's: the shadow is pushed toward the arc until it stops 1px short
+       of the two edges the backdrop meets, and past the bridge's edge it
+       lands on the bridge's own fill. */
+    &::before,
+    &::after {
+      content: "";
+      position: absolute;
+      width: var(--join-radius);
+      height: var(--join-radius);
+      border: 0 solid var(--canvas-border);
+      box-shadow: calc(var(--arc-x) * var(--join-radius) / 2)
+        calc(var(--arc-y) * var(--join-radius) / 2) 0
+        calc(var(--join-radius) / 2 - 1px) var(--join-fill);
+    }
+  }
+
+  /* Tabs on top: from the tab's bottom down onto the sheet, whose top edge is
+     the surface frame's, its own anchor, so the run follows whatever sits
+     between them (a banner included). */
+  :has([data-sheet-joined="top"]) > [data-sheet-join-bridge="top"] {
+    left: anchor(left);
+    right: anchor(right);
+    top: anchor(bottom);
+    bottom: calc(anchor(--task-frame top) - 1px);
+    border-inline: 1px solid var(--canvas-border);
+
+    &::before,
+    &::after {
+      clip-path: inset(-1px -1px 0);
+    }
+
+    &::before {
+      right: 100%;
+      bottom: 0;
+      border-bottom-width: 1px;
+      border-right-width: 1px;
+      border-bottom-right-radius: var(--join-radius);
+      --arc-x: 1;
+      --arc-y: 1;
+    }
+
+    &::after {
+      left: 100%;
+      bottom: 0;
+      border-bottom-width: 1px;
+      border-left-width: 1px;
+      border-bottom-left-radius: var(--join-radius);
+      --arc-x: -1;
+      --arc-y: 1;
+    }
+  }
+
+  /* Tabs on the side: from the row's inner edge across the strip's gutter
+     onto the surface. */
+  :has([data-sheet-joined="left"]) > [data-sheet-join-bridge="left"],
+  :has([data-sheet-joined="right"]) > [data-sheet-join-bridge="right"] {
+    top: anchor(top);
+    bottom: anchor(bottom);
+    border-block: 1px solid var(--canvas-border);
+
+    &::before {
+      bottom: 100%;
+    }
+
+    &::after {
+      top: 100%;
+    }
+  }
+
+  :has([data-sheet-joined="left"]) > [data-sheet-join-bridge="left"] {
+    left: anchor(right);
+    right: calc(anchor(--task-frame left) - 1px);
+
+    &::before,
+    &::after {
+      clip-path: inset(-1px 0 -1px -1px);
+    }
+
+    &::before {
+      right: 0;
+      border-bottom-width: 1px;
+      border-right-width: 1px;
+      border-bottom-right-radius: var(--join-radius);
+      --arc-x: 1;
+      --arc-y: 1;
+    }
+
+    &::after {
+      right: 0;
+      border-top-width: 1px;
+      border-right-width: 1px;
+      border-top-right-radius: var(--join-radius);
+      --arc-x: 1;
+      --arc-y: -1;
+    }
+  }
+
+  :has([data-sheet-joined="right"]) > [data-sheet-join-bridge="right"] {
+    right: anchor(left);
+    left: calc(anchor(--task-frame right) - 1px);
+
+    &::before,
+    &::after {
+      clip-path: inset(-1px -1px -1px 0);
+    }
+
+    &::before {
+      left: 0;
+      border-bottom-width: 1px;
+      border-left-width: 1px;
+      border-bottom-left-radius: var(--join-radius);
+      --arc-x: -1;
+      --arc-y: 1;
+    }
+
+    &::after {
+      left: 0;
+      border-top-width: 1px;
+      border-left-width: 1px;
+      border-top-left-radius: var(--join-radius);
+      --arc-x: -1;
+      --arc-y: -1;
+    }
+  }
 }
 
 /* The thumb and fill share one response: quick eased follow while dragging,
@@ -758,6 +1043,12 @@
     monospace;
 
   --app-background: var(--background);
+  /* Reflect at black so AMOLED also has a distinct ground. */
+  --shell-ground: light-dark(
+    oklch(from var(--canvas) max(calc(l - 0.08), calc(0.08 - l)) c h),
+    oklch(from var(--canvas) max(calc(l - 0.18), calc(0.18 - l)) c h)
+  );
+  --shell-gap: 6px;
 
   --radius: 0.375rem;
 }
@@ -1051,6 +1342,7 @@
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
   --color-foreground: var(--foreground);
+  --color-shell-ground: var(--shell-ground);
   --color-canvas: var(--canvas);
   --color-canvas-foreground: var(--canvas-foreground);
   --color-canvas-border: var(--canvas-border);
@@ -1106,35 +1398,27 @@
   transition-duration: 0s;
 }
 
+/* The task surface fills the space beside the strip and under the header
+   edge to edge: no inset, no enclosing box. One seam line runs along the edge
+   facing the tabs (the header's baseline, or the side strip's edge), and the
+   active tab's join opens it; the epic canvas draws its own border. */
 @utility task-surface-frame {
-  margin-top: -1px;
-  border-top-left-radius: var(--radius-xl);
-  border-top-right-radius: var(--radius-xl);
+  anchor-name: --task-frame;
 
-  &::before,
-  &::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    z-index: 30;
-    width: var(--radius-xl);
-    height: var(--radius-xl);
-    pointer-events: none;
-    border-style: solid;
-    border-top-width: 1px;
-    border-color: color-mix(in oklab, var(--color-border) 90%, transparent);
+  &[data-tab-edge="top"] {
+    border-top: 1px solid var(--canvas-border);
   }
 
-  &::before {
-    left: 0;
-    border-left-width: 1px;
-    border-top-left-radius: inherit;
+  &[data-tab-edge="left"] {
+    border-left: 1px solid var(--canvas-border);
   }
 
-  &::after {
-    right: 0;
-    border-right-width: 1px;
-    border-top-right-radius: inherit;
+  &[data-tab-edge="right"] {
+    border-right: 1px solid var(--canvas-border);
+  }
+
+  & [data-shell-sheet="route"] {
+    background-color: var(--canvas);
   }
 }
 

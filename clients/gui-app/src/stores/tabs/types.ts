@@ -88,6 +88,15 @@ export type HeaderTab = { readonly appearance?: HeaderTabAppearance | null } & (
       readonly canOpenInNewWindow: boolean;
     }
   | {
+      readonly kind: "sample-workspace";
+      readonly id: string;
+      readonly route: string;
+      readonly name: string;
+      readonly icon: TabIcon | null;
+      readonly canDuplicate: boolean;
+      readonly canOpenInNewWindow: boolean;
+    }
+  | {
       readonly kind: "history";
       readonly id: "history";
       readonly route: string;
@@ -170,7 +179,7 @@ export interface TabSurfaceCapabilities {
   readonly newWindow: "copy" | "move" | "none";
   readonly readinessScope: "none" | "default-host" | "tab-host";
   readonly durableState: {
-    readonly owner: "epic-canvas" | "landing-draft" | "tabs-store";
+    readonly owner: "epic-canvas" | "landing-draft" | "tabs-store" | "none";
     readonly eviction: "reconstruct";
   };
 }
@@ -233,8 +242,17 @@ export interface TabKindDescriptor<K extends HeaderTabKind> {
   readonly activate: (
     intent: Extract<TabNavigationIntent, { kind: K }>,
   ) => void;
-  /** Kind-specific close. */
-  readonly requestClose: (tab: Extract<HeaderTab, { kind: K }>) => void;
+  /**
+   * Kind-specific close: calls `close` to close the tab, or refuses by not
+   * calling it. The close operation is a PARAMETER, supplied by the caller
+   * (`useTabCloseCommand`), because the coordinator that performs it imports
+   * this registry; a kind that imported the coordinator itself closed an
+   * import cycle through the registry (G1-G2 follow-up).
+   */
+  readonly requestClose: (
+    tab: Extract<HeaderTab, { kind: K }>,
+    close: (ref: TabRef) => void,
+  ) => void;
   /**
    * Returns `true` when closing this tab should prompt the user first
    * (e.g., an epic tab with unsynced edits). Returns `false` when the

@@ -6,6 +6,8 @@ import { persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
   ACTION_IDS,
+  ACTION_META,
+  canonicalBinding,
   getDefaultBindings,
   type ActionId,
 } from "@/lib/keybindings/actions";
@@ -45,9 +47,10 @@ export const useKeybindingStore = create<KeybindingState>()(
     (set) => ({
       bindings: getDefaultBindings(),
       setBinding: (id, chord) => {
+        const canonical = canonicalBinding(ACTION_META[id], chord);
         set((state) => {
-          if (state.bindings[id] === chord) return state;
-          return { bindings: { ...state.bindings, [id]: chord } };
+          if (state.bindings[id] === canonical) return state;
+          return { bindings: { ...state.bindings, [id]: canonical } };
         });
       },
       clearBinding: (id) => {
@@ -99,7 +102,7 @@ function readPersistedBindings(
   for (const actionId of ACTION_IDS) {
     const value = bindings[actionId];
     if (isPersistedBindingValue(value)) {
-      persistedBindings[actionId] = value;
+      persistedBindings[actionId] = canonicalPersisted(actionId, value);
     }
   }
   // Renamed ids must be carried here, BEFORE the `ACTION_IDS` filter above
@@ -110,9 +113,24 @@ function readPersistedBindings(
     persistedBindings["composer.drafts"] === undefined &&
     isPersistedBindingValue(legacyStash)
   ) {
-    persistedBindings["composer.drafts"] = legacyStash;
+    persistedBindings["composer.drafts"] = canonicalPersisted(
+      "composer.drafts",
+      legacyStash,
+    );
   }
   return persistedBindings;
+}
+
+/**
+ * A stored binding in the form the dispatcher compares (`canonicalChord`), so a
+ * value saved in another spelling, a shipped default's included, matches on
+ * read with no migration.
+ */
+function canonicalPersisted(
+  id: ActionId,
+  value: ChordString | null,
+): ChordString | null {
+  return value === null ? null : canonicalBinding(ACTION_META[id], value);
 }
 
 function normalizePersistedBindings(

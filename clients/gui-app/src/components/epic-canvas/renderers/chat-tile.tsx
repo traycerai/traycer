@@ -1496,8 +1496,12 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
              * get a definite height (h-full on LegendList needs a real
              * containing block all the way up). The overlay dock below is
              * absolutely positioned, so it does not participate in this flex
-             * layout regardless. */}
-            <div className="relative flex min-h-0 flex-1 flex-col">
+             * layout regardless. The definite flex height also makes this a
+             * size container for the dock panel's proportional height. */}
+            <div
+              data-chat-pane=""
+              className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
+            >
               <TranscriptQueuePauseReasonSupportContext
                 value={queuePauseReasonSupport}
               >

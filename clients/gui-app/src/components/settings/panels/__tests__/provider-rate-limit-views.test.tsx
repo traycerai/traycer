@@ -10,7 +10,7 @@ import {
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatResetFullDateTime } from "@/lib/relative-time";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 import {
   AntigravityRateLimitView,
   ClaudeRateLimitView,
@@ -138,7 +138,9 @@ describe("CodexRateLimitView (extended fields)", () => {
     }
 
     it("prints '% used' under percentMode 'used'", () => {
-      useLayoutStore.getState().setStatusBarPercentMode("used");
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { amount: "used" });
       render(<CodexRateLimitView data={codex} variant="settings" />);
       expect(screen.getByText("4% used")).toBeTruthy();
       expect(screen.getByText("68% used")).toBeTruthy();
@@ -147,7 +149,9 @@ describe("CodexRateLimitView (extended fields)", () => {
     });
 
     it("prints the complement as '% remaining' under percentMode 'remaining', with the bar fill unchanged", () => {
-      useLayoutStore.getState().setStatusBarPercentMode("remaining");
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { amount: "remaining" });
       render(<CodexRateLimitView data={codex} variant="settings" />);
       expect(screen.getByText("96% remaining")).toBeTruthy();
       expect(screen.getByText("32% remaining")).toBeTruthy();
@@ -160,7 +164,9 @@ describe("CodexRateLimitView (extended fields)", () => {
       render(<CodexRateLimitView data={codex} variant="popover-detail" />);
       expect(screen.getByText("4% used")).toBeTruthy();
       act(() => {
-        useLayoutStore.getState().setStatusBarPercentMode("remaining");
+        useLayoutStore
+          .getState()
+          .setRegionValues("usageLimits", { amount: "remaining" });
       });
       expect(screen.getByText("96% remaining")).toBeTruthy();
       expect(screen.queryByText("4% used")).toBeNull();

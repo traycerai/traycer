@@ -16,7 +16,6 @@ import {
   type PlainTerminalCollection,
 } from "@/lib/terminals/plain-terminal-authority";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { EpicCanvasTerminalTileDragData } from "@/components/epic-canvas/dnd/dnd";
 
 const EPIC_ID = "epic-1";
@@ -101,17 +100,27 @@ vi.mock("@dnd-kit/core", () => ({
   },
 }));
 
+// The chips follow the Resource monitor's own region values now (L-60), so
+// the row asks this hook rather than reading a settings field. A deliberate
+// subset here, so the chip assertions below prove the row passes the hook's
+// answer through rather than a default of its own.
+vi.mock("@/hooks/resources/use-navigator-resource-metrics", () => ({
+  useNavigatorResourceMetrics: () => ["memory"],
+}));
 vi.mock("@/components/resources/resource-usage-chip", () => ({
-  OwnerResourceChip: (props: {
-    readonly kind: string;
-    readonly ownerId: string;
-    readonly hostId: string | null;
+  NavigatorResourceHotspotChip: (props: {
+    readonly owner: {
+      readonly kind: string;
+      readonly ownerId: string;
+      readonly hostId: string | null;
+    } | null;
     readonly metrics: ReadonlyArray<string>;
   }) => {
-    resourceChipCalls.calls.push(props);
+    if (props.owner === null) return null;
+    resourceChipCalls.calls.push({ ...props.owner, metrics: props.metrics });
     return (
       <span
-        data-testid={`owner-resource-chip-${props.hostId}-${props.ownerId}`}
+        data-testid={`owner-resource-chip-${props.owner.hostId}-${props.owner.ownerId}`}
       />
     );
   },
@@ -235,7 +244,6 @@ describe("terminal sidebar fleet identity consumers", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     draggableCalls.calls = [];
     resourceChipCalls.calls = [];
-    useSettingsStore.setState({ navigatorResourceMetrics: ["cpu", "memory"] });
     durableCollection.value = freshPlainCollection([
       epicRunningPlainTerminal(SHARED_ID, HOST_A, "Host A shell"),
       epicRunningPlainTerminal(SHARED_ID, HOST_B, "Host B shell"),
@@ -244,7 +252,6 @@ describe("terminal sidebar fleet identity consumers", () => {
 
   afterEach(() => {
     cleanup();
-    useSettingsStore.setState({ navigatorResourceMetrics: [] });
   });
 
   it("highlights, registers DnD, and selects resources per owner host", () => {
@@ -288,19 +295,20 @@ describe("terminal sidebar fleet identity consumers", () => {
       draggableCalls.calls.map((call) => call.data.tile.hostId).sort(),
     ).toEqual([HOST_A, HOST_B].sort());
 
+    // Each row's chip carries the hook's metrics for its OWN host.
     expect(resourceChipCalls.calls).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           kind: "terminal",
           ownerId: SHARED_ID,
           hostId: HOST_A,
-          metrics: ["cpu", "memory"],
+          metrics: ["memory"],
         }),
         expect.objectContaining({
           kind: "terminal",
           ownerId: SHARED_ID,
           hostId: HOST_B,
-          metrics: ["cpu", "memory"],
+          metrics: ["memory"],
         }),
       ]),
     );

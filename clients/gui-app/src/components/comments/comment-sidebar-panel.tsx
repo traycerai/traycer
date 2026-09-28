@@ -4,7 +4,10 @@ import {
   useEpicLaneCommentThreadsDroppedAt,
 } from "@/hooks/comments/use-lane-comment-threads";
 import { revealCommentThreadAnchor } from "@/lib/comments/comment-editor-registry";
-import { useEpicArtifact } from "@/lib/epic-selectors";
+import {
+  useEpicArtifact,
+  useEpicCommentRoomAvailability,
+} from "@/lib/epic-selectors";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useArtifactAnchorPositions } from "@/stores/comments/anchor-positions-store";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
@@ -37,6 +40,10 @@ export function CommentSidebarPanel(props: CommentSidebarPanelProps) {
   // belong to this wiring layer, which is what keeps the panel mountable on
   // the mobile switcher, outside any epic session.
   const laneDroppedAt = useEpicLaneCommentThreadsDroppedAt();
+  // The sticky gate: it holds an unavailable answer across a stream
+  // reconnect, which clears the store's durability slots and would otherwise
+  // re-open the panel against the same absent room.
+  const commentRoomAvailability = useEpicCommentRoomAvailability();
   const setFlashThread = useCommentThreadsStore((s) => s.setFlashThread);
   const anchorPositions = useArtifactAnchorPositions(epicId, activeArtifactId);
   const currentUserId = useAuthStore((state) => state.profile?.userId ?? null);
@@ -58,6 +65,7 @@ export function CommentSidebarPanel(props: CommentSidebarPanelProps) {
       artifactId={activeArtifactId}
       laneThreads={laneThreads}
       laneDroppedAt={laneDroppedAt}
+      commentRoomAvailability={commentRoomAvailability}
       anchorPositions={anchorPositions}
       currentUserId={currentUserId}
       canModerate={false}

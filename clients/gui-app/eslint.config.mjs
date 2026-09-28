@@ -112,6 +112,12 @@ const importRestrictionDimensions = {
         "Overlay portal primitives are built only by the shadcn wrappers in src/components/ui/**. Use the wrapper - Dialog/Popover/Select/DropdownMenu/Tooltip/ContextMenu/HoverCard from @/components/ui/* - instead of importing the Radix primitive directly.",
     },
     {
+      group: ["@floating-ui/react"],
+      importNames: ["FloatingPortal"],
+      message:
+        "Floating UI's portal is built only by the wrappers in src/components/ui/** (the hover card). Use HoverCard from @/components/ui/hover-card instead of portalling a Floating UI surface directly.",
+    },
+    {
       group: ["radix-ui/internal"],
       importNames: [
         "DismissableLayer",
@@ -994,7 +1000,7 @@ const tailContracts = [
     // The card is a SURFACE: it owns its fill, its border and its elevation,
     // and nothing else. A caller that does not use `HOVER_PREVIEW_SCROLL_CLASS`
     // supplies the inset and the type itself, because the card never had them.
-    pattern: "^HoverCardContent$",
+    pattern: "^HoverCard$",
     allow: ["layout", "spacing", "typography", ...fontSizeTokens],
   },
   {
@@ -2619,6 +2625,27 @@ export default tseslint.config(
     },
   },
   {
+    // "This component has committed at least once" is the one fact a render
+    // cannot compute, so the rule's cure - derive it during render instead -
+    // does not exist here. The dock's pill strip suppresses the attention
+    // ring of every pill that mounts in its FIRST commit (L-148: opening a
+    // chat with five pills fired five rings at once, for nothing that had
+    // happened) and rings every later arrival, and a chip reads the flag once
+    // in its own state initializer, so it has to be true during that first
+    // render and false in every render after it.
+    //
+    // The three shapes that would satisfy this rule are all worse and two are
+    // banned by their own rules: a `useRef` read in render trips
+    // `react-hooks/refs`, a mutable cell held in `useState` trips
+    // `react-hooks/immutability`, and a timer would make a deterministic
+    // mount fact into a race. The cost the rule is warning about is one extra
+    // render of a flex row of at most five pills.
+    files: ["src/components/chat/chat-dock-compact-strip.tsx"],
+    rules: {
+      "react-hooks/set-state-in-effect": "off",
+    },
+  },
+  {
     // Router -> store synchronization direction for an already-committed epic
     // route. This is the inverse of navigateToTabIntent's entry-point seam,
     // so it may read the store action directly while the rest of the app may
@@ -3047,7 +3074,8 @@ export default tseslint.config(
   {
     // Geometry a SHARED HELPER builds: `frameStyle(paintedSize, origin)`,
     // `containBox(frameSize)`, `gitTreeStyle(...)`, `pipRootBox(geometry)`,
-    // `surfaceStyle(placement)`, dnd-kit's `sortable.style`, a measured
+    // `surfaceStyle(placement)`, dnd-kit's `sortable.style`, Floating UI's
+    // `floatingStyles` and `useTransitionStyles` styles, a measured
     // `rect`, `useEpicNodeIconTone(type).style`. Every property inside is one
     // the allow list above already permits - `useEpicNodeIconTone` builds the
     // `--swatch` custom property and nothing else - and the rule simply cannot
@@ -3069,6 +3097,7 @@ export default tseslint.config(
       "src/components/epic-canvas/image-preview/image-diff-view.tsx",
       "src/components/epic-canvas/pip/agent-browser-pip.tsx",
       "src/components/epic-canvas/renderers/agent-cursor-overlay.tsx",
+      "src/components/epic-canvas/sidebar/artifact-row-view.tsx",
       "src/components/epic-canvas/sidebar/epic-sidebar-artifact-tree.tsx",
       "src/components/epic-canvas/sidebar/epic-sidebar-chat-tree.tsx",
       "src/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row.tsx",
@@ -3082,6 +3111,7 @@ export default tseslint.config(
       "src/components/notifications/notifications-popover.tsx",
       "src/components/resources/resource-monitor-popover.tsx",
       "src/components/settings/panels/appearance-settings-panel.tsx",
+      "src/components/ui/hover-card.tsx",
       "src/components/ui/shimmer.tsx",
       "src/components/ui/start-truncated-text.tsx",
     ],

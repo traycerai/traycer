@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useState, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -25,6 +27,10 @@ import {
   openStoreForTest,
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useTabsStore } from "@/stores/tabs/store";
+import { tabAutoTint } from "@/components/layout/tabs/tab-identity";
+import { useSidebarRailWidthStore } from "@/stores/epics/sidebar-rail-width-store";
 
 const sidebarRenderCounts = vi.hoisted(() => ({
   liveHost: 0,
@@ -71,10 +77,18 @@ vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-rail", () => ({
 
 // The snapshot scope reads session-bound selectors; stub them so the live
 // branch renders against the fake handle without a full projector store.
-vi.mock("@/lib/epic-selectors", () => ({
-  useEpicSnapshotLoaded: () => true,
-  useEpicSnapshotFetchError: () => null,
-}));
+// Everything else (incl. `useRegisteredEpicTitle` /
+// `useRegisteredEpicTitleGenerating`, which the panel task header reads) stays
+// real: both fall back safely to `null`/`false` for an epic id with no
+// registered handle, which is every case in this file.
+vi.mock("@/lib/epic-selectors", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/epic-selectors")>();
+  return {
+    ...actual,
+    useEpicSnapshotLoaded: () => true,
+    useEpicSnapshotFetchError: () => null,
+  };
+});
 
 const EPIC_ID = "sidebar-column-epic";
 const TAB_ID = "sidebar-column-tab";
@@ -124,13 +138,22 @@ function buildSessionHandle(epicId: string): OpenedStoreForTest {
   });
 }
 
+/** The app root's query client; the panel header's rename reads it. */
+function QueryWrapper(props: { readonly children: ReactNode }) {
+  const [client] = useState(() => new QueryClient());
+  return (
+    <QueryClientProvider client={client}>{props.children}</QueryClientProvider>
+  );
+}
+
 function renderColumn() {
   return render(
     <TooltipProvider>
       <div className="flex">
-        <EpicSidebarColumn epicId={EPIC_ID} tabId={TAB_ID} />
+        <EpicSidebarColumn epicId={EPIC_ID} tabId={TAB_ID} side="left" />
       </div>
     </TooltipProvider>,
+    { wrapper: QueryWrapper },
   );
 }
 
@@ -139,10 +162,11 @@ function renderColumnWithSession(handle: OpenedStoreForTest) {
     <TooltipProvider>
       <EpicSessionContext.Provider value={handle}>
         <div className="flex">
-          <EpicSidebarColumn epicId={EPIC_ID} tabId={TAB_ID} />
+          <EpicSidebarColumn epicId={EPIC_ID} tabId={TAB_ID} side="left" />
         </div>
       </EpicSessionContext.Provider>
     </TooltipProvider>,
+    { wrapper: QueryWrapper },
   );
 }
 
@@ -155,6 +179,9 @@ describe("<EpicSidebarColumn />", () => {
       mainCollapsedByTabId: {},
       sidebarWidthPx: DEFAULT_SIDEBAR_WIDTH_PX,
     });
+    useSidebarRailWidthStore.setState({ naturalWidthPxByTabId: {} });
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
   });
 
   afterEach(() => {
@@ -197,7 +224,7 @@ describe("<EpicSidebarColumn />", () => {
     view.rerender(
       <TooltipProvider>
         <div className="flex">
-          <EpicSidebarColumn epicId={EPIC_ID} tabId={TAB_ID} />
+          <EpicSidebarColumn epicId={EPIC_ID} tabId={TAB_ID} side="left" />
         </div>
       </TooltipProvider>,
     );
@@ -223,7 +250,7 @@ describe("<EpicSidebarColumn />", () => {
       <TooltipProvider>
         <EpicSessionContext.Provider value={null}>
           <div className="flex">
-            <EpicSidebarColumn epicId={EPIC_ID} tabId={TAB_ID} />
+            <EpicSidebarColumn epicId={EPIC_ID} tabId={TAB_ID} side="left" />
           </div>
         </EpicSessionContext.Provider>
       </TooltipProvider>,
@@ -237,7 +264,7 @@ describe("<EpicSidebarColumn />", () => {
       <TooltipProvider>
         <EpicSessionContext.Provider value={handle}>
           <div className="flex">
-            <EpicSidebarColumn epicId={EPIC_ID} tabId={TAB_ID} />
+            <EpicSidebarColumn epicId={EPIC_ID} tabId={TAB_ID} side="left" />
           </div>
         </EpicSessionContext.Provider>
       </TooltipProvider>,
@@ -320,6 +347,28 @@ describe("<EpicSidebarColumn />", () => {
       DEFAULT_SIDEBAR_WIDTH_PX,
     );
     expect(column.style.width).toBe(`${DEFAULT_SIDEBAR_WIDTH_PX}px`);
+  });
+
+  // Bug #1: the rail is mocked out in this file, so the widest-mounted-rail
+  // floor is exercised directly through its store rather than through a real
+  // rail's own measurement (that measurement is covered in
+  // `epic-sidebar-rail.test.tsx`).
+  it("widens the panel past the persisted width for a wider mounted rail, and settles back once it unmounts", () => {
+    act(() => {
+      useSidebarRailWidthStore
+        .getState()
+        .setRailNaturalWidthPx("other-tab", 400);
+    });
+    renderColumn();
+    expect(screen.getByTestId("epic-sidebar-column").style.width).toBe("400px");
+
+    act(() => {
+      useSidebarRailWidthStore.getState().clearRailNaturalWidthPx("other-tab");
+    });
+
+    expect(screen.getByTestId("epic-sidebar-column").style.width).toBe(
+      `${DEFAULT_SIDEBAR_WIDTH_PX}px`,
+    );
   });
 
   it("nudges the committed width with arrow keys from the handle", () => {
@@ -450,6 +499,48 @@ describe("<EpicSidebarColumn />", () => {
     );
   });
 
+  it("keeps a live drag from going narrower than the widest mounted rail's reported floor", () => {
+    act(() => {
+      useSidebarRailWidthStore
+        .getState()
+        .setRailNaturalWidthPx("other-tab", 260);
+    });
+    const { handle, column } = setUpDragSurface();
+
+    fireEvent(
+      handle,
+      pointerEvent("pointerdown", {
+        pointerId: 7,
+        clientX: DEFAULT_SIDEBAR_WIDTH_PX,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    // Far left: would floor at the static MIN_SIDEBAR_WIDTH_PX (200) without
+    // the fix; the mounted rail's own 260px floor wins instead.
+    fireEvent(
+      handle,
+      pointerEvent("pointermove", {
+        pointerId: 7,
+        clientX: -5000,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(column.style.width).toBe("260px");
+
+    fireEvent(
+      handle,
+      pointerEvent("pointerup", {
+        pointerId: 7,
+        clientX: -5000,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(useLeftPanelStore.getState().sidebarWidthPx).toBe(260);
+  });
+
   it("restores the pre-drag inline width on pointer-cancel without committing", () => {
     const { handle, column } = setUpDragSurface();
 
@@ -486,5 +577,75 @@ describe("<EpicSidebarColumn />", () => {
     expect(useLeftPanelStore.getState().sidebarWidthPx).toBe(
       DEFAULT_SIDEBAR_WIDTH_PX,
     );
+  });
+});
+
+describe("<EpicSidebarColumn /> panel task header", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useLeftPanelStore.setState({
+      mainCollapsedByTabId: {},
+      sidebarWidthPx: DEFAULT_SIDEBAR_WIDTH_PX,
+    });
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("tints the chip with the tab's own colour when it has one", () => {
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(TAB_ID, EPIC_ID, "Header Task");
+    // `setTabCustomization` writes onto the strip's own layout item, so the
+    // ref has to be present in it first - unlike the epic-canvas tab record,
+    // this store has no seed for a ref that was never opened through it.
+    useTabsStore.getState().ensurePresent({ kind: "epic", id: TAB_ID });
+    useTabsStore
+      .getState()
+      .setTabCustomization({ kind: "epic", id: TAB_ID }, { color: "#3355ee" });
+
+    renderColumn();
+
+    expect(screen.getByTestId("epic-sidebar-task-header")).not.toBeNull();
+    expect(screen.getByText("Header Task")).not.toBeNull();
+    const chip = screen.getByTestId("side-tab-monogram-chip");
+    expect(chip.style.getPropertyValue("--side-tab-tint")).toBe("#3355ee");
+  });
+
+  it("falls back to the epic's auto tint when the tab has no colour", () => {
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(TAB_ID, EPIC_ID, "Header Task");
+
+    renderColumn();
+
+    const chip = screen.getByTestId("side-tab-monogram-chip");
+    expect(chip.style.getPropertyValue("--side-tab-tint")).toBe(
+      tabAutoTint(EPIC_ID),
+    );
+  });
+
+  it("shows no header while the panel is collapsed", () => {
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(TAB_ID, EPIC_ID, "Header Task");
+
+    renderColumn();
+    expect(screen.getByTestId("epic-sidebar-task-header")).not.toBeNull();
+
+    act(() => {
+      useLeftPanelStore.getState().setMainCollapsed(TAB_ID, true);
+    });
+
+    expect(screen.queryByTestId("epic-sidebar-task-header")).toBeNull();
+  });
+
+  it("renders no header when the tab cannot be resolved", () => {
+    renderColumn();
+
+    expect(screen.queryByTestId("epic-sidebar-task-header")).toBeNull();
   });
 });

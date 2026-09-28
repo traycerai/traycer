@@ -22,6 +22,7 @@ Restarts and updates that recover cleanly, a cooperative stop on Windows, and a 
 <Update label="v1.3.0">
 Reliable Host updates, a way to sign in the mobile app, and clearer commands.
 
+* **Breaking: Node.js 22.13 for npm installs** — the npm package now needs Node.js 22.13 or later; it needed 20.18 before. Update Node.js before you upgrade through npm. Homebrew and Traycer Desktop install a standalone binary that does not need Node.js.
 * **Host updates** — `traycer host update` shows progress, waits instead of interrupting busy work, and can move to an older release with `--release` and `--allow-downgrade`. A Host you deliberately downgraded is no longer upgraded again behind your back.
 * **Mobile app** — `traycer link-phone` signs the Traycer mobile app in by scanning a code, and shows a match code to compare on both sides.
 * **Self-upgrade** — upgrading the CLI installs exactly the version it reports.
@@ -46,6 +47,7 @@ Remote hosts, new agent commands, and a Host that recovers on its own.
 <Update label="v1.1.10">
 Proxy support and easier-to-diagnose Host crashes.
 
+* **Breaking: `--epic-id` and `--sender-agent-id` removed** — agent, workspace, and monitor commands no longer take these flags. They read the Task from `TRAYCER_EPIC_ID` and the calling agent from `TRAYCER_AGENT_ID`, which Traycer sets for the agents it launches. Scripts that pass either flag now fail with an unknown-option error.
 * **Proxies** — the CLI honours `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`.
 * **Epic Mode removed** — `traycer agent create` no longer offers Epic Mode.
 * **Agent-to-agent** — agents created by other agents run with full access.
@@ -56,7 +58,7 @@ Proxy support and easier-to-diagnose Host crashes.
 <Update label="v1.1.9">
 Agent roles, the Oh My Pi coding agent, and Host installs that recover instead of leaving you stuck.
 
-* **Agent roles** — give an agent a role when you create it.
+* **Agent roles** — agents claim, list, and give up named roles in a Task with `traycer agent role claim`, `list`, and `relinquish`, when agent roles are turned on in Settings.
 * **Oh My Pi** — create agents with `--harness omp`.
 * **Command help** — command descriptions now spell out what each command actually does.
 * **Installing the Host** — a failed install or update offers a way forward instead of leaving you stuck. On macOS, the Host no longer runs slowed down in the background, and appears in Login Items as Traycer rather than `sh`.

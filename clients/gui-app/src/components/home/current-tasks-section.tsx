@@ -16,6 +16,7 @@ import { HistoryTaskRow } from "@/components/epics/history-task-row";
 import { historyItemDisplayTitle } from "@/components/epics/history-item-title";
 import { EpicsListLoading } from "@/components/epics/epics-list-shared";
 import { useHistoryOpenItem } from "@/components/epics/use-history-open-item";
+import { PARTIAL_ACTIVITY_NOTICE } from "@/components/notifications/notification-indicator-icon";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { Kbd } from "@/components/ui/kbd";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
@@ -129,7 +130,7 @@ export function CurrentTasksSection(): ReactNode {
                   notice={
                     activityCoverage === "fleet"
                       ? null
-                      : "Can't check everything that's running right now"
+                      : PARTIAL_ACTIVITY_NOTICE
                   }
                 />
                 <CurrentTaskGroup

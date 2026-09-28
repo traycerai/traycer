@@ -1,6 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  aNativeTileIsPresented,
   listTileRects,
   notifyTileRects,
   rectsIntersect,
@@ -40,6 +41,16 @@ const RECT_B: TileRect = {
   bottom: 140,
   width: 120,
   height: 120,
+};
+
+/** A tile whose surface has no box: registered, but with nowhere to paint. */
+const EMPTY_RECT: TileRect = {
+  left: 24,
+  top: 24,
+  right: 24,
+  bottom: 24,
+  width: 0,
+  height: 0,
 };
 
 /** A detached element whose measured rect the test controls. */
@@ -127,6 +138,29 @@ describe("registerTileRect", () => {
 
     expect(counts).toEqual([1, 1, 0]);
     unsubscribe();
+  });
+});
+
+describe("aNativeTileIsPresented", () => {
+  it("is false with nothing registered", () => {
+    expect(aNativeTileIsPresented()).toBe(false);
+  });
+
+  it("is true while a tile has somewhere to paint", () => {
+    const deregister = registerTile(TILE_KEY, elementAt(RECT_A));
+
+    expect(aNativeTileIsPresented()).toBe(true);
+
+    deregister();
+
+    expect(aNativeTileIsPresented()).toBe(false);
+  });
+
+  it("ignores a registration with no box, which is a tile that is not on screen", () => {
+    registerTile(TILE_KEY, elementAt(EMPTY_RECT));
+
+    expect(listTileRects()).toEqual([EMPTY_RECT]);
+    expect(aNativeTileIsPresented()).toBe(false);
   });
 });
 

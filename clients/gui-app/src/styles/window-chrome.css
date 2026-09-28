@@ -1,13 +1,41 @@
+/* `--app-title-band-height` is the height of whatever sits at the window's
+   top edge: the app header (APP_HEADER_HEIGHT_CLASS, h-10) or the slim title
+   band, never shorter than the native window controls. It is zero when
+   neither does, which the shell declares by stamping
+   `data-app-title-band="none"` on the app column. */
+:root {
+  --app-title-band-height: max(
+    env(titlebar-area-height, 0px),
+    calc(var(--spacing) * 10)
+  );
+}
+
+:root:has([data-app-title-band="none"]) {
+  --app-title-band-height: 0px;
+}
+
+/* The leading inset that clears the macOS traffic lights. It belongs to the
+   element at the window's top-left corner: a left-docked layout inspector
+   takes that corner, so the app column beside it drops to a plain gutter.
+   `min()` keeps Windows and Linux, where the inset is 0, at 0. */
+.wco {
+  --window-leading-inset: env(titlebar-area-x, 82px);
+}
+
+.wco:has([data-layout-inspector][data-dock-mode="left"]) [data-layout-column] {
+  --window-leading-inset: min(env(titlebar-area-x, 82px), 0.75rem);
+}
+
 /* Native window controls sit above renderer layers and cannot be dimmed by
-   modal backdrops. Keep the entire header on the same undimmed surface while
-   a modal owns focus; its content remains blocked by the modal focus/pointer
-   trap. Fullscreen and browser shells retain the full-viewport backdrop.
-   The spacing expression matches APP_HEADER_HEIGHT_CLASS (h-10). */
+   modal backdrops. Keep the window's top bar on the same undimmed surface
+   while a modal owns focus; its content remains blocked by the modal
+   focus/pointer trap. Fullscreen and browser shells retain the full-viewport
+   backdrop. */
 .wco
   :is(
     [data-slot="dialog-overlay"],
     [data-slot="sheet-overlay"],
     [data-slot="drawer-overlay"]
   ) {
-  top: max(env(titlebar-area-height, 0px), calc(var(--spacing) * 10));
+  top: var(--app-title-band-height);
 }

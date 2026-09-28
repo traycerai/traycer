@@ -16,15 +16,31 @@ import {
 } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
+import { EpicSessionGate } from "@/providers/epic-session-gate";
 
 type AgentTreeRecord = EpicTreeRecord & {
   readonly type: "chat" | "terminal-agent";
 };
 
-export function AgentReferenceChip(props: {
+interface AgentReferenceChipProps {
   readonly agentId: string;
   readonly display: "text" | "code";
-}) {
+}
+
+/**
+ * Markdown turns any id-shaped token into one of these, and markdown also
+ * renders with no open epic behind it (the layout editor's sample transcript).
+ * With no records to resolve against, the chip is the id as written.
+ */
+export function AgentReferenceChip(props: AgentReferenceChipProps) {
+  return (
+    <EpicSessionGate fallback={fallbackAgentId(props.agentId, props.display)}>
+      <ResolvedAgentReferenceChip {...props} />
+    </EpicSessionGate>
+  );
+}
+
+function ResolvedAgentReferenceChip(props: AgentReferenceChipProps) {
   const records = useEpicArtifactRecords();
   const roleClaimsByAgentId = useEpicAgentRoleClaimsByAgentId();
   const epicId = useOpenEpicId();

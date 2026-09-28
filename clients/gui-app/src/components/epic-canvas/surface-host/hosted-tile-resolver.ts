@@ -14,6 +14,7 @@
  *   `paneRoot.contains(target)` becomes `resolveHostedTileOwnership` /
  *   `isTargetInsideHostedTile`).
  */
+import { cssEscape } from "@/lib/dom/css-escape";
 import {
   HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
   HOSTED_TILE_PANE_ID_ATTRIBUTE,
@@ -32,7 +33,7 @@ export function findHostedTileElement(
   instanceId: string,
 ): HTMLElement | null {
   return root.querySelector<HTMLElement>(
-    `[${HOSTED_TILE_INSTANCE_ID_ATTRIBUTE}="${cssEscapeAttributeValue(instanceId)}"]`,
+    `[${HOSTED_TILE_INSTANCE_ID_ATTRIBUTE}="${cssEscape(instanceId)}"]`,
   );
 }
 
@@ -70,14 +71,4 @@ export function isTargetInsideHostedTile(
   if (!(target instanceof Element)) return false;
   const ownership = resolveHostedTileOwnership(target);
   return ownership !== null && ownership.instanceId === instanceId;
-}
-
-/**
- * `CSS.escape` is not implemented in every target runtime this app ships
- * against; instanceIds are opaque store-generated ids, never user-authored
- * text, so escaping only the two characters that would break a `querySelector`
- * attribute-value string (`"` and `\`) is sufficient and avoids a polyfill.
- */
-function cssEscapeAttributeValue(value: string): string {
-  return value.replace(/[\\"]/g, (char) => `\\${char}`);
 }

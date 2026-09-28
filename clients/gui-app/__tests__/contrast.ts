@@ -167,37 +167,6 @@ export const DARK_THEME_SURFACES: Readonly<Record<string, ThemeSurfaces>> = {
   },
 };
 
-// `--muted-foreground` per preset - unlike the surfaces above, presets
-// override this alongside their own hue, so light/dark tables must carry
-// the actual per-preset value (not the default gray).
-export const MUTED_FOREGROUND_LIGHT: Readonly<Record<string, string>> = {
-  default: "oklch(0.556 0 0)",
-  amoled: "#7d7d7d",
-  "traycer-green": "#666666",
-  dracula: "#4f5d86",
-  catppuccin: "#5c6074",
-  github: "#656d76",
-  gruvbox: "#665c54",
-  "tokyo-night": "#3f528f",
-  nord: "#4c566a",
-  ayu: "#626a73",
-  everforest: "#5f6b62",
-};
-
-export const MUTED_FOREGROUND_DARK: Readonly<Record<string, string>> = {
-  default: "oklch(0.708 0 0)",
-  amoled: "#a0a0a0",
-  "traycer-green": "#a8a8a8",
-  dracula: "#a1a8c3",
-  catppuccin: "#a6adc8",
-  github: "#8b949e",
-  gruvbox: "#a89984",
-  "tokyo-night": "#9aa5ce",
-  nord: "#d8dee9",
-  ayu: "#828890",
-  everforest: "#a4afa7",
-};
-
 // `--destructive` and `--success-foreground` remain shared by presets.
 export const DESTRUCTIVE_FOREGROUND = {
   light: "oklch(0.577 0.245 27.325)",
@@ -408,3 +377,31 @@ export function isFullPalettePreset(
     resolveThemeTokens("default", mode).get("--background")
   );
 }
+
+/**
+ * `--muted-foreground` per preset, keyed like the surface tables above so a
+ * caller can pair each value with its surfaces. Read from the palette registry
+ * rather than copied: presets override it alongside their own hue, and a
+ * copy has to be hand-synced every time one moves. Declared last because it
+ * runs at module load and `themeToken` reads `MEASURABLE_COLOR`.
+ */
+function mutedForegroundByPreset(
+  mode: ResolvedThemeMode,
+  surfaces: Readonly<Record<string, ThemeSurfaces>>,
+): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    Object.keys(surfaces).map((preset) => [
+      preset,
+      themeToken(resolveThemeTokens(preset, mode), "--muted-foreground"),
+    ]),
+  );
+}
+
+export const MUTED_FOREGROUND_LIGHT = mutedForegroundByPreset(
+  "light",
+  LIGHT_THEME_SURFACES,
+);
+export const MUTED_FOREGROUND_DARK = mutedForegroundByPreset(
+  "dark",
+  DARK_THEME_SURFACES,
+);

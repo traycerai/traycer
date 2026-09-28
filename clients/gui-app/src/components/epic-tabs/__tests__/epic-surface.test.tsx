@@ -196,6 +196,23 @@ vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-column", async () => {
   };
 });
 
+// D9: the strip's live agents list is portalled from HERE, inside this pane's
+// own session - stubbed to a marker that proves containment rather than
+// exercising the real tree/notification wiring (`strip-live-agents.test.tsx`
+// covers that in isolation).
+vi.mock("@/components/epic-canvas/sidebar/strip-live-agents", () => ({
+  StripLiveAgentsPortal: (props: {
+    readonly epicId: string;
+    readonly tabId: string;
+  }) => (
+    <span
+      data-epic-id={props.epicId}
+      data-tab-id={props.tabId}
+      data-testid="strip-live-agents-portal-mount"
+    />
+  ),
+}));
+
 import { EpicSurface } from "@/components/epic-tabs/epic-surface";
 
 const SAMPLE_SESSION: BrowserSessionInfo = sessionInfo({
@@ -258,6 +275,56 @@ describe("<EpicSurface />", () => {
     ]);
     expect(screen.getByTestId("epic-canvas-body-tab-a")).not.toBeNull();
     expect(screen.getByTestId("epic-canvas-body-tab-b")).not.toBeNull();
+  });
+
+  // D9's ownership rule: the epic canvas portals the strip's live agents from
+  // inside the SAME session this pane already has, so exactly one session
+  // boundary exists per pane and both the sidebar and the strip's portal sit
+  // inside it - never a second `<EpicSessionProvider>` for the portal alone.
+  it("mounts the strip's live-agents portal inside the pane's one session, beside the sidebar", () => {
+    renderEpicSurface("tab-a", "epic-a");
+
+    const sessions = screen.getAllByTestId("epic-session-boundary");
+    expect(sessions).toHaveLength(1);
+    const session = sessions[0];
+    const portalMount = screen.getByTestId("strip-live-agents-portal-mount");
+    const sidebar = screen.getByTestId("epic-sidebar-column");
+    expect(portalMount.dataset.epicId).toBe("epic-a");
+    expect(portalMount.dataset.tabId).toBe("tab-a");
+    expect(session.contains(portalMount)).toBe(true);
+    expect(session.contains(sidebar)).toBe(true);
+  });
+
+  it("keeps each split pane's portal inside its OWN session boundary, not a shared one", () => {
+    render(
+      <>
+        <TabSurfaceActivityProvider activity={{ visible: true, focused: true }}>
+          <EpicSurface epicId="epic-a" tabId="tab-a" />
+        </TabSurfaceActivityProvider>
+        <TabSurfaceActivityProvider
+          activity={{ visible: true, focused: false }}
+        >
+          <EpicSurface epicId="epic-b" tabId="tab-b" />
+        </TabSurfaceActivityProvider>
+      </>,
+    );
+
+    const sessions = screen.getAllByTestId("epic-session-boundary");
+    expect(sessions).toHaveLength(2);
+    const portalMounts = screen.getAllByTestId(
+      "strip-live-agents-portal-mount",
+    );
+    expect(portalMounts).toHaveLength(2);
+    const sessionForTabA = sessions.find(
+      (element) => element.dataset.tabId === "tab-a",
+    );
+    const portalForTabA = portalMounts.find(
+      (element) => element.dataset.tabId === "tab-a",
+    );
+    if (sessionForTabA === undefined || portalForTabA === undefined) {
+      throw new Error("expected a session and a portal mount for tab-a");
+    }
+    expect(sessionForTabA.contains(portalForTabA)).toBe(true);
   });
 
   it("cold-starts browser sessions with a null open-epic handle, then mounts the ready provider when the handle resolves", () => {

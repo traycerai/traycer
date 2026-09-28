@@ -8,7 +8,12 @@ import {
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useLayoutStore } from "@/stores/layout/layout-store";
+import {
+  statusBarShownProfileIds,
+  type StatusBarShownProfiles,
+} from "@/lib/layout/layout-arrangement";
+import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 
 function profile(
   profileId: string,
@@ -60,6 +65,45 @@ function selection(
     lastProfileByHarness: {},
     ...overrides,
   };
+}
+
+/**
+ * One account checked or unchecked for the strip, on one host - the test
+ * double for `withProfileShown` in `rate-limit-popover.tsx` (module-private
+ * there), which is the only production writer of `arrangement.shownProfiles`.
+ * An emptied entry is REMOVED rather than left as `[]`, matching what the
+ * arrangement's own resolver does on rehydration.
+ */
+function setStatusBarProfileShown(
+  hostId: string,
+  providerId: RateLimitProviderId,
+  profileId: string | null,
+  shown: boolean,
+): void {
+  const arrangement = useLayoutStore.getState().arrangement;
+  const current = statusBarShownProfileIds(
+    arrangement.shownProfiles,
+    hostId,
+    providerId,
+  );
+  if (current.includes(profileId) === shown) return;
+  const next = shown
+    ? [...current, profileId]
+    : current.filter((candidate) => candidate !== profileId);
+  const hostShown: Record<string, ReadonlyArray<string | null>> = {
+    ...arrangement.shownProfiles[hostId],
+  };
+  if (next.length === 0) delete hostShown[providerId];
+  else hostShown[providerId] = next;
+  const nextShownProfiles: Record<string, StatusBarShownProfiles[string]> = {
+    ...arrangement.shownProfiles,
+  };
+  if (Object.keys(hostShown).length === 0) delete nextShownProfiles[hostId];
+  else nextShownProfiles[hostId] = hostShown;
+  useLayoutStore.getState().setArrangement({
+    ...arrangement,
+    shownProfiles: nextShownProfiles,
+  });
 }
 
 beforeEach(() => {
@@ -206,14 +250,8 @@ describe("useRateLimitProfileSelection", () => {
     const memory = useComposerHarnessMemoryStore.getState();
     memory.recordProfileSelection("host-a", "codex", "personal-profile");
     memory.recordProfileSelection("host-b", "codex", "work-profile");
-    const layout = useLayoutStore.getState();
-    layout.setStatusBarProfileShown(
-      "host-a",
-      "claude-code",
-      "claude-work",
-      true,
-    );
-    layout.setStatusBarProfileShown("host-b", "codex", null, true);
+    setStatusBarProfileShown("host-a", "claude-code", "claude-work", true);
+    setStatusBarProfileShown("host-b", "codex", null, true);
 
     const initialProps: { readonly hostId: string | null } = {
       hostId: "host-a",
@@ -254,17 +292,13 @@ describe("useRateLimitProfileSelection", () => {
     const before = result.current.shownProfiles;
 
     act(() => {
-      useLayoutStore
-        .getState()
-        .setStatusBarProfileShown("host-b", "codex", "work-profile", true);
+      setStatusBarProfileShown("host-b", "codex", "work-profile", true);
     });
     // Another host's entry is not this surface's business.
     expect(result.current.shownProfiles).toBe(before);
 
     act(() => {
-      useLayoutStore
-        .getState()
-        .setStatusBarProfileShown("host-a", "codex", "work-profile", true);
+      setStatusBarProfileShown("host-a", "codex", "work-profile", true);
     });
     expect(renderCount).toBeGreaterThan(settled);
     expect(result.current.shownProfiles).toEqual({ codex: ["work-profile"] });

@@ -2665,9 +2665,11 @@ describe("<EpicsListPanel />", () => {
     const backgroundIcon = await screen.findByTestId(
       "epics-list-row-background-activity-epic-from-history",
     );
-    expect(backgroundIcon.getAttribute("class")).toContain(
-      "lucide-message-square-clock",
-    );
+    expect(
+      backgroundIcon
+        .closest("[data-status-glyph]")
+        ?.getAttribute("data-status-glyph"),
+    ).toBe("background");
     expect(anyTooltipHasText("Background activity — agent idle")).toBe(true);
   });
 

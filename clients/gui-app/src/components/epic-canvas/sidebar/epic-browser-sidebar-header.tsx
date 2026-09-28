@@ -24,6 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { PanelSearchField } from "@/components/epic-canvas/sidebar/epic-sidebar-search-field";
 import { useAddBrowserAction } from "@/components/epic-canvas/sidebar/use-browser-add-action";
@@ -39,10 +40,6 @@ import {
   useTabSurfaceKey,
 } from "@/hooks/host/use-surface-host-pin";
 import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import {
-  useEpicLeftPanelStore,
-  useLeftPanelSectionCollapsed,
-} from "@/stores/epics/left-panel-store";
 import {
   usePanelHeaderSearchOpen,
   usePanelHeaderSearchQuery,
@@ -70,11 +67,7 @@ export function BrowsersPanelActions(props: LeftPanelSlotProps) {
 }
 
 function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
-  const collapsed = useLeftPanelSectionCollapsed("browsers");
   const searchOpen = usePanelHeaderSearchOpen(props.tabId, BROWSERS_PANEL_ID);
-  const setPanelSectionCollapsed = useEpicLeftPanelStore(
-    (state) => state.setPanelSectionCollapsed,
-  );
   const openSearch = usePanelHeaderSearchStore((state) => state.openSearch);
   const surfaceKey = useTabSurfaceKey("browsers", props.tabId);
   const hostPin = useSurfaceHostPin(surfaceKey);
@@ -87,21 +80,19 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
   const [hostMenuOpen, setHostMenuOpen] = useState(false);
   const resolvedHost = useHostDirectoryEntryForHostId(hostPin.resolvedHostId);
   const { add: addBrowser, isAdding } = useAddBrowserAction(props.tabId, null);
+  const placement = useColumnOverlayPlacement("row");
   const handleAdd = useCallback(() => {
-    if (collapsed) setPanelSectionCollapsed("browsers", false);
     addBrowser();
-  }, [addBrowser, collapsed, setPanelSectionCollapsed]);
+  }, [addBrowser]);
   const handleSearch = useCallback(() => {
-    if (collapsed) setPanelSectionCollapsed("browsers", false);
     openSearch(props.tabId, BROWSERS_PANEL_ID, "");
-  }, [collapsed, openSearch, props.tabId, setPanelSectionCollapsed]);
+  }, [openSearch, props.tabId]);
   const handleFilterOpenChange = useCallback(
     (open: boolean) => {
-      if (open && collapsed) setPanelSectionCollapsed("browsers", false);
       if (!open) setHostMenuOpen(false);
       setMenuOpen(props.tabId, BROWSERS_PANEL_ID, "filter", open);
     },
-    [collapsed, props.tabId, setMenuOpen, setPanelSectionCollapsed],
+    [props.tabId, setMenuOpen],
   );
   const filterLabel = hostPin.isPinned
     ? "Filter browsers by host, 1 filter active"
@@ -162,8 +153,8 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
           </DropdownMenuTrigger>
         </TooltipWrapper>
         <DropdownMenuContent
-          side="right"
-          align="start"
+          side={placement?.side ?? "right"}
+          align={placement?.align ?? "start"}
           sideOffset={8}
           avoidCollisions={false}
           className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-64 overflow-y-auto"
@@ -184,7 +175,7 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
             <DropdownMenuSubContent
               sideOffset={8}
               alignOffset={-4}
-              avoidCollisions={false}
+              avoidCollisions={placement?.side === "left"}
               className="w-[min(90vw,20rem)]"
               data-testid="epic-browsers-panel-host-menu"
             >
@@ -249,6 +240,7 @@ export function BrowserHostFilterChoices(props: {
               intent="pin"
               surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
               updateView={null}
+              nameRef={null}
             />
           </DropdownMenuRadioItem>
         ))}

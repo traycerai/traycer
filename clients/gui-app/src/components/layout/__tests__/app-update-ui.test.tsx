@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
@@ -361,7 +362,7 @@ describe("desktop app update UI", () => {
 
   it("renders a download button when an update is available", async () => {
     const bridge = new FakeAppUpdatesBridge(availableSnapshot(1));
-    renderWithHost(<AppUpdateHeaderButton />, bridge);
+    renderWithHost(<AppUpdateHeaderButton layout="icon" />, bridge);
 
     const button = await screen.findByRole("button", {
       name: /Download update/i,
@@ -371,9 +372,114 @@ describe("desktop app update UI", () => {
     expect(bridge.downloadUpdate).toHaveBeenCalledTimes(1);
   });
 
+  // The strip foot's row layout (D6): the same states, drawn as a full-width
+  // row with the state spelled out in text, present only while an update is
+  // actually pending - absent for idle, same as the icon layout.
+  it("row layout: shows the update row only while an update is pending", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    renderWithHost(<AppUpdateHeaderButton layout="row" />, bridge);
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    expect(screen.queryByTestId("app-update-row")).toBeNull();
+
+    act(() => {
+      bridge.emit(availableSnapshot(1));
+    });
+    const row = screen.getByTestId("app-update-row");
+    expect(row.textContent).toContain("Download update");
+
+    fireEvent.click(row);
+    expect(bridge.downloadUpdate).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      bridge.emit(readySnapshot(2));
+    });
+    expect(screen.getByTestId("app-update-row").textContent).toContain(
+      "Restart to update",
+    );
+
+    act(() => {
+      bridge.emit({ ...IDLE_SNAPSHOT, sequence: 3 });
+    });
+    expect(screen.queryByTestId("app-update-row")).toBeNull();
+  });
+
+  it("row layout: keeps every state but blocked to one cut line, with the full label in a tooltip, and dims only a blocked icon", async () => {
+    const bridge = new FakeAppUpdatesBridge({
+      ...readySnapshot(1),
+      installInFlight: true,
+    });
+    renderWithHost(<AppUpdateHeaderButton layout="row" />, bridge);
+
+    const row = await screen.findByTestId("app-update-row");
+    expect(row.className.split(" ")).toContain("h-8");
+    expect(row.lastElementChild?.className.split(" ")).toContain("truncate");
+    // In-flight is disabled, but not blocked - its icon stays at full
+    // strength (a `disabled:` variant never matches a span).
+    expect(row.firstElementChild?.className).not.toContain("opacity-60");
+    // The restart announcement is exposed in row mode too (finding 5), and
+    // the action label stays the stable "Restart to update to v…" - not
+    // renamed to describe the in-flight state.
+    expect(
+      within(row).getByRole("status", {
+        name: "Restarting to install the update",
+      }),
+    ).toBeTruthy();
+    expect(row.getAttribute("aria-label")).toBe("Restart to update to v1.2.3");
+    // Disabled while restarting, so the tooltip hangs off the row's wrapper.
+    const wrapper = row.parentElement;
+    if (wrapper === null) throw new Error("expected the row's tooltip wrapper");
+    fireEvent.pointerMove(wrapper);
+    fireEvent.focus(wrapper);
+    expect(
+      await screen.findByRole("tooltip", {
+        name: "Restart to update to v1.2.3",
+      }),
+    ).toBeTruthy();
+    cleanup();
+
+    // Blocked wraps its reason in full instead, so it has no tooltip.
+    const blockedBridge = new FakeAppUpdatesBridge({
+      ...availableSnapshot(1),
+      installBlockedReason:
+        "Move Traycer to your Applications folder to install updates.",
+    });
+    renderWithHost(<AppUpdateHeaderButton layout="row" />, blockedBridge);
+    const blockedRow = await screen.findByTestId("app-update-row");
+    expect(blockedRow.className.split(" ")).toContain("min-h-8");
+    expect(blockedRow.firstElementChild?.className).toContain("opacity-60");
+    // A real reason is a full line the row wraps, not truncates (finding 6):
+    // the row is disabled, its accessible name is the whole reason, and the
+    // label element carries no `truncate` class that would clip it.
+    expect(blockedRow.hasAttribute("disabled")).toBe(true);
+    expect(blockedRow.getAttribute("aria-label")).toBe(
+      "Move Traycer to your Applications folder to install updates.",
+    );
+    expect(blockedRow.lastElementChild?.className).not.toContain("truncate");
+    const blockedWrapper = blockedRow.parentElement;
+    if (blockedWrapper === null) throw new Error("expected a parent");
+    fireEvent.pointerMove(blockedWrapper);
+    fireEvent.focus(blockedWrapper);
+    fireEvent.pointerMove(blockedRow);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    cleanup();
+
+    // The icon layout's own button still carries the disabled variant.
+    const blockedIconBridge = new FakeAppUpdatesBridge({
+      ...availableSnapshot(1),
+      installBlockedReason:
+        "Move Traycer to your Applications folder to install updates.",
+    });
+    renderWithHost(<AppUpdateHeaderButton layout="icon" />, blockedIconBridge);
+    const blockedButton = await screen.findByTestId("app-update-header-button");
+    expect(blockedButton.className).toContain("disabled:opacity-60");
+  });
+
   it("surfaces download progress in the button accessible name", async () => {
     const bridge = new FakeAppUpdatesBridge(downloadingSnapshot(1, 42));
-    renderWithHost(<AppUpdateHeaderButton />, bridge);
+    renderWithHost(<AppUpdateHeaderButton layout="icon" />, bridge);
 
     await screen.findByRole("button", { name: /Downloading 42%/i });
   });
@@ -384,7 +490,7 @@ describe("desktop app update UI", () => {
       installBlockedReason:
         "Move Traycer to your Applications folder to install updates.",
     });
-    renderWithHost(<AppUpdateHeaderButton />, bridge);
+    renderWithHost(<AppUpdateHeaderButton layout="icon" />, bridge);
 
     const button = await screen.findByRole("button", {
       name: /Move Traycer to your Applications folder/i,
@@ -401,7 +507,7 @@ describe("desktop app update UI", () => {
       installBlockedReason:
         "Move Traycer to your Applications folder to install updates.",
     });
-    renderWithHost(<AppUpdateHeaderButton />, bridge);
+    renderWithHost(<AppUpdateHeaderButton layout="icon" />, bridge);
 
     const button = await screen.findByRole("button", {
       name: /Move Traycer to your Applications folder/i,
@@ -416,7 +522,7 @@ describe("desktop app update UI", () => {
   it("restarts to install directly when the ready tick is clicked, without a second confirmation", async () => {
     const bridge = new FakeAppUpdatesBridge(readySnapshot(1));
     const track = vi.spyOn(Analytics.getInstance(), "track");
-    renderWithHost(<AppUpdateHeaderButton />, bridge);
+    renderWithHost(<AppUpdateHeaderButton layout="icon" />, bridge);
 
     const button = await screen.findByRole("button", {
       name: /Restart to update/i,
@@ -439,7 +545,7 @@ describe("desktop app update UI", () => {
 
   it("disarms the ready tick while an install is in flight", async () => {
     const bridge = new FakeAppUpdatesBridge(readySnapshot(1));
-    renderWithHost(<AppUpdateHeaderButton />, bridge);
+    renderWithHost(<AppUpdateHeaderButton layout="icon" />, bridge);
     await waitFor(() => {
       expect(bridge.subscriptionCount()).toBe(1);
     });
@@ -463,7 +569,7 @@ describe("desktop app update UI", () => {
       ...readySnapshot(1),
       installInFlight: true,
     });
-    renderWithHost(<AppUpdateHeaderButton />, bridge);
+    renderWithHost(<AppUpdateHeaderButton layout="icon" />, bridge);
     await waitFor(() => {
       expect(bridge.subscriptionCount()).toBe(1);
     });
@@ -484,7 +590,7 @@ describe("desktop app update UI", () => {
     const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
     renderWithHost(
       <>
-        <AppUpdateHeaderButton />
+        <AppUpdateHeaderButton layout="icon" />
         <AppUpdateToastController />
       </>,
       bridge,
@@ -523,7 +629,7 @@ describe("desktop app update UI", () => {
       ...readySnapshot(1),
       installGuidance: READY_GUIDANCE,
     });
-    renderWithHost(<AppUpdateHeaderButton />, bridge);
+    renderWithHost(<AppUpdateHeaderButton layout="icon" />, bridge);
 
     const button = await screen.findByRole("button", {
       name: /Finish update/i,
@@ -576,7 +682,7 @@ describe("desktop app update UI", () => {
     const bridge = new FakeAppUpdatesBridge(readySnapshot(1));
     renderWithHost(
       <>
-        <AppUpdateHeaderButton />
+        <AppUpdateHeaderButton layout="icon" />
         <AppUpdateToastController />
       </>,
       bridge,
@@ -589,7 +695,7 @@ describe("desktop app update UI", () => {
 
   it("keeps newer live update state when the initial snapshot resolves late", async () => {
     const bridge = new DelayedSnapshotAppUpdatesBridge(IDLE_SNAPSHOT);
-    renderWithHost(<AppUpdateHeaderButton />, bridge);
+    renderWithHost(<AppUpdateHeaderButton layout="icon" />, bridge);
     await waitFor(() => {
       expect(bridge.subscriptionCount()).toBe(1);
     });

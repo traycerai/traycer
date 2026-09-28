@@ -1,42 +1,101 @@
 ---
 title: "Composer"
-description: "Add context, stash prompts, quote replies, and manage conversation context."
+description: "Mention context, run slash commands, keep drafts, quote replies, and manage the context window."
 ---
+
+import { FeatureVideo } from "/snippets/feature-video.jsx";
 
 The composer is where you write the next message on the Chat interface. Pick a [coding agent and model](/agents-and-models/coding-agents#models) and [permissions](/panels/agents#permissions) before sending.
 
+Press **Enter** to send and **Shift+Enter** for a new line. While a turn is running, **Enter** queues the message and **⌘Enter / Ctrl+Enter** steers it into the running turn. The shortcut queues instead when **Steer with ⌘+Enter** (**Steer with Ctrl+Enter** on Windows and Linux) is off in [General settings](/settings/general), and for a coding agent that can't steer it queues the message as **After turn**. See [Message queue](/panels/agents/message-queue).
+
 ## Mention Context
 
-Type `@` to open the mention picker. Browse a category or type to search across files, folders, agents, terminals, and artifacts. Select a result to insert an inline mention and continue writing. You can include several kinds of context in one message.
+Type `@` to open the mention picker. Browse a category or type to search, then select a result to insert an inline mention and keep writing. One message can mention several kinds of context.
 
-<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Mention a file, agent, and artifact">
-  <source src="https://assets.traycer.ai/docs/videos/mention-pickers.mp4" type="video/mp4" />
-  Unable to load video.
-</video>
+| Category                      | What you can mention                                                                            | When it appears                                                   |
+| ----------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| **Files**, **Folders**        | Files and folders in the workspace.                                                             | The Task has a workspace folder.                                  |
+| **Worktrees**                 | The repository's git worktrees.                                                                  | The Task has a workspace folder.                                  |
+| **Git**                       | Branches, commits, and changes, including **Diff against branch...** and **Diff against commit...** | The Task has a workspace folder.                              |
+| **Pull requests**, **Issues** | The repository's pull requests and issues.                                                      | The Task has a workspace folder. Needs the GitHub CLI (`gh`), signed in with `gh auth login`. |
+| **Task**                      | Other Tasks you can open.                                                                       | Always.                                                           |
+| **Agents**, **Terminals**     | Agents and terminals in this Task.                                                              | Inside a Task.                                                    |
+| **Browser**                   | Tabs in the in-app browser.                                                                     | At least one browser tab is open.                                 |
+| **Artifacts**                 | Artifacts from Tasks you can open. Inside a Task, its own artifacts come first.                 | Always.                                                           |
 
-You can also drag a file from File Tree into the composer to insert an inline file mention. See the [file context demo](/panels/agents#attachments-and-voice).
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/mention-pickers.mp4" label="Mention a file, agent, and artifact" />
 
-## Stash A Prompt
+You can also drag a file or folder from the File Tree into the composer to insert an inline mention. See [Attachments and voice](/panels/agents#attachments-and-voice).
 
-In the landing composer, press **Cmd+S** on macOS or **Ctrl+S** on Windows and Linux to stash a draft. The composer clears and the **Stash** count increases. Open **Stashed prompts** and choose **Insert** to bring a saved prompt back into the composer, or **Delete** to remove it.
+## Slash Commands And Skills
 
+Type `/` or `$` to open the command list. Both show the same list: the selected coding agent's own commands and skills, plus Traycer's side-chat commands.
+
+A coding agent's own commands work only at the start of a message. Further into a message they stay in the list but are greyed out, with "This command is only allowed at the start of the message".
+
+### Side Chats
+
+Type `/btw` or `/side` followed by a question to ask it in a forked copy of the conversation, without interrupting the agent. The side chat is titled "Side - " plus your question, and opens next to the chat you asked from. Change where it opens with **Side chats** in [Opening behavior](/settings/opening-behavior).
+
+## Drafts
+
+What you type in a composer is saved as a draft as you go, so an unsent prompt is never lost.
+
+A start-page draft keeps the prompt together with its coding agent, model, and other run settings, its interface (Chat or Terminal), and its workspace folders. Closing a start-page tab that has text keeps the draft; closing an empty one discards it. Sending the prompt turns the draft into a new Task.
+
+On the start page, press **⌘S / Ctrl+S**, or click the **Drafts** button on the composer, to list your start-page drafts. Use the arrow keys to move through the list.
+
+| Key   | Action                                                         |
+| ----- | -------------------------------------------------------------- |
+| **↵** | **Open** the draft.                                            |
+| **C** | **Copy** the draft's text.                                     |
+| **D** | **Delete** the draft. The toast offers **Undo**.               |
+| Esc   | Close the list.                                                |
+
+When you have none, the list reads "No drafts here yet".
+
+### All Drafts
+
+Choose **Drafts** in the account menu or the command palette to see every draft in one dialog: start-page drafts, unsent chat messages, and unsent **Start a new agent** prompts. Search them, and filter by **This task** (inside a Task), **Other tasks**, and **Start pages**.
+
+Opening a draft takes you back to where you wrote it. A start-page draft reopens as a tab, a chat draft opens its chat, and a new-agent draft reopens **Start a new agent** in its Task.
+
+Start-page and new-agent drafts can follow you to your other devices while you are signed in. A draft of a chat message stays with the host where you wrote it.
 
 ## Quote A Reply
 
-Select text in an assistant reply and click **Quote**. The selection becomes a blockquote in the composer, with space below it for your follow-up.
+Select text in an assistant reply and click **Quote**. The selection becomes a blockquote in the composer, with space below it for your follow-up. To turn the **Quote** button off, clear **Quote reply on text selection** in [General settings](/settings/general), under **Chat & composer**.
 
-<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Quote part of an assistant reply">
-  <source src="https://assets.traycer.ai/docs/videos/quote-selection.mp4" type="video/mp4" />
-  Unable to load video.
-</video>
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/quote-selection.mp4" label="Quote part of an assistant reply" />
 
 ## Context Usage
 
-When usage is available, the context chip shows how much of the conversation's context window remains. Click it to inspect the token breakdown. The separate **Compact** button beside the chip summarizes the conversation to free space; progress and the resulting token counts appear in the transcript.
+When the coding agent reports it, a chip beside the composer shows how much of the context window is left, for example "62% context left". Click it to open the breakdown: **Used**, **Fresh**, **Cache read**, **Cache write**, and **Output**. **Pin breakdown** keeps a summary strip visible near the composer.
 
-<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Inspect context usage and compact a conversation">
-  <source src="https://assets.traycer.ai/docs/videos/context-usage-compact.mp4" type="video/mp4" />
-  Unable to load video.
-</video>
+The icon next to the chip, **Compact conversation**, summarizes the conversation to free space. It appears when the coding agent supports compacting on request. Progress and the resulting token counts appear in the transcript. If a turn is running, compaction is queued to run next.
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/context-usage-compact.mp4" label="Inspect context usage and compact a conversation" />
+
+## Expand The Composer On A Phone
+
+In the phone layout, on **Home** and in a conversation, pull up from the composer's top edge to open it as a larger sheet over the page. It works with any draft, even an empty one.
+
+- The edge has no visible handle. Start the pull just above the first line of text.
+- The sheet follows your finger and settles open or closed depending on how far you pull. A tap does nothing.
+- Pull down from the top edge to shrink it again. Sending a message also returns it to its compact size.
+- The editor keeps focus throughout, so the keyboard stays up.
+
+With a keyboard or screen reader, use the **Expand composer** / **Collapse composer** button instead. It stays hidden until it receives keyboard focus.
+
+The new-agent dialog, and editing an earlier message, don't expand this way.
+
+## Composer Settings
+
+| Setting                                                               | What it changes                                                                                                                     |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| [General](/settings/general) › **Chat & composer**                    | **Voice input**, **Quote reply on text selection**, and **Steer with ⌘+Enter** (**Steer with Ctrl+Enter** on Windows and Linux).   |
+| [Layout](/settings/layout) › **Composer**                             | Fold the **Files changed**, **Active agents**, and **Background** panels into chips; hide the **Attach image**, **Microphone**, and **Compact conversation** buttons; show **Access** (the permission picker) as an icon only; choose how the model chip shows thinking effort, and whether the model picker offers it as a slider or a list. |
+| [Layout](/settings/layout) › **Chat** › **Pin context breakdown**     | Keep the context breakdown visible, and choose which figures it shows.                                                               |
 
 While an agent is running, use the [Message queue](/panels/agents/message-queue) to prepare follow-ups or steer the current turn.

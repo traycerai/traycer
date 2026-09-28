@@ -67,6 +67,6 @@ describe("tile strip geometry", () => {
     item.getBoundingClientRect = () => rect(180, 10, 60, 30);
     scroller.append(item);
 
-    expect(readTileStripSlots("group-source")[0].contentLeft).toBe(50);
+    expect(readTileStripSlots("group-source")[0].contentStart).toBe(50);
   });
 });

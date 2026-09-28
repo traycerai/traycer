@@ -6,13 +6,13 @@
  * asynchronously, through the coordinator's generic source-reconciliation
  * pass - not through the precise `removeLayoutRef` algebra that implements
  * survivor-promotion / active-preservation. These tests dispatch through the
- * REAL `tabRequestClose` registry function (exactly what
- * `use-close-tab-flow.tsx` calls) against real store state and assert on the
+ * REAL `requestTabClose` (the registry dispatch plus the coordinator close
+ * it hands each kind, exactly what `use-close-tab-flow.tsx` calls) against real store state and assert on the
  * resulting `useTabsStore` layout, so a regression back to the direct-source
  * bypass shows up here.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { tabRequestClose } from "@/stores/tabs/registry";
+import { requestTabClose } from "@/components/layout/tabs/use-tab-close-command";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -88,7 +88,7 @@ describe("T10 Area 1: requestClose routes through the coordinator", () => {
 
     const tabA = getHeaderTabs().find((tab) => tab.id === "tab-a");
     if (tabA === undefined) throw new Error("expected tab-a");
-    tabRequestClose(tabA);
+    requestTabClose(tabA);
 
     // The split collapses to the survivor as a bare tab item, and that item
     // becomes active - not left dangling or defaulted to a neighbor.
@@ -122,7 +122,7 @@ describe("T10 Area 1: requestClose routes through the coordinator", () => {
 
     const tabB = getHeaderTabs().find((tab) => tab.id === "tab-b");
     if (tabB === undefined) throw new Error("expected tab-b");
-    tabRequestClose(tabB);
+    requestTabClose(tabB);
 
     expect(useTabsStore.getState().items).toEqual([
       { kind: "tab", id: "tab:epic:tab-a", ref: a },
@@ -162,7 +162,7 @@ describe("T10 Area 1: requestClose routes through the coordinator", () => {
 
     const tabA = getHeaderTabs().find((tab) => tab.id === "tab-a");
     if (tabA === undefined) throw new Error("expected tab-a");
-    tabRequestClose(tabA);
+    requestTabClose(tabA);
 
     // The split had no live survivor (the other side was empty), so the
     // whole group is removed and the neighboring item becomes active.
@@ -185,7 +185,7 @@ describe("T10 Area 1: requestClose routes through the coordinator", () => {
 
     const draftTab = getHeaderTabs().find((tab) => tab.id === "draft-a");
     if (draftTab === undefined) throw new Error("expected draft-a");
-    tabRequestClose(draftTab);
+    requestTabClose(draftTab);
 
     expect(useTabsStore.getState().items).toEqual([]);
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
@@ -214,7 +214,7 @@ describe("T10 Area 1: requestClose routes through the coordinator", () => {
 
     const draftTab = getHeaderTabs().find((tab) => tab.id === "draft-a");
     if (draftTab === undefined) throw new Error("expected draft-a");
-    tabRequestClose(draftTab);
+    requestTabClose(draftTab);
 
     expect(useTabsStore.getState().items).toEqual([]);
     expect(getHeaderTabs()).toEqual([]);
@@ -243,7 +243,7 @@ describe("T10 Area 1: requestClose routes through the coordinator", () => {
 
     const historyTab = getHeaderTabs().find((tab) => tab.kind === "history");
     if (historyTab === undefined) throw new Error("expected history tab");
-    tabRequestClose(historyTab);
+    requestTabClose(historyTab);
 
     expect(useTabsStore.getState().items).toEqual([]);
     expect(useTabsStore.getState().systemTabs.history).toBeNull();

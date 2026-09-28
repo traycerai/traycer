@@ -345,7 +345,7 @@ describe("app route tab-strip navigation", () => {
       expect(router.state.location.pathname).toBe(`/draft/${draftId}`);
     });
   });
-  it("aligns active tab border joins and covers the header baseline", async () => {
+  it("draws the header's own hairline baseline", async () => {
     const epicTabId = useEpicCanvasStore
       .getState()
       .openEpicTab("epic-current", "Current Epic");
@@ -357,40 +357,5 @@ describe("app route tab-strip navigation", () => {
       .className.split(/\s+/);
     expect(headerClassTokens).toContain("after:bg-border/90");
     expect(headerClassTokens).toContain("after:h-px");
-    const baselineCoverClassName =
-      screen.getByTestId("tab-baseline-cover").className;
-    expect(baselineCoverClassName).toContain("bottom-0");
-    expect(baselineCoverClassName).toContain("h-px");
-    expect(baselineCoverClassName).toContain("z-0");
-    expect(screen.getByTestId("tab-cap-left").getAttribute("class")).toContain(
-      "z-10",
-    );
-    expect(screen.getByTestId("tab-cap-right").getAttribute("class")).toContain(
-      "z-10",
-    );
-    expect(screen.getByTestId("tab-chrome-center").className).not.toContain(
-      "z-10",
-    );
-    expect(
-      screen.getByTestId("tab-chrome-center").className.split(/\s+/),
-    ).toContain("border-t");
-    expect(
-      screen.getByTestId("tab-cap-outline-left").getAttribute("d"),
-    ).toContain("M -2 35.5 H 0");
-    expect(
-      screen.getByTestId("tab-cap-outline-left").getAttribute("d"),
-    ).toContain("V 10.5 A 10 10 0 0 1 22 0.5");
-    expect(
-      screen.getByTestId("tab-cap-outline-right").getAttribute("d"),
-    ).toContain("24 35.5 H 26");
-    expect(
-      screen.getByTestId("tab-cap-outline-right").getAttribute("d"),
-    ).toContain("M 0 0.5 H 2 A 10 10 0 0 1 12 10.5");
-    expect(
-      screen.getByTestId("tab-cap-outline-left").getAttribute("stroke-width"),
-    ).toBe("1");
-    expect(
-      screen.getByTestId("tab-cap-outline-right").getAttribute("stroke-width"),
-    ).toBe("1");
   });
 });

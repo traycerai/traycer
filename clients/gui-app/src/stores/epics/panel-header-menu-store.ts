@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { LeftPanelId } from "@/stores/epics/left-panel-store";
+import type { LeftPanelId } from "@/lib/left-panel-ids";
 
 export type PanelHeaderMenuId = "create" | "filter" | "more";
 

@@ -120,7 +120,7 @@ export const builtinPalettes: Partial<
       secondary: "#f2f2f2",
       "secondary-foreground": "#171717",
       muted: "#f2f2f2",
-      "muted-foreground": "#7d7d7d",
+      "muted-foreground": "#717171",
       accent: "#ebebeb",
       "accent-foreground": "#171717",
       border: "#e6e6e6",

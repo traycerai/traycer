@@ -4,10 +4,9 @@ import type {
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { formatUnavailableReason } from "@/lib/provider-rate-limit-content";
-import {
-  useLayoutStore,
-  type PercentMode,
-} from "@/stores/settings/layout-store";
+import { useRegionValues } from "@/lib/layout-overrides";
+import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
+import type { AmountMode } from "@/lib/layout/layout-values";
 
 /**
  * The box the readings sit in, at its NATURAL width.
@@ -82,9 +81,10 @@ const NO_SEGMENTS: ReadonlyArray<StatusBarProviderSegmentModel> = [];
  * model itself, so a segment already carries the windows it should draw.
  */
 export interface StatusBarUsageDisplay {
-  readonly percentMode: PercentMode;
+  readonly percentMode: AmountMode;
   readonly showModeWord: boolean;
   readonly showBar: boolean;
+  readonly showPercent: boolean;
   readonly showTimer: boolean;
 }
 
@@ -101,6 +101,7 @@ export interface StatusBarUsageDisplay {
 export interface StatusBarUsageParts {
   readonly modeWord: boolean;
   readonly bar: boolean;
+  readonly percent: boolean;
   readonly timer: boolean;
 }
 
@@ -110,27 +111,28 @@ export function statusBarUsageParts(
   return {
     modeWord: display.showModeWord,
     bar: display.showBar,
+    percent: display.showPercent,
     timer: display.showTimer,
   };
 }
 
 /**
- * Field by field rather than one object selector: a selector returning a fresh
- * object every call makes `useSyncExternalStore` see a new snapshot on each
- * read and re-render forever.
+ * Through the override seam (`lib/layout-overrides.ts`), so a style example or
+ * a specimen stage can draw the real readings under a different answer.
+ *
+ * One region read rather than five: every one of these leaves lives in the
+ * `usageLimits` bag, so a reader of one is a reader of the region, and the
+ * delta's identity changes only when that region does.
  */
 export function useStatusBarUsageDisplay(): StatusBarUsageDisplay {
-  const percentMode = useLayoutStore(
-    (state) => state.statusBar.rateLimits.percentMode,
-  );
-  const showModeWord = useLayoutStore(
-    (state) => state.statusBar.rateLimits.showModeWord,
-  );
-  const showBar = useLayoutStore((state) => state.statusBar.rateLimits.showBar);
-  const showTimer = useLayoutStore(
-    (state) => state.statusBar.rateLimits.showTimer,
-  );
-  return { percentMode, showModeWord, showBar, showTimer };
+  const values = useRegionValues("usageLimits");
+  return {
+    percentMode: values.amount,
+    showModeWord: values.word,
+    showBar: values.bar,
+    showPercent: values.percent,
+    showTimer: values.reset,
+  };
 }
 
 /** The segments a cluster is drawing, or one shared empty list for the rest. */
@@ -163,4 +165,36 @@ export function statusBarSegmentTooltip(
   }
   if (segment.state === "cold") return `${providerName} · no reading yet`;
   return providerName;
+}
+
+/**
+ * What a screen reader hears on a usage trigger - the status bar's, or the
+ * tab strip's when the reading lives there: the headline, then the
+ * tightest reading for each segment it is showing - named by provider, and by
+ * account too where the provider has more than one.
+ *
+ * One reading per segment rather than every window, because this is a control
+ * name and a name is read in full before anything else can happen. The tightest
+ * window is the one the segment model selects by default for the same reason -
+ * it is the number that decides whether the panel is worth opening. Every
+ * segment is in the name whether or not it is currently scrolled into view:
+ * what a screen reader hears cannot depend on where the strip is scrolled to.
+ */
+export function statusBarUsageTriggerName(
+  cluster: StatusBarRateLimitCluster,
+  percentMode: AmountMode,
+): string {
+  if (cluster.kind !== "segments") return "Usage limits";
+  const readings = cluster.segments.flatMap((segment) =>
+    segment.tightest === null
+      ? []
+      : [
+          `${statusBarSegmentName(segment)} ${windowPercentText(
+            segment.tightest.usedPercent,
+            percentMode,
+          )}`,
+        ],
+  );
+  if (readings.length === 0) return "Usage limits";
+  return `Usage limits: ${readings.join(", ")}`;
 }

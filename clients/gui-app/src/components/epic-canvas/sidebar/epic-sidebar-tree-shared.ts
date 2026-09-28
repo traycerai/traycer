@@ -185,3 +185,70 @@ export function nodePadRightClass(
   if (revealed) return "pr-8";
   return "pr-2 group-hover/tree-item:pr-8 group-focus-within/tree-item:pr-8 group-has-[[data-state=open]]/tree-item:pr-8";
 }
+
+/**
+ * Dimming for an archived row included by the selected visibility mode or by
+ * the narrow open/activity/unread exception in the default view.
+ */
+export const ARCHIVED_ROW_CLASS = "opacity-55";
+
+/**
+ * The row's own class list, lifted out of the chat tree's row button so its five
+ * state modifiers stop counting against that component's complexity ceiling.
+ * Pure and unchanged - same operands, same order.
+ *
+ * `min-h-7` is a FLOOR, not a height: the row is a horizontal flex - chevron,
+ * leading icon, then the text column - and `items-center` centers the short
+ * children against whatever height the column takes. Kept as a floor rather
+ * than a fixed height so a row whose title wraps, or which regains a second
+ * line, grows instead of clipping.
+ */
+export function chatRowClassName(state: {
+  readonly isDragging: boolean;
+  readonly showRowControls: boolean;
+  readonly reserveArchiveSlot: boolean;
+  readonly selectionMode: boolean;
+  readonly isArchived: boolean;
+  readonly isActive: boolean;
+  readonly revealRowControls: boolean;
+}): string {
+  return cn(
+    "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 text-left text-ui-sm font-normal transition-colors",
+    "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
+    state.isDragging && "cursor-grabbing opacity-60",
+    nodePadRightClass(
+      state.showRowControls,
+      state.reserveArchiveSlot,
+      state.revealRowControls,
+    ),
+    state.selectionMode && "cursor-pointer",
+    state.isArchived && ARCHIVED_ROW_CLASS,
+    state.isActive
+      ? "bg-accent text-accent-foreground"
+      : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
+    SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
+  );
+}
+
+/**
+ * An artifact row's class list, shared by the tree's row button and the
+ * sample workspace's sidebar so the two draw one row (F3).
+ */
+export function artifactRowClassName(state: {
+  readonly isDragging: boolean;
+  readonly padRightClass: string;
+  readonly selectionMode: boolean;
+  readonly isActive: boolean;
+}): string {
+  return cn(
+    "flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md text-left text-ui-sm font-normal transition-colors",
+    "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
+    state.isDragging && "cursor-grabbing opacity-60",
+    state.padRightClass,
+    state.selectionMode && "cursor-pointer",
+    state.isActive
+      ? "bg-accent text-accent-foreground"
+      : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
+    SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
+  );
+}

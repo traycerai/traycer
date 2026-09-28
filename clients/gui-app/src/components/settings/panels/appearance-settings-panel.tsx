@@ -9,6 +9,7 @@ import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { StartPageSettingsSection } from "@/components/settings/start-page-settings-section";
+import { DiffViewerSettingsSection } from "@/components/settings/diff-viewer-settings-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { EpicNodeIconColorPicker } from "@/components/settings/controls/node-icon-color-picker";
 import { SettingsNumberInput } from "@/components/settings/controls/settings-number-input";
@@ -323,6 +324,8 @@ export function AppearanceSettingsPanel() {
             </div>
           </div>
         </SettingsGroup>
+
+        <DiffViewerSettingsSection />
 
         <SettingsGroup
           group={APPEARANCE.definitions.agentOffice}

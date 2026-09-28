@@ -55,7 +55,8 @@ export type TabNavigationIntent =
   | { readonly kind: "draft"; readonly draftId: string }
   | { readonly kind: "history" }
   | { readonly kind: "settings"; readonly section: SettingsSectionId }
-  | { readonly kind: "home" };
+  | { readonly kind: "home" }
+  | { readonly kind: "sample-workspace" };
 
 /**
  * Requests that need source resolution are deliberately distinct from canonical

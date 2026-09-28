@@ -1,6 +1,4 @@
 import { type CSSProperties, type ReactNode } from "react";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { BackgroundActivityGlyph } from "@/components/notifications/background-activity-glyph";
 import { UnknownActivityGlyph } from "@/components/notifications/unknown-activity-glyph";
 import type { AgentActivityCoverage } from "@/lib/agent-activity";
 import {
@@ -13,6 +11,10 @@ import {
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useStatusGlyphTooltipOpen } from "@/components/notifications/status-glyph-focus";
+import {
+  StatusGlyph,
+  type StatusGlyphStatus,
+} from "@/components/notifications/status-glyph";
 import { cn } from "@/lib/utils";
 
 export const BACKGROUND_ACTIVITY_TITLE = "Background activity — agent idle";
@@ -24,7 +26,15 @@ export const BACKGROUND_ACTIVITY_TITLE = "Background activity — agent idle";
  * may be perfectly busy on another machine.
  */
 export const UNKNOWN_ACTIVITY_TITLE =
-  "Agent status unknown — this device isn't receiving activity for its machine";
+  "Agent status unknown. This device isn't receiving activity for its machine.";
+
+/**
+ * Qualifies activity read from a union that reaches some of the account's
+ * hosts but not all: what it shows is real, and more may be running where it
+ * cannot see.
+ */
+export const PARTIAL_ACTIVITY_NOTICE =
+  "Can't check everything that's running right now";
 
 /**
  * Live-activity tier for the running slot. `"turn"` is the agent actually
@@ -66,57 +76,53 @@ interface NotificationIndicatorIconProps {
   readonly style: CSSProperties | undefined;
   readonly runningTitle: string;
   readonly defaultIcon: ReactNode;
-  readonly statusPresentation: "message" | "spinner";
   /** Agent surface whose identity owns the failure glyph. "Terminal" in the
    * indicator state means a latest outcome, not necessarily a TUI agent. */
   readonly agentSurface: AgentNotificationSurface;
 }
 
 /**
- * The single renderer for notification status icons. Notification state wins
- * over live activity for high-attention states: chat/other failures first,
- * then unresolved prompts, followed by the session-backed running indicator
- * (turn spinner, or the muted background variant), unread completion, and
- * finally terminal failure. Producers retain historical failures in the feed
- * while projecting only the latest terminal outcome into this renderer.
+ * The single renderer for notification status icons, drawn through the shared
+ * `StatusGlyph`. Notification state wins over live activity for high-attention
+ * states: chat/other failures first, then unresolved prompts, followed by the
+ * session-backed running glyph (turn, or the calmer background glyph), unread
+ * completion, and finally terminal failure. Producers retain historical
+ * failures in the feed while projecting only the latest terminal outcome into
+ * this renderer.
  */
 export function NotificationIndicatorIcon(
   props: NotificationIndicatorIconProps,
 ): ReactNode {
   const tone = attentionTone(props.state);
   if (tone !== null) {
-    return <IndicatorTonePresentation tone={tone} indicatorProps={props} />;
+    return <IndicatorToneStatus tone={tone} indicatorProps={props} />;
   }
   if (props.running === "turn") {
     return (
-      <IndicatorSpan indicatorProps={props} tooltip={props.runningTitle}>
-        <AgentSpinningDots
-          className={undefined}
-          testId={`${props.testIdPrefix}-activity-${props.subjectId}`}
-          variant={undefined}
-        />
-      </IndicatorSpan>
+      <GlyphStatus
+        status="running"
+        tooltip={props.runningTitle}
+        testId={`${props.testIdPrefix}-activity-${props.subjectId}`}
+        indicatorProps={props}
+      />
     );
   }
   if (props.running === "background") {
     return (
-      <IndicatorSpan indicatorProps={props} tooltip={BACKGROUND_ACTIVITY_TITLE}>
-        <BackgroundActivityGlyph
-          testId={`${props.testIdPrefix}-background-activity-${props.subjectId}`}
-        />
-      </IndicatorSpan>
+      <GlyphStatus
+        status="background"
+        tooltip={BACKGROUND_ACTIVITY_TITLE}
+        testId={`${props.testIdPrefix}-background-activity-${props.subjectId}`}
+        indicatorProps={props}
+      />
     );
   }
   if (props.state.unreadDone) {
-    return (
-      <IndicatorTonePresentation tone={DONE_TONE} indicatorProps={props} />
-    );
+    return <IndicatorToneStatus tone={DONE_TONE} indicatorProps={props} />;
   }
   const terminalTone = terminalFailureTone(props.state, props.agentSurface);
   if (terminalTone !== null) {
-    return (
-      <IndicatorTonePresentation tone={terminalTone} indicatorProps={props} />
-    );
+    return <IndicatorToneStatus tone={terminalTone} indicatorProps={props} />;
   }
   // LAST, and only here: the idle glyph is the one slot that renders a
   // CONCLUSION drawn from silence ("nothing is happening"), and `unserved` is
@@ -136,48 +142,36 @@ export function NotificationIndicatorIcon(
   return props.defaultIcon;
 }
 
-function IndicatorTonePresentation(props: {
+function IndicatorToneStatus(props: {
   readonly tone: IndicatorTone;
   readonly indicatorProps: NotificationIndicatorIconProps;
 }): ReactNode {
-  if (props.indicatorProps.statusPresentation === "message") {
-    return <IndicatorStatus {...props} />;
-  }
-  return <IndicatorDot {...props} />;
-}
-
-function IndicatorStatus(props: {
-  readonly tone: IndicatorTone;
-  readonly indicatorProps: NotificationIndicatorIconProps;
-}): ReactNode {
-  const Icon = props.tone.Icon;
   return (
-    <IndicatorSpan
-      indicatorProps={props.indicatorProps}
+    <GlyphStatus
+      status={props.tone}
       tooltip={props.tone.title}
-    >
-      <Icon
-        aria-hidden
-        className={cn("size-3.5", props.tone.className)}
-        data-testid={`${props.indicatorProps.testIdPrefix}-${props.tone.testId}-${props.indicatorProps.subjectId}`}
-      />
-    </IndicatorSpan>
+      testId={`${props.indicatorProps.testIdPrefix}-${props.tone.testId}-${props.indicatorProps.subjectId}`}
+      indicatorProps={props.indicatorProps}
+    />
   );
 }
 
-function IndicatorDot(props: {
-  readonly tone: IndicatorTone;
+function GlyphStatus(props: {
+  readonly status: StatusGlyphStatus;
+  readonly tooltip: string;
+  readonly testId: string;
   readonly indicatorProps: NotificationIndicatorIconProps;
 }): ReactNode {
   return (
     <IndicatorSpan
       indicatorProps={props.indicatorProps}
-      tooltip={props.tone.title}
+      tooltip={props.tooltip}
     >
-      <AgentSpinningDots
-        className={props.tone.className}
-        testId={`${props.indicatorProps.testIdPrefix}-${props.tone.testId}-${props.indicatorProps.subjectId}`}
-        variant="static"
+      <StatusGlyph
+        status={props.status}
+        className="size-3.5"
+        testId={props.testId}
+        label={null}
       />
     </IndicatorSpan>
   );
@@ -185,8 +179,8 @@ function IndicatorDot(props: {
 
 /**
  * The one status-glyph leaf: `role="status"` + accessible name + the hover
- * tooltip. The tone/dot/running variants above differ only in their glyph, and
- * each used to re-spell this span - including its own native `title`, which is
+ * tooltip. The variants above differ only in their glyph, and each used to
+ * re-spell this span - including its own native `title`, which is
  * how three copies of the same "aria-label and title say the same thing"
  * pairing ended up here.
  *

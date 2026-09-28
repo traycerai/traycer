@@ -6,6 +6,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ColumnEdgeContext } from "@/components/layout/column-edge-context";
 
 const mocks = vi.hoisted(() => ({
   onAddTerminalAgent: vi.fn(),
@@ -176,6 +177,37 @@ describe("<AddNodeDropdown /> terminal-agent launch", () => {
     expect((await screen.findByRole("menu")).getAttribute("data-side")).toBe(
       "right",
     );
+  });
+
+  it("mirrors the header add menu's side off a right sidebar column, not the row fallback (D7)", async () => {
+    render(
+      <ColumnEdgeContext.Provider value="right">
+        <AddNodeDropdown
+          open
+          onOpenChange={() => undefined}
+          menuPlacement="header"
+          menuTestId="header-add-node-menu"
+          itemTestId={(type) => `header-add-${type}`}
+          onAdd={() => undefined}
+          epicId="epic-test"
+          onAddTerminalAgent={undefined}
+          terminalAgentWorkspaceSeed={null}
+          terminalAgentHostScope={undefined}
+          terminalAgentStagingKey={undefined}
+          tuiAgentPending={false}
+          disabled={false}
+          disabledTooltip={null}
+          disabledTypes={undefined}
+          excludeTypes={undefined}
+        >
+          <button type="button">Add artifact</button>
+        </AddNodeDropdown>
+      </ColumnEdgeContext.Provider>,
+    );
+
+    const menu = await screen.findByRole("menu");
+    expect(menu.getAttribute("data-side")).toBe("left");
+    expect(menu.getAttribute("data-align")).toBe("start");
   });
 
   it("starts an unseeded terminal agent with the populated global workspace", async () => {
