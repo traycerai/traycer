@@ -175,12 +175,17 @@ export type ChatSubscribeOpenRequest = z.infer<
 
 /**
  * `1.19` requires an explicit nullable claim. `null` states that this client
- * holds nothing; omission is an invalid 1.19 request. Every older line keeps
- * the base schema, so its parser strips a claim from a downgraded request.
+ * holds nothing; omission is an invalid 1.19 request. A malformed present
+ * claim is a cache miss, so normalize it to null at the transport validation
+ * boundary before a resolver is constructed. Every older line keeps the base
+ * schema, so its parser strips a claim from a downgraded request.
  */
 export const chatSubscribeOpenRequestSchemaV119 = lazySchema(() =>
   chatSubscribeOpenRequestSchema.extend({
-    resume: chatSkeletonResumeSchema.nullable(),
+    resume: z
+      .unknown()
+      .refine((value) => value !== undefined)
+      .pipe(chatSkeletonResumeSchema.nullable().catch(null)),
   }),
 );
 export type ChatSubscribeOpenRequestV119 = z.infer<
