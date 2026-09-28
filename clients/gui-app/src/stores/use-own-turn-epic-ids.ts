@@ -42,6 +42,27 @@ function knownOwnerOfAgent(
   return owners.size === 1 ? (owners.values().next().value ?? null) : null;
 }
 
+function ownedWarmTiers(
+  userId: string,
+  epicState: OpenEpicState | null,
+  warm: readonly ChatSessionStoreHandle[],
+  liveIds: ReadonlySet<string> | null,
+): { turn: boolean; background: ReadonlySet<string> } {
+  const background = new Set<string>();
+  for (const handle of warm) {
+    if (liveIds !== null && !liveIds.has(handle.chatId)) continue;
+    const state = handle.store.getState();
+    if (state.access?.ownerUserId !== userId) continue;
+    if (knownOwnerOfAgent(handle.chatId, epicState, warm) !== userId) continue;
+    const activity = chatSessionActivity(state);
+    if (activity === "turn") return { turn: true, background };
+    // A warm background tier is authoritative for this chat. Older hosts
+    // conservatively copy all working agents into the published turn tier.
+    if (activity === "background") background.add(handle.chatId);
+  }
+  return { turn: false, background };
+}
+
 function hasOwnedTurn(
   epicId: string,
   userId: string,
@@ -52,19 +73,12 @@ function hasOwnedTurn(
     epicState === null
       ? null
       : new Set([...epicState.chats.allIds, ...epicState.tuiAgents.allIds]);
+  const warmTiers = ownedWarmTiers(userId, epicState, warm, liveIds);
+  if (warmTiers.turn) return true;
   for (const agentId of getEpicAgentActivity(epicId).turn) {
     if (liveIds !== null && !liveIds.has(agentId)) continue;
+    if (warmTiers.background.has(agentId)) continue;
     if (knownOwnerOfAgent(agentId, epicState, warm) === userId) return true;
-  }
-  for (const handle of warm) {
-    if (liveIds !== null && !liveIds.has(handle.chatId)) continue;
-    const state = handle.store.getState();
-    if (
-      state.access?.ownerUserId === userId &&
-      chatSessionActivity(state) === "turn"
-    ) {
-      return true;
-    }
   }
   return false;
 }

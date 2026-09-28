@@ -5,7 +5,15 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
+import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import {
+  __getChatSessionRegistryForTests,
+  disposeAllChatSessions,
+} from "@/lib/registries/chat-session-registry";
+import { createChatSessionStore } from "@/stores/chats/chat-session-store";
+import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import {
@@ -86,8 +94,58 @@ function publishWorking(agentIds: readonly string[]): void {
   ]);
 }
 
+function registerOwnedWarmChat() {
+  const handle = __getChatSessionRegistryForTests().acquire(
+    {
+      epicId: EPIC_ID,
+      chatId: AGENT_ID,
+      hostId: "host-a",
+      scopeKey: "history-activity-test",
+    },
+    () =>
+      createChatSessionStore({
+        environment: CHAT_STORE_TEST_ENVIRONMENT,
+        hostId: "host-a",
+        epicId: EPIC_ID,
+        chatId: AGENT_ID,
+        userId: null,
+        onAuthError: null,
+        onProviderAuthError: null,
+        wakeTransport: null,
+        streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+        streamClientFactory: () => ({
+          sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => true,
+          draftBlobBridgeSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
+          close: () => undefined,
+        }),
+      }),
+  );
+  const shell: ManagedCommand = {
+    id: "cmd-1",
+    monitoring: false,
+    description: "dev server",
+    command: "tail -f deploy.log",
+    cwd: "/work/repo",
+    cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
+    status: { state: "running", pid: 4242, startedAtMs: 1 },
+    chatId: AGENT_ID,
+    relaunchOnHostRestart: false,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+  };
+  handle.store.setState({
+    access: { role: "owner", ownerUserId: "viewer", canAct: true },
+    managedCommands: [shell],
+  });
+  return handle;
+}
+
 afterEach(() => {
   __getOpenEpicRegistryForTests().disposeAll();
+  disposeAllChatSessions();
   resetAgentActivity();
 });
 
@@ -218,6 +276,26 @@ describe("useOwnTurnEpicIds", () => {
     const { result } = renderHook(() => useOwnTurnEpicIds("viewer"));
     act(() => publishWorking([AGENT_ID]));
     expect(result.current.has(EPIC_ID)).toBe(false);
+  });
+
+  it("lets an owned warm background tier suppress an older host's unclassified turn", () => {
+    const epic = registerSessionHoldingAgents([AGENT_ID]);
+    epic.store.setState({
+      chats: {
+        allIds: [AGENT_ID],
+        byId: { [AGENT_ID]: chatProjection(AGENT_ID, "viewer") },
+      },
+    });
+    const chat = registerOwnedWarmChat();
+    const { result } = renderHook(() => useOwnTurnEpicIds("viewer"));
+
+    act(() => publishWorking([AGENT_ID]));
+    expect(result.current.has(EPIC_ID)).toBe(false);
+
+    act(() => {
+      chat.store.setState({ runStatus: "running", turnInProgress: true });
+    });
+    expect(result.current.has(EPIC_ID)).toBe(true);
   });
 });
 
