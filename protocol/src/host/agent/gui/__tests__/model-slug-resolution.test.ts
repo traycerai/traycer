@@ -77,6 +77,58 @@ const CLAUDE_CATALOG: readonly GuiAgentModelOption[] = [
   }),
 ];
 
+/**
+ * The same account's catalog before and after Claude CLI 2.1.282 dropped the
+ * `[1m]` entitlement decoration, measured through the SDK's `supportedModels()`
+ * on 2.1.280 and 2.1.284. Every slug below still runs on both CLIs; only the
+ * row names differ.
+ */
+const CLAUDE_CLI_2_1_280_CATALOG: readonly GuiAgentModelOption[] = [
+  model({
+    harnessId: "claude",
+    slug: "default",
+    resolvedModel: "claude-opus-5-5[1m]",
+  }),
+  model({
+    harnessId: "claude",
+    slug: "opus[1m]",
+    resolvedModel: "claude-opus-5-5[1m]",
+  }),
+  model({
+    harnessId: "claude",
+    slug: "claude-fable-5-1[1m]",
+    resolvedModel: "claude-fable-5-1",
+  }),
+  model({
+    harnessId: "claude",
+    slug: "sonnet",
+    resolvedModel: "claude-sonnet-5",
+  }),
+];
+
+const CLAUDE_CLI_2_1_284_CATALOG: readonly GuiAgentModelOption[] = [
+  model({
+    harnessId: "claude",
+    slug: "default",
+    resolvedModel: "claude-opus-5-5",
+  }),
+  model({
+    harnessId: "claude",
+    slug: "opus",
+    resolvedModel: "claude-opus-5-5",
+  }),
+  model({
+    harnessId: "claude",
+    slug: "claude-fable-5-1",
+    resolvedModel: "claude-fable-5-1",
+  }),
+  model({
+    harnessId: "claude",
+    slug: "sonnet",
+    resolvedModel: "claude-sonnet-5-5",
+  }),
+];
+
 describe("resolveModelBySlug", () => {
   it("returns kind exact for an exact slug match", () => {
     const match = resolveModelBySlug(CLAUDE_CATALOG, "sonnet");
@@ -150,20 +202,291 @@ describe("resolveModelBySlug", () => {
     });
   });
 
-  it("returns none for a persisted decorated slug whose decoration later changed", () => {
-    // KNOWN, deliberately-unfixed gap — not a bug to "fix".
-    // Persisted "opus[1m]" when the catalog used to offer that decorated slug;
-    // catalog now offers undecorated "opus" with resolvedModel "claude-opus-5".
-    // Exact fails (slug gone). Alias fails (resolvedModel is the canonical
-    // wire id, not the old decorated slug). Resolution returns none.
-    const evolvedCatalog = [
+  it("resolves a persisted decorated slug against a catalog that dropped the marker", () => {
+    // Persisted `opus[1m]` / `claude-fable-5-1[1m]` under CLI 2.1.280; the
+    // catalog now lists `opus` / `claude-fable-5-1`. Neither pass 1 (slug gone)
+    // nor pass 2 (resolvedModel is the canonical wire id) sees it, so pass 3
+    // must, or the composer presents Default for a model that is still listed.
+    const opus = resolveModelBySlug(CLAUDE_CLI_2_1_284_CATALOG, "opus[1m]");
+    expect(opus).toEqual({
+      kind: "alias",
+      model: CLAUDE_CLI_2_1_284_CATALOG[1],
+      ambiguous: false,
+      tied: [CLAUDE_CLI_2_1_284_CATALOG[1]],
+    });
+
+    // The row matches on both its slug and its resolvedModel; it is one row,
+    // so it must not read as a tie.
+    const fable = resolveModelBySlug(
+      CLAUDE_CLI_2_1_284_CATALOG,
+      "claude-fable-5-1[1m]",
+    );
+    expect(fable).toEqual({
+      kind: "alias",
+      model: CLAUDE_CLI_2_1_284_CATALOG[2],
+      ambiguous: false,
+      tied: [CLAUDE_CLI_2_1_284_CATALOG[2]],
+    });
+  });
+
+  it("resolves a persisted undecorated slug against a catalog that gained the marker", () => {
+    // The forward direction of the same drift: `opus` persisted under a
+    // catalog that listed it plain, resolved against one that lists `opus[1m]`.
+    const match = resolveModelBySlug(CLAUDE_CLI_2_1_280_CATALOG, "opus");
+    expect(match).toEqual({
+      kind: "alias",
+      model: CLAUDE_CLI_2_1_280_CATALOG[1],
+      ambiguous: false,
+      tied: [CLAUDE_CLI_2_1_280_CATALOG[1]],
+    });
+  });
+
+  it("ties every row that shares the marker-less id", () => {
+    // `default` and `opus` both publish `claude-opus-5-5`, so a persisted
+    // `claude-opus-5-5[1m]` is ambiguous; first-in-catalog-order is only ever
+    // a READ, exactly as for a pass-2 tie.
+    const match = resolveModelBySlug(
+      CLAUDE_CLI_2_1_284_CATALOG,
+      "claude-opus-5-5[1m]",
+    );
+    expect(match.kind).toBe("alias");
+    if (match.kind !== "alias") return;
+    expect(match.ambiguous).toBe(true);
+    expect(match.model).toBe(CLAUDE_CLI_2_1_284_CATALOG[0]);
+    expect(match.tied.map((row) => row.slug)).toEqual(["default", "opus"]);
+  });
+
+  it("never lets the tier-tolerant pass override an exact or canonical-id match", () => {
+    // Pass 1 beats pass 3: a catalog listing BOTH tiers resolves `opus[1m]` to
+    // the `opus[1m]` row, not to the plain one that pass 3 would also accept.
+    const plain = model({
+      harnessId: "claude",
+      slug: "opus",
+      resolvedModel: "claude-opus-5-5",
+    });
+    const decorated = model({
+      harnessId: "claude",
+      slug: "opus[1m]",
+      resolvedModel: "claude-opus-5-5[1m]",
+    });
+    expect(resolveModelBySlug([plain, decorated], "opus[1m]")).toEqual({
+      kind: "exact",
+      model: decorated,
+    });
+
+    // Pass 2 beats pass 3: `beta[1m]` is `pointer`'s canonical id, so the row
+    // whose slug is merely `beta` (a pass-3 candidate) must not join or replace it.
+    const pointer = model({
+      harnessId: "claude",
+      slug: "pointer",
+      resolvedModel: "beta[1m]",
+    });
+    const bare = model({
+      harnessId: "claude",
+      slug: "beta",
+      resolvedModel: "beta-wire",
+    });
+    expect(resolveModelBySlug([bare, pointer], "beta[1m]")).toEqual({
+      kind: "alias",
+      model: pointer,
+      ambiguous: false,
+      tied: [pointer],
+    });
+  });
+
+  it("only folds the tier grammar, not any trailing bracket", () => {
+    // `model[preview]` is a real id, and `[1mb]` has two unit letters; neither
+    // is a tier marker, so neither may inherit `model`'s row.
+    const catalog = [
       model({
         harnessId: "claude",
-        slug: "opus",
-        resolvedModel: "claude-opus-5",
+        slug: "model",
+        resolvedModel: "model-wire",
       }),
     ];
-    expect(resolveModelBySlug(evolvedCatalog, "opus[1m]")).toEqual({
+    expect(resolveModelBySlug(catalog, "model[preview]")).toEqual({
+      kind: "none",
+    });
+    expect(resolveModelBySlug(catalog, "model[1mb]")).toEqual({ kind: "none" });
+    expect(resolveModelBySlug(catalog, "model[200k]").kind).toBe("alias");
+  });
+
+  it("never equates two different tier markers", () => {
+    // A marker on only one side is the drift pass 3 exists for; markers on
+    // both sides that disagree name two different tiers, so `opus[1m]` must
+    // not borrow an `opus[200k]` row's details while the CLI still receives
+    // `opus[1m]`. Checked on both fields a row can match on.
+    const bySlug = [
+      model({
+        harnessId: "claude",
+        slug: "opus[200k]",
+        resolvedModel: "claude-opus-5-5-wire",
+      }),
+    ];
+    expect(resolveModelBySlug(bySlug, "opus[1m]")).toEqual({ kind: "none" });
+
+    const byResolvedModel = [
+      model({
+        harnessId: "claude",
+        slug: "default",
+        resolvedModel: "claude-opus-5-5[200k]",
+      }),
+    ];
+    expect(resolveModelBySlug(byResolvedModel, "claude-opus-5-5[1m]")).toEqual({
+      kind: "none",
+    });
+
+    // The grammar is case-insensitive, so a case-only difference is one tier.
+    expect(resolveModelBySlug(bySlug, "opus[200K]").kind).toBe("alias");
+  });
+
+  it("keeps slug-before-resolvedModel precedence inside the tier-tolerant pass", () => {
+    // Pass 3 ranks its matches the way passes 1 and 2 do: a row whose slug
+    // matches beats a row whose resolvedModel matches, whatever the catalog
+    // order. A merged tie would pick by catalog accident.
+    const bySlug = model({
+      harnessId: "claude",
+      slug: "beta",
+      resolvedModel: "wire-a",
+    });
+    const byCanonical = model({
+      harnessId: "claude",
+      slug: "pointer",
+      resolvedModel: "beta",
+    });
+    for (const catalog of [
+      [bySlug, byCanonical],
+      [byCanonical, bySlug],
+    ]) {
+      expect(resolveModelBySlug(catalog, "beta[1m]")).toEqual({
+        kind: "alias",
+        model: bySlug,
+        ambiguous: false,
+        tied: [bySlug],
+      });
+    }
+
+    // The case that matters: a version pin must not land on the floating
+    // pointer that currently routes to it. `sonnet` precedes the pinned row
+    // in Claude's catalog, so a merged tie would have picked `sonnet`.
+    const sonnet = model({
+      harnessId: "claude",
+      slug: "sonnet",
+      resolvedModel: "claude-sonnet-5",
+    });
+    const pinned = model({
+      harnessId: "claude",
+      slug: "claude-sonnet-5",
+      resolvedModel: "claude-sonnet-5",
+    });
+    expect(resolveModelBySlug([sonnet, pinned], "claude-sonnet-5[1m]")).toEqual(
+      { kind: "alias", model: pinned, ambiguous: false, tied: [pinned] },
+    );
+  });
+
+  it("rejects a row whose other field carries a conflicting marker", () => {
+    // The row's slug is plain, but its resolvedModel says it routes to the
+    // `[200k]` tier, so it is not the `[1m]` model the input names.
+    const routesTo200k = model({
+      harnessId: "claude",
+      slug: "opus",
+      resolvedModel: "claude-opus-5-5[200k]",
+    });
+    expect(resolveModelBySlug([routesTo200k], "opus[1m]")).toEqual({
+      kind: "none",
+    });
+
+    // The same rule when the match is on resolvedModel and the slug conflicts.
+    const named200k = model({
+      harnessId: "claude",
+      slug: "opus[200k]",
+      resolvedModel: "claude-opus-5-5",
+    });
+    expect(resolveModelBySlug([named200k], "claude-opus-5-5[1m]")).toEqual({
+      kind: "none",
+    });
+
+    // An unmarked other field is no conflict: this is the drift pass 3 is for.
+    const plain = model({
+      harnessId: "claude",
+      slug: "opus",
+      resolvedModel: "claude-opus-5-5",
+    });
+    expect(resolveModelBySlug([plain], "opus[1m]").kind).toBe("alias");
+  });
+
+  it("leaves an unmarked input unresolved when the candidates name different tiers", () => {
+    // `opus` says nothing about its tier, so against a catalog listing the same
+    // id at two tiers there is no evidence which one it means; a tie would read
+    // as covered and serve the first row's capabilities. Unresolved is what the
+    // two-pass resolver answered here before pass 3 existed.
+    const oneM = model({
+      harnessId: "claude",
+      slug: "opus[1m]",
+      resolvedModel: "claude-opus-5-5[1m]",
+    });
+    const twoHundredK = model({
+      harnessId: "claude",
+      slug: "opus[200k]",
+      resolvedModel: "claude-opus-5-5[200k]",
+    });
+    expect(resolveModelBySlug([oneM, twoHundredK], "opus")).toEqual({
+      kind: "none",
+    });
+    expect(resolveModelBySlug([oneM, twoHundredK], "claude-opus-5-5")).toEqual({
+      kind: "none",
+    });
+
+    // Rows that agree on the tier still tie: they are one model.
+    const defaultRow = model({
+      harnessId: "claude",
+      slug: "default",
+      resolvedModel: "claude-opus-5-5[1m]",
+    });
+    const match = resolveModelBySlug([defaultRow, oneM], "claude-opus-5-5");
+    expect(match.kind).toBe("alias");
+    if (match.kind !== "alias") return;
+    expect(match.tied).toEqual([defaultRow, oneM]);
+  });
+
+  it("prefers the same tier marker over a missing one", () => {
+    // A catalog listing both tiers: `opus[1M]` names the `[1m]` tier (the
+    // grammar is case-insensitive), so it must not tie with plain `opus`.
+    const plain = model({
+      harnessId: "claude",
+      slug: "opus",
+      resolvedModel: "claude-opus-5-5",
+    });
+    const decorated = model({
+      harnessId: "claude",
+      slug: "opus[1m]",
+      resolvedModel: "claude-opus-5-5[1m]",
+    });
+    expect(resolveModelBySlug([plain, decorated], "opus[1M]")).toEqual({
+      kind: "alias",
+      model: decorated,
+      ambiguous: false,
+      tied: [decorated],
+    });
+  });
+
+  it("keeps rows with no resolvedModel on exact-only matching, marker or not", () => {
+    // Only adapters whose catalog decorates slugs publish `resolvedModel`, so
+    // a row without it has no evidence that `x[1m]` and `x` are one model.
+    // The documented fallback for such rows is exact-only, in both directions.
+    const undecorated = [model({ harnessId: "claude", slug: "bare-slug" })];
+    expect(resolveModelBySlug(undecorated, "bare-slug[1m]")).toEqual({
+      kind: "none",
+    });
+
+    const decorated = [model({ harnessId: "claude", slug: "bare-slug[1m]" })];
+    expect(resolveModelBySlug(decorated, "bare-slug")).toEqual({
+      kind: "none",
+    });
+  });
+
+  it("returns none for an input that is nothing but a tier marker", () => {
+    expect(resolveModelBySlug(CLAUDE_CLI_2_1_284_CATALOG, "[1m]")).toEqual({
       kind: "none",
     });
   });
