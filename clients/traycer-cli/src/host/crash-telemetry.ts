@@ -208,9 +208,116 @@ export function captureHostCrashEvent(event: HostCrashEvent): void {
 }
 
 /**
+ * The count for a run of crashes {@link HostCrashReportThrottle} held back.
+ * A `warning`, under its own fingerprint, so the run is one line beside the
+ * issue it belongs to rather than more events inside it.
+ */
+export function captureHostCrashSummary(
+  event: HostCrashEvent,
+  suppressedCount: number,
+  windowStartedAt: number,
+): void {
+  Sentry.withScope((scope) => {
+    scope.setLevel("warning");
+    scope.setFingerprint([...event.fingerprint, "repeated"]);
+    scope.setTags(event.tags);
+    scope.setExtras({ suppressedCount, windowStartedAt });
+    if (event.hostId !== null) {
+      scope.setUser({ id: event.hostId });
+    }
+    Sentry.captureMessage(`${event.message} (repeated)`, "warning");
+  });
+}
+
+/** Crashes of one kind reported in full before the throttle starts counting. */
+export const HOST_CRASH_REPORTS_BEFORE_THROTTLE = 3;
+
+/** One summary per kind per hour once the throttle is counting. */
+export const HOST_CRASH_SUMMARY_WINDOW_MS = 60 * 60 * 1000;
+
+export interface HostCrashReportThrottleDeps {
+  readonly now: () => number;
+  readonly capture: (event: HostCrashEvent) => void;
+  readonly captureSummary: (
+    event: HostCrashEvent,
+    suppressedCount: number,
+    windowStartedAt: number,
+  ) => void;
+}
+
+interface HostCrashThrottleState {
+  reported: number;
+  suppressedCount: number;
+  windowStartedAt: number;
+}
+
+/**
+ * Bounds what one crash-looping host can report.
+ *
+ * The supervisor relaunches a crashed host and reports each crash. A host that
+ * cannot start crashes on every relaunch, for as long as the machine is on:
+ * one such host reported 7,023 crashes in four days. What those events say is
+ * carried by the first few and by how many followed, so that is what is sent:
+ * the first {@link HOST_CRASH_REPORTS_BEFORE_THROTTLE} crashes of a kind in
+ * full, then one summary per hour carrying the count.
+ *
+ * Keyed by the event's fingerprint, the same (platform, kind) pair that groups
+ * the issue, so a host that starts dying a different way is reported in full
+ * again. The state lives in the supervisor process and ends with it; a
+ * supervisor restart is rare and bounded, and is itself worth a fresh report.
+ */
+export class HostCrashReportThrottle {
+  private readonly deps: HostCrashReportThrottleDeps;
+  private readonly states = new Map<string, HostCrashThrottleState>();
+
+  constructor(deps: HostCrashReportThrottleDeps) {
+    this.deps = deps;
+  }
+
+  report(event: HostCrashEvent): void {
+    const key = event.fingerprint.join("|");
+    const at = this.deps.now();
+    const state = this.states.get(key);
+    if (state === undefined) {
+      this.states.set(key, {
+        reported: 1,
+        suppressedCount: 0,
+        windowStartedAt: at,
+      });
+      this.deps.capture(event);
+      return;
+    }
+    if (state.reported < HOST_CRASH_REPORTS_BEFORE_THROTTLE) {
+      state.reported += 1;
+      state.windowStartedAt = at;
+      this.deps.capture(event);
+      return;
+    }
+    state.suppressedCount += 1;
+    if (at - state.windowStartedAt < HOST_CRASH_SUMMARY_WINDOW_MS) {
+      return;
+    }
+    this.deps.captureSummary(
+      event,
+      state.suppressedCount,
+      state.windowStartedAt,
+    );
+    state.suppressedCount = 0;
+    state.windowStartedAt = at;
+  }
+}
+
+const hostCrashReportThrottle = new HostCrashReportThrottle({
+  now: () => Date.now(),
+  capture: captureHostCrashEvent,
+  captureSummary: captureHostCrashSummary,
+});
+
+/**
  * The default `reportHostCrash` dependency: bounded identity read, then one
- * event. Never throws - a telemetry failure on the exit path must not cost
- * the relaunch that follows it.
+ * event, or a count toward the next summary once this kind of crash is
+ * repeating (see {@link HostCrashReportThrottle}). Never throws - a telemetry
+ * failure on the exit path must not cost the relaunch that follows it.
  */
 export async function reportHostCrashToSentry(
   telemetry: HostCrashTelemetry,
@@ -233,7 +340,7 @@ export async function reportHostCrashToSentry(
     identity = null;
   }
   try {
-    captureHostCrashEvent(buildHostCrashEvent(telemetry, identity));
+    hostCrashReportThrottle.report(buildHostCrashEvent(telemetry, identity));
   } catch {
     // Intentionally silent: see the module comment.
     return;
