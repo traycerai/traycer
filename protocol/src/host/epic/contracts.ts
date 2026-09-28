@@ -56,6 +56,7 @@ import {
   listEpicCollaboratorsResponseSchema,
   getTaskContextsRequestSchema,
   getTaskContextsResponseSchema,
+  getTaskContextsResponseSchemaPre14,
   getTaskContextsResponseSchemaPre12,
   getTaskContextsResponseSchemaV10,
   getTaskContextsResponseSchemaPre13,
@@ -508,7 +509,7 @@ export const epicGetTaskContextsV13 = defineRpcContract({
   method: "epic.getTaskContexts",
   schemaVersion: { major: 1, minor: 3 } as const,
   requestSchema: getTaskContextsRequestSchema,
-  responseSchema: getTaskContextsResponseSchema,
+  responseSchema: getTaskContextsResponseSchemaPre14,
 });
 
 export const epicGetTaskContextsUpgradeV12ToV13 = defineUpgradePath<
@@ -522,6 +523,25 @@ export const epicGetTaskContextsUpgradeV12ToV13 = defineUpgradePath<
   // question, and absence already means "cloud or unknown" - which is the
   // reading that keeps the pin action enabled, so inventing an id list here
   // would be indistinguishable from the defect.
+  upgradeResponse: (response) => response,
+});
+
+// `@1.4` adds a sibling activity map. The `tasks` record value remains the
+// frozen @1.2 shape; a negotiated older peer strips the new sibling.
+export const epicGetTaskContextsV14 = defineRpcContract({
+  method: "epic.getTaskContexts",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: getTaskContextsRequestSchema,
+  responseSchema: getTaskContextsResponseSchema,
+});
+
+export const epicGetTaskContextsUpgradeV13ToV14 = defineUpgradePath<
+  typeof epicGetTaskContextsV13,
+  typeof epicGetTaskContextsV14
+>({
+  from: epicGetTaskContextsV13.schemaVersion,
+  to: epicGetTaskContextsV14.schemaVersion,
+  upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
 

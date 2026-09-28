@@ -55,6 +55,7 @@ const testState = vi.hoisted(() => {
     activityWorktrees: [] as readonly WorktreeHostEntryV12[],
     activityError: null as Error | null,
     taskContexts: new Map<string, ListTaskLight>(),
+    recentAtByTaskId: new Map<string, number>(),
     localHomedTaskIds: new Set<string>(),
     taskContextsError: null as Error | null,
     // `useEpicGetTaskContexts`'s `isFetching`, so a test can hold context
@@ -179,7 +180,16 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
       tasksById: new Map(
         taskIds.flatMap((taskId) => {
           const task = testState.taskContexts.get(taskId);
-          return task === undefined ? [] : [[taskId, task] as const];
+          if (task === undefined) return [];
+          // Model combineTaskContextResults: @1.4's sibling activity value is
+          // merged onto each found row before History receives the context map.
+          const recentAt = testState.recentAtByTaskId.get(taskId);
+          return [
+            [
+              taskId,
+              recentAt === undefined ? task : { ...task, recentAt },
+            ] as const,
+          ];
         }),
       ),
       // `epic.getTaskContexts@1.2`'s sibling home-marker list. Kept on the fake
@@ -225,6 +235,7 @@ describe("useHistoryQuery", () => {
     testState.activityWorktrees = [];
     testState.activityError = null;
     testState.taskContexts = new Map();
+    testState.recentAtByTaskId = new Map();
     testState.taskContextsError = null;
     testState.taskContextsFetching = false;
     testState.localHomedTaskIds = new Set<string>();
@@ -597,14 +608,18 @@ describe("useHistoryQuery", () => {
     testState.taskContexts = new Map([
       [
         "context-extra",
-        taskLightWithRecentAt(
+        taskLightWithUpdatedAt(
           "context-extra",
           "rank extra",
           "traycer/local",
-          recentAt(11, 10),
+          recentAt(10, 50),
         ),
       ],
     ]);
+    // This is the @1.4 sibling map. The row's updatedAt would put the context
+    // extra last without it; the viewer activity value puts it between the
+    // two cloud rows while remaining later than the task's edit time.
+    testState.recentAtByTaskId = new Map([["context-extra", recentAt(11, 10)]]);
 
     render(
       <HistoryQueryHarness
@@ -1355,6 +1370,26 @@ function taskLightWithRecentAt(
   recentAt: number,
 ): ListTaskLight {
   return { ...taskLight(id, title, repo), recentAt };
+}
+
+function taskLightWithUpdatedAt(
+  id: string,
+  title: string,
+  repo: string,
+  updatedAt: number,
+): ListTaskLight {
+  const task = taskLight(id, title, repo);
+  const epic = task.epic;
+  if (epic === null || epic === undefined || epic.light === null) {
+    throw new Error("Expected an epic light test fixture");
+  }
+  return {
+    ...task,
+    epic: {
+      ...epic,
+      light: { ...epic.light, updatedAt },
+    },
+  };
 }
 
 function taskLightWithOrganization(

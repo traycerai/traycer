@@ -549,9 +549,11 @@ import {
   epicGetTaskContextsV11,
   epicGetTaskContextsV12,
   epicGetTaskContextsV13,
+  epicGetTaskContextsV14,
   epicGetTaskContextsUpgradeV10ToV11,
   epicGetTaskContextsUpgradeV11ToV12,
   epicGetTaskContextsUpgradeV12ToV13,
+  epicGetTaskContextsUpgradeV13ToV14,
   epicGrantAccessV10,
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
@@ -7177,9 +7179,9 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     1: {
       // @1.1's new row-union values are projection-gated in host dispatch:
       // a v1.0 caller receives its released nullable rows, never a union arm.
-      // @1.3's `localHomedTaskIds` sibling needs no gate of its own - an
-      // older peer's frozen schema strips the optional key at parse time.
-      latestMinor: 3,
+      // @1.3's local-home list and @1.4's activity map are siblings; older
+      // peers' frozen response schemas strip these optional keys.
+      latestMinor: 4,
       versions: {
         0: {
           contract: epicGetTaskContextsV10,
@@ -7197,6 +7199,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         3: {
           contract: epicGetTaskContextsV13,
           upgradeFromPreviousVersion: epicGetTaskContextsUpgradeV12ToV13,
+        },
+        4: {
+          contract: epicGetTaskContextsV14,
+          upgradeFromPreviousVersion: epicGetTaskContextsUpgradeV13ToV14,
         },
       },
       downgradePathsFromLatest: {},

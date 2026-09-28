@@ -26,7 +26,7 @@ export const TASK_CONTEXT_TITLE_STALE_TIME_MS = 5 * 60_000;
 export interface EpicTaskContexts {
   readonly tasksById: ReadonlyMap<string, ListTaskLight>;
   /**
-   * The subset of `tasksById` the host marked local-homed - `@1.1`'s
+   * The subset of `tasksById` the host marked local-homed - `@1.3`'s
    * `localHomedTaskIds` sibling.
    *
    * Carried rather than dropped because `tasks` is a `z.record`, so the home
@@ -117,7 +117,13 @@ function combineTaskContextResults(
     if (result.data === undefined) continue;
     for (const [taskId, resolution] of Object.entries(result.data.tasks)) {
       if (isFoundTaskContext(resolution)) {
-        tasksById.set(taskId, resolution.task);
+        const recentAt = result.data.recentAtByTaskId?.[taskId];
+        tasksById.set(
+          taskId,
+          recentAt === undefined
+            ? resolution.task
+            : { ...resolution.task, recentAt },
+        );
       }
     }
     for (const taskId of result.data.localHomedTaskIds ?? []) {

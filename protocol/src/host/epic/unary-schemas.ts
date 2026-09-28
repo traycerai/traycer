@@ -1425,12 +1425,9 @@ export const taskContextResolutionSchema = lazySchema(() =>
       // getTaskContexts schema, and the released-baseline gate caught it as a
       // BREAKING structural change at a shipped version.
       //
-      // Nothing wants the newer keys here: `@1.3` deliberately answers the
-      // local-home question with the `localHomedTaskIds` SIBLING list rather
-      // than a row field, and `combineTaskPinnedStateResults` reads that list.
-      // A later minor that genuinely needs a richer row must add its own
-      // resolution schema against the frozen alias of ITS release, never move
-      // this one forward.
+      // `@1.3` answers the local-home question with a sibling id list.
+      // `@1.4` likewise carries recent activity in a sibling map, because
+      // changing this record value would reshape a released minor.
       task: listTaskLightSchemaPre14,
     }),
     z.object({
@@ -1508,9 +1505,15 @@ export type GetTaskContextsResponsePre13 = z.infer<
  * Absence means the host did not say - an older host, or a `@1.0`-`@1.2`
  * negotiation - and must be read as cloud-or-unknown, never as local.
  */
-export const getTaskContextsResponseSchema = lazySchema(() =>
+export const getTaskContextsResponseSchemaPre14 = lazySchema(() =>
   getTaskContextsResponseSchemaPre13.extend({
     localHomedTaskIds: z.array(z.string()).optional(),
+  }),
+);
+/** `@1.4` carries viewer activity beside frozen context rows. */
+export const getTaskContextsResponseSchema = lazySchema(() =>
+  getTaskContextsResponseSchemaPre14.extend({
+    recentAtByTaskId: z.record(z.string(), z.number()).optional(),
   }),
 );
 export type GetTaskContextsResponse = z.infer<

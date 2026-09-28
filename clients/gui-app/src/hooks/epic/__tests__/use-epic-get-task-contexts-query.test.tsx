@@ -153,4 +153,60 @@ describe("useEpicGetTaskContexts", () => {
       expect(request).toHaveBeenCalledTimes(2);
     });
   });
+
+  it("merges @1.4 recent activity into found rows and leaves it absent for older responses", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const activityTask = listTaskLight("epic-with-activity", "Activity task");
+    const legacyTask = listTaskLight("epic-without-activity", "Legacy task");
+    request
+      .mockImplementationOnce(() =>
+        Promise.resolve({
+          tasks: {
+            "epic-with-activity": { status: "found", task: activityTask },
+          },
+          recentAtByTaskId: { "epic-with-activity": 1_234 },
+        }),
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve({
+          tasks: {
+            "epic-without-activity": { status: "found", task: legacyTask },
+          },
+        }),
+      );
+
+    const withActivity = renderHook(
+      () =>
+        useEpicGetTaskContexts(["epic-with-activity"], USER_ID, {
+          enabled: true,
+        }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+    await waitFor(() => {
+      expect(
+        withActivity.result.current.tasksById.get("epic-with-activity")
+          ?.recentAt,
+      ).toBe(1_234);
+    });
+
+    const withoutActivity = renderHook(
+      () =>
+        useEpicGetTaskContexts(["epic-without-activity"], USER_ID, {
+          enabled: true,
+        }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+    await waitFor(() => {
+      expect(
+        withoutActivity.result.current.tasksById.has("epic-without-activity"),
+      ).toBe(true);
+    });
+
+    expect(
+      withoutActivity.result.current.tasksById.get("epic-without-activity")
+        ?.recentAt,
+    ).toBeUndefined();
+  });
 });
