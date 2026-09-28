@@ -9,7 +9,6 @@ internally rather than here.
 For local development and packaging from this repo:
 
 - `make dev-desktop` — run the desktop dev shell against production with a
-  downloaded host. See [`AGENTS.md`](AGENTS.md) and
-  [`../../docs/DEVELOPMENT.md`](../../docs/DEVELOPMENT.md).
+  downloaded host. See [`AGENTS.md`](AGENTS.md).
 - `bun run package` — produce an **unsigned** packaged Electron binary.
 - `bun run package:dir` — unpacked package for a faster smoke test.

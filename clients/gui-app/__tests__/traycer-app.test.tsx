@@ -59,7 +59,7 @@ function mockMatchMedia(): void {
 
 function buildHost(): MockRunnerHost {
   return new MockRunnerHost({
-    signInUrl: "https://platform.traycer.ai?redirect_uri=traycer%3A%2F%2Fauth",
+    signInUrl: "https://traycer.ai?redirect_uri=traycer%3A%2F%2Fauth",
     authnBaseUrl: "http://localhost:5005",
     localHost: null,
     hosts: [],
@@ -82,7 +82,7 @@ const TRAYCER_APP_TEST_TIMEOUT_MS = 30_000;
 
 function buildHostWithLocalHost(): MockRunnerHost {
   return new MockRunnerHost({
-    signInUrl: "https://platform.traycer.ai?redirect_uri=traycer%3A%2F%2Fauth",
+    signInUrl: "https://traycer.ai?redirect_uri=traycer%3A%2F%2Fauth",
     authnBaseUrl: "http://localhost:5005",
     localHost: localSnapshot,
     hosts: [],

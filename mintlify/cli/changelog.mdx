@@ -5,6 +5,20 @@ description: "Track the latest updates and improvements to the Traycer CLI."
 rss: true
 ---
 
+<Update label="v1.4.0">
+Restarts and updates that recover cleanly, a cooperative stop on Windows, and a lighter Host on macOS.
+
+* **Host restart** — on macOS and Linux, a restart that takes longer than expected is no longer reported as failed. If the service manager doesn't answer in time, the CLI says the restart is unconfirmed. A restart while an installed update is waiting for a busy Host now starts the Host on that update instead of leaving it stopped.
+* **Clearer recovery** — when an update is waiting and the Host isn't running, `host status` points to `traycer host update`. Commands refused because of a pending update name it and say how to recover.
+* **Updates** — a downgrade you confirmed with `--accept-store-format-loss` still applies when the update has to wait for a busy Host.
+* **Windows** — `host stop` and `host restart` ask the Host to shut down cleanly first. While the Host has work in progress, both are refused rather than cutting that work off. `--force` still stops it.
+* **macOS memory** — the Host starts with the system allocator's large-block cache turned off, so freed large blocks are given back instead of held.
+* **Agent list** — when the Host can tell, `traycer agent list` shows whether an agent's session is running, sleeping, or stopped, so a sleeping agent isn't mistaken for a stopped one.
+* **Host logs** — rotating `host.log` at start now shifts older logs down instead of overwriting the one the Host just rotated out.
+* **Crash reports** — expected outcomes, such as an expired sign-in, are no longer sent as crash reports.
+* **Fixes** — a Host request containing a Unicode line separator is no longer broken apart; the notice for an agent stopped before replying no longer claims the user stopped it; and monitor hints tell agents to follow up with `--expect-reply`.
+</Update>
+
 <Update label="v1.3.0">
 Reliable Host updates, a way to sign in the mobile app, and clearer commands.
 
