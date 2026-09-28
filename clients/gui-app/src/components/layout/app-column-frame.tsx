@@ -56,8 +56,6 @@ export function AppColumnFrame(props: AppColumnFrameProps): ReactNode {
       // the OLD snapshot of the column is captured before that.
       data-layout-column
       data-tab-strip-placement={placement}
-      // Read by styles/window-chrome.css to size `--app-title-band-height`.
-      data-app-title-band={titleBand}
       // Scoped so a picture of the frame inside it (the layout editor's
       // preset miniatures) can never lend the bridge its anchors.
       className="relative flex h-safe-dvh min-w-0 flex-1 flex-col [anchor-scope:--sheet-joined,--task-frame] md:bg-shell-ground"

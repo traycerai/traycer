@@ -1,17 +1,19 @@
-import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
 /**
  * THE single DndContext for the app. Mounted once in `app-shell.tsx`,
  * wrapping the header tab strip and every route surface, so canvas tiles,
  * sidebar sources, rail items, header tabs, and tear-off all share one
  * context - no geometry bridges between provider islands.
  *
- * The provider holds ZERO React state: drag lifecycle handlers write into
- * the ephemeral `dnd-store` (narrow per-target selectors keep preview ticks
+ * Drag lifecycle handlers write into the ephemeral `dnd-store`
+ * (narrow per-target selectors keep preview ticks
  * scoped to the hovered pane) and track the last resolved drop in a ref.
  * Collision detection + the collision-pass pointer stash live in
  * `root-dnd-collision.ts`; commits live in `root-dnd-commits.ts` and read
  * stores imperatively.
+ * The sheet-join scope encloses both the live strip and the portaled drag
+ * overlay so they publish to the same bridge during a handoff.
  */
+import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
 import {
   ARTIFACT_TAB_DND_TYPE,
   SIDEBAR_NODE_DND_TYPE,

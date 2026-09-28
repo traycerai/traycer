@@ -1007,7 +1007,7 @@ const SIDE_VARIANT_PROBE = `(() => {
     strip: rect(strip),
     edge: strip.getAttribute("data-edge"),
     placementStamp: column.getAttribute("data-tab-strip-placement"),
-    bandKind: column.getAttribute("data-app-title-band"),
+    bandKind: document.documentElement.getAttribute("data-app-title-band"),
     fixtureHeader: document.querySelector("[data-fixture-header]") !== null,
   };
 })()`;

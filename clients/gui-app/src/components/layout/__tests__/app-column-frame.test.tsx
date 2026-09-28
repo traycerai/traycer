@@ -8,19 +8,23 @@ import {
 import type { AppColumnChrome } from "@/components/layout/header/app-title-band-kind";
 import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
 import { usePublishSheetJoin } from "@/components/layout/tabs/sheet-join-context";
+import type { SheetJoinPane } from "@/components/layout/tabs/side-strip/side-tab-join";
 
 const TOP: AppColumnChrome = { placement: "top", titleBand: "header" };
 const LEFT_NONE: AppColumnChrome = { placement: "left", titleBand: "none" };
 const RIGHT_BAND: AppColumnChrome = { placement: "right", titleBand: "band" };
 
-/** A stand-in for a joined tab: publishes while on, and a click toggles it. */
-function TogglePublisher(): ReactNode {
+/** A stand-in for a joined tab: publishes `pane` while on; a click toggles it. */
+function TogglePublisher(props: {
+  readonly id: string;
+  readonly pane: SheetJoinPane;
+}): ReactNode {
   const [on, setOn] = useState(true);
-  usePublishSheetJoin(on ? "canvas" : null);
+  usePublishSheetJoin(on ? props.pane : null);
   return (
     <button
       type="button"
-      data-testid="join-toggle"
+      data-testid={`join-toggle-${props.id}`}
       onClick={() => setOn((current) => !current)}
     />
   );
@@ -170,12 +174,14 @@ describe("AppColumnFrame", () => {
   );
 
   it.each([TOP, LEFT_NONE, RIGHT_BAND])(
-    "stamps both markers for $placement / $titleBand and keeps the tail's last child last",
+    "stamps the placement on the column and the band kind on the document root for $placement / $titleBand, and keeps the tail's last child last",
     (chrome) => {
       const column = renderFrame(chrome);
 
       expect(column.dataset.tabStripPlacement).toBe(chrome.placement);
-      expect(column.dataset.appTitleBand).toBe(chrome.titleBand);
+      expect(document.documentElement.dataset.appTitleBand).toBe(
+        chrome.titleBand,
+      );
       expect(column.hasAttribute("data-swipe-nav-screen")).toBe(true);
       expect(column.lastElementChild).toBe(screen.getByTestId("tail-last"));
     },
@@ -231,17 +237,58 @@ describe("AppColumnFrame", () => {
     });
 
     it("activates the top bridge for a published join and clears it when the join is withdrawn", () => {
-      renderFrameWith(TOP, <TogglePublisher />);
+      renderFrameWith(TOP, <TogglePublisher id="a" pane="canvas" />);
       const bridge = document.querySelector('[data-sheet-join-bridge="top"]');
 
       expect(bridge?.hasAttribute("data-join-active")).toBe(true);
       expect(bridge?.getAttribute("data-join-pane")).toBe("canvas");
 
-      fireEvent.click(screen.getByTestId("join-toggle"));
+      fireEvent.click(screen.getByTestId("join-toggle-a"));
 
       expect(bridge?.hasAttribute("data-join-active")).toBe(false);
       expect(bridge?.hasAttribute("data-join-pane")).toBe(false);
     });
+
+    // The scope's ordering contract for overlapping eligible publishers: the
+    // bridge shows the most recently published one, and withdrawing any
+    // publisher - in either order - leaves it on the latest one still up.
+    it.each([
+      {
+        order: "the newer withdrawn first",
+        steps: [
+          { click: "join-toggle-b", pane: "panel" },
+          { click: "join-toggle-a", pane: null },
+        ],
+      },
+      {
+        order: "the older withdrawn first",
+        steps: [
+          { click: "join-toggle-a", pane: "canvas" },
+          { click: "join-toggle-b", pane: null },
+        ],
+      },
+    ])(
+      "keeps the bridge on the remaining publisher with $order",
+      ({ steps }) => {
+        renderFrameWith(
+          TOP,
+          <>
+            <TogglePublisher id="a" pane="panel" />
+            <TogglePublisher id="b" pane="canvas" />
+          </>,
+        );
+        const bridge = document.querySelector('[data-sheet-join-bridge="top"]');
+        expect(bridge?.getAttribute("data-join-pane")).toBe("canvas");
+
+        for (const step of steps) {
+          fireEvent.click(screen.getByTestId(step.click));
+          expect(bridge?.getAttribute("data-join-pane")).toBe(step.pane);
+          expect(bridge?.hasAttribute("data-join-active")).toBe(
+            step.pane !== null,
+          );
+        }
+      },
+    );
 
     it("leaves the top bridge inactive while nothing publishes a join", () => {
       renderFrame(TOP);

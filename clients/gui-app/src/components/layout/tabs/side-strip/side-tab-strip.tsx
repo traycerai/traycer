@@ -154,7 +154,7 @@ export function SideTabStrip(props: {
           />
           <SideStripFoot variant={variant} />
           {/* The joined tab's run onto its task's sheet, anchored to the joined
-            row and drawn only while one exists (`index.css`). */}
+            row and activated by the shared SheetJoinScope. */}
           <div data-strip-drag-overlay-host className="contents" />
           <SheetJoinBridge edge={edge} />
           <SideStripResizeHandle

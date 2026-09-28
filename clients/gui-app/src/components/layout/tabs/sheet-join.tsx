@@ -3,24 +3,23 @@ import type { SheetJoinPane } from "./side-strip/side-tab-join";
 
 import { JoinPaneContext, PublishJoinContext } from "./sheet-join-context";
 
-/** The strip owns one bridge; the eligible row publishes its already-known join. */
+/** The bridge follows the latest remaining eligible row or drag overlay. */
 export function SheetJoinScope(props: {
   readonly children: ReactNode;
 }): ReactNode {
-  const [join, setJoin] = useState<{
-    owner: symbol;
-    pane: SheetJoinPane;
-  } | null>(null);
+  const [joins, setJoins] = useState<{ owner: symbol; pane: SheetJoinPane }[]>(
+    [],
+  );
   const publish = useCallback((pane: SheetJoinPane) => {
     const owner = Symbol();
-    setJoin({ owner, pane });
+    setJoins((current) => [...current, { owner, pane }]);
     return () => {
-      setJoin((current) => (current?.owner === owner ? null : current));
+      setJoins((current) => current.filter((join) => join.owner !== owner));
     };
   }, []);
   return (
     <PublishJoinContext value={publish}>
-      <JoinPaneContext value={join?.pane ?? null}>
+      <JoinPaneContext value={joins.at(-1)?.pane ?? null}>
         {props.children}
       </JoinPaneContext>
     </PublishJoinContext>

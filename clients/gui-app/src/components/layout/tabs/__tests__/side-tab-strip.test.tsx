@@ -1251,7 +1251,7 @@ describe("<SideTabStrip />", () => {
       ).toBe(true);
     });
 
-    it("clears the bridge when the active tab changes to one that does not join", async () => {
+    it("clears the bridge when no tab is active (activeItemId null)", async () => {
       setSidebarSide("right");
       openEpicTabs(["Alpha"]);
       await renderStrip("/elsewhere", LEFT_STRIP);

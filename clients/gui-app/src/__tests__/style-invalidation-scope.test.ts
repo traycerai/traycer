@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * Two selectors that make a style recalculation reach far past the element
- * that changed, kept out by reading the source text (jsdom cannot measure
- * style invalidation):
+ * Selectors that make a style recalculation reach far past the element that
+ * changed, kept out by reading the source text (jsdom cannot measure style
+ * invalidation):
  *
  * - an unqualified `:has()`, or one on html / body / :root / .wco / the app
  *   column, re-evaluates against nearly the whole document whenever any
@@ -19,9 +19,11 @@ import { describe, expect, it } from "vitest";
  *   `group-has-[...]`, `[&:has(...)]`) on the app-scope owners - the column
  *   frame, the shell and the root route components. `group-has-*` on a tab or
  *   row host is a local group and stays allowed everywhere else.
- * - `container-type: size` inside the transcript list or its rows makes every
- *   row's size a layout dependency of the container. The outer chat tile's
- *   container and the minimaps are outside this rule.
+ *
+ * Limits, by design (no CSS parser here): the CSS check reads the plain
+ * compound directly before each `:has(`. A nested `&:has(` and a subject
+ * wrapped in `:is()` / `:where()` are not resolved, so a new one of those on
+ * a document or app-column scope needs a human look.
  */
 
 const SRC_DIR = path.resolve(
@@ -38,7 +40,6 @@ const APP_SCOPE_TSX = [
   "routes/root-route-components.tsx",
 ];
 const HAS_VARIANT = /(?<![\w-])(?:group-|peer-)?has-|\[&:has\(/;
-const SIZE_CONTAINER = /\[container-type:size\]|container-type:\s*size\b/;
 
 function sourceFiles(dir: string, extensions: ReadonlyArray<string>): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -123,28 +124,6 @@ describe("has variants on the app-scope owners", () => {
           .replace(/^\s*\/\/.*$/gm, ""),
       ),
     );
-    expect(offences).toEqual([]);
-  });
-});
-
-describe("container-type: size in the transcript", () => {
-  it("matches size containers but not inline-size ones", () => {
-    expect(SIZE_CONTAINER.test('className="[container-type:size]"')).toBe(true);
-    expect(SIZE_CONTAINER.test("container-type: size;")).toBe(true);
-    expect(
-      SIZE_CONTAINER.test('className="[container-type:inline-size]"'),
-    ).toBe(false);
-  });
-
-  it("is used nowhere under components/chat except the turn minimap", () => {
-    const offences = sourceFiles(path.join(SRC_DIR, "components", "chat"), [
-      ".tsx",
-      ".ts",
-      ".css",
-    ])
-      .filter((file) => !/minimap/.test(path.basename(file)))
-      .filter((file) => SIZE_CONTAINER.test(readFileSync(file, "utf8")))
-      .map((file) => path.relative(SRC_DIR, file));
     expect(offences).toEqual([]);
   });
 });

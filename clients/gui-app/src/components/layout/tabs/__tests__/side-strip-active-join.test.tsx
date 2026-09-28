@@ -356,8 +356,8 @@ describe("side strip: sheet join and the header-overlay portal under a real drag
     // The source row itself is still in the DOM (opacity-0), and it is the
     // one actually being dragged - it relinquishes the join.
     expect(alpha.hasAttribute("data-sheet-joined")).toBe(false);
-    // The source's un-join and the overlay's join hand the bridge over with
-    // no gap: it stays active and follows the overlay's pane.
+    // Once the source has un-joined and the overlay joined, the bridge is
+    // active and carries the overlay's pane.
     expect(joinBridge().hasAttribute("data-join-active")).toBe(true);
     expect(joinBridge().getAttribute("data-join-pane")).toBe(
       overlayRow?.getAttribute("data-join-pane"),
@@ -401,8 +401,8 @@ describe("side strip: sheet join and the header-overlay portal under a real drag
     expect(joinedElements()).toEqual([overlayRow]);
     expect(beta.hasAttribute("data-sheet-joined")).toBe(false);
     expect(alpha.hasAttribute("data-sheet-joined")).toBe(false);
-    // Three publishers changed hands (ALPHA off, BETA's source off, BETA's
-    // overlay on); the one bridge never reads as unowned or double-owned.
+    // After ALPHA, BETA's source and BETA's overlay have settled, the bridge
+    // is active for the overlay's join.
     expect(joinBridge().hasAttribute("data-join-active")).toBe(true);
 
     releaseAt(drag, 16 + EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE + 1);
