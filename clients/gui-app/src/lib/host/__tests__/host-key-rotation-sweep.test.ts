@@ -153,7 +153,7 @@ describe("buildHostKeyRotationSweep", () => {
 
 /**
  * (B) THE NO-ANNOUNCE PIN, against a REAL `HostClient`. R-1's sweep runs
- * through `invalidateHostScopeUnannounced`
+ * through `invalidateHostScopeAfterKeyRotation`
  * (`host-client.test.ts`'s "un-strands a host's scope without announcing a
  * change" pins that method generically); this proves the SWEEP itself, wired
  * end to end, produces exactly that shape - one unannounced invalidation, no
@@ -231,7 +231,8 @@ describe("buildHostKeyRotationSweep wired to a real HostClient", () => {
   it("invalidates the rotated host's scope WITHOUT announcing a change event", async () => {
     const { client, invalidator, events } = buildRealHostClient();
     const sweep = buildHostKeyRotationSweep({
-      sweepHostScope: (hostId) => client.invalidateHostScopeUnannounced(hostId),
+      sweepHostScope: (hostId) =>
+        client.invalidateHostScopeAfterKeyRotation(hostId),
     });
 
     sweep([remoteEntry({ publicKey: "pk-1" })]);
@@ -245,7 +246,11 @@ describe("buildHostKeyRotationSweep wired to a real HostClient", () => {
 
     expect(invalidator.calls).toEqual([mockRemoteHostEntry.hostId]);
     expect(invalidator.options).toEqual([
-      { refetchActive: true, recovery: "reconnect" },
+      {
+        refetchActive: true,
+        recovery: "reconnect",
+        ignoreWorktreeReplayCoverage: true,
+      },
     ]);
     // THE CLAIM: a rotation swept ALONE in its microtask tick must produce
     // zero change events. A reason-scoped consumer (an `availability-recovered`

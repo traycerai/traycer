@@ -234,8 +234,11 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   // cannot be snoozed away" (experience doc), and a parked
   // `waiting-to-activate` is precisely the state a person needs to see.
   //
-  // Failures can be dismissed here and remain discoverable in Settings.
-  // Successful updates have no landing notice; Settings owns acknowledgement.
+  // Failures can be dismissed here, and the dismissal is shared with the
+  // Settings Overview card (one per-attempt list), so a dismissed failure is
+  // gone from both; the Doctor card and `traycer host doctor` still report
+  // the record. Successful updates have no landing notice; Settings owns
+  // that acknowledgement.
   const dismissedAttemptIds = useHostUpdateBannerStore(
     (state) => state.landingDismissedAttemptIds,
   );

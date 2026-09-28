@@ -3,6 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ComposerMobileToolbar } from "@/components/home/mobile/composer-mobile-toolbar";
+import type { PermissionMode } from "@/components/home/data/landing-options";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 
 vi.mock("@/providers/use-resolved-theme", () => ({
@@ -44,13 +45,13 @@ beforeEach(() => {
   );
 });
 
-function makeStore(modelSlug: string) {
+function makeStore(modelSlug: string, permission: PermissionMode) {
   return createComposerToolbarStore({
     purpose: "run",
     reasoningFallback: "model-default",
     seedKey: "mobile-toolbar-test",
     values: {
-      permission: "supervised",
+      permission,
       selection: { harnessId: "claude", modelSlug, profileId: null },
       reasoning: "",
       serviceTier: "",
@@ -66,10 +67,11 @@ function renderToolbar(
   modelSlug: string,
   onSubmit: () => void,
   runTargetHostId: string | null,
+  permission: PermissionMode,
 ) {
   return render(
     <ComposerMobileToolbar
-      store={makeStore(modelSlug)}
+      store={makeStore(modelSlug, permission)}
       onAttachImages={vi.fn()}
       canSubmit
       attachmentPending={false}
@@ -91,7 +93,7 @@ function renderToolbar(
 
 describe("ComposerMobileToolbar", () => {
   it("keeps the desktop arrangement: attach, permission, model, send", () => {
-    renderToolbar("claude-opus-5", vi.fn(), null);
+    renderToolbar("claude-opus-5", vi.fn(), null, "supervised");
     expect(screen.getByRole("button", { name: "Attach image" })).not.toBeNull();
     expect(screen.getByTestId("mock-model-picker")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Send" })).not.toBeNull();
@@ -100,7 +102,7 @@ describe("ComposerMobileToolbar", () => {
   });
 
   it("renders the permission as an icon, naming it only for assistive tech", () => {
-    renderToolbar("claude-opus-5", vi.fn(), null);
+    renderToolbar("claude-opus-5", vi.fn(), null, "supervised");
     expect(
       screen.getByRole("button", { name: "Permissions: Supervised" }),
     ).not.toBeNull();
@@ -109,8 +111,15 @@ describe("ComposerMobileToolbar", () => {
     expect(screen.queryByText("Supervised")).toBeNull();
   });
 
+  it("names the trigger 'Auto — Experimental' when the effective permission is Auto", () => {
+    renderToolbar("claude-opus-5", vi.fn(), null, "auto");
+    expect(
+      screen.getByRole("button", { name: "Permissions: Auto — Experimental" }),
+    ).not.toBeNull();
+  });
+
   it("opens the options sheet from the permission pill", async () => {
-    renderToolbar("claude-opus-5", vi.fn(), null);
+    renderToolbar("claude-opus-5", vi.fn(), null, "supervised");
     expect(screen.queryByTestId("composer-options-sheet")).toBeNull();
     await userEvent.click(
       screen.getByRole("button", { name: "Permissions: Supervised" }),
@@ -120,7 +129,7 @@ describe("ComposerMobileToolbar", () => {
 
   it("blocks send while the model slug is still empty", () => {
     const onSubmit = vi.fn();
-    renderToolbar("", onSubmit, null);
+    renderToolbar("", onSubmit, null, "supervised");
     expect(
       screen.getByRole("button", { name: "Send" }).hasAttribute("disabled"),
     ).toBe(true);
@@ -128,13 +137,13 @@ describe("ComposerMobileToolbar", () => {
 
   it("allows send once the model slug resolves", async () => {
     const onSubmit = vi.fn();
-    renderToolbar("claude-opus-5", onSubmit, null);
+    renderToolbar("claude-opus-5", onSubmit, null, "supervised");
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(onSubmit).toHaveBeenCalled();
   });
 
   it("wires the sheet's trailing row to useOpenPermissionSettings", async () => {
-    renderToolbar("claude-opus-5", vi.fn(), null);
+    renderToolbar("claude-opus-5", vi.fn(), null, "supervised");
     await userEvent.click(
       screen.getByRole("button", { name: "Permissions: Supervised" }),
     );
@@ -146,13 +155,13 @@ describe("ComposerMobileToolbar", () => {
   });
 
   it("hands useOpenPermissionSettings the toolbar's run-target host", () => {
-    renderToolbar("claude-opus-5", vi.fn(), "host-b");
+    renderToolbar("claude-opus-5", vi.fn(), "host-b", "supervised");
 
     expect(useOpenPermissionSettingsMock).toHaveBeenCalledWith("host-b");
   });
 
   it("hands it null when no run target has resolved", () => {
-    renderToolbar("claude-opus-5", vi.fn(), null);
+    renderToolbar("claude-opus-5", vi.fn(), null, "supervised");
 
     expect(useOpenPermissionSettingsMock).toHaveBeenLastCalledWith(null);
   });

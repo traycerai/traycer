@@ -31,6 +31,7 @@ import {
 import {
   commitExecutorAttemptMutation,
   commitExecutorRecoveryMutation,
+  parkedActivationMatchesInstall,
   verifyUpdateMutationCapability,
   withSupervisorRelaunchContender,
   withUpdateContender,
@@ -1610,6 +1611,110 @@ describe("withSupervisorRelaunchContender - the parked-record admission exemptio
     // caller cannot select a wider exemption while supplying install evidence.
     forced.admission = "recovery-maintenance";
     expect(forced.reason).toBe("contender-test");
+  });
+});
+
+// `parkedActivationMatchesInstall` - the pure predicate `host restart`
+// (traycer-cli) and `supervisorRelaunchDisposition` (above) both call to
+// decide whether a `waiting-to-activate` park describes exactly the bytes
+// installed right now. ONE function for both, deliberately (see the
+// docstring in `../contender.ts`) - these are its own direct unit tests,
+// independent of either caller's admission machinery.
+describe("parkedActivationMatchesInstall", () => {
+  const INSTALL_GENERATION = "install-7|2026-01-01T00:00:00.000Z|abc123|1.2.3";
+
+  function claim(
+    overrides: Partial<HostUpdateAttemptClaimBaseline>,
+  ): HostUpdateAttemptClaimBaseline {
+    return {
+      installedVersion: "1.2.3",
+      installGeneration: INSTALL_GENERATION,
+      stageFingerprint: null,
+      allowDowngrade: false,
+      acceptStoreFormatLoss: false,
+      ...overrides,
+    };
+  }
+
+  function installed(
+    overrides: Partial<SupervisorRelaunchInstalledIdentity>,
+  ): SupervisorRelaunchInstalledIdentity {
+    return {
+      installedVersion: "1.2.3",
+      installGeneration: INSTALL_GENERATION,
+      ...overrides,
+    };
+  }
+
+  function activatablePark(
+    overrides: Partial<HostUpdateAttemptRecord>,
+  ): HostUpdateAttemptRecord {
+    return record({
+      phase: "waiting-to-activate",
+      execution: "parked",
+      continuation: "activate",
+      claim: claim({}),
+      ...overrides,
+    });
+  }
+
+  it("true for a full match: phase, claim, and installed identity all agree", () => {
+    expect(
+      parkedActivationMatchesInstall(activatablePark({}), installed({})),
+    ).toBe(true);
+  });
+
+  it("false for the wrong phase, even with a claim that would otherwise match", () => {
+    expect(
+      parkedActivationMatchesInstall(
+        record({
+          phase: "restarting",
+          execution: "active",
+          continuation: "activate",
+          claim: claim({}),
+          targetVersion: "1.2.3",
+        }),
+        installed({}),
+      ),
+    ).toBe(false);
+  });
+
+  it("false for a claim-less park - unverifiable is refused, never admitted", () => {
+    expect(
+      parkedActivationMatchesInstall(
+        record({
+          phase: "waiting-to-activate",
+          execution: "parked",
+          continuation: "activate",
+          targetVersion: "1.2.3",
+        }),
+        installed({}),
+      ),
+    ).toBe(false);
+  });
+
+  it("false for a null installed identity", () => {
+    expect(parkedActivationMatchesInstall(activatablePark({}), null)).toBe(
+      false,
+    );
+  });
+
+  it("false when the installed version disagrees with the claim/target", () => {
+    expect(
+      parkedActivationMatchesInstall(
+        activatablePark({}),
+        installed({ installedVersion: "9.9.9" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("false when the install generation disagrees, even with matching versions", () => {
+    expect(
+      parkedActivationMatchesInstall(
+        activatablePark({}),
+        installed({ installGeneration: "install-9|later|def456|1.2.3" }),
+      ),
+    ).toBe(false);
   });
 });
 

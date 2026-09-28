@@ -109,8 +109,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
       disabled={disabled}
       placeholder={placeholder}
       // Desktop keeps the chat editor compact; a phone lets it grow to the
-      // same cap as the landing composer, so a long draft has room before
-      // the grabber offers the sheet.
+      // same cap as the landing composer.
       editorClassName={cn(
         "max-h-[3.5lh] min-h-9",
         PHONE_COMPOSER_EDITOR_CAP_CLASSNAME,

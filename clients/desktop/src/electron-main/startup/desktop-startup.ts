@@ -1132,8 +1132,9 @@ function localHostLaneStarters(
       // disk still names an unreachable host. Started after bootstrap so the
       // initial 60s readiness wait can't register as an outage. On a machine with
       // no host installed that wait is skipped, so this starts promptly instead -
-      // harmless, because `tick` returns immediately while the snapshot is null
-      // and no recovery is pending, and so never reaches `recoverIfDown`.
+      // harmless, because while the snapshot is null and no recovery is pending
+      // `tick` only re-reads pid.json (the backstop for a missed watcher edge)
+      // and so never reaches `recoverIfDown`.
       void hostReady.then(() => {
         // One authority for automatic restarts, holding both the liveness gate and
         // the attempt budget. It re-reads pid.json itself inside `requestRespawn`

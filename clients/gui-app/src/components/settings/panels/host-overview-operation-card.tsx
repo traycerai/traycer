@@ -38,10 +38,12 @@ import type { HostUpdateCompletion } from "@/hooks/host/use-host-update-completi
  * want to restart — parked on live work, or failed — are exactly the states a
  * page-wide lock would trap them in.
  *
- * Only successful updates can be dismissed here. Failed attempts remain
- * discoverable in this Overview even after dismissal on the landing page. The
- * acknowledgement itself is the PANEL's (`completion`), so this card's own
- * mount and unmount never restart its timer.
+ * Successful and failed attempts can both be dismissed here; only a success
+ * collapses on its own. A dismissed failure is hidden, not erased: the record
+ * stays on the host until it expires or a newer attempt supersedes it, and
+ * the Doctor card below still reports it. The acknowledgement itself is the
+ * PANEL's (`completion`), so this card's own mount and unmount never restart
+ * its timer.
  *
  * Retry and Diagnostics are likewise absent ON PURPOSE. Both already exist on
  * this page: the version rows below are how a person installs again, and the
@@ -132,8 +134,8 @@ export function HostOverviewOperationCard(props: {
    */
   readonly cliFloorBlocked: boolean;
   /**
-   * The success acknowledgement (`useHostUpdateCompletion`), held by the
-   * panel so this card's own mount and unmount never restart its timer.
+   * The terminal-attempt acknowledgement (`useHostUpdateCompletion`), held by
+   * the panel so this card's own mount and unmount never restart its timer.
    */
   readonly completion: HostUpdateCompletion;
   /**

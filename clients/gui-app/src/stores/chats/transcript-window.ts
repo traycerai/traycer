@@ -179,6 +179,14 @@ export interface TranscriptWindow {
    * than as the end of the transcript.
    */
   readonly skeleton: readonly (RowSkeletonEntry | undefined)[];
+  /**
+   * Moves whenever the skeleton names a row it did not name before - an
+   * ordinal that was a hole, or one that now holds a different row id - and
+   * never otherwise. A chunk beyond a dropped one moves it while
+   * `skeletonStreamCoveredThrough` stands still. Chat find keys what it could
+   * not conclude over a partial skeleton on it.
+   */
+  readonly skeletonRevision: number;
   /** Set by the chunk carrying `isFinal`, once its length agrees with `rowCount`. */
   readonly skeletonComplete: boolean;
   /**
@@ -530,6 +538,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     epoch: 0,
     rowCount: 0,
     skeleton: [],
+    skeletonRevision: 0,
     skeletonComplete: false,
     skeletonStreamCoveredThrough: 0,
     indexRevision: 0,
@@ -802,7 +811,8 @@ function recordsByteLength(
 }
 
 /**
- * The window's full charge: the fresh tier PLUS the live tail.
+ * The active window charge: the fresh tier PLUS the live tail. Stale carry is
+ * measured separately because it is retained but excluded from this cap.
  *
  * A plain sum, and it is the disjointness that makes it one. A record a fresh
  * span references is dropped from the live set by
@@ -826,9 +836,9 @@ function chargedWindowBytes(
 }
 
 /**
- * What the window currently retains, in bytes - the figure
- * {@link evictTranscriptWindowToBudget} reads, and the one a process-wide
- * accountant should settle.
+ * What the window's active tier retains, in bytes - the figure
+ * {@link evictTranscriptWindowToBudget} reads. The process accountant also
+ * includes {@link transcriptWindowStaleTierBytes}.
  */
 export function transcriptWindowChargedBytes(window: TranscriptWindow): number {
   return chargedWindowBytes(
@@ -837,6 +847,13 @@ export function transcriptWindowChargedBytes(window: TranscriptWindow): number {
     window.liveMessages,
     window.liveEvents,
   );
+}
+
+/** Stale carry is retained even though the window's eight-MiB cap excludes it. */
+export function transcriptWindowStaleTierBytes(
+  window: TranscriptWindow,
+): number {
+  return staleTierBytes(window);
 }
 
 /**
@@ -2971,6 +2988,45 @@ function tailRowIdsFor(
   return rowIds;
 }
 
+/** Whether seating `entry` over `previous` names a row not named there before. */
+function namesDifferentRow(
+  previous: RowSkeletonEntry | undefined,
+  entry: RowSkeletonEntry,
+): boolean {
+  return previous === undefined || previous.rowId !== entry.rowId;
+}
+
+/**
+ * Seats an index delta's entries into `skeleton` (see {@link applyIndexChange}
+ * for why appends begin at `appendBase`): where the appends stopped, and
+ * whether any entry named a row the skeleton did not name there before.
+ */
+function seatIndexChanges(
+  skeleton: (RowSkeletonEntry | undefined)[],
+  changes: readonly ChatIndexChange[],
+  appendBase: number,
+): { readonly appendCursor: number; readonly namesNewRow: boolean } {
+  let appendCursor = appendBase;
+  let namesNewRow = false;
+  for (const change of changes) {
+    if (change.type === "appended") {
+      for (const entry of change.entries) {
+        namesNewRow ||= namesDifferentRow(skeleton[appendCursor], entry);
+        skeleton[appendCursor] = entry;
+        appendCursor += 1;
+      }
+      continue;
+    }
+    if (change.type === "updated") {
+      for (const { ordinal, entry } of change.entries) {
+        namesNewRow ||= namesDifferentRow(skeleton[ordinal], entry);
+        skeleton[ordinal] = entry;
+      }
+    }
+  }
+  return { appendCursor, namesNewRow };
+}
+
 /**
  * Place one chunk of the skeleton.
  *
@@ -2987,8 +3043,11 @@ export function applySkeletonChunk(
 ): TranscriptWindow {
   if (chunk.epoch !== window.epoch) return window;
   const skeleton = [...window.skeleton];
+  let namesNewRow = false;
   for (let index = 0; index < chunk.entries.length; index += 1) {
-    skeleton[chunk.fromOrdinal + index] = chunk.entries[index];
+    const ordinal = chunk.fromOrdinal + index;
+    namesNewRow ||= namesDifferentRow(skeleton[ordinal], chunk.entries[index]);
+    skeleton[ordinal] = chunk.entries[index];
   }
   const complete = chunk.isFinal;
   // How far THIS stream has reached, contiguously from ordinal 0.
@@ -3025,6 +3084,7 @@ export function applySkeletonChunk(
   const next: TranscriptWindow = {
     ...window,
     skeleton,
+    skeletonRevision: window.skeletonRevision + (namesNewRow ? 1 : 0),
     skeletonComplete: complete && !lost,
     skeletonStreamCoveredThrough: coveredThrough,
     invalidated: window.invalidated || lost,
@@ -4211,21 +4271,11 @@ export function applyIndexChange(
   // reason: on the snapshot-ran-ahead interleave above it already counts the
   // rows this delta delivers, and seating from it would shift every entry one
   // past its real ordinal.
-  let appendCursor = appendBase;
-  for (const change of input.changes) {
-    if (change.type === "appended") {
-      for (const entry of change.entries) {
-        skeleton[appendCursor] = entry;
-        appendCursor += 1;
-      }
-      continue;
-    }
-    if (change.type === "updated") {
-      for (const { ordinal, entry } of change.entries) {
-        skeleton[ordinal] = entry;
-      }
-    }
-  }
+  const { appendCursor, namesNewRow } = seatIndexChanges(
+    skeleton,
+    input.changes,
+    appendBase,
+  );
   // How far the skeleton STREAM has contiguously reached once this frame is
   // folded in.
   //
@@ -4247,6 +4297,7 @@ export function applyIndexChange(
   const next: TranscriptWindow = {
     ...window,
     skeleton,
+    skeletonRevision: window.skeletonRevision + (namesNewRow ? 1 : 0),
     rowCount: input.rowCount,
     indexRevision: input.indexRevision,
     // Spent: this delta's revision is now the baseline the next one is
@@ -5908,12 +5959,55 @@ export function evictTranscriptWindowToBudget(
   visible: OrdinalRange | null,
   required: readonly number[],
 ): TranscriptWindow {
+  return evictTranscriptWindowWithRecordOverhead(input, maxBytes, {
+    visible,
+    required,
+    recordOverheadBytes: 0,
+    includeStaleBytes: false,
+  });
+}
+
+/** The process budget uses the same span policy with each retained record's heap cost. */
+export function evictTranscriptWindowToEstimatedBudget(
+  input: TranscriptWindow,
+  maxBytes: number,
+  options: {
+    readonly visible: OrdinalRange | null;
+    readonly required: readonly number[];
+    readonly recordOverheadBytes: number;
+  },
+): TranscriptWindow {
+  return evictTranscriptWindowWithRecordOverhead(input, maxBytes, {
+    ...options,
+    includeStaleBytes: true,
+  });
+}
+
+function evictTranscriptWindowWithRecordOverhead(
+  input: TranscriptWindow,
+  maxBytes: number,
+  options: {
+    readonly visible: OrdinalRange | null;
+    readonly required: readonly number[];
+    readonly recordOverheadBytes: number;
+    readonly includeStaleBytes: boolean;
+  },
+): TranscriptWindow {
+  const { visible, required, recordOverheadBytes, includeStaleBytes } = options;
   // The one place the byte figure is READ, and therefore the one place it has
   // to be true. Settling FIRST rather than after the early return is the whole
   // point: a window carrying a turn's worth of deferred growth would otherwise
   // read as under budget and evict nothing.
   const window = settleWindowBytes(input);
-  if (window.hydratedBytes <= maxBytes) {
+  let bytes =
+    window.hydratedBytes +
+    (includeStaleBytes ? staleTierBytes(window) : 0) +
+    recordOverheadBytes *
+      (window.records.messages.size +
+        window.records.events.size +
+        window.liveMessages.length +
+        window.liveEvents.length);
+  if (bytes <= maxBytes) {
     return window.evictionTerminal === "none"
       ? window
       : { ...window, evictionTerminal: "none" };
@@ -5951,15 +6045,24 @@ export function evictTranscriptWindowToBudget(
   // genuinely drops - which is what lets a post-rebase window (whose carry
   // holds every fresh span's records) make progress at all.
   const { messageRefs, eventRefs } = freshRecordRefCounts(window.spans);
+  const staleRefs = referencedRecordIds([window.staleSpans]);
   const marginalSaving = (span: HydratedSpan): number => {
     let saving = span.contextBytes;
     for (const id of span.messageIds) {
       if (messageRefs.get(id) !== 1) continue;
-      saving += window.records.messages.get(id)?.bytes ?? 0;
+      const entry = window.records.messages.get(id);
+      if (entry === undefined) continue;
+      const heldByStale = staleRefs.messageIds.has(id);
+      if (!includeStaleBytes || !heldByStale) saving += entry.bytes;
+      if (!heldByStale) saving += recordOverheadBytes;
     }
     for (const id of span.eventIds) {
       if (eventRefs.get(id) !== 1) continue;
-      saving += window.records.events.get(id)?.bytes ?? 0;
+      const entry = window.records.events.get(id);
+      if (entry === undefined) continue;
+      const heldByStale = staleRefs.eventIds.has(id);
+      if (!includeStaleBytes || !heldByStale) saving += entry.bytes;
+      if (!heldByStale) saving += recordOverheadBytes;
     }
     return saving;
   };
@@ -5994,7 +6097,6 @@ export function evictTranscriptWindowToBudget(
     }
     return members;
   };
-  let bytes = window.hydratedBytes;
   let sawUnbreakableGroup = false;
   for (const span of candidates) {
     if (bytes <= maxBytes) break;
@@ -6017,7 +6119,11 @@ export function evictTranscriptWindowToBudget(
     }
     // Every member unprotected: evict the closure as one unit and charge the
     // union saving.
-    bytes -= evictClosureUnit(closure, window.records, evictSpan);
+    bytes -= evictClosureUnit(closure, window.records, evictSpan, {
+      recordOverheadBytes,
+      staleRefs,
+      includeStaleBytes,
+    });
   }
   let evictionTerminal: TranscriptWindow["evictionTerminal"] = "none";
   if (bytes > maxBytes) {
@@ -6078,7 +6184,16 @@ function evictClosureUnit(
   closure: ReadonlySet<HydratedSpan>,
   records: RecordLedger,
   evictSpan: (span: HydratedSpan) => void,
+  options: {
+    readonly recordOverheadBytes: number;
+    readonly includeStaleBytes: boolean;
+    readonly staleRefs: {
+      readonly messageIds: ReadonlySet<string>;
+      readonly eventIds: ReadonlySet<string>;
+    };
+  },
 ): number {
+  const { recordOverheadBytes, staleRefs, includeStaleBytes } = options;
   let unionSaving = 0;
   const freedMessages = new Set<string>();
   const freedEvents = new Set<string>();
@@ -6086,13 +6201,23 @@ function evictClosureUnit(
     unionSaving += member.contextBytes;
     for (const id of member.messageIds) freedMessages.add(id);
     for (const id of member.eventIds) freedEvents.add(id);
-    evictSpan(member);
   }
   for (const id of freedMessages) {
-    unionSaving += records.messages.get(id)?.bytes ?? 0;
+    const entry = records.messages.get(id);
+    if (entry === undefined) continue;
+    const heldByStale = staleRefs.messageIds.has(id);
+    if (!includeStaleBytes || !heldByStale) unionSaving += entry.bytes;
+    if (!heldByStale) unionSaving += recordOverheadBytes;
   }
   for (const id of freedEvents) {
-    unionSaving += records.events.get(id)?.bytes ?? 0;
+    const entry = records.events.get(id);
+    if (entry === undefined) continue;
+    const heldByStale = staleRefs.eventIds.has(id);
+    if (!includeStaleBytes || !heldByStale) unionSaving += entry.bytes;
+    if (!heldByStale) unionSaving += recordOverheadBytes;
+  }
+  if (unionSaving > 0) {
+    for (const member of closure) evictSpan(member);
   }
   return unionSaving;
 }
@@ -6118,6 +6243,34 @@ export function transcriptWindowProtectedBytes(
   window: TranscriptWindow,
   visible: OrdinalRange | null,
   required: readonly number[],
+): readonly ProtectedBytes[] {
+  return transcriptWindowProtectedBytesWithRecordOverhead(
+    window,
+    visible,
+    required,
+    0,
+  );
+}
+
+export function transcriptWindowProtectedEstimatedBytes(
+  window: TranscriptWindow,
+  visible: OrdinalRange | null,
+  required: readonly number[],
+  recordOverheadBytes: number,
+): readonly ProtectedBytes[] {
+  return transcriptWindowProtectedBytesWithRecordOverhead(
+    window,
+    visible,
+    required,
+    recordOverheadBytes,
+  );
+}
+
+function transcriptWindowProtectedBytesWithRecordOverhead(
+  window: TranscriptWindow,
+  visible: OrdinalRange | null,
+  required: readonly number[],
+  recordOverheadBytes: number,
 ): readonly ProtectedBytes[] {
   const byKind = new Map<ProtectedRegionKind, HydratedSpan[]>();
   const classify = (span: HydratedSpan): ProtectedRegionKind | null => {
@@ -6147,10 +6300,16 @@ export function transcriptWindowProtectedBytes(
   }
   const reported: ProtectedBytes[] = [];
   for (const [kind, spans] of byKind) {
-    const bytes = freshTierBytes(window.records, spans);
+    const ids = referencedRecordIds([spans]);
+    const bytes =
+      freshTierBytes(window.records, spans) +
+      recordOverheadBytes * (ids.messageIds.size + ids.eventIds.size);
     if (bytes > 0) reported.push({ kind, bytes });
   }
-  const liveBytes = recordsByteLength(window.liveMessages, window.liveEvents);
+  const liveBytes =
+    recordsByteLength(window.liveMessages, window.liveEvents) +
+    recordOverheadBytes *
+      (window.liveMessages.length + window.liveEvents.length);
   if (liveBytes > 0) {
     const tail = reported.find((entry) => entry.kind === "tail");
     if (tail === undefined) reported.push({ kind: "tail", bytes: liveBytes });

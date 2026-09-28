@@ -3,8 +3,8 @@
 > **Empty by design.** Desktop **never** bundles a host binary. Host
 > install/update/uninstall is owned by the **Traycer CLI** and backed by the
 > hosted registry (`versions.json` + minisign). See
-> [`docs/DEVELOPMENT.md`](../../../../docs/DEVELOPMENT.md) for the CLI-driven
-> host lifecycle.
+> [`clients/traycer-cli/README.md`](../../../traycer-cli/README.md) for the
+> CLI-driven host lifecycle.
 
 This directory exists only because `package.json`'s `build.extraResources`
 references it; the `electron-builder` filter is restricted to the explanatory

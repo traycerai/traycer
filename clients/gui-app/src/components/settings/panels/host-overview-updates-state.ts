@@ -10,6 +10,7 @@ import {
   describeHostStoreFloorRpcRefusal,
 } from "./host-overview-store-formats";
 import { useQueryClient } from "@tanstack/react-query";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
@@ -472,13 +473,16 @@ export function useHostOverviewUpdates(input: {
   const { hostId } = input;
   useEffect(() => {
     if (!recheckFloor || hostId === null) return;
-    const timer = setInterval(() => {
-      void queryClient.invalidateQueries(
-        { queryKey: hostQueryKeys.methodScope(hostId, "host.update.check") },
-        { cancelRefetch: false },
-      );
-    }, CLI_FLOOR_RECHECK_MS);
-    return () => clearInterval(timer);
+    return startVisibleInterval({
+      tick: () => {
+        void queryClient.invalidateQueries(
+          { queryKey: hostQueryKeys.methodScope(hostId, "host.update.check") },
+          { cancelRefetch: false },
+        );
+      },
+      intervalMs: CLI_FLOOR_RECHECK_MS,
+      fireOnShow: true,
+    });
   }, [recheckFloor, hostId, queryClient]);
   // Read off the resolved target rather than `manifest.latest`, which for an
   // installed-RC catalog is the WRONG pointer: `latest` tracks the stable

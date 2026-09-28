@@ -21,6 +21,7 @@ import {
 } from "@/lib/host/host-directory-service";
 import { lastLocalHostIdKey } from "@/lib/persist";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { __setBrowserDocumentHiddenForTests } from "@/lib/dom/document-visibility";
 
 const PLAN_ALLOWS_REMOTE = true;
 
@@ -109,7 +110,6 @@ function makeHostWithRegistryPush(localHost: LocalHostSnapshot | null): {
 }
 
 const directories: HostDirectoryService[] = [];
-let restoreDocumentHidden: (() => void) | null = null;
 
 function makeDirectory(
   options: Omit<HostDirectoryServiceOptions, "onRegistryPollTick"> &
@@ -128,20 +128,7 @@ function makeDirectory(
 }
 
 function setDocumentHidden(hidden: boolean): void {
-  if (restoreDocumentHidden === null) {
-    const descriptor = Object.getOwnPropertyDescriptor(document, "hidden");
-    restoreDocumentHidden = () => {
-      if (descriptor === undefined) {
-        Reflect.deleteProperty(document, "hidden");
-        return;
-      }
-      Object.defineProperty(document, "hidden", descriptor);
-    };
-  }
-  Object.defineProperty(document, "hidden", {
-    configurable: true,
-    get: () => hidden,
-  });
+  __setBrowserDocumentHiddenForTests(hidden);
 }
 
 async function flushPromises(): Promise<void> {
@@ -159,10 +146,7 @@ afterEach(() => {
   }
   window.localStorage.removeItem(LAST_LOCAL_HOST_ID_STORAGE_KEY);
   useSettingsHostScopeStore.getState().setScopedHostId(null);
-  if (restoreDocumentHidden !== null) {
-    restoreDocumentHidden();
-    restoreDocumentHidden = null;
-  }
+  __setBrowserDocumentHiddenForTests(false);
   vi.useRealTimers();
 });
 
@@ -1144,11 +1128,11 @@ describe("HostDirectoryService", () => {
     await directory.start();
     expect(fetchCalls).toBe(1);
 
-    // Resume/visibility-change fires partway through the poll window - this
-    // should rearm the interval from this point, not just refresh once while
-    // leaving the original schedule armed.
+    // Hide then show partway through the poll window - fireOnShow refreshes
+    // once and rearms the interval from this point.
     await vi.advanceTimersByTimeAsync(HOST_DIRECTORY_REFRESH_POLL_MS / 2);
-    document.dispatchEvent(new Event("visibilitychange"));
+    setDocumentHidden(true);
+    setDocumentHidden(false);
     await flushPromises();
     expect(fetchCalls).toBe(2);
 

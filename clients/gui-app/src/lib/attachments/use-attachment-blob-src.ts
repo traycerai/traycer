@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
@@ -12,6 +12,7 @@ import {
   type ImageBytesResult,
   type ScopedImageBytesFetcher,
 } from "@/lib/attachments/image-blob-cache";
+import { persistTranscriptImageBytes } from "@/lib/attachments/transcript-image-bytes-store";
 import {
   IMAGE_UNAVAILABLE_GRACE_MS,
   useImageBlobUrlState,
@@ -58,13 +59,15 @@ export type AttachmentBlobSrcState =
  * would stay degraded for the session.
  */
 const hostBuildsWithoutArtifactAttachmentFetch = new Set<string>();
+let artifactHostSupportGeneration = 0;
 
 /**
- * Test-only: forgets every remembered `E_HOST_UNSUPPORTED` verdict. The set is
- * module-global and deliberately session-lived, so a suite that exercises the
- * unsupported path would otherwise poison every later test in the same file.
+ * Forgets every remembered `E_HOST_UNSUPPORTED` verdict. Host ids belong to
+ * an account; identity teardown must not leave account A's probe pinning
+ * account B's session.
  */
-export function resetArtifactAttachmentHostSupportForTests(): void {
+export function resetArtifactAttachmentHostSupport(): void {
+  artifactHostSupportGeneration += 1;
   hostBuildsWithoutArtifactAttachmentFetch.clear();
 }
 
@@ -113,6 +116,7 @@ async function readArtifactAttachmentFromHost(
   ) {
     return null;
   }
+  const probeGeneration = artifactHostSupportGeneration;
   try {
     const response = await scope.client.requestWithSignal(
       "epic.fetchArtifactAttachment",
@@ -129,13 +133,104 @@ async function readArtifactAttachmentFromHost(
     return { bytes, mediaType: response.mediaType };
   } catch (error: unknown) {
     if (error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED") {
-      if (buildKey !== null) {
+      if (
+        buildKey !== null &&
+        !signal.aborted &&
+        probeGeneration === artifactHostSupportGeneration
+      ) {
         hostBuildsWithoutArtifactAttachmentFetch.add(buildKey);
       }
       return null;
     }
     throw error;
   }
+}
+
+/**
+ * The store surface the arm-abort lease needs: `installedArm` plus
+ * `subscribe`. Held per handle, not per hook instance, so an arm change
+ * still cancels a retained in-flight fetch after the last image unmounts.
+ */
+interface ArmAbortSource {
+  readonly store: {
+    readonly getState: () => { readonly installedArm?: string | null };
+    readonly subscribe: (onStoreChange: () => void) => () => void;
+  };
+}
+
+interface ArmAbortLease {
+  arm: string | null;
+  abort: AbortController;
+  inFlight: number;
+  unsubscribe: () => void;
+}
+
+const armAbortLeases = new Map<object, ArmAbortLease>();
+
+function currentInstalledArm(handle: ArmAbortSource): string | null {
+  return handle.store.getState().installedArm ?? null;
+}
+
+function acquireArmAbort(
+  handle: ArmAbortSource,
+  expectedArm: string | null,
+): {
+  readonly signal: AbortSignal;
+  readonly release: () => void;
+} {
+  // Captured at render (`installedArm` on the fetch closure) vs read at
+  // call/effect time. If they disagree, this fetch selected a byte source
+  // the store no longer uses; abort so a later lanes fetch does not join
+  // a parked waiting-replica read.
+  if (currentInstalledArm(handle) !== expectedArm) {
+    const abort = new AbortController();
+    abort.abort();
+    return { signal: abort.signal, release: () => {} };
+  }
+  let lease = armAbortLeases.get(handle);
+  if (lease === undefined) {
+    const created: ArmAbortLease = {
+      arm: expectedArm,
+      abort: new AbortController(),
+      inFlight: 0,
+      unsubscribe: () => {},
+    };
+    created.unsubscribe = handle.store.subscribe(() => {
+      const live = armAbortLeases.get(handle);
+      if (live === undefined) return;
+      const nextArm = currentInstalledArm(handle);
+      if (live.arm === nextArm) return;
+      live.abort.abort();
+      live.arm = nextArm;
+      live.abort = new AbortController();
+    });
+    armAbortLeases.set(handle, created);
+    lease = created;
+  }
+  lease.inFlight += 1;
+  let released = false;
+  return {
+    signal: lease.abort.signal,
+    release: () => {
+      if (released) return;
+      released = true;
+      const live = armAbortLeases.get(handle);
+      if (live === undefined) return;
+      live.inFlight -= 1;
+      if (live.inFlight > 0) return;
+      live.unsubscribe();
+      armAbortLeases.delete(handle);
+    },
+  };
+}
+
+/** Drop arm-abort leases so an outgoing epic handle cannot abort the next account. */
+export function resetEpicImageFetcherArmAbort(): void {
+  for (const lease of armAbortLeases.values()) {
+    lease.unsubscribe();
+    lease.abort.abort();
+  }
+  armAbortLeases.clear();
 }
 
 /**
@@ -180,83 +275,61 @@ export function useEpicImageFetcher(): ScopedImageBytesFetcher {
     ),
     useCallback(() => handle?.store.getState().installedArm ?? null, [handle]),
   );
-  // One controller per arm GENERATION. Identity alone does not free a parked
-  // read: `imageBlobCache` entries are keyed by subject AND hash, neither of
-  // which an arm change moves, so later acquirers still reuse the first
-  // in-flight fetch - a new fetcher would attach to the same stuck promise,
-  // and so would another mounted copy of the same image. Aborting
-  // rejects it instead, which is the path the cache already handles by
-  // dropping the poisoned entry, and the re-acquire below then runs on the
-  // new arm.
-  //
-  // Built in render rather than an effect so it exists before the consumer's
-  // own fetch effect runs; nothing observable happens until `abort()`, which
-  // is the cleanup's job. A memo React discards just yields a fresh unaborted
-  // controller, which is inert.
-  const armGeneration = useMemo(
-    // The arm is IN the value, not only in the dependency list: a memo whose
-    // body ignores its own dep reads to the exhaustive-deps rule as an
-    // unnecessary dependency, and the dep is the entire point here.
-    () => ({ arm: installedArm, abort: new AbortController() }),
-    [installedArm],
-  );
-  useEffect(
-    () => () => {
-      armGeneration.abort.abort();
-    },
-    [armGeneration],
-  );
   const fetch = useCallback<ImageBytesFetcher>(
-    async (h, callerSignal) => {
+    async (h, signal) => {
       if (handle === null) {
         throw new Error("No open-epic handle to fetch image attachment");
       }
-      const composed = signalUntilArmChanges(
-        callerSignal,
-        armGeneration.abort.signal,
-      );
-      try {
-        const signal = composed.signal;
-        if (installedArm === "lanes") {
-          const fromHost = await readArtifactAttachmentFromHost(
-            scope,
-            h,
-            signal,
-          );
-          if (fromHost !== null) return fromHost;
-          const held = await readHeldEpicAttachmentBytes(handle, h);
-          if (held === null) {
-            throw new Error(`Image attachment ${h} unavailable`);
-          }
-          return { bytes: new Uint8Array(held), mediaType: null };
-        }
-        // Through the replica-read seam rather than the store directly: this
-        // is one of the byte reads that resolves against the worker-held root
-        // replica once the runtime moves, and the seam is where that swap
-        // happens. The WAITING variant deliberately - an artifact image whose
-        // bytes are still replicating must resolve when they land, not read as
-        // missing (see the seam for why the chat leg takes the other one).
-        const bytes = await readEpicAttachmentBytes(handle, h, signal);
-        if (bytes === null) {
+      if (installedArm === "lanes") {
+        const fromHost = await readArtifactAttachmentFromHost(scope, h, signal);
+        if (fromHost !== null) return fromHost;
+        const held = await readHeldEpicAttachmentBytes(handle, h);
+        if (held === null) {
           throw new Error(`Image attachment ${h} unavailable`);
         }
-        // The doc replica stores raw bytes with no sniffed header of its own,
-        // so it has no verdict to offer and the caller's declared type stands.
-        return { bytes: new Uint8Array(bytes), mediaType: null };
-      } finally {
-        // On EVERY path, resolve included. The arm signal outlives this fetch
-        // by design and is shared by every image in the epic, so a listener
-        // left behind by a fetch that simply succeeded is retained until the
-        // arm next changes - one per thumbnail the user scrolled past.
-        composed.clear();
+        return { bytes: new Uint8Array(held), mediaType: null };
       }
+      // Through the replica-read seam rather than the store directly: this
+      // is one of the byte reads that resolves against the worker-held root
+      // replica once the runtime moves, and the seam is where that swap
+      // happens. The WAITING variant deliberately - an artifact image whose
+      // bytes are still replicating must resolve when they land, not read as
+      // missing (see the seam for why the chat leg takes the other one).
+      const bytes = await readEpicAttachmentBytes(handle, h, signal);
+      if (bytes === null) {
+        throw new Error(`Image attachment ${h} unavailable`);
+      }
+      // The doc replica stores raw bytes with no sniffed header of its own,
+      // so it has no verdict to offer and the caller's declared type stands.
+      return { bytes: new Uint8Array(bytes), mediaType: null };
     },
-    [handle, scope, installedArm, armGeneration],
+    [handle, scope, installedArm],
   );
-  return useMemo<ScopedImageBytesFetcher>(
-    () => ({ scopeKey: epicAttachmentScopeKey(handle, scope), fetch }),
-    [handle, scope, fetch],
-  );
+  return useMemo<ScopedImageBytesFetcher>(() => {
+    const persisted = persistTranscriptImageBytes({
+      scopeKey: epicAttachmentScopeKey(handle, scope),
+      fetch,
+    });
+    return {
+      scopeKey: persisted.scopeKey,
+      fetch: async (hash, callerSignal) => {
+        if (handle === null) {
+          throw new Error("No open-epic handle to fetch image attachment");
+        }
+        // Subscribe on the handle store, not a mounted effect: last-ref
+        // grace keeps the in-flight fetch after unmount, and an arm change
+        // in that window must still drop the parked legacy read.
+        const armAbort = acquireArmAbort(handle, installedArm);
+        const composed = signalUntilArmChanges(callerSignal, armAbort.signal);
+        try {
+          return await persisted.fetch(hash, composed.signal);
+        } finally {
+          composed.clear();
+          armAbort.release();
+        }
+      },
+    };
+  }, [handle, scope, fetch, installedArm]);
 }
 
 /**

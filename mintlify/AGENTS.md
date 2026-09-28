@@ -17,9 +17,9 @@ navigation.
 ## What does not
 
 Support runbooks, production ops procedures, ADRs, design notes, SQL,
-credentials, and agent instructions other than this file. Contributor and
-development docs live in the repo's top-level `docs/`, which is not
-published.
+credentials, and agent instructions other than this file. Contributor docs
+live in `CONTRIBUTING.md` and the `AGENTS.md` files next to the code, none of
+which is published.
 
 ## Publishing
 

@@ -667,8 +667,16 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The countdown card's "Switch now" (the verb runs whatever step the host
+  // planned), on the same terms as `cancel`: it names the revision it expects,
+  // so two rapid presses are two requests.
+  "chat.fallback.proceed": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The destination menu's candidate list, and the ONE fallback method that is
-  // not `fifo`. The other four mutate and name the revision they expect, so two
+  // not `fifo`. The other five mutate and name the revision they expect, so two
   // rapid answers must stay two ordered requests. This one is read-only - no
   // probe, no gauge write, no record write - so a later read supersedes an
   // earlier one and `LATEST_SCHEDULING` is the honest scheduling: a user who
@@ -1445,6 +1453,10 @@ export const HOST_METHOD_POLL_TABLE = {
   // goes stale - a cadence would only re-ask the host about a card nobody is
   // looking at.
   "epic.getChatRunSettings": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  "epic.getChatRunSettingsBatch": {
     ...LATEST_SCHEDULING,
     poll: null,
   },

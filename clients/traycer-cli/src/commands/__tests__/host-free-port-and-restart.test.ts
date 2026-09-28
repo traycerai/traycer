@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeAttemptRecordForEnvironment } from "./attempt-record-test-support";
+import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
+import type { HostInstallRecord } from "../../manifest/host-install";
 // Type-only, so it is erased before `vi.hoisted` runs. Annotating the fixture
 // with the PRODUCER's contract rather than a hand-copied structural twin is
 // what makes this mock fail to compile - instead of silently going stale -
@@ -166,6 +168,32 @@ function fakeCtx(): CommandContext {
     },
     progress: vi.fn(),
   };
+}
+
+// Mirrors `host-restart.test.ts`'s identical helper: returns the record it
+// wrote so a test can compute the SAME `installGeneration`
+// (`encodeInstallGeneration(record)`) a matching park's claim would carry,
+// never a hand-rebuilt literal.
+async function writeInstallRecordForAttestation(): Promise<HostInstallRecord> {
+  const { writeHostInstallRecord } =
+    await import("../../manifest/host-install");
+  const record: HostInstallRecord = {
+    installId: "free-port-and-restart-attestation-install",
+    version: "1.7.0",
+    runtimeVersion: null,
+    platform: "darwin",
+    arch: "arm64",
+    installedAt: "2026-01-01T00:00:00.000Z",
+    source: { kind: "registry", value: "1.7.0" },
+    archiveSha256: "a".repeat(64),
+    signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+    signatureKeyId: "test-key",
+    sizeBytes: 1,
+    executablePath: join(workHome, "host", "traycer-host"),
+    executableSha256: null,
+  };
+  await writeHostInstallRecord("production", record);
+  return record;
 }
 
 describe("buildHostFreePortAndRestartCommand", () => {
@@ -547,6 +575,10 @@ describe("buildHostFreePortAndRestartCommand", () => {
         restartedLabel: null,
         deferredForParkedActivation: false,
       });
+      // The 2026-09-27 staging outage: the old stop-only sentence gave the
+      // reader no way back. The stopped-outcome human text must now name the
+      // one command that recovers a parked record.
+      expect(result.human).toContain("traycer host update");
     });
 
     // Regression for the `killError` warning composing with whichever
@@ -591,7 +623,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
       expect(mocks.controllerCalls).toEqual(["stop"]);
       expect(result.data).toMatchObject({ killed: false, killError: "EPERM" });
       expect(result.human).toBe(
-        `pid 4242 could not be signalled (EPERM); port verified free anyway (port 51820 has no listener (freed before the signal)); stopped '${label.id}' without activating parked update bytes`,
+        `pid 4242 could not be signalled (EPERM); port verified free anyway (port 51820 has no listener (freed before the signal)); stopped '${label.id}' without activating parked update bytes; the host is now down: an update to host 1.2.3 is parked at waiting-to-activate with no updater running; run 'traycer host update' to resume it, which also starts the host if none is running`,
       );
       mocks.killResult = {
         killed: true,
@@ -626,6 +658,168 @@ describe("buildHostFreePortAndRestartCommand", () => {
       expect(mocks.controllerCalls).toEqual(["restart"]);
       expect(result.data).toMatchObject({
         restartedLabel: "ai.traycer.host",
+        deferredForParkedActivation: false,
+      });
+    });
+  });
+
+  // Same `parkedActivationRelaunchable` exemption as `host restart`
+  // (`host/parked-activation-relaunch.ts`): a `waiting-to-activate` park
+  // whose claim names exactly the installed bytes is the activation restart
+  // the park is waiting for, so this command's ordinary restart path
+  // (`controller.restart`, not stop) must continue it too.
+  describe("a parked record whose claim matches the installed bytes", () => {
+    it("restarts via the controller's restart, restartedLabel set, deferredForParkedActivation:false", async () => {
+      mocks.controllerCalls = [];
+      mocks.lockCalls = [];
+      mocks.killCalls = [];
+      const installed = await writeInstallRecordForAttestation();
+      await writeAttemptRecordForEnvironment("production", {
+        targetVersion: "1.7.0",
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+        claim: {
+          installedVersion: "1.7.0",
+          installGeneration: encodeInstallGeneration(installed),
+          stageFingerprint: null,
+          allowDowngrade: false,
+          acceptStoreFormatLoss: false,
+        },
+      });
+
+      const { serviceLabelFor } = await import("../../service");
+      const label = serviceLabelFor("production");
+      const { buildHostFreePortAndRestartCommand } =
+        await import("../host-free-port-and-restart");
+      const command = buildHostFreePortAndRestartCommand({
+        pid: null,
+        port: null,
+        deferIfParked: false,
+        lifecycleOrigin: "terminal",
+      });
+      const result = await command(fakeCtx());
+
+      expect(mocks.controllerCalls).toEqual(["restart"]);
+      expect(result.data).toMatchObject({
+        restartedLabel: label.id,
+        deferredForParkedActivation: false,
+      });
+    });
+
+    it("--defer-if-parked still defers even over a MATCHING park: decided before the park is examined", async () => {
+      mocks.controllerCalls = [];
+      mocks.lockCalls = [];
+      mocks.killCalls = [];
+      const installed = await writeInstallRecordForAttestation();
+      await writeAttemptRecordForEnvironment("production", {
+        targetVersion: "1.7.0",
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+        claim: {
+          installedVersion: "1.7.0",
+          installGeneration: encodeInstallGeneration(installed),
+          stageFingerprint: null,
+          allowDowngrade: false,
+          acceptStoreFormatLoss: false,
+        },
+      });
+
+      const { buildHostFreePortAndRestartCommand } =
+        await import("../host-free-port-and-restart");
+      const command = buildHostFreePortAndRestartCommand({
+        pid: null,
+        port: null,
+        deferIfParked: true,
+        lifecycleOrigin: "terminal",
+      });
+      const result = await command(fakeCtx());
+
+      expect(mocks.controllerCalls).toEqual([]);
+      expect(result.data).toMatchObject({
+        restartedLabel: null,
+        deferredForParkedActivation: true,
+      });
+      // The install comparison runs for a DEFERRED record too (traycer#2208
+      // review): a deferred park that still matches the install must not be
+      // called stale.
+      expect(result.human).toContain("run 'traycer host update' to resume it");
+      expect(result.human).not.toContain("no longer matches");
+    });
+
+    it("--defer-if-parked over a MISMATCHING park: still defers, but the human text calls it stale, not resumable", async () => {
+      mocks.controllerCalls = [];
+      mocks.lockCalls = [];
+      mocks.killCalls = [];
+      const installed = await writeInstallRecordForAttestation();
+      await writeAttemptRecordForEnvironment("production", {
+        targetVersion: "1.7.0",
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+        claim: {
+          // The claim names a DIFFERENT installed version than what is
+          // actually on disk (still "1.7.0", from
+          // `writeInstallRecordForAttestation`).
+          installedVersion: "1.6.0",
+          installGeneration: encodeInstallGeneration(installed),
+          stageFingerprint: null,
+          allowDowngrade: false,
+          acceptStoreFormatLoss: false,
+        },
+      });
+
+      const { buildHostFreePortAndRestartCommand } =
+        await import("../host-free-port-and-restart");
+      const command = buildHostFreePortAndRestartCommand({
+        pid: null,
+        port: null,
+        deferIfParked: true,
+        lifecycleOrigin: "terminal",
+      });
+      const result = await command(fakeCtx());
+
+      expect(mocks.controllerCalls).toEqual([]);
+      expect(result.data).toMatchObject({
+        restartedLabel: null,
+        deferredForParkedActivation: true,
+      });
+      expect(result.human).toContain("installed host no longer matches");
+    });
+
+    it("an ACTIVE record (preparing/activate) stays stop-only regardless of a matching claim", async () => {
+      mocks.controllerCalls = [];
+      mocks.lockCalls = [];
+      mocks.killCalls = [];
+      const installed = await writeInstallRecordForAttestation();
+      await writeAttemptRecordForEnvironment("production", {
+        targetVersion: "1.7.0",
+        phase: "preparing",
+        execution: "active",
+        continuation: "activate",
+        claim: {
+          installedVersion: "1.7.0",
+          installGeneration: encodeInstallGeneration(installed),
+          stageFingerprint: null,
+          allowDowngrade: false,
+          acceptStoreFormatLoss: false,
+        },
+      });
+
+      const { buildHostFreePortAndRestartCommand } =
+        await import("../host-free-port-and-restart");
+      const command = buildHostFreePortAndRestartCommand({
+        pid: null,
+        port: null,
+        deferIfParked: false,
+        lifecycleOrigin: "terminal",
+      });
+      const result = await command(fakeCtx());
+
+      expect(mocks.controllerCalls).toEqual(["stop"]);
+      expect(result.data).toMatchObject({
+        restartedLabel: null,
         deferredForParkedActivation: false,
       });
     });

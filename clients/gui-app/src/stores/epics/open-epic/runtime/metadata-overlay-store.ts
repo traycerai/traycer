@@ -24,6 +24,131 @@ import type {
   PendingMetadataOverlay,
   PendingMetadataValue,
 } from "../pending-metadata-overlay";
+import {
+  retainedValueSize,
+  type RetainedValueSize,
+} from "@/stores/replica-memory/retained-value-size";
+
+/** Incremental collection charges avoid rescanning old rename tombstones. */
+class RetainedMap<Key, Value> extends Map<Key, Value> {
+  private rawEntryBytes = 0;
+  private estimatedEntryBytes = 0;
+
+  constructor(
+    private readonly measureEntry: (
+      key: Key,
+      value: Value,
+    ) => RetainedValueSize,
+    private readonly onSizeChanged: () => void,
+  ) {
+    super();
+  }
+
+  override set(key: Key, value: Value): this {
+    const hadKey = this.has(key);
+    const previous = this.get(key);
+    const before =
+      hadKey && previous !== undefined
+        ? this.measureEntry(key, previous)
+        : { rawBytes: 0, estimatedHeapBytes: 0 };
+    const after = this.measureEntry(key, value);
+    this.rawEntryBytes += after.rawBytes - before.rawBytes;
+    this.estimatedEntryBytes +=
+      after.estimatedHeapBytes - before.estimatedHeapBytes;
+    super.set(key, value);
+    if (
+      before.rawBytes !== after.rawBytes ||
+      before.estimatedHeapBytes !== after.estimatedHeapBytes
+    ) {
+      this.onSizeChanged();
+    }
+    return this;
+  }
+
+  override delete(key: Key): boolean {
+    if (!this.has(key)) return false;
+    const value = this.get(key);
+    if (value === undefined) return false;
+    const size = this.measureEntry(key, value);
+    this.rawEntryBytes -= size.rawBytes;
+    this.estimatedEntryBytes -= size.estimatedHeapBytes;
+    super.delete(key);
+    this.onSizeChanged();
+    return true;
+  }
+
+  override clear(): void {
+    if (this.size === 0) return;
+    super.clear();
+    this.rawEntryBytes = 0;
+    this.estimatedEntryBytes = 0;
+    this.onSizeChanged();
+  }
+
+  retainedSize(): RetainedValueSize {
+    return {
+      rawBytes: 2 + Math.max(0, this.size - 1) + this.rawEntryBytes,
+      estimatedHeapBytes: 48 + this.estimatedEntryBytes,
+    };
+  }
+}
+
+class RetainedSet<Value> extends Set<Value> {
+  private rawEntryBytes = 0;
+  private estimatedEntryBytes = 0;
+
+  constructor(
+    private readonly measureEntry: (value: Value) => RetainedValueSize,
+    private readonly onSizeChanged: () => void,
+  ) {
+    super();
+  }
+
+  override add(value: Value): this {
+    if (this.has(value)) return this;
+    const size = this.measureEntry(value);
+    this.rawEntryBytes += size.rawBytes;
+    this.estimatedEntryBytes += size.estimatedHeapBytes;
+    super.add(value);
+    this.onSizeChanged();
+    return this;
+  }
+
+  override delete(value: Value): boolean {
+    if (!this.has(value)) return false;
+    const size = this.measureEntry(value);
+    this.rawEntryBytes -= size.rawBytes;
+    this.estimatedEntryBytes -= size.estimatedHeapBytes;
+    super.delete(value);
+    this.onSizeChanged();
+    return true;
+  }
+
+  override clear(): void {
+    if (this.size === 0) return;
+    super.clear();
+    this.rawEntryBytes = 0;
+    this.estimatedEntryBytes = 0;
+    this.onSizeChanged();
+  }
+
+  retainedSize(): RetainedValueSize {
+    return {
+      rawBytes: 2 + Math.max(0, this.size - 1) + this.rawEntryBytes,
+      estimatedHeapBytes: 48 + this.estimatedEntryBytes,
+    };
+  }
+}
+
+function mapEntrySize(
+  key: RetainedValueSize,
+  value: RetainedValueSize,
+): RetainedValueSize {
+  return {
+    rawBytes: key.rawBytes + value.rawBytes + 3,
+    estimatedHeapBytes: key.estimatedHeapBytes + value.estimatedHeapBytes + 32,
+  };
+}
 
 /**
  * How long a LANDED metadata mutation may keep patching the display while its
@@ -65,11 +190,14 @@ export interface MetadataOverlaySources {
     outcome: "echo" | "superseded",
     via: "authoritative-projection" | "landed-overlay-ttl",
   ) => void;
+  readonly onRetainedStateChanged?: (size: RetainedValueSize) => void;
 }
 
 export interface MetadataOverlayStore {
   /** The map the projector folds in. Live reference, read at projection time. */
   overlay(): PendingMetadataOverlay;
+  /** All five retained collections, including rename tombstones and timers. */
+  retainedSize(): RetainedValueSize;
   /** Capture provenance for every retained mutation the record plane backs. */
   markRegistryBacked(): void;
   /** Stamp a mutation, mark its chain's provenance, and republish. */
@@ -138,7 +266,26 @@ export function createMetadataOverlayStore(
     recordPlaneServesNode,
     isDisposed,
     onReconciled,
+    onRetainedStateChanged,
   } = sources;
+
+  let sizeNotificationQueued = false;
+  const noteRetainedChange = (): void => {
+    if (sizeNotificationQueued || onRetainedStateChanged === undefined) return;
+    sizeNotificationQueued = true;
+    environment.scheduler.scheduleMicrotask(() => {
+      sizeNotificationQueued = false;
+      if (!isDisposed()) onRetainedStateChanged(retainedSize());
+    });
+  };
+
+  const stringSetEntrySize = (value: string): RetainedValueSize => {
+    const size = retainedValueSize(value);
+    return {
+      rawBytes: size.rawBytes,
+      estimatedHeapBytes: size.estimatedHeapBytes + 24,
+    };
+  };
 
   /**
    * Metadata mutations stamped by this client and not yet answered, keyed by
@@ -147,11 +294,25 @@ export function createMetadataOverlayStore(
    * A `Map` because order is semantic: two renames of one row must apply in
    * the order the user made them.
    */
-  const pending = new Map<string, PendingMetadataMutation>();
+  const pending = new RetainedMap<string, PendingMetadataMutation>(
+    (requestId, mutation) =>
+      mapEntrySize(retainedValueSize(requestId), retainedValueSize(mutation)),
+    noteRetainedChange,
+  );
   /** Ambiguous sends temporarily use the landed chain's echo/TTL machinery. */
-  const unknownOutcomeRequestIds = new Set<string>();
+  const unknownOutcomeRequestIds = new RetainedSet<string>(
+    stringSetEntrySize,
+    noteRetainedChange,
+  );
   /** One active landed/ambiguous expiry per request id. */
-  const landedExpiryByRequestId = new Map<string, RuntimeTimer>();
+  const landedExpiryByRequestId = new RetainedMap<string, RuntimeTimer>(
+    (requestId) =>
+      mapEntrySize(retainedValueSize(requestId), {
+        rawBytes: 2,
+        estimatedHeapBytes: 64,
+      }),
+    noteRetainedChange,
+  );
 
   /**
    * The last-stamped rename request per node, SURVIVING the chain: the dead
@@ -164,7 +325,11 @@ export function createMetadataOverlayStore(
    * ids are never reused, so a stale tombstone can only ever refuse a write,
    * never misattribute one.
    */
-  const latestRenameStampByNode = new Map<string, string>();
+  const latestRenameStampByNode = new RetainedMap<string, string>(
+    (nodeId, requestId) =>
+      mapEntrySize(retainedValueSize(nodeId), retainedValueSize(requestId)),
+    noteRetainedChange,
+  );
 
   /**
    * Mutations OBSERVED to target a record-plane row, by client request id.
@@ -186,7 +351,28 @@ export function createMetadataOverlayStore(
    * future chain - the deletes at the map's removal sites are hygiene, not
    * correctness.
    */
-  const registryBackedRequestIds = new Set<string>();
+  const registryBackedRequestIds = new RetainedSet<string>(
+    stringSetEntrySize,
+    noteRetainedChange,
+  );
+
+  const retainedSize = (): RetainedValueSize => {
+    const collections = [
+      pending.retainedSize(),
+      unknownOutcomeRequestIds.retainedSize(),
+      landedExpiryByRequestId.retainedSize(),
+      latestRenameStampByNode.retainedSize(),
+      registryBackedRequestIds.retainedSize(),
+    ];
+    return {
+      rawBytes: collections.reduce((sum, size) => sum + size.rawBytes, 0),
+      // The five collection objects and the small size-tracking closures
+      // remain live even when no metadata mutation is pending.
+      estimatedHeapBytes:
+        256 +
+        collections.reduce((sum, size) => sum + size.estimatedHeapBytes, 0),
+    };
+  };
 
   const chainKeyOf = (kind: string, nodeId: string): string =>
     `${kind}\u001f${nodeId}`;
@@ -324,6 +510,7 @@ export function createMetadataOverlayStore(
 
   return {
     overlay: () => pending,
+    retainedSize,
 
     markRegistryBacked,
 

@@ -1,3 +1,4 @@
+import { SendTimings } from "@traycer/protocol/host/agent/gui/send-timing";
 import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
 import {
   addAcceptedAction,
@@ -88,7 +89,6 @@ import {
   refreshSeatedRows,
   streamWindowMessage,
   touchTranscriptRange,
-  transcriptWindowChargedBytes,
   updateWindowMessage,
   TRANSCRIPT_WINDOW_MAX_BYTES,
   type OrdinalRange,
@@ -96,9 +96,17 @@ import {
 } from "@/stores/chats/transcript-window";
 import { ensureProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
 import {
+  createChatOwnedStateAccount,
+  noteLiveTextAppend,
+} from "@/stores/replica-memory/chat-owned-state-account";
+import type { RetainedValueSize } from "@/stores/replica-memory/retained-value-size";
+import {
+  CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES,
+  CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
   chatHolderId,
-  chatSessionChargeBytes,
+  chatSessionEstimatedHeapBytes,
   chatWholeSetSliceBytes,
+  estimatedTranscriptWindowBytes,
   evictChatWindowForAccountant,
   legacyTranscriptResidencyBytes,
   type ChatWholeSetSlices,
@@ -276,6 +284,8 @@ export type ChatStreamClientHandle = Pick<
       // `auto`, and collapsing the two would veto the mode across every
       // fixture that predates it.
       | "autoPermissionModeProtocolSupported"
+      // Optional, and absent reads as `null`, for the same reason.
+      | "queuePauseReasonProtocolSupported"
     >
   >;
 
@@ -1228,6 +1238,20 @@ export interface ChatSessionState {
    */
   readonly autoPermissionModeProtocolSupported: boolean | null;
   /**
+   * Whether THIS tab's negotiated `chat.subscribe` line publishes the queue's
+   * `pausedReason` (`@1.18`), or `null` while the session cannot say.
+   *
+   * It decides whether the transcript draws the host's queue-pause notice
+   * (`queuePausedNoticeHidden`), which an older line's user needs and a newer
+   * line's pill already says. So it gates what a PAST row shows rather than
+   * what a frame may carry, and unlike the flags above it keeps its answer
+   * through `reconnecting`: dropping to `null` there would take an older
+   * host's notices off screen on every reconnect and put them back on the next
+   * `open`. The next `open` re-answers it; `retry()` and `dispose()` clear it
+   * with the rest.
+   */
+  readonly queuePauseReasonProtocolSupported: boolean | null;
+  /**
    * The host's own `isTurnInProgress()`: is a turn genuinely active or
    * activating right now? Narrower than `runStatus !== "idle"`, which also
    * reads "running" for a pending queued item or visible background work
@@ -1284,6 +1308,20 @@ export interface ChatSessionState {
    * See {@link requiredHydrationOrdinalsOf}.
    */
   readonly jumpTargetOrdinal: number | null;
+  /**
+   * The one row chat find needs hydrated to confirm an index hit, or `null`.
+   *
+   * The host's find index counts text the client may never paint, so an index
+   * hit is a CANDIDATE until the client scan reads the row. This names that
+   * row's ordinal as required hydration - never a viewport move: the reader
+   * stays where they are while find reads.
+   *
+   * Separate from {@link jumpTargetOrdinal} rather than sharing it, because the
+   * two are held by different surfaces with different lifetimes: a reader's
+   * jump must not clobber a find read, or the reverse. See
+   * {@link requiredHydrationOrdinalsOf}.
+   */
+  readonly findReadOrdinal: number | null;
   /**
    * The accumulated-change SUMMARIES, assembled from the chunk frames.
    *
@@ -1756,6 +1794,8 @@ export interface ChatSessionState {
    */
   /** See the implementation - names the ordinal a pending jump is waiting on. */
   requestTranscriptOrdinal: (ordinal: number | null) => void;
+  /** See the implementation - names the ordinal a find index read needs. */
+  requestFindReadOrdinal: (ordinal: number | null) => void;
   retry: () => void;
   /**
    * {@link retry}, escalated to a transport re-dial first when - and only
@@ -3213,9 +3253,59 @@ export function createChatSessionStoreWithNotificationDependencies(
   options: ChatSessionStoreOptions,
   notificationDependencies: ChatSessionNotificationDependencies,
 ): ChatSessionStoreHandle {
+  let sendTimingEnabled = false;
+  try {
+    sendTimingEnabled = localStorage.getItem("traycer:send-timing") === "1";
+  } catch {
+    // Diagnostics must not make storage access a prerequisite for sending.
+  }
+  const sendTimings = new SendTimings(
+    { side: "gui", epicId: options.epicId, chatId: options.chatId },
+    (batch) => {
+      // appLogger retains at most 20 array items. Chunk before sanitization so
+      // a batch of concurrent sends cannot silently lose its last phases.
+      for (let offset = 0; offset < batch.entries.length; offset += 20) {
+        appLogger.info("ChatSendTiming", {
+          entries: batch.entries
+            .slice(offset, offset + 20)
+            .map((entry) => ({ ...entry })),
+          droppedEntries: offset === 0 ? batch.droppedEntries : 0,
+        });
+      }
+    },
+    sendTimingEnabled,
+  );
+  const noteSendAck = (
+    action: PendingChatAction | null,
+    status: "accepted" | "rejected",
+  ): void => {
+    if (action?.action !== "send") return;
+    const messageId = action.messageId;
+    if (messageId === null) return;
+    sendTimings.mark(
+      messageId,
+      status === "accepted" ? "ack_accepted" : "ack_rejected",
+    );
+  };
+  const noteSendSnapshot = (
+    messages: readonly { readonly messageId: string }[],
+    queue: ChatQueueState,
+  ): void => {
+    if (!sendTimings.enabled) return;
+    for (const message of messages)
+      sendTimings.mark(message.messageId, "transcript_received");
+    for (const item of queue.items) {
+      if (item.kind === "prompt")
+        sendTimings.mark(item.messageId, "queue_received");
+    }
+  };
+  let unsubscribeSendTimings: (() => void) | null = null;
   const notificationUserId = options.userId;
   const memory = ensureProcessMemoryRuntime(options.environment);
   const holderId = chatHolderId(options.hostId, options.epicId, options.chatId);
+  const ownedStateAccount = createChatOwnedStateAccount();
+  let settleOwnedStateBudget = (): void => undefined;
+  let unsubscribeOwnedState = (): void => undefined;
   let recencyStamp = 0;
   let disposed = false;
   let streamClient: ChatStreamClientHandle | null = null;
@@ -3284,6 +3374,34 @@ export function createChatSessionStoreWithNotificationDependencies(
    * callback settling synchronously, which nothing enforces".
    */
   let storeReady = false;
+  const settlePrivateStringSetCharge = (): void => {
+    // An inherited delivery marker can be seated before create() returns.
+    // The initial whole-state settlement below picks that charge up.
+    if (!storeReady || disposed) return;
+    const size = ownedStateAccount.size();
+    memory.chatWindows.recordOwnedStateSize(
+      holderId,
+      size.rawBytes,
+      size.estimatedHeapBytes,
+    );
+    settleOwnedStateBudget();
+  };
+  const settleImageWitnessSize = (size: RetainedValueSize): void => {
+    if (
+      disposed ||
+      !ownedStateAccount.updateImageWitnessSize(size) ||
+      !storeReady
+    ) {
+      return;
+    }
+    const total = ownedStateAccount.size();
+    memory.chatWindows.recordOwnedStateSize(
+      holderId,
+      total.rawBytes,
+      total.estimatedHeapBytes,
+    );
+    settleOwnedStateBudget();
+  };
   /**
    * The ONLY writer of {@link connectionEpoch}.
    *
@@ -3374,6 +3492,13 @@ export function createChatSessionStoreWithNotificationDependencies(
     if (!canSendAction(input.get)) return null;
     const client = streamClient;
     if (client === null) return null;
+    if (input.frame.kind === "send") {
+      sendTimings.begin(
+        input.frame.messageId,
+        input.frame.clientActionId,
+        null,
+      );
+    }
     const nextPendingUser = input.pendingUserMessage;
     const pending: PendingChatAction = { ...input.pending, connectionEpoch };
     input.set((state) => ({
@@ -3393,7 +3518,13 @@ export function createChatSessionStoreWithNotificationDependencies(
               nextPendingUser,
             ],
     }));
+    if (input.frame.kind === "send" && nextPendingUser !== null) {
+      sendTimings.mark(input.frame.messageId, "optimistic_pending_published");
+    }
     client.sendAction(input.frame);
+    if (input.frame.kind === "send") {
+      sendTimings.mark(input.frame.messageId, "dispatched");
+    }
     return input.pending.clientActionId;
   };
 
@@ -3565,14 +3696,20 @@ export function createChatSessionStoreWithNotificationDependencies(
    * the row, so the prompt returning to its composer is what the user saw
    * happen. See `takeMessageDeliveryRestoration`.
    */
-  const watchedMessageDeliveryIds = new Set<string>();
+  const watchedMessageDeliveryIds = ownedStateAccount.createPrivateStringSet(
+    "watchedMessageDeliveryIds",
+    settlePrivateStringSetCharge,
+  );
   /**
    * Withdrawn openings this store has answered - restored, or found with
    * nothing to restore. Never cleared: a withdrawal is final, so a message
    * handled once has nothing left to hand back, and a second take would put the
    * same prompt in the composer twice.
    */
-  const handledMessageDeliveryIds = new Set<string>();
+  const handledMessageDeliveryIds = ownedStateAccount.createPrivateStringSet(
+    "handledMessageDeliveryIds",
+    settlePrivateStringSetCharge,
+  );
   /**
    * The acknowledgement an earlier store for this chat on this device still
    * owed when it went away - a reload between the restore and the host's
@@ -4509,6 +4646,7 @@ export function createChatSessionStoreWithNotificationDependencies(
      * carried across reconnects exactly as the window's spans are.
      */
     let imageWitnesses = createImageWitnessStore();
+    imageWitnesses.setRetainedSizeListener(settleImageWitnessSize);
 
     /**
      * The ordinal range the transcript viewport is showing, as last reported
@@ -4605,6 +4743,26 @@ export function createChatSessionStoreWithNotificationDependencies(
     let assemblingSummaries:
       | readonly ChatAccumulatedFileChangeSummary[]
       | null = null;
+    const accountSummaryAssembly = (
+      assembly: readonly ChatAccumulatedFileChangeSummary[] | null,
+    ): void => {
+      if (
+        disposed ||
+        !ownedStateAccount.updateSummaryAssembly(
+          assembly,
+          get().accumulatedFileChangeSummaries,
+        )
+      ) {
+        return;
+      }
+      const size = ownedStateAccount.size();
+      memory.chatWindows.recordOwnedStateSize(
+        holderId,
+        size.rawBytes,
+        size.estimatedHeapBytes,
+      );
+      settleOwnedStateBudget();
+    };
 
     /**
      * The range request currently in flight, so a stream of identical
@@ -5674,14 +5832,19 @@ export function createChatSessionStoreWithNotificationDependencies(
       memory.chatWindows.settle(
         memory.accountant,
         holderId,
-        chatSessionChargeBytes(window, chatSlicesOf(get())),
+        chatSessionEstimatedHeapBytes(window, chatSlicesOf(get())) +
+          ownedStateAccount.size().estimatedHeapBytes,
       );
       memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
     };
 
     const legacyTranscriptChargeBytes = (state: ChatSessionState): number =>
       legacyTranscriptResidencyBytes(state.messages, state.events) +
-      chatWholeSetSliceBytes(chatSlicesOf(state));
+      chatWholeSetSliceBytes(chatSlicesOf(state)) +
+      CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+      (state.messages.length + state.events.length) *
+        CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES +
+      ownedStateAccount.size().estimatedHeapBytes;
 
     const commitLegacyTranscriptBudget = (): void => {
       recencyStamp = memory.stampChatRecency();
@@ -5719,11 +5882,15 @@ export function createChatSessionStoreWithNotificationDependencies(
         memory.accountant,
         holderId,
         windowedLine
-          ? chatSessionChargeBytes(state.transcriptWindow, chatSlicesOf(state))
+          ? chatSessionEstimatedHeapBytes(
+              state.transcriptWindow,
+              chatSlicesOf(state),
+            ) + ownedStateAccount.size().estimatedHeapBytes
           : legacyTranscriptChargeBytes(state),
       );
       memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
     };
+    settleOwnedStateBudget = commitWholeSetSliceBudget;
 
     const publishWindowedTranscript = (
       window: TranscriptWindow,
@@ -5754,22 +5921,42 @@ export function createChatSessionStoreWithNotificationDependencies(
             state.messages,
             state.events,
           );
+          const transcriptEstimatedBytes =
+            transcriptBytes +
+            (state.messages.length + state.events.length) *
+              CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES;
+          const requiredBytes =
+            chatWholeSetSliceBytes(chatSlicesOf(state)) +
+            CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+            ownedStateAccount.size().estimatedHeapBytes;
           // No ordinal/range exists on the legacy line, so this transcript is
           // the sole recoverable copy rather than an evictable window.
           memory.chatWindows.settle(
             memory.accountant,
             holderId,
-            transcriptBytes + chatWholeSetSliceBytes(chatSlicesOf(state)),
+            transcriptBytes +
+              chatWholeSetSliceBytes(chatSlicesOf(state)) +
+              CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+              (state.messages.length + state.events.length) *
+                CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES +
+              ownedStateAccount.size().estimatedHeapBytes,
           );
           return {
             reclaimedBytes: 0,
-            protectedBytesByKind:
-              transcriptBytes === 0
+            protectedBytesByKind: [
+              ...(transcriptEstimatedBytes === 0
                 ? []
-                : [{ kind: "sole-copy", bytes: transcriptBytes }],
+                : [
+                    {
+                      kind: "sole-copy" as const,
+                      bytes: transcriptEstimatedBytes,
+                    },
+                  ]),
+              { kind: "required" as const, bytes: requiredBytes },
+            ],
           };
         }
-        const current = transcriptWindowChargedBytes(state.transcriptWindow);
+        const current = estimatedTranscriptWindowBytes(state.transcriptWindow);
         const { window, outcome } = evictChatWindowForAccountant(
           state.transcriptWindow,
           Math.max(0, current - overBytes),
@@ -5782,9 +5969,20 @@ export function createChatSessionStoreWithNotificationDependencies(
         memory.chatWindows.settle(
           memory.accountant,
           holderId,
-          chatSessionChargeBytes(window, chatSlicesOf(get())),
+          chatSessionEstimatedHeapBytes(window, chatSlicesOf(get())) +
+            ownedStateAccount.size().estimatedHeapBytes,
         );
-        return outcome;
+        const requiredBytes =
+          chatWholeSetSliceBytes(chatSlicesOf(get())) +
+          CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+          ownedStateAccount.size().estimatedHeapBytes;
+        return {
+          ...outcome,
+          protectedBytesByKind: [
+            ...outcome.protectedBytesByKind,
+            { kind: "required", bytes: requiredBytes },
+          ],
+        };
       },
     });
 
@@ -6093,10 +6291,14 @@ export function createChatSessionStoreWithNotificationDependencies(
       // below and it disagree at the one site whose own comment demands a
       // blank slate for a later re-upgrade.
       assemblingSummaries = null;
+      accountSummaryAssembly(null);
       // The witness store's evidence orders copies within the windowed
       // coordinate space this line is abandoning; a later re-upgrade starts
       // a new lineage and must not inherit stamps from the old one.
+      imageWitnesses.setRetainedSizeListener(null);
       imageWitnesses = createImageWitnessStore();
+      imageWitnesses.setRetainedSizeListener(settleImageWitnessSize);
+      settleImageWitnessSize(imageWitnesses.retainedSize());
       applyAuthoritativeSnapshot(
         frame,
         {
@@ -6109,6 +6311,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           accumulatedFileChangeCount: 0,
           coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
           jumpTargetOrdinal: null,
+          findReadOrdinal: null,
           accumulatedFileChangeSummaries: [],
           accumulatedSummaryGenerationSeated: false,
           accumulatedSummaryAssemblyStarted: false,
@@ -7192,6 +7395,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        noteSendSnapshot(frame.snapshot.tail.messages, frame.snapshot.queue);
         windowedLine = true;
         // NEITHER the dedup slot nor the ledger is cleared here, and both
         // decisions are deferred to below for the same reason. A snapshot is
@@ -7334,6 +7538,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (frame.snapshot.indexRevision === null) {
           accumulatedSummaryGeneration = -1;
           assemblingSummaries = null;
+          accountSummaryAssembly(null);
           recovery.resetSummaryStream();
           // The retained array is now the PREVIOUS generation's, so it vouches
           // for nothing until a replacement chunk lands - including when its
@@ -7705,6 +7910,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // the completion watchdog measures the ASSEMBLY, not the retained
           // array whose length may coincide with the count.
           assemblingSummaries = [];
+          accountSummaryAssembly(assemblingSummaries);
           set(summaryTrustState());
         }
         // A chunk starting PAST the end is a chunk whose predecessor was
@@ -7735,6 +7941,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           ...frame.chunk.summaries,
         ];
         assemblingSummaries = summaries;
+        // This array is retained privately until final. The published state
+        // still owns the previous generation, so a store subscriber alone
+        // cannot see these bytes. The account caches row sizes by identity.
+        accountSummaryAssembly(frame.chunk.isFinal ? null : summaries);
         // Published only once whole. Until then the previous set keeps the
         // panel honest, and the watchdog - armed below off the un-seated
         // flag - is what recovers a replacement stream that stops short.
@@ -7816,6 +8026,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        noteSendAck(
+          pendingActionForId(get().pendingActions, frame.clientActionId),
+          frame.status,
+        );
         retireSweptEvidenceOnAck(frame);
         const rejectedPending =
           frame.status === "rejected"
@@ -8094,6 +8308,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        sendTimings.mark(frame.message.messageId, "acceptance_received");
         flushBlockDeltas();
         set((state) => {
           const pendingUserMessages = state.pendingUserMessages.filter(
@@ -8143,6 +8358,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         });
         if (windowedLine) {
           takeLiveRecords({ messages: [frame.message], events: [] });
+          sendTimings.mark(frame.message.messageId, "acceptance_applied");
           return;
         }
         // THE LEGACY ARM'S SETTLE. `takeLiveRecords` re-settles through
@@ -8153,6 +8369,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // handler agree about recency: the windowed arm stamps it, and a
         // message landing means the same thing on either line.
         commitLegacyTranscriptBudget();
+        sendTimings.mark(frame.message.messageId, "acceptance_applied");
       },
       onMessageDeliveryChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId))
@@ -8172,6 +8389,12 @@ export function createChatSessionStoreWithNotificationDependencies(
       onQueueChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
+        }
+        if (sendTimings.enabled) {
+          for (const item of frame.queue.items) {
+            if (item.kind === "prompt")
+              sendTimings.mark(item.messageId, "queue_received");
+          }
         }
         set((state) => {
           const now = Date.now();
@@ -8944,6 +9167,12 @@ export function createChatSessionStoreWithNotificationDependencies(
       onConnectionStatus: (status, reason, retryCause) => {
         if (disposed) return;
         if (status === "reconnecting" || status === "closed") {
+          if (sendTimings.enabled) {
+            for (const action of Object.values(get().pendingActions)) {
+              if (action.action === "send" && action.messageId !== null)
+                sendTimings.mark(action.messageId, "transport_closed");
+            }
+          }
           // Frames dispatched on the lost connection can no longer be
           // answered. Only stamps get older here - nothing is cancelled
           // until an authoritative post-reconnect snapshot arrives.
@@ -8993,6 +9222,15 @@ export function createChatSessionStoreWithNotificationDependencies(
               streamClient?.autoPermissionModeProtocolSupported?.() ?? null
             );
           };
+          // Three states like the auto flag, but KEPT off `open`: it decides
+          // whether past rows show, not what a frame may carry (see the
+          // field).
+          const resolveQueuePauseReasonProtocolSupported = () => {
+            if (status !== "open") {
+              return state.queuePauseReasonProtocolSupported;
+            }
+            return streamClient?.queuePauseReasonProtocolSupported?.() ?? null;
+          };
           // One attempt that failed before delivering a snapshot, counted for
           // the tile's bounded loading gate (see `PreSnapshotRetryEvidence`).
           //
@@ -9039,6 +9277,8 @@ export function createChatSessionStoreWithNotificationDependencies(
               resolveInterviewDeliveryRetryProtocolSupported(),
             autoPermissionModeProtocolSupported:
               resolveAutoPermissionModeProtocolSupported(),
+            queuePauseReasonProtocolSupported:
+              resolveQueuePauseReasonProtocolSupported(),
             fatalClose: resolveFatalClose(),
             preSnapshotRetries: resolvePreSnapshotRetries(),
           };
@@ -9120,6 +9360,12 @@ export function createChatSessionStoreWithNotificationDependencies(
       return {
         onSnapshot: (frame) => {
           if (!streamGuard.isCurrent(streamGeneration)) return;
+          if (matchesChat(options, frame.epicId, frame.chatId)) {
+            noteSendSnapshot(
+              frame.snapshot.chat.messages,
+              frame.snapshot.queue,
+            );
+          }
           callbacks.onSnapshot(frame);
           const activeTurnId = get().activeTurn?.turnId ?? null;
           if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
@@ -9285,6 +9531,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       // `null`, not `false` - no session has answered yet, so the catalog line
       // decides alone rather than the mode being vetoed before a handshake.
       autoPermissionModeProtocolSupported: null,
+      queuePauseReasonProtocolSupported: null,
       turnInProgress: undefined,
       pendingApprovals: [],
       pendingFileEditApprovals: [],
@@ -9295,6 +9542,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       accumulatedFileChangeCount: 0,
       coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
       jumpTargetOrdinal: null,
+      findReadOrdinal: null,
       accumulatedFileChangeSummaries: [],
       accumulatedSummaryGenerationSeated: false,
       accumulatedSummaryAssemblyStarted: false,
@@ -9325,7 +9573,6 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingCancelRestorations: {},
       failedSendRestoration: null,
       hashOnlyRecoveries: {},
-      hashOnlyRecovery: null,
       currentComposerSettings: null,
       liveAssistantMessage: null,
       liveTurnUsage: null,
@@ -9348,6 +9595,20 @@ export function createChatSessionStoreWithNotificationDependencies(
       requestTranscriptOrdinal: (ordinal: number | null) => {
         if (get().jumpTargetOrdinal === ordinal) return;
         set({ jumpTargetOrdinal: ordinal });
+        if (ordinal !== null) requestPlannedHydration();
+      },
+
+      /**
+       * Name (or clear) the ordinal a chat find index read is waiting on.
+       *
+       * The same shape as `requestTranscriptOrdinal`, for the same reason: the
+       * row is outside the viewport, and hydration is otherwise driven by the
+       * viewport. Unlike a jump, a find read never moves the viewport at all,
+       * so this is the ONLY thing that will ever fetch the row.
+       */
+      requestFindReadOrdinal: (ordinal: number | null) => {
+        if (get().findReadOrdinal === ordinal) return;
+        set({ findReadOrdinal: ordinal });
         if (ordinal !== null) requestPlannedHydration();
       },
       wake: () => {
@@ -9389,6 +9650,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           draftBlobBridgeSupported: false,
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
+          queuePauseReasonProtocolSupported: null,
           fatalClose: null,
           snapshotLoaded: false,
           // A LATER pre-snapshot wait begins here, and the tile's anchor
@@ -9573,6 +9835,9 @@ export function createChatSessionStoreWithNotificationDependencies(
             ),
           }));
           commitWholeSetSliceBudget();
+          sendTimings.mark(messageId, "optimistic_queue_published");
+        } else if (!rendersAsPendingUserMessage) {
+          sendTimings.mark(messageId, "optimistic_not_published");
         }
         // Consume the staged worktree once it's on the wire so a later send
         // doesn't re-create it (the frame carries it across transport retries).
@@ -10964,6 +11229,8 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       dispose: () => {
         if (disposed) return;
+        unsubscribeSendTimings?.();
+        sendTimings.clear();
         // BEFORE `disposed = true` and before the store leaves
         // `liveChatSessionStores`, because abandonment has to actually land:
         // it writes the prompt into `failedSendRestoration` (or states it),
@@ -11013,6 +11280,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         clearResnapshotRequestTimer();
         clearStreamCompletionWatchdog();
         legacyTranscriptAdapter.detach("disposed");
+        unsubscribeOwnedState();
         memory.chatWindows.detach(holderId);
         memory.accountant.release(BUDGET_PLANE_IDS.chatWindows, holderId);
         closeStreamClient();
@@ -11037,6 +11305,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           draftBlobBridgeSupported: false,
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
+          queuePauseReasonProtocolSupported: null,
         });
       },
     };
@@ -11045,6 +11314,18 @@ export function createChatSessionStoreWithNotificationDependencies(
   // here and the `create()` above is the window `storeReady` exists to name, and
   // anything inserted before this line silently joins it.
   storeReady = true;
+  const updateOwnedStateCharge = (state: ChatSessionState): void => {
+    if (disposed || !ownedStateAccount.update(state)) return;
+    const size = ownedStateAccount.size();
+    memory.chatWindows.recordOwnedStateSize(
+      holderId,
+      size.rawBytes,
+      size.estimatedHeapBytes,
+    );
+    settleOwnedStateBudget();
+  };
+  updateOwnedStateCharge(store.getState());
+  unsubscribeOwnedState = store.subscribe(updateOwnedStateCharge);
 
   if (notificationUserId !== null) {
     unsubscribeLiveCompletionAcknowledgements =
@@ -11080,6 +11361,59 @@ export function createChatSessionStoreWithNotificationDependencies(
       );
   }
 
+  // Observe the same three reconciliation doors that hide an optimistic row.
+  // A transport receipt is earlier than this state publication, and neither
+  // is a browser paint. Do no transcript scans when no send is pending.
+  unsubscribeSendTimings = store.subscribe((state, previous) => {
+    if (
+      !sendTimings.enabled ||
+      disposed ||
+      previous.pendingUserMessages.length === 0
+    )
+      return;
+    if (
+      state.pendingUserMessages === previous.pendingUserMessages &&
+      state.messages === previous.messages &&
+      state.queue === previous.queue
+    )
+      return;
+    for (const pending of previous.pendingUserMessages) {
+      if (!sendTimings.pendingIsUnreconciled(pending.messageId)) continue;
+      if (
+        sendTimings.hasPhase(pending.messageId, "acceptance_received") &&
+        !state.pendingUserMessages.some(
+          (message) => message.messageId === pending.messageId,
+        )
+      ) {
+        sendTimings.reconcilePending(
+          pending.messageId,
+          "pending_replaced_by_acceptance",
+        );
+      } else if (messageExists(state.messages, pending.messageId)) {
+        sendTimings.reconcilePending(
+          pending.messageId,
+          "pending_replaced_by_transcript",
+        );
+      } else if (
+        state.queue.items.some(
+          (item) =>
+            item.kind === "prompt" && item.messageId === pending.messageId,
+        )
+      ) {
+        sendTimings.reconcilePending(
+          pending.messageId,
+          "pending_replaced_by_queue",
+        );
+      } else if (
+        !state.pendingUserMessages.some(
+          (message) => message.messageId === pending.messageId,
+        )
+      ) {
+        sendTimings.reconcilePending(pending.messageId, "pending_removed");
+      }
+    }
+  });
+
   liveChatSessionStores.add(store);
 
   return {
@@ -11089,10 +11423,19 @@ export function createChatSessionStoreWithNotificationDependencies(
     store,
     deliveredNotices: {
       notices: new WeakSet<ChatErrorNotice>(),
-      retainedClientActionIds: new Set<string>(),
-      clientActionIds: new Set<string>(),
+      retainedClientActionIds: ownedStateAccount.createPrivateStringSet(
+        "deliveredRetainedNoticeClientActionIds",
+        settlePrivateStringSetCharge,
+      ),
+      clientActionIds: ownedStateAccount.createPrivateStringSet(
+        "deliveredNoticeClientActionIds",
+        settlePrivateStringSetCharge,
+      ),
     },
-    deliveredRestoreCompletionKeys: new Set<string>(),
+    deliveredRestoreCompletionKeys: ownedStateAccount.createPrivateStringSet(
+      "deliveredRestoreCompletionKeys",
+      settlePrivateStringSetCharge,
+    ),
     setSurfaceVisibility: (surfaceId, visible) => {
       if (surfaceVisibility.get(surfaceId) === visible) return;
       surfaceVisibility.set(surfaceId, visible);
@@ -12102,9 +12445,10 @@ function refusalCauseOf(
  *
  * `status: "rejected"` becomes `refused` rather than `null`, deliberately. The
  * menu has to tell "the host declined this hold" from "no hold was ever asked
- * for": the first closes the menu and says the chat has moved on, the second is
- * the ordinary closed state, and collapsing them would make a refusal look like
- * a menu that simply never opened.
+ * for": the first puts "Couldn't pause the countdown." on the chooser's footer
+ * - no cause, since a refusal proves no advancement (D220) - the second is the
+ * ordinary closed state, and collapsing them would make a refusal look like a
+ * menu that simply never opened.
  */
 function reconcileFallbackChoiceAck(
   lease: ChatSessionState["fallbackChoiceLease"],
@@ -12939,15 +13283,18 @@ function pendingInterviewOrdinals(
  * The ordinals hydration must reach beyond the viewport, as the STORE currently
  * holds them.
  *
- * Two sources, and they are here together because `planTranscriptHydration`
- * takes one list: the pending interviews' answer cards, and a transcript JUMP
- * whose target is cold.
+ * Three sources, and they are here together because `planTranscriptHydration`
+ * takes one list: the pending interviews' answer cards, a transcript JUMP
+ * whose target is cold, and the row a chat find index read must confirm.
  *
  * The jump one is not an optimization. A cross-tile jump waits for its target
  * to appear before it scrolls, and a scroll is what moves the viewport, which
  * is what drives hydration - so for a target outside the retained spans the
  * request waits on a row that nothing will ever ask for, and the jump parks
  * forever. Naming the ordinal here is what breaks that circle.
+ *
+ * The find read is the same circle with no scroll at all at the end of it: it
+ * never moves the viewport, so nothing but this list will ever fetch its row.
  */
 function requiredHydrationOrdinalsOf(
   state: ChatSessionState,
@@ -12958,9 +13305,12 @@ function requiredHydrationOrdinalsOf(
       : state.transcriptDerived.interviewAnswerability,
     state.pendingInterviews,
   );
-  const jump = state.jumpTargetOrdinal;
-  if (jump === null) return interviews;
-  return interviews.includes(jump) ? interviews : [...interviews, jump];
+  let ordinals = interviews;
+  for (const extra of [state.jumpTargetOrdinal, state.findReadOrdinal]) {
+    if (extra === null || ordinals.includes(extra)) continue;
+    ordinals = [...ordinals, extra];
+  }
+  return ordinals;
 }
 
 /**
@@ -13621,6 +13971,19 @@ function applyContentBlockDelta(
 ): Partial<ChatSessionState> {
   const applied = reduceContentBlockDelta(state, event, witnesses);
   if (applied === state) return applied;
+  if (
+    event.type === "text.delta" &&
+    state.liveAssistantMessage !== null &&
+    applied.liveAssistantMessage !== undefined &&
+    applied.liveAssistantMessage !== null
+  ) {
+    noteLiveTextAppend(
+      state.liveAssistantMessage.blocks,
+      applied.liveAssistantMessage.blocks,
+      event.blockId,
+      event.delta,
+    );
+  }
   if (!isSubagentCardOpeningEvent(event)) return applied;
   if (state.openedSubagentCardBlockIds.has(event.blockId)) return applied;
   const opened = new Set(state.openedSubagentCardBlockIds);

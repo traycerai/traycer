@@ -29,6 +29,7 @@ import {
   ownerScopedRowKey,
   type RecordTable,
 } from "./record-table";
+import type { RetainedValueSize } from "@/stores/replica-memory/retained-value-size";
 
 export interface TuiAgentRecordTableSources {
   readonly getCurrentUserId: () => string | null;
@@ -49,6 +50,7 @@ export interface TuiAgentRecordPublication {
 }
 
 export interface TuiAgentRecordTable {
+  retainedRowSize(): RetainedValueSize;
   current(): TerminalAgentsSlice;
   ingestSeq(): number;
   /**
@@ -310,6 +312,7 @@ export function createTuiAgentRecordTable(
   }
 
   return {
+    retainedRowSize: () => table.retainedRowSize(),
     current: () => table.current(),
     ingestSeq: () => table.ingestSeq(),
     snapshotIncompleteSeq: () => table.snapshotIncompleteSeq(),

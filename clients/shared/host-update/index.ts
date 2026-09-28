@@ -156,6 +156,7 @@ export {
   supervisorRelaunchAdmitsStandingRecord,
   supervisorRelaunchInstalledIdentityOf,
   readSupervisorRelaunchInstalledIdentityAt,
+  parkedActivationMatchesInstall,
   commitAttemptMutationWithCapability,
   discardAttemptRecordWithCapability,
   withUpdateContenderAdoption,

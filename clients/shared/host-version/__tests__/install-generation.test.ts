@@ -59,7 +59,11 @@ const MIGRATED_CALLERS: readonly string[] = [
   // The supervisor relaunch admission's installed identity:
   // `supervisorRelaunchInstalledIdentityOf` builds it from the full install
   // record, and `commands/host-start.ts` reads it through
-  // `readSupervisorRelaunchInstalledIdentity` instead of encoding its own.
+  // `readSupervisorRelaunchInstalledIdentity` instead of encoding its own. So
+  // does the restart commands' park comparison
+  // (`host/parked-activation-relaunch.ts`, traycer#2208): it keeps its own
+  // install READ, whose failures it must tell apart from an absent record,
+  // and maps the record through the same function.
   "clients/shared/host-update/contender.ts",
   // Desktop main's own capture, migrated with Q7. It is the only caller
   // outside this package, and the only one whose encoded string is compared
