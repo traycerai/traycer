@@ -1,0 +1,132 @@
+---
+title: "Search and navigation"
+description: "Find commands, Tasks and chat messages, go back and forward, reopen closed tabs, work across windows, and use the Home tab."
+keywords: ['command palette', 'search chats', 'search', 'back', 'forward', 'reopen closed tab', 'new window', 'home tab', 'text search', 'navigation']
+---
+
+This page covers the ways to find things and move around in Traycer Desktop. Every shortcut below is a default; change them in [Keybindings](/settings/keybindings).
+
+## Command Palette
+
+Press ⌘K / Ctrl+K to open the command palette. ⌃⇧P / Ctrl+Shift+P opens it too, and also works while a terminal has focus.
+
+Type to search commands, Tasks, Settings sections and help. Each command shows its shortcut, if it has one.
+
+Start your search with a prefix to search one kind of item:
+
+| Prefix | Searches |
+|---|---|
+| `>` | Actions |
+| `#` | Tasks |
+| `?` | Help |
+
+The palette groups what it finds:
+
+| Group | What it holds |
+|---|---|
+| **Pinned** | Commands you pinned. |
+| **Recent** | The last 8 commands you ran. |
+| **Suggested** | Commands for the composer you're typing in, such as **Change model…**, **Switch provider** and **Drafts**. |
+| **Tasks** | Your Tasks. |
+| **Actions** | App commands, such as **Search chats**, **Reopen closed tab** and **Go back**. |
+| **Navigation** | Places to go, such as **Open Tasks**, **Open App Settings** and each Settings section. |
+| **Theme** | **Light**, **Dark** or **System**. |
+| **Help** | **Open keybindings reference** and **Report issue**. |
+
+Tasks match on their title and repository, a worktree's branch or path, and a pull request number (`84`, `#84` or `PR #84`).
+
+To pin a command, hover it, or select it with the arrow keys, and click the pin icon (**Pin command**). Click it again (**Unpin command**) to unpin.
+
+Some commands open a second list, for example to pick a model. **Esc** goes back one level; at the top level, it closes the palette.
+
+## Search Chats
+
+**Search chats** finds chats by title and by what was said in them. Press ⌘⇧F / Ctrl+Shift+F, or run **Search chats** from the command palette.
+
+Type to search. Titles match from the first character; messages match from 2 characters.
+
+| Control | Options |
+|---|---|
+| Scope | **This task** or **All tasks**. **This task** needs an open Task. |
+| Message filter | **All messages**, **You** (what you typed), or **Agent reply**. |
+| Date | **Any time**, **Past day**, **Past week**, **Past month** or **Past year**. |
+
+Results come in two parts: chats whose title matches, then chats with matching messages. Expand a chat to see its matching messages. Click a result to open the chat at that message. Use the arrow keys to move through results.
+
+Search chats looks through the chats stored on the [active host](/concepts/hosts).
+
+<Note>
+  Search chats needs a recent host. On an older one, the dialog says "Chat search isn't available on this host. Update Traycer Host to search your chats." Update the host from [Overview](/settings/host).
+</Note>
+
+You can also start from other searches:
+
+- **History.** Its search finds Tasks and messages. **Refine in chat search** continues in Search chats. See [History](/concepts/history#search).
+- **Agents panel.** Searching the panel also finds matching messages in the Task. Click **All tasks** to search every Task in Search chats.
+
+## Text Search
+
+To search the text of your artifacts or code, open the pane opener: press ⌘T / Ctrl+T in a Task, or click into an empty group. Choose **Text search**, then **Artifacts** or a workspace folder.
+
+The search has **Match case**, **Match whole word** and **Use regular expression**, plus **Files to include** and **Files to exclude**, which take comma-separated globs. Click a result to open it.
+
+Text search is only in the pane opener, not in the ⌘K / Ctrl+K palette. See [Pane opener](/panels#pane-opener).
+
+## Back And Forward
+
+The **Go back** and **Go forward** arrows in the desktop app's title bar move through the places you've been, such as Tasks, the tabs inside them, and History.
+
+| Command | macOS | Windows and Linux |
+|---|---|---|
+| **Go back** | ⌘⇧, | Ctrl+Shift+, |
+| **Go forward** | ⌘⇧. | Ctrl+Shift+. |
+
+Places in Tasks you've since closed are skipped. They come back if you reopen the Task.
+
+## Reopen Closed Tabs
+
+Press ⌘⇧T / Ctrl+Shift+T to reopen what you closed last. You can also choose **Reopen Closed Tab** from a tab's right-click menu, in the canvas or in the header, or run **Reopen closed tab** from the command palette.
+
+- It restores the last Task, draft, tab or group of tabs you closed in this window. Several tabs closed together, for example with **Close All**, come back together.
+- A reopened tab returns where it was, with its split, color, icon and tab group.
+- Each window remembers its last 50 closes, and keeps them when you restart the app.
+- Something you deleted doesn't come back. **Clear local app state** in [General](/settings/general) also clears this history.
+
+### Reading Position
+
+Chats, artifacts, files and diffs remember where you were reading. When you switch back to one, or close it and open it again later, it returns to the same place. Terminals and command output show their latest output when they are opened again.
+
+## Windows
+
+| Command | Shortcut | What it does |
+|---|---|---|
+| File › **New Window** | ⌘⇧N / Ctrl+Shift+N | Opens another window. |
+| File › **Open Task in New Window...** | ⌘⇧O / Ctrl+Shift+O | Lists your Tasks. Pick one to open it in a new window. |
+| **Open in New Window** in a header tab's right-click menu | | Moves that tab to a new window. |
+
+History rows have **Open in New Window** too. The **Window** menu lists your open windows.
+
+Every window uses the same [active host](/concepts/hosts). Each window keeps its own list of closed tabs.
+
+## Home Tab
+
+The Home tab shows what needs you and what's running across every Task. Turn it on with **Home tab** in [Layout](/settings/layout#tabs); it is off by default. Then press ⌘⇧H / Ctrl+Shift+H, or run **Go to Home** from the command palette, to go to it.
+
+Home has two sections:
+
+| Section | What it lists |
+|---|---|
+| **Needs you** | Agents waiting for you, such as approvals and questions. When there are none, it reads "Nothing needs you." |
+| **Running** | Tasks with agents, background work or browser tabs running, grouped by Task, and by machine when you use more than one host. |
+
+A summary line at the top, such as "2 need you · 3 running", jumps to each section.
+
+- **Stop** stops one agent.
+- **Stop all** stops every agent in a Task, after you confirm.
+- An agent on a device Traycer can't reach can't be stopped from here. Its stop button explains: "Runs on another device".
+
+The Home tab can't be closed, moved, split or opened in another window. To remove it, turn it off in Layout. In the mobile app, Home is the first entry in the menu.
+
+## Split View
+
+To show two views in one header tab, or to split the canvas into groups, see [Panels](/panels#window-split-view).

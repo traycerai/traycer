@@ -24,6 +24,7 @@ import {
 } from "@/lib/commands/tile-find";
 import { resolveSettingsTabIntent } from "@/lib/commands/actions/open-system-tab";
 import { activateTabIntent } from "@/lib/tab-navigation";
+import { closeLayoutEditorForCloseTabChord } from "@/lib/layout/editor-session";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { LocalHostRestartFlow } from "@/components/host/local-host-restart-flow";
@@ -378,6 +379,7 @@ function handleMenuCommand(
     return;
   }
   if (payload.command === "epic.closeTab") {
+    if (closeLayoutEditorForCloseTabChord()) return;
     handlers.closeActiveTab();
     return;
   }

@@ -38,7 +38,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { RootLandingPage } from "@/components/layout/root-landing-page";
-import { HeaderNotificationsBell } from "@/components/layout/header/app-header";
+import { HeaderNotificationsBell } from "@/components/layout/header/header-actions";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { requireSignedIn } from "@/lib/router-auth";
 import { bindAuthInvalidation, type AppRouterContext } from "@/router";
@@ -536,7 +536,7 @@ function mountHarness(opts: {
       <div data-testid="admission-sentinel">
         <RootLandingPage />
       </div>
-      {/* Admission gate #3 (app-header.tsx#HeaderNotificationsBell): the
+      {/* Admission gate #3 (header-actions.tsx#HeaderNotificationsBell): the
           desktop bell is a LOCAL-plane surface gated on `admitsLocalPlane`,
           through the IDENTICAL `useAuthStore` wiring - it renders for the
           admitted `unverified` session. The cloud control for this file is
@@ -680,7 +680,7 @@ describe("renderer local admission — cross-seam (real AuthService × real useA
     // content and a positive control in the identical tree.
     expect(screen.queryByText("Welcome to Traycer")).toBeNull();
 
-    // Admission gate #3 (app-header.tsx#HeaderNotificationsBell), identical
+    // Admission gate #3 (header-actions.tsx#HeaderNotificationsBell), identical
     // wiring: the desktop bell reads `admitsLocalPlane` and RENDERS under
     // `unverified` - it is the only desktop entry point to the local
     // notification lanes the session provider keeps running for this

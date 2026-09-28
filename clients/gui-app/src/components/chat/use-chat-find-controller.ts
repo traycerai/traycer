@@ -30,6 +30,8 @@ import {
 } from "@/components/chat/chat-messages-scroll-helpers";
 import { useTranscriptQueuePauseReasonSupport } from "@/components/chat/use-transcript-queue-pause-reason-support";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
+import { useRegionShown } from "@/lib/layout-overrides";
+import { isThinkingShown } from "@/stores/layout/layout-store";
 import {
   useChatFindActiveTargetClearEpoch,
   useReconcileChatFindActiveTarget,
@@ -529,9 +531,16 @@ export function useChatFindController(
     [applyFindOpenedTarget],
   );
 
+  // Thinking's Shown regroups runs as surely as promotion does.
+  const thinkingShown = useRegionShown("thinking");
   useLayoutEffect(() => {
     chatFindAdapterRef.current?.notifyRowsChanged();
-  }, [backgroundToolBlockIds, messages, queuePauseReasonSupport]);
+  }, [
+    backgroundToolBlockIds,
+    messages,
+    queuePauseReasonSupport,
+    thinkingShown,
+  ]);
 
   useLayoutEffect(() => {
     if (openSubagentIdRef.current === openSubagentId) return;
@@ -563,7 +572,11 @@ export function useChatFindController(
           messagesRef.current,
           instanceId,
           backgroundToolBlockIdsRef.current,
-          queuePauseReasonSupportRef.current,
+          {
+            hideReasoning: !isThinkingShown(),
+            queuePauseReasonProtocolSupported:
+              queuePauseReasonSupportRef.current,
+          },
         );
       },
       // A card's conversation lives inside one loaded turn: the windowed

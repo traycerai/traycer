@@ -117,7 +117,7 @@ function queryClient() {
  *
  * `measureHeaderStripGeometry` reads `getBoundingClientRect()` off the strip
  * and each `[data-strip-item-id]`, and jsdom returns zeros - so without stubbed
- * rects `stripBottom` is 0, every release is "below" it, and the test would
+ * rects `bandEnd` is 0, every release is "below" it, and the test would
  * pass for the wrong reason. Stubbing them is what makes the tear-off threshold
  * real rather than degenerate.
  */
@@ -161,7 +161,11 @@ function HeaderStripHarness(): ReactNode {
     data: dragData,
   });
   return (
-    <div data-testid={HEADER_STRIP_SCROLL_TEST_ID}>
+    <div
+      data-testid={HEADER_STRIP_SCROLL_TEST_ID}
+      data-strip-axis="x"
+      data-strip-edge="top"
+    >
       <button
         ref={setNodeRef}
         data-strip-item-id={`tab:epic:${EPIC_TAB.id}`}
@@ -219,7 +223,7 @@ interface TearOffDrag {
  * move, move BELOW the measured strip bottom - but no `pointerUp` yet, so a
  * caller can assert mid-drag state before choosing how the gesture ends.
  *
- * Rects are stubbed because jsdom returns zeros - without them `stripBottom` is
+ * Rects are stubbed because jsdom returns zeros - without them `bandEnd` is
  * 0, every release counts as below it, and the threshold is degenerate. Each
  * event gets its own `act()` and `isPrimary` is set: the sensor ignores a
  * non-primary pointer, and batching activation with the first move collapses
@@ -370,7 +374,7 @@ describe("tab detach channel wiring", () => {
     // `readTabDetachHandler()` call would leave this test green.
     //
     // S2.7 asks for a real header-tab drag released below the strip, asserting
-    // the detach fires. That needs `activeHeaderStripGeometry` populated from a
+    // the detach fires. That needs `activeHeaderStripSession` populated from a
     // measured strip, which this harness does not build. Recorded as NOT
     // COVERED rather than renamed into a pass - a test that looks like it
     // covers an assertion and does not is worse than an absent one.

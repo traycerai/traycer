@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
-import type { TaskTabLayout } from "@/stores/settings/settings-store";
+import type { TaskTabLayout } from "@/lib/layout/layout-arrangement";
+import { HORIZONTAL_STRIP_AXIS } from "@/components/epic-canvas/dnd/strip-axis";
 import { readHeaderStripLayoutRect } from "./header-strip-geometry";
 
 const TAB_SELECTOR = "[data-header-tab-key]";
@@ -60,12 +61,12 @@ export function useHiddenHeaderTabs(layout: TaskTabLayout) {
             TAB_SELECTOR,
           )) {
             const key = tab.dataset.headerTabKey;
-            const rect = readHeaderStripLayoutRect(tab);
-            if (key === undefined || rect.width <= 0) continue;
-            if (rect.left < viewport.left - PIXEL_TOLERANCE) {
+            const rect = readHeaderStripLayoutRect(tab, HORIZONTAL_STRIP_AXIS);
+            if (key === undefined || rect.extent <= 0) continue;
+            if (rect.start < viewport.left - PIXEL_TOLERANCE) {
               left.push(key);
             }
-            if (rect.right > viewport.right + PIXEL_TOLERANCE) {
+            if (rect.end > viewport.right + PIXEL_TOLERANCE) {
               right.push(key);
             }
           }
@@ -173,13 +174,15 @@ function preserveActiveTabVisibility(
     activeTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
   const activeRect =
-    activeTab === null ? undefined : readHeaderStripLayoutRect(activeTab);
+    activeTab === null
+      ? undefined
+      : readHeaderStripLayoutRect(activeTab, HORIZONTAL_STRIP_AXIS);
   return {
     width: element.clientWidth,
     key: activeKey,
     visible:
       activeRect !== undefined &&
-      activeRect.left >= viewport.left - PIXEL_TOLERANCE &&
-      activeRect.right <= viewport.right + PIXEL_TOLERANCE,
+      activeRect.start >= viewport.left - PIXEL_TOLERANCE &&
+      activeRect.end <= viewport.right + PIXEL_TOLERANCE,
   };
 }

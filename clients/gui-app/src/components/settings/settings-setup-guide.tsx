@@ -1,8 +1,10 @@
 import { lazy, Suspense, type RefObject } from "react";
+import { useLayoutLitMoment } from "@/components/layout-editor/lit-moment";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { setupGuide } from "@/stores/onboarding/setup-guides";
+import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import { scrollPaneToCenter } from "@/components/settings/use-settings-anchor-reveal";
 
 const Coachmark = lazy(() =>
@@ -17,14 +19,29 @@ export function SettingsSetupGuide(props: {
 }) {
   const active = useOnboardingStore((state) => state.activeSetup);
   const complete = useOnboardingStore((state) => state.completeSetup);
+  // No guide step runs inside a layout-editor session: the editor owns the
+  // screen and its Escape, and a coachmark pointing into Settings would float
+  // over it. The guide resumes at the same step when the session ends.
+  const customizing = useLayoutEditorStore((state) => state.session !== null);
+  const guide = active === null ? null : setupGuide(active.id);
+  const step =
+    guide === null || active === null ? null : guide.steps[active.step];
+  // Resolved above the early returns, because it is a hook: the lit moment
+  // belongs to the step that asked for it and ends when that step does,
+  // however it ends - Continue, Escape, or the surface closing (L-50).
+  useLayoutLitMoment(
+    !customizing &&
+      step !== null &&
+      step.litChrome === true &&
+      step.section === props.section,
+  );
   // Nothing on unmount: development roots render under StrictMode, whose mount
   // probe runs every effect's cleanup once, which would clear the guide the
   // moment it started. `activeSetup` is session-local presence, so a closed
   // Settings simply resumes the same step when it reopens - and closing the
   // surface is not a user skip, so it must not finish the card either.
-  if (active === null) return null;
-  const guide = setupGuide(active.id);
-  const step = guide.steps[active.step];
+  if (active === null || guide === null || step === null) return null;
+  if (customizing) return null;
   if (step.section !== props.section) return null;
   const last = active.step + 1 === guide.steps.length;
   const go = (index: number): void => {

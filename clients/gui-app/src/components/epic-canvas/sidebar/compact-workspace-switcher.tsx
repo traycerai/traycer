@@ -1,3 +1,4 @@
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import type { ReactNode } from "react";
 import {
   Popover,
@@ -20,6 +21,7 @@ export interface CompactWorkspaceSwitcherProps {
 }
 
 export function CompactWorkspaceSwitcher(props: CompactWorkspaceSwitcherProps) {
+  const placement = useColumnOverlayPlacement("row");
   return (
     <Popover open={props.open} onOpenChange={props.onOpenChange}>
       <PopoverTrigger asChild>
@@ -35,7 +37,8 @@ export function CompactWorkspaceSwitcher(props: CompactWorkspaceSwitcherProps) {
         />
       </PopoverTrigger>
       <PopoverContent
-        align="start"
+        side={placement?.side}
+        align={placement?.align ?? "start"}
         className={props.contentClassName}
         data-testid={props.contentTestId}
         // The host picker's list is a nested Radix popover: it portals OUTSIDE

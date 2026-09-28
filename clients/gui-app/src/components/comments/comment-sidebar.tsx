@@ -11,7 +11,6 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
-import { useEpicCommentRoomAvailability } from "@/lib/epic-selectors";
 import type { EpicCommentRoomAvailability } from "@/lib/epic-selectors";
 import { resolveArtifactCommentThreads } from "@/hooks/comments/use-lane-comment-threads";
 import {
@@ -50,6 +49,12 @@ export interface CommentSidebarProps {
    * ambient context.
    */
   readonly laneDroppedAt: number | null;
+  /**
+   * Whether this epic's comment room can be reached - see
+   * `useEpicCommentRoomAvailability`, which holds an unavailable answer across
+   * a stream reconnect. A prop for the same reason the rows are.
+   */
+  readonly commentRoomAvailability: EpicCommentRoomAvailability;
   /** Threads-anchored-in-document positions, derived from the active tile's
    *  Tiptap editor by the parent. Used both for sort order and orphan
    *  detection (no entry → orphan). */
@@ -79,6 +84,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
     artifactId,
     laneThreads,
     laneDroppedAt,
+    commentRoomAvailability,
     anchorPositions,
     currentUserId,
     canModerate,
@@ -91,10 +97,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
   const setDraft = useCommentThreadsStore((s) => s.setDraft);
   // Covers promotion and preserved-orphan states - see
   // `commentsHaveNoUsableCommentRoom`. Local rooms have their own durable
-  // thread provider. The sticky hook holds an unavailable answer across a
-  // stream reconnect, which clears the store's durability slots and would
-  // otherwise re-open the panel against the same absent room.
-  const commentRoomAvailability = useEpicCommentRoomAvailability();
+  // thread provider.
   const commentsUnavailable = commentRoomAvailability.kind !== "available";
 
   // The poll is NOT disabled when the lane has rows. It is on the released

@@ -1,0 +1,151 @@
+---
+title: "Model routing"
+description: "Choose what Traycer tries when a rate limit or another provider problem blocks a chat: another account, an equivalent model, waiting for the limit to reset, or notifying you."
+keywords: ['model routing', 'fallback', 'failover', 'rate limit', 'usage limit', 'switch account', 'switch model', 'equivalent models', 'tiers', 'wait for reset', 'overrides']
+---
+
+**Model routing** settings decide what Traycer does when a rate limit or another provider problem blocks a chat's turn. The page sits in the **Host** group of Settings.
+
+For what routing looks like in a chat, including the switch countdown and switching back, see [Usage Limits and Model Routing](/agents-and-models/usage-limits-and-routing).
+
+## Which Host and Agents It Covers
+
+Model routing settings belong to one host, and to your account on that host. Choose the host with the [host picker](/settings#host-picker) at the top of the Settings sidebar. The page description names the host it applies to: "Applies to your chat agents on _host name_."
+
+- Routing applies to **chat agents** only. [Terminal agents](/concepts/terminal-agents-vs-terminals) are never switched or held.
+- Routing runs on the host, so it also covers chats you don't have open.
+- The gear on a chat's [routing card](/agents-and-models/usage-limits-and-routing#the-routing-card) opens this page for that chat's host.
+- Your changes save as you make them. A tier name saves when you leave the field or press Enter.
+
+## Route Automatically
+
+**Route automatically** is the switch at the top of the page. It is **off** by default.
+
+When it is on and a chat's turn is blocked, Traycer works through your [plan](#plan) until a step works or it reaches **Notify me**. When it is off, a blocked turn stops with an error, and you choose what to do from the chat.
+
+Turning it off stops Traycer starting new switches or waits. Chats that are already switching or waiting carry on; stop those from the card in the chat. While any are in progress, the row shows how many, for example "2 in progress right now."
+
+The switch covers only Traycer's routing. Your coding agent's own retries are separate and keep working either way.
+
+While the switch is off, you can still edit everything below it. The page says "Off - these settings take effect when you turn on Route automatically."
+
+The rest of the page has three tabs: **Plan**, **Equivalent models** and **Overrides**.
+
+## Plan
+
+### Steps
+
+Under **Try these in order**, the page lists the steps Traycer can take. It tries them from the top and stops at the first one that works.
+
+| Step | What it does |
+| --- | --- |
+| **Another account on the same provider** | Switches to a different account you're signed in to on the same provider. Traycer checks that account's usage first and skips an account that is already at its limit. |
+| **An equivalent model on another provider** | Tries a backup model from the [Equivalent models](#equivalent-models) tab. |
+| **Wait for the limit to reset** | If the provider gives a reset time within your [longest wait](#behavior), Traycer waits until then and retries the message. |
+| **Notify me** | Traycer notifies you and stops trying. Later steps won't run. |
+
+By default all four steps are on, in this order.
+
+- Turn a step on or off with its switch. **Notify me** has no switch: it always runs when nothing else worked, and shows **Always**.
+- Reorder steps with the up and down arrows, or drag a step by its handle. **Notify me** stays last.
+- Turning a step off leaves it where it is. When you reopen the page, steps that are still off appear just above **Notify me**.
+
+Switching accounts or models starts a new agent session using the chat's history, and retries the blocked message there. Messages waiting to run use the new account or model too.
+
+<Note>
+  **Another account on the same provider** needs a second account. Claude Code,
+  Codex, Grok and Antigravity support more than one account through managed profiles; see
+  [Agents & Models](/agents-and-models/coding-agents). If you have none, the
+  step says "No other accounts to switch to yet." with a link to add one in
+  [Providers](/settings/providers).
+</Note>
+
+If your tiers give the model you last used nowhere to go, the equivalent-model step says so: "No other model is set up for _provider · model_ — the model you last started a chat with on this host." Add that model to a tier, or choose a tier for [models not in any tier](#models-not-in-any-tier).
+
+### Behavior
+
+| Setting | What it controls | Options | Default |
+| --- | --- | --- | --- |
+| **Time to cancel a switch** | How long Traycer waits before switching, so you can cancel from the chat. Opening the model picker from the card pauses the countdown. | 10 to 15 seconds | 15 seconds |
+| **Longest wait for a usage limit to reset** | If the limit resets later than this, Traycer skips waiting and moves on to the next step. | 1 hour, 3 hours, 6 hours, 12 hours, 1 day, 3 days, 7 days | 6 hours |
+| **When the original provider's limit resets** | What happens once the account or model the chat started on can be used again. | **Ask me**, **Switch back automatically**, **Stay where it switched to** | **Ask me** |
+
+Switching back also starts a new agent session using the chat's history. With **Switch back automatically**, messages waiting to run move back to the original account or model too.
+
+### Danger Zone
+
+**Reset model routing** puts every setting on this page back to its default. Click **Reset**, then confirm.
+
+A reset turns **Route automatically** off, restores the default steps, timings and equivalent models, and clears any per-problem overrides. It applies only to your chat agents on the selected host.
+
+Chats that are already waiting or switching keep the steps and timings they started with. If they still need another model, they use the restored default tiers.
+
+## Equivalent Models
+
+This tab lists the models you are happy to use in place of one another. Models that can stand in for each other go in the same **tier**. When one is blocked, Traycer tries the others in its tier, top to bottom.
+
+Traycer switches only between models in the same tier. A model that isn't in any tier uses the tier you choose under [For a model not in any tier](#models-not-in-any-tier).
+
+### Default Tiers
+
+Traycer starts you with three tiers, **frontier**, **flagship** and **standard**, filled with Claude Code, Codex and Grok models. **flagship** is also the tier used for models not in any tier.
+
+Traycer Inference isn't in the default tiers, because it uses your Traycer credits. You can add it to a tier yourself.
+
+**Restore the default tiers** replaces your tiers with the defaults and sets the tier for other models back to **flagship**. Traycer asks you to confirm, and a restore can't be undone. If you delete every tier, the tab says the equivalent-model step has nothing to switch to, and offers the same button.
+
+### Rows
+
+Each row in a tier has three parts:
+
+| Column | What it holds |
+| --- | --- |
+| **Provider** | The coding agent that runs the model. |
+| **Model or pattern** | One model, or a pattern that covers several. |
+| **Effort** | The reasoning effort to use after the switch, or **Any effort**. |
+
+In **Model or pattern**, pick a model from the list, or type a pattern:
+
+- `*` matches any run of characters. `*opus*` covers every model whose ID or name contains "opus". Matching ignores case.
+- Typing a word of three or more letters offers **Any model containing "…"**.
+- `*` on its own covers every model from that provider, shown as **Any _provider_ model**.
+- Text without `*` names one model exactly.
+
+Under each row, a line lists the models it would try, in order, for example "Tries A → B", and marks any that Traycer would skip.
+
+A model can be in only one tier. In the picker, a model that another tier already covers is marked **in _tier_** and can't be picked. If your saved tiers overlap anyway, both rows show the conflict, and the tier listed first handles the model until you fix it with **Edit pattern** or **Change model**.
+
+Use **Add model or pattern** to add a row, **Add tier** to add a tier, and **Delete tier** to remove one. Order within a tier matters, so each row has up and down arrows. Deleting a tier or a row shows a message with **Undo**.
+
+### Models Not in Any Tier
+
+**For a model not in any tier** chooses the tier Traycer tries when the blocked model isn't in any tier. Choose **None - skip this step** to skip model switching for those models only.
+
+### Test a Model
+
+**Test a model** opens a panel that shows what Traycer would do for a blocked model. Choose the provider, the model, and whether it was blocked by **a rate limit** or **another error**, then the account and permission mode. The panel names the tier Traycer would use, the model it would switch to, the models it would skip and why, and what happens if none of them work.
+
+## Overrides
+
+**When a problem happens**, Traycer uses your main plan from the **Plan** tab. This tab lets you choose different steps for one kind of problem. The top of the tab shows **Your main plan** as a summary.
+
+Each problem shows **Main plan** or **Custom**. Expand a row to see its actions, then check or clear them.
+
+| Problem | Actions you can choose | Also |
+| --- | --- | --- |
+| **Signed out** | Try another account, Try an equivalent model | Starts only once the sign-out is confirmed. |
+| **Rate limit reached** | Try another account, Try an equivalent model, Wait for the limit to reset | |
+| **Billing issue** | Try another account, Try an equivalent model | Always notifies you, even when a switch works. |
+| **Model unavailable** | Try an equivalent model | |
+| **Temporarily unavailable** | Try an equivalent model | Retried briefly first. |
+
+Actions that can't help a problem aren't offered for it, and **Why aren't other actions available?** explains each one. For example, another account won't help when the whole provider is down.
+
+- **Use main plan** puts one problem back on the main plan.
+- **Reset all to main plan** removes every override, and offers **Undo**.
+- If you clear every action in a row, Traycer won't switch or wait for that problem. It notifies you instead, with no countdown to cancel.
+
+Under **No actions to choose**:
+
+- **Connection failed** gets a brief retry, then Traycer notifies you.
+- Six other problems need your attention, and Traycer never switches or waits for them: **Context limit reached**, **Provider rejected the request**, **Provider did not start in time**, **Provider stopped responding**, **Background work stopped** and **Session limit reached**.

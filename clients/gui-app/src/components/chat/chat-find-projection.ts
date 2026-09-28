@@ -36,6 +36,7 @@ import {
 } from "@/components/chat/segments/plan-display";
 import { normalizeSearchableText } from "@/lib/find-engine/searchable-text";
 import { formatSingleLine } from "@/lib/text/format-single-line";
+import { isThinkingShown } from "@/stores/layout/layout-store";
 import type {
   ActivityGroupModel,
   ChatActivityTimelineItem,
@@ -95,6 +96,11 @@ const BUILT_IN_MARKED_TOKEN_TYPES = [
 ] as const;
 const CHAT_FIND_PREVIEW_MAX_LENGTH = 180;
 
+interface ChatFindVisibility {
+  readonly hideReasoning: boolean;
+  readonly queuePauseReasonProtocolSupported: boolean | null;
+}
+
 export function buildChatFindRows(
   messages: ReadonlyArray<ChatMessageModel>,
   tileInstanceId: string,
@@ -107,19 +113,17 @@ export function buildChatFindRows(
    */
   promotedToolBlockIds: ReadonlySet<string>,
   /**
-   * The chat's `ChatSessionState.queuePauseReasonProtocolSupported`, for the
-   * renderer's own hide (`hidden-transcript-notices.ts`): a row the timeline
-   * does not draw has no painted text, and a hit on it is one the user cannot
-   * find.
+   * The renderer's visibility: hidden thinking and hidden transcript notices
+   * have no painted text for Find to match.
    */
-  queuePauseReasonProtocolSupported: boolean | null,
+  visibility: ChatFindVisibility,
 ): ReadonlyArray<ChatFindRow> {
   return messages.map((message) => {
     const units = chatFindUnitsForMessage(
       message,
       tileInstanceId,
       promotedToolBlockIds,
-      queuePauseReasonProtocolSupported,
+      visibility,
     );
     return {
       messageId: message.id,
@@ -237,7 +241,7 @@ function chatFindUnitsForMessage(
   message: ChatMessageModel,
   tileInstanceId: string,
   promotedToolBlockIds: ReadonlySet<string>,
-  queuePauseReasonProtocolSupported: boolean | null,
+  visibility: ChatFindVisibility,
 ): ReadonlyArray<ChatFindUnit> {
   if (message.role === "assistant") {
     const turnState = message.runState === null ? "complete" : "active";
@@ -246,11 +250,12 @@ function chatFindUnitsForMessage(
     // as `AssistantMessageBody` drops them.
     const shown = segmentsShownInTranscript(
       message.segments,
-      queuePauseReasonProtocolSupported,
+      visibility.queuePauseReasonProtocolSupported,
     );
     return buildChatActivityTimeline(shown, {
       turnState,
       promotedToolBlockIds,
+      hideReasoning: visibility.hideReasoning,
     }).flatMap((item) =>
       settled !== null && item.kind === "segment"
         ? settledCardSearchUnits(item.segment, settled, tileInstanceId)
@@ -859,6 +864,9 @@ function subagentConversationSearchUnits(
   return buildChatActivityTimeline(segment.children, {
     turnState: segment.isStreaming ? "active" : "complete",
     promotedToolBlockIds: NO_PROMOTED_TOOL_BLOCK_IDS,
+    // The card groups its runs the way `SubagentConversation` renders them,
+    // and Thinking's Shown regroups them there too.
+    hideReasoning: !isThinkingShown(),
   }).flatMap((item) => {
     if (item.kind === "activity_group") {
       return activityGroupSearchUnits(item.group, tileInstanceId, bodyChain);

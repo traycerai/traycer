@@ -79,7 +79,7 @@ import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import { ContextUsageChip } from "@/components/chat/context-usage-chip";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 
 const USAGE_PROBE_75: TokenUsage = {
@@ -291,7 +291,9 @@ describe("composer isolation from per-token dock churn", () => {
   beforeEach(() => {
     composerRenderCount = 0;
     useUsageProbeStore.setState({ usage: USAGE_PROBE_75 });
-    useSettingsStore.setState({ pinContextUsageBreakdown: false });
+    useLayoutStore
+      .getState()
+      .setRegionValues("contextUsage", { pinBreakdown: false });
   });
 
   afterEach(cleanup);
@@ -376,7 +378,9 @@ describe("composer isolation from per-token dock churn", () => {
   });
 
   it("does not re-render the composer when the context usage leaf updates", async () => {
-    useSettingsStore.getState().setPinContextUsageBreakdown(true);
+    useLayoutStore
+      .getState()
+      .setRegionValues("contextUsage", { pinBreakdown: true });
     render(<ChatLowerInteractionSurfaces {...props(TURN_IDLE, 0)} />);
     expect(composerRenderCount).toBe(1);
     expect(queryCompactContextTrigger()).toBeNull();

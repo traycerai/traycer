@@ -14,10 +14,6 @@
  * only drops the database once the SHARED map accounts for every entry,
  * including the ones window B converted (G4).
  */
-// The specific `keys` submodule, not the `@/lib/persist` barrel: the barrel
-// re-exports `lib/persist/wipe.ts`, which imports `STASH_DB_NAME` from this
-// module to delete the stash database by exact name - importing the barrel
-// here would close that cycle.
 import { PERSIST_PREFIX, persistKey } from "@/lib/persist/keys";
 
 import type { JsonContent } from "@traycer/protocol/common/registry";

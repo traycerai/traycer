@@ -42,9 +42,16 @@ const SRC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
  * one level further out: both paint `bg-card/40` themselves, so a panel
  * that renders one is standing on a card without ever spelling it. Nearly
  * every settings surface in the app is one of those two.
+ *
+ * `<HoverCard` rather than `HoverCardContent`: G8 rebuilt `ui/hover-card.tsx`
+ * on Floating UI as a single props-only `HoverCard` component (`trigger` +
+ * `content`, no separate `HoverCardContent`), so the old marker now matches
+ * nothing and every hover-card call site would silently drop out of scope.
+ * `\b` keeps `<HoverCardGroup>` out: a group paints nothing, and matching it
+ * pulled a whole list's imports into scope.
  */
 const RAISED_SURFACE =
-  /DialogContent|AlertDialogContent|PopoverContent|HoverCardContent|DropdownMenuContent|SheetContent|ContextMenuContent|SelectContent|SettingsPanelShell|SettingsGroup|<Card|bg-popover|bg-card/;
+  /DialogContent|AlertDialogContent|PopoverContent|<HoverCard\b|DropdownMenuContent|SheetContent|ContextMenuContent|SelectContent|SettingsPanelShell|SettingsGroup|<Card|bg-popover|bg-card/;
 
 /**
  * `bg-muted-foreground` is a TEXT color and is unaffected by the collapse.

@@ -21,9 +21,9 @@ import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
 import {
-  DEFAULT_STATUS_BAR_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
+} from "@/stores/layout/layout-store";
 
 interface MockState {
   cluster: StatusBarRateLimitClusterModel;
@@ -81,6 +81,7 @@ function segmentFixture(
     providerId,
     profileId: null,
     account: null,
+    hidden: false,
     state: "live",
     reason: null,
     windows: tightest === null ? [] : [tightest],
@@ -124,6 +125,7 @@ function renderCluster(props: {
             hostId="host-a"
             providers={props.providers ?? []}
             profileSelection={PROFILE_SELECTION}
+            editing={false}
           />
         </Popover>
       </TooltipProvider>
@@ -132,7 +134,7 @@ function renderCluster(props: {
 }
 
 beforeEach(() => {
-  useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
 
 afterEach(() => {
@@ -148,7 +150,7 @@ afterEach(() => {
     httpRefetches: [],
     httpFetching: false,
   };
-  useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
 
 describe("<StatusBarRateLimitCluster />", () => {
@@ -307,15 +309,9 @@ describe("<StatusBarRateLimitCluster />", () => {
     });
 
     it("switches to remaining phrasing under percentMode: remaining", () => {
-      useLayoutStore.setState({
-        statusBar: {
-          ...DEFAULT_STATUS_BAR_LAYOUT,
-          rateLimits: {
-            ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
-            percentMode: "remaining",
-          },
-        },
-      });
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { amount: "remaining" });
       const codexUsed = 34;
       mocks.cluster = {
         kind: "segments",
@@ -380,6 +376,7 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
               hostId={hostId}
               providers={[]}
               profileSelection={PROFILE_SELECTION}
+              editing={false}
             />
           </Popover>
         </TooltipProvider>
@@ -513,16 +510,10 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
   });
 
   it("drops the mode word, the bar and the countdown from every reading when the switches are off", () => {
-    useLayoutStore.setState({
-      statusBar: {
-        ...DEFAULT_STATUS_BAR_LAYOUT,
-        rateLimits: {
-          ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
-          showModeWord: false,
-          showBar: false,
-          showTimer: false,
-        },
-      },
+    useLayoutStore.getState().setRegionValues("usageLimits", {
+      word: false,
+      bar: false,
+      reset: false,
     });
     vi.useFakeTimers();
     sixAccountCluster(Date.now() + 4 * 60 * MINUTE_MS + 15 * MINUTE_MS + 5_000);
@@ -767,6 +758,7 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
               hostId="host-a"
               providers={[]}
               profileSelection={PROFILE_SELECTION}
+              editing={false}
             />
           </Popover>
         </TooltipProvider>

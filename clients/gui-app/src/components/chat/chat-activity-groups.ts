@@ -147,6 +147,15 @@ export type ActivityTimelineTurnState = "active" | "complete";
 export interface ActivityTimelineOptions {
   readonly turnState: ActivityTimelineTurnState;
   readonly promotedToolBlockIds: ReadonlySet<string>;
+  /**
+   * Layout > Chat > Thinking is Hidden: reasoning is left out of each run
+   * once it is grouped, so a run of nothing but reasoning draws no row and a
+   * mixed run's summary drops its "thought for" clause. The run keeps the id
+   * its first member gave it, so toggling the setting never re-keys a group
+   * and the reader's open/closed choice survives it (L-176). Every caller that must group as
+   * the renderer does (Find, block reveal) passes the same answer.
+   */
+  readonly hideReasoning: boolean;
 }
 
 interface TimelineCacheEntry {
@@ -154,12 +163,17 @@ interface TimelineCacheEntry {
   active: ReadonlyArray<ChatActivityTimelineItem> | null;
 }
 
-// Timeline is purely a function of `segments`. The base walk is turn-state
-// independent — only the trailing-group "active" marker differs — so we cache
-// the base once per `segments` identity and derive the active variant on
-// demand. This avoids re-walking the same segments tree when the same identity
-// is queried for both turn states across renders.
+// Timeline is purely a function of `segments` and whether reasoning is hidden.
+// The base walk is turn-state independent - only the trailing-group "active"
+// marker differs - so we cache the base once per `segments` identity, one cache
+// per reasoning setting, and derive the active variant on demand. This avoids
+// re-walking the same segments tree when the same identity is queried for both
+// turn states across renders.
 const timelineCache = new WeakMap<
+  ReadonlyArray<MessageSegment>,
+  TimelineCacheEntry
+>();
+const hiddenReasoningTimelineCache = new WeakMap<
   ReadonlyArray<MessageSegment>,
   TimelineCacheEntry
 >();
@@ -231,25 +245,29 @@ export function buildChatActivityTimeline(
   segments: ReadonlyArray<MessageSegment>,
   options: ActivityTimelineOptions,
 ): ReadonlyArray<ChatActivityTimelineItem> {
+  const { hideReasoning } = options;
   if (options.promotedToolBlockIds.size > 0) {
     const base = buildChatActivityTimelineImpl(
       segments,
       options.promotedToolBlockIds,
+      hideReasoning,
     );
     return options.turnState === "complete"
       ? base
       : markTrailingActivityGroupActive(base);
   }
-  let entry = timelineCache.get(segments);
+  const cache = hideReasoning ? hiddenReasoningTimelineCache : timelineCache;
+  let entry = cache.get(segments);
   if (entry === undefined) {
     entry = {
       base: buildChatActivityTimelineImpl(
         segments,
         EMPTY_PROMOTED_TOOL_BLOCK_IDS,
+        hideReasoning,
       ),
       active: null,
     };
-    timelineCache.set(segments, entry);
+    cache.set(segments, entry);
   }
   if (options.turnState === "complete") return entry.base;
   if (entry.active === null) {
@@ -261,6 +279,7 @@ export function buildChatActivityTimeline(
 function buildChatActivityTimelineImpl(
   segments: ReadonlyArray<MessageSegment>,
   promotedToolBlockIds: ReadonlySet<string>,
+  hideReasoning: boolean,
 ): ReadonlyArray<ChatActivityTimelineItem> {
   const matchedQuestionToolIds = buildMatchedQuestionToolIds(segments);
   const hasQuestionInterview = segments.some(
@@ -292,8 +311,19 @@ function buildChatActivityTimelineImpl(
   // mounted across the shrink does. See `everHeaded` in `ActivityGroupSegment`.
   const flushRun = (): void => {
     if (run.length === 0) return;
-    const group = activityGroupFromRun(run);
-    out.push({ kind: "activity_group", id: group.id, group });
+    // Reasoning never splits a run, so leaving it out here rather than before
+    // grouping draws the same runs, under the id the whole run's first member
+    // gives it whether or not that member is reasoning.
+    const members = hideReasoning
+      ? run.filter((segment) => segment.kind !== "reasoning")
+      : run;
+    if (members.length > 0) {
+      const group = activityGroupFromRun(
+        deriveActivityGroupRenderId(run[0].id),
+        members,
+      );
+      out.push({ kind: "activity_group", id: group.id, group });
+    }
     run = [];
   };
 
@@ -430,6 +460,18 @@ export function hidesSoleReasoningHeader(
   segments: ReadonlyArray<ActivityGroupDetailSegment>,
 ): boolean {
   return segments.length === 1 && segments[0].kind === "reasoning";
+}
+
+/**
+ * Whether a run is nothing but reasoning, which makes it Thinking's row rather
+ * than Tool activity's: its header reads "Thought for Xs" and opening it shows
+ * the trace, so the Thinking setting decides how it opens and what a
+ * right-click on it offers.
+ */
+export function isReasoningOnlyRun(
+  segments: ReadonlyArray<ActivityGroupDetailSegment>,
+): boolean {
+  return segments.every((segment) => segment.kind === "reasoning");
 }
 
 /**
@@ -598,13 +640,13 @@ function toolActivityLabel(segment: ToolSegment): string {
 }
 
 function activityGroupFromRun(
+  id: string,
   segments: ReadonlyArray<ActivityGroupDetailSegment>,
 ): ActivityGroupModel {
-  const first = segments[0];
   const summary = activityGroupSummary(segments);
   const isStreaming = segments.some(isStreamingActivitySegment);
   return {
-    id: deriveActivityGroupRenderId(first.id),
+    id,
     segments,
     isActive: isStreaming,
     isStreaming,

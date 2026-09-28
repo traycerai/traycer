@@ -1,0 +1,103 @@
+---
+title: "Settings overview"
+description: "Open Settings as a dialog or a tab, search it, and find every section in the Guide, Application, Account and Host groups, including how the host picker scopes the Host group."
+---
+
+Settings is where you change how Traycer behaves: for this app, for your account, and for each machine that runs a host. This page explains how Settings is organized and links to a page for every section.
+
+## Open Settings
+
+Press <kbd>Cmd</kbd> + <kbd>,</kbd> / <kbd>Ctrl</kbd> + <kbd>,</kbd>, choose **Settings...** from the app menu, or run **Open settings** from the command palette.
+
+- **As a dialog.** Settings opens over the app. Press <kbd>Esc</kbd> or click the close button to return to your work.
+- **As a tab.** Click the arrow button in the dialog's title bar (**Open Settings as a tab**) to move Settings into a tab in the header strip, where it stays open beside your Tasks. Close it like any other tab.
+- **In a narrow window.** When the window is narrower than 768 px, Settings opens as a full page instead: a list of sections first, then the section you tap, with a back button to return to the list.
+
+## Search Settings
+
+The **Search settings** box sits at the top of the Settings sidebar.
+
+- While you type, the results replace the section list. Each result names the section it belongs to.
+- Pick a result to open its section. Settings scrolls to the matching row and highlights it.
+- Use the arrow keys to move through the results.
+- The first <kbd>Esc</kbd> clears the search. The next one closes Settings.
+
+## Groups And Sections
+
+The sidebar has four groups. The group tells you whose setting it is:
+
+| Group | Whose settings | Applies to |
+| --- | --- | --- |
+| **Guide** | Your setup checklist. | This app. |
+| **Application** | The app itself. | This app on this device, whichever host you are looking at. |
+| **Account** | Your Traycer account. | Every device you sign in on. |
+| **Host** | One machine running a Traycer host. | The host chosen in the [host picker](#host-picker). |
+
+Every section, in sidebar order:
+
+| Group | Section | What it covers |
+| --- | --- | --- |
+| Guide | [Getting started](/settings/getting-started) | The initial tour and the setup guides. |
+| Application | [General](/settings/general) | Composer behavior, sleep while agents run, the branch prefix, experimental features, and resetting local app state. |
+| Application | [Appearance](/settings/appearance) | Themes, the start page, zoom, fonts, motion, the terminal, and icon colors. |
+| Application | [Browser](/settings/browser) | The in-app browser: search engine, agent access, saved website sessions, and where browser tabs open. |
+| Application | [Opening behavior](/settings/opening-behavior) | Where links and new tiles open. |
+| Application | [Sounds](/settings/sounds) | The chime for each kind of notification, and OS and phone notifications. |
+| Application | [Keybindings](/settings/keybindings) | Every keyboard shortcut, and how to rebind it. |
+| Application | [Diagnostics](/settings/diagnostics) | The app's own log level, memory capture, and recent logs. |
+| Application | [Layout](/settings/layout) | Presets, the status bar, tabs, the composer, chat, and the sidebar. |
+| Account | [Sessions](/settings/account#sessions) | Where your account is signed in. |
+| Account | [Link mobile app](/settings/account#link-mobile-app) | Signing the mobile app in to your account. |
+| Account | [Usage](/settings/account#usage) | Token and cost usage across your agents. |
+| Host | [Overview](/settings/host) | The host's status, updates, ports, data, and installation. |
+| Host | [Providers](/settings/providers) | Coding agents, their accounts, models, and extensions. |
+| Host | [Worktrees](/settings/worktrees) | Traycer-created worktrees on the host, and automatic cleanup. |
+| Host | [Notifications](/settings/notifications) | Which events the host turns into notifications, and notification hooks. |
+| Host | [Permissions](/settings/permissions) | The default permission mode, the Auto mode judge, rules, and recent decisions. |
+| Host | [Agent selection](/settings/agents) | How Traycer picks a coding agent, model, and reasoning effort for child agents. |
+| Host | [Model routing](/settings/model-routing) | What Traycer tries when a usage limit or another provider problem interrupts a chat. |
+| Host | [Shell](/settings/shell) | The shell and environment the host uses for terminals and providers. |
+| Host | [Diagnostics](/settings/host-diagnostics) | The host's and CLI's log levels, and the host's recent logs. |
+
+There are two **Diagnostics** sections. The one under **Application** is about this app; the one under **Host** is about the selected host.
+
+## Host Picker
+
+One picker heads the **Host** group. It chooses which host every section below it shows and changes, so you can review or change settings on any of your hosts from one window.
+
+- By default the picker shows the [active host](/concepts/hosts).
+- Picking another host only changes what Settings shows. It never changes the window's active host. While you look at another host, a note under the picker reads "Viewing — the active host is …".
+- **Add host…** at the end of the list adds a new host.
+- **Permissions › Modes** is the one exception. The mode new conversations start in doesn't depend on the host you pick. The other Permissions tabs do.
+
+Application and Account sections don't change with the picker.
+
+## Section Numbers
+
+While Settings is open, hold <kbd>Opt</kbd> / <kbd>Alt</kbd> and press a digit to jump to a section. Holding the key shows each section's number in the sidebar.
+
+Only the first ten sidebar entries have a number:
+
+| Key | Section |
+| --- | --- |
+| 1 | Getting started |
+| 2 | General |
+| 3 | Appearance |
+| 4 | Browser |
+| 5 | Opening behavior |
+| 6 | Sounds |
+| 7 | Keybindings |
+| 8 | Diagnostics (Application) |
+| 9 | Layout |
+| 0 | Sessions |
+
+**Link mobile app**, **Usage** and every Host section have no number. [Keybindings](/settings/keybindings) lists this shortcut as **Switch settings section by number**.
+
+## In The Mobile App
+
+Settings in the [mobile app](/account/mobile-app) has the same groups, with a few differences:
+
+- There is no **Keybindings** or **Link mobile app** section.
+- **Account** adds **Delete account**, which permanently deletes your Traycer account and its data.
+- Rows that need the desktop app are hidden, such as **Voice input** and **Prevent sleep while running** in General and **Zoom** in Appearance.
+- Settings opens as a full page: a list of sections, then the section you tap.

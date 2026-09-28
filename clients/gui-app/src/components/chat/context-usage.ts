@@ -1,3 +1,7 @@
+import {
+  CONTEXT_USAGE_ROW_KEYS,
+  type ContextUsageRowKey,
+} from "@/lib/context-usage-rows";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 
 /**
@@ -55,20 +59,10 @@ export interface ContextUsageRow {
 }
 
 /**
- * Every row a breakdown can show, in the order the surfaces draw them. This
- * is the one list the pinned strip's field picker offers, so a row added to
- * `buildContextUsageRows` has to be added here to be selectable at all.
+ * What each row is called. The keys themselves are the persisted vocabulary and
+ * live in `lib/context-usage-rows.ts`, so a row added to
+ * `buildContextUsageRows` has to be added there to be selectable at all.
  */
-export const CONTEXT_USAGE_ROW_KEYS = [
-  "used",
-  "fresh",
-  "cacheRead",
-  "cacheWrite",
-  "output",
-] as const;
-
-export type ContextUsageRowKey = (typeof CONTEXT_USAGE_ROW_KEYS)[number];
-
 export const CONTEXT_USAGE_ROW_LABELS: Readonly<
   Record<ContextUsageRowKey, string>
 > = {

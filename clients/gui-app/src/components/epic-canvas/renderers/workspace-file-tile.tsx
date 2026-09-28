@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { CopyPathButton } from "@/components/copy-path-button";
-import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
+import { HoverCard } from "@/components/ui/hover-card";
 import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 import { useWorkspaceReadFile } from "@/hooks/workspace/use-read-file-query";
 import { useFileEditSession } from "@/hooks/workspace/use-file-edit-session";
@@ -1006,7 +1006,6 @@ function WorkspaceFilePath(props: {
   readonly filePath: string;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);
-  const [hoverOpen, setHoverOpen] = useState(false);
   const absolutePath = resolveAbsolutePath(props.workspacePath, props.filePath);
   const details = (
     <div className="flex max-w-[min(28rem,90vw)] items-center gap-2 px-3 py-1.5 text-ui-xs">
@@ -1021,36 +1020,34 @@ function WorkspaceFilePath(props: {
   );
   return (
     <div className="flex h-full min-w-0 flex-1 items-center">
-      <Popover
-        open={popoverOpen}
-        onOpenChange={(open) => {
-          setPopoverOpen(open);
-          if (open) setHoverOpen(false);
-        }}
-      >
-        <HoverPreviewCard
-          appearance="tooltip"
+      <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
+        <HoverCard
+          trigger={
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="flex h-full max-w-full min-w-0 items-center text-left text-ui-xs text-muted-foreground"
+                aria-label="Show full file path"
+              >
+                <StartTruncatedText className="block min-w-0">
+                  {props.filePath}
+                </StartTruncatedText>
+              </button>
+            </PopoverTrigger>
+          }
           content={details}
+          appearance="tooltip"
+          // A chip to look at, but it carries the Copy button.
+          semantics={{ role: "dialog", label: "File path" }}
           side="bottom"
           sideOffset={4}
           align="start"
-          open={!popoverOpen && hoverOpen}
-          onOpenChange={(open) => {
-            if (!popoverOpen) setHoverOpen(open);
-          }}
-        >
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className="flex h-full max-w-full min-w-0 items-center text-left text-ui-xs text-muted-foreground"
-              aria-label="Show full file path"
-            >
-              <StartTruncatedText className="block min-w-0">
-                {props.filePath}
-              </StartTruncatedText>
-            </button>
-          </PopoverTrigger>
-        </HoverPreviewCard>
+          enabled={!popoverOpen}
+          open={null}
+          onOpenChange={null}
+          testId={null}
+          className={null}
+        />
         <PopoverContent
           appearance="tooltip"
           layout="bare"

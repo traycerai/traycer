@@ -12,6 +12,7 @@ import {
 } from "@/lib/chat/file-edit-reason-copy";
 import { documentAssetKindOf } from "@/lib/assets/image-extension-allowlist";
 import { buildSnapshotUnifiedPatch } from "@/lib/diff/snapshot-diff-patch";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
  * Inline merged diff rendered straight from a pair of snapshot hashes, reusing
@@ -45,6 +46,9 @@ export function SnapshotHashInlineDiff(props: {
     enabled: documentKind === null,
   });
 
+  const diffPreferences = useSettingsStore(
+    (state) => state.diffViewerPreferences,
+  );
   const patch = useMemo(() => {
     if (query.data === undefined || query.data.reason !== "snapshot") {
       return null;
@@ -99,9 +103,9 @@ export function SnapshotHashInlineDiff(props: {
           cacheScope={props.cacheScope}
           mode="unified"
           wordWrap={false}
-          backgrounds
-          lineNumbers={false}
-          indicatorStyle="bars"
+          backgrounds={diffPreferences.backgrounds}
+          lineNumbers={diffPreferences.lineNumbers}
+          indicatorStyle={diffPreferences.indicatorStyle}
           fileHeaders={false}
           isEmptyFile={false}
         />

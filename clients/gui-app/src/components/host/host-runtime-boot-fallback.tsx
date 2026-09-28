@@ -61,7 +61,7 @@ export function HostRuntimeBootFallback(props: {
       data-testid="host-runtime-boot-fallback"
     >
       <BootDesktopMenus onOpenSettings={props.onOpenSettings} />
-      <DesktopMenuHeader />
+      <DesktopMenuHeader variant="boot" />
       <div className="flex flex-1 items-center justify-center p-6">
         <HostBootSurface
           testId={null}

@@ -1,12 +1,14 @@
-import { useLayoutEffect, useRef, type CSSProperties, type Ref } from "react";
-import { FoldVertical, Pin, PinOff } from "lucide-react";
 import {
-  animate,
-  useMotionValue,
-  useReducedMotion,
-  useTransform,
-} from "motion/react";
-import * as m from "motion/react-m";
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  type CSSProperties,
+  type Ref,
+} from "react";
+import { LayoutRegionContextMenu } from "@/components/layout-editor/region-quick-verbs";
+import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
+import { useComposerTileId } from "@/components/home/composer/composer-tile-hooks";
+import { FoldVertical, Pin, PinOff } from "lucide-react";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,7 +16,9 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { RollingNumber } from "@/components/ui/rolling-number";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
 import {
   buildContextUsageRows,
   computeEffectiveContextUsage,
@@ -25,12 +29,14 @@ import {
   type ContextUsageRow,
   type EffectiveContextUsage,
 } from "@/components/chat/context-usage";
-import { cn } from "@/lib/utils";
-import { useLayoutStore } from "@/stores/settings/layout-store";
 import {
-  useSettingsStore,
-  type ContextIndicatorStyle,
-} from "@/stores/settings/settings-store";
+  useArrangementValue,
+  useRegionShown,
+  useRegionValue,
+} from "@/lib/layout-overrides";
+import type { ContextStyle } from "@/lib/layout/layout-values";
+import { cn } from "@/lib/utils";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 
 interface ContextUsageChipProps {
   /**
@@ -56,25 +62,89 @@ type ContextUsageMeterStyle = CSSProperties & {
   readonly "--context-usage-percent": string;
 };
 
-const PINNED_NUMBER_TRANSITION = {
-  duration: 0.16,
-  ease: "easeOut",
-} as const;
+/**
+ * The arc's travel when the reading moves. 240ms is the longest value in the
+ * app's timing family that is still a UI response rather than a decay cue, and
+ * a sweep needs the extra frames a digit roll does not: the eye follows a ring
+ * around its whole circumference.
+ *
+ * Gated rather than written with `motion-reduce:`, because the class-level
+ * variant sees only the OS query and this app also has its own "Panel
+ * animations" switch - the exact gap `AnimatedPinnedInteger` shipped with.
+ */
+const RING_ARC_TRANSITION_CLASS_NAME =
+  "transition-[stroke-dashoffset] duration-240 ease-spring";
 
-export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
+/**
+ * Whether this chip puts anything on screen.
+ *
+ * ONE predicate, because two callers ask it: {@link ContextUsageChipView}'s own
+ * early return, and {@link ContextUsageChip}'s guard on whether to mount a
+ * context-menu root at all. A copy of the rule in the parent is a copy that
+ * stops agreeing the day the view gains a third reason to draw nothing - and
+ * the parent would then wrap a `display: contents` trigger around an empty
+ * subtree, which answers a right-click meant for whatever is behind it.
+ */
+function contextUsageChipDraws(
+  usage: TokenUsage | null,
+  editing: boolean,
+): boolean {
+  return editing || computeEffectiveContextUsage(usage) !== null;
+}
+
+export function ContextUsageChip(props: ContextUsageChipProps) {
+  const tileId = useComposerTileId();
+  const { ref, editing, ghost } = useLayoutRegion({
+    regionId: "contextUsage",
+    instanceId: tileId,
+  });
+  // Layout ▸ Chat ▸ Context usage can hide the chip (G6: the switch had no
+  // reader). A hidden chip still materialises while the editor points at it
+  // (L-14), the same rule every hideable control follows.
+  const shown = useRegionShown("contextUsage") || ghost;
+  if (!shown) return null;
+  const chip = (
+    <ContextUsageChipView {...props} ref={ref} contextEditing={editing} />
+  );
+  // L-144: every pointable region offers its verbs on right-click. The one
+  // case that gets no menu root is the one with nothing to point AT - the
+  // chip hides itself outside an editing session when no turn has carried a
+  // usable rollup, and a `display: contents` trigger around nothing would
+  // still answer a press landing on whatever is behind it.
+  if (!contextUsageChipDraws(props.usage, editing)) return chip;
+  return (
+    <LayoutRegionContextMenu regionId="contextUsage">
+      {chip}
+    </LayoutRegionContextMenu>
+  );
+}
+
+export function ContextUsageChipView({
+  usage,
+  onCompact,
+  ref: contextHotspotRef,
+  contextEditing,
+}: ContextUsageChipProps & {
+  ref: ((node: HTMLElement | null) => void) | null;
+  contextEditing: boolean;
+}) {
   const preserveFocusOnOpenRef = useRef(false);
   const pinBreakdownActionRef = useRef<HTMLButtonElement>(null);
   const compactTriggerRef = useRef<HTMLButtonElement>(null);
   const pinnedUnpinActionRef = useRef<HTMLButtonElement>(null);
   const focusPinnedActionAfterPinRef = useRef(false);
   const focusCompactTriggerAfterUnpinRef = useRef(false);
-  const pinContextUsageBreakdown = useSettingsStore(
-    (s) => s.pinContextUsageBreakdown,
+  const pinContextUsageBreakdown = useRegionValue(
+    "contextUsage",
+    "pinBreakdown",
   );
-  const setPinContextUsageBreakdown = useSettingsStore(
-    (s) => s.setPinContextUsageBreakdown,
-  );
-  const indicatorStyle = useSettingsStore((s) => s.contextIndicatorStyle);
+  // The SETTER still writes the real store: an override changes what this
+  // subtree draws, never where a real user gesture writes.
+  const setPinContextUsageBreakdown = useCallback((pinBreakdown: boolean) => {
+    useLayoutStore.getState().setRegionValues("contextUsage", { pinBreakdown });
+  }, []);
+  const indicatorStyle = useRegionValue("contextUsage", "style");
+  const effective = computeEffectiveContextUsage(usage);
 
   useLayoutEffect(() => {
     if (pinContextUsageBreakdown && focusPinnedActionAfterPinRef.current) {
@@ -88,8 +158,6 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
     }
   }, [pinContextUsageBreakdown]);
 
-  if (usage === null) return null;
-  const effective = computeEffectiveContextUsage(usage);
   // The chip ONLY renders when we can compute a reliable percent from the
   // harness's real SDK data (`contextTokens` + `contextWindow` both
   // sourced from the SDK, no hardcoded fallbacks). For harnesses where
@@ -97,7 +165,22 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
   // public context-window surface - the chip stays hidden. Raw token
   // counts on their own would mislead without a denominator, so we don't
   // show them.
-  if (effective === null) return null;
+  //
+  // `computeEffectiveContextUsage` already answers null for a null `usage`, so
+  // the second half of this test decides nothing at runtime: it is what tells
+  // the compiler that the rows below have a usage to read.
+  if (effective === null || usage === null) {
+    if (!contextUsageChipDraws(usage, contextEditing)) return null;
+    return (
+      <span
+        ref={contextHotspotRef}
+        data-testid="context-usage-chip-ghost"
+        className="inline-flex h-5 w-12 shrink-0 items-center justify-center rounded-sm border border-dashed border-border/60 text-ui-xs text-muted-foreground/50"
+      >
+        -
+      </span>
+    );
+  }
   const percent = effective.percentLeft;
   const meterStyle = contextUsageMeterStyle(percent);
   const rows = buildContextUsageRows(usage, effective);
@@ -110,13 +193,20 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
 
   if (pinContextUsageBreakdown) {
     return (
-      <ContextUsagePinnedStrip
-        rows={rows}
-        effective={effective}
-        onUnpin={unpinFromPinnedStrip}
-        onCompact={onCompact}
-        actionRef={pinnedUnpinActionRef}
-      />
+      <span
+        ref={contextHotspotRef}
+        className={cn(
+          contextEditing ? "col-span-full block min-w-0" : "contents",
+        )}
+      >
+        <ContextUsagePinnedStrip
+          rows={rows}
+          effective={effective}
+          onUnpin={unpinFromPinnedStrip}
+          onCompact={onCompact}
+          actionRef={pinnedUnpinActionRef}
+        />
+      </span>
     );
   }
 
@@ -156,7 +246,14 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
     >
       {indicatorStyle === "text" ? (
         <>
-          <span className="@max-[28rem]:sr-only">{percent}% context left</span>
+          <span className="@max-[28rem]:sr-only">
+            <RollingNumber
+              value={percent}
+              className={undefined}
+              testId="context-usage-chip-percent-value"
+            />
+            % context left
+          </span>
           <span
             aria-hidden
             data-testid="context-usage-meter"
@@ -176,7 +273,10 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
   );
 
   return (
-    <div className="flex min-w-0 items-center gap-0.5 justify-self-end">
+    <div
+      ref={contextHotspotRef}
+      className="flex min-w-0 items-center gap-0.5 justify-self-end"
+    >
       {onCompact === null ? null : <CompactAction onCompact={onCompact} />}
       <Popover>
         <PopoverTrigger asChild>
@@ -226,7 +326,7 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
 
 interface ContextUsageRingProps {
   readonly percent: number;
-  readonly style: Exclude<ContextIndicatorStyle, "text">;
+  readonly style: Exclude<ContextStyle, "text">;
 }
 
 // Same construction as `MicProgressRing` (`home/toolbar/composer-mic-button`)
@@ -253,6 +353,12 @@ const RING_MINIMUM_FILL = 0.05;
  */
 function ContextUsageRing({ percent, style }: ContextUsageRingProps) {
   const filled = Math.max(RING_MINIMUM_FILL, percent / 100);
+  const motionEnabled = useMotionEnabled();
+  // A CSS transition never runs against a first computed value, so the arc is
+  // drawn where it belongs on the first paint and only sweeps on a change.
+  const arcClassName = motionEnabled
+    ? RING_ARC_TRANSITION_CLASS_NAME
+    : undefined;
   return (
     <span
       data-testid="context-usage-ring"
@@ -278,6 +384,7 @@ function ContextUsageRing({ percent, style }: ContextUsageRingProps) {
         <circle
           data-testid="context-usage-ring-arc"
           data-percent-left={percent}
+          className={arcClassName}
           cx="10"
           cy="10"
           r={RING_RADIUS}
@@ -300,7 +407,11 @@ function ContextUsageRing({ percent, style }: ContextUsageRingProps) {
             percent === 100 ? "text-[0.5rem]" : "text-[0.625rem]",
           )}
         >
-          {percent}
+          <RollingNumber
+            value={percent}
+            className={undefined}
+            testId="context-usage-ring-percent-value"
+          />
         </span>
       ) : null}
     </span>
@@ -326,7 +437,7 @@ interface CompactActionProps {
  * the same compaction.
  */
 function CompactAction({ onCompact }: CompactActionProps) {
-  const compactButton = useLayoutStore((s) => s.composer.compactButton);
+  const compactButton = useRegionValue("contextUsage", "compactButton");
   if (compactButton === "hidden") return null;
   return (
     <TooltipWrapper
@@ -369,8 +480,16 @@ function ContextUsageBreakdown({
     <div className="flex flex-col gap-2 text-ui-xs">
       <div className="flex items-baseline justify-between gap-3 border-b border-border/40 pb-1.5">
         <span className="font-medium text-foreground">Context window</span>
-        <span className="font-mono tabular-nums">
-          {effective.percentLeft}% left
+        <span
+          data-testid="context-usage-breakdown-percent"
+          className="font-mono tabular-nums"
+        >
+          <RollingNumber
+            value={effective.percentLeft}
+            className={undefined}
+            testId="context-usage-breakdown-percent-value"
+          />
+          % left
         </span>
       </div>
       <div className="flex flex-col gap-1.5">
@@ -417,11 +536,11 @@ function ContextUsagePinnedStrip({
   onCompact,
   actionRef,
 }: ContextUsagePinnedStripProps) {
-  const fields = useSettingsStore((s) => s.pinnedContextBreakdownFields);
-  // `rows` is already in canonical order and only ever carries rows the data
-  // supports, so filtering it keeps both properties; the picker decides which
-  // of those the strip prints, not what the data can say.
-  const visibleRows = rows.filter((row) => fields.includes(row.key));
+  const fields = useRegionValue("contextUsage", "pinnedFields");
+  const order = useArrangementValue("pinnedContextFieldOrder");
+  const visibleRows = order.flatMap((key) =>
+    rows.filter((row) => row.key === key && fields.includes(key)),
+  );
   const usedSummary = `${formatContextWindowTokens(effective.used)} / ${formatContextWindowTokens(effective.window)} used`;
   return (
     <div
@@ -438,10 +557,10 @@ function ContextUsagePinnedStrip({
             )}
           >
             Context{" "}
-            <AnimatedPinnedInteger
+            <RollingNumber
               value={effective.percentLeft}
+              className="inline-block min-w-[3ch] text-right"
               testId="context-usage-pinned-percent-value"
-              className="inline-block min-w-[3ch] text-right tabular-nums"
             />
             %<span className="@max-[34rem]:sr-only"> left</span>
           </span>
@@ -510,48 +629,6 @@ function PinnedUsageRow({ row }: UsageRowProps) {
         {formatContextUsageRowValue(row)}
       </span>
     </span>
-  );
-}
-
-interface AnimatedPinnedIntegerProps {
-  readonly value: number;
-  readonly testId: string;
-  readonly className: string;
-}
-
-function AnimatedPinnedInteger({
-  value,
-  testId,
-  className,
-}: AnimatedPinnedIntegerProps) {
-  const shouldReduceMotion = useReducedMotion() === true;
-  const animatedValue = useMotionValue(value);
-  const roundedValue = useTransform(animatedValue, (latest) =>
-    Math.round(latest).toString(),
-  );
-
-  useLayoutEffect(() => {
-    if (shouldReduceMotion) {
-      animatedValue.set(value);
-      return;
-    }
-
-    const controls = animate(animatedValue, value, PINNED_NUMBER_TRANSITION);
-    return () => controls.stop();
-  }, [animatedValue, shouldReduceMotion, value]);
-
-  if (shouldReduceMotion) {
-    return (
-      <span data-testid={testId} className={className}>
-        {value}
-      </span>
-    );
-  }
-
-  return (
-    <m.span data-testid={testId} className={className}>
-      {roundedValue}
-    </m.span>
   );
 }
 

@@ -17,6 +17,7 @@ export const MOD_ENTER_LABEL = `${modLabel()}+Enter`;
 
 export const GENERAL = defineSettingsSection("general", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "General",
     description: "App behavior, agent activity, and local data controls.",
     keywords: ["preferences", "options", "misc"],

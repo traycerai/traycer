@@ -1,10 +1,15 @@
 /**
  * Geometry model for header-strip tab dragging.
  *
+ * The model is one-dimensional: every position and extent is measured along
+ * the strip's main axis (x for a horizontal strip, y for a vertical one). The
+ * caller maps the viewport onto that axis (see `strip-axis.ts`); nothing here
+ * knows which axis it is.
+ *
  * Chrome does not hit-test droppables to decide a reorder, and neither does
- * this: the insertion index is a pure function of the pointer's x against tab
- * widths measured once at drag start. That is what makes the result stable.
- * Resolving against live droppables re-enters the loop it is driving - the
+ * this: the insertion index is a pure function of the pointer's position
+ * against item extents measured once at drag start. That is what makes the
+ * result stable. Resolving against live droppables re-enters the loop it is driving - the
  * provisional order moves a tab under the pointer, which changes the hit, which
  * changes the provisional order - and the strip oscillates.
  *
@@ -13,9 +18,9 @@
  *
  * - **Monotonicity.** A monotone pointer sweep yields a monotone index.
  * - **Hysteresis.** After a swap the neighbour's centre has moved, so reversing
- *   requires re-crossing `sourceWidth` - see `swapHysteresisPx`. Note this is
- *   the SOURCE's width, not the mean of the pair: the two coincide only for
- *   equal-width items, and a split group is one strip item of its own width.
+ *   requires re-crossing `sourceExtent` - see `swapHysteresisPx`. Note this is
+ *   the SOURCE's extent, not the mean of the pair: the two coincide only for
+ *   equal-extent items, and a split group is one strip item of its own extent.
  *
  * Merge (pair-into-split) and reorder divide a hovered neighbour at its centre.
  * The approaching half is the merge target; crossing the midpoint starts the
@@ -25,10 +30,10 @@
  * no timer to keep alive.
  *
  * Both zones are resolved against the DRAGGED TAB'S CENTRE
- * (`pointer - grabOffset + width/2`), never against the raw pointer - the same
+ * (`pointer - grabOffset + extent/2`), never against the raw pointer - the same
  * reference Chrome uses for its swap rule. The user watches the tab in their
  * hand, not the invisible pointer, and the two can disagree by up to a full
- * tab width: grab a tab by its trailing edge and drag toward its leading side,
+ * tab extent: grab a tab by its trailing edge and drag toward its leading side,
  * and the tab visibly sits ON TOP of the neighbour while the pointer is still
  * back over the source slot. Pointer-resolved zones make that gesture a dead
  * zone - the tab overlaps the target, nothing highlights, nothing swaps -
@@ -39,14 +44,16 @@
 
 export interface StripSlot {
   readonly itemId: string;
-  readonly width: number;
-  /** Left edge in the strip's CONTENT box, so scrolling cannot invalidate it. */
-  readonly contentLeft: number;
+  readonly extent: number;
   /**
-   * Distance from this slot's left edge to the next slot's, measured rather
-   * than assumed. Prefix-summing raw widths would silently bias every centre
+   * Start edge in the strip's CONTENT box, so scrolling cannot invalidate it.
+   */
+  readonly contentStart: number;
+  /**
+   * Distance from this slot's start edge to the next slot's, measured rather
+   * than assumed. Prefix-summing raw extents would silently bias every centre
    * by an accumulating amount if any wrapper carries margin, padding or a
-   * border - worst at the right end of the strip, and invisible to a unit test
+   * border - worst at the end of the strip, and invisible to a unit test
    * that generates its own contiguous geometry.
    */
   readonly advance: number;
@@ -60,23 +67,29 @@ export interface StripSlot {
 export interface StripDragGeometry {
   readonly slots: ReadonlyArray<StripSlot>;
   readonly sourceIndex: number;
-  /** `pointerDownX - sourceRect.left`, held for the life of the gesture. */
-  readonly grabOffsetX: number;
   /**
-   * The source tab's viewport left at drag start. dnd-kit positions the overlay
-   * from this rect, so every overlay calculation must be expressed against it -
+   * Press position minus the source's start edge, held for the life of the
+   * gesture.
+   */
+  readonly grabOffset: number;
+  /**
+   * The source tab's viewport start edge at drag start. dnd-kit positions the
+   * overlay from this rect, so every overlay calculation must be expressed
+   * against it -
    * never against a live rect, which tracks the placeholder as it slides.
    */
-  readonly sourceInitialLeft: number;
-  readonly sourceWidth: number;
-  readonly stripTop: number;
-  readonly stripBottom: number;
+  readonly sourceInitialStart: number;
+  readonly sourceExtent: number;
+  readonly bandStart: number;
+  readonly bandEnd: number;
 }
 
 /**
  * The pair side the DRAGGED tab would take on a merge: the side it approaches
- * from. Dragging rightward onto a neighbour hovers its left half, so the
- * dragged tab becomes the LEFT member; leftward is the mirror. Preview and
+ * from. `left` is the start half (left horizontally, top vertically) and
+ * `right` the end half. Dragging toward the end onto a neighbour hovers its
+ * start half, so the dragged tab becomes the LEFT member; toward the start is
+ * the mirror. Preview and
  * commit both read this one field, so the highlighted half and the committed
  * pair order cannot disagree.
  */
@@ -94,25 +107,29 @@ export type StripDragState =
 export interface ResolveStripDragInput {
   readonly geometry: StripDragGeometry;
   /**
-   * Viewport x of the strip's content origin, re-read every frame as
-   * `stripRect.left - stripEl.scrollLeft`. The strip scrolls mid-drag - by
-   * wheel and by dnd-kit autoScroll - and a cached origin desyncs every
+   * Viewport position of the strip's content origin along the main axis,
+   * re-read every frame as the strip's start edge minus its scroll offset. The
+   * strip scrolls mid-drag - by wheel and by dnd-kit autoScroll - and a cached
+   * origin desyncs every
    * neighbour centre with no recovery.
    */
-  readonly contentOriginX: number;
-  readonly pointerX: number;
-  /** Carries only the settled `targetIndex` between frames - see the swap rule. */
+  readonly contentOrigin: number;
+  readonly pointer: number;
+  /**
+   * Carries only the settled `targetIndex` between frames - see the swap rule.
+   */
   readonly previous: StripDragState | null;
 }
 
 /**
  * Distance the pointer must travel back before a just-made swap reverses.
  * Both crossings use the approached tab's midpoint. After the swap that tab
- * occupies the source slot, so the midpoint shift—and therefore hysteresis—is
- * exactly the dragged source width, independent of unequal neighbour widths.
+ * occupies the source slot, so the midpoint shift - and therefore
+ * hysteresis - is exactly the dragged source extent, independent of unequal
+ * neighbour extents.
  */
-export function swapHysteresisPx(sourceWidth: number): number {
-  return sourceWidth;
+export function swapHysteresisPx(sourceExtent: number): number {
+  return sourceExtent;
 }
 
 /**
@@ -154,7 +171,8 @@ export function insertionIndexForTarget(
 }
 
 /**
- * Where the dragged tab's overlay should sit, in VIEWPORT x.
+ * Where the dragged tab's overlay should start, in VIEWPORT coordinates along
+ * the main axis.
  *
  * Derived from the pointer, not from a drag delta, and expressed in one
  * coordinate frame end to end. Both matter:
@@ -165,27 +183,28 @@ export function insertionIndexForTarget(
  * - Mixing frames is what makes this fail invisibly. Clamping against a rect
  *   that tracks the source PLACEHOLDER - which slides as the provisional order
  *   changes - while the transform is measured from the tab's ORIGINAL position
- *   pins the overlay at the source's original right edge partway through a
+ *   pins the overlay at the source's original end edge partway through a
  *   drag. On the second-to-last tab that pinned value coincides with the
  *   correct bound, so the bug is invisible on exactly one strip position.
  */
-export function overlayLeftForPointer(input: {
-  readonly pointerX: number;
-  readonly grabOffsetX: number;
-  readonly sourceWidth: number;
-  readonly stripLeft: number;
-  readonly stripRight: number;
+export function overlayStartForPointer(input: {
+  readonly pointer: number;
+  readonly grabOffset: number;
+  readonly sourceExtent: number;
+  readonly stripStart: number;
+  readonly stripEnd: number;
 }): number {
-  const desired = input.pointerX - input.grabOffsetX;
-  const maxLeft = Math.max(
-    input.stripLeft,
-    input.stripRight - input.sourceWidth,
+  const desired = input.pointer - input.grabOffset;
+  const maxStart = Math.max(
+    input.stripStart,
+    input.stripEnd - input.sourceExtent,
   );
-  return Math.min(Math.max(desired, input.stripLeft), maxLeft);
+  return Math.min(Math.max(desired, input.stripStart), maxStart);
 }
 
 /**
- * Per-item x displacement, in px, for a strip rendering a provisional order.
+ * Per-item main-axis displacement, in px, for a strip rendering a provisional
+ * order.
  *
  * `targetIndex === null` means the dragged item is outside this strip. The
  * source strip deliberately keeps its natural layout: the source slot stays in
@@ -207,17 +226,17 @@ export function stripOffsetsFor(
     return offsets;
   }
 
-  // Natural left of each slot, then its left in the provisional order.
-  const naturalLeft = new Map<string, number>();
+  // Natural start of each slot, then its start in the provisional order.
+  const naturalStart = new Map<string, number>();
   let cursor = 0;
   for (const slot of slots) {
-    naturalLeft.set(slot.itemId, cursor);
+    naturalStart.set(slot.itemId, cursor);
     cursor += slot.advance;
   }
   const ordered = provisionalStripOrder(slots, sourceIndex, targetIndex);
   cursor = 0;
   for (const slot of ordered) {
-    offsets.set(slot.itemId, cursor - (naturalLeft.get(slot.itemId) ?? 0));
+    offsets.set(slot.itemId, cursor - (naturalStart.get(slot.itemId) ?? 0));
     cursor += slot.advance;
   }
   return offsets;
@@ -226,16 +245,16 @@ export function stripOffsetsFor(
 /**
  * Offsets for a strip the dragged item is being INSERTED into from another
  * group: it has no slot here, so everything from `insertIndex` onwards opens a
- * gap of `insertWidth`.
+ * gap of `insertExtent`.
  */
 export function insertionOffsetsFor(
   slots: ReadonlyArray<StripSlot>,
   insertIndex: number,
-  insertWidth: number,
+  insertExtent: number,
 ): ReadonlyMap<string, number> {
   const offsets = new Map<string, number>();
   slots.forEach((slot, index) => {
-    offsets.set(slot.itemId, index >= insertIndex ? insertWidth : 0);
+    offsets.set(slot.itemId, index >= insertIndex ? insertExtent : 0);
   });
   return offsets;
 }
@@ -247,13 +266,13 @@ export function insertionOffsetsFor(
  */
 export function insertionIndexFromPointer(
   slots: ReadonlyArray<StripSlot>,
-  contentOriginX: number,
-  pointerX: number,
+  contentOrigin: number,
+  pointer: number,
 ): number {
-  let cursor = contentOriginX + (slots[0]?.contentLeft ?? 0);
+  let cursor = contentOrigin + (slots[0]?.contentStart ?? 0);
   let index = 0;
   for (const slot of slots) {
-    if (pointerX < cursor + slot.width / 2) return index;
+    if (pointer < cursor + slot.extent / 2) return index;
     cursor += slot.advance;
     index += 1;
   }
@@ -262,18 +281,18 @@ export function insertionIndexFromPointer(
 
 interface LaidOutSlot {
   readonly slot: StripSlot;
-  readonly centreX: number;
+  readonly centre: number;
 }
 
 /**
- * Lay the measured widths out in the provisional order and return each item's
+ * Lay the measured extents out in the provisional order and return each item's
  * viewport centre. Deliberately NOT read from live DOM rects: those are mid
  * spring animation, and feeding an animating rect back into the decision that
  * drives the animation is the feedback loop this model exists to remove.
  */
 function layOutProvisional(
   geometry: StripDragGeometry,
-  contentOriginX: number,
+  contentOrigin: number,
   targetIndex: number,
 ): ReadonlyArray<LaidOutSlot> {
   const ordered = provisionalStripOrder(
@@ -281,11 +300,11 @@ function layOutProvisional(
     geometry.sourceIndex,
     targetIndex,
   );
-  const originOffset = geometry.slots[0]?.contentLeft ?? 0;
+  const originOffset = geometry.slots[0]?.contentStart ?? 0;
   const laidOut: LaidOutSlot[] = [];
-  let cursor = contentOriginX + originOffset;
+  let cursor = contentOrigin + originOffset;
   for (const slot of ordered) {
-    laidOut.push({ slot, centreX: cursor + slot.width / 2 });
+    laidOut.push({ slot, centre: cursor + slot.extent / 2 });
     cursor += slot.advance;
   }
   return laidOut;
@@ -306,26 +325,26 @@ function previousTargetIndex(
  */
 function settleTargetIndex(
   geometry: StripDragGeometry,
-  contentOriginX: number,
+  contentOrigin: number,
   startIndex: number,
-  centreX: number,
+  centre: number,
 ): number {
   const lastIndex = geometry.slots.length - 1;
   let index = Math.min(Math.max(startIndex, 0), Math.max(lastIndex, 0));
   // Bounded by the slot count: each iteration moves the index one step and the
   // thresholds are monotone, so this cannot cycle.
   for (let guard = 0; guard <= geometry.slots.length; guard += 1) {
-    const laidOut = layOutProvisional(geometry, contentOriginX, index);
+    const laidOut = layOutProvisional(geometry, contentOrigin, index);
     if (index + 1 < laidOut.length) {
       const right = laidOut[index + 1];
-      if (centreX > right.centreX) {
+      if (centre > right.centre) {
         index += 1;
         continue;
       }
     }
     if (index - 1 >= 0) {
       const left = laidOut[index - 1];
-      if (centreX < left.centreX) {
+      if (centre < left.centre) {
         index -= 1;
         continue;
       }
@@ -344,7 +363,7 @@ interface MergeCandidateResult {
  * The mergeable neighbour whose slot the dragged tab's centre is currently
  * inside, or null. Candidacy is purely positional - centre inside a
  * neighbour's provisional slot - with NO travel-direction filter: after a
- * swap, the passed tab sits a full `sourceWidth` behind the dragged centre,
+ * swap, the passed tab sits a full `sourceExtent` behind the dragged centre,
  * so it can only re-arm when the centre genuinely re-enters its half (a
  * narrow tab still overlapping a wide neighbour it just passed, or the user
  * reversing onto it). Filtering by net travel instead re-created the dead
@@ -352,16 +371,16 @@ interface MergeCandidateResult {
  * on the neighbour's half with nothing highlighted. Both neighbours are
  * candidates; the nearer one wins on a strip narrow enough for both slots to
  * contain the centre. A candidate AHEAD of the dragged tab is approached from
- * its left (the dragged tab would take the pair's left side); one behind is
+ * its start (the dragged tab would take the pair's left side); one behind is
  * the mirror.
  */
 function mergeCandidate(
   geometry: StripDragGeometry,
-  contentOriginX: number,
+  contentOrigin: number,
   targetIndex: number,
-  centreX: number,
+  centre: number,
 ): MergeCandidateResult | null {
-  const laidOut = layOutProvisional(geometry, contentOriginX, targetIndex);
+  const laidOut = layOutProvisional(geometry, contentOrigin, targetIndex);
   const candidateIndices = [targetIndex - 1, targetIndex + 1];
   let best: MergeCandidateResult | null = null;
   let bestDistance = Number.POSITIVE_INFINITY;
@@ -369,8 +388,8 @@ function mergeCandidate(
     if (index < 0 || index >= laidOut.length) continue;
     const neighbour = laidOut[index];
     if (!neighbour.slot.isMergeTarget) continue;
-    const distance = Math.abs(centreX - neighbour.centreX);
-    if (distance <= neighbour.slot.width / 2 && distance < bestDistance) {
+    const distance = Math.abs(centre - neighbour.centre);
+    if (distance <= neighbour.slot.extent / 2 && distance < bestDistance) {
       best = {
         slot: neighbour.slot,
         side: index > targetIndex ? "left" : "right",
@@ -389,26 +408,26 @@ function mergeCandidate(
 export function resolveStripDragState(
   input: ResolveStripDragInput,
 ): StripDragState {
-  const { geometry, contentOriginX, pointerX, previous } = input;
+  const { geometry, contentOrigin, pointer, previous } = input;
   if (geometry.slots.length === 0) {
     return { kind: "reorder", targetIndex: 0 };
   }
   // The overlay's centre: where the user sees the tab, offset from the pointer
   // by the constant grab offset. See the module doc for why zones must follow
   // this and not the raw pointer.
-  const draggedCentreX =
-    pointerX - geometry.grabOffsetX + geometry.sourceWidth / 2;
+  const draggedCentre =
+    pointer - geometry.grabOffset + geometry.sourceExtent / 2;
   const targetIndex = settleTargetIndex(
     geometry,
-    contentOriginX,
+    contentOrigin,
     previousTargetIndex(geometry, previous),
-    draggedCentreX,
+    draggedCentre,
   );
   const candidate = mergeCandidate(
     geometry,
-    contentOriginX,
+    contentOrigin,
     targetIndex,
-    draggedCentreX,
+    draggedCentre,
   );
   if (candidate === null) {
     // Off every mergeable half: plain reorder at this very pointer position,
@@ -430,11 +449,11 @@ export function resolveStripDragState(
  * than assumed.
  */
 export function reconstructionErrorPx(slots: ReadonlyArray<StripSlot>): number {
-  const origin = slots[0]?.contentLeft ?? 0;
+  const origin = slots[0]?.contentStart ?? 0;
   let cursor = origin;
   let worst = 0;
   for (const slot of slots) {
-    worst = Math.max(worst, Math.abs(cursor - slot.contentLeft));
+    worst = Math.max(worst, Math.abs(cursor - slot.contentStart));
     cursor += slot.advance;
   }
   return worst;

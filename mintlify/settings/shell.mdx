@@ -1,27 +1,91 @@
 ---
 title: "Shell"
-description: "Configure the shell and host environment used for terminal sessions."
+description: "Choose the shell a host uses for terminals and for finding your tools, set its startup flags, and set the host's own environment variables."
 ---
 
-Shell settings affect terminal surfaces launched by the host.
+**Shell** settings control how Traycer launches terminals, the host, and coding agents on a host. Shell is in the Host group of Settings, so it applies to the host selected in the [host picker](/settings#host-picker), including remote hosts.
 
-## Shell Command
+The page has two groups: **Terminal shell · New terminals** and **Host environment · After restart**. New terminals pick up shell changes immediately. Host environment changes apply when the host restarts.
 
-| Control | What it changes |
+## What The Shell Is Used For
+
+The shell you pick here does more than open terminal tabs:
+
+- **Terminals.** Every new terminal on the host starts with this shell and its startup flags.
+- **Finding your tools.** The host runs this shell to read your environment, so agents find the CLIs and version managers you set up in your shell profile (nvm, Homebrew, asdf and so on), along with variables such as API keys. Changing the shell here re-reads that environment without restarting the host.
+- **On Windows,** the shell also decides how agents get their environment:
+
+| Shell | Agents' environment |
 |---|---|
-| **Shell program** | Chooses the executable Traycer uses for shell sessions. |
-| **Startup flags** | Adds arguments such as login or interactive shell flags. |
-| **Effective command preview** | Shows the command Traycer will run. |
-| **Reset to defaults** | Restores the default shell configuration. |
+| **PowerShell** (PowerShell 7 or Windows PowerShell) | The Windows environment, plus what your PowerShell profile sets |
+| **Git Bash** | The Windows environment, plus what your Git Bash profile sets |
+| **cmd**, **WSL**, or any other program | The Windows environment only |
+
+<Tip>
+  If you edit your shell profile (for example `~/.zshrc`), restart the host so agents see the change. Switching shells in Settings picks up the new shell's profile right away.
+</Tip>
+
+## Terminal Shell
+
+The group opens with a preview of the **effective command**: the program and flags every new terminal runs.
+
+### Shell Program
+
+Click the **Shell program** picker to choose a shell. It lists:
+
+- **System default**: your login shell (on Windows, the system's default command processor). Pick it to go back to the login shell after choosing another one. Your added shells and their flags are kept.
+- The shells Traycer detected on the host and the shells you added yourself, in one alphabetical list.
+
+Selecting a shell saves it immediately.
+
+To add any other program, type its absolute path under **Add a shell**. The path is checked as you type: **✓ found · executable** means it can be added, and you add it with Enter or the ⏎ button. When you configure the host on this computer, **Browse…** lets you choose the program file instead.
+
+To remove a shell you added, hover over its row and click **✕**. Added shells that no longer exist on the host show **not found**; they stay selectable, so reinstalling the program fixes them in place.
+
+Click **Re-detect shells** at the bottom of the list to scan the host again, for example after installing a new shell or WSL.
+
+### Startup Flags
+
+**Startup flags for** the selected program are shown as chips. They are passed to the program each time a terminal opens.
+
+- Click **＋ flag** to add a flag, and the **✕** on a chip to remove it.
+- Flags belong to each program, so switching programs switches the flag set.
+- Login shells (zsh, bash, fish, sh, ksh, tcsh, dash) default to `-i -l`, which loads your full shell profile (PATH, aliases). Other programs default to no flags.
+- **Restore default flags** resets the selected program's flags to its default. It is available only when the flags differ from the default.
+
+Startup flags affect terminals only. When the host reads your environment to find tools, it runs the shell with its own fixed flags.
+
+## Host Environment
+
+**Host environment · After restart** sets environment variables for the host process on the selected host. The host starts with the environment your shell produces, and these variables are applied on top of it. Everything the host launches, including agents, inherits them. Restart the host after changing them.
+
+Click **Add environment variable**, enter a **Name**, choose an action, and confirm:
+
+| Action | What it does |
+|---|---|
+| **Set** | Sets the variable to the value you enter. |
+| **Unset** | Removes the variable, including one the host would otherwise inherit. |
+
+Names must start with a letter or underscore and contain only letters, digits and underscores. Edit a row in place to change it, or click the trash icon to delete it.
+
+Values are passed exactly as written, byte for byte. If a value has leading or trailing spaces, the row warns that the spaces are part of the value and offers **Trim spaces**.
+
+Per-provider variables live in [Providers](/settings/providers) and take precedence over these for that provider's agents. Use provider variables for one coding agent's credentials or endpoints, and host environment variables for everything the host runs.
 
 ## Using WSL
 
-Selecting WSL as your shell opens terminal tabs inside WSL. Agents always run on Windows, so they use the Windows environment and can't see tools installed inside WSL.
+On Windows, you can pick WSL as the shell. That opens new terminal tabs inside WSL, but the host and agents keep running on Windows, so they use the Windows environment and can't see tools installed inside WSL. The picker notes this with **WSL applies to terminal tabs only**.
 
-To run agents with your WSL toolchain, run the Traycer host inside WSL.
+To run agents with your WSL toolchain, run Traycer itself inside WSL. See [Windows via WSL](/install#windows-via-wsl).
 
-## Environment Variables
+If WSL can't start a terminal, the picker shows the WSL row but won't let you select it. When WSL is already the selected shell, a caption under the picker says why:
 
-Host environment variables are configured here and apply after host restart.
+| Caption | Fix |
+|---|---|
+| "WSL isn't installed — terminals won't start" | Run `wsl --install` from an elevated terminal, restart Windows, then click **Re-detect shells**. |
+| "WSL has no Linux distribution — terminals won't start" | Run `wsl --install -d Ubuntu`, then click **Re-detect shells**. |
 
-Per-provider variables live in [Providers](/settings/providers). Use provider variables for coding-agent-specific credentials or endpoints; use Shell variables for host-wide terminal environment.
+## When The Host Can't Answer
+
+- If the selected host is the one on this computer and it isn't running, or runs a version that predates remote configuration, the page shows this computer's saved configuration with a note. Changes apply when the host starts, or once it is updated.
+- If a remote host runs an older version, the page says its shell configuration can't be changed from here. Update that host and the page fills in.

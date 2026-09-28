@@ -68,6 +68,18 @@ const authMock = vi.hoisted(() => ({
   signIn: vi.fn(() => Promise.resolve()),
   signOut: vi.fn(() => Promise.resolve()),
 }));
+// `false` by default, so the whole file's existing native-close-tab coverage
+// keeps exercising `closeTabFlow.closeActiveTab` unchanged; only the chord
+// test below flips it to prove the interception itself, without standing up
+// a full layout editor session (that machinery is `editor-session.ts`'s own
+// suite).
+const closeLayoutEditorForCloseTabChordMock = vi.hoisted(() =>
+  vi.fn(() => false),
+);
+
+vi.mock("@/lib/layout/editor-session", () => ({
+  closeLayoutEditorForCloseTabChord: closeLayoutEditorForCloseTabChordMock,
+}));
 
 function latestNavigation(): CapturedNavigate {
   const call = navigateMock.mock.calls.at(-1);
@@ -329,6 +341,8 @@ describe("<MenuCommandListener />", () => {
     resetStores();
     useDesktopDialogStore.getState().close();
     useDesktopDialogStore.setState({ reportIssueAvailable: false });
+    closeLayoutEditorForCloseTabChordMock.mockReset();
+    closeLayoutEditorForCloseTabChordMock.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -508,6 +522,34 @@ describe("<MenuCommandListener />", () => {
 
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
     expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
+  });
+
+  // Item 3, `editor-session.ts`'s `closeLayoutEditorForCloseTabChord`: Cmd+W's
+  // native counterpart (the File menu's "Close Tab") asks the chord first too,
+  // whatever tab or tile has focus - closing a real tab under an open editor
+  // is the one thing the user did not ask for.
+  it("asks the layout editor's close chord before closing an Epic tab, and defers to it while a session is open", () => {
+    closeLayoutEditorForCloseTabChordMock.mockReturnValue(true);
+    const tabId = openEpicFixture(EPIC_A);
+    routerState.pathname = `/epics/e-a/${tabId}`;
+    const menu = createMenu();
+
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RunnerHostProvider runnerHost={createRunnerHost(menu)}>
+          <MenuCommandListener />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      menu.emit("epic.closeTab");
+    });
+
+    expect(closeLayoutEditorForCloseTabChordMock).toHaveBeenCalledOnce();
+    // Done ran instead: the tab under the editor is untouched.
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([tabId]);
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 
   it("uses the unsynced wait/discard guard for dirty Epic close commands", async () => {

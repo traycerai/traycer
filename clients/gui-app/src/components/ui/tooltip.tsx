@@ -104,7 +104,7 @@ function TooltipContent({
         // the boundary that matters.
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
-          // Tooltip content is label-only (see hover-preview-card.tsx for the
+          // Tooltip content is label-only (see hover-card.tsx for the
           // interactive-content surface); `pointer-events-none` stops the
           // portalled content from ever winning hit-testing away from its
           // trigger, which otherwise can drive a hover/reposition loop when

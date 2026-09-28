@@ -28,6 +28,14 @@ import type {
 export type HostPickIntent = "view" | "bind" | "pin";
 
 /**
+ * What an Activate does, said where it is offered (Settings' Activate button
+ * and the account menu's Host rows). Not "tabs stay on the host they started
+ * on" - the active-host switch still reloads open tabs today (F2/F3/F7), so
+ * that promise would be false. This only says what IS true.
+ */
+export const ACTIVATE_HOST_HINT = "Switching changes where new work starts.";
+
+/**
  * A refusal the SURFACE holds against a host, keyed by `hostId` and carrying
  * the one word the row shows for it ("needs update").
  *

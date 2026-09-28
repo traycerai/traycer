@@ -1,4 +1,6 @@
 import { useMemo } from "react";
+import { useRegionGhost } from "@/components/layout-editor/use-layout-region";
+import { useRegionShown } from "@/lib/layout-overrides";
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
 import { AssistantSegment } from "@/components/chat/chat-message-assistant-body";
 import { ChatBlockNavigationAnchor } from "@/components/chat/chat-navigation-highlight";
@@ -36,13 +38,19 @@ interface SubagentConversationProps {
 export function SubagentConversation(props: SubagentConversationProps) {
   const { entries, isStreaming } = props;
   const turnState = isStreaming ? "active" : "complete";
+  // Thinking's Shown applies to a card's conversation exactly as it does to
+  // the transcript's own turns (see `AssistantMessageBody`).
+  const thinkingShown = useRegionShown("thinking");
+  const thinkingGhost = useRegionGhost("thinking");
+  const hideReasoning = !(thinkingShown || thinkingGhost);
   const timeline = useMemo(
     () =>
       buildChatActivityTimeline(entries, {
         turnState,
         promotedToolBlockIds: NO_BACKGROUND_TOOL_BLOCK_IDS,
+        hideReasoning,
       }),
-    [entries, turnState],
+    [entries, turnState, hideReasoning],
   );
   const keys = useMemo(
     () =>

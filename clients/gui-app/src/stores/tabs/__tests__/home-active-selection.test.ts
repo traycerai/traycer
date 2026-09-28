@@ -1,25 +1,28 @@
 /**
  * Locks down "Home is active" == `activeItemId === null`.
  *
- * That state only means Home while `homeTabEnabled` is on - with the flag
- * off, a populated strip must never legitimately sit on a null selection, so
- * every commit boundary (`committedLayout`, `repairLayout`,
- * `migrateTabsPersistedState`) has to keep resolving null back to the first
- * item exactly as it did before Home existed. Getting this wrong either stops
- * Home from working (flag on) or strands a real user's strip with nothing
- * selected (flag off) - so both sides of the flag are exercised for every
- * commit path below, not just the "happy" one.
+ * That state only means Home while the layout store's `homeTab.shown` is
+ * "shown" - with the flag off, a populated strip must never legitimately sit
+ * on a null selection, so every commit boundary (`committedLayout`,
+ * `repairLayout`, `migrateTabsPersistedState`) has to keep resolving null
+ * back to the first item exactly as it did before Home existed. Getting this
+ * wrong either stops Home from working (flag on) or strands a real user's
+ * strip with nothing selected (flag off) - so both sides of the flag are
+ * exercised for every commit path below, not just the "happy" one.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import {
   emptyTabStripLayout,
   flattenLayoutRefs,
   type PersistedTabStripLayout,
 } from "@/stores/tabs/layout";
-import { isRegisteredTabKind } from "@/stores/tabs/registry";
+import { isRegisteredTabKind } from "@/stores/tabs/tab-kind-policy";
 import {
   layoutHomeIsActive,
   migrateTabsPersistedState,
@@ -40,7 +43,8 @@ function resetStores(): void {
   });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-  useSettingsStore.setState({ homeTabEnabled: false });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
   __resetTabSyncCoordinatorForTesting();
 }
 
@@ -57,7 +61,7 @@ describe("home active selection", () => {
   });
 
   it("flag ON: a null activeItemId survives repair() and stripOrder still lists the items", () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
     const epicRef: TabRef = { kind: "epic", id: "epic-a" };
     useTabsStore.setState({
       version: 2,
@@ -77,7 +81,7 @@ describe("home active selection", () => {
   });
 
   it("flag OFF: the same null-activeItemId seed resolves to the first item after repair() - byte-identical to pre-Home behavior", () => {
-    useSettingsStore.setState({ homeTabEnabled: false });
+    useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
     const epicRef: TabRef = { kind: "epic", id: "epic-a" };
     useTabsStore.setState({
       version: 2,
@@ -96,7 +100,7 @@ describe("home active selection", () => {
   });
 
   it("flag ON: activateTab({ kind: 'home' }) selects Home, leaves items untouched, and clears the epic canvas's active id", () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
     const activation = tabCommandCoordinator.activateTab({
       kind: "epic",
       epicId: "epic-a",
@@ -117,7 +121,7 @@ describe("home active selection", () => {
   });
 
   it("flag ON: activateTab({ kind: 'home' }) clears the landing draft store's active draft id", () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
     const activation = tabCommandCoordinator.activateTab({
       kind: "draft",
       draftId: null,
@@ -135,7 +139,7 @@ describe("home active selection", () => {
   });
 
   it("flag OFF: activateTab({ kind: 'home' }) returns null and leaves the layout unchanged", () => {
-    useSettingsStore.setState({ homeTabEnabled: false });
+    useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
     tabCommandCoordinator.activateTab({
       kind: "epic",
       epicId: "epic-a",
@@ -151,7 +155,7 @@ describe("home active selection", () => {
   });
 
   it("opening a real tab after Home was active re-selects that tab", () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
     const activation = tabCommandCoordinator.activateTab({
       kind: "epic",
       epicId: "epic-a",
@@ -177,7 +181,7 @@ describe("home active selection", () => {
   });
 
   it("migrateTabsPersistedState keeps a null activeItemId when the flag is on", () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
     const persisted = {
       items: [
         {
@@ -197,7 +201,7 @@ describe("home active selection", () => {
   });
 
   it("migrateTabsPersistedState resolves the same payload to the first item when the flag is off", () => {
-    useSettingsStore.setState({ homeTabEnabled: false });
+    useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
     const persisted = {
       items: [
         {

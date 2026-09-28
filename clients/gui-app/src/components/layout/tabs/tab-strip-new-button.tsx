@@ -1,3 +1,4 @@
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import { Plus } from "lucide-react";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
@@ -12,6 +13,7 @@ interface TabStripNewButtonProps {
 export function TabStripNewButton(
   props: TabStripNewButtonProps,
 ): React.ReactNode {
+  const placement = useColumnOverlayPlacement("top");
   const { onNewTab } = props;
   const chord = useBindingForAction("epic.new");
   const tooltip =
@@ -20,16 +22,18 @@ export function TabStripNewButton(
   return (
     <TooltipWrapper
       label={tooltip}
-      side="top"
+      side={placement?.side ?? "top"}
       sideOffset={undefined}
-      align={undefined}
+      align={placement?.align}
     >
       <button
         type="button"
+        // Non-editable chrome, dimmed while a layout session is live (4.2).
+        data-layout-passive
         data-testid="tab-new"
         aria-label={NEW_TAB_PLACEHOLDER}
         onClick={onNewTab}
-        className="ml-1 flex size-7 shrink-0 items-center justify-center self-center rounded-md text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground [-webkit-app-region:no-drag]"
+        className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground [-webkit-app-region:no-drag]"
       >
         <Plus className="size-4" />
       </button>

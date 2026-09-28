@@ -75,6 +75,7 @@ export function ModesTab(): ReactNode {
               turnActive={false}
               judgeBilling={null}
               closeFocus="trigger"
+              interactive={false}
               // A Settings surface must not open Settings.
               onOpenPermissionSettings={null}
             />

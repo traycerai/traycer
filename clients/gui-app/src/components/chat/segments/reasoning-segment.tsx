@@ -3,6 +3,8 @@ import { reasoningBlockLabel } from "@/components/chat/chat-activity-groups";
 import { ThinkingTokensEstimate } from "@/components/chat/thinking-tokens-estimate";
 import { useLiveActivityPromote } from "./live-activity-promote-context";
 import { cn } from "@/lib/utils";
+import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
+import { useRegionValue } from "@/lib/layout-overrides";
 import { TraycerMarkdown } from "@/markdown";
 import { Brain, ChevronRight } from "lucide-react";
 import {
@@ -187,14 +189,36 @@ function ReasoningContent(props: ReasoningContentProps) {
   );
 }
 
+/**
+ * Whether a block shows its whole trace. Layout > Chat > Thinking decides
+ * which state a block starts in; a click is the reader's own choice, sticks
+ * for the segment's lifetime and wins over the setting, including a later
+ * change to it (L-176).
+ */
+function useReasoningExpanded(
+  initiallyExpanded: boolean,
+): readonly [boolean, (next: boolean) => void] {
+  const defaultExpanded = useRegionValue("thinking", "size") === "full";
+  const [choice, setChoice] = useState<boolean | null>(
+    initiallyExpanded ? true : null,
+  );
+  return [choice ?? defaultExpanded, setChoice];
+}
+
 export function ReasoningSegment(props: ReasoningSegmentProps) {
   const { findUnitId, markdown, isStreaming, durationMs, bodyBoundedByParent } =
     props;
   const { headerless, initiallyExpanded } = props;
-  // `expanded` shows the full trace. Default (false) means the streaming tail
-  // preview while thinking, or the collapsed "Thought for Xs" line once done. A
-  // click toggles and sticks for the segment's lifetime.
-  const [expanded, setExpanded] = useState(initiallyExpanded);
+  // `expanded` shows the full trace. Not expanded means the streaming tail
+  // preview while thinking, or the collapsed "Thought for Xs" line once done.
+  const [expanded, setExpanded] = useReasoningExpanded(initiallyExpanded);
+  // The block's own name for a right-click on it and for the editor's canvas.
+  // Per mount rather than per find unit: a headerless block has no unit.
+  const regionInstanceId = useId();
+  const { ref: regionRef } = useLayoutRegion({
+    regionId: "thinking",
+    instanceId: regionInstanceId,
+  });
   const promote = useLiveActivityPromote();
   const toggle = useCallback((): void => {
     // Inside the live window a disclosure would open into four line-heights, so
@@ -204,8 +228,8 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
       promote();
       return;
     }
-    setExpanded((current) => !current);
-  }, [promote]);
+    setExpanded(!expanded);
+  }, [expanded, promote, setExpanded]);
   const bodyId = useId();
 
   // Make the body itself a click target so clicking anywhere on the block (not
@@ -256,7 +280,7 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
         if (bodyRef.current === node) bodyRef.current = null;
       };
     },
-    [bodyPinsOnly, toggle],
+    [bodyPinsOnly, setExpanded, toggle],
   );
 
   // The tail preview is this block's OWN bounded scroller. Inside a container
@@ -371,7 +395,6 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
   // commit that REMOVES the control React has already detached the ref, so it
   // bails and preserves the last reading - focus ownership as of the last commit
   // that still had a button, which is exactly what the handoff needs to know.
-  const rootRef = useRef<HTMLDivElement | null>(null);
   const headerFocusedRef = useRef(false);
   const onHeaderFocus = useCallback((): void => {
     headerFocusedRef.current = true;
@@ -408,7 +431,7 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
     bodyRef.current?.focus({ preventScroll: true });
   }, [controlRemoved]);
   return (
-    <div ref={rootRef} className="text-ui-sm text-muted-foreground">
+    <div ref={regionRef} className="text-ui-sm text-muted-foreground">
       {headerless && !headerActionable ? null : (
         <ReasoningHeader
           findUnitId={findUnitId}

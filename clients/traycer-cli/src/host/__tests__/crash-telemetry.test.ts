@@ -74,11 +74,16 @@ const {
   buildHostCrashEvent,
   readHostCrashIdentity,
   captureHostCrashEvent,
-  reportHostCrashToSentry,
   HOST_CRASH_FINGERPRINT_ROOT,
   HOST_CRASH_IDENTITY_TIMEOUT_MS,
   HOST_CRASH_TRANSPORT_TIMEOUT_MS,
 } = await import("../crash-telemetry");
+
+// `reportHostCrashToSentry` is deliberately NOT destructured from the shared
+// top-level import above: it now runs through crash-telemetry's
+// module-level `HostCrashReportThrottle` singleton (see the
+// "reportHostCrashToSentry" describe block below, which imports a fresh
+// module instance per test instead).
 
 const { resolveCliVersion } = await import("../../cli-version");
 
@@ -428,6 +433,24 @@ describe("reportHostCrashToSentry", () => {
     vi.useRealTimers();
   });
 
+  // Every test below imports a FRESH crash-telemetry module instance rather
+  // than reusing the file's shared top-level import. reportHostCrashToSentry
+  // now runs through the module-level HostCrashReportThrottle singleton
+  // (HOST_CRASH_REPORTS_BEFORE_THROTTLE = 3), and sampleTelemetry's default
+  // fixture (exitCode 7, signal null) is the SAME crash "kind" across every
+  // test in this describe block. Without a fresh module per test, only the
+  // first 3 reportHostCrashToSentry calls across the WHOLE FILE would ever
+  // reach Sentry.captureMessage - every later test's assertions would fail
+  // not because reporting broke, but because an EARLIER test already spent
+  // this kind's throttle budget.
+  async function freshReportHostCrashToSentry(): Promise<
+    (telemetry: HostCrashTelemetry) => Promise<void>
+  > {
+    vi.resetModules();
+    const mod = await import("../crash-telemetry");
+    return mod.reportHostCrashToSentry;
+  }
+
   it("carries the resolved hostId and running version when the pid.json's pid matches the crashed child's", async () => {
     pidMetadataMocks.readHostPidMetadata.mockResolvedValue(
       samplePidMetadata({
@@ -437,7 +460,8 @@ describe("reportHostCrashToSentry", () => {
       }),
     );
 
-    await reportHostCrashToSentry(sampleTelemetry({ childPid: 4242 }));
+    const report = await freshReportHostCrashToSentry();
+    await report(sampleTelemetry({ childPid: 4242 }));
 
     expect(sentryMocks.setUser).toHaveBeenCalledWith({ id: "host-resolved" });
     expect(sentryMocks.setTags).toHaveBeenCalledWith(
@@ -458,7 +482,8 @@ describe("reportHostCrashToSentry", () => {
       }),
     );
 
-    await reportHostCrashToSentry(sampleTelemetry({ childPid: 4242 }));
+    const report = await freshReportHostCrashToSentry();
+    await report(sampleTelemetry({ childPid: 4242 }));
 
     expect(sentryMocks.setUser).toHaveBeenCalledWith({ id: "host-resolved" });
     expect(sentryMocks.setTags).toHaveBeenCalledWith(
@@ -475,7 +500,8 @@ describe("reportHostCrashToSentry", () => {
       new Error("EACCES reading pid.json"),
     );
 
-    await reportHostCrashToSentry(sampleTelemetry({}));
+    const report = await freshReportHostCrashToSentry();
+    await report(sampleTelemetry({}));
 
     expect(sentryMocks.setUser).not.toHaveBeenCalled();
     expect(sentryMocks.setTags).toHaveBeenCalledWith(
@@ -493,7 +519,8 @@ describe("reportHostCrashToSentry", () => {
       () => new Promise(() => undefined),
     );
 
-    const reportPromise = reportHostCrashToSentry(sampleTelemetry({}));
+    const report = await freshReportHostCrashToSentry();
+    const reportPromise = report(sampleTelemetry({}));
     await vi.advanceTimersByTimeAsync(HOST_CRASH_IDENTITY_TIMEOUT_MS);
     await reportPromise;
 
@@ -510,16 +537,16 @@ describe("reportHostCrashToSentry", () => {
       throw new Error("Sentry transport exploded");
     });
 
-    await expect(
-      reportHostCrashToSentry(sampleTelemetry({})),
-    ).resolves.toBeUndefined();
+    const report = await freshReportHostCrashToSentry();
+    await expect(report(sampleTelemetry({}))).resolves.toBeUndefined();
   });
 
   describe("transport budget", () => {
     it("flushes the transport exactly once with the transport timeout after a successful capture", async () => {
       pidMetadataMocks.readHostPidMetadata.mockResolvedValue(null);
 
-      await reportHostCrashToSentry(sampleTelemetry({}));
+      const report = await freshReportHostCrashToSentry();
+      await report(sampleTelemetry({}));
 
       expect(sentryMocks.flush).toHaveBeenCalledTimes(1);
       expect(sentryMocks.flush).toHaveBeenCalledWith(
@@ -531,7 +558,8 @@ describe("reportHostCrashToSentry", () => {
       pidMetadataMocks.readHostPidMetadata.mockResolvedValue(null);
       sentryMocks.flush.mockImplementation(() => Promise.resolve(true));
 
-      await reportHostCrashToSentry(sampleTelemetry({}));
+      const report = await freshReportHostCrashToSentry();
+      await report(sampleTelemetry({}));
       // Flush the microtask queue so a wrongly-called destroy would have run.
       await new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -544,7 +572,8 @@ describe("reportHostCrashToSentry", () => {
       pidMetadataMocks.readHostPidMetadata.mockResolvedValue(null);
       sentryMocks.flush.mockImplementation(() => Promise.resolve(false));
 
-      await reportHostCrashToSentry(sampleTelemetry({}));
+      const report = await freshReportHostCrashToSentry();
+      await report(sampleTelemetry({}));
 
       await vi.waitFor(() => {
         expect(
@@ -559,9 +588,8 @@ describe("reportHostCrashToSentry", () => {
         Promise.reject(new Error("transport flush failed")),
       );
 
-      await expect(
-        reportHostCrashToSentry(sampleTelemetry({})),
-      ).resolves.toBeUndefined();
+      const report = await freshReportHostCrashToSentry();
+      await expect(report(sampleTelemetry({}))).resolves.toBeUndefined();
 
       await vi.waitFor(() => {
         expect(
@@ -576,7 +604,8 @@ describe("reportHostCrashToSentry", () => {
         throw new Error("Sentry transport exploded");
       });
 
-      await reportHostCrashToSentry(sampleTelemetry({}));
+      const report = await freshReportHostCrashToSentry();
+      await report(sampleTelemetry({}));
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       expect(sentryMocks.flush).not.toHaveBeenCalled();
@@ -595,7 +624,8 @@ describe("reportHostCrashToSentry", () => {
       );
       pidMetadataMocks.readHostPidMetadata.mockResolvedValue(null);
 
-      await reportHostCrashToSentry(sampleTelemetry({}));
+      const report = await freshReportHostCrashToSentry();
+      await report(sampleTelemetry({}));
 
       // The reporter's own promise already resolved above, while flush is
       // still pending - so the destroy it could trigger has not run yet.

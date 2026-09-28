@@ -463,10 +463,9 @@ describe("TabStrip title", () => {
       screen.queryByTestId(`tab-title-generating-${TAB.instanceId}`),
     ).toBeNull();
     const failure = screen.getByTestId(`chat-tab-spinner-failure-${CHAT_ID}`);
-    expect(failure.getAttribute("class")).toContain("lucide-message-square-x");
-    expect(failure.getAttribute("class")).not.toContain(
-      "lucide-square-terminal",
-    );
+    expect(
+      failure.closest("[data-status-glyph]")?.getAttribute("data-status-glyph"),
+    ).toBe("failure");
   });
 
   it("shows the chat's unread-done status instead of the title spinner", async () => {
@@ -555,5 +554,19 @@ describe("TabStrip title", () => {
     fireEvent.contextMenu(screen.getByTestId(`tab-item-${TAB.instanceId}`));
 
     expect(screen.queryByText("Edit Title")).toBeNull();
+  });
+
+  it("keeps the Edit Title input mounted and focused after the menu closes", async () => {
+    renderTabStrip(TAB, true);
+    await flushEpicSnapshot();
+    fireEvent.contextMenu(screen.getByTestId(`tab-item-${TAB.instanceId}`));
+    fireEvent.click(await screen.findByText("Edit Title"));
+
+    // Guards the NON-MODAL tab menu: a modal menu's focus trap pulls focus
+    // back as it closes, the input blur-commits and unmounts, and this fails.
+    const input = await screen.findByTestId(
+      `tab-title-input-${TAB.instanceId}`,
+    );
+    await waitFor(() => expect(document.activeElement).toBe(input));
   });
 });

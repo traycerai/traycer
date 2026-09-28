@@ -124,18 +124,18 @@ describe("GettingStartedSettingsPanel", () => {
 
   it("meters the steps already completed, so the last one is not a full bar", () => {
     useOnboardingStore.setState({
-      setupProgress: { agents: -1, appearance: 4, cookies: -1 },
+      setupProgress: { agents: -1, appearance: 5, cookies: -1 },
     });
     const { container } = render(<GettingStartedSettingsPanel />);
 
     expect(
       screen.getByRole("button", {
-        name: "Appearance and layout, Step 5 of 5",
+        name: "Appearance and layout, Step 6 of 6",
       }),
     ).toBeTruthy();
     const meter = container.querySelector("progress");
-    expect(meter?.getAttribute("value")).toBe("4");
-    expect(meter?.getAttribute("max")).toBe("5");
+    expect(meter?.getAttribute("value")).toBe("5");
+    expect(meter?.getAttribute("max")).toBe("6");
   });
 
   it("names the step a started guide is on and resumes it there", () => {
@@ -145,7 +145,7 @@ describe("GettingStartedSettingsPanel", () => {
     render(<GettingStartedSettingsPanel />);
 
     const card = screen.getByRole("button", {
-      name: "Appearance and layout, Step 4 of 5",
+      name: "Appearance and layout, Step 4 of 6",
     });
     fireEvent.click(card);
 

@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, type KeyboardEvent } from "react";
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import { Bell } from "lucide-react";
+import { AnimatePresence } from "motion/react";
+import * as m from "motion/react-m";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -8,32 +10,25 @@ import {
 } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
-import { useNotificationCenterGeometry } from "@/hooks/notifications/use-notification-center-geometry";
-import { useNotificationCenterOpenLifecycle } from "@/hooks/notifications/use-notification-center-open-lifecycle";
+import { RollingNumber } from "@/components/ui/rolling-number";
+import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
+import { useNotificationCenter } from "@/hooks/notifications/use-notification-center";
 import {
   notificationBellAccessibleLabel,
-  useMergedNotificationUnreadCount,
-  useNotificationBellState,
-  useNotificationCenterHostState,
   type NotificationBellState,
 } from "@/stores/notifications/merged-notifications";
-import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
-import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
-import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
-import {
-  chordMatchesEvent,
-  formatChordForDisplay,
-} from "@/lib/keybindings/chord";
-import { useBindingForAction } from "@/stores/settings/keybinding-store";
-import {
-  Analytics,
-  AnalyticsEvent,
-  analyticsCountBucket,
-  type AnalyticsNotificationEntryPoint,
-} from "@/lib/analytics";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
 
-/** The center's own surface, marked by `NotificationsPopover`. */
-const NOTIFICATION_CENTER_SELECTOR = "[data-notification-center]";
+/**
+ * The badge's arrival and departure, at the `LeaderDigitBadge` values so every
+ * small appearing pill in the app shares one timing. `0.9` rather than `0`: a
+ * badge that grows from nothing reads as a pop, and the origin is the corner
+ * that overlaps the bell (`origin-bottom-left` against a `-top-1 -right-1`
+ * placement), so it grows out of the glyph rather than out of the page.
+ */
+const BADGE_HIDDEN = { opacity: 0, scale: 0.9 } as const;
+const BADGE_PRESENT = { opacity: 1, scale: 1 } as const;
+const BADGE_TRANSITION = { duration: 0.14, ease: "easeOut" } as const;
 
 /**
  * Top-level notifications trigger in the app header. Shows an unread-count
@@ -41,140 +36,31 @@ const NOTIFICATION_CENTER_SELECTOR = "[data-notification-center]";
  * emission is owned by `NotificationEmissionController` so all sources share
  * the same hold/coalescing/focus policy.
  *
- * Owns every Radix-Popover-specific concern for the center - anchoring,
- * the one-time geometry lock, and open/close focus lifecycle - so
+ * The center's Popover wiring is `useNotificationCenter`'s, shared with the
+ * strip's Notifications drawer; this owns the bell trigger and its badge, so
  * `NotificationsPopover` stays purely presentational.
  */
 export function NotificationsBell() {
-  const open = useNotificationsPopoverStore((state) => state.open);
-  const setOpen = useNotificationsPopoverStore((state) => state.setOpen);
-  const bellState = useNotificationBellState();
-  const hostState = useNotificationCenterHostState();
-  const unreadCount = useMergedNotificationUnreadCount();
-  useTitleBarDragSuppression("notifications", open);
-
-  const geometry = useNotificationCenterGeometry({
+  const placement = useColumnOverlayPlacement("foot");
+  const {
     open,
-    isColdOpen: hostState.isPartial,
-  });
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const headingRef = useRef<HTMLHeadingElement>(null);
-  const lifecycle = useNotificationCenterOpenLifecycle({
+    setOpen,
+    bellState,
+    chord,
     triggerRef,
-    headingRef,
-  });
+    onTriggerPointerDown,
+    onTriggerKeyDown,
+    contentHandlers,
+    popoverProps,
+  } = useNotificationCenter();
 
-  const handleNavigate = useCallback(() => {
-    setOpen(false);
-  }, [setOpen]);
-
-  // Whether the nested filter menu is logically open right now, per Radix's
-  // own onOpenChange notification - not derived from the DOM, since the menu
-  // portals to document.body (so it isn't a shell descendant to query) and
-  // its data-state can briefly read "closed" while still mounted mid-exit-
-  // animation. The outside-pointerdown guard below reads this ref at
-  // dispatch time to decide whether the menu still needs a synthetic Escape
-  // or has already dismissed itself first - see the guard's own comment for
-  // why that ordering isn't guaranteed.
-  const nestedMenuOpenRef = useRef(false);
-  const handleFilterMenuOpenChange = useCallback((menuOpen: boolean) => {
-    nestedMenuOpenRef.current = menuOpen;
-  }, []);
-
-  // Analytics-only entry-point tracking, independent of the T04 focus-
-  // modality ref above: a direct bell interaction sets this just before the
-  // open transition; anything that flips `open` without going through the
-  // trigger (native-notification bridge opens, including the
-  // origin-unavailable state) keeps the "notification" default. Reset after
-  // every consumed open cycle so a later bell-less open never inherits a
-  // stale "direct_ui" value.
-  const openEntryPointRef =
-    useRef<AnalyticsNotificationEntryPoint>("notification");
-  const onTriggerPointerDown = useCallback(() => {
-    openEntryPointRef.current = "direct_ui";
-    lifecycle.onTriggerPointerDown();
-  }, [lifecycle]);
-  const onTriggerKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLButtonElement>) => {
-      if (event.key === "Enter" || event.key === " ") {
-        openEntryPointRef.current = "direct_ui";
-      }
-      lifecycle.onTriggerKeyDown(event);
-    },
-    [lifecycle],
-  );
-
-  const chord = useBindingForAction("app.notifications.open");
-  const markKeyboardDismiss = lifecycle.markKeyboardDismiss;
-  // Opening goes through the normal dispatch path. A chord open is a
-  // deliberate interaction with the app, so it is attributed to `direct_ui`
-  // like a bell click - `notification` means "arrived from a native
-  // notification", which would be a false claim here.
-  useEffect(
-    () =>
-      registerDynamicActionHandler("app.notifications.open", () => {
-        openEntryPointRef.current = "direct_ui";
-        useNotificationsPopoverStore.getState().setOpen(true);
-      }),
-    [],
-  );
-
-  // Closing does NOT: an open Radix popover is a `role="dialog"`, and the
-  // keybinding provider deliberately stops dispatching chords behind one
-  // (`isAnyDialogOpen`), so the dynamic handler above can never see the
-  // second press. This window listener is mounted only while the center is
-  // open and matches the live binding itself, which also keeps the toggle
-  // working when the center was opened by pointer or by a native-notification
-  // click (focus outside the surface, so no in-surface handler would fire).
-  //
-  // Focus returns to the bell only when the center's own surface still holds
-  // it: a pointer-opened center leaves focus wherever the user was typing,
-  // and yanking that into the header would be the worse bug. That question is
-  // asked of the focused element itself (`data-notification-center`, set by
-  // the popover) rather than of the shell ref, which belongs to the geometry
-  // lock and must not be read from render.
-  useEffect(() => {
-    if (!open || chord === null) return;
-    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (!chordMatchesEvent(chord, event)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const active = document.activeElement;
-      if (active !== null && active.closest(NOTIFICATION_CENTER_SELECTOR)) {
-        markKeyboardDismiss();
-      }
-      useNotificationsPopoverStore.getState().setOpen(false);
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [chord, markKeyboardDismiss, open]);
-
-  // Fires exactly once per open cycle - edge-triggered on the `open`
-  // boolean's false -> true transition, so it covers every way the center
-  // can open (bell click/keyboard AND a native-notification-driven
-  // programmatic open) rather than only the ones that go through Radix's own
-  // onOpenChange handler.
-  const wasOpenRef = useRef(open);
-  useEffect(() => {
-    if (open && !wasOpenRef.current) {
-      const attentionCount =
-        bellState.kind === "attention" ? bellState.count : 0;
-      Analytics.getInstance().track(AnalyticsEvent.NotificationCenterOpened, {
-        entry_point: openEntryPointRef.current,
-        host_state: hostState.isPartial ? "unknown" : "exact",
-        attention_bucket:
-          bellState.kind === "unknown"
-            ? "unknown"
-            : analyticsCountBucket(attentionCount),
-        unread_bucket:
-          bellState.kind === "unknown"
-            ? "unknown"
-            : analyticsCountBucket(unreadCount),
-      });
-      openEntryPointRef.current = "notification";
-    }
-    wasOpenRef.current = open;
-  }, [open, bellState, hostState.isPartial, unreadCount]);
+  // The badge appears and disappears in a single frame under reduced motion,
+  // with the app's "Panel animations" switch off, or in a pane that is mounted
+  // but not painting. `initial={false}` is motion's own "start where you are";
+  // an absent `exit` resolves the moment `AnimatePresence` asks for it.
+  const motionEnabled = useMotionEnabled();
+  const badgeInitial = motionEnabled ? BADGE_HIDDEN : false;
+  const badgeExit = motionEnabled ? BADGE_HIDDEN : undefined;
 
   const ariaLabel = notificationBellAccessibleLabel(bellState);
   const bellTooltip = (state: NotificationBellState): string => {
@@ -186,7 +72,7 @@ export function NotificationsBell() {
     // unreachable stream AND by a reachable one whose summary is not exact
     // yet, so naming the transport was a diagnosis this state cannot support.
     if (state.kind === "unknown") {
-      return "Notifications — status unavailable, so this may be out of date";
+      return "Notifications status unavailable, so this may be out of date";
     }
     return chord === null
       ? "Notifications"
@@ -196,9 +82,9 @@ export function NotificationsBell() {
     <Popover open={open} onOpenChange={setOpen}>
       <TooltipWrapper
         label={open ? null : bellTooltip(bellState)}
-        side="top"
+        side={placement?.side ?? "top"}
         sideOffset={6}
-        align={undefined}
+        align={placement?.align}
       >
         <PopoverTrigger asChild>
           <Button
@@ -206,6 +92,8 @@ export function NotificationsBell() {
             type="button"
             variant="ghost"
             size="icon-sm"
+            // Non-editable chrome, dimmed while a layout session is live (4.2).
+            data-layout-passive
             data-testid="notifications-bell"
             aria-label={ariaLabel}
             onPointerDown={onTriggerPointerDown}
@@ -218,15 +106,26 @@ export function NotificationsBell() {
               className="size-4 text-muted-foreground group-hover/button:text-foreground"
               aria-hidden
             />
-            {bellState.kind === "attention" && (
-              <span
-                data-testid="notifications-attention-badge"
-                aria-hidden
-                className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-md bg-destructive px-1 text-overline font-semibold leading-none text-destructive-foreground tabular-nums shadow-sm ring-2 ring-background"
-              >
-                {bellState.count}
-              </span>
-            )}
+            <AnimatePresence initial={false}>
+              {bellState.kind === "attention" ? (
+                <m.span
+                  key="attention-badge"
+                  data-testid="notifications-attention-badge"
+                  aria-hidden
+                  initial={badgeInitial}
+                  animate={BADGE_PRESENT}
+                  exit={badgeExit}
+                  transition={BADGE_TRANSITION}
+                  className="absolute -right-1 -top-1 flex h-4 min-w-4 origin-bottom-left items-center justify-center rounded-md bg-destructive px-1 text-overline font-semibold leading-none text-destructive-foreground tabular-nums shadow-sm ring-2 ring-background"
+                >
+                  <RollingNumber
+                    value={bellState.count}
+                    className={undefined}
+                    testId="notifications-attention-count"
+                  />
+                </m.span>
+              ) : null}
+            </AnimatePresence>
             {bellState.kind === "quietDot" && (
               <span
                 data-testid="notifications-quiet-dot"
@@ -260,77 +159,12 @@ export function NotificationsBell() {
       </TooltipWrapper>
       <PopoverContent
         layout="bare"
-        align="end"
+        side={placement?.side}
+        align={placement?.align ?? "end"}
         className="w-auto overflow-hidden"
-        onOpenAutoFocus={lifecycle.onContentOpenAutoFocus}
-        onEscapeKeyDown={lifecycle.onContentEscapeKeyDown}
-        onCloseAutoFocus={lifecycle.onContentCloseAutoFocus}
-        // A nested modal menu (the filter menu) traps focus into its own
-        // portal, outside this Content's DOM subtree - without this guard,
-        // Radix's DismissableLayer reads that as focus leaving the popover
-        // and dismisses it. Escape still closes the popover normally; this
-        // only turns off the focus-outside path, which nothing else in the
-        // T04 focus contract depends on.
-        onFocusOutside={(event) => event.preventDefault()}
-        // Real-browser-only bug (jsdom's fireEvent bypasses hit-testing and
-        // never reproduced it): while the modal filter menu is open, its
-        // pointer/scroll barrier sets `body.style.pointerEvents = "none"`.
-        // A click landing inside the popover but outside the menu is then
-        // NOT hit-tested onto the clicked element at all - the browser skips
-        // every inert (pointer-events:none) node under it and resolves
-        // `event.target` to <html>. `event.target` can't be trusted to tell
-        // "inside the popover" from "truly outside" while that lock is
-        // active, so this checks the click's real screen position against
-        // the shell's own rect instead. Genuinely outside still closes
-        // everything normally.
-        //
-        // Inside the shell, this must decide whether the filter menu still
-        // needs a synthetic Escape to close it, or already closed itself -
-        // Radix's own DismissableLayer defers cross-layer
-        // onPointerDownOutside delivery (`deferPointerDownOutside`), so the
-        // menu's own outside-pointerdown handling and this popover-level
-        // handler are NOT guaranteed to run in a fixed order relative to
-        // each other. When the menu's handler runs first, it has already
-        // closed the menu by the time this fires; dispatching Escape then
-        // would hit the popover itself as the new topmost layer and close
-        // it too - reproduced live in headless Chrome. Reading
-        // `nestedMenuOpenRef` (updated synchronously by the menu's own
-        // onOpenChange, which always completes before this deferred handler
-        // runs, since it fires on an earlier event in the same gesture)
-        // makes the decision correct in both orderings: dispatch Escape only
-        // if the menu is still open; otherwise it already closed itself, so
-        // do nothing and leave the popover open.
-        onPointerDownOutside={(event) => {
-          const shell = geometry.shellRef.current;
-          if (shell === null) return;
-          const { clientX, clientY } = event.detail.originalEvent;
-          const rect = shell.getBoundingClientRect();
-          const isInsideShell =
-            clientX >= rect.left &&
-            clientX <= rect.right &&
-            clientY >= rect.top &&
-            clientY <= rect.bottom;
-          if (isInsideShell) {
-            event.preventDefault();
-            if (nestedMenuOpenRef.current) {
-              document.dispatchEvent(
-                new KeyboardEvent("keydown", {
-                  key: "Escape",
-                  bubbles: true,
-                  cancelable: true,
-                }),
-              );
-            }
-          }
-        }}
+        {...contentHandlers}
       >
-        <NotificationsPopover
-          onNavigate={handleNavigate}
-          headingRef={headingRef}
-          shellRef={geometry.shellRef}
-          shellStyle={geometry.style}
-          onFilterMenuOpenChange={handleFilterMenuOpenChange}
-        />
+        <NotificationsPopover variant="center" {...popoverProps} />
       </PopoverContent>
     </Popover>
   );

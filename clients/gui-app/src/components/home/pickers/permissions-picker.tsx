@@ -1,3 +1,4 @@
+import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
 import { useRef } from "react";
 import { ChevronDown } from "lucide-react";
 import {
@@ -15,7 +16,9 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Badge } from "@/components/ui/badge";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { cn } from "@/lib/utils";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useRegionValue } from "@/lib/layout-overrides";
+import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
+import { useComposerTileId } from "@/components/home/composer/composer-tile-hooks";
 import {
   AUTO_JUDGE_UNAVAILABLE_DESCRIPTION,
   AUTO_MID_TURN_NOTICE,
@@ -89,6 +92,10 @@ interface PermissionsPickerProps {
    * in) out from under the panel the user is reading.
    */
   closeFocus: "composer" | "trigger";
+  /** `false` for every mount that isn't a real toolbar slot (the Settings
+   *  default-permission row): keeps that row from registering the
+   *  `composer.access` hotspot under the shared `"landing"` tile id. */
+  readonly interactive: boolean;
   /**
    * The trailing "Permission settings…" item's action, or `null` to render no
    * such item. A composer passes one (it always has a run-target host); the
@@ -110,6 +117,7 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
     turnActive,
     judgeBilling,
     closeFocus,
+    interactive,
     onOpenPermissionSettings,
   } = props;
   // Set by the trailing Settings item for the close it causes. That close must
@@ -145,7 +153,12 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   // the permission the next send will run under, so `compact` takes it to the
   // shape a narrow composer already puts it in - icon alone, name on hover -
   // and no further.
-  const compact = useLayoutStore((s) => s.composer.access) === "compact";
+  const compact = useRegionValue("access", "size") === "chip";
+  const tileId = useComposerTileId();
+  const { ref: hotspotRef } = useLayoutRegion({
+    regionId: "access",
+    instanceId: tileId,
+  });
 
   // No tooltip of its own: the wrapper below already renders one (both branches
   // ARE a `TooltipWrapper`), and the label is VISIBLE on this pill until the
@@ -157,36 +170,15 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   // control.
   const trigger = (
     <DropdownMenuTrigger asChild>
-      <ToolbarPillButton
+      <PermissionsTrigger
+        ref={interactive ? hotspotRef : undefined}
+        label={label}
         aria-label={accessibleLabel}
         disabled={disabled}
-        className={cn(
-          "min-w-0 disabled:cursor-not-allowed disabled:opacity-50",
-          experimental ? "max-w-full" : "max-w-[min(32cqw,13rem)]",
-          compact && "justify-center",
-        )}
-      >
-        <Icon className="size-4 shrink-0" />
-        <span
-          className={cn(
-            "min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap @max-lg:hidden",
-            compact ? "hidden" : "inline-flex",
-          )}
-        >
-          <span className="truncate">{label}</span>
-          {experimental ? (
-            <Badge variant="muted" size="xs">
-              Experimental
-            </Badge>
-          ) : null}
-        </span>
-        <ChevronDown
-          className={cn(
-            "size-3.5 shrink-0 text-muted-foreground @max-lg:hidden",
-            compact && "hidden",
-          )}
-        />
-      </ToolbarPillButton>
+        compact={compact}
+        experimental={experimental}
+        icon={<Icon className="size-4 shrink-0" />}
+      />
     </DropdownMenuTrigger>
   );
 
@@ -357,5 +349,60 @@ function PermissionOptionBody(props: {
         </span>
       ) : null}
     </span>
+  );
+}
+
+export function PermissionsTrigger({
+  label,
+  disabled,
+  compact,
+  experimental,
+  icon,
+  ...rest
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  label: string;
+  compact: boolean;
+  experimental?: boolean;
+  icon: ReactNode;
+  ref?: Ref<HTMLButtonElement>;
+}) {
+  return (
+    <ToolbarPillButton
+      aria-label={label}
+      {...rest}
+      disabled={disabled}
+      // Shield alone means a SQUARE chip, not a pill with its label removed:
+      // the label and chevron are `hidden` in both of these cases, so keeping
+      // the pill's side padding would leave a 34px box beside the model chip's
+      // 28px one. `@max-lg` is the composer going narrow, `compact` is the
+      // user choosing the chip size in Layout; they arrive at the same shape.
+      className={cn(
+        "min-w-0",
+        experimental ? "max-w-full" : "max-w-[min(32cqw,13rem)]",
+        "@max-lg:size-7 @max-lg:justify-center @max-lg:px-0",
+        compact && "size-7 justify-center px-0",
+      )}
+    >
+      {icon}
+      <span
+        className={cn(
+          "min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap @max-lg:hidden",
+          compact ? "hidden" : "inline-flex",
+        )}
+      >
+        <span className="truncate">{label}</span>
+        {experimental ? (
+          <Badge variant="muted" size="xs">
+            Experimental
+          </Badge>
+        ) : null}
+      </span>
+      <ChevronDown
+        className={cn(
+          "size-3.5 shrink-0 text-muted-foreground @max-lg:hidden",
+          compact && "hidden",
+        )}
+      />
+    </ToolbarPillButton>
   );
 }

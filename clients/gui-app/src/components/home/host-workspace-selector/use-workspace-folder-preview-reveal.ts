@@ -21,7 +21,7 @@ export interface WorkspaceFolderPreviewReveal {
 /**
  * The touch half of the workspace summary trigger's hover preview.
  *
- * The preview is a HoverCard, and Radix opens those on hover with touch
+ * The preview is a HoverCard, and those open on a MOUSE hover only, touch
  * pointers explicitly excluded - so on a phone `repo · branch`, the path the
  * chat actually runs in, and a staged folder's apply hint have no route at all.
  * Tapping opens the folder picker instead, which carries the binding controls

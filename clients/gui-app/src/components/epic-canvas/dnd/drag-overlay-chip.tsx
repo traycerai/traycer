@@ -1,3 +1,5 @@
+import { ColumnEdgeContext } from "@/components/layout/column-edge-context";
+import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-placement";
 import type { ReactNode } from "react";
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
 /**
@@ -16,7 +18,8 @@ import {
   Lock,
   Trash2,
 } from "lucide-react";
-import { LEFT_PANEL_DEFINITIONS } from "@/components/epic-canvas/sidebar/left-panel-registry";
+import { LeftPanelRailIcon } from "@/components/epic-canvas/sidebar/left-panel-rail-icon";
+import { LEFT_PANEL_RAIL_TILE_CLASS } from "@/components/epic-canvas/sidebar/left-panel-rail-tile";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
@@ -24,6 +27,7 @@ import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy
 import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
 import { HeaderTabDragOverlay } from "@/components/layout/tabs/tab-strip-drag-overlay";
 import { SplitTabDragOverlay } from "@/components/layout/tabs/split-tab-drag-overlay";
+import { SideTabDragOverlay } from "@/components/layout/tabs/side-strip/side-tab-drag-overlay";
 import {
   useAppearanceHeaderStripItem,
   useHeaderTabs,
@@ -114,7 +118,9 @@ export function EpicRootDragOverlayContent() {
   const tileSourceWidth = useEpicDndStore((s) => s.tileSourceWidth);
   const activeSource = useEpicDndStore((s) => s.activeSource);
   const activeHeaderTab = useEpicDndStore((s) => s.activeHeaderTab);
-  const headerTabWidth = useEpicDndStore((s) => s.headerStripSourceWidth);
+  const headerTabWidth = useEpicDndStore(
+    (s) => s.headerStripSourceSize?.width ?? null,
+  );
   const openableSource = canvasOpenableDragSource(activeSource);
   const railSource =
     activeSource?.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE ? activeSource : null;
@@ -195,16 +201,42 @@ function HeaderTabOverlayChip(props: {
   readonly tab: HeaderTabDragData;
   readonly width: number | null;
 }) {
+  const placement = useTabStripPlacement();
   const item = useAppearanceHeaderStripItem(props.tab.stripItemId);
   const ghost = useActiveHeaderTabGhost();
   const tearOff = useEpicDndStore((state) => state.headerTearOffPreview);
   const isActive = useTabsStore(
     (state) => state.activeItemId === props.tab.stripItemId,
   );
+  const axis = useEpicDndStore((state) => state.headerStripAxis);
+  const size = useEpicDndStore((state) => state.headerStripSourceSize);
   if (item === null) return null;
+  // A vertical strip's drag carries a row (or a row pair), not a tab.
+  if (axis === "y") {
+    return (
+      <HeaderTabOverlayIndicators>
+        <ColumnEdgeContext.Provider
+          value={placement === "top" ? null : placement}
+        >
+          <SideTabDragOverlay
+            item={item}
+            ghost={ghost}
+            size={size}
+            source={props.tab}
+            isActive={isActive}
+          />
+        </ColumnEdgeContext.Provider>
+      </HeaderTabOverlayIndicators>
+    );
+  }
   if (item.kind === "tab" && ghost !== null) {
     return (
-      <HeaderTabDragOverlay tab={item.tab} ghost={ghost} width={props.width} />
+      <HeaderTabDragOverlay
+        tab={item.tab}
+        ghost={ghost}
+        width={props.width}
+        isActive={isActive}
+      />
     );
   }
   return (
@@ -214,6 +246,7 @@ function HeaderTabOverlayChip(props: {
           tab={item.tab}
           ghost={ghost}
           width={props.width}
+          isActive={isActive}
         />
       ) : (
         <SplitTabDragOverlay
@@ -440,24 +473,24 @@ function GitDiffTileDragOverlay(props: { readonly node: GitDiffTileRef }) {
   );
 }
 
+/**
+ * A rail icon drags as its own tile, not a labelled chip: the rail is a row of
+ * 36px icons, and a chip three tiles wide covered the neighbours and the drop
+ * line the user was aiming at.
+ */
 function LeftPanelRailDragOverlay(props: {
   readonly source: EpicCanvasLeftPanelRailDragData;
 }) {
-  const panel =
-    LEFT_PANEL_DEFINITIONS.find(
-      (definition) => definition.id === props.source.panelId,
-    ) ?? null;
-  if (panel === null) return null;
-  const Icon = panel.icon;
   return (
     <m.div
       {...CHIP_MOTION}
+      data-testid="left-panel-rail-drag-overlay"
       className={cn(
-        "pointer-events-none flex h-9 cursor-grabbing select-none items-center gap-2 rounded-md border border-canvas-border/80 bg-canvas px-3 text-ui-sm font-medium text-canvas-foreground shadow-lg",
+        LEFT_PANEL_RAIL_TILE_CLASS,
+        "pointer-events-none flex cursor-grabbing select-none items-center justify-center border border-canvas-border/80 bg-canvas text-canvas-foreground shadow-lg",
       )}
     >
-      <Icon className="size-4 shrink-0 text-muted-foreground" />
-      <span>{panel.title}</span>
+      <LeftPanelRailIcon panelId={props.source.panelId} hidden={false} />
     </m.div>
   );
 }

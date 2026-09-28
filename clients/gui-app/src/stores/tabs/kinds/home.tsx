@@ -3,6 +3,7 @@ import { House } from "lucide-react";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { homeTabIntent } from "@/lib/tab-navigation/intents";
 import type { HeaderTab, TabKindModule, TabRef } from "@/stores/tabs/types";
+import { TAB_KIND_SPLIT_ELIGIBILITY } from "@/stores/tabs/tab-kind-policy";
 
 const HOME_TAB_LABEL = "Home";
 const HOME_ROUTE = "/home";
@@ -53,7 +54,7 @@ export const homeTabModule: TabKindModule<"home", null> = {
     surface: {
       render: () => createElement(homeSurface),
       canonicalRoute: (tab) => tab.route,
-      splitEligibility: "ineligible",
+      splitEligibility: TAB_KIND_SPLIT_ELIGIBILITY.home,
       duplication: "forbidden",
       singleton: "per-window",
       newWindow: "none",

@@ -1,0 +1,74 @@
+---
+title: "Editing artifacts"
+description: "Write and format artifacts, link and embed content, and send passages to a chat."
+---
+
+Open an artifact from the [Artifacts](/panels/artifacts) panel to edit it in a tile. Edits save as you type, and everyone with the Task open sees them live. Collaborators' cursors appear in the text while you co-edit.
+
+Editing needs the **Editor** or **Owner** role. Viewers can read, comment, and send passages to a chat. See [Roles](/panels/sharing#roles).
+
+## Titles
+
+An artifact you create in the app opens with an empty heading at the top, where the cursor starts. Until you rename the artifact, its title in the panel and on the tab follows that first heading as you type.
+
+Once you rename the artifact from the panel, the heading and the title are independent.
+
+## Formatting Toolbar
+
+Select text to show the formatting toolbar:
+
+| Group     | Buttons                                                   |
+| --------- | --------------------------------------------------------- |
+| Headings  | **Heading 1**, **Heading 2**, **Heading 3**               |
+| Text      | **Bold**, **Italic**, **Strikethrough**, **Link** (⌘K / Ctrl+K) |
+| Lists     | **Bullet list**, **Numbered list**, **Task list**         |
+| Blocks    | **Quote**, **Inline code**, **Code block**                |
+
+Two actions sit beside the formatting buttons:
+
+- **Comment** (⌘⌥M / Ctrl+Alt+M) starts a comment thread on the selection. See [Comments](/panels/comments).
+- **Send to chat** hands the selection to an agent chat. See [Send to Chat](#send-to-chat).
+
+In a narrow tile the formatting buttons fold into one **Aa** button. Viewers see only **Comment** and **Send to chat**.
+
+## Links
+
+Select text and click **Link**, or press ⌘K / Ctrl+K, to open **Edit link**. It has two fields, **Page or URL** and **Link title**, and **Remove link** when you edit an existing link.
+
+To link to another artifact, enter its folder as a relative path, such as `../sibling-ticket` for a sibling or `child-artifact` for a child. See [Artifacts on Disk](/panels/artifacts#artifacts-on-disk) for the folder layout.
+
+Hover a link to see a preview card with **Copy link** and, for Editors and Owners, **Edit**.
+
+## Images
+
+Paste or drop images into the body. Each image can be up to 30 MB.
+
+## Diagrams and Wireframes
+
+Type a code fence named `mermaid` or `wireframe` and it turns into a live block after a short pause:
+
+- [Diagrams](/panels/artifacts/diagrams) render Mermaid source as a diagram.
+- [Wireframes](/panels/artifacts/wireframes) render a self-contained HTML document as a live preview.
+
+## Structure and Navigation
+
+- **Nested artifacts.** When an artifact has children, a list of them appears under its body. Click a row to open that child.
+- **Table of contents.** An outline beside the body lists the artifact's level-1 and level-2 headings, so you can jump through a long document.
+- **Syncing.** If the connection to the host drops while an artifact is open, a thin bar moves along the edge of the artifact until it reconnects. If it takes a while, or with reduced motion turned on, the bar stays still. The text you see may be out of date until then.
+- **Drag onto the canvas.** Drag an artifact card from a chat, a row of the nested list, or a spec or ticket reference chip onto the canvas to open that artifact in its own tile.
+
+## Send to Chat
+
+Select a passage and click **Send to chat** to quote it in an agent chat. The menu lists:
+
+- **Open**: chats that already have a tile open in this Task tab.
+- **Other chats**: the rest of the Task's chats.
+- **New chat**: always at the bottom.
+
+The quote, followed by a reference to the artifact, is added to that chat's draft and the chat comes forward. Nothing is sent until you send the message. **New chat** opens the new-conversation dialog with the quote already in place.
+
+## Related
+
+- [Comments](/panels/comments)
+- [Version history and recovery](/panels/artifacts/version-history)
+- [Export](/panels/artifacts/export)
