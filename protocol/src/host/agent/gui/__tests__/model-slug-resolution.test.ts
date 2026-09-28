@@ -340,6 +340,21 @@ describe("resolveModelBySlug", () => {
     expect(resolveModelBySlug(bySlug, "opus[200K]").kind).toBe("alias");
   });
 
+  it("keeps rows with no resolvedModel on exact-only matching, marker or not", () => {
+    // Only adapters whose catalog decorates slugs publish `resolvedModel`, so
+    // a row without it has no evidence that `x[1m]` and `x` are one model.
+    // The documented fallback for such rows is exact-only, in both directions.
+    const undecorated = [model({ harnessId: "claude", slug: "bare-slug" })];
+    expect(resolveModelBySlug(undecorated, "bare-slug[1m]")).toEqual({
+      kind: "none",
+    });
+
+    const decorated = [model({ harnessId: "claude", slug: "bare-slug[1m]" })];
+    expect(resolveModelBySlug(decorated, "bare-slug")).toEqual({
+      kind: "none",
+    });
+  });
+
   it("returns none for an input that is nothing but a tier marker", () => {
     expect(resolveModelBySlug(CLAUDE_CLI_2_1_284_CATALOG, "[1m]")).toEqual({
       kind: "none",

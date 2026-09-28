@@ -145,7 +145,9 @@ function tierCompatible(input: TierSplit, candidate: string): boolean {
  * 3. the rows that agree with `slug` once a trailing tier marker (`[1m]`) is
  *    set aside, on either their `slug` or their `resolvedModel` - provided the
  *    marker is on at most one side or is the same on both. Two different
- *    markers are two different tiers and never match.
+ *    markers are two different tiers and never match. Only rows that publish
+ *    `resolvedModel` take part: that is the signal of an adapter whose catalog
+ *    decorates slugs, and every other row keeps exact-only matching.
  *
  * Pass 3 exists because a catalog can gain or lose the marker between two
  * provider CLI releases: Claude's 2.1.280 listed `opus[1m]` and
@@ -180,9 +182,13 @@ export function resolveModelBySlug(
   const input = splitTierMarker(slug);
   if (input.bare.length === 0) return NO_MATCH;
   const tierTied = models.filter((candidate) => {
-    if (tierCompatible(input, candidate.slug)) return true;
+    // Only a row that publishes `resolvedModel` comes from an adapter whose
+    // catalog decorates slugs; any other row stays on exact-only matching.
     const resolved = modelResolvedModel(candidate);
-    return resolved !== null && tierCompatible(input, resolved);
+    if (resolved === null) return false;
+    return (
+      tierCompatible(input, candidate.slug) || tierCompatible(input, resolved)
+    );
   });
   const tierFirst = tierTied.at(0);
   if (tierFirst === undefined) return NO_MATCH;
