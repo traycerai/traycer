@@ -230,7 +230,7 @@ Agent commands are for agents that Traycer launches. They read the Task and the 
 | `traycer agent send ... --response-id <id>` | Answer a request you received from that agent. |
 | `traycer agent transcript --agent-id <id>` | Print another agent's conversation. |
 | `traycer agent inbox` | Print the messages recently delivered to this agent, in full. `--after <cursor>` continues from the previous page, and `--agent-id <id>` reads a different agent's inbox. |
-| `traycer monitor` | Stream this agent's incoming messages as they arrive. It keeps running, and each message it prints is marked as delivered. |
+| `traycer monitor` | Stream this agent's incoming messages as they arrive. It keeps running, and each message it prints is marked as delivered. `--agent-id <id>` monitors a different agent. |
 | `traycer agent selection-guide` | Print the agent selection guide, which says which coding agent, model, and reasoning effort to use. See [Settings › Agent selection](/settings/agents). |
 | `traycer agent list-harnesses` | List the coding agents enabled on this host, with the ids `--harness` accepts. |
 | `traycer agent list-harness-models <harness>` | List a coding agent's models and their options. |
@@ -300,14 +300,16 @@ Traycer sets two environment variables for every agent it launches:
 - `TRAYCER_EPIC_ID` is the Task the agent belongs to.
 - `TRAYCER_AGENT_ID` is the agent itself.
 
-There are no flags for these values. Commands that need them read them from the environment:
+There is no flag for the Task. Commands that need these values read them from the environment, and a few accept `--agent-id` in place of `TRAYCER_AGENT_ID`:
 
 | Needs | Commands |
 | --- | --- |
-| `TRAYCER_EPIC_ID` | `workspace list`, `terminal list`, `terminal output`, `comments list`, `comments set-status`, `monitor`, and every `agent` command except `agent list-harnesses` |
-| `TRAYCER_AGENT_ID` as well | `agent list`, `create`, `fork`, `configure`, `send`, `selection-guide`, `list-harness-models`, `list-profiles`, and `profile-rate-limits`. Also `agent inbox`, `agent role claim`, `agent role relinquish`, and `monitor`, unless you pass `--agent-id`. |
+| `TRAYCER_EPIC_ID` | `workspace list`, `terminal list`, `terminal output`, `comments list`, `comments set-status`, `agent stop`, `agent archive`, `agent transcript`, and `agent role list` |
+| `TRAYCER_EPIC_ID` and `TRAYCER_AGENT_ID` | `agent list`, `create`, `fork`, `configure`, `send`, `selection-guide`, `list-profiles`, and `profile-rate-limits` |
+| `TRAYCER_EPIC_ID`, and `TRAYCER_AGENT_ID` or `--agent-id` | `agent inbox`, `agent role claim`, `agent role relinquish`, and `monitor` |
+| Neither | `agent list-harnesses` and `agent list-harness-models` |
 
-Run outside an agent, these commands fail with "epic id required - set TRAYCER_EPIC_ID."
+Run outside an agent, these commands fail with "epic id required - set TRAYCER_EPIC_ID." or "sender agent id required - set TRAYCER_AGENT_ID." `monitor` checks the agent first: "agent id required — pass --agent-id or set TRAYCER_AGENT_ID."
 
 ### Read-Only Agents
 

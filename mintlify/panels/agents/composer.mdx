@@ -7,7 +7,7 @@ import { FeatureVideo } from "/snippets/feature-video.jsx";
 
 The composer is where you write the next message on the Chat interface. Pick a [coding agent and model](/agents-and-models/coding-agents#models) and [permissions](/panels/agents#permissions) before sending.
 
-Press **Enter** to send and **Shift+Enter** for a new line. While a turn is running, **Enter** queues the message and **⌘Enter / Ctrl+Enter** steers it into the running turn. See [Message queue](/panels/agents/message-queue).
+Press **Enter** to send and **Shift+Enter** for a new line. While a turn is running, **Enter** queues the message and **⌘Enter / Ctrl+Enter** steers it into the running turn. The shortcut queues instead when **Steer with ⌘+Enter** (**Steer with Ctrl+Enter** on Windows and Linux) is off in [General settings](/settings/general), and for a coding agent that can't steer it queues the message as **After turn**. See [Message queue](/panels/agents/message-queue).
 
 ## Mention Context
 
@@ -22,7 +22,7 @@ Type `@` to open the mention picker. Browse a category or type to search, then s
 | **Task**                      | Other Tasks you can open.                                                                       | Always.                                                           |
 | **Agents**, **Terminals**     | Agents and terminals in this Task.                                                              | Inside a Task.                                                    |
 | **Browser**                   | Tabs in the in-app browser.                                                                     | At least one browser tab is open.                                 |
-| **Artifacts**                 | Artifacts in this Task.                                                                         | Always.                                                           |
+| **Artifacts**                 | Artifacts from Tasks you can open. Inside a Task, its own artifacts come first.                 | Always.                                                           |
 
 <FeatureVideo src="https://assets.traycer.ai/docs/videos/mention-pickers.mp4" label="Mention a file, agent, and artifact" />
 

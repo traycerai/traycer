@@ -27,7 +27,7 @@ Use this guide when you want agents to run on another machine, such as a worksta
     traycer host ensure             # installs, registers and starts the host
     ```
 
-    When the host joins your account, the dialog shows **Host connected**. Click **Set up host** to open its **Overview**, and rename it with the pencil (**Edit name**) if the name isn't clear. If `traycer host ensure` can't register the host, run `traycer host doctor` there. See [Remote hosts](/concepts/hosts/remote-hosts).
+    When the host joins your account, the dialog shows **Host connected**. Click **Set up host** to open its **Overview**, and rename it with the pencil (**Edit name**) if the name isn't clear. If the dialog shows **Host registered** instead, the host is in your account but this window has no live connection to it: **Set up host** still opens its settings, but check the connection before you start agents there. If `traycer host ensure` can't register the host, or it doesn't connect, run `traycer host doctor` there. See [Remote hosts](/concepts/hosts/remote-hosts).
   </Step>
   <Step title="Choose where new work starts">
     To start new work on the other machine by default, click **Activate** on its Overview; this changes the active host for every window. To keep the active host and use the other machine for one piece of work, pick it in the host picker of the start-page composer, the new agent dialog, **New terminal**, or **Fork agent**.

@@ -105,7 +105,7 @@ While routing is working on a chat, one card sits above the composer. It has the
 - **Count line**, only when there is something to count: "2 queued messages move with it", or "1 other chat in this task is also switching".
 - **Two buttons:** the step to take now, and the way to refuse it.
 
-The card has no close button. It goes away when the countdown ends, when you answer it, or when routing finishes. While the chat's connection is down its buttons are disabled and read **Reconnecting…**, and while Traycer is still working out the next step they read **Deciding…**.
+The card has no close button. It goes away when you answer it or when routing finishes. A countdown that ends in a switch finishes routing; one that ends in a wait keeps the card up until the wait is over (see [Waiting for a Reset](#waiting-for-a-reset)). While the chat's connection is down its buttons are disabled and read **Reconnecting…**, and while Traycer is still working out the next step they read **Deciding…**.
 
 ### The Switch Countdown
 

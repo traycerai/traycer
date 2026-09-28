@@ -190,7 +190,7 @@ When an agent runs in a new worktree, its chat shows a setup card. See [Setup an
 | State | Meaning |
 |---|---|
 | **Creating worktree** | Git is creating the worktree. |
-| **Setting up worktree** | The setup script is running. It has no time limit. |
+| **Setting up worktree** | The setup script is running. It has no overall time limit, but it is cancelled after 5 minutes with no output. |
 | **Worktree ready** | The worktree was created and setup finished. |
 | **Setup failed** | The setup script exited with an error, shown as "(exit N)". Click **Retry setup**. |
 | **Setup cancelled** | Setup was stopped: Ctrl+C, the setup terminal was closed, or 5 minutes passed with no output. Click **Retry setup**. |

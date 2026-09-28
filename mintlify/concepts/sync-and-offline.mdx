@@ -48,10 +48,10 @@ When more than one thing is wrong, the indicator shows the most serious one. Hov
 
 ## Closing A Task With Unsynced Changes
 
-If you close a Task tab while it has changes that haven't synced, Traycer asks first: "They'll be discarded if you close the tab now. Keep it open and they'll sync as soon as the connection returns."
+If you close a Task tab while it holds changes its host hasn't received yet, Traycer asks first: "They'll be discarded if you close the tab now. Keep it open and they'll sync as soon as the connection returns." Changes the host already has don't trigger this: closing the tab leaves them on the host, which syncs them to the cloud when it can.
 
-- **Keep open** leaves the tab open. The dialog also closes by itself as soon as the changes sync.
-- **Close anyway** closes the tab and discards the unsynced changes.
+- **Keep open** leaves the tab open. The dialog also closes by itself as soon as the host receives the changes.
+- **Close anyway** closes the tab and discards the changes the host hasn't received.
 
 Closing a group of tabs waits for this answer before it closes any of them.
 
