@@ -11,6 +11,7 @@ import type { ProviderListRow } from "@/components/providers/provider-list";
 import { Button } from "@/components/ui/button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
+  providerLoginAnswerStillStarting,
   providerLoginAnswerWantsPackRetry,
   providerLoginNotStartedMessage,
   providerLoginStartCopy,
@@ -32,6 +33,7 @@ import {
 } from "@/components/settings/panels/use-auto-open-login-url";
 import { waitingStepCopy } from "@/components/settings/panels/waiting-step-copy";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
+import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-login-mutation";
 import { useProvidersEnsurePack } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
@@ -732,6 +734,7 @@ function SignInToEnableButton(props: {
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useHostScopedProvidersAwaitLogin();
   const ensurePack = useProvidersEnsurePack();
+  const cancelLogin = useProvidersCancelLogin();
   // One press can be several `providers.startLogin` calls: the host answers
   // `pending` while the provider's pack downloads or its login child is
   // still coming up, and the same question asked again attaches to that work
@@ -875,6 +878,13 @@ function SignInToEnableButton(props: {
       wait: waitForProviderLoginStart,
     }).then(
       (result: ProviderStartLoginAnswer) => {
+        // The press ended while the host was still bringing its login child
+        // up: the user moved on from this step (Continue is always enabled),
+        // or the host said "still starting" too often. Nothing here will open
+        // that child's page or wait for it, so it is released, mounted or not.
+        if (providerLoginAnswerStillStarting(result)) {
+          cancelLogin.mutate({ providerId, profileId: null });
+        }
         if (unmountedRef.current) return;
         setStartProgress(null);
         if (!result.started) return;

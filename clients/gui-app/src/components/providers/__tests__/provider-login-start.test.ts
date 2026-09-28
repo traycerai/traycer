@@ -3,6 +3,7 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import {
   PROVIDER_LOGIN_PACK_POLL_MS,
   PROVIDER_LOGIN_STILL_STARTING_CAP,
+  providerLoginAnswerStillStarting,
   providerLoginAnswerWantsPackRetry,
   providerLoginNotStartedMessage,
   providerLoginPackFailure,
@@ -365,6 +366,24 @@ describe("providerLoginAnswerWantsPackRetry", () => {
       expect(providerLoginAnswerWantsPackRetry(withReason)).toBe(false);
     });
   }
+});
+
+describe("providerLoginAnswerStillStarting", () => {
+  it("is true for a pending 'starting' answer", () => {
+    expect(providerLoginAnswerStillStarting(STARTING_ANSWER)).toBe(true);
+  });
+
+  it("is false for a pending 'pack_preparing' answer", () => {
+    expect(providerLoginAnswerStillStarting(DOWNLOADING_ANSWER)).toBe(false);
+  });
+
+  it("is false for a null pending", () => {
+    expect(providerLoginAnswerStillStarting(NOT_STARTED_ANSWER)).toBe(false);
+  });
+
+  it("is false for a started answer, even though it also carries no pending", () => {
+    expect(providerLoginAnswerStillStarting(STARTED_ANSWER)).toBe(false);
+  });
 });
 
 describe("providerLoginNotStartedMessage", () => {

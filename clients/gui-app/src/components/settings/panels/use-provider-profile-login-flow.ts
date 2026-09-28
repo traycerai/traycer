@@ -13,6 +13,7 @@ import {
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import {
+  providerLoginAnswerStillStarting,
   providerLoginAnswerWantsPackRetry,
   providerLoginNotStartedMessage,
   providerLoginStartCopy,
@@ -233,7 +234,7 @@ function startAnswerRefusal(
   if (answer.started && !profileMissing) return null;
   // The RPC succeeded but the host declined to start the login: the provider
   // tooling is the limiting factor, not auth.
-  const gaveUp = (answer.pending ?? null) === "starting";
+  const gaveUp = providerLoginAnswerStillStarting(answer);
   return {
     blocker: gaveUp ? "timeout" : "provider_unavailable",
     releaseHostLogin: gaveUp,
@@ -745,17 +746,34 @@ export function useProviderProfileLoginFlow(
         wait: waitForProviderLoginStart,
       }).then(
         (data) => {
-          if (startAbandoned()) return;
-          lastAnswerRef.current = data;
+          // A newer attempt asks the same question and attaches to the same
+          // login, so whatever this answer holds is that attempt's now.
+          if (attemptIdRef.current !== thisAttemptId) return;
           // Reauth always awaits the profile it was invoked for - the
           // response never mints a different id for an existing profile.
           // Create has no id until this response supplies one.
           const nextProfileId =
             mode === "reauth" ? existingProfileId : data.profileId;
+          // Ahead of the unmount check: a Cancel pressed while the pack was
+          // downloading ends the flow at once (`cancel`), and the dialog can
+          // be gone by the time the call already on its way answers - with a
+          // login it started, and a profile it minted, that only this cancel
+          // releases.
           if (cancelRequestedRef.current) {
             finishCancellation(nextProfileId);
             return;
           }
+          if (unmountedRef.current) {
+            // Nobody will open this login's page or wait for it. A login that
+            // already started is left to its own deadline, as it always was:
+            // a provider that opens its own page may have it open in a
+            // browser already, where the user can still finish.
+            if (providerLoginAnswerStillStarting(data)) {
+              cancelProfile(nextProfileId);
+            }
+            return;
+          }
+          lastAnswerRef.current = data;
           // Create mode must have a minted profile id to proceed; reauth
           // mode never derives `nextProfileId` from this response (it is
           // always the caller's own `existingProfileId`, including the

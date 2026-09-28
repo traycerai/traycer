@@ -77,6 +77,11 @@ type SetEnabledMutate = (variables: {
 }) => void;
 type SetEnabledVariables = Parameters<SetEnabledMutate>[0];
 
+type CancelLoginVariables = {
+  readonly providerId: string;
+  readonly profileId: string | null;
+};
+
 // `codex` is disabled with a DETECTED candidate, so it's the one row that
 // satisfies `providerNeedsSignInToEnable` (`!state.enabled && installDetected`)
 // and renders `SignInToEnableButton` - every other provider's row has no
@@ -147,6 +152,7 @@ const fixtures = vi.hoisted(() => {
     ),
     awaitLoginMutate: vi.fn<AwaitLoginMutate>(),
     awaitLoginReset: vi.fn(),
+    cancelLoginMutate: vi.fn<(vars: CancelLoginVariables) => void>(),
     // Modelled for the same reason `startLogin`'s are: the component derives
     // its "did not authenticate" row message from the mutation RESULT rather
     // than from local state, so a mock that carried only `mutate` would leave
@@ -246,6 +252,13 @@ vi.mock("@/hooks/providers/use-providers-touch-login-mutation", () => ({
   }),
 }));
 
+vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => ({
+  useProvidersCancelLogin: () => ({
+    mutate: fixtures.cancelLoginMutate,
+    isPending: false,
+  }),
+}));
+
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => vi.fn(() => Promise.resolve()),
 }));
@@ -274,6 +287,10 @@ import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
 } from "@/lib/providers/provider-ambient-auth";
+import {
+  PROVIDER_LOGIN_PACK_POLL_MS,
+  PROVIDER_LOGIN_STILL_STARTING_CAP,
+} from "@/components/providers/provider-login-start";
 
 function latestStartLoginCall(): readonly [
   StartLoginVariables,
@@ -315,6 +332,7 @@ function resetFixtures(): void {
   fixtures.awaitLoginReset.mockReset();
   fixtures.awaitLoginSuccess = false;
   fixtures.awaitLoginData = undefined;
+  fixtures.cancelLoginMutate.mockReset();
   fixtures.setEnabledMutate.mockReset();
   fixtures.setEnabledPending = false;
   fixtures.setEnabledVariables = undefined;
@@ -1566,5 +1584,137 @@ describe("OnboardingDetectedAgents terminal-login rows", () => {
     // makes negatively - the line a terminal-login row does NOT get.
     expect(screen.getByText("Not signed in")).toBeTruthy();
     expect(screen.queryByText(TERMINAL_SETUP_SUBTEXT)).toBeNull();
+  });
+});
+
+// A login the host is still holding for a press this button has stopped
+// asking about: the host keeps a "still starting" child alive for the next
+// call to attach to, and this button is the only one asking, so once it
+// stops nothing else ever will. `providers.cancelLogin` is how it lets that
+// child go, ambiently (`profileId: null` - onboarding has no profile picker).
+describe("SignInToEnableButton releasing a login nobody is coming back for", () => {
+  afterEach(resetFixtures);
+
+  it("cancels once the host answers 'still starting' PROVIDER_LOGIN_STILL_STARTING_CAP times, and states it did not start", async () => {
+    fixtures.providers = [fixtures.signInProvider];
+    const view = render(<OnboardingDetectedAgents />);
+
+    fireEvent.click(signInButton());
+    for (
+      let attempt = 0;
+      attempt < PROVIDER_LOGIN_STILL_STARTING_CAP;
+      attempt += 1
+    ) {
+      const [, options] = latestStartLoginCall();
+      const stillStarting: StartLoginData = {
+        started: false,
+        pending: "starting",
+      };
+      await act(() => {
+        fixtures.startLoginPending = true;
+        fixtures.startLoginSuccess = true;
+        fixtures.startLoginData = stillStarting;
+        options.onSuccess(stillStarting);
+        return Promise.resolve();
+      });
+    }
+    fixtures.startLoginPending = false;
+    view.rerender(<OnboardingDetectedAgents />);
+
+    expect(fixtures.startLoginMutate).toHaveBeenCalledTimes(
+      PROVIDER_LOGIN_STILL_STARTING_CAP,
+    );
+    expect(fixtures.cancelLoginMutate).toHaveBeenCalledTimes(1);
+    expect(fixtures.cancelLoginMutate).toHaveBeenCalledWith({
+      providerId: "codex",
+      profileId: null,
+    });
+    expect(fixtures.awaitLoginMutate).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Sign-in did not start. Try again.",
+    );
+  });
+
+  it("cancels a login that was still starting when the row unmounted, with no further call dispatched", async () => {
+    fixtures.providers = [fixtures.signInProvider];
+    const view = render(<OnboardingDetectedAgents />);
+
+    fireEvent.click(signInButton());
+    const [, options] = latestStartLoginCall();
+    view.unmount();
+
+    await act(() => {
+      options.onSuccess({ started: false, pending: "starting" });
+      return Promise.resolve();
+    });
+
+    // Nobody is left to ask again, so the loop must have stopped at this one
+    // answer rather than dispatching a second call into a dead row.
+    expect(fixtures.startLoginMutate).toHaveBeenCalledTimes(1);
+    expect(fixtures.cancelLoginMutate).toHaveBeenCalledTimes(1);
+    expect(fixtures.cancelLoginMutate).toHaveBeenCalledWith({
+      providerId: "codex",
+      profileId: null,
+    });
+  });
+
+  it("does not cancel a login that had already started by the time the row unmounted", async () => {
+    // The complement of the case above, proving the positive path would have
+    // been observable here too: same press, same unmount, only the final
+    // answer differs.
+    fixtures.providers = [fixtures.signInProvider];
+    const view = render(<OnboardingDetectedAgents />);
+
+    fireEvent.click(signInButton());
+    const [, options] = latestStartLoginCall();
+    view.unmount();
+
+    await act(() => {
+      options.onSuccess({
+        started: true,
+        url: "https://example.test/oauth",
+        profileId: null,
+        pending: null,
+      });
+      return Promise.resolve();
+    });
+
+    expect(fixtures.cancelLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("does not cancel while the pack is only downloading, and stops asking once the row unmounts", async () => {
+    // `pack_preparing` means nothing has been spawned yet - there is no login
+    // child for a cancel to release, and no second poll should go out once
+    // nobody is left to read the answer.
+    vi.useFakeTimers();
+    try {
+      fixtures.providers = [fixtures.signInProvider];
+      const view = render(<OnboardingDetectedAgents />);
+
+      fireEvent.click(signInButton());
+      const [, options] = latestStartLoginCall();
+      const downloading: StartLoginData = {
+        started: false,
+        pending: "pack_preparing",
+        pack: { percent: 10, reason: null, retryAtMs: null },
+      };
+      act(() => {
+        fixtures.startLoginPending = true;
+        fixtures.startLoginSuccess = true;
+        fixtures.startLoginData = downloading;
+        options.onSuccess(downloading);
+      });
+      expect(fixtures.startLoginMutate).toHaveBeenCalledTimes(1);
+
+      view.unmount();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PROVIDER_LOGIN_PACK_POLL_MS);
+      });
+
+      expect(fixtures.startLoginMutate).toHaveBeenCalledTimes(1);
+      expect(fixtures.cancelLoginMutate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -3433,7 +3433,11 @@ export type ProvidersStartLoginResponseV12 = z.infer<
  * `starting`: the login child is running and has not produced its sign-in URL
  * within this call's wait. The host keeps the child alive, and a further
  * `providers.startLogin` for the same target attaches to it rather than
- * spawning another. Antigravity's server takes 36 to 42 s to answer
+ * spawning another. The same target is the same `profileId`, or for a create
+ * the same `createProfile` request (label and sharing choice): the host
+ * continues the profile it minted for the first call rather than minting
+ * another, so the caller repeats its request unchanged. A caller that stops
+ * asking releases the child with `providers.cancelLogin`. Antigravity's server takes 36 to 42 s to answer
  * `initialize` on Windows, which no single call inside the transport's
  * response budget can wait out.
  */

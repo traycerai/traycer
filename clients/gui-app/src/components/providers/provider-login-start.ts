@@ -150,6 +150,24 @@ export function providerLoginNotStartedMessage(
   return notStarted;
 }
 
+/**
+ * Whether the answer that ENDED a press leaves a login child on the host that
+ * nobody is coming back for.
+ *
+ * `pending: "starting"` on that answer means this side stopped asking - the
+ * user cancelled or moved on, or the host said "still starting" too often -
+ * not that the host gave up: it keeps the child alive for the next call to
+ * attach to. The GUI is the only side that opens that child's consent page,
+ * so once nobody is asking, nothing ever will, and the child only waits for
+ * the host to reap it. Whoever stops asking releases it with
+ * `providers.cancelLogin`.
+ */
+export function providerLoginAnswerStillStarting(
+  answer: ProviderStartLoginAnswer,
+): boolean {
+  return (answer.pending ?? null) === "starting";
+}
+
 function progressOfAnswer(
   answer: ProviderStartLoginAnswer,
 ): ProviderLoginStartProgress | null {
@@ -202,7 +220,8 @@ export interface StartProviderLoginInput {
  * latest answer once `shouldStop` reports nobody is waiting or the host has
  * said "still starting" too many times. The caller reads that answer exactly
  * as it read a single call's: a non-null `pending` on it means this side gave
- * up, and is rendered as not started.
+ * up, and is rendered as not started. A `starting` one also leaves a login
+ * child for the caller to release (`providerLoginAnswerStillStarting`).
  */
 export async function startProviderLoginUntilSettled(
   input: StartProviderLoginInput,
