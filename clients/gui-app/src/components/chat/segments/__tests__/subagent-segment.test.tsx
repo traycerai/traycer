@@ -71,6 +71,7 @@ function SubagentPersistenceHarness(props: SubagentPersistenceHarnessProps) {
   return (
     <SubagentSegment
       id={props.segmentId}
+      cardId={props.segmentId}
       name="reviewer"
       task="Review the implementation"
       progressUpdates={["Step one"]}
@@ -124,6 +125,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-1"
+        cardId="test-segment-1"
         name="reviewer"
         task="Review the implementation"
         progressUpdates={["one", "two", "three", "four", "five", "six"]}
@@ -160,6 +162,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-2"
+        cardId="test-segment-2"
         name="reviewer"
         task="Review the implementation"
         progressUpdates={[]}
@@ -183,6 +186,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="subagent-header-skip"
+        cardId="subagent-header-skip"
         name="Scanner"
         task="Scan the repo"
         progressUpdates={["Scanning"]}
@@ -220,6 +224,7 @@ describe("<SubagentSegment /> promoted feed", () => {
       render(
         <SubagentSegment
           id="subagent-header-skip-elapsed"
+          cardId="subagent-header-skip-elapsed"
           name="Probe"
           task="Scan the repo"
           progressUpdates={[]}
@@ -254,6 +259,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="subagent-header-skip-badge"
+        cardId="subagent-header-skip-badge"
         name="Probe"
         task="Scan the repo"
         progressUpdates={["Scanning"]}
@@ -285,6 +291,7 @@ describe("<SubagentSegment /> promoted feed", () => {
       render(
         <SubagentSegment
           id="subagent-card-header-skip"
+          cardId="subagent-card-header-skip"
           name="Probe"
           task="Scan the repo"
           progressUpdates={["Scanning"]}
@@ -322,6 +329,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="subagent-card-header-skip-badge"
+        cardId="subagent-card-header-skip-badge"
         name="Probe"
         task="Scan the repo"
         progressUpdates={[]}
@@ -350,6 +358,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-measured-change"
+        cardId="test-segment-measured-change"
         name="reviewer"
         task="Review the implementation"
         progressUpdates={["one", "two"]}
@@ -378,6 +387,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-card-measured-change"
+        cardId="test-segment-card-measured-change"
         name="reviewer"
         task="Review the implementation"
         progressUpdates={["one", "two"]}
@@ -406,6 +416,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-task-notification"
+        cardId="test-segment-task-notification"
         name="codex-cli"
         task={[
           "<task-notification>",
@@ -441,6 +452,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-task-notification-attrs"
+        cardId="test-segment-task-notification-attrs"
         name="codex-cli"
         task={[
           '<task-notification kind="monitor">',
@@ -473,6 +485,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-3"
+        cardId="test-segment-3"
         name="reviewer"
         task="Review the implementation"
         progressUpdates={["Scanning", "Scanning", "Reading", "Scanning"]}
@@ -501,6 +514,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-segment-4"
+        cardId="test-segment-4"
         name="reviewer"
         task="Review the implementation"
         progressUpdates={["Step one", "Step two"]}
@@ -565,6 +579,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         <FindForceStatus renderId={segmentId} />
         <SubagentSegment
           id={segmentId}
+          cardId={segmentId}
           name="reviewer"
           task="Find-forced task"
           progressUpdates={["Step one"]}
@@ -607,6 +622,7 @@ describe("<SubagentSegment /> promoted feed", () => {
           />
           <SubagentSegment
             id={segmentId}
+            cardId={segmentId}
             name="reviewer"
             task="Tile A task"
             progressUpdates={[]}
@@ -625,6 +641,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         <ChatExpansionTestProviders tileInstanceId="tile-b">
           <SubagentSegment
             id={segmentId}
+            cardId={segmentId}
             name="reviewer"
             task="Tile B task"
             progressUpdates={[]}
@@ -655,6 +672,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-agent-type"
+        cardId="test-agent-type"
         name="Godel"
         agentType="explorer"
         task="Investigate the auth flow"
@@ -680,6 +698,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-header-anchor"
+        cardId="test-header-anchor"
         name="Godel"
         agentType="explorer"
         task="Investigate the auth flow"
@@ -715,6 +734,7 @@ describe("<SubagentSegment /> promoted feed", () => {
       render(
         <SubagentSegment
           id="test-elapsed-live"
+          cardId="test-elapsed-live"
           name="reviewer"
           agentType={null}
           task="Review the implementation"
@@ -741,6 +761,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-elapsed-total"
+        cardId="test-elapsed-total"
         name="reviewer"
         agentType={null}
         task="Review the implementation"
@@ -764,6 +785,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-elapsed-floor"
+        cardId="test-elapsed-floor"
         name="reviewer"
         agentType={null}
         task="Review the implementation"
@@ -789,6 +811,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-elapsed-subsecond"
+        cardId="test-elapsed-subsecond"
         name="reviewer"
         agentType={null}
         task="Review the implementation"
@@ -813,6 +836,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-elapsed-interrupted"
+        cardId="test-elapsed-interrupted"
         name="reviewer"
         agentType={null}
         task="Review the implementation"
@@ -842,6 +866,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-subagent-stopped"
+        cardId="test-subagent-stopped"
         name="reviewer"
         agentType={null}
         task="Review the implementation"
@@ -865,6 +890,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-parent"
+        cardId="test-parent"
         name="planner"
         agentType={null}
         task="Plan the refactor."
@@ -894,6 +920,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     const { container } = render(
       <SubagentSegment
         id="test-no-children"
+        cardId="test-no-children"
         name="planner"
         agentType={null}
         task="Plan the refactor."
@@ -919,6 +946,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-parent-notice"
+        cardId="test-parent-notice"
         name="planner"
         agentType={null}
         task="Plan the refactor."
@@ -959,6 +987,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-root"
+        cardId="test-root"
         name="root-agent"
         agentType={null}
         task="Root task."
@@ -999,6 +1028,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-workflow"
+        cardId="test-workflow"
         name="max-effort-review"
         agentType={null}
         task={null}
@@ -1045,6 +1075,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-workflow-no-intent"
+        cardId="test-workflow-no-intent"
         name="mystery-workflow"
         agentType={null}
         task={null}
@@ -1077,6 +1108,7 @@ describe("<SubagentSegment /> promoted feed", () => {
     render(
       <SubagentSegment
         id="test-workflow-totals"
+        cardId="test-workflow-totals"
         name="settled-workflow"
         agentType={null}
         task={null}
@@ -1148,6 +1180,7 @@ function ConversationCard(props: ConversationCardProps) {
   return (
     <SubagentSegment
       id={id}
+      cardId={id}
       name="reviewer"
       agentType={null}
       task="Review it"
@@ -1296,6 +1329,7 @@ describe("<SubagentSegment /> conversation", () => {
     render(
       <SubagentSegment
         id="conv-workflow"
+        cardId="conv-workflow"
         name="review-workflow"
         agentType={null}
         task={null}

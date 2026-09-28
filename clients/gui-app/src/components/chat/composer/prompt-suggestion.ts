@@ -1,4 +1,5 @@
 import type { ComposerTopBannerKind } from "./chat-composer-top-banner";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 import { plainTextPromptContent } from "@/components/epic-canvas/renderers/chat-tile-session-state";
 
@@ -14,10 +15,10 @@ import { plainTextPromptContent } from "@/components/epic-canvas/renderers/chat-
  *   offers an action the user cannot finish. Two gates, because the
  *   composer's `sendBlocked` does not carry the workspace one: a missing or
  *   unavailable workspace refuses the send button through its own check.
- * - **Only over an empty draft.** Filling REPLACES the document. A placeholder
- *   shows only over an empty document anyway, but the gate also keeps the
- *   accept key inert under a draft: typing hides the suggestion, and clearing
- *   the draft brings it back while the suggestion still stands.
+ * - **Only over one empty paragraph.** Filling REPLACES the document. Trimmed
+ *   plain text alone cannot decide this: whitespace and an empty code block
+ *   are authored drafts whose placeholder is hidden. Clearing the document
+ *   brings the suggestion back while the offer still stands.
  */
 export function promptSuggestionAllowed(input: {
   readonly topBannerKind: ComposerTopBannerKind;
@@ -25,13 +26,24 @@ export function promptSuggestionAllowed(input: {
   readonly workspaceBlocked: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
+  readonly draftContent: JsonContent;
 }): boolean {
   return (
     input.topBannerKind === "none" &&
     !input.sendDisabled &&
     !input.workspaceBlocked &&
     !input.draftHasText &&
-    !input.draftHasImages
+    !input.draftHasImages &&
+    isSuggestionPlaceholderDocument(input.draftContent)
+  );
+}
+
+/** Only the ordinary empty paragraph can display an actionable suggestion. */
+function isSuggestionPlaceholderDocument(content: JsonContent): boolean {
+  if (content.type !== "doc" || content.content?.length !== 1) return false;
+  const paragraph = content.content[0];
+  return (
+    paragraph.type === "paragraph" && (paragraph.content?.length ?? 0) === 0
   );
 }
 
@@ -42,7 +54,7 @@ export function promptSuggestionAllowed(input: {
  */
 export type SuggestionFillTarget = Pick<
   ComposerPromptEditorHandle,
-  "isReady" | "setContent" | "focusAtEnd"
+  "isReady" | "getJSON" | "setContent" | "focusAtEnd"
 >;
 
 /**
@@ -85,6 +97,9 @@ export function fillComposerWithSuggestion(
   suggestion: string,
 ): void {
   if (editor === null || !editor.isReady()) return;
+  // The live editor may have changed since React offered the placeholder.
+  // Never replace a draft based only on that earlier render's empty state.
+  if (!isSuggestionPlaceholderDocument(editor.getJSON())) return;
   editor.setContent(plainTextPromptContent(suggestion), null);
   editor.focusAtEnd();
 }

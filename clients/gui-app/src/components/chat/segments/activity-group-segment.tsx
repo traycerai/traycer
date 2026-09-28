@@ -486,6 +486,7 @@ function ActivityChildRow(props: ActivityChildRowProps) {
       return (
         <SubagentSegment
           id={segment.id}
+          cardId={segment.id}
           name={segment.name}
           agentType={segment.agentType}
           task={segment.task}

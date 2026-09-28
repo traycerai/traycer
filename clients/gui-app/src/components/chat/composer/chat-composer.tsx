@@ -716,6 +716,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       workspaceBlocked,
       draftHasText,
       draftHasImages,
+      draftContent,
     })
       ? suggestedPrompt
       : null;

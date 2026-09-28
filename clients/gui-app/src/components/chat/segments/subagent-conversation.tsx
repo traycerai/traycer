@@ -118,6 +118,7 @@ function NestedSubagentCard(props: { readonly segment: SubagentSegmentModel }) {
     <div className="border-l border-border/40 pl-3">
       <SubagentSegment
         id={segment.id}
+        cardId={segment.id}
         name={segment.name}
         agentType={segment.agentType}
         task={segment.task}

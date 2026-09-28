@@ -362,6 +362,7 @@ export function AssistantMessageBody({
             <ChatBlockNavigationAnchor key={key} blockId={item.segment.id}>
               <SubagentSegment
                 id={item.id}
+                cardId={item.segment.id}
                 name={item.segment.name}
                 agentType={item.segment.agentType}
                 task={item.segment.task}
@@ -1270,6 +1271,7 @@ export function AssistantSegment({
       return (
         <SubagentSegment
           id={id}
+          cardId={segment.id}
           name={segment.name}
           agentType={segment.agentType}
           task={segment.task}

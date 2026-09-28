@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { ComposerTopBannerKind } from "@/components/chat/composer/chat-composer-top-banner";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   isPromptSuggestionAcceptKey,
   promptSuggestionAllowed,
 } from "@/components/chat/composer/prompt-suggestion";
+
+const EMPTY_DOC: JsonContent = {
+  type: "doc",
+  content: [{ type: "paragraph" }],
+};
 
 const ALLOWED_INPUT: {
   readonly topBannerKind: ComposerTopBannerKind;
@@ -11,13 +17,66 @@ const ALLOWED_INPUT: {
   readonly workspaceBlocked: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
+  readonly draftContent: JsonContent;
 } = {
   topBannerKind: "none",
   sendDisabled: false,
   workspaceBlocked: false,
   draftHasText: false,
   draftHasImages: false,
+  draftContent: EMPTY_DOC,
 };
+
+const BLANK_DRAFT_CONTENTS: ReadonlyArray<{
+  readonly label: string;
+  readonly content: JsonContent;
+}> = [
+  {
+    label: "a whitespace-only paragraph",
+    content: {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: " \t " }],
+        },
+      ],
+    },
+  },
+  {
+    label: "a code block followed by the trailing paragraph",
+    content: {
+      type: "doc",
+      content: [{ type: "codeBlock" }, { type: "paragraph" }],
+    },
+  },
+  {
+    label: "an empty heading",
+    content: {
+      type: "doc",
+      content: [{ type: "heading", attrs: { level: 1 } }],
+    },
+  },
+  {
+    label: "an empty list",
+    content: {
+      type: "doc",
+      content: [
+        {
+          type: "bulletList",
+          content: [{ type: "listItem", content: [{ type: "paragraph" }] }],
+        },
+      ],
+    },
+  },
+  {
+    label: "multiple blank paragraphs",
+    content: {
+      type: "doc",
+      content: [{ type: "paragraph" }, { type: "paragraph" }],
+    },
+  },
+];
 
 const OTHER_BANNER_KINDS: ReadonlyArray<ComposerTopBannerKind> = [
   "fallback",
@@ -30,6 +89,19 @@ describe("promptSuggestionAllowed", () => {
   it("is true when no banner is up, sending is possible and the draft is empty", () => {
     expect(promptSuggestionAllowed(ALLOWED_INPUT)).toBe(true);
   });
+
+  it.each(BLANK_DRAFT_CONTENTS)(
+    "is false for $label even when draftHasText is false",
+    ({ content }) => {
+      expect(
+        promptSuggestionAllowed({
+          ...ALLOWED_INPUT,
+          draftHasText: false,
+          draftContent: content,
+        }),
+      ).toBe(false);
+    },
+  );
 
   it.each(OTHER_BANNER_KINDS)(
     "is false when the banner kind is %s",

@@ -60,7 +60,10 @@ import type {
 } from "@/stores/composer/chat-store";
 
 interface SubagentSegmentProps {
+  /** Display identity for collapsible and find state, including promotion. */
   id: string;
+  /** Original transcript block identity for navigation and focus return. */
+  cardId: string;
   name: string | null;
   agentType: string | null;
   task: string | null;
@@ -121,6 +124,7 @@ export function SubagentSegment(props: SubagentSegmentProps) {
 function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
   const {
     id,
+    cardId,
     name,
     agentType,
     task,
@@ -157,7 +161,7 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
     nested,
   );
   const headerAction = useOpenAsChatHeaderAction(
-    id,
+    cardId,
     nested,
     variant === "row" ? "bare" : "cell",
   );
@@ -312,6 +316,7 @@ function PromotedSubagentSegment(
 ) {
   const {
     id,
+    cardId,
     name,
     agentType,
     task,
@@ -346,7 +351,7 @@ function PromotedSubagentSegment(
   const displayAgentType = cleanSubagentNotificationText(agentType);
   const displayTask = cleanSubagentNotificationText(task);
   const dedupedProgress = useSubagentProgressItems(progressUpdates, nested);
-  const headerAction = useOpenAsChatHeaderAction(id, nested, "cell");
+  const headerAction = useOpenAsChatHeaderAction(cardId, nested, "cell");
   const lastProgress = dedupedProgress.at(-1)?.text ?? null;
   // Collapsed line shows live progress only. Finished cards omit it because
   // the final result is visible in the expanded body and duplicates the title.
@@ -780,6 +785,7 @@ interface WorkflowCardSegmentProps extends Omit<
 function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
   const {
     id,
+    cardId,
     name,
     result,
     isStreaming,
@@ -811,7 +817,7 @@ function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
   );
 
   const headerAction = useOpenAsChatHeaderAction(
-    id,
+    cardId,
     nested,
     variant === "row" ? "bare" : "cell",
   );
