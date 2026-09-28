@@ -311,6 +311,35 @@ describe("resolveModelBySlug", () => {
     expect(resolveModelBySlug(catalog, "model[200k]").kind).toBe("alias");
   });
 
+  it("never equates two different tier markers", () => {
+    // A marker on only one side is the drift pass 3 exists for; markers on
+    // both sides that disagree name two different tiers, so `opus[1m]` must
+    // not borrow an `opus[200k]` row's details while the CLI still receives
+    // `opus[1m]`. Checked on both fields a row can match on.
+    const bySlug = [
+      model({
+        harnessId: "claude",
+        slug: "opus[200k]",
+        resolvedModel: "claude-opus-5-5-wire",
+      }),
+    ];
+    expect(resolveModelBySlug(bySlug, "opus[1m]")).toEqual({ kind: "none" });
+
+    const byResolvedModel = [
+      model({
+        harnessId: "claude",
+        slug: "default",
+        resolvedModel: "claude-opus-5-5[200k]",
+      }),
+    ];
+    expect(resolveModelBySlug(byResolvedModel, "claude-opus-5-5[1m]")).toEqual({
+      kind: "none",
+    });
+
+    // The grammar is case-insensitive, so a case-only difference is one tier.
+    expect(resolveModelBySlug(bySlug, "opus[200K]").kind).toBe("alias");
+  });
+
   it("returns none for an input that is nothing but a tier marker", () => {
     expect(resolveModelBySlug(CLAUDE_CLI_2_1_284_CATALOG, "[1m]")).toEqual({
       kind: "none",

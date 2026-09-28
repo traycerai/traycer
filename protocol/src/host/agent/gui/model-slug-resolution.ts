@@ -13,7 +13,8 @@ import type { GuiAgentModelOption } from "./unary-schemas";
  *
  * Resolution is therefore three passes: exact `slug` first, then the row whose
  * `metadata.resolvedModel` (the adapter-published canonical wire id) equals
- * the input, then a match that ignores a trailing tier marker (`[1m]`).
+ * the input, then a match that tolerates a trailing tier marker (`[1m]`)
+ * present on only one side.
  * Exact-first is load-bearing, not a preference - rows DUPLICATE
  * `resolvedModel` (Claude's `default` and `opus[1m]` both resolve to the same
  * canonical id), so alias matching alone cannot be a unique index.
@@ -105,8 +106,35 @@ const NO_MATCH: ModelMatch = { kind: "none" };
  */
 const TIER_MARKER_PATTERN = /\[\d+[a-z]?\]$/i;
 
-function withoutTierMarker(value: string): string {
-  return value.replace(TIER_MARKER_PATTERN, "");
+interface TierSplit {
+  readonly bare: string;
+  /** Lowercased, since the grammar is case-insensitive; `null` when absent. */
+  readonly marker: string | null;
+}
+
+function splitTierMarker(value: string): TierSplit {
+  const match = TIER_MARKER_PATTERN.exec(value);
+  if (match === null) return { bare: value, marker: null };
+  return {
+    bare: value.slice(0, match.index),
+    marker: match[0].toLowerCase(),
+  };
+}
+
+/**
+ * Whether `candidate` names the same model as `input` at a compatible tier: the
+ * same id once the markers are set aside, with a marker on at most one side or
+ * the same marker on both. Two different markers (`[1m]`, `[200k]`) name two
+ * different tiers and never match.
+ */
+function tierCompatible(input: TierSplit, candidate: string): boolean {
+  const other = splitTierMarker(candidate);
+  if (other.bare !== input.bare) return false;
+  return (
+    input.marker === null ||
+    other.marker === null ||
+    input.marker === other.marker
+  );
 }
 
 /**
@@ -115,7 +143,9 @@ function withoutTierMarker(value: string): string {
  * 1. exact `slug`;
  * 2. the row whose `metadata.resolvedModel` equals `slug`;
  * 3. the rows that agree with `slug` once a trailing tier marker (`[1m]`) is
- *    dropped from both sides, on either their `slug` or their `resolvedModel`.
+ *    set aside, on either their `slug` or their `resolvedModel` - provided the
+ *    marker is on at most one side or is the same on both. Two different
+ *    markers are two different tiers and never match.
  *
  * Pass 3 exists because a catalog can gain or lose the marker between two
  * provider CLI releases: Claude's 2.1.280 listed `opus[1m]` and
@@ -147,12 +177,12 @@ export function resolveModelBySlug(
   if (first !== undefined) {
     return { kind: "alias", model: first, ambiguous: tied.length > 1, tied };
   }
-  const bare = withoutTierMarker(slug);
-  if (bare.length === 0) return NO_MATCH;
+  const input = splitTierMarker(slug);
+  if (input.bare.length === 0) return NO_MATCH;
   const tierTied = models.filter((candidate) => {
-    if (withoutTierMarker(candidate.slug) === bare) return true;
+    if (tierCompatible(input, candidate.slug)) return true;
     const resolved = modelResolvedModel(candidate);
-    return resolved !== null && withoutTierMarker(resolved) === bare;
+    return resolved !== null && tierCompatible(input, resolved);
   });
   const tierFirst = tierTied.at(0);
   if (tierFirst === undefined) return NO_MATCH;
