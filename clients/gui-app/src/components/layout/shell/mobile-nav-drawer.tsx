@@ -361,6 +361,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     isFetchingNextPage,
     cloudPagePending,
     currentUserId,
+    activityRefreshScope,
     hostId,
   } = useHistoryQuery({ search, nowMs: null });
   // Memoized so the id list below only changes when the page does, not on
@@ -371,6 +372,8 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     userId: currentUserId,
     hostId,
     enabled: !hasActiveHistoryFilters(search) && search.sort === "recent",
+    refreshEnabled: search.sort === "recent",
+    refreshScope: activityRefreshScope,
     refetch,
   });
 

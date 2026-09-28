@@ -294,6 +294,78 @@ describe("optimistic activity history projection", () => {
     second.unmount();
   });
 
+  it("uses a nonzero retry delay when a new edge arrives during an in-flight refresh", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(25_000);
+    const userId = `in-flight-edge-${crypto.randomUUID()}`;
+    let resolveFirst: (() => void) | undefined;
+    const refetch = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    renderHook(() =>
+      useOptimisticActivityHistoryItems({
+        items: [],
+        userId,
+        hostId: "host-in-flight-edge",
+        enabled: true,
+        refetch,
+      }),
+    );
+
+    act(() => requestHistoryActivityRefresh(userId));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+    expect(refetch).toHaveBeenCalledTimes(1);
+
+    act(() => requestHistoryActivityRefresh(userId));
+    if (resolveFirst === undefined) throw new Error("refetch did not start");
+    await act(async () => {
+      resolveFirst?.();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_999);
+    });
+    expect(refetch).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(refetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps ownerless removal refreshes retrying until the bounded TTL", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(50_000);
+    const userId = `ownerless-removal-${crypto.randomUUID()}`;
+    const refetch = vi.fn(() => Promise.resolve());
+    renderHook(() =>
+      useOptimisticActivityHistoryItems({
+        items: [],
+        userId,
+        hostId: "host-ownerless-removal",
+        enabled: true,
+        refetch,
+      }),
+    );
+
+    act(() => requestHistoryActivityRefresh(userId));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600_000);
+    });
+    const requestsAtTtl = refetch.mock.calls.length;
+    expect(requestsAtTtl).toBeGreaterThan(3);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(refetch).toHaveBeenCalledTimes(requestsAtTtl);
+  });
+
   it("refreshes a scope when it becomes enabled after an own idle record change", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(30_000);
@@ -369,5 +441,53 @@ describe("optimistic activity history projection", () => {
       await vi.advanceTimersByTimeAsync(750);
     });
     expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes filtered Recent without projecting rows and isolates each consumer scope", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(60_000);
+    const userId = `filtered-refresh-${crypto.randomUUID()}`;
+    const filteredItems: readonly HistoryItem[] = [];
+    const unfilteredItems = [historyItem("idle-epic", 5, undefined)];
+    const filteredRefetch = vi.fn(() => Promise.resolve());
+    const recentRefetch = vi.fn(() => Promise.resolve());
+    const filtered = renderHook(() =>
+      useOptimisticActivityHistoryItems({
+        items: filteredItems,
+        userId,
+        hostId: "host-filtered-refresh",
+        enabled: false,
+        refreshEnabled: true,
+        refreshScope: "recent:query-filter",
+        refetch: filteredRefetch,
+      }),
+    );
+    const unfiltered = renderHook(() =>
+      useOptimisticActivityHistoryItems({
+        items: unfilteredItems,
+        userId,
+        hostId: "host-filtered-refresh",
+        enabled: true,
+        refreshEnabled: true,
+        refreshScope: "recent:all",
+        refetch: recentRefetch,
+      }),
+    );
+
+    expect(filtered.result.current).toBe(filteredItems);
+    act(() => observeOwnHistoryRecordChange(userId, "idle-epic", 60_000));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+
+    expect(filteredRefetch).toHaveBeenCalledTimes(1);
+    expect(recentRefetch).toHaveBeenCalledTimes(1);
+    expect(filtered.result.current).toEqual([]);
+    expect(filtered.result.current).not.toContainEqual(
+      expect.objectContaining({ epicId: "idle-epic" }),
+    );
+    expect(unfiltered.result.current[0]?.recentAtMs).toBe(60_000);
+    filtered.unmount();
+    unfiltered.unmount();
   });
 });

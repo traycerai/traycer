@@ -28,6 +28,7 @@ interface ActivitySnapshot {
 const EMPTY_SNAPSHOT: ActivitySnapshot = { revision: 0, stamps: new Map() };
 let currentSnapshot: ActivitySnapshot = EMPTY_SNAPSHOT;
 const generations = new Map<string, number>();
+const ownerlessRefreshDeadlines = new Map<string, number>();
 const scheduledGenerations = new Map<string, number>();
 const scopeSubscribers = new Map<string, number>();
 interface RefreshState {
@@ -38,6 +39,8 @@ interface RefreshState {
   refetch: () => Promise<unknown>;
   attempts: number;
   deadline: number;
+  ownerlessUntil: number;
+  newEdgeInFlight: boolean;
 }
 const refreshes = new Map<string, RefreshState>();
 
@@ -133,6 +136,16 @@ export function observeOwnHistoryRecordChange(
 
 /** Removes have no owner on the old stream wire, so only reconcile the page. */
 export function requestHistoryActivityRefresh(userId: string): void {
+  const now = Date.now();
+  for (const [key, deadline] of ownerlessRefreshDeadlines) {
+    if (deadline <= now) ownerlessRefreshDeadlines.delete(key);
+  }
+  ownerlessRefreshDeadlines.delete(userId);
+  ownerlessRefreshDeadlines.set(userId, now + STAMP_TTL_MS);
+  if (ownerlessRefreshDeadlines.size > MAX_ACTIVE_ROWS) {
+    const oldest = ownerlessRefreshDeadlines.keys().next().value;
+    if (oldest !== undefined) ownerlessRefreshDeadlines.delete(oldest);
+  }
   changed(userId);
 }
 
@@ -194,6 +207,10 @@ function scheduleActivityRefresh(state: RefreshState, delay: number): void {
   if (state.timer !== null || state.inFlight) return;
   state.timer = window.setTimeout(() => {
     state.timer = null;
+    if (Date.now() >= state.deadline) {
+      refreshes.delete(state.scope);
+      return;
+    }
     state.inFlight = true;
     state.attempts += 1;
     void state
@@ -204,11 +221,18 @@ function scheduleActivityRefresh(state: RefreshState, delay: number): void {
         if (refreshes.get(state.scope) !== state) return;
         const now = Date.now();
         const pending = hasUnsettledStamps(state.userId, now);
-        // A removal has no timestamp on the frozen stream wire. Give it three
-        // attempts; timestamped upserts retry through the bounded stamp window.
-        if (now >= state.deadline || (!pending && state.attempts >= 3)) {
+        // An ownerless removal has no durable watermark on the frozen stream
+        // wire. Reconcile through its bounded window, including cloud retry.
+        if (
+          now >= state.deadline ||
+          (!pending && now >= state.ownerlessUntil && state.attempts >= 3)
+        ) {
           refreshes.delete(state.scope);
           return;
+        }
+        if (state.newEdgeInFlight) {
+          state.newEdgeInFlight = false;
+          state.attempts = 1;
         }
         const retryIndex = Math.min(
           state.attempts - 1,
@@ -229,8 +253,18 @@ function queueActivityRefresh(
   if (existing !== undefined) {
     existing.refetch = refetch;
     if (generation > (scheduledGenerations.get(scope) ?? 0)) {
-      existing.attempts = 0;
       existing.deadline = Date.now() + STAMP_TTL_MS;
+      existing.ownerlessUntil = Math.max(
+        existing.ownerlessUntil,
+        ownerlessRefreshDeadlines.get(userId) ?? 0,
+      );
+      if (existing.inFlight) {
+        existing.newEdgeInFlight = true;
+      } else {
+        if (existing.timer !== null) window.clearTimeout(existing.timer);
+        existing.timer = null;
+        existing.attempts = 0;
+      }
     }
     scheduledGenerations.set(scope, generation);
     scheduleActivityRefresh(existing, REFRESH_DEBOUNCE_MS);
@@ -244,6 +278,8 @@ function queueActivityRefresh(
     refetch,
     attempts: 0,
     deadline: Date.now() + STAMP_TTL_MS,
+    ownerlessUntil: ownerlessRefreshDeadlines.get(userId) ?? 0,
+    newEdgeInFlight: false,
   };
   refreshes.set(scope, state);
   scheduledGenerations.set(scope, generation);
@@ -255,6 +291,10 @@ export interface OptimisticActivityHistoryInput {
   readonly userId: string | null;
   readonly hostId: string | null;
   readonly enabled: boolean;
+  /** Refresh the durable page even when filters disable row injection. */
+  readonly refreshEnabled?: boolean;
+  /** The actual list request key; distinct filters own distinct retries. */
+  readonly refreshScope?: string;
   readonly refetch: () => Promise<unknown>;
 }
 
@@ -267,6 +307,8 @@ export function useOptimisticActivityHistoryItems(
   input: OptimisticActivityHistoryInput,
 ): readonly HistoryItem[] {
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const refreshEnabled = input.refreshEnabled ?? input.enabled;
+  const refreshScope = input.refreshScope ?? "";
   const workingEpicIds = useTurnEpicIds();
   const activitySnapshot = useSyncExternalStore(
     subscribe,
@@ -315,8 +357,8 @@ export function useOptimisticActivityHistoryItems(
     ],
   );
   useEffect(() => {
-    if (!input.enabled || input.userId === null) return;
-    const scope = JSON.stringify([input.hostId, input.userId]);
+    if (!refreshEnabled || input.userId === null) return;
+    const scope = JSON.stringify([input.hostId, input.userId, refreshScope]);
     scopeSubscribers.set(scope, (scopeSubscribers.get(scope) ?? 0) + 1);
     return () => {
       const remaining = (scopeSubscribers.get(scope) ?? 1) - 1;
@@ -332,12 +374,12 @@ export function useOptimisticActivityHistoryItems(
       }
       refreshes.delete(scope);
     };
-  }, [input.enabled, input.hostId, input.userId]);
+  }, [input.hostId, refreshEnabled, refreshScope, input.userId]);
   useEffect(() => {
     if (input.userId === null) return;
     observeActiveHistoryEdges(input.userId, workingEpicIds, Date.now());
-    if (!input.enabled) return;
-    const scope = JSON.stringify([input.hostId, input.userId]);
+    if (!refreshEnabled) return;
+    const scope = JSON.stringify([input.hostId, input.userId, refreshScope]);
     const generation = generations.get(input.userId) ?? 0;
     if (generation > (scheduledGenerations.get(scope) ?? 0)) {
       queueActivityRefresh(scope, input.userId, generation, input.refetch);
@@ -350,6 +392,8 @@ export function useOptimisticActivityHistoryItems(
     input.enabled,
     input.hostId,
     input.refetch,
+    refreshEnabled,
+    refreshScope,
     input.userId,
     workingEpicIds,
   ]);
@@ -357,7 +401,7 @@ export function useOptimisticActivityHistoryItems(
     if (input.userId !== null) settleHistoryActivity(input.userId, input.items);
   }, [input.items, input.userId]);
   useEffect(() => {
-    if (!input.enabled || input.userId === null || stamps.size === 0) return;
+    if (!refreshEnabled || input.userId === null || stamps.size === 0) return;
     const earliestExpiry = Math.min(
       ...[...stamps.values()].map((stamp) => stamp.expiresAt),
     );
@@ -369,7 +413,7 @@ export function useOptimisticActivityHistoryItems(
       Math.max(0, earliestExpiry - Date.now()),
     );
     return () => window.clearTimeout(timer);
-  }, [activitySnapshot, input.enabled, input.userId]);
+  }, [activitySnapshot, refreshEnabled, input.userId]);
   if (!input.enabled || input.userId === null) return input.items;
   if (input.items.length === 0 && backfilled.length === 0) return EMPTY_ITEMS;
   return projectOptimisticHistoryItems(

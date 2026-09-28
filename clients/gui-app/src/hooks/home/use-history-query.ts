@@ -84,6 +84,8 @@ export interface UseHistoryQueryResult {
    * backfill), never an authorization to spend the cloud capability.
    */
   readonly currentUserId: string | null;
+  /** Canonical request identity for scoped activity reconciliation. */
+  readonly activityRefreshScope: string;
   refetch: () => Promise<unknown>;
   fetchNextPage: () => void;
   hasNextPage: boolean;
@@ -151,6 +153,10 @@ export function useHistoryQuery(
     });
     return listCloudTasksRequestForHistorySearch(search);
   }, [debouncedQuery, params.search]);
+  const activityRefreshScope = useMemo(
+    () => JSON.stringify(request),
+    [request],
+  );
   const {
     hostId,
     currentUserId,
@@ -456,6 +462,7 @@ export function useHistoryQuery(
       taskContexts.error,
     hostId,
     currentUserId,
+    activityRefreshScope,
     refetch,
     fetchNextPage,
     // Pagination follows the plain cloud query; id-fetched local matches are

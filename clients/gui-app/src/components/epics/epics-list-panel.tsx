@@ -375,6 +375,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     cloudPagePending,
     isCountPending,
     currentUserId,
+    activityRefreshScope,
   } = useHistoryQuery({
     search,
     nowMs: props.historyNowMs,
@@ -404,6 +405,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     hostId,
     enabled:
       variant !== "picker" && !hasActiveFilters && search.sort === "recent",
+    refreshEnabled: search.sort === "recent",
+    refreshScope: activityRefreshScope,
     refetch,
   });
   const worktreesByEpicId = view.worktreesByEpicId;
