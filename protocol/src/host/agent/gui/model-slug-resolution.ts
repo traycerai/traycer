@@ -136,6 +136,23 @@ function tierMatchRank(input: TierSplit, candidate: string): number {
 }
 
 /**
+ * Whether any field of the row names a tier other than the one `input` names.
+ * A row's `slug` and `resolvedModel` describe one model, so a conflicting marker
+ * on the field that is not being compared still disqualifies it.
+ */
+function rowNamesOtherTier(
+  input: TierSplit,
+  slug: string,
+  resolved: string,
+): boolean {
+  if (input.marker === null) return false;
+  return [slug, resolved].some((value) => {
+    const marker = splitTierMarker(value).marker;
+    return marker !== null && marker !== input.marker;
+  });
+}
+
+/**
  * The rows whose `field` is the closest tier match for `input`. Only a row that
  * publishes `resolvedModel` takes part: that is the signal of an adapter whose
  * catalog decorates slugs, and every other row stays on exact-only matching.
@@ -148,7 +165,9 @@ function closestTierMatches(
   let bestRank = 0;
   let best: GuiAgentModelOption[] = [];
   for (const candidate of models) {
-    if (modelResolvedModel(candidate) === null) continue;
+    const resolved = modelResolvedModel(candidate);
+    if (resolved === null) continue;
+    if (rowNamesOtherTier(input, candidate.slug, resolved)) continue;
     const value = field(candidate);
     if (value === null) continue;
     const rank = tierMatchRank(input, value);
@@ -169,7 +188,8 @@ function closestTierMatches(
  * 2. the row whose `metadata.resolvedModel` equals `slug`;
  * 3. the rows that agree with `slug` once a trailing tier marker (`[1m]`) is
  *    set aside - provided the marker is on at most one side or is the same on
- *    both. Two different markers are two different tiers and never match. It
+ *    both. Two different markers are two different tiers and never match, on
+ *    whichever of the row's two fields the conflicting marker sits. It
  *    keeps the earlier passes' precedence: rows matching on `slug` before rows
  *    matching on `resolvedModel`, and within each, the same marker before a
  *    missing one. Only rows that publish `resolvedModel` take part: that is the

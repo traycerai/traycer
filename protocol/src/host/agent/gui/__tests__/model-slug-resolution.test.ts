@@ -384,6 +384,37 @@ describe("resolveModelBySlug", () => {
     );
   });
 
+  it("rejects a row whose other field carries a conflicting marker", () => {
+    // The row's slug is plain, but its resolvedModel says it routes to the
+    // `[200k]` tier, so it is not the `[1m]` model the input names.
+    const routesTo200k = model({
+      harnessId: "claude",
+      slug: "opus",
+      resolvedModel: "claude-opus-5-5[200k]",
+    });
+    expect(resolveModelBySlug([routesTo200k], "opus[1m]")).toEqual({
+      kind: "none",
+    });
+
+    // The same rule when the match is on resolvedModel and the slug conflicts.
+    const named200k = model({
+      harnessId: "claude",
+      slug: "opus[200k]",
+      resolvedModel: "claude-opus-5-5",
+    });
+    expect(resolveModelBySlug([named200k], "claude-opus-5-5[1m]")).toEqual({
+      kind: "none",
+    });
+
+    // An unmarked other field is no conflict: this is the drift pass 3 is for.
+    const plain = model({
+      harnessId: "claude",
+      slug: "opus",
+      resolvedModel: "claude-opus-5-5",
+    });
+    expect(resolveModelBySlug([plain], "opus[1m]").kind).toBe("alias");
+  });
+
   it("prefers the same tier marker over a missing one", () => {
     // A catalog listing both tiers: `opus[1M]` names the `[1m]` tier (the
     // grammar is case-insensitive), so it must not tie with plain `opus`.
