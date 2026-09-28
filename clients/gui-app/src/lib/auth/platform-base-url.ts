@@ -1,3 +1,4 @@
+import type { AccountContext } from "@traycer/protocol/common/schemas";
 import { appLogger, describeLogError } from "@/lib/logger";
 
 /**
@@ -43,8 +44,8 @@ export function platformOriginFromSignInUrl(signInUrl: string): string | null {
 const PRODUCTION_PLATFORM_URL = "https://platform.traycer.ai";
 
 /**
- * The platform origin for NAVIGATION — the "Manage subscription" jump and
- * anything else that just opens a page.
+ * The platform origin for NAVIGATION — the Billing page jump and anything else
+ * that just opens a page.
  *
  * This one may fall back to production, and the distinction from
  * `platformOriginFromSignInUrl` is the whole point: sending a person to the
@@ -56,4 +57,43 @@ const PRODUCTION_PLATFORM_URL = "https://platform.traycer.ai";
  */
 export function resolvePlatformBaseUrl(signInUrl: string): string {
   return platformOriginFromSignInUrl(signInUrl) ?? PRODUCTION_PLATFORM_URL;
+}
+
+/** The fields of a team the Billing path needs: which team, and its URL slug. */
+export interface BillingTeam {
+  readonly teamId: string;
+  readonly slug: string;
+}
+
+/**
+ * The platform path of the Billing page for an account context.
+ *
+ * The platform origin's root is the marketing homepage, so every billing
+ * affordance ("Manage subscription", "Upgrade") names a page, never the bare
+ * origin. A team context opens that team's billing page, which is also where a
+ * team with no plan is offered one; the personal context opens the user's own.
+ *
+ * A team context that cannot be named in a URL - the stored team id is not
+ * among `teams` (the user left it, or the list has not loaded), or its slug is
+ * empty - opens the personal page instead. That is the same fallback
+ * `resolveAccountContext` applies to a stale team, and a page the user can see
+ * and switch from beats a `/team//billing` that resolves to nothing.
+ */
+export function billingPathFor(
+  accountContext: AccountContext,
+  teams: ReadonlyArray<BillingTeam>,
+): string {
+  if (accountContext.type !== "TEAM") return "/billing";
+  const team = teams.find((t) => t.teamId === accountContext.teamId);
+  if (team === undefined || team.slug.length === 0) return "/billing";
+  return `/team/${encodeURIComponent(team.slug)}/billing`;
+}
+
+/** The full Billing page URL: {@link resolvePlatformBaseUrl} + {@link billingPathFor}. */
+export function resolvePlatformBillingUrl(
+  signInUrl: string,
+  accountContext: AccountContext,
+  teams: ReadonlyArray<BillingTeam>,
+): string {
+  return `${resolvePlatformBaseUrl(signInUrl)}${billingPathFor(accountContext, teams)}`;
 }

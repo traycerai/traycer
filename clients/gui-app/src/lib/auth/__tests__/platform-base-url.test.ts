@@ -7,8 +7,10 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  billingPathFor,
   platformOriginFromSignInUrl,
   resolvePlatformBaseUrl,
+  resolvePlatformBillingUrl,
 } from "../platform-base-url";
 
 describe("platformOriginFromSignInUrl", () => {
@@ -69,5 +71,65 @@ describe("resolvePlatformBaseUrl", () => {
     expect(resolvePlatformBaseUrl("not a url")).toBe(
       "https://platform.traycer.ai",
     );
+  });
+});
+
+describe("billingPathFor", () => {
+  const teams = [
+    { teamId: "team-1", slug: "acme" },
+    { teamId: "team-2", slug: "r&d team/west" },
+    { teamId: "team-3", slug: "" },
+  ];
+
+  it("opens the personal Billing page for the personal context", () => {
+    expect(billingPathFor({ type: "PERSONAL" }, teams)).toBe("/billing");
+  });
+
+  it("opens the selected team's Billing page by its slug", () => {
+    expect(billingPathFor({ type: "TEAM", teamId: "team-1" }, teams)).toBe(
+      "/team/acme/billing",
+    );
+  });
+
+  it("encodes a slug that is not URL-safe as one path segment", () => {
+    expect(billingPathFor({ type: "TEAM", teamId: "team-2" }, teams)).toBe(
+      "/team/r%26d%20team%2Fwest/billing",
+    );
+  });
+
+  it("falls back to the personal page for a team the user no longer has", () => {
+    // A persisted team id outlives leaving the team; the store's own
+    // resolution treats it as personal, and so does the link.
+    expect(billingPathFor({ type: "TEAM", teamId: "gone" }, teams)).toBe(
+      "/billing",
+    );
+    expect(billingPathFor({ type: "TEAM", teamId: "team-1" }, [])).toBe(
+      "/billing",
+    );
+  });
+
+  it("never composes an empty team segment", () => {
+    expect(billingPathFor({ type: "TEAM", teamId: "team-3" }, teams)).toBe(
+      "/billing",
+    );
+  });
+});
+
+describe("resolvePlatformBillingUrl", () => {
+  it("joins the configured origin to the Billing path, dropping the sign-in route", () => {
+    expect(
+      resolvePlatformBillingUrl(
+        "http://192.168.1.42:21003/sign-in?redirect_uri=x",
+        { type: "TEAM", teamId: "team-1" },
+        [{ teamId: "team-1", slug: "acme" }],
+      ),
+    ).toBe("http://192.168.1.42:21003/team/acme/billing");
+    expect(
+      resolvePlatformBillingUrl(
+        "http://localhost:21003/sign-in",
+        { type: "PERSONAL" },
+        [],
+      ),
+    ).toBe("http://localhost:21003/billing");
   });
 });
