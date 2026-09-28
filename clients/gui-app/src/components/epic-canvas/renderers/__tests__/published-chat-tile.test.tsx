@@ -35,6 +35,8 @@ import {
 import type { ChatDeadTileBannerReason } from "@/components/epic-canvas/renderers/dead-tile-banner";
 import type { PublishedChatSessionHandle } from "@/lib/chats/published-chat-session";
 import { PublishedChatTile } from "@/components/epic-canvas/renderers/published-chat-tile";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
+import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 
 // A narrow stand-in for `UseQueryResult`, not the real thing: the tile only
 // ever reads `.data` and `.isPending` off this query, and hand-building a
@@ -55,6 +57,8 @@ interface MockHostReachability {
   readonly hostLabel: string;
   /** Absent on most fixtures, like the real hook's `null`. */
   readonly unavailability?: "offline" | "plan-restricted";
+  /** Absent on most fixtures, which never arms the owner recovery read. */
+  readonly hostKind?: "local" | "remote" | "unknown";
 }
 
 /**
@@ -103,6 +107,23 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 // `<TabHostProvider>` would resolve for this tab.
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-1",
+}));
+// The owner recovery read, recorded at the hook boundary like every other read
+// in this suite: which client it was handed is the whole assertion.
+interface HostQueryCall {
+  readonly method: string;
+  readonly client: { readonly hostId: string } | null;
+}
+const hostQueryCalls: HostQueryCall[] = [];
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: (args: HostQueryCall) => {
+    hostQueryCalls.push({ method: args.method, client: args.client });
+    return { data: undefined };
+  },
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === null ? null : { hostId },
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: (hostId: string) => mockUseHostReachability(hostId),
@@ -331,6 +352,7 @@ afterEach(() => {
   vi.clearAllMocks();
   deadTileBannerContainerProps.length = 0;
   chatTileSessionViewCalls.length = 0;
+  hostQueryCalls.length = 0;
 });
 
 describe("PublishedChatTile - doc-replica fallback", () => {
@@ -934,5 +956,83 @@ describe("PublishedChatTile - head-keyed refresh", () => {
     expect(mockUseChatReplicaRead).toHaveBeenLastCalledWith(
       expect.objectContaining({ enabled: false }),
     );
+  });
+});
+
+// The regression: the cloud reported a running owner `offline`, only a ready
+// session could overturn that verdict, and nothing dialed the owner - so the
+// canvas kept this copy (and the live tab it substitutes for) on screen until
+// an unrelated surface, such as the new-agent composer, happened to dial it.
+describe("PublishedChatTile - offline owner recovery", () => {
+  const OFFLINE_REMOTE_OWNER: MockHostReachability = {
+    status: "unreachable",
+    hostLabel: "Ada's Mac",
+    unavailability: "offline",
+    hostKind: "remote",
+  };
+
+  function renderVisibility(visibility: {
+    readonly paneVisible: boolean;
+    readonly tabSelected: boolean;
+  }): void {
+    render(
+      <PaneVisibilityContext.Provider value={visibility.paneVisible}>
+        <TabBodySelectedContext.Provider value={visibility.tabSelected}>
+          <PublishedChatTile
+            node={NODE}
+            viewTabId="tab-1"
+            tileId="pane-1"
+            isActive={false}
+            epicId="epic-1"
+          />
+        </TabBodySelectedContext.Provider>
+      </PaneVisibilityContext.Provider>,
+    );
+  }
+
+  function lastStatusClient(): HostQueryCall["client"] | undefined {
+    return hostQueryCalls.filter((call) => call.method === "host.status").at(-1)
+      ?.client;
+  }
+
+  beforeEach(() => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+  });
+
+  it("asks the OWNER for host.status while the copy is on screen, even in an unfocused pane", () => {
+    mockUseHostReachability.mockImplementation((hostId) =>
+      hostId === NODE.ownerHostId
+        ? OFFLINE_REMOTE_OWNER
+        : { status: "reachable", hostLabel: "Serving host" },
+    );
+    renderVisibility({ paneVisible: true, tabSelected: true });
+
+    expect(lastStatusClient()).toEqual({ hostId: NODE.ownerHostId });
+  });
+
+  it.each([
+    ["the pane is hidden", { paneVisible: false, tabSelected: true }],
+    ["the tab is not selected", { paneVisible: true, tabSelected: false }],
+  ])("does not dial while %s", (_label, visibility) => {
+    mockUseHostReachability.mockReturnValue(OFFLINE_REMOTE_OWNER);
+    renderVisibility(visibility);
+
+    expect(lastStatusClient()).toBeNull();
+  });
+
+  it.each<[string, MockHostReachability]>([
+    ["reachable", { status: "reachable", hostLabel: "Ada's Mac" }],
+    [
+      "plan-restricted",
+      { ...OFFLINE_REMOTE_OWNER, unavailability: "plan-restricted" },
+    ],
+    ["a local host", { ...OFFLINE_REMOTE_OWNER, hostKind: "local" }],
+    ["an unknown host", { ...OFFLINE_REMOTE_OWNER, hostKind: "unknown" }],
+  ])("does not dial when the owner is %s", (_label, reachability) => {
+    mockUseHostReachability.mockReturnValue(reachability);
+    renderVisibility({ paneVisible: true, tabSelected: true });
+
+    expect(lastStatusClient()).toBeNull();
   });
 });
