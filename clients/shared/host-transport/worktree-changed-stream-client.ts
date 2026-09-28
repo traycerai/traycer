@@ -14,6 +14,7 @@ import type {
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IHostStreamClient } from "./host-stream-client";
+import type { TimerHandle } from "./timer-handle";
 
 export type WorktreeChangedStreamCallbacks = {
   /** True only after the active consumer has accepted the invalidation. */
@@ -49,19 +50,66 @@ function lineReadsResume(onWireVersion: SchemaVersion | null): boolean {
   return onWireVersion.major > 1 || onWireVersion.minor >= 1;
 }
 
+// The mount can be torn down by a capability notification rather than by a
+// failed socket. That path bypasses the transport's reconnect backoff. Pace
+// replacements sharing one host cursor so an effect feedback loop cannot dial
+// sockets at renderer speed. A healthy session resets the ladder on close.
+const RAPID_REOPEN_WINDOW_MS = 1_000;
+const INITIAL_REOPEN_DELAY_MS = 250;
+const MAX_REOPEN_DELAY_MS = 5_000;
+type ReopenPacer = {
+  lastClosedAtMs: number | null;
+  nextDelayMs: number;
+};
+const reopenPacers = new WeakMap<WorktreeChangedCursorStore, ReopenPacer>();
+
 export class WorktreeChangedStreamClient {
-  private readonly session: IStreamSession;
+  private session: IStreamSession | null = null;
+  private admissionTimer: TimerHandle | null = null;
+  private openedAtMs: number | null = null;
+  private readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   private readonly callbacks: WorktreeChangedStreamCallbacks;
   private readonly cursor: WorktreeChangedCursorStore;
+  private readonly pacer: ReopenPacer;
   private closed = false;
 
   constructor(options: WorktreeChangedStreamClientOptions) {
+    this.wsStreamClient = options.wsStreamClient;
     this.callbacks = options.callbacks;
     this.cursor = options.cursor;
+    let pacer = reopenPacers.get(this.cursor);
+    if (pacer === undefined) {
+      pacer = { lastClosedAtMs: null, nextDelayMs: INITIAL_REOPEN_DELAY_MS };
+      reopenPacers.set(this.cursor, pacer);
+    }
+    this.pacer = pacer;
+    const elapsedSinceClose =
+      pacer.lastClosedAtMs === null
+        ? null
+        : Date.now() - pacer.lastClosedAtMs;
+    if (
+      elapsedSinceClose === null ||
+      elapsedSinceClose < 0 ||
+      elapsedSinceClose >= RAPID_REOPEN_WINDOW_MS
+    ) {
+      pacer.nextDelayMs = INITIAL_REOPEN_DELAY_MS;
+      this.startSession();
+      return;
+    }
+    const delayMs = pacer.nextDelayMs;
+    pacer.nextDelayMs = Math.min(MAX_REOPEN_DELAY_MS, delayMs * 2);
+    this.admissionTimer = setTimeout(() => {
+      this.admissionTimer = null;
+      if (!this.closed) this.startSession();
+    }, delayMs);
+  }
+
+  private startSession(): void {
+    if (this.closed) return;
     // Re-read before every wire subscribe, reconnects included: the cursor
     // worth offering is the one from the frame received just before the drop,
     // not whatever was current when this client was built.
-    this.session = options.wsStreamClient.subscribeWithParamsProvider(
+    const session = this.wsStreamClient.subscribeWithParamsProvider(
       "worktree.changed",
       (onWireVersion): WorktreeChangedOpenRequest => {
         const resume = this.cursor.current;
@@ -70,14 +118,16 @@ export class WorktreeChangedStreamClient {
           : { resume };
       },
     );
-    this.session.onServerFrame((envelope, binaryPayload) => {
+    this.session = session;
+    session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
-    this.session.onStatusChange((status, reason) => {
+    session.onStatusChange((status, reason) => {
+      if (status === "open") this.openedAtMs = Date.now();
       this.callbacks.onConnectionStatus(
         status,
         reason,
-        this.session.getNegotiatedSchemaVersion(),
+        session.getNegotiatedSchemaVersion(),
       );
     });
   }
@@ -85,7 +135,18 @@ export class WorktreeChangedStreamClient {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.session.close();
+    if (this.admissionTimer !== null) {
+      clearTimeout(this.admissionTimer);
+      this.admissionTimer = null;
+    }
+    if (
+      this.openedAtMs !== null &&
+      Date.now() - this.openedAtMs >= RAPID_REOPEN_WINDOW_MS
+    ) {
+      this.pacer.nextDelayMs = INITIAL_REOPEN_DELAY_MS;
+    }
+    this.pacer.lastClosedAtMs = Date.now();
+    this.session?.close();
   }
 
   private handleServerFrame(
