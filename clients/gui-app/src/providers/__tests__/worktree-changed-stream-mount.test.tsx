@@ -601,6 +601,34 @@ describe("<WorktreeChangedStreamMount /> reopen lane", () => {
     expect(worktreeMountStreamState.closes).toBe(1);
   });
 
+  it("keeps one accepted subscription across negotiated and predicted version publications", () => {
+    const queryClient = createAppQueryClient();
+    const view = renderWorktreeChangedStreamMount(queryClient);
+    expect(worktreeMountStreamState.opened).toHaveLength(1);
+
+    // WsStreamClient publishes a live negotiated version after open, then
+    // falls back to its predicted version when the owning session closes.
+    // Both snapshots describe 1.1 but are distinct objects. Model those
+    // publications without advancing timers or changing the host/client.
+    worktreeMountStreamState.schemaVersion = { major: 1, minor: 1 };
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <WorktreeChangedStreamMount />
+      </QueryClientProvider>,
+    );
+    expect(worktreeMountStreamState.closes).toBe(0);
+    expect(worktreeMountStreamState.opened).toHaveLength(1);
+
+    worktreeMountStreamState.schemaVersion = { major: 1, minor: 1 };
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <WorktreeChangedStreamMount />
+      </QueryClientProvider>,
+    );
+    expect(worktreeMountStreamState.closes).toBe(0);
+    expect(worktreeMountStreamState.opened).toHaveLength(1);
+  });
+
   it("accepts frames from the active open and rejects a retired client's buffered frame", () => {
     const queryClient = createAppQueryClient();
     const view = renderWorktreeChangedStreamMount(queryClient);

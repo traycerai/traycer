@@ -1,0 +1,71 @@
+---
+title: "Account"
+description: "Review and sign out signed-in sessions, link the mobile app, see your account's usage, and find where each account setting lives."
+keywords: ['account', 'sessions', 'sign out', 'sign out everywhere', 'verification code', 'link mobile app', 'qr code', 'usage', 'tokens', 'cost', 'manage subscription', 'web dashboard']
+---
+
+The **Account** group in Settings holds **Sessions**, **Link mobile app** and **Usage**. In the mobile app it also holds **Delete account**, and has no **Link mobile app**. Billing, teams and privacy are managed in the [web dashboard](https://traycer.ai/settings) instead; see [Where to Manage Your Account](#where-to-manage-your-account).
+
+## Sessions
+
+**Sessions** lists everywhere your account is signed in: browsers, the desktop app, the CLI, the IDE extension, the mobile app and Traycer hosts. Each row shows a badge for the kind of client (**Web**, **Desktop**, **CLI**, **Extension**, **Mobile app** or **Host**), the device, platform and app version, a rough location, and when the session was created and last seen. The session you are using is marked **This session**.
+
+- Click **Sign out** on a session to end it.
+- Click **Sign out everywhere** to end every session at once.
+
+Both ask you to verify it's you first. Traycer emails you a 6-digit code; enter it in the dialog and click **Verify**. After you verify, you can sign out more sessions one by one for a short while without another code. **Sign out everywhere** always asks for a fresh code.
+
+Signing out **This session**, or clicking **Sign out everywhere**, also signs this app out.
+
+The web dashboard has the same list under **Account → Sessions**.
+
+## Link Mobile App
+
+**Link mobile app** signs the [Traycer mobile app](/account/mobile-app) in to your account. It shows a QR code and a code to type. The code changes on its own about once a minute; the panel shows **New code in** with the seconds left.
+
+<Steps>
+  <Step title="Scan or type the code on your phone">
+    In the mobile app, tap **Scan QR code**, or tap **Enter code manually** and type the code. The phone then shows a two-digit code and waits.
+  </Step>
+  <Step title="Check the code and approve">
+    The QR code is replaced by "Does your phone show NN?", where the request came from, and a countdown (**Expires in**). If the digits match the phone and you just scanned the code yourself, click **Approve**. Otherwise click **Reject**.
+  </Step>
+</Steps>
+
+Scanning alone signs nothing in. Each code signs in one phone, expires after about a minute, and only works once you approve it. After you approve, click **Link another device** to show a new code.
+
+If the phone shows no code, the desktop warns "This phone did not show a sign-in code." Approve only if you just scanned the code yourself and the phone is waiting; otherwise reject it and update the mobile app.
+
+If the code stops working (it expired before anyone approved it, or a code shown in another window or browser replaced it), the panel says so. Click **Show a new code here** to start again.
+
+You can also link a phone from a terminal with `traycer link-phone`. See [Link From a Terminal](/account/mobile-app#link-from-a-terminal).
+
+## Usage
+
+**Usage** is a dashboard of what your agents spent, in tokens and estimated cost, across your whole account.
+
+- **Filters.** Pick a window of **7 days**, **30 days** (the default) or **90 days**, and a host (**All hosts** by default). Switch between **Cost** and **Tokens** at the top right, next to buttons that export the dashboard as an image.
+- **Headline.** The total for the window, and how it splits across harnesses (Claude Code, Codex and so on). With more than one host in the window, a **By host** list follows.
+- **Tiles.** **Processed tokens**, **Cached input**, **Uncached input**, **Output** and **Cache savings**.
+- **Daily chart.** Spend per day, grouped by **Harness** or by **Model**.
+- **Activity.** A calendar of daily activity over the past year.
+- **Breakdown.** A table grouped by **Model** or by **Day**.
+
+Costs are estimated at the providers' published list prices, so they can differ from what you are actually billed; the headline is marked "* if billed at full API rate". For the credits Traycer actually charged, open **Billing → Usage** in the web dashboard.
+
+If this machine's host can't read your account's usage from the cloud, the dashboard shows this machine's usage only and says so under the headline.
+
+For a single Task's or chat's usage, and for your coding agents' plan limits, see [Usage Limits and Model Routing](/agents-and-models/usage-limits-and-routing).
+
+## Where to Manage Your Account
+
+| To… | Go to |
+| --- | --- |
+| Sign out, or sign out other devices | Desktop avatar menu → **Sign out**, or **Settings → Sessions** |
+| Link the mobile app | **Settings → Link mobile app**, or `traycer link-phone` |
+| Manage your subscription | Desktop avatar menu → **Manage subscription**, which opens the web dashboard |
+| Buy credits, view credit usage, get a referral link | Web dashboard → **Billing**, **Usage**, **Referrals** |
+| Turn Privacy Mode on or off | Web dashboard → **Settings → Privacy Settings** |
+| Manage a team's members, billing and settings | Web dashboard → pick the team in the team switcher → **Members**, **Billing**, **Settings** |
+| Delete your account | Mobile app → **Settings → Delete account**. See [Delete Your Account](/account/mobile-app#delete-your-account). |
+| Download the mobile app | [Install → Mobile App](/install#mobile-app) |

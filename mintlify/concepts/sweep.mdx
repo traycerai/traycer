@@ -5,21 +5,27 @@ description: "Clean up Task worktrees, understand what gets deleted, and review 
 
 **Sweep** removes selected [worktrees](/concepts/worktrees) belonging to one or more Tasks. Use it to reclaim disk space after work has landed or when you no longer need an isolated checkout.
 
-Opening Sweep lets you inspect the worktrees before removing anything. Sweep keeps the Task, its agent conversations, and its artifacts. It removes the selected checkout directories. Saved bindings can then point to missing worktrees, so agents need an available run location for future work. The removal operation itself does not delete local or remote branch refs; a configured teardown script may perform additional cleanup.
+Opening Sweep lets you inspect the worktrees before removing anything. Sweep keeps the Task, its agent conversations, and its artifacts. It removes the selected checkout directories. Saved bindings can then point to missing worktrees, so agents need an available run location for future work.
+
+Removing a worktree doesn't delete its local or remote branch, so committed work stays on the branch. The exception is a submodule checked out on its own branch for that worktree: that branch lives inside the worktree and is deleted with it, together with any commits that exist only there. A configured [teardown script](/concepts/worktrees/scripts#how-teardown-runs) may also perform additional cleanup.
 
 <Warning>
   Removal has no undo in Traycer. Uncommitted files and work that exists only in a removed worktree may be permanently lost. Save anything you need elsewhere before removing it, including ignored files you want to keep.
+</Warning>
+
+<Warning>
+  Removing a worktree closes every terminal open inside it, including terminals that are still running a command, even when Sweep doesn't list the worktree as **In use**. [Automatic cleanup](/settings/worktrees#automatic-cleanup) skips such worktrees instead.
 </Warning>
 
 ## Open Sweep
 
 | Starting point | How to open it |
 |---|---|
-| **Inside a Task** | Click the paintbrush icon in the top-right status row, next to the sync indicator. Its tooltip says **Sweep worktrees**. |
-| **History: one Task** | Use the Task row's paintbrush action or **Sweep Worktrees…** in its context menu. |
-| **History: several Tasks** | Enter selection mode, select the Tasks, then use the Sweep action. |
+| **Inside a Task** | Click the paintbrush at the end of the Task's top-right status row, after the usage control. Its tooltip reads "Sweep worktrees — 2 worktrees", followed by merge progress when some of the Task's branches have merged PRs, for example "merged 1/2". The status row isn't shown in windows narrower than 768 px; use History there. |
+| **History: one Task** | Hover the Task's row and click its paintbrush ("Sweep this task's worktrees"), or right-click the row and choose **Sweep Worktrees…**. |
+| **History: several Tasks** | Click **Select**, select the Tasks, then click the paintbrush in the History toolbar. |
 
-The action is unavailable when there are no worktrees to sweep. For an inventory of all Traycer-managed worktrees on a host, use [Settings > Worktrees](/settings/worktrees).
+The paintbrush is faded when the Task has no worktrees on this host. For an inventory of all Traycer-managed worktrees on a host, use [Settings › Worktrees](/settings/worktrees).
 
 ## Choose What To Remove
 
@@ -41,6 +47,8 @@ When several selected Tasks share a worktree, it appears once. It counts as shar
   **Select all** includes selectable worktrees that did not start checked, including work needing review. Keep the default selection if you only want the worktrees Traycer has preselected as safe.
 </Note>
 
+Press **A** to select or deselect all, and **R** to refresh the worktree details. The footer shows when the details were last checked ("Workspace snapshot ·" followed by the time).
+
 ## Remove The Selected Worktrees
 
 1. Check the paths, branches, and selected count. Deselect anything you want to keep.
@@ -50,7 +58,11 @@ When several selected Tasks share a worktree, it appears once. It counts as shar
 
 For a selected worktree in use, confirmation authorizes stopping anything working there when deletion runs. If Traycer cannot identify everything using it, the review says so. If the activity changes during review, Traycer asks you to review the updated consequences.
 
-Cleanup runs in the background and can run the workspace's configured teardown script. Closing the dialog does not cancel cleanup that has started. Reopen Sweep to see progress; the result notification reports removals, failures, or unconfirmed outcomes.
+Cleanup runs in the background and can run the workspace's configured teardown script. Closing the dialog does not cancel cleanup that has started; while a sweep runs, **Cancel** becomes **Close**. Reopen Sweep to see progress; the result notification reports removals, failures, or unconfirmed outcomes.
+
+If you close the dialog after clicking **Remove N worktrees** but before Traycer finishes rechecking, and the selection turns out to need review, a "Sweep needs your confirmation." notification offers **Review sweep**. Nothing is removed until you confirm.
+
+When the list includes proven-safe worktrees and automatic cleanup is off for the host, the dialog offers **Set up automatic cleanup**.
 
 ### Example: Clean Up After A Merged PR
 
@@ -68,6 +80,6 @@ An empty list means no worktrees were found for the selected Tasks on that host.
 
 - **Couldn't be removed:** Inspect the reported reason, address it, then select the worktree again to retry.
 - **Unconfirmed:** Traycer could not confirm the outcome. Check the worktree and refresh its status before taking further action; Sweep does not automatically retry that deletion.
-- **Couldn't check these worktrees:** Retry or inspect the host's inventory in [Settings > Worktrees](/settings/worktrees).
+- **Couldn't check these worktrees:** Retry or inspect the host's inventory in [Settings › Worktrees](/settings/worktrees).
 
-Sweep is manual cleanup. Opening it does not enable [automatic cleanup](/settings/worktrees#automatic-cleanup), a separate, opt-in setting that removes inactive, proven-safe worktrees on a schedule. See Settings > Worktrees for its eligibility rules, timing, and cleanup history.
+Sweep is manual cleanup. Opening it does not enable [automatic cleanup](/settings/worktrees#automatic-cleanup), a separate, opt-in setting that removes inactive, proven-safe worktrees on a schedule. See Settings › Worktrees for its eligibility rules, timing, and cleanup history.

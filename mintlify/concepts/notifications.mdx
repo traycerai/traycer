@@ -1,0 +1,86 @@
+---
+title: "Notifications"
+description: "How Traycer tells you an agent needs you, failed, or finished: the notification center, tab indicators, OS and phone notifications, sounds, and hooks."
+---
+
+Traycer notifies you when an agent needs your approval or an answer, when something fails, and when work finishes. The same notification can show up in several places:
+
+| Where | What you get |
+|---|---|
+| [Notification center](#notification-center) | The full list, opened from the bell in the app header. |
+| [Tab indicators](#tab-indicators) | A status icon on the Task and agent that the notification is about. |
+| [OS notifications](#os-notifications) | A system notification when no Traycer window has focus. |
+| [Phone](#push-notifications-on-your-phone) | A push notification from the mobile app when an agent needs you. |
+| [Sounds](#sounds) | A chime for each kind of notification. |
+| [Hooks](#hooks) | A script or URL the host calls, for your own automation. |
+
+## Kinds Of Notification
+
+Each notification has a severity:
+
+| Severity | Covers |
+|---|---|
+| **Needs action** | Approvals, interviews, and browser steps only you can complete. |
+| **Failure** | Errored turns, stalls, crashes, and rate limits. |
+| **Done** | Completed or intentionally stopped turns. |
+| **Info** | Background host operations, such as worktree cleanup. |
+
+Each host creates its own notifications. Which severities a host creates is set per host in [Settings › Notifications](/settings/notifications). **Info** is off by default; the others are on.
+
+## Notification Center
+
+Click the bell in the app header, or press ⌘⇧B / Ctrl+Shift+B, to open the notification center. Press the shortcut again to close it, and use the Up and Down arrow keys to move between notifications.
+
+The bell shows a count when something needs your attention, and a dot when there are unread notifications.
+
+The center has two sections:
+
+- **Needs attention**: approvals, questions and browser steps waiting for you, and failures you haven't read.
+- **Recent activity**: everything else, newest first.
+
+Click a notification to open the Task or agent it's about. An unread notification has a **Mark as read** button. Marking an approval or question as read doesn't answer it.
+
+The buttons at the top of the center:
+
+| Control | What it does |
+|---|---|
+| **Filter** | Filters **Recent activity** by **Unread only** and by category: **Task activity**, **Collaboration**, and **System issues**. It doesn't hide anything in **Needs attention**. |
+| **Mark all as read** | Marks every notification as read. |
+| **Clear notifications** | Asks to confirm, then clears the list. Cleared notifications don't come back. |
+| **Notification settings** | Opens [Settings › Notifications](/settings/notifications). |
+
+While Traycer's cloud feed is connected, the center shows notifications from all of your hosts. If it can't reach the feed, it says so and shows the notifications already on this device until it reconnects.
+
+## Tab Indicators
+
+A notification also marks the Task and agent it's about, so you can spot them without opening the center. The icon appears on Task tabs, on agent tabs inside a Task, on agents in the Agents panel, and in Task lists. A parent agent also shows the status of the agents under it.
+
+| Indicator | Means |
+|---|---|
+| Task waiting for your approval | An agent is waiting for you to approve an action. |
+| Task waiting for your interview response | An agent asked you a question. |
+| Browser needs you | An agent's browser tab needs you to finish a step, such as a sign-in. |
+| Task needs attention | Something failed. |
+| Task completed | Work finished and you haven't looked at it yet. |
+
+An approval, question or browser indicator stays until you respond. A failure or completed indicator clears when you open that agent.
+
+## OS Notifications
+
+The desktop app shows a system notification only when **every** Traycer window is unfocused. While you're working in a Traycer window, a new notification appears as a message inside the app instead.
+
+Click a system notification to open what it's about. A newer notification about the same Task or agent replaces the earlier one rather than stacking.
+
+Banners, badges and sounds for system notifications are managed in your operating system's notification settings. To get there, click **Open Settings** next to **OS notifications** in [Settings › Sounds](/settings/sounds).
+
+## Push Notifications On Your Phone
+
+The [mobile app](/account/mobile-app) can notify your phone when an agent needs you. In the mobile app, open **Settings › Sounds**, find **This phone**, and turn on **Push notifications** with **Enable**. If you turned notifications off for Traycer in the phone's settings, the row says so and offers **Open Settings**.
+
+## Sounds
+
+The app plays a chime for each severity while a Traycer window has focus. Choose the chimes, or turn them off, in [Settings › Sounds](/settings/sounds). Chimes apply to every host.
+
+## Hooks
+
+A host can run a script or send an HTTP request whenever it creates a notification of the severities you choose, for example to post to a chat tool. Hooks are set up per host. See [Notification hooks](/settings/notifications#notification-hooks).

@@ -1,0 +1,90 @@
+---
+title: "Sync and offline"
+description: "What the sync indicator in a Task means, what happens to your changes when you go offline, and how agents on offline machines appear."
+keywords: ['sync', 'offline', 'unsynced changes', 'published copy', 'private agent', 'clone agent', 'cloud', 'saving changes']
+---
+
+A Task's work is held by the [host](/concepts/hosts) that serves it, and synced to the cloud so that it reaches your other devices and the people you share the Task with. The sync indicator tells you where your latest changes are.
+
+## The Sync Indicator
+
+The indicator sits in the status row at the top right of an open Task, next to the Task's usage and Sweep buttons. It isn't shown on phone-sized screens.
+
+When everything is normal, the indicator is a small dot. Hover it to see what it means:
+
+| Tooltip | Meaning |
+|---|---|
+| "All changes synced" | Everything you changed has reached the cloud. |
+| "Saving changes" | Changes are on their way. This is normal while agents are working. |
+| "Saved. Not synced yet." | The Task is saved on its host but hasn't been synced to the cloud. |
+
+Other states show a label. Hover the indicator for the full message.
+
+| Label | Meaning | What to do |
+|---|---|---|
+| **Connected** | The window is connected to its host, and the sync state isn't known yet. | Nothing. |
+| **Connecting…** or **Reconnecting…** | The window is connecting to its host. After a while the label reads **Still connecting…** or **Still reconnecting…**. It keeps retrying on its own. | Keep the window open. Changes you haven't sent yet are only in this window. |
+| **Offline — saving changes…** | The cloud can't be reached, and some recent changes are still being saved. | Keep the window open. |
+| **Offline — changes pending** | The cloud can't be reached. The host serving the Task is holding your changes. | Keep that host running. The changes sync when the connection is back. |
+| **Offline — new edits not backed up** | The cloud can't be reached, and nothing is keeping new edits except this window. | Reconnect, or copy anything you can't lose. Edits are lost if the window closes. |
+| **Offline** | The window lost its connection to its host. | Keep the window open. Unsent changes stay in it until it reconnects. |
+
+A few labels are about one change rather than the connection:
+
+| Label | Meaning |
+|---|---|
+| **Change not saved** | A recent change was refused and not applied. Make it again to retry. |
+| **Change replaced** | A newer change from another device replaced a recent change of yours. Make it again if you still want it. |
+| **Change may not be saved** | A recent change was sent, but its result is unknown. It settles on its own once the server confirms. |
+
+Two labels are about how current agent status is:
+
+| Label | Meaning |
+|---|---|
+| **Agent status may be stale** | Live agent activity is unavailable, so an agent's status may be out of date until it reconnects. |
+| **Remote agent status unavailable** | This device can't reach the cloud, so agents on other devices may show as idle. Agents on this device are live. |
+
+When more than one thing is wrong, the indicator shows the most serious one. Hover it to see the rest.
+
+## Closing A Task With Unsynced Changes
+
+If you close a Task tab while it holds changes its host hasn't received yet, Traycer asks first: "They'll be discarded if you close the tab now. Keep it open and they'll sync as soon as the connection returns." Changes the host already has don't trigger this: closing the tab leaves them on the host, which syncs them to the cloud when it can.
+
+- **Keep open** leaves the tab open. The dialog also closes by itself as soon as the host receives the changes.
+- **Close anyway** closes the tab and discards the changes the host hasn't received.
+
+Closing a group of tabs waits for this answer before it closes any of them.
+
+## Agents On Machines That Are Offline
+
+An agent runs on one host and stays bound to it. While that host is reachable, you can follow the agent live from any of your devices.
+
+Traycer keeps a published copy of each chat agent in the cloud. When the agent's host is offline:
+
+- Its row in the Agents panel says it lives on that host, which is offline, and opens read-only from the last published copy.
+- Opening it shows the last published copy, read-only. Sending resumes when the host is back.
+- To keep working now, **Clone agent** creates a new agent on the active host from it. The original stays bound to its own host. You need more than view-only access to the Task to clone.
+
+A Terminal-interface agent can only run on its own machine. When it isn't running there, its tab says "This agent is not running on … right now, and it can only be started on that machine." The agent and its transcript are kept on that machine.
+
+A collaborator's agent always opens from its last published copy, because it runs on their machine.
+
+## Private And Shared Agents
+
+In a Task you share, collaborators can view and clone the agents you share with the Task, but never act in them. A private agent is visible only to you. Terminal-interface agents are never shared.
+
+- **All your agents:** the **Share my agents** switch in the [Sharing](/panels/sharing) panel shares or unshares every agent you have in the Task, including future ones.
+- **One agent:** use **Share with task** or **Make private** in the agent's row menu in the [Agents](/panels/agents) panel.
+
+## Working Offline
+
+"Offline" can mean two different things.
+
+**The cloud can't be reached.** Your hosts keep running, and agents on this device keep working. Changes you make are held by the host serving the Task and sync when the connection returns, so keep that host running. Meanwhile:
+
+- Agents on your other devices may show as idle.
+- Published copies can't be loaded. An agent that needs one says "Could not reach the cloud".
+- Settings shows your hosts as "You're offline", because it can't check their status.
+- A report you send with Report Issue is saved on this machine and sent when the connection returns.
+
+**The window lost its host.** The indicator reads **Reconnecting…** or **Offline**. Changes you haven't sent yet exist only in this window, so keep it open until it reconnects. If the host itself stopped, see [Troubleshooting](/reference/troubleshooting).

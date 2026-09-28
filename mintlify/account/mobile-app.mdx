@@ -1,0 +1,66 @@
+---
+title: "Mobile App"
+description: "Follow and steer your Tasks from your phone with the Traycer mobile app."
+keywords: ['mobile', 'mobile app', 'iphone', 'ios', 'android', 'phone', 'link mobile app', 'link-phone', 'qr code', 'push notifications', 'delete account', 'relay']
+---
+
+The Traycer mobile app runs the same interface as Traycer Desktop on your phone. It has no host of its own: it reaches the hosts on your other machines through Traycer's relay, so the agents keep running there while you follow them from the phone.
+
+The mobile app is included on every plan, including Free.
+
+## Get the App
+
+- **iPhone:** [join the TestFlight beta](https://testflight.apple.com/join/GrMtbuXk). Install Apple's TestFlight app first.
+- **Android:** [get it on Google Play](https://play.google.com/store/apps/details?id=ai.traycer.app.android).
+
+The same links are on the [download page](https://traycer.ai/download) and on the [Mobile App](https://traycer.ai/_/mobile-app) page of the web dashboard.
+
+## Sign In
+
+The quickest way in is to link the phone from Traycer Desktop:
+
+<Steps>
+  <Step title="Show a code on the desktop">
+    On your computer, open **Settings → Link mobile app**. It shows a QR code and a code you can type.
+  </Step>
+  <Step title="Scan or type it on the phone">
+    In the mobile app, tap **Scan QR code** and scan the code. If you can't use the camera, tap **Enter code manually**, type the code shown under the QR code, and tap **Sign in**. The phone then shows **Your code:** with a two-digit number and waits for your approval.
+  </Step>
+  <Step title="Approve on the desktop">
+    The desktop asks "Does your phone show NN?" with the same two digits. If they match and you just scanned the code yourself, click **Approve**. Otherwise click **Reject**.
+  </Step>
+</Steps>
+
+Scanning alone signs nothing in. Each code signs in one phone, expires after about a minute, and works only once you approve it. See [Link Mobile App](/settings/account#link-mobile-app) for the rest of the desktop side.
+
+You can also tap **Sign in** to sign in with your account directly, as on the desktop. See [Sign In](/account/sign-in).
+
+### Link From a Terminal
+
+On a machine where the CLI is signed in, run `traycer link-phone`. It prints a QR code and a code to type, then asks you in the terminal to approve the phone that scanned it. Use `traycer link-phone --no-qr` if your terminal garbles the QR code. See [CLI commands](/cli/commands#auth-commands).
+
+## Push Notifications
+
+The mobile app can notify your phone when an agent needs you. In the mobile app, open **Settings → Sounds** and, under **This phone**, tap **Enable** on the **Push notifications** row. If you turned notifications off for Traycer in the phone's settings, the row offers **Open Settings** instead. See [Sounds](/settings/sounds#this-phone) and [Notifications](/concepts/notifications#push-notifications-on-your-phone).
+
+## Differences From the Desktop App
+
+- Settings has no **Keybindings** or **Link mobile app** section.
+- There is no **Manage subscription** link. Manage your subscription from **Billing** in the [web dashboard](https://traycer.ai/billing).
+- Settings has a **Delete account** section, which the desktop app does not. See [Delete Your Account](#delete-your-account).
+
+## Delete Your Account
+
+<Steps>
+  <Step title="Request the deletion">
+    In the mobile app, open **Settings → Delete account** and tap **Request account deletion**. Confirm with **Continue**.
+  </Step>
+  <Step title="Fill in the form">
+    A short form opens in your browser, filled in with your account's email address. Submit it to confirm the request.
+  </Step>
+  <Step title="Wait for the confirmation email">
+    The Traycer team completes the deletion within 30 days and emails a confirmation to your account's address. Your account stays active until then.
+  </Step>
+</Steps>
+
+Deleting your account removes your profile, sessions, Tasks, chats and generated documents from Traycer's active services. It can't be undone. Some data can remain in backups or archives, or be kept where the law requires it or for the other reasons the [Privacy Policy](https://traycer.ai/privacy-policy) lists.

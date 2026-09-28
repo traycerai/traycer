@@ -1,81 +1,76 @@
 ---
 title: "Hosts"
-description: "Understand the Traycer process that owns workspace, terminal, file, and agent operations."
+description: "Understand the Traycer process that runs agents, terminals and file access on each of your machines."
 ---
 
-A **Host** is the Traycer process that connects Desktop to workspace folders, files, terminals, git state, and coding agents. A Host can run on the same machine as Desktop or on another reachable machine.
+A **host** is the Traycer process that connects the app to workspace folders, files, terminals, git state and coding agents on one machine. Each machine you use runs its own host. The app can use a host on the same computer or on another machine you've added to your account.
 
-Most of the time, you do not manage Hosts directly. You notice them when Traycer is starting, offline, updating, or when a tab is tied to a different machine.
+Most of the time you don't manage hosts directly. You notice them when Traycer is starting, when a machine is offline or updating, or when a tab belongs to a different machine.
 
 ## What The Host Owns
 
-The Host owns live work that depends on where it is running:
+The host owns live work that depends on the machine it runs on:
 
 - workspace-folder access
 - file previews
 - git diffs
 - terminal sessions
-- agents on the Terminal interface
-- provider and coding-agent setup that depends on tools available to that Host
+- agents, and the provider and coding-agent setup that depends on tools installed on that machine
+- in-app browser sessions and [port forwards](/concepts/hosts/port-forwarding)
 
-Cloud sync can move durable Task data across machines, but live surfaces still depend on the Host that opened them.
+Cloud sync carries your Tasks and their history across machines, but live work still runs on the host that started it. See [Sync and offline](/concepts/sync-and-offline).
 
 ## Multiple Hosts
 
-A user can have more than one Host. For example, your laptop and a workstation can each run a Host, and each Host owns the work it can reach on that machine.
+You can have more than one host. For example, your laptop and a workstation can each run a host, and each works with the folders and tools on its own machine.
 
-Open the host switcher in Settings and choose **Add host…** to connect another machine. Follow the setup commands in the dialog. Once **Host connected** appears, choose **Set up host**, then click **Activate** on its identity card. The button becomes an **Active** tag.
+To add one, open the host picker in Settings and choose **Add host…**. See [Remote hosts](/concepts/hosts/remote-hosts).
 
-The switcher lists Hosts without health dots. Connection status appears on the Host identity card and the dialog's **Host connected** card.
+The picker lists every host on your account. Rows show an **Active** tag on the active host, a short status word when a host needs attention (such as offline or restarting), and an update word such as updating or update waiting.
 
-The model is:
+<Note>
+Traycer on native Windows and Traycer inside WSL are separate hosts, each with its own folders, tools and agents.
+</Note>
 
-- each device can run its own Host
-- Desktop can connect to a Host when that Host is reachable
-- live surfaces still depend on the Host that started them
-- cloud sync carries durable Task data across devices
+## The Active Host
 
-## Current Host And Tab Host
+The **active host** is where new work starts unless you choose otherwise. It is shared by every Traycer window.
 
-Traycer can use a Host in two ways:
+To change it, open **Settings › Host › Overview** for another host and click **Activate**. See [Overview](/settings/host#header).
 
-| Host relationship | Meaning |
+**Failover.** If the active host can't be reached, Traycer switches to another host that is working and shows "Switched to &lt;host&gt;". It switches back once the host you chose has been reachable for about 20 seconds.
+
+**Choosing a host for one piece of work.** Several places let you pick a host without changing the active host:
+
+| Place | What the host picker does |
 |---|---|
-| **Current Host** | The Host Desktop is currently using for app-wide actions, such as opening Tasks, files, git diffs, and settings. |
-| **Tab Host** | The Host a specific tab or session started on. |
+| The start-page composer | Chooses where a new Task's first agent runs. |
+| The new agent dialog | Chooses where the new agent runs. |
+| **New terminal** | Chooses the host and folder where the terminal opens. |
+| The **Fork agent** dialog | Chooses where the forked agent runs. |
+| Settings | Chooses which host the Host settings pages show. It never changes the active host. |
 
-Some tabs keep using their original Host:
+## Tabs And Their Host
 
-| Surface | Behavior |
+Every agent, terminal, file and diff tab belongs to the host it was opened on, for as long as the tab exists. Changing the active host doesn't move them.
+
+| Tab | Behavior |
 |---|---|
-| **Chat interface** | Can continue on another Host by cloning the agent. The clone is a NEW agent; the original stays bound to its Host. |
-| **Terminal / Terminal interface** | Cannot migrate because the PTY is tied to the Host that started it. The agent stays durable and reachable once its Host returns. |
-| **File preview** | Loads from its Tab Host. |
-| **Git diff** | Loads from its Tab Host. |
+| **Agent on the Chat interface** | Stays on its host. To continue while that host is offline, clone it onto another host. The clone is a new agent; the original stays where it was. |
+| **Agent on the Terminal interface** | Stays on its host and can't move. The agent and its transcript are kept and become available again when that host is back. |
+| **Terminal** | Can't move. If its host goes away, the terminal is closed; start a new one. |
+| **File preview** | Loads from its own host, whatever the active host is. |
+| **Git diff** | Loads from its own host, whatever the active host is. |
 
-If a Host becomes unavailable, affected tabs show an unavailable state. Terminal sessions cannot move to another Host; start a new session on the Current Host when needed.
+When a tab's host is unreachable, the tab says so. See [Host-Bound Tabs](/reference/troubleshooting#host-bound-tabs).
 
 ## Hosts And Agent-To-Agent Work
 
-The Host boundary also gates what one agent can do to another. Referencing is unaffected — every agent in the Task can be referenced regardless of Host. The other two capabilities are not:
-
-| Capability | Host requirement |
-|---|---|
-| **Reference an agent** | None. Works across Hosts. |
-| **Read a Chat-interface transcript** | None. That history is Task-backed, so it reads across Hosts (same user still required). |
-| **Read a Terminal-interface transcript** | Must be read on the Host that owns that agent. |
-| **Send an agent-to-agent message** | Sender and receiver must both be local to the same Host. |
-
-A message to an agent on another Host is rejected rather than queued. The full matrix, including the runtime requirements that apply on top of these, is in [Agent-to-Agent](/concepts/agent-to-agent).
+Agents can work with agents on other hosts in the same Task. What works across hosts depends on each agent's interface and owner; see [Agent-to-Agent](/concepts/agent-to-agent).
 
 ## Where To Manage Hosts
 
-Use [Settings > Host](/settings/host) to check Host status, install or update the Host, restart it, and run Doctor diagnostics.
-
-Use [Troubleshooting](/reference/troubleshooting) for unavailable states, logs, and issue-reporting steps.
-
-## Resources
-
-Use the header’s **Resources** button to inspect CPU and memory usage. See [Resource monitor](/concepts/hosts/resource-monitor).
-
-See [Remote hosts](/concepts/hosts/remote-hosts) for the connection and activation walkthrough.
+- [Settings › Host › Overview](/settings/host): status, updates, data, ports, installation and Doctor for each host.
+- [Troubleshooting](/reference/troubleshooting): status words, startup messages, logs and reporting an issue.
+- [Resource monitor](/concepts/hosts/resource-monitor): CPU and memory for each host's agents and shells.
+- [Port forwarding](/concepts/hosts/port-forwarding): reaching a port on one machine from another.

@@ -1,75 +1,116 @@
 ---
 title: "Artifact workflow"
-description: "How Tasks hold artifacts after per-agent Epic Mode was removed, and how planning skills fit a large feature."
+description: "How agents use Traycer's built-in skills to plan, build, and review work through artifacts."
 keywords:
   [
     "artifacts",
     "skills",
     "epic brief",
+    "core flows",
     "tech plan",
     "tickets",
+    "execute",
+    "review",
     "walkthrough",
+    "debate",
+    "autobuild",
     "desktop",
   ]
 ---
 
 <Note>
-  This is the Desktop path. The IDE extension's Epic Mode is a separate product;
-  see the [IDE Extension docs](/extension).
+  This is the Desktop workflow. The IDE extension is a separate product; see
+  the [IDE Extension docs](/extension).
 </Note>
 
-A **Task** is still the container for a piece of work. It holds agents, files, git
-diff, and [artifacts](/panels/artifacts) — specs, tickets, stories, and reviews.
+A **Task** is the container for a piece of work. It holds agents, files, the git diff, and [artifacts](/panels/artifacts): specs, tickets, stories, and reviews. Traycer ships a set of skills that tell agents how to plan, build, and review through those artifacts.
 
-Desktop 1.1.10 removed the **per-agent** Epic / Regular mode control (composer,
-settings, and `traycer agent create`). That control was never a property of the
-Task. Removing it did not remove Tasks or the artifact tree.
+## How Artifacts Appear
 
-## How artifacts appear
+Artifacts are written when something should outlive the conversation or be put in front of you. You can create them from the [Artifacts](/panels/artifacts) panel, and an agent can write one during a turn.
 
-Artifacts are created when something should outlive the conversation or be put in
-front of you. You can create them from the Artifacts panel, and an agent can write
-one during a turn.
+An agent writes an artifact only when the work calls for one. If none is written, the coding work can still finish and the context stays in the chat transcript. To be sure you get an artifact, ask for it, or run the skill that produces it.
 
-That write is not guaranteed. If nobody creates the artifact, the coding work can
-still finish and the context stays in the transcript.
+## Built-In Skills
 
-## Planning skills
+For a large feature, a typical order is brief, core flows, tech plan, tickets, execute, review, and walkthrough. Skip any step the work doesn't need.
 
-Traycer still ships skills for framing, planning, tickets, implementation, and
-review. They are the same skills that used to sit behind Epic Mode. Typical order
-for a large feature — skip any step the work does not need:
+### Plan
 
-| Order | Skill | Role |
-| ----- | ----- | ---- |
-| 1 | `traycer-epic-brief` | Orientation: what the initiative is, who it affects, why now. Not UX or architecture. |
-| 2 | `traycer-core-flows` | Product-level journeys, states, and UX decisions. |
-| 3 | `traycer-tech-plan` | Architecture and load-bearing technical decisions, after product direction is aligned. |
-| 4 | `traycer-ticket-breakdown` | Implementation tickets from the aligned plan. |
-| 5 | `traycer-execute` | Implement from those tickets. |
-| 6 | `traycer-review` | Review the changeset. |
-| 7 | `traycer-changeset-walkthrough` | A guide for reviewing substantive completed work. |
+| Skill                         | What it does                                                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `traycer-epic-brief`          | Frames a new initiative: what it is, who it affects, why it matters now, and what's in scope. Writes a short brief. |
+| `traycer-core-flows`          | Maps the user journeys, states, and UX decisions at product level, after clarifying them with you.                  |
+| `traycer-tech-plan`           | Works through the architecture and load-bearing technical decisions with you, then writes plan artifacts.           |
+| `traycer-ticket-breakdown`    | Turns the plan into ticket artifacts with their dependencies, and iterates until you approve the set.               |
+| `traycer-revise-requirements` | Carries a significant requirement change through the product, technical, and ticket artifacts, in that order.       |
+| `traycer-artifact-critique`   | Pressure-tests a plan or other artifact for gaps, contradictions, and risks. Writes a review artifact.              |
 
-Use `traycer-revise-requirements` when the requirements change enough to rewrite
-existing planning artifacts. Use `traycer-artifact-critique` to pressure-test a
-plan before implementation.
+### Build
 
-## Invoking a skill
+| Skill               | What it does                                                                                                                                                                                                                                                                     |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `traycer-execute`   | Orchestrates implementation of the tickets. It orders them into batches by dependency, starts one child agent per ticket, and reviews each batch against the plan. Tickets that pass are marked done; small problems get a fix-up ticket; product drift stops the run and comes back to you. |
+| `traycer-implement` | Guides an agent that implements a ticket handed to it by another agent, such as `traycer-execute`: when to ask, when to decide, and what to report back. You rarely run it yourself. |
+| `traycer-autobuild` | Runs a long, mostly hands-off build. The agent drafts a high-level spec, a grading rubric, and a way to verify the work, and asks you to approve them. Then a builder agent and a separate evaluator agent iterate on each sprint until it passes. |
 
-On the Chat interface, pick skills with `$` in the composer, or type `/` and the
-skill name. Several skills can be attached to one prompt.
+### Review
 
-Some coding agents may also start a skill from its description without that pick.
-That is harness behavior. Traycer does not run brief → plan → tickets →
-walkthrough as an automatic pipeline, and it does not fail the turn when a skill
-is skipped.
+| Skill                           | What it does                                                                                                         |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `traycer-review`                | Reviews a code change for correctness and quality. Writes a review artifact with prioritized findings.               |
+| `traycer-changeset-walkthrough` | Writes a guide to reviewing completed work: what changed, why, the review order, and what still needs verifying. The agent offers one after substantial work and writes it once you agree. |
 
-Picking the skill yourself is a **reliable available workflow**. It is not a new
-policy that every artifact must be requested by hand.
+### Decide and Maintain
+
+| Skill                  | What it does                                                                                                                             |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `traycer-debate`       | Runs a structured debate between agents with different perspectives. You approve the perspectives and models, and it ends with a written synthesis. |
+| `traycer-housekeeping` | Audits the Traycer-created worktrees on the host, recommends which to remove, and deletes only the ones you approve.                     |
+
+## Where Skill Output Lands
+
+| Skill                                          | Output                                                              |
+| ---------------------------------------------- | ------------------------------------------------------------------- |
+| `traycer-review`, `traycer-artifact-critique`  | A **review** artifact.                                              |
+| `traycer-ticket-breakdown`                     | One **ticket** per piece of work, under a `tickets` folder.         |
+| `traycer-changeset-walkthrough`                | A **spec** under a `changeset-walkthroughs` folder.                 |
+| `traycer-debate`                               | Artifacts under `debates/<topic>/`: one per round and perspective, and a final synthesis. |
+| `traycer-autobuild`                            | Artifacts under `autobuild/<build>/`: the spec, the rubric, and one per sprint. |
+
+Folders are relative to the Task's artifacts. See [Artifacts on Disk](/panels/artifacts#artifacts-on-disk).
+
+## Run a Skill
+
+In the chat composer, type `$` or `/` to open the picker; both open the same list. Pick a skill, then write your prompt after it. You can attach several skills to one prompt.
+
+```text
+$traycer-epic-brief We want the mobile app to work offline. Frame the initiative.
+```
+
+```text
+$traycer-tech-plan Plan the sync engine for offline mode, based on the core flows.
+```
+
+```text
+$traycer-execute Implement the offline-mode tickets.
+```
+
+```text
+$traycer-review Review the changes on this branch.
+```
+
+Some coding agents also start a skill on their own when a request matches its description. Traycer doesn't run the steps as an automatic pipeline and doesn't fail a turn when a skill is skipped. Picking the skill yourself is the reliable way to run it.
+
+To add skills of your own, see [Skills](/settings/providers/skills).
+
+## Feedback Through Comments
+
+Comment on the artifacts as you review them, then ask an agent to address the open threads. The agent reads each thread, updates the artifact, and resolves the threads it has handled. See [Comments and Agents](/panels/comments#comments-and-agents).
 
 ## Related
 
 - [Tasks and workspace folders](/concepts/tasks-and-workspace-folders)
 - [Artifacts](/panels/artifacts)
 - [Agents](/panels/agents)
-- [Desktop changelog](/changelog)
+- [Agent-to-agent communication](/concepts/agent-to-agent)
