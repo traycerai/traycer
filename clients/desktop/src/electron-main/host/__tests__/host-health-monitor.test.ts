@@ -697,12 +697,12 @@ describe("startHostHealthMonitor", () => {
     monitor.dispose();
   });
 
-  it("surfaces a host the watcher missed, without respawning, when the backstop reload finds one", async () => {
-    // The mirror of the test above: this time the backstop reload actually
-    // FINDS a published host - the one the lossy pid.json watcher never
-    // reported an edge for. This branch only lets the reload's own `change`
-    // event carry convergence; it must not itself decide to respawn, and the
-    // debug line it logs is a lost-edge counter, not an incident.
+  it("finds a host on disk without respawning when the backstop reload surfaces one", async () => {
+    // The mirror of the test above: this time the backstop reload FINDS a
+    // host, e.g. one whose pid.json edge the lossy watcher never delivered.
+    // The reload's own `change` event carries convergence; this branch must
+    // not decide to respawn, and its debug line is a discovery, not an
+    // incident.
     const reload = vi.fn(async () => SNAPSHOT);
     const respawn = vi.fn(async () => {});
     const monitor = startMonitor({
@@ -721,7 +721,7 @@ describe("startHostHealthMonitor", () => {
     expect(reload).toHaveBeenCalled();
     expect(respawn).not.toHaveBeenCalled();
     expect(vi.mocked(log.debug)).toHaveBeenCalledWith(
-      "[host-health] null-snapshot backstop surfaced a host the pid.json watcher missed",
+      "[host-health] null-snapshot backstop found a host on disk",
       { pid: SNAPSHOT.pid },
     );
     monitor.dispose();

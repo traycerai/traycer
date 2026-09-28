@@ -375,10 +375,11 @@ export function startHostHealthMonitor(
           // (one ENOENT read).
           const surfaced = await deps.host.reloadSnapshotFromDisk();
           if (surfaced !== null) {
-            // A host the watcher never reported. Debug-only: this counts lost
-            // edges in field logs, it is not an incident.
+            // A discovery, not proof of a lost watcher edge: a superseded
+            // reload, a late watcher event or a respawn's null snapshot also
+            // land here. Debug-only, an upper bound on lost edges in field logs.
             log.debug(
-              "[host-health] null-snapshot backstop surfaced a host the pid.json watcher missed",
+              "[host-health] null-snapshot backstop found a host on disk",
               { pid: surfaced.pid },
             );
           }
