@@ -86,7 +86,6 @@ async function pressAndHoldArrowKey(
 function withVerticalStrip(): void {
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    layoutCarryDone: true,
     arrangement: {
       ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
       tabStripPlacement: "left",
@@ -98,7 +97,6 @@ beforeEach(() => {
   window.localStorage.clear();
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    layoutCarryDone: true,
   });
   useLayoutEditorStore.getState().endSession();
   useLayoutEditorStore.setState({ surfaceNodes: new Map() });
@@ -270,7 +268,6 @@ describe("<SurfacePlacementBar />", () => {
     it("ArrowLeft moves focus to the previous pictogram and selects it as one gesture", async () => {
       useLayoutStore.setState({
         ...DEFAULT_LAYOUT_SNAPSHOT,
-        layoutCarryDone: true,
         arrangement: {
           ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
           tabStripPlacement: "right",

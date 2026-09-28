@@ -205,7 +205,6 @@ beforeEach(() => {
   setViewportWidth(1440);
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    layoutCarryDone: true,
   });
   useLayoutEditorStore.getState().endSession();
   useTabsStore.setState({

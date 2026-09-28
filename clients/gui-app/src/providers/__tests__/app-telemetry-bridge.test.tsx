@@ -20,7 +20,6 @@ beforeEach(() => {
   window.localStorage.removeItem(LAYOUT_SNAPSHOT_KEY);
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    layoutCarryDone: true,
   });
 });
 

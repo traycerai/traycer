@@ -20,10 +20,17 @@ import {
   type RailEntry,
 } from "@/lib/layout/rail";
 import type { RailRegionId } from "@/lib/layout/region-id";
-import { sameRegionValue, type LayoutValues } from "@/lib/layout/layout-values";
+import {
+  sameRegionValue,
+  type LayoutOverrides,
+  type LayoutValues,
+  type RegionSize,
+  type Visibility,
+} from "@/lib/layout/layout-values";
 import {
   LAYOUT_PRESET_IDS,
   PRESET_VALUES,
+  SHIPPED_DEFAULT_VALUES,
   type LayoutPresetId,
 } from "@/lib/layout/layout-presets";
 import { resolvePersistedOverrides } from "@/lib/layout/layout-values-persist";
@@ -51,11 +58,6 @@ import {
  * the last-applied preset (`layout-diff.ts`).
  */
 export interface LayoutStoreState extends LayoutSnapshot {
-  /**
-   * Whether the one-shot carry of the six shipped values has run (L-49,
-   * L-61). Persisted in this same blob, which is what makes it one-shot.
-   */
-  readonly layoutCarryDone: boolean;
   /**
    * Every value replaced by the preset's, the arrangement untouched: the
    * delta is cleared and `basePreset` becomes the last-applied preset.
@@ -86,35 +88,29 @@ export const DEFAULT_LAYOUT_SNAPSHOT: LayoutSnapshot = {
 const LAYOUT_PERSIST_KEY = persistKey(STORE_KEYS.layout);
 
 /**
- * Version 2 was bumped for the new shape with no `migrate`, because the layout
- * store is unreleased (L-22) and a blob written by a development build is
- * discarded rather than translated. Version 3 is the exception (L-158): the
- * shipped rail put a divider between every panel, and a record written before
- * L-155 holds all seven whatever else it holds, so it needs translating rather
- * than discarding - discarding it would take the user's panel ORDER with it.
- * Version 4 is the same exception one ruling later (L-166): stacks did not
- * exist between L-155 and L-166, so a v3 record names none, and left as it is
- * a dogfooder would be the one user in the world whose sidebar never draws
- * Agents and Artifacts together. The five values that DID ship are carried
- * separately, below. Version 5 splits the agent rows' resource readings off
- * the monitor's Shown (G7, `withSplitResourceReadings`). Version 6 moves Tab
- * overflow in from the settings store (`withCarriedTaskTabLayout`).
+ * The versions a stored record can carry, each with exactly one translation
+ * to this build's shape (`migrateLayoutPersistedState`).
+ *
+ * - 0: no layout record at all. Not a version anyone wrote: it is seeded
+ *   (`seedMissingLayoutRecord`) so a fresh install and an install from before
+ *   the layout store take the same migrate-and-write-back path as everyone
+ *   else, rather than an implicit fallback.
+ * - 1: the one version that shipped (desktop-v1.4.0), `{ statusBar, composer }`.
+ * - 7: this shape. 2 to 6 were written only by pre-release builds of this
+ *   store and are deliberately NOT reused: zustand skips `migrate` when the
+ *   stored version equals the current one, so reusing one would load a
+ *   development record as-is.
  */
-const LAYOUT_PERSIST_VERSION = 6;
+const MISSING_LAYOUT_VERSION = 0;
+const SHIPPED_LAYOUT_VERSION = 1;
+const LAYOUT_PERSIST_VERSION = 7;
 
-const SHIPPED_CARRY = carryShippedLayoutValues();
+seedMissingLayoutRecord();
 
 export const useLayoutStore = create<LayoutStoreState>()(
   persist(
     (set, get) => ({
-      // The carry writes its result into this store's own record before the
-      // store exists, so the ordinary rehydrate below picks it up. It is ALSO
-      // seeded here, for the one case a rehydrate cannot cover: a quota
-      // failure on that write, which would otherwise discard the carry AND
-      // leave the flag unset, so the next launch carried over whatever the
-      // user had changed in between (G1-24).
-      ...(SHIPPED_CARRY ?? DEFAULT_LAYOUT_SNAPSHOT),
-      layoutCarryDone: SHIPPED_CARRY !== null,
+      ...DEFAULT_LAYOUT_SNAPSHOT,
       applyPreset: (basePreset) => {
         // Re-applying the untouched current preset writes nothing: a set here
         // would still persist and rehydrate every other window.
@@ -168,15 +164,12 @@ export const useLayoutStore = create<LayoutStoreState>()(
           basePreset,
           overrides: resolvePersistedOverrides(persisted.overrides),
           arrangement: resolvePersistedArrangement(persisted.arrangement),
-          layoutCarryDone:
-            persisted.layoutCarryDone === true || SHIPPED_CARRY !== null,
         };
       },
       partialize: (state) => ({
         basePreset: state.basePreset,
         overrides: state.overrides,
         arrangement: state.arrangement,
-        layoutCarryDone: state.layoutCarryDone,
       }),
     },
   ),
@@ -302,140 +295,227 @@ export function isThinkingShown(): boolean {
 }
 
 /**
- * The six values that actually shipped, carried into this store once (L-49,
- * L-61), or `null` when there is nothing to carry.
+ * A launch that finds no layout record at all is version 0, written down
+ * before the store hydrates so zustand's own `migrate` translates it and
+ * writes the result back: the same one-shot path every stored version takes,
+ * which is why no "carry done" flag exists.
  *
- * Verified against `desktop-v1.3.0`: the layout store itself is unreleased, so
- * nothing else is migrated (P5) - but the minimap side, the pinned context
- * breakdown, the resource-monitor switch, the sidebar's resource metrics,
- * the sidebar's panel groups and the rail's per-panel Hide/Show are on users'
- * machines, and losing any of them would be a visible regression on update.
- *
- * Written straight into this store's own record BEFORE it hydrates, rather
- * than folded into `merge`: zustand does not write a store back after an
- * ordinary merge, so a `merge` that reached for the old records would consult
- * them on every launch and a deliberate return to the default could never
- * survive a relaunch. `seedPersistedStateFromLegacyKeys` is the same move and
- * cannot serve here, because its "the key is already present" guard is exactly
- * what an unreleased v1 layout blob under this same key defeats; the carry
- * flag inside the record is the guard instead.
- *
- * The legacy bytes come from `legacy-layout-records.ts` rather than from
- * `localStorage` here, which is what makes this independent of which store
- * module the entry path loaded first - see that module's header. Every field
- * goes through the same total resolvers a normal rehydrate uses, so a corrupt
- * old record carries nothing rather than something malformed.
+ * It only ever fills an ABSENT key. A record that exists, whatever it holds,
+ * is left for `migrate` to read.
  */
-function carryShippedLayoutValues(): LayoutSnapshot | null {
-  const existing = readLayoutRecord();
-  if (existing !== null && existing.layoutCarryDone === true) return null;
-  const settings = legacySettingsRecord();
-  const leftPanel = legacyLeftPanelRecord();
-  // Handed to the resolvers as UNPARSED values, which is the point: the carry
-  // decides which six things move, and the resolvers decide what each of
-  // them is allowed to be.
-  // Carry the old answers only when they differ from the new defaults. The
-  // sidebar's old default was no chips, so its empty metric list is an answer
-  // that must become agentRows: false under the new preset's visible rows.
-  const overrides = {
-    ...(settings.chatTurnMinimapSide === "hide"
-      ? { minimap: { shown: "hidden" } }
-      : {}),
-    ...carriedContextUsage(settings),
-    ...carriedResourceMonitor(settings),
-    ...carriedRailVisibility(leftPanel.panelVisibilityOverrideById),
-  };
-  const arrangement = {
-    // `"hide"` is not a side, so the resolver falls back to the default one
-    // and the value above is what carries the hidden state.
-    minimapSide: settings.chatTurnMinimapSide,
-    pinnedContextFieldOrder: settings.pinnedContextBreakdownOrder,
-    rail: carriedRail(leftPanel.panelGroups),
-    taskTabLayout: settings.taskTabLayout,
-  };
-  const carried: LayoutSnapshot = {
-    basePreset: DEFAULT_LAYOUT_SNAPSHOT.basePreset,
-    overrides: resolvePersistedOverrides(overrides),
-    arrangement: resolvePersistedArrangement(arrangement),
-  };
+function seedMissingLayoutRecord(): void {
   try {
+    if (window.localStorage.getItem(LAYOUT_PERSIST_KEY) !== null) return;
     window.localStorage.setItem(
       LAYOUT_PERSIST_KEY,
-      JSON.stringify({
-        state: { ...carried, layoutCarryDone: true },
-        version: LAYOUT_PERSIST_VERSION,
-      }),
+      JSON.stringify({ state: {}, version: MISSING_LAYOUT_VERSION }),
     );
   } catch {
-    // A quota failure is not worth failing a launch over, and it is not worth
-    // losing the carry over either: the snapshot is returned regardless and
-    // seeds the store's initial state, so the values are on screen and the
-    // store's own first persist write records the flag.
+    // Unreadable or full storage: the store starts on the defaults, as it
+    // does for any record it cannot read.
   }
-  return carried;
 }
 
 /**
- * The two context-usage picks, by DIFFERENCE against the shipped Default -
- * the same rule the minimap and the resource monitor follow above, and the
- * one the carry's own comment states.
+ * One translation per stored version, straight to this build's shape.
  *
- * It used to write both keys unconditionally and lean on `minimizeOverrides`
- * erasing the redundant half afterwards. Nothing erases it now: the delta IS
- * the user's own answers (L-133), so an unconditional carry would put a
- * preference on record for something every upgrading user never expressed -
- * and the Detailed preset, whose `pinBreakdown` is `true`, would then draw no
- * pinned breakdown and read as "Detailed + 1 change" on a layout nobody has
- * touched.
- *
- * Both values arrive UNPARSED, so each is tested for its own shape first: a
- * non-boolean and a non-list are not preferences, and carrying one would hand
- * the resolver a key it drops and leave a region behind that says nothing.
+ * 0 and 1 are the same translation: a missing record is a shipped record
+ * with no layout data in it, and both take the values that shipped in the
+ * settings and sidebar records alongside. Anything else - a pre-release 2 to
+ * 6, or a newer build's record after a downgrade - resets to the defaults
+ * rather than guessing at a shape this build never defined.
  */
-function carriedContextUsage(
-  settings: Record<string, unknown>,
-): Record<string, unknown> {
-  const base = PRESET_VALUES.default.contextUsage;
-  const pinBreakdown = settings.pinContextUsageBreakdown;
-  const pinnedFields = settings.pinnedContextBreakdownFields;
-  const picks = {
-    ...(typeof pinBreakdown === "boolean" && pinBreakdown !== base.pinBreakdown
-      ? { pinBreakdown }
-      : {}),
-    ...(Array.isArray(pinnedFields) &&
-    !sameRegionValue("pinnedFields", pinnedFields, base.pinnedFields)
-      ? { pinnedFields }
-      : {}),
-  };
-  return Object.keys(picks).length === 0 ? {} : { contextUsage: picks };
+function migrateLayoutPersistedState(
+  persistedState: unknown,
+  version: number,
+): LayoutSnapshot {
+  if (
+    version === MISSING_LAYOUT_VERSION ||
+    version === SHIPPED_LAYOUT_VERSION
+  ) {
+    return fromShippedRecords(isRecord(persistedState) ? persistedState : {});
+  }
+  return DEFAULT_LAYOUT_SNAPSHOT;
 }
 
-/** The old sidebar chips were independent of the global monitor switch. */
+/**
+ * Everything desktop-v1.4.0 persisted about the chrome, as this build's
+ * snapshot: its own layout record (`{ statusBar, composer }`, empty for
+ * version 0), the settings record and the sidebar record.
+ *
+ * Each value is renamed into its new home and handed UNPARSED to the same
+ * total resolvers a rehydrate runs, so a corrupt field carries nothing rather
+ * than something malformed. A value is then kept only where it differs from
+ * the shipped Default (`withoutShippedDefaults`): the old records hold every
+ * field whether or not anyone touched it, and the delta is the user's own
+ * picks (L-133).
+ *
+ * Three things do not survive, deliberately:
+ * - A provider on Automatic AND explicit limits keeps only the explicit keys.
+ *   The two are exclusive now (R1-15), and the explicit picks are the more
+ *   specific answer.
+ * - The resource monitor's Scope (host tree or this app) has no equivalent:
+ *   the monitor always reads the host.
+ * - A sidebar group of more than four panels splits, because a stack holds at
+ *   most four (`carriedRail`).
+ */
+function fromShippedRecords(layout: Record<string, unknown>): LayoutSnapshot {
+  const settings = legacySettingsRecord();
+  const leftPanel = legacyLeftPanelRecord();
+  const statusBar = recordOrEmpty(layout.statusBar);
+  const rateLimits = recordOrEmpty(statusBar.rateLimits);
+  const composer = recordOrEmpty(layout.composer);
+  const overrides = {
+    homeTab: { shown: shownIf(settings.homeTabEnabled) },
+    usageLimits: carriedUsageLimits(statusBar),
+    resourceMonitor: carriedResourceMonitor(statusBar, settings),
+    minimap: {
+      shown: settings.chatTurnMinimapSide === "hide" ? "hidden" : undefined,
+    },
+    contextUsage: {
+      style: settings.contextIndicatorStyle,
+      pinBreakdown: settings.pinContextUsageBreakdown,
+      pinnedFields: settings.pinnedContextBreakdownFields,
+      compactButton: hideableShown(composer.compactButton),
+    },
+    changedFiles: { size: compactableSize(composer.filesChanged) },
+    runningAgents: { size: compactableSize(composer.activeAgents) },
+    background: { size: compactableSize(composer.background) },
+    access: { size: compactableSize(composer.access) },
+    attachImage: { shown: hideableShown(composer.attachImage) },
+    mic: { shown: hideableShown(composer.mic) },
+    model: {
+      style: composer.reasoningIndicator,
+      reasoningControl: composer.reasoningFooterControl,
+    },
+    ...carriedRailVisibility(leftPanel.panelVisibilityOverrideById),
+  };
+  return {
+    basePreset: DEFAULT_LAYOUT_SNAPSHOT.basePreset,
+    overrides: withoutShippedDefaults(resolvePersistedOverrides(overrides)),
+    arrangement: resolvePersistedArrangement({
+      // One placement for both readings, which is exactly what a lone
+      // `usageHost` means to the resolver (L-161): `header` puts the pair up
+      // at the right end, where v1.4.0 drew it.
+      usageHost: statusBar.placement,
+      mobileFooter: statusBar.mobileFooter,
+      hiddenProviders: rateLimits.hiddenProviders,
+      // The resolver reads `limitKeys` alone, which IS the explicit-keys-win
+      // rule above: an `automatic` beside a non-empty list is dropped, and a
+      // selection with no keys is Automatic.
+      providerLimits: rateLimits.providers,
+      shownProfiles: rateLimits.shownProfiles,
+      // `"hide"` is not a side, so the resolver falls back to the default one
+      // and the minimap's Shown above is what carries the hidden state.
+      minimapSide: settings.chatTurnMinimapSide,
+      rail: carriedRail(leftPanel.panelGroups),
+      taskTabLayout: settings.taskTabLayout,
+    }),
+  };
+}
+
+/**
+ * The usage reading's display picks. `enabled` is carried only while the
+ * readings lived in the strip: in the header, v1.4.0 drew the usage button
+ * whatever it said, so there it never spoke for anything on screen.
+ */
+function carriedUsageLimits(
+  statusBar: Record<string, unknown>,
+): Record<string, unknown> {
+  const rateLimits = recordOrEmpty(statusBar.rateLimits);
+  return {
+    shown:
+      statusBar.placement === "header"
+        ? undefined
+        : shownIf(rateLimits.enabled),
+    bar: rateLimits.showBar,
+    word: rateLimits.showModeWord,
+    reset: rateLimits.showTimer,
+    amount: rateLimits.percentMode,
+  };
+}
+
+/**
+ * The monitor, from whichever switch drew it: v1.4.0 put the header's monitor
+ * behind `showGlobalResourceMonitor` and the strip's behind the strip's own
+ * `resources.enabled`. A record with no strip slice answers from the global
+ * switch, the one a build before the strip had.
+ *
+ * Its readings are the strip's own list when there is one. Before it, the
+ * sidebar's chips were the only readings anybody picked, so a non-empty chip
+ * list stands in. The chips themselves became `agentRows`, and an empty list,
+ * the old default, is an answer: no readings on the rows.
+ */
 function carriedResourceMonitor(
+  statusBar: Record<string, unknown>,
   settings: Record<string, unknown>,
 ): Record<string, unknown> {
-  const legacyMetrics = settings.navigatorResourceMetrics;
-  const selected = Array.isArray(legacyMetrics)
-    ? new Set(
-        ["cpu", "memory", "processes"].filter((metric) =>
-          legacyMetrics.includes(metric),
-        ),
-      )
+  const resources = recordOrEmpty(statusBar.resources);
+  const chips = Array.isArray(settings.navigatorResourceMetrics)
+    ? settings.navigatorResourceMetrics
     : null;
-  const picks = {
-    ...(settings.showGlobalResourceMonitor === false
-      ? { shown: "hidden" }
-      : {}),
-    ...(selected === null ? {} : { agentRows: selected.size > 0 }),
-    ...(selected !== null && selected.size > 0
-      ? {
-          cpu: selected.has("cpu"),
-          memory: selected.has("memory"),
-          processes: selected.has("processes"),
-        }
-      : {}),
+  const chipMetrics = chips !== null && chips.length > 0 ? chips : null;
+  const metrics = Array.isArray(resources.metrics)
+    ? resources.metrics
+    : chipMetrics;
+  const stripDrawsIt =
+    statusBar.placement !== "header" && typeof resources.enabled === "boolean";
+  return {
+    shown: shownIf(
+      stripDrawsIt ? resources.enabled : settings.showGlobalResourceMonitor,
+    ),
+    ...(metrics === null
+      ? {}
+      : {
+          cpu: metrics.includes("cpu"),
+          memory: metrics.includes("memory"),
+          processes: metrics.includes("processes"),
+          ramShare: metrics.includes("ramShare"),
+        }),
+    agentRows: chips === null ? undefined : chips.length > 0,
   };
-  return Object.keys(picks).length === 0 ? {} : { resourceMonitor: picks };
+}
+
+/**
+ * The delta with every value the shipped Default already has taken out, so
+ * an untouched v1.4.0 field is not recorded as a pick nobody made.
+ */
+function withoutShippedDefaults(overrides: LayoutOverrides): LayoutOverrides {
+  const defaults: Record<string, unknown> = { ...SHIPPED_DEFAULT_VALUES };
+  const kept: Record<string, unknown> = {};
+  for (const [region, patch] of Object.entries(overrides)) {
+    const base = defaults[region];
+    if (!isRecord(patch) || !isRecord(base)) continue;
+    kept[region] = Object.fromEntries(
+      Object.entries(patch).filter(
+        ([key, value]) => !sameRegionValue(key, value, base[key]),
+      ),
+    );
+  }
+  return resolvePersistedOverrides(kept);
+}
+
+function shownIf(value: unknown): Visibility | undefined {
+  if (typeof value !== "boolean") return undefined;
+  return value ? "shown" : "hidden";
+}
+
+/** A v1.4.0 composer row that compacts: `compact` is the chip. */
+function compactableSize(mode: unknown): RegionSize | undefined {
+  if (mode === "visible") return "full";
+  if (mode === "compact") return "chip";
+  return undefined;
+}
+
+/** A v1.4.0 composer element that hides. */
+function hideableShown(mode: unknown): Visibility | undefined {
+  if (mode === "visible") return "shown";
+  if (mode === "hidden") return "hidden";
+  return undefined;
+}
+
+function recordOrEmpty(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
 }
 
 /**
@@ -463,10 +543,10 @@ function carriedRailVisibility(value: unknown): Record<string, unknown> {
  * ONE: the shipped sidebar put every lone panel in a group of its own and a
  * divider between every pair, and neither of those was a thing anybody placed.
  *
- * A group of three or more carries its first two, because a stack joins
- * exactly two panels (L-166) and the first two are the pair that was drawn at
- * the top of that group's body. The rest of the group keeps its ORDER and
- * simply stands alone, which is the same trade the divider drop made.
+ * A group becomes one stack of every member this build still has (L-181), up
+ * to four (`MAX_RAIL_STACK_MEMBERS`): the shipped groups had no cap, and
+ * `normalizeRail` keeps a longer group's first four as the stack while the
+ * rest keep their ORDER and stand alone.
  */
 function carriedRail(value: unknown): ReadonlyArray<RailEntry> {
   if (!Array.isArray(value)) return DEFAULT_ARRANGEMENT.rail;
@@ -483,8 +563,6 @@ function carriedRail(value: unknown): ReadonlyArray<RailEntry> {
   const panelIds = groups.flat();
   if (panelIds.length === 0) return DEFAULT_ARRANGEMENT.rail;
   const rail = railFromPanelIdOrder(panelIds);
-  // A group carries every member it still has (L-181), not only its first
-  // two: a stack is the members its id names.
   const links = groups.flatMap((group): RailEntry[] => {
     const members = group.flatMap((panelId) => {
       const regionId = carriedRailRegion(panelId);
@@ -506,141 +584,6 @@ function carriedRailRegion(panelId: string): RailRegionId | null {
     ([candidate]) => candidate === panelId,
   );
   return match === undefined ? null : match[1];
-}
-
-/**
- * Two one-shot repairs of a stored rail, each for a ruling that changed what a
- * rail entry means.
- *
- * v3 (L-158): every divider dropped. The rail a version-2 record holds was
- * written when the shipped default put one between every panel, so those seven
- * are structure this build no longer has rather than spacers anyone placed -
- * the same judgement the one-shot carry makes about the shipped `panelGroups`.
- *
- * v4 (L-166): the default stack put back, and only where it still means what
- * it meant. A v3 record was written in the window where stacking did not
- * exist, so it names none, and nothing in it distinguishes "I never had a
- * stack" from "I moved these two apart" - what it DOES say is whether Agents
- * is still immediately followed by Artifacts. If it is, the record agrees with
- * the shipped order at exactly the place the default stack joins, and the join
- * is the default the user has simply never seen. If it is not, the user moved
- * one of them, and inserting a link would either re-join two panels they had
- * separated or join a pair they never chose - so that record gets none.
- *
- * The user's panel ORDER is theirs throughout and is never touched.
- * `dividerSeq` is left where it is on purpose: it is the counter that keeps a
- * new divider's id unique, and winding it back would reissue an id a removed
- * divider already used.
- */
-function migrateLayoutPersistedState(
-  persistedState: unknown,
-  version: number,
-): unknown {
-  if (!isRecord(persistedState)) return persistedState;
-  const railed =
-    version >= 4 ? persistedState : migrateRail(persistedState, version);
-  const split = version >= 5 ? railed : withSplitResourceReadings(railed);
-  return version >= 6 ? split : withCarriedTaskTabLayout(split);
-}
-
-/**
- * Version 6: Tab overflow used to live in the settings store as
- * `taskTabLayout`, outside the layout, so Undo, Discard and Reset layout could
- * not reach it. The settings record as this launch found it carries the value
- * over once; the arrangement resolver decides whether it is one this build
- * knows.
- */
-function withCarriedTaskTabLayout(
-  persistedState: Record<string, unknown>,
-): Record<string, unknown> {
-  const arrangement = isRecord(persistedState.arrangement)
-    ? persistedState.arrangement
-    : {};
-  return {
-    ...persistedState,
-    arrangement: {
-      ...arrangement,
-      taskTabLayout: legacySettingsRecord().taskTabLayout,
-    },
-  };
-}
-
-/**
- * Version 5 (G7): the agent rows' readings used to ride the monitor's Shown,
- * and now have their own `agentRows`. A record that hid the monitor hid the
- * rows too, so it keeps them hidden; every other record takes the shipped
- * `true`. Done here, once, rather than in the value resolver, which also runs
- * on every write - there it would re-couple the two on each later Hide.
- */
-function withSplitResourceReadings(
-  persistedState: Record<string, unknown>,
-): Record<string, unknown> {
-  const overrides = persistedState.overrides;
-  if (!isRecord(overrides)) return persistedState;
-  const monitor = overrides.resourceMonitor;
-  if (!isRecord(monitor) || monitor.shown !== "hidden") return persistedState;
-  if (typeof monitor.agentRows === "boolean") return persistedState;
-  return {
-    ...persistedState,
-    overrides: {
-      ...overrides,
-      resourceMonitor: { ...monitor, agentRows: false },
-    },
-  };
-}
-
-function migrateRail(
-  persistedState: Record<string, unknown>,
-  version: number,
-): Record<string, unknown> {
-  const arrangement = persistedState.arrangement;
-  if (!isRecord(arrangement) || !Array.isArray(arrangement.rail)) {
-    return persistedState;
-  }
-  const withoutShippedDividers =
-    version >= 3
-      ? arrangement.rail
-      : arrangement.rail.filter(
-          (entry) => !(isRecord(entry) && entry.kind === "divider"),
-        );
-  const rail = withDefaultStack(withoutShippedDividers);
-  return {
-    ...persistedState,
-    arrangement: { ...arrangement, rail },
-  };
-}
-
-/** The default link, put in only where the default pair is still adjacent. */
-function withDefaultStack(
-  rail: ReadonlyArray<unknown>,
-): ReadonlyArray<unknown> {
-  const agents = rail.findIndex(
-    (entry) =>
-      isRecord(entry) && entry.kind === "panel" && entry.id === "railAgents",
-  );
-  if (agents < 0) return rail;
-  const next = rail[agents + 1];
-  if (!isRecord(next) || next.kind !== "panel" || next.id !== "railArtifacts") {
-    return rail;
-  }
-  return [
-    ...rail.slice(0, agents + 1),
-    { kind: "stack", id: railStackId(["railAgents", "railArtifacts"]) },
-    ...rail.slice(agents + 1),
-  ];
-}
-
-/** This store's own persisted record, or `null` if it is not readable. */
-function readLayoutRecord(): Record<string, unknown> | null {
-  try {
-    const raw = window.localStorage.getItem(LAYOUT_PERSIST_KEY);
-    if (raw === null) return null;
-    const parsed: unknown = JSON.parse(raw);
-    if (!isRecord(parsed)) return null;
-    return isRecord(parsed.state) ? parsed.state : null;
-  } catch {
-    return null;
-  }
 }
 
 function isLayoutPresetId(value: unknown): value is LayoutPresetId {

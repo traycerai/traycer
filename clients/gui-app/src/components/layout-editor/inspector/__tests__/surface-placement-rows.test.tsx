@@ -77,7 +77,6 @@ beforeEach(() => {
   window.localStorage.clear();
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    layoutCarryDone: true,
   });
   useLayoutEditorStore.getState().endSession();
 });
@@ -173,7 +172,6 @@ describe("<SideStripViewRow /> (D8)", () => {
   function withVerticalStrip(): void {
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
-      layoutCarryDone: true,
       arrangement: {
         ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
         tabStripPlacement: "left",
@@ -463,7 +461,6 @@ describe("<TabOverflowRow />", () => {
   function withVerticalStrip(): void {
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
-      layoutCarryDone: true,
       arrangement: {
         ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
         tabStripPlacement: "left",

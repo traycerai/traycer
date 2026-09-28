@@ -109,7 +109,6 @@ beforeEach(() => {
   usage.providerIds = [];
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    layoutCarryDone: true,
   });
   useLayoutEditorStore.getState().endSession();
   useLayoutEditorStore.setState({

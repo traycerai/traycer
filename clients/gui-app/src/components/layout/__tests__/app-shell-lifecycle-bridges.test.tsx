@@ -269,7 +269,6 @@ describe("<AppShell />", () => {
     // settings-store + layout-store pair used to set explicitly.
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
-      layoutCarryDone: true,
     });
     useAuthStore
       .getState()
@@ -291,7 +290,6 @@ describe("<AppShell />", () => {
     useAuthStore.getState().setSignedOut();
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
-      layoutCarryDone: true,
     });
     setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
     setNativeKeyboardState({ open: false, transitioning: false });

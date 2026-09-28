@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONTEXT_USAGE_ROW_KEYS } from "@/lib/context-usage-rows";
 import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
 import { visibleRailPanelIds, type RailEntry } from "@/lib/layout/rail";
-import type { RailRegionId } from "@/lib/layout/region-id";
 import { layoutChanges, regionChanged } from "@/lib/layout/layout-diff";
 import { type LayoutValues } from "@/lib/layout/layout-values";
 import {
@@ -19,8 +18,10 @@ import {
 } from "@/stores/layout/layout-store";
 
 const LAYOUT_KEY = persistKey(STORE_KEYS.layout);
+const SETTINGS_KEY = persistKey(STORE_KEYS.settings);
+const LEFT_PANEL_KEY = persistKey(STORE_KEYS.leftPanel);
 /** The version this build writes (`LAYOUT_PERSIST_VERSION` in `layout-store.ts`). */
-const LAYOUT_VERSION = 6;
+const LAYOUT_VERSION = 7;
 
 /** The number of Styles lines on the change list - what `changeCount` used to return. */
 function changeCount(snapshot: LayoutSnapshot): number {
@@ -34,11 +35,13 @@ function everyRailPanelId(
   return visibleRailPanelIds(rail, () => true);
 }
 
+/** The rail's stack entries only, in rail order. */
+function railStacks(rail: ReadonlyArray<RailEntry>): ReadonlyArray<RailEntry> {
+  return rail.filter((entry) => entry.kind === "stack");
+}
+
 function reset(): void {
-  useLayoutStore.setState({
-    ...DEFAULT_LAYOUT_SNAPSHOT,
-    layoutCarryDone: false,
-  });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   window.localStorage.clear();
 }
 
@@ -48,6 +51,16 @@ function writeLayoutRecord(state: unknown): void {
 
 function writeLayoutRecordAtVersion(state: unknown, version: number): void {
   window.localStorage.setItem(LAYOUT_KEY, JSON.stringify({ state, version }));
+}
+
+/** The version field of whatever is currently stored under the layout key. */
+function storedLayoutVersion(): unknown {
+  const raw = window.localStorage.getItem(LAYOUT_KEY);
+  if (raw === null) return null;
+  const parsed: unknown = JSON.parse(raw);
+  return typeof parsed === "object" && parsed !== null && "version" in parsed
+    ? parsed.version
+    : null;
 }
 
 async function rehydrateFrom(state: unknown): Promise<void> {
@@ -64,13 +77,32 @@ async function rehydrateFromVersion(
   await useLayoutStore.persist.rehydrate();
 }
 
+function writeSettingsRecord(state: unknown): void {
+  window.localStorage.setItem(
+    SETTINGS_KEY,
+    JSON.stringify({ state, version: 1 }),
+  );
+}
+
+/**
+ * An OLDER version than the sidebar store's current one, which is what a
+ * machine updating from before this migration has - and what makes zustand
+ * rewrite the record through the CURRENT `partialize` the moment the sidebar
+ * store is created (`legacy-layout-records.ts`'s reason to capture at load).
+ */
+function writeLeftPanelRecord(state: unknown): void {
+  window.localStorage.setItem(
+    LEFT_PANEL_KEY,
+    JSON.stringify({ state, version: 2 }),
+  );
+}
+
 /**
  * A second launch of the store, module load and all - the only way to observe
- * the carry, which runs before the store exists.
+ * a migration, which runs before the store exists.
  */
 async function relaunchStore(): Promise<{
   readonly state: () => LayoutSnapshot;
-  readonly carried: () => boolean;
 }> {
   vi.resetModules();
   const module = await import("@/stores/layout/layout-store");
@@ -80,110 +112,7 @@ async function relaunchStore(): Promise<{
       overrides: module.useLayoutStore.getState().overrides,
       arrangement: module.useLayoutStore.getState().arrangement,
     }),
-    carried: () => module.useLayoutStore.getState().layoutCarryDone,
   };
-}
-
-/** A v1.3.0 machine's two legacy records, holding all six shipped values. */
-function seedLegacyRecords(): void {
-  window.localStorage.setItem(
-    persistKey(STORE_KEYS.settings),
-    JSON.stringify({
-      state: {
-        chatTurnMinimapSide: "left",
-        pinContextUsageBreakdown: true,
-        pinnedContextBreakdownFields: ["output", "used"],
-        pinnedContextBreakdownOrder: ["output", "used"],
-        showGlobalResourceMonitor: false,
-        // Independent of the switch: a valid empty list is what carries
-        // `agentRows: false`, so the hidden monitor alone does not.
-        navigatorResourceMetrics: [],
-        // Everything else the settings record holds is deliberately not
-        // carried: it never shipped as a layout value.
-        contextIndicatorStyle: "ring",
-        homeTabEnabled: true,
-      },
-      version: 1,
-    }),
-  );
-  window.localStorage.setItem(
-    persistKey(STORE_KEYS.leftPanel),
-    JSON.stringify({
-      // The whole grouping, which is the shape the sidebar store holds: a
-      // panel it has no group for is its own group there. Deliberately NOT
-      // the canonical order, so the carry's one job - keeping the order the
-      // user put the panels in - is observable.
-      state: {
-        panelGroups: [
-          { panelIds: ["comments", "chats"] },
-          { panelIds: ["artifacts", "terminals"] },
-          { panelIds: ["browsers"] },
-          { panelIds: ["git-diff"] },
-          { panelIds: ["pull-requests"] },
-          { panelIds: ["file-tree"] },
-          { panelIds: ["sharing"] },
-        ],
-        // The fifth shipped key (L-61). `true` and `false` are both real
-        // preferences; a panel absent from this map is on its own presence
-        // rule and must carry nothing, and a non-boolean is not a preference.
-        panelVisibilityOverrideById: {
-          comments: false,
-          sharing: true,
-          "git-diff": "yes",
-        },
-      },
-      // An OLDER version than this build's, which is what a machine updating
-      // from v1.3.0 has - and what makes zustand rewrite the record through
-      // the current `partialize` the moment the sidebar store is created.
-      version: 2,
-    }),
-  );
-}
-
-/** What {@link seedLegacyRecords} must produce, all six keys at once. */
-function expectCarried(snapshot: LayoutSnapshot, label: string): void {
-  expect(snapshot.overrides, label).toEqual({
-    contextUsage: { pinBreakdown: true, pinnedFields: ["used", "output"] },
-    resourceMonitor: { shown: "hidden", agentRows: false },
-    railComments: { shown: "hidden" },
-    railSharing: { shown: "shown" },
-  });
-  expect(snapshot.arrangement.minimapSide, label).toBe("left");
-  expect(snapshot.arrangement.pinnedContextFieldOrder, label).toEqual([
-    "output",
-    "used",
-    "fresh",
-    "cacheRead",
-    "cacheWrite",
-  ]);
-  // The ORDER carries and the boundaries do not (L-155): the shipped sidebar
-  // put one between every panel, which was structure rather than a preference.
-  expect(everyRailPanelId(snapshot.arrangement.rail), label).toEqual([
-    "comments",
-    "chats",
-    "artifacts",
-    "terminals",
-    "browsers",
-    "git-diff",
-    "pull-requests",
-    "file-tree",
-    "sharing",
-  ]);
-  expect(
-    snapshot.arrangement.rail.filter((entry) => entry.kind === "divider"),
-    label,
-  ).toEqual([]);
-  // A shipped group of two adjacent panels was two panels the sidebar drew
-  // TOGETHER, which is a stack (L-166); a group of one was every lone panel,
-  // which was structure. Both of this record's pairs carry, and nothing else
-  // does.
-  expect(
-    snapshot.arrangement.rail.filter((entry) => entry.kind === "stack"),
-    label,
-  ).toEqual([
-    { kind: "stack", id: "stack:railComments+railAgents" },
-    { kind: "stack", id: "stack:railArtifacts+railTerminals" },
-  ]);
 }
 
 describe("useLayoutStore", () => {
@@ -382,7 +311,6 @@ describe("useLayoutStore", () => {
           homeTab: { shown: "shown" },
         },
         arrangement: DEFAULT_ARRANGEMENT,
-        layoutCarryDone: true,
       });
 
       expect(getLayoutSnapshot().basePreset).toBe("compact");
@@ -423,7 +351,6 @@ describe("useLayoutStore", () => {
           ...DEFAULT_ARRANGEMENT,
           dock: ["queue", "changedFiles", "runningAgents", "background"],
         },
-        layoutCarryDone: true,
       });
 
       const snapshot = getLayoutSnapshot();
@@ -447,12 +374,26 @@ describe("useLayoutStore", () => {
       expect(getLayoutSnapshot()).toEqual(DEFAULT_LAYOUT_SNAPSHOT);
     });
 
+    it("keeps a current-version record's own taskTabLayout regardless of the legacy settings record", async () => {
+      // Tab overflow shipped on the settings store before it moved into the
+      // arrangement (carried once, on a version-0 or version-1 launch); a
+      // record already at this build's version answers for itself, and
+      // `migrate` never runs to consult the settings record at all.
+      writeSettingsRecord({ taskTabLayout: "shrink" });
+      await rehydrateFrom({
+        basePreset: "default",
+        overrides: {},
+        arrangement: { ...DEFAULT_ARRANGEMENT, taskTabLayout: "scroll" },
+      });
+
+      expect(getLayoutSnapshot().arrangement.taskTabLayout).toBe("scroll");
+    });
+
     it("takes another window's write through the storage event", async () => {
       writeLayoutRecord({
         basePreset: "detailed",
         overrides: { homeTab: { shown: "shown" } },
         arrangement: DEFAULT_ARRANGEMENT,
-        layoutCarryDone: true,
       });
 
       window.dispatchEvent(new StorageEvent("storage", { key: LAYOUT_KEY }));
@@ -464,22 +405,50 @@ describe("useLayoutStore", () => {
   });
 });
 
-describe("the one-shot carry of the six shipped values (L-49, L-61)", () => {
+/**
+ * A launch that finds no layout record at all (`seedMissingLayoutRecord`
+ * writes one at version 0), so `migrateLayoutPersistedState` takes the
+ * MISSING/SHIPPED branch and reads whatever the legacy settings and
+ * left-panel records hold.
+ */
+describe("migrating a version-0 launch (no layout record) off the legacy settings and left-panel records", () => {
   beforeEach(reset);
   afterEach(reset);
 
-  it("carries all six whichever store module the entry path loads first (L-61)", async () => {
-    // The order dependence this pins is not hypothetical. A zustand store
+  it("carries every mapped value whichever store module the entry path loads first", async () => {
+    // The order dependence this pins is not hypothetical: a zustand store
     // rewrites its own record through the CURRENT `partialize` on its first
     // write, and both legacy record owners have since dropped the fields the
-    // carry reads. They reach that write differently, and this exercises
-    // both: the sidebar store's record is an older version, so the migration
-    // its `create()` runs writes it back; the settings record is current, so
-    // it takes an ordinary `setState` - what any launch does within seconds
-    // of start-up - to erase the three keys there.
+    // migration reads. They reach that write differently, and this exercises
+    // both.
     for (const order of ["layout-first", "owners-first"] as const) {
       reset();
-      seedLegacyRecords();
+      writeSettingsRecord({
+        homeTabEnabled: true,
+        contextIndicatorStyle: "ring",
+        taskTabLayout: "shrink",
+        pinContextUsageBreakdown: true,
+        pinnedContextBreakdownFields: ["output", "used"],
+        chatTurnMinimapSide: "left",
+        showGlobalResourceMonitor: false,
+        navigatorResourceMetrics: [],
+      });
+      writeLeftPanelRecord({
+        panelGroups: [
+          { panelIds: ["comments", "chats"] },
+          { panelIds: ["artifacts", "terminals"] },
+          { panelIds: ["browsers"] },
+          { panelIds: ["git-diff"] },
+          { panelIds: ["pull-requests"] },
+          { panelIds: ["file-tree"] },
+          { panelIds: ["sharing"] },
+        ],
+        panelVisibilityOverrideById: {
+          comments: false,
+          "pull-requests": true,
+          "git-diff": "yes",
+        },
+      });
       vi.resetModules();
       if (order === "owners-first") {
         const settings = await import("@/stores/settings/settings-store");
@@ -489,26 +458,39 @@ describe("the one-shot carry of the six shipped values (L-49, L-61)", () => {
       const module = await import("@/stores/layout/layout-store");
       const state = module.useLayoutStore.getState();
 
-      expectCarried(
-        {
-          basePreset: state.basePreset,
-          overrides: state.overrides,
-          arrangement: state.arrangement,
+      expect(state.overrides, order).toEqual({
+        homeTab: { shown: "shown" },
+        contextUsage: {
+          style: "ring",
+          pinBreakdown: true,
+          pinnedFields: ["used", "output"],
         },
-        order,
-      );
-      expect(state.layoutCarryDone, order).toBe(true);
+        resourceMonitor: { shown: "hidden", agentRows: false },
+        railComments: { shown: "hidden" },
+        railPullRequests: { shown: "shown" },
+      });
+      expect(state.arrangement.minimapSide, order).toBe("left");
+      expect(state.arrangement.taskTabLayout, order).toBe("shrink");
+      expect(everyRailPanelId(state.arrangement.rail), order).toEqual([
+        "comments",
+        "chats",
+        "artifacts",
+        "terminals",
+        "browsers",
+        "git-diff",
+        "pull-requests",
+        "file-tree",
+        "sharing",
+      ]);
+      expect(railStacks(state.arrangement.rail), order).toEqual([
+        { kind: "stack", id: "stack:railComments+railAgents" },
+        { kind: "stack", id: "stack:railArtifacts+railTerminals" },
+      ]);
     }
   });
 
   it("carries a hidden minimap as hidden, on the default side", async () => {
-    window.localStorage.setItem(
-      persistKey(STORE_KEYS.settings),
-      JSON.stringify({
-        state: { chatTurnMinimapSide: "hide" },
-        version: 1,
-      }),
-    );
+    writeSettingsRecord({ chatTurnMinimapSide: "hide" });
 
     const { state } = await relaunchStore();
 
@@ -519,23 +501,17 @@ describe("the one-shot carry of the six shipped values (L-49, L-61)", () => {
   });
 
   it("carries a legacy group of three panels as one stack naming all three (L-181)", async () => {
-    window.localStorage.setItem(
-      persistKey(STORE_KEYS.leftPanel),
-      JSON.stringify({
-        state: {
-          panelGroups: [
-            { panelIds: ["chats", "artifacts", "terminals"] },
-            { panelIds: ["browsers"] },
-            { panelIds: ["git-diff"] },
-            { panelIds: ["pull-requests"] },
-            { panelIds: ["file-tree"] },
-            { panelIds: ["sharing"] },
-            { panelIds: ["comments"] },
-          ],
-        },
-        version: 2,
-      }),
-    );
+    writeLeftPanelRecord({
+      panelGroups: [
+        { panelIds: ["chats", "artifacts", "terminals"] },
+        { panelIds: ["browsers"] },
+        { panelIds: ["git-diff"] },
+        { panelIds: ["pull-requests"] },
+        { panelIds: ["file-tree"] },
+        { panelIds: ["sharing"] },
+        { panelIds: ["comments"] },
+      ],
+    });
 
     const { state } = await relaunchStore();
 
@@ -550,36 +526,29 @@ describe("the one-shot carry of the six shipped values (L-49, L-61)", () => {
       "sharing",
       "comments",
     ]);
-    expect(
-      state().arrangement.rail.filter((entry) => entry.kind === "stack"),
-    ).toEqual([
+    expect(railStacks(state().arrangement.rail)).toEqual([
       { kind: "stack", id: "stack:railAgents+railArtifacts+railTerminals" },
     ]);
   });
 
-  it("carries nothing from a legacy record sitting on the shipped defaults", async () => {
-    // The carry runs for EVERY user on the first launch after it lands, not
-    // only for users who changed something. A value equal to the shipped
-    // Default must not be recorded: it would win over an apply's cleared
-    // delta and read as "Detailed · Modified" on a layout nobody touched.
-    window.localStorage.setItem(
-      persistKey(STORE_KEYS.settings),
-      JSON.stringify({
-        state: {
-          chatTurnMinimapSide: DEFAULT_ARRANGEMENT.minimapSide,
-          pinContextUsageBreakdown:
-            PRESET_VALUES.default.contextUsage.pinBreakdown,
-          pinnedContextBreakdownFields: [...CONTEXT_USAGE_ROW_KEYS],
-          showGlobalResourceMonitor: true,
-        },
-        version: 1,
-      }),
-    );
+  it("carries nothing from legacy records sitting on the shipped defaults", async () => {
+    // Every user hits this migration on the first launch after it lands, not
+    // only users who changed something. A value equal to the shipped Default
+    // must not be recorded: it would win over an apply's cleared delta and
+    // read as "Detailed - Modified" on a layout nobody touched.
+    writeSettingsRecord({
+      chatTurnMinimapSide: DEFAULT_ARRANGEMENT.minimapSide,
+      taskTabLayout: DEFAULT_ARRANGEMENT.taskTabLayout,
+      homeTabEnabled: false,
+      contextIndicatorStyle: "text",
+      pinContextUsageBreakdown: PRESET_VALUES.default.contextUsage.pinBreakdown,
+      pinnedContextBreakdownFields: [...CONTEXT_USAGE_ROW_KEYS],
+      showGlobalResourceMonitor: true,
+    });
 
     const relaunched = await relaunchStore();
 
     expect(relaunched.state().overrides).toEqual({});
-    expect(relaunched.carried()).toBe(true);
   });
 
   it.each([
@@ -589,26 +558,25 @@ describe("the one-shot carry of the six shipped values (L-49, L-61)", () => {
       monitor: { agentRows: false },
     },
     {
-      name: "a nonempty list turns the rows on and sets each metric from membership, under a hidden monitor",
+      // The rows' own default is already ON (`SHIPPED_DEFAULT_VALUES.resourceMonitor.agentRows`),
+      // so a nonempty list agreeing with it costs nothing to record - only the
+      // metrics that differ from the shipped set survive the diff.
+      name: "a nonempty list sets each metric from membership, under a hidden monitor",
       state: {
         showGlobalResourceMonitor: false,
         navigatorResourceMetrics: ["memory"],
       },
-      monitor: {
-        shown: "hidden",
-        agentRows: true,
-        cpu: false,
-        memory: true,
-        processes: false,
-      },
+      monitor: { shown: "hidden", cpu: false, memory: true, processes: false },
     },
     {
-      name: "a nonempty list is independent of the switch being on",
+      // Every field this record resolves to - the switch, the metrics, the
+      // rows - equals the shipped Default, so nothing is recorded at all.
+      name: "a nonempty list matching the shipped metrics carries nothing",
       state: {
         showGlobalResourceMonitor: true,
         navigatorResourceMetrics: ["cpu", "processes"],
       },
-      monitor: { agentRows: true, cpu: true, memory: false, processes: true },
+      monitor: null,
     },
     {
       name: "an invalid list carries no row or metric preference",
@@ -621,160 +589,294 @@ describe("the one-shot carry of the six shipped values (L-49, L-61)", () => {
   ])(
     "carries the legacy navigator metrics: $name",
     async ({ state, monitor }) => {
-      window.localStorage.setItem(
-        persistKey(STORE_KEYS.settings),
-        JSON.stringify({ state, version: 1 }),
-      );
+      writeSettingsRecord(state);
 
       const { state: carried } = await relaunchStore();
 
-      expect(carried().overrides).toEqual({ resourceMonitor: monitor });
+      expect(carried().overrides).toEqual(
+        monitor === null ? {} : { resourceMonitor: monitor },
+      );
     },
   );
 
   it("carries only the context-usage key that differs", async () => {
-    window.localStorage.setItem(
-      persistKey(STORE_KEYS.settings),
-      JSON.stringify({
-        state: {
-          pinContextUsageBreakdown: true,
-          // Equal to the Default's own list, so this half is not an answer.
-          pinnedContextBreakdownFields: [...CONTEXT_USAGE_ROW_KEYS],
-        },
-        version: 1,
-      }),
-    );
+    writeSettingsRecord({
+      pinContextUsageBreakdown: true,
+      // Equal to the Default's own list, so this half is not an answer.
+      pinnedContextBreakdownFields: [...CONTEXT_USAGE_ROW_KEYS],
+    });
 
     const { state } = await relaunchStore();
 
     expect(state().overrides).toEqual({ contextUsage: { pinBreakdown: true } });
   });
 
-  it("never runs a second time, so a later relaunch keeps the user's own value", async () => {
-    window.localStorage.setItem(
-      persistKey(STORE_KEYS.settings),
-      JSON.stringify({
-        state: { showGlobalResourceMonitor: false },
-        version: 1,
-      }),
+  it("carries nothing from a record it cannot read", async () => {
+    window.localStorage.setItem(SETTINGS_KEY, "{ broken");
+    window.localStorage.setItem(LEFT_PANEL_KEY, "[]");
+
+    const relaunched = await relaunchStore();
+
+    expect(relaunched.state()).toEqual(DEFAULT_LAYOUT_SNAPSHOT);
+  });
+});
+
+/**
+ * The one version that ever shipped: desktop-v1.4.0-rc.1's own layout record,
+ * `{ statusBar, composer }`, read alongside the same legacy settings and
+ * left-panel records version 0 reads.
+ */
+describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)", () => {
+  beforeEach(reset);
+  afterEach(reset);
+
+  /** Every field the mapping carries, each holding a NON-default value. */
+  function seedFullV1Records(): void {
+    writeLayoutRecordAtVersion(
+      {
+        statusBar: {
+          placement: "header",
+          mobileFooter: true,
+          rateLimits: {
+            enabled: false,
+            hiddenProviders: ["codex"],
+            providers: {
+              // Automatic set alongside explicit keys: the keys win (lossy).
+              cursor: { automatic: true, limitKeys: ["5h"] },
+              // Automatic with no keys: no entry at all.
+              grok: { automatic: true, limitKeys: [] },
+              antigravity: { automatic: false, limitKeys: ["weekly"] },
+            },
+            shownProfiles: { "host-1": { codex: ["profile-a", null] } },
+            percentMode: "remaining",
+            showTimer: false,
+            showBar: false,
+            showModeWord: false,
+          },
+          resources: {
+            enabled: true,
+            metrics: ["cpu", "ramShare"],
+            // Never read back: the monitor always reads the host (lossy).
+            scope: "desktop-app",
+          },
+        },
+        composer: {
+          filesChanged: "compact",
+          activeAgents: "compact",
+          background: "compact",
+          access: "compact",
+          attachImage: "hidden",
+          mic: "hidden",
+          compactButton: "hidden",
+          reasoningIndicator: "bars-text",
+          reasoningFooterControl: "list",
+        },
+      },
+      1,
     );
-    // The first launch carried the switch off; the user turned it back on,
-    // which is what this record holds.
-    writeLayoutRecord({
-      basePreset: "default",
-      overrides: {},
-      arrangement: DEFAULT_ARRANGEMENT,
-      layoutCarryDone: true,
+    writeSettingsRecord({
+      homeTabEnabled: true,
+      contextIndicatorStyle: "ring",
+      taskTabLayout: "shrink",
+      pinContextUsageBreakdown: true,
+      pinnedContextBreakdownFields: ["output", "used"],
+      chatTurnMinimapSide: "left",
+      showGlobalResourceMonitor: false,
+      navigatorResourceMetrics: ["cpu"],
+    });
+    writeLeftPanelRecord({
+      panelGroups: [
+        // Five members: only four make a stack, the fifth stands alone
+        // (lossy, `MAX_RAIL_STACK_MEMBERS`).
+        {
+          panelIds: [
+            "file-tree",
+            "sharing",
+            "comments",
+            "browsers",
+            "terminals",
+          ],
+        },
+        { panelIds: ["chats"] },
+        { panelIds: ["artifacts", "git-diff"] },
+        { panelIds: ["pull-requests"] },
+      ],
+      panelVisibilityOverrideById: {
+        comments: true,
+        browsers: false,
+        "pull-requests": true,
+        chats: "not-a-boolean",
+      },
+    });
+  }
+
+  const EXPECTED_OVERRIDES = {
+    homeTab: { shown: "shown" },
+    usageLimits: { bar: false, word: false, reset: false, amount: "remaining" },
+    resourceMonitor: { shown: "hidden", processes: false, ramShare: true },
+    contextUsage: {
+      style: "ring",
+      pinBreakdown: true,
+      pinnedFields: ["used", "output"],
+      compactButton: "hidden",
+    },
+    changedFiles: { size: "chip" },
+    runningAgents: { size: "chip" },
+    background: { size: "chip" },
+    access: { size: "chip" },
+    attachImage: { shown: "hidden" },
+    mic: { shown: "hidden" },
+    model: { style: "bars-text", reasoningControl: "list" },
+    railComments: { shown: "shown" },
+    railBrowsers: { shown: "hidden" },
+    railPullRequests: { shown: "shown" },
+  };
+
+  function expectFullyCarried(state: LayoutSnapshot): void {
+    expect(state.basePreset).toBe("default");
+    expect(state.overrides).toEqual(EXPECTED_OVERRIDES);
+    expect(state.arrangement).toMatchObject({
+      usageHost: "header",
+      // Resolved through the pre-L-156 legacy-header rule (L-161): one
+      // `usageHost` used to mean both readings, drawn at the bar's right end.
+      usageSide: "right",
+      resourceHost: "header",
+      hiddenProviders: ["codex"],
+      providerLimits: {
+        cursor: { limitKeys: ["5h"] },
+        antigravity: { limitKeys: ["weekly"] },
+      },
+      shownProfiles: { "host-1": { codex: ["profile-a", null] } },
+      minimapSide: "left",
+      mobileFooter: true,
+      taskTabLayout: "shrink",
+    });
+    expect(everyRailPanelId(state.arrangement.rail)).toEqual([
+      "file-tree",
+      "sharing",
+      "comments",
+      "browsers",
+      "terminals",
+      "chats",
+      "artifacts",
+      "git-diff",
+      "pull-requests",
+    ]);
+    expect(railStacks(state.arrangement.rail)).toEqual([
+      {
+        kind: "stack",
+        id: "stack:railFileTree+railSharing+railComments+railBrowsers",
+      },
+      { kind: "stack", id: "stack:railArtifacts+railGitDiff" },
+    ]);
+  }
+
+  it("carries every preservable v1 field into the version-7 snapshot, one-shot", async () => {
+    seedFullV1Records();
+
+    const first = await relaunchStore();
+    expectFullyCarried(first.state());
+    expect(storedLayoutVersion()).toBe(7);
+
+    // Simulate the settings store's own module load rewriting its record
+    // through today's `partialize`, which no longer carries these fields
+    // (`legacy-layout-records.ts`'s whole reason to capture once at load).
+    writeSettingsRecord({});
+
+    const second = await relaunchStore();
+    // Version 7 now equals the current version, so zustand's `persist` skips
+    // `migrate` entirely and the legacy records are never consulted again -
+    // proving the carry is one-shot and its result is what persists.
+    expect(second.state()).toEqual(first.state());
+    expect(storedLayoutVersion()).toBe(7);
+  });
+
+  it("takes both Shown switches from the strip's own slice when the readings lived in the strip", async () => {
+    writeLayoutRecordAtVersion(
+      {
+        statusBar: {
+          placement: "status-bar",
+          rateLimits: { enabled: false },
+          resources: { enabled: false },
+        },
+        composer: {},
+      },
+      1,
+    );
+    // The header's switch never drew anything while the strip held the
+    // monitor, so it must not decide the carried Shown.
+    writeSettingsRecord({ showGlobalResourceMonitor: true });
+
+    const { state } = await relaunchStore();
+
+    expect(state().overrides.usageLimits).toEqual({ shown: "hidden" });
+    expect(state().overrides.resourceMonitor).toEqual({ shown: "hidden" });
+  });
+
+  it("produces no overrides for a v1 record already sitting on its own shipped defaults", async () => {
+    writeLayoutRecordAtVersion(
+      {
+        statusBar: {
+          placement: "status-bar",
+          mobileFooter: false,
+          rateLimits: {
+            enabled: true,
+            hiddenProviders: [],
+            providers: {},
+            shownProfiles: {},
+            percentMode: "used",
+            showTimer: true,
+            showBar: true,
+            showModeWord: true,
+          },
+          resources: { enabled: true, metrics: ["cpu", "processes"] },
+        },
+        composer: {
+          filesChanged: "visible",
+          activeAgents: "visible",
+          background: "visible",
+          access: "visible",
+          attachImage: "visible",
+          mic: "visible",
+          compactButton: "visible",
+          reasoningIndicator: "text",
+          reasoningFooterControl: "slider",
+        },
+      },
+      1,
+    );
+    writeSettingsRecord({
+      homeTabEnabled: false,
+      contextIndicatorStyle: "text",
+      taskTabLayout: "scroll",
+      pinContextUsageBreakdown: false,
+      pinnedContextBreakdownFields: [...CONTEXT_USAGE_ROW_KEYS],
+      chatTurnMinimapSide: "right",
+      showGlobalResourceMonitor: true,
     });
 
     const { state } = await relaunchStore();
 
     expect(state().overrides).toEqual({});
   });
-
-  it("carries nothing from a record it cannot read", async () => {
-    window.localStorage.setItem(persistKey(STORE_KEYS.settings), "{ broken");
-    window.localStorage.setItem(persistKey(STORE_KEYS.leftPanel), "[]");
-
-    const relaunched = await relaunchStore();
-
-    expect(relaunched.state()).toEqual(DEFAULT_LAYOUT_SNAPSHOT);
-    expect(relaunched.carried()).toBe(true);
-  });
 });
 
 /**
- * The record a dogfooder already has (L-158, L-166).
- *
- * The one-shot carry above only runs for a machine that has NO layout record,
- * so it cannot reach anyone who opened this branch before L-155: their rail
- * holds the seven dividers the shipped default put between every panel, which
- * is structure this build no longer has rather than spacers they placed - and
- * then, after L-155 and before L-166, no stack at all, because stacks did not
- * exist in that window.
+ * Versions 2 through 6 were written only by pre-release builds of this store,
+ * never shipped, and are deliberately not reused: zustand skips `migrate` when
+ * the stored version equals the current one, so reusing one of them would load
+ * a development record as-is. Any of them - and any future version this build
+ * has never written - resets to the defaults rather than guessing at a shape
+ * it never defined.
  */
-describe("the version-3 migration off the shipped dividers (L-158)", () => {
+describe("migrating an unrecognized version resets to the defaults", () => {
   beforeEach(reset);
   afterEach(reset);
 
-  /** The pre-L-155 default, panel by panel with a divider between each. */
-  function shippedRailWithDividers(): ReadonlyArray<RailEntry> {
-    const panels: ReadonlyArray<RailEntry> = [
-      { kind: "panel", id: "railAgents" },
-      { kind: "panel", id: "railArtifacts" },
-      { kind: "panel", id: "railTerminals" },
-      { kind: "panel", id: "railBrowsers" },
-      { kind: "panel", id: "railGitDiff" },
-      { kind: "panel", id: "railPullRequests" },
-      { kind: "panel", id: "railFileTree" },
-      { kind: "panel", id: "railSharing" },
-      { kind: "panel", id: "railComments" },
-    ];
-    return panels.flatMap((entry, index): RailEntry[] =>
-      index === 0
-        ? [entry]
-        : [{ kind: "divider", id: `divider:${String(index)}` }, entry],
-    );
-  }
-
-  it("drops every divider and keeps the user's panel order", async () => {
-    // Deliberately NOT the canonical order: what the migration must keep is
-    // the order this user put the panels in.
-    const stored = shippedRailWithDividers().filter(
-      (entry) => !(entry.kind === "panel" && entry.id === "railComments"),
-    );
-    await rehydrateFromVersion(
-      {
-        basePreset: "default",
-        overrides: {},
-        arrangement: {
-          ...DEFAULT_ARRANGEMENT,
-          rail: [{ kind: "panel", id: "railComments" }, ...stored],
-          dividerSeq: 8,
-        },
-        layoutCarryDone: true,
-      },
-      2,
-    );
-
-    const rail = useLayoutStore.getState().arrangement.rail;
-    expect(rail.filter((entry) => entry.kind === "divider")).toEqual([]);
-    expect(everyRailPanelId(rail)).toEqual([
-      "comments",
-      "chats",
-      "artifacts",
-      "terminals",
-      "browsers",
-      "git-diff",
-      "pull-requests",
-      "file-tree",
-      "sharing",
-    ]);
-  });
-
-  it("leaves `dividerSeq` alone, so no removed id is ever reissued", async () => {
-    await rehydrateFromVersion(
-      {
-        basePreset: "default",
-        overrides: {},
-        arrangement: {
-          ...DEFAULT_ARRANGEMENT,
-          rail: shippedRailWithDividers(),
-          dividerSeq: 8,
-        },
-        layoutCarryDone: true,
-      },
-      2,
-    );
-
-    expect(useLayoutStore.getState().arrangement.dividerSeq).toBe(8);
-  });
-
-  it("keeps a divider in a version-4 record, written after the shipped dividers were dropped", async () => {
-    // A version-4 record already went through the divider drop: a divider in
-    // it is one the user placed, and the migration must not reach it.
-    writeLayoutRecordAtVersion(
-      {
+  it.each([
+    {
+      version: 2,
+      state: {
         basePreset: "default",
         overrides: {},
         arrangement: {
@@ -786,246 +888,47 @@ describe("the version-3 migration off the shipped dividers (L-158)", () => {
           ],
           dividerSeq: 1,
         },
-        layoutCarryDone: true,
       },
-      4,
-    );
-    await useLayoutStore.persist.rehydrate();
-
-    expect(
-      useLayoutStore
-        .getState()
-        .arrangement.rail.filter((entry) => entry.kind === "divider"),
-    ).toEqual([{ kind: "divider", id: "divider:1" }]);
-  });
-});
-
-/**
- * The same record one ruling later (L-166).
- *
- * Stacking did not exist between L-155 and L-166, so a version-3 record names
- * no stack and nothing in it distinguishes "I never had one" from "I moved
- * those two apart". What it DOES say is whether the default pair is still
- * adjacent, and that is the whole of the rule.
- */
-describe("the version-4 migration back onto the default stack (L-166)", () => {
-  beforeEach(reset);
-  afterEach(reset);
-
-  /** The nine panels in some order, with no link and no divider. */
-  function flatRail(
-    order: ReadonlyArray<RailRegionId>,
-  ): ReadonlyArray<RailEntry> {
-    return order.map((id): RailEntry => ({ kind: "panel", id }));
-  }
-
-  async function rehydrateV3Rail(
-    rail: ReadonlyArray<RailEntry>,
-  ): Promise<void> {
-    await rehydrateFromVersion(
-      {
-        basePreset: "default",
-        overrides: {},
-        arrangement: { ...DEFAULT_ARRANGEMENT, rail },
-        layoutCarryDone: true,
-      },
-      3,
-    );
-  }
-
-  it("gives the default stack to a rail whose default pair is still adjacent", async () => {
-    await rehydrateV3Rail(
-      flatRail([
-        "railAgents",
-        "railArtifacts",
-        "railTerminals",
-        "railBrowsers",
-        "railGitDiff",
-        "railPullRequests",
-        "railFileTree",
-        "railSharing",
-        "railComments",
-      ]),
-    );
-
-    expect(
-      useLayoutStore
-        .getState()
-        .arrangement.rail.filter((entry) => entry.kind === "stack"),
-    ).toEqual([{ kind: "stack", id: "stack:railAgents+railArtifacts" }]);
-  });
-
-  it("gives none to a rail where the user moved one of the two", async () => {
-    await rehydrateV3Rail(
-      flatRail([
-        "railAgents",
-        "railTerminals",
-        "railArtifacts",
-        "railBrowsers",
-        "railGitDiff",
-        "railPullRequests",
-        "railFileTree",
-        "railSharing",
-        "railComments",
-      ]),
-    );
-
-    const rail = useLayoutStore.getState().arrangement.rail;
-    expect(rail.filter((entry) => entry.kind === "stack")).toEqual([]);
-    expect(everyRailPanelId(rail)).toEqual([
-      "chats",
-      "terminals",
-      "artifacts",
-      "browsers",
-      "git-diff",
-      "pull-requests",
-      "file-tree",
-      "sharing",
-      "comments",
-    ]);
-  });
-
-  it("gives none when a divider the user placed sits between them", async () => {
-    await rehydrateV3Rail([
-      { kind: "panel", id: "railAgents" },
-      { kind: "divider", id: "divider:1" },
-      ...flatRail([
-        "railArtifacts",
-        "railTerminals",
-        "railBrowsers",
-        "railGitDiff",
-        "railPullRequests",
-        "railFileTree",
-        "railSharing",
-        "railComments",
-      ]),
-    ]);
-
-    const rail = useLayoutStore.getState().arrangement.rail;
-    expect(rail.filter((entry) => entry.kind === "stack")).toEqual([]);
-    expect(rail.filter((entry) => entry.kind === "divider")).toEqual([
-      { kind: "divider", id: "divider:1" },
-    ]);
-  });
-});
-
-describe("the version-5 migration splitting the agent rows off Shown (G7)", () => {
-  beforeEach(reset);
-  afterEach(reset);
-
-  it("gives a hidden-monitor v4 record agentRows: false", async () => {
-    await rehydrateFromVersion(
-      {
-        basePreset: "default",
-        overrides: { resourceMonitor: { shown: "hidden" } },
-        arrangement: DEFAULT_ARRANGEMENT,
-        layoutCarryDone: true,
-      },
-      4,
-    );
-
-    expect(getLayoutSnapshot().overrides.resourceMonitor).toEqual({
-      shown: "hidden",
-      agentRows: false,
-    });
-  });
-
-  it.each([
-    {
-      name: "the monitor is shown",
-      overrides: { resourceMonitor: { shown: "shown", memory: true } },
-      stored: { shown: "shown", memory: true },
     },
     {
-      name: "there is no resourceMonitor override at all",
-      overrides: {},
-      stored: undefined,
+      version: 4,
+      state: {
+        basePreset: "compact",
+        overrides: { resourceMonitor: { shown: "hidden" } },
+        arrangement: DEFAULT_ARRANGEMENT,
+      },
+    },
+    {
+      version: 5,
+      state: {
+        basePreset: "default",
+        overrides: { resourceMonitor: { shown: "hidden", agentRows: true } },
+        arrangement: DEFAULT_ARRANGEMENT,
+      },
+    },
+    {
+      version: 6,
+      state: {
+        basePreset: "detailed",
+        overrides: { model: { style: "bars" } },
+        arrangement: { ...DEFAULT_ARRANGEMENT, taskTabLayout: "shrink" },
+      },
+    },
+    {
+      version: 99,
+      state: {
+        basePreset: "compact",
+        overrides: { model: { style: "bars" } },
+        arrangement: { ...DEFAULT_ARRANGEMENT, minimapSide: "left" },
+      },
     },
   ])(
-    "forces nothing when $name - agentRows stays the shipped default",
-    async ({ overrides, stored }) => {
-      await rehydrateFromVersion(
-        {
-          basePreset: "default",
-          overrides,
-          arrangement: DEFAULT_ARRANGEMENT,
-          layoutCarryDone: true,
-        },
-        4,
-      );
+    "resets a version-$version record to the defaults without throwing, and rewrites it at version 7",
+    async ({ version, state }) => {
+      await rehydrateFromVersion(state, version);
 
-      expect(getLayoutSnapshot().overrides.resourceMonitor).toEqual(stored);
-      expect(
-        effectiveLayoutValues("default", getLayoutSnapshot().overrides)
-          .resourceMonitor.agentRows,
-      ).toBe(true);
+      expect(getLayoutSnapshot()).toEqual(DEFAULT_LAYOUT_SNAPSHOT);
+      expect(storedLayoutVersion()).toBe(7);
     },
   );
-
-  it("leaves a version-5 record completely untouched, even a hidden monitor with no agentRows", async () => {
-    await rehydrateFromVersion(
-      {
-        basePreset: "default",
-        overrides: { resourceMonitor: { shown: "hidden" } },
-        arrangement: DEFAULT_ARRANGEMENT,
-        layoutCarryDone: true,
-      },
-      5,
-    );
-
-    // A version-5 record shaped like this cannot occur from a real write
-    // (this build always writes both halves together) - the point is that
-    // the migration is gated on VERSION, not re-derived from shape, so it
-    // does not reach in and force agentRows here the way it would at v4.
-    expect(getLayoutSnapshot().overrides.resourceMonitor).toEqual({
-      shown: "hidden",
-    });
-  });
-
-  it("does not clobber a v4 record whose agentRows already differs from what the migration would force", async () => {
-    await rehydrateFromVersion(
-      {
-        basePreset: "default",
-        overrides: {
-          resourceMonitor: { shown: "hidden", agentRows: true },
-        },
-        arrangement: DEFAULT_ARRANGEMENT,
-        layoutCarryDone: true,
-      },
-      4,
-    );
-
-    expect(getLayoutSnapshot().overrides.resourceMonitor).toEqual({
-      shown: "hidden",
-      agentRows: true,
-    });
-  });
-
-  it("migrates once, rather than re-deriving agentRows from Shown on every later write", async () => {
-    await rehydrateFromVersion(
-      {
-        basePreset: "default",
-        overrides: { resourceMonitor: { shown: "hidden" } },
-        arrangement: DEFAULT_ARRANGEMENT,
-        layoutCarryDone: true,
-      },
-      4,
-    );
-    expect(getLayoutSnapshot().overrides.resourceMonitor).toEqual({
-      shown: "hidden",
-      agentRows: false,
-    });
-
-    // Un-hiding the monitor alone, after the migration already ran, must not
-    // also flip the rows' own switch back on - a re-coupling would make it
-    // impossible to un-hide the monitor without also un-hiding the rows.
-    useLayoutStore
-      .getState()
-      .setRegionValues("resourceMonitor", { shown: "shown" });
-
-    expect(getLayoutSnapshot().overrides.resourceMonitor).toEqual({
-      shown: "shown",
-      agentRows: false,
-    });
-  });
 });

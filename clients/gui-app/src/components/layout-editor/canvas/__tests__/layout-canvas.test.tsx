@@ -174,7 +174,6 @@ async function flushFrame(): Promise<void> {
 beforeEach(() => {
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    layoutCarryDone: true,
   });
   useLayoutEditorStore.getState().endSession();
   useLayoutEditorStore.setState({ instances: new Map() });

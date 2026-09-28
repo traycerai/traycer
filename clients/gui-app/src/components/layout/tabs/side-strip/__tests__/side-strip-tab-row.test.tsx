@@ -116,7 +116,6 @@ function joinedPane(): string | undefined {
 function resetStores(): void {
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    layoutCarryDone: true,
   });
   useEpicDndStore.setState(useEpicDndStore.getInitialState(), true);
   useLeftPanelStore.setState({

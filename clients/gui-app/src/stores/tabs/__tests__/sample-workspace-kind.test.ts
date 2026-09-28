@@ -101,7 +101,6 @@ function resetStores(): void {
   // Home tab off by default (SHIPPED_DEFAULT_VALUES.homeTab.shown = "hidden").
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    layoutCarryDone: true,
   });
   tabCommandCoordinator.resetReconciliationForTesting();
 }

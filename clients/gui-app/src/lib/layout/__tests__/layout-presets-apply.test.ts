@@ -26,7 +26,6 @@ import {
 function reset(): void {
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    layoutCarryDone: true,
   });
   window.localStorage.clear();
 }

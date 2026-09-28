@@ -88,7 +88,6 @@ function beginSession(): void {
 function resetStores(): void {
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    layoutCarryDone: true,
   });
   useLayoutEditorStore.getState().endSession();
 }

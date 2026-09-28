@@ -316,7 +316,6 @@ describe("side strip: sheet join and the header-overlay portal under a real drag
     // edge and never joins regardless of active state.
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
-      layoutCarryDone: true,
       arrangement: { ...DEFAULT_ARRANGEMENT, tabStripPlacement: "left" },
     });
     seedTabs();
@@ -328,7 +327,6 @@ describe("side strip: sheet join and the header-overlay portal under a real drag
     vi.restoreAllMocks();
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
-      layoutCarryDone: true,
     });
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);

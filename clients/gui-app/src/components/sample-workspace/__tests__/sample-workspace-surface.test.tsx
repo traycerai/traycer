@@ -181,7 +181,6 @@ beforeEach(() => {
   useThemeLibraryStore.setState({ panelAnimations: false });
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    layoutCarryDone: true,
   });
   useLayoutEditorStore.getState().endSession();
   useLayoutEditorStore.setState({
@@ -393,7 +392,6 @@ describe("SampleWorkspaceBody - quick verbs on every pointable region", () => {
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
       overrides: { changedFiles: { size: "chip" } },
-      layoutCarryDone: true,
     });
     renderBody();
     expect(screen.getByTestId("chat-dock-chip-filesChanged")).not.toBeNull();
@@ -510,7 +508,6 @@ describe("SampleWorkspaceBody - a hidden dock member's ghost", () => {
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
       overrides: { changedFiles: { shown: "hidden", size: "chip" } },
-      layoutCarryDone: true,
     });
     renderBody();
 
@@ -541,7 +538,6 @@ describe("SampleWorkspaceBody - a Hidden minimap", () => {
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
       overrides: { minimap: { shown: "hidden" } },
-      layoutCarryDone: true,
     });
     renderSession();
 

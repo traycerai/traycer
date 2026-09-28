@@ -73,7 +73,6 @@ beforeEach(() => {
   window.localStorage.clear();
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    layoutCarryDone: true,
   });
   useLayoutEditorStore.getState().endSession();
   useLayoutEditorStore.getState().beginSession({
