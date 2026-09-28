@@ -43,7 +43,7 @@ vi.mock("@/providers/use-runner-host", () => ({
     // The platform origin is derived from `signInUrl`; without one this
     // fixture would silently exercise the production fallback instead of the
     // deployment it names.
-    signInUrl: "https://platform.traycer.ai/sign-in",
+    signInUrl: "https://traycer.ai/sign-in",
   }),
 }));
 
@@ -177,8 +177,46 @@ describe("TraycerSubscriptionSection", () => {
     // link setting never applies to it.
     // The click event travels too (L9): `account` never reclassifies today,
     // but a dropped event would silently kill modifiers if it ever did.
+    // The platform origin's root is the marketing homepage, so the link names
+    // the personal Billing page for the personal context.
     expect(mocks.openLink).toHaveBeenCalledWith(
-      "https://platform.traycer.ai",
+      "https://traycer.ai/billing",
+      "account",
+      expect.objectContaining({ type: "click" }),
+    );
+  });
+
+  it("opens the selected team's Billing page by its slug", () => {
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-1" },
+    });
+    render(<TraycerSubscriptionSection />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Manage subscription/ }),
+    );
+
+    expect(mocks.openLink).toHaveBeenCalledWith(
+      "https://traycer.ai/team/acme/billing",
+      "account",
+      expect.objectContaining({ type: "click" }),
+    );
+  });
+
+  it("opens the personal Billing page when the stored team is no longer the user's", () => {
+    // The picker falls back to Personal for a team the user left; the link
+    // must follow the picker rather than address a team page by a stale id.
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-left" },
+    });
+    render(<TraycerSubscriptionSection />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Manage subscription/ }),
+    );
+
+    expect(mocks.openLink).toHaveBeenCalledWith(
+      "https://traycer.ai/billing",
       "account",
       expect.objectContaining({ type: "click" }),
     );

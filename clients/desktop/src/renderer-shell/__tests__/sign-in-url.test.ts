@@ -17,7 +17,7 @@ describe("composeDesktopSignInUrl", () => {
   });
 
   it("uses the production Cloud UI base URL in source", () => {
-    expect(DESKTOP_SIGN_IN_BASE_URL).toBe("https://platform.traycer.ai");
+    expect(DESKTOP_SIGN_IN_BASE_URL).toBe("https://traycer.ai");
   });
 
   it("uses the Vite-injected loopback Cloud UI URL for a dev desktop run", async () => {
@@ -34,7 +34,7 @@ describe("composeDesktopSignInUrl", () => {
   });
 
   it("rejects a non-loopback Cloud UI override", async () => {
-    vi.stubEnv("VITE_DEV_CLOUD_UI_BASE_URL", "https://platform.traycer.ai");
+    vi.stubEnv("VITE_DEV_CLOUD_UI_BASE_URL", "https://traycer.ai");
     vi.resetModules();
 
     const slotted = await import("../sign-in-url");
