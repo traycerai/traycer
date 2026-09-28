@@ -1031,11 +1031,9 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     ).toHaveLength(2);
   });
 
-  // `foldedQueue` rebuilds the queue when it drops the received rows. The
-  // rebuild once named `status` and `items` only; `pausedReason` is an optional
-  // key, so the compiler cannot notice a copy that loses it - the held row's
-  // pill would quietly go back to a bare "Paused".
-  it("keeps the queue's pausedReason through the fold, so the held row still says why", () => {
+  // The queue keeps its pause reason while agent-sent and user-typed rows
+  // render together, so the held row still says why it paused.
+  it("keeps the queue's pausedReason beside received rows", () => {
     useLayoutStore
       .getState()
       .setRegionValues("runningAgents", { size: "chip" });
@@ -1060,11 +1058,12 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
       },
     });
 
-    // The fold happened: only the user-typed row is left in the dock.
     const queueRows = screen.getByTestId("queued-message-rows");
     expect(
-      within(queueRows).getAllByTestId("queued-message-content-preview"),
-    ).toHaveLength(1);
+      within(queueRows)
+        .getAllByTestId("queued-message-content-preview")
+        .map((row) => row.textContent),
+    ).toEqual(["Received prompt one", "Held message"]);
     expect(
       within(queueRows).getByTestId("queued-message-status-badge").textContent,
     ).toBe("Paused after an error");

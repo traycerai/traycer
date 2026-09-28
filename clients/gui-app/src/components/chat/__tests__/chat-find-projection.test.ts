@@ -1824,7 +1824,7 @@ describe("buildChatFindRows - hideReasoning", () => {
     };
 
     const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
-      hideReasoning: false,
+      hideReasoning: true,
       queuePauseReasonProtocolSupported: true,
     })[0];
 
