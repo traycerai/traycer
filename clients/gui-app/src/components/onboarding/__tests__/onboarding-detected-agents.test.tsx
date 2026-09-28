@@ -1658,10 +1658,10 @@ describe("SignInToEnableButton releasing a login nobody is coming back for", () 
     });
   });
 
-  it("does not cancel a login that had already started by the time the row unmounted", async () => {
-    // The complement of the case above, proving the positive path would have
-    // been observable here too: same press, same unmount, only the final
-    // answer differs.
+  it("cancels a login that had already started by the time the row unmounted, when only the GUI would have opened its page", async () => {
+    // A started answer this time, not a still-starting one - `signInProvider`
+    // carries `selfOpensBrowser: null`, so this provider never opens its own
+    // browser and a login nobody asks for again is a login nobody ever opens.
     fixtures.providers = [fixtures.signInProvider];
     const view = render(<OnboardingDetectedAgents />);
 
@@ -1679,7 +1679,71 @@ describe("SignInToEnableButton releasing a login nobody is coming back for", () 
       return Promise.resolve();
     });
 
+    expect(fixtures.cancelLoginMutate).toHaveBeenCalledTimes(1);
+    expect(fixtures.cancelLoginMutate).toHaveBeenCalledWith({
+      providerId: "codex",
+      profileId: null,
+    });
+  });
+
+  it("leaves alone a login that had already started by the time the row unmounted, when the provider opens its own browser", async () => {
+    // The complement of the case above, proving the positive path would have
+    // been observable here too: same press, same unmount, same answer -
+    // only the capability differs.
+    fixtures.providers = [
+      {
+        ...fixtures.signInProvider,
+        loginCapability: {
+          oauthArgs: ["auth", "login"],
+          token: null,
+          codePaste: null,
+          terminalLogin: null,
+          remoteSafe: null,
+          selfOpensBrowser: {},
+        },
+      },
+    ];
+    const view = render(<OnboardingDetectedAgents />);
+
+    fireEvent.click(signInButton());
+    const [, options] = latestStartLoginCall();
+    view.unmount();
+
+    await act(() => {
+      options.onSuccess({
+        started: true,
+        url: "https://example.test/oauth",
+        profileId: null,
+        pending: null,
+      });
+      return Promise.resolve();
+    });
+
     expect(fixtures.cancelLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("does not cancel a login that started while the row stayed mounted, whatever the capability", async () => {
+    // The mounted branch keys off `providerLoginAnswerStillStarting` alone -
+    // a started login while still mounted is the ordinary path (it goes on
+    // to `awaitLogin`), and adding the capability check to the unmount branch
+    // must not have widened this one too.
+    fixtures.providers = [fixtures.signInProvider];
+    render(<OnboardingDetectedAgents />);
+
+    fireEvent.click(signInButton());
+    const [, options] = latestStartLoginCall();
+    await act(() => {
+      options.onSuccess({
+        started: true,
+        url: "https://example.test/oauth",
+        profileId: null,
+        pending: null,
+      });
+      return Promise.resolve();
+    });
+
+    expect(fixtures.cancelLoginMutate).not.toHaveBeenCalled();
+    expect(fixtures.awaitLoginMutate).toHaveBeenCalledTimes(1);
   });
 
   it("does not cancel while the pack is only downloading, and stops asking once the row unmounts", async () => {

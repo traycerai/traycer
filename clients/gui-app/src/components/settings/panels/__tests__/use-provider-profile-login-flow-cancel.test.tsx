@@ -17,6 +17,7 @@ import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { PROVIDER_LOGIN_PACK_POLL_MS } from "@/components/providers/provider-login-start";
 import {
@@ -124,6 +125,25 @@ const PACK_PREPARING_ANSWER: StartLoginResponse = startLoginAnswer({
   pack: { percent: 10, reason: null, retryAtMs: null },
 });
 
+function loginCapability(
+  selfOpensBrowser: Record<string, never> | null,
+): NonNullable<ProviderCliState["loginCapability"]> {
+  return {
+    oauthArgs: ["login"],
+    token: null,
+    codePaste: null,
+    terminalLogin: null,
+    remoteSafe: null,
+    selfOpensBrowser,
+  };
+}
+/** Nobody but the GUI would have opened this login's page. */
+const GUI_OPENS_BROWSER = loginCapability(null);
+/** The provider's own child opens its browser - its page may already be open
+ *  and the user can still finish there, so an unmounted-and-started login for
+ *  this capability is left alone. */
+const SELF_OPENS_BROWSER = loginCapability({});
+
 function queryClientWrapper(): (props: {
   readonly children: ReactNode;
 }) => ReactNode {
@@ -150,6 +170,7 @@ function queryClientWrapper(): (props: {
 function LoginFlowHarness(props: {
   readonly mode: ProviderProfileLoginFlowMode;
   readonly existingProfileId: string | null;
+  readonly loginCapability: ProviderCliState["loginCapability"];
   readonly startLoginImpl: (
     request: StartLoginRequest,
   ) => Promise<StartLoginResponse>;
@@ -215,7 +236,7 @@ function LoginFlowHarness(props: {
     mode: props.mode,
     providerId: PROVIDER_ID,
     existingProfileId: props.existingProfileId,
-    loginCapability: null,
+    loginCapability: props.loginCapability,
     startLogin,
     awaitLogin,
     cancelLogin,
@@ -279,6 +300,7 @@ describe("useProviderProfileLoginFlow - releasing a login the host is still hold
       <LoginFlowHarness
         mode="create"
         existingProfileId={null}
+        loginCapability={null}
         startLoginImpl={recorder.impl}
         cancelLoginImpl={cancelLoginImpl}
       />,
@@ -331,6 +353,7 @@ describe("useProviderProfileLoginFlow - releasing a login the host is still hold
       <LoginFlowHarness
         mode="create"
         existingProfileId={null}
+        loginCapability={null}
         startLoginImpl={recorder.impl}
         cancelLoginImpl={cancelLoginImpl}
       />,
@@ -377,6 +400,7 @@ describe("useProviderProfileLoginFlow - releasing a login the host is still hold
       <LoginFlowHarness
         mode="create"
         existingProfileId={null}
+        loginCapability={null}
         startLoginImpl={recorder.impl}
         cancelLoginImpl={cancelLoginImpl}
       />,
@@ -405,16 +429,60 @@ describe("useProviderProfileLoginFlow - releasing a login the host is still hold
     });
   });
 
-  it("leaves a login alone when it had already started by the time the hook unmounted with no Cancel press", async () => {
-    // The complement of the case above: proves the positive path would have
-    // been observable (same setup, same unmount) had the answer actually
-    // still been starting - so this negative is not vacuous.
+  it("releases a login that had already started by the time the hook unmounted, when only the GUI would have opened its page", async () => {
+    // A started answer this time, not a still-starting one - but with no
+    // capability (or `selfOpensBrowser: null`), this provider never opens its
+    // own browser, so a login nobody asks for again is a login nobody ever
+    // opens.
     const recorder = startLoginRecorder();
     const cancelLoginImpl = vi.fn<(request: CancelLoginRequest) => void>();
     const view = render(
       <LoginFlowHarness
         mode="create"
         existingProfileId={null}
+        loginCapability={GUI_OPENS_BROWSER}
+        startLoginImpl={recorder.impl}
+        cancelLoginImpl={cancelLoginImpl}
+      />,
+      { wrapper: queryClientWrapper() },
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "start" }));
+      await Promise.resolve();
+    });
+    view.unmount();
+
+    await act(async () => {
+      recorder.calls[0].resolve(
+        startLoginAnswer({
+          started: true,
+          profileId: "p-new",
+          url: "https://example.test/oauth",
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(1);
+    expect(cancelLoginImpl).toHaveBeenCalledWith({
+      providerId: PROVIDER_ID,
+      profileId: "p-new",
+    });
+  });
+
+  it("leaves a login alone when it had already started by the time the hook unmounted, when the provider opens its own browser", async () => {
+    // The complement of the case above: proves the positive path would have
+    // been observable (same setup, same unmount, same answer) had the
+    // capability actually been one only the GUI opens - so this negative is
+    // not vacuous.
+    const recorder = startLoginRecorder();
+    const cancelLoginImpl = vi.fn<(request: CancelLoginRequest) => void>();
+    const view = render(
+      <LoginFlowHarness
+        mode="create"
+        existingProfileId={null}
+        loginCapability={SELF_OPENS_BROWSER}
         startLoginImpl={recorder.impl}
         cancelLoginImpl={cancelLoginImpl}
       />,
@@ -449,6 +517,7 @@ describe("useProviderProfileLoginFlow - releasing a login the host is still hold
       <LoginFlowHarness
         mode="create"
         existingProfileId={null}
+        loginCapability={null}
         startLoginImpl={recorder.impl}
         cancelLoginImpl={cancelLoginImpl}
       />,

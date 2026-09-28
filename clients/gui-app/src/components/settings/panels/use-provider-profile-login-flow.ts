@@ -13,6 +13,7 @@ import {
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import {
+  providerLoginAnswerHeldForNobody,
   providerLoginAnswerStillStarting,
   providerLoginAnswerWantsPackRetry,
   providerLoginNotStartedMessage,
@@ -764,11 +765,10 @@ export function useProviderProfileLoginFlow(
             return;
           }
           if (unmountedRef.current) {
-            // Nobody will open this login's page or wait for it. A login that
-            // already started is left to its own deadline, as it always was:
-            // a provider that opens its own page may have it open in a
-            // browser already, where the user can still finish.
-            if (providerLoginAnswerStillStarting(data)) {
+            // Nobody will open this login's page or wait for it. Only a
+            // provider that opens its own page keeps its login: that page may
+            // be open in a browser, where the user can still finish.
+            if (providerLoginAnswerHeldForNobody(data, loginCapability)) {
               cancelProfile(nextProfileId);
             }
             return;
@@ -896,6 +896,7 @@ export function useProviderProfileLoginFlow(
       fail,
       failureMessages,
       finishCancellation,
+      loginCapability,
       mode,
       providerId,
       restart,

@@ -11,6 +11,7 @@ import type { ProviderListRow } from "@/components/providers/provider-list";
 import { Button } from "@/components/ui/button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
+  providerLoginAnswerHeldForNobody,
   providerLoginAnswerStillStarting,
   providerLoginAnswerWantsPackRetry,
   providerLoginNotStartedMessage,
@@ -878,11 +879,15 @@ function SignInToEnableButton(props: {
       wait: waitForProviderLoginStart,
     }).then(
       (result: ProviderStartLoginAnswer) => {
-        // The press ended while the host was still bringing its login child
-        // up: the user moved on from this step (Continue is always enabled),
-        // or the host said "still starting" too often. Nothing here will open
-        // that child's page or wait for it, so it is released, mounted or not.
-        if (providerLoginAnswerStillStarting(result)) {
+        // A login nothing here will open or wait for is released. Mounted,
+        // that is one the host is still bringing up after it said "still
+        // starting" too often. After the user moved on from this step
+        // (Continue is always enabled) it is also one that started and whose
+        // page only this row would have opened.
+        const heldForNobody = unmountedRef.current
+          ? providerLoginAnswerHeldForNobody(result, state.loginCapability)
+          : providerLoginAnswerStillStarting(result);
+        if (heldForNobody) {
           cancelLogin.mutate({ providerId, profileId: null });
         }
         if (unmountedRef.current) return;

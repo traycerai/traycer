@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
 import {
   PROVIDER_LOGIN_PACK_POLL_MS,
   PROVIDER_LOGIN_STILL_STARTING_CAP,
+  providerLoginAnswerHeldForNobody,
   providerLoginAnswerStillStarting,
   providerLoginAnswerWantsPackRetry,
   providerLoginNotStartedMessage,
@@ -46,6 +50,21 @@ const DOWNLOADING_ANSWER = answer({
   pack: { percent: 42, reason: null, retryAtMs: null },
 });
 const NOT_STARTED_ANSWER = answer({ started: false });
+
+function loginCapability(
+  selfOpensBrowser: Record<string, never> | null,
+): NonNullable<ProviderCliState["loginCapability"]> {
+  return {
+    oauthArgs: ["login"],
+    token: null,
+    codePaste: null,
+    terminalLogin: null,
+    remoteSafe: null,
+    selfOpensBrowser,
+  };
+}
+const GUI_OPENS_BROWSER = loginCapability(null);
+const SELF_OPENS_BROWSER = loginCapability({});
 
 /** Every field `startProviderLoginUntilSettled` needs, so a test overrides
  *  only what it is exercising. */
@@ -383,6 +402,46 @@ describe("providerLoginAnswerStillStarting", () => {
 
   it("is false for a started answer, even though it also carries no pending", () => {
     expect(providerLoginAnswerStillStarting(STARTED_ANSWER)).toBe(false);
+  });
+});
+
+describe("providerLoginAnswerHeldForNobody", () => {
+  it("is true while still starting, whatever the capability", () => {
+    expect(providerLoginAnswerHeldForNobody(STARTING_ANSWER, null)).toBe(true);
+    expect(
+      providerLoginAnswerHeldForNobody(STARTING_ANSWER, GUI_OPENS_BROWSER),
+    ).toBe(true);
+    expect(
+      providerLoginAnswerHeldForNobody(STARTING_ANSWER, SELF_OPENS_BROWSER),
+    ).toBe(true);
+  });
+
+  it("is true for a started login when the capability is null", () => {
+    expect(providerLoginAnswerHeldForNobody(STARTED_ANSWER, null)).toBe(true);
+  });
+
+  it("is true for a started login the GUI is the one that opens", () => {
+    expect(
+      providerLoginAnswerHeldForNobody(STARTED_ANSWER, GUI_OPENS_BROWSER),
+    ).toBe(true);
+  });
+
+  it("is false for a started login whose own child opens its browser", () => {
+    expect(
+      providerLoginAnswerHeldForNobody(STARTED_ANSWER, SELF_OPENS_BROWSER),
+    ).toBe(false);
+  });
+
+  it("is false when the answer neither started nor is pending", () => {
+    expect(providerLoginAnswerHeldForNobody(NOT_STARTED_ANSWER, null)).toBe(
+      false,
+    );
+  });
+
+  it("is false for a pack_preparing answer - nothing has been spawned yet to hold", () => {
+    expect(providerLoginAnswerHeldForNobody(DOWNLOADING_ANSWER, null)).toBe(
+      false,
+    );
   });
 });
 

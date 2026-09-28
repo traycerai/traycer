@@ -4,6 +4,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   PROVIDER_DISPLAY_NAMES,
+  type ProviderCliState,
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -166,6 +167,26 @@ export function providerLoginAnswerStillStarting(
   answer: ProviderStartLoginAnswer,
 ): boolean {
   return (answer.pending ?? null) === "starting";
+}
+
+/**
+ * Whether the answer holds a login nobody will use once the surface that
+ * asked for it is gone: one still starting (above), or one that started for
+ * a provider that does not open its own page (`selfOpensBrowser` null), so
+ * the GUI that just went away was the only thing that would have. Antigravity
+ * is one: the host switches the server's own browser open off and relies on
+ * the GUI to open the link.
+ *
+ * A provider that opens its own page is left alone, on a remote host too.
+ * That page may already be open in a browser on the host's machine, where
+ * the user can still finish the sign-in.
+ */
+export function providerLoginAnswerHeldForNobody(
+  answer: ProviderStartLoginAnswer,
+  loginCapability: ProviderCliState["loginCapability"],
+): boolean {
+  if (providerLoginAnswerStillStarting(answer)) return true;
+  return answer.started && (loginCapability?.selfOpensBrowser ?? null) === null;
 }
 
 function progressOfAnswer(
