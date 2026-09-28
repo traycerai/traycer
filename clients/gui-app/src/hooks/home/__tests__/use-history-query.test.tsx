@@ -198,6 +198,7 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
       localHomedTaskIds: testState.localHomedTaskIds,
       isFetching: testState.taskContextsFetching,
       error: testState.taskContextsError,
+      refetch: () => Promise.resolve(),
     };
   },
 }));

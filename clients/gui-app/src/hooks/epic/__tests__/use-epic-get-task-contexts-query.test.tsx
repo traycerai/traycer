@@ -1,10 +1,11 @@
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type {
-  GetTaskContextsResponse,
-  ListTaskLight,
+import {
+  GET_TASK_CONTEXTS_MAX_IDS,
+  type GetTaskContextsResponse,
+  type ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -127,6 +128,40 @@ describe("useEpicGetTaskContexts", () => {
     });
 
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("explicitly refetches each capped batch inside the stale window", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const taskIds = Array.from({ length: 64 }, (_, index) => `epic-${index}`);
+    const { result } = renderHook(
+      () => useEpicGetTaskContexts(taskIds, USER_ID, { enabled: true }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+
+    await waitFor(() => {
+      expect(result.current.tasksById.size).toBe(taskIds.length);
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await result.current.refetch();
+    });
+
+    expect(request).toHaveBeenCalledTimes(4);
+    const requestedIds = request.mock.calls.map((call) => {
+      expect(call[0]).toBe("epic.getTaskContexts");
+      const params = call[1] as { readonly taskIds: readonly string[] };
+      expect(params.taskIds.length).toBeLessThanOrEqual(
+        GET_TASK_CONTEXTS_MAX_IDS,
+      );
+      return params.taskIds;
+    });
+    expect(requestedIds.slice(0, 2).flat().toSorted()).toEqual(
+      taskIds.toSorted(),
+    );
+    expect(requestedIds.slice(2).flat().toSorted()).toEqual(taskIds.toSorted());
   });
 
   it("refetches for a different user - a permission-scoped answer is never shared", async () => {

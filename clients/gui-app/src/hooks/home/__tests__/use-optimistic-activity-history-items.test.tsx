@@ -15,6 +15,9 @@ const hookState = vi.hoisted(() => ({
   workingEpicIds: new Set<string>(),
   contextRequests: [] as string[][],
   contexts: new Map<string, ListTaskLight>(),
+  cachedContexts: new Map<string, ListTaskLight>(),
+  useCachedContexts: false,
+  contextRefetchCalls: 0,
 }));
 
 vi.mock("@/stores/use-own-turn-epic-ids", () => ({
@@ -30,14 +33,23 @@ vi.mock("@/stores/auth/auth-store", () => ({
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
   useEpicGetTaskContexts: (ids: readonly string[]) => {
     hookState.contextRequests.push([...ids]);
+    const contexts = hookState.useCachedContexts
+      ? hookState.cachedContexts
+      : hookState.contexts;
     return {
       tasksById: new Map(
         ids.flatMap((id) => {
-          const task = hookState.contexts.get(id);
+          const task = contexts.get(id);
           return task === undefined ? [] : [[id, task] as const];
         }),
       ),
       localHomedTaskIds: new Set<string>(),
+      refetch: () => {
+        if (!hookState.useCachedContexts) return Promise.resolve();
+        hookState.contextRefetchCalls += 1;
+        hookState.cachedContexts = new Map(hookState.contexts);
+        return Promise.resolve();
+      },
     };
   },
 }));
@@ -104,6 +116,9 @@ afterEach(() => {
   hookState.workingEpicIds = new Set();
   hookState.contextRequests = [];
   hookState.contexts = new Map();
+  hookState.cachedContexts = new Map();
+  hookState.useCachedContexts = false;
+  hookState.contextRefetchCalls = 0;
 });
 
 describe("optimistic activity history projection", () => {
@@ -136,6 +151,30 @@ describe("optimistic activity history projection", () => {
     expect(projected.filter((item) => item.recentAtMs === 1000)).toHaveLength(
       64,
     );
+  });
+
+  it("prioritizes a pending own-record id within the 64-row backfill cap", () => {
+    const userId = `retained-backfill-cap-${crypto.randomUUID()}`;
+    const workingIds = Array.from(
+      { length: 64 },
+      (_, index) => `working-${index}`,
+    );
+    hookState.workingEpicIds = new Set(workingIds);
+    observeOwnHistoryRecordChange(userId, "retained-off-page", 1_000);
+
+    renderHook(() =>
+      useOptimisticActivityHistoryItems({
+        items: [],
+        userId,
+        hostId: "host-retained-backfill-cap",
+        enabled: true,
+        refetch: vi.fn(() => Promise.resolve()),
+      }),
+    );
+
+    const requestedIds = hookState.contextRequests.at(-1);
+    expect(requestedIds).toHaveLength(64);
+    expect(requestedIds).toContain("retained-off-page");
   });
 
   it("projects active timestamps into Recent ordering and removes them at durable catch-up", () => {
@@ -444,6 +483,163 @@ describe("optimistic activity history projection", () => {
     rerender({ revision: 1 });
 
     expect(result.current[0]?.recentAtMs).toBe(2_000);
+  });
+
+  it("refetches one cached context batch during off-page reconciliation", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const userId = `cached-context-reconcile-${crypto.randomUUID()}`;
+    const epicId = "cached-context-reconcile-epic";
+    const staleContext = { ...taskContext(epicId), recentAt: 500 };
+    settleHistoryActivity(userId, [historyItem(epicId, 500, 500)]);
+    hookState.useCachedContexts = true;
+    hookState.contexts.set(epicId, {
+      ...taskContext(epicId),
+      recentAt: 2_000,
+    });
+    hookState.cachedContexts.set(epicId, staleContext);
+    const refetch = vi.fn(() => Promise.resolve());
+    const { result, rerender } = renderHook(
+      ({ revision }) => {
+        void revision;
+        return useOptimisticActivityHistoryItems({
+          items: [],
+          userId,
+          hostId: "host-cached-context-reconcile",
+          enabled: true,
+          refetch,
+        });
+      },
+      { initialProps: { revision: 0 } },
+    );
+
+    act(() => observeOwnHistoryRecordChange(userId, epicId, 1_000));
+    expect(result.current[0]?.recentAtMs).toBe(1_000);
+    expect(hookState.contextRefetchCalls).toBe(0);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+    rerender({ revision: 1 });
+
+    expect(refetch).toHaveBeenCalledTimes(1);
+    expect(hookState.contextRefetchCalls).toBe(1);
+    expect(hookState.contextRequests.at(-1)).toEqual([epicId]);
+    expect(result.current[0]?.recentAtMs).toBe(2_000);
+  });
+
+  it("keeps an acknowledged context key until the page catches up", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const userId = `context-page-catch-up-${crypto.randomUUID()}`;
+    const epicId = "context-page-catch-up-epic";
+    settleHistoryActivity(userId, [historyItem(epicId, 1_000, 1_000)]);
+    hookState.contexts.set(epicId, {
+      ...taskContext(epicId),
+      recentAt: 1_000,
+    });
+    const { result, rerender } = renderHook(
+      ({ items, revision }) => {
+        void revision;
+        return useOptimisticActivityHistoryItems({
+          items,
+          userId,
+          hostId: "host-context-page-catch-up",
+          enabled: true,
+          refetch: vi.fn(() => Promise.resolve()),
+        });
+      },
+      {
+        initialProps: {
+          items: [] as readonly HistoryItem[],
+          revision: 0,
+        },
+      },
+    );
+
+    act(() => observeOwnHistoryRecordChange(userId, epicId, 3_000));
+    hookState.contexts.set(epicId, {
+      ...taskContext(epicId),
+      recentAt: 3_000,
+    });
+    rerender({ items: [], revision: 1 });
+    expect(result.current[0]?.recentAtMs).toBe(3_000);
+
+    rerender({
+      items: [historyItem(epicId, 2_000, 2_000)],
+      revision: 2,
+    });
+    expect(result.current[0]?.recentAtMs).toBe(3_000);
+
+    rerender({
+      items: [historyItem(epicId, 3_000, 3_000)],
+      revision: 3,
+    });
+    expect(result.current[0]?.recentAtMs).toBe(3_000);
+
+    rerender({
+      items: [historyItem(epicId, 4_000, 4_000)],
+      revision: 4,
+    });
+    expect(result.current[0]?.recentAtMs).toBe(4_000);
+  });
+
+  it("keeps unfiltered context retention when a filtered scope catches up", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const userId = `cross-scope-retention-${crypto.randomUUID()}`;
+    const epicId = "cross-scope-retention-epic";
+    settleHistoryActivity(userId, [historyItem(epicId, 1_000, 1_000)]);
+    hookState.contexts.set(epicId, {
+      ...taskContext(epicId),
+      recentAt: 1_000,
+    });
+    const { result: unfilteredResult, rerender: rerenderUnfiltered } =
+      renderHook(
+        ({ revision }) => {
+          void revision;
+          return useOptimisticActivityHistoryItems({
+            items: [],
+            userId,
+            hostId: "host-cross-scope-retention",
+            enabled: true,
+            refreshScope: "recent:all",
+            refetch: vi.fn(() => Promise.resolve()),
+          });
+        },
+        { initialProps: { revision: 0 } },
+      );
+
+    act(() => observeOwnHistoryRecordChange(userId, epicId, 3_000));
+    hookState.contexts.set(epicId, {
+      ...taskContext(epicId),
+      recentAt: 3_000,
+    });
+    rerenderUnfiltered({ revision: 1 });
+    expect(unfilteredResult.current[0]?.epicId).toBe(epicId);
+
+    const { rerender: rerenderFiltered } = renderHook(
+      ({ items }) =>
+        useOptimisticActivityHistoryItems({
+          items,
+          userId,
+          hostId: "host-cross-scope-retention",
+          enabled: false,
+          refreshEnabled: true,
+          refreshScope: "recent:filtered",
+          refetch: vi.fn(() => Promise.resolve()),
+        }),
+      {
+        initialProps: {
+          items: [historyItem(epicId, 3_000, 3_000)],
+        },
+      },
+    );
+    rerenderFiltered({ items: [historyItem(epicId, 3_000, 3_000)] });
+    rerenderUnfiltered({ revision: 2 });
+
+    expect(unfilteredResult.current[0]?.epicId).toBe(epicId);
+    expect(unfilteredResult.current[0]?.recentAtMs).toBe(3_000);
   });
 
   it("keeps an idle active row while the outbox is delayed, retries, then settles", async () => {
@@ -825,6 +1021,71 @@ describe("optimistic activity history projection", () => {
     await act(async () => {
       resolveThird?.();
       await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(refetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps an acknowledged backfill visible after a stale in-flight page", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(25_000);
+    const userId = `backfill-stale-page-${crypto.randomUUID()}`;
+    const epicId = "backfill-stale-page-epic";
+    hookState.contexts.set(epicId, {
+      ...taskContext(epicId),
+      recentAt: 500,
+    });
+    let requests = 0;
+    let resolveThird: (() => void) | undefined;
+    const refetch = vi.fn(() => {
+      requests += 1;
+      return requests === 3
+        ? new Promise<void>((resolve) => {
+            resolveThird = resolve;
+          })
+        : Promise.resolve();
+    });
+    const stalePage: readonly HistoryItem[] = [];
+    const { result, rerender } = renderHook(
+      ({ items, revision }) => {
+        void revision;
+        return useOptimisticActivityHistoryItems({
+          items,
+          userId,
+          hostId: "host-backfill-stale-page",
+          enabled: true,
+          refreshScope: "recent:all",
+          refetch,
+        });
+      },
+      { initialProps: { items: stalePage, revision: 0 } },
+    );
+
+    act(() => observeOwnHistoryRecordChange(userId, epicId, 1_000));
+    expect(result.current.map((item) => item.epicId)).toContain(epicId);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750 + 2_000 + 5_000);
+    });
+    expect(refetch).toHaveBeenCalledTimes(3);
+    if (resolveThird === undefined)
+      throw new Error("third refetch did not start");
+
+    hookState.contexts.set(epicId, {
+      ...taskContext(epicId),
+      recentAt: 3_000,
+    });
+    rerender({ items: stalePage, revision: 1 });
+    expect(result.current.map((item) => item.epicId)).toContain(epicId);
+
+    await act(async () => {
+      resolveThird?.();
+      await Promise.resolve();
+      rerender({ items: stalePage, revision: 2 });
+    });
+    expect(result.current.map((item) => item.epicId)).toContain(epicId);
+
+    await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
     });
     expect(refetch).toHaveBeenCalledTimes(4);

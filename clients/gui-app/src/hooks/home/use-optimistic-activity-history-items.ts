@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import {
   buildHistoryItemsFromTasks,
@@ -33,6 +39,8 @@ interface ActivityStamp {
   readonly acceptedAt: number | null;
   /** A later turn still needs activity beyond this earlier accepted record. */
   readonly turnAfterAcceptedAt: number | null;
+  /** Context acknowledged this key; retain its row until the list sees it. */
+  readonly awaitingListAt: number | null;
 }
 const stamps = new Map<string, ActivityStamp>();
 const knownDurableAt = new Map<string, number>();
@@ -75,6 +83,41 @@ function rememberDurableKey(key: string, at: number): void {
   }
 }
 
+function latestDurableBaseline(
+  key: string,
+  previous: ActivityStamp | undefined,
+): number | null {
+  const latest = Math.max(
+    previous?.baselineAt ?? -Infinity,
+    previous?.awaitingListAt ?? -Infinity,
+    knownDurableAt.get(key) ?? -Infinity,
+  );
+  return latest === -Infinity ? null : latest;
+}
+
+function contextAlreadyAcknowledged(
+  previous: ActivityStamp | undefined,
+  at: number,
+): boolean {
+  const acknowledgedAt = previous?.awaitingListAt;
+  return (
+    acknowledgedAt !== null &&
+    acknowledgedAt !== undefined &&
+    at <= acknowledgedAt
+  );
+}
+
+function pendingBaselineForNewRecord(
+  previous: ActivityStamp | undefined,
+): boolean {
+  if (
+    previous?.awaitingListAt !== null &&
+    previous?.awaitingListAt !== undefined
+  )
+    return false;
+  return previous?.baselineFromPendingRead ?? false;
+}
+
 function changed(userId: string | null): void {
   if (userId !== null) {
     generations.set(userId, (generations.get(userId) ?? 0) + 1);
@@ -107,6 +150,17 @@ function removeExpiredStamps(at: number): boolean {
   return removed;
 }
 
+function capStamps(): void {
+  if (stamps.size <= MAX_ACTIVE_ROWS) return;
+  // Preserve an accepted record (including a context-acknowledged row) ahead
+  // of an active-only edge when the shared overlay reaches its fixed cap.
+  const activeOnly = [...stamps].find(
+    ([, stamp]) => stamp.acceptedAt === null && stamp.awaitingListAt === null,
+  )?.[0];
+  const oldest = activeOnly ?? stamps.keys().next().value;
+  if (oldest !== undefined) stamps.delete(oldest);
+}
+
 function stampActiveHistoryEdge(key: string, at: number): void {
   // A record delta can precede the turn projection. Its exact accepted time
   // settles that record, but the later turn still needs a further durable key.
@@ -116,7 +170,7 @@ function stampActiveHistoryEdge(key: string, at: number): void {
   stamps.set(key, {
     at: Math.max(previous?.at ?? 0, at),
     expiresAt: Math.max(previous?.expiresAt ?? 0, at + STAMP_TTL_MS),
-    baselineAt: previous?.baselineAt ?? knownDurableAt.get(key) ?? null,
+    baselineAt: latestDurableBaseline(key, previous),
     // A fresh turn makes any already-observed key its pre-edge baseline.
     baselineFromPendingRead: false,
     acceptedAt,
@@ -124,11 +178,9 @@ function stampActiveHistoryEdge(key: string, at: number): void {
       acceptedAt === null
         ? priorTurnBarrier
         : Math.max(priorTurnBarrier ?? acceptedAt, acceptedAt),
+    awaitingListAt: null,
   });
-  if (stamps.size > MAX_ACTIVE_ROWS) {
-    const oldest = stamps.keys().next().value;
-    if (oldest !== undefined) stamps.delete(oldest);
-  }
+  capStamps();
 }
 
 /** Records only a new active edge; a durable catch-up does not re-arm it. */
@@ -168,23 +220,22 @@ export function observeOwnHistoryRecordChange(
 ): void {
   const key = keyFor(userId, epicId);
   const previous = stamps.get(key);
+  if (contextAlreadyAcknowledged(previous, at)) return;
   const priorTurnBarrier = previous?.turnAfterAcceptedAt ?? null;
   stamps.delete(key);
   stamps.set(key, {
     at: Math.max(previous?.at ?? 0, at),
     expiresAt: Date.now() + STAMP_TTL_MS,
-    baselineAt: previous?.baselineAt ?? knownDurableAt.get(key) ?? null,
-    baselineFromPendingRead: previous?.baselineFromPendingRead ?? false,
+    baselineAt: latestDurableBaseline(key, previous),
+    baselineFromPendingRead: pendingBaselineForNewRecord(previous),
     acceptedAt: Math.max(previous?.acceptedAt ?? 0, at),
     turnAfterAcceptedAt:
       priorTurnBarrier !== null && at <= priorTurnBarrier
         ? priorTurnBarrier
         : null,
+    awaitingListAt: null,
   });
-  if (stamps.size > MAX_ACTIVE_ROWS) {
-    const oldest = stamps.keys().next().value;
-    if (oldest !== undefined) stamps.delete(oldest);
-  }
+  capStamps();
   changed(userId);
 }
 
@@ -236,10 +287,14 @@ export function settleHistoryActivity(
     const durableAt = item.recentAtMs;
     const stamp = stamps.get(key);
     if (stamp !== undefined) {
-      if (durableKeyCatchesUp(stamp, durableAt)) {
+      if (
+        stamp.awaitingListAt !== null
+          ? durableAt >= stamp.awaitingListAt
+          : durableKeyCatchesUp(stamp, durableAt)
+      ) {
         stamps.delete(key);
         removed = true;
-      } else if (stamp.baselineAt === null) {
+      } else if (stamp.awaitingListAt === null && stamp.baselineAt === null) {
         // The first off-page key may predate the edge even when its server
         // clock is ahead of the browser. Only a later change can settle it.
         stamps.set(key, {
@@ -252,6 +307,40 @@ export function settleHistoryActivity(
     rememberDurableKey(key, durableAt);
   }
   if (removed) changed(null);
+}
+
+/** A context key settles the timestamp but cannot prove page membership. */
+function settleBackfilledHistoryActivity(
+  userId: string,
+  items: readonly HistoryItem[],
+): void {
+  let acknowledged = false;
+  for (const item of items) {
+    if (item.recentAtMs === undefined) continue;
+    const key = keyFor(userId, item.epicId);
+    const durableAt = item.recentAtMs;
+    const stamp = stamps.get(key);
+    if (stamp !== undefined) {
+      if (stamp.awaitingListAt !== null && durableAt > stamp.awaitingListAt) {
+        stamps.set(key, { ...stamp, awaitingListAt: durableAt });
+        acknowledged = true;
+      } else if (
+        stamp.awaitingListAt === null &&
+        durableKeyCatchesUp(stamp, durableAt)
+      ) {
+        stamps.set(key, { ...stamp, awaitingListAt: durableAt });
+        acknowledged = true;
+      } else if (stamp.awaitingListAt === null && stamp.baselineAt === null) {
+        stamps.set(key, {
+          ...stamp,
+          baselineAt: durableAt,
+          baselineFromPendingRead: true,
+        });
+      }
+    }
+    rememberDurableKey(key, durableAt);
+  }
+  if (acknowledged) changed(userId);
 }
 
 interface ProjectedHistoryRow {
@@ -282,7 +371,21 @@ export function projectOptimisticHistoryItems(
 ): readonly HistoryItem[] {
   const byEpic = new Map(pageItems.map((item) => [item.epicId, item]));
   for (const item of backfilled) {
-    if (!byEpic.has(item.epicId)) byEpic.set(item.epicId, item);
+    const pageItem = byEpic.get(item.epicId);
+    if (pageItem === undefined) {
+      byEpic.set(item.epicId, item);
+    } else if (
+      item.recentAtMs !== undefined &&
+      item.recentAtMs > (pageItem.recentAtMs ?? -Infinity)
+    ) {
+      // A stale page can contain the row before its activity key catches up.
+      byEpic.set(item.epicId, {
+        ...pageItem,
+        recentAtMs: item.recentAtMs,
+        recentLabel: item.recentLabel,
+        recentBucket: item.recentBucket,
+      });
+    }
   }
   const sourceItems = [...byEpic.values()];
   const missingDurableKey = sourceItems.some(
@@ -290,7 +393,11 @@ export function projectOptimisticHistoryItems(
   );
   const projected: ProjectedHistoryRow[] = sourceItems.map((item) => {
     const stamp = stamps.get(keyFor(userId, item.epicId));
-    if (stamp === undefined || stamp.expiresAt <= nowMs) {
+    if (
+      stamp === undefined ||
+      stamp.expiresAt <= nowMs ||
+      stamp.awaitingListAt !== null
+    ) {
       return { item, stampAt: null };
     }
     const recentAtMs = Math.max(item.recentAtMs ?? item.updatedAtMs, stamp.at);
@@ -443,17 +550,36 @@ export function useOptimisticActivityHistoryItems(
     authorizesCloudCapability(state.status),
   );
   const missing = useMemo(() => {
-    if (!input.enabled) return [];
-    const onPage = new Set(input.items.map((item) => item.epicId));
+    if (!input.enabled || input.userId === null) return [];
+    const userId = input.userId;
+    const onPage = new Map(input.items.map((item) => [item.epicId, item]));
     const stamped = [...activitySnapshot.stamps]
       .filter(
         ([key]) => (JSON.parse(key) as [string, string])[0] === input.userId,
       )
       .map(([key]) => (JSON.parse(key) as [string, string])[1]);
-    return [...new Set([...workingEpicIds, ...stamped])]
-      .filter((epicId) => !onPage.has(epicId))
-      .sort()
-      .slice(0, MAX_ACTIVE_ROWS);
+    // Every retained stamp fits the 64-row cap. Prioritize those obligations
+    // before filling any remaining context slots with unstamped active ids.
+    const stampedSet = new Set(stamped);
+    const candidates = [
+      ...stamped.sort(),
+      ...[...workingEpicIds].filter((epicId) => !stampedSet.has(epicId)).sort(),
+    ];
+    return candidates
+      .filter((epicId) => {
+        const pageItem = onPage.get(epicId);
+        const awaitingListAt = activitySnapshot.stamps.get(
+          keyFor(userId, epicId),
+        )?.awaitingListAt;
+        return (
+          pageItem === undefined ||
+          (awaitingListAt !== null &&
+            awaitingListAt !== undefined &&
+            (pageItem.recentAtMs ?? -Infinity) < awaitingListAt)
+        );
+      })
+      .slice(0, MAX_ACTIVE_ROWS)
+      .sort();
   }, [
     activitySnapshot.stamps,
     input.enabled,
@@ -464,22 +590,28 @@ export function useOptimisticActivityHistoryItems(
   const backfill = useEpicGetTaskContexts(missing, input.userId, {
     enabled: cloudAuthorized,
   });
-  const backfilled = useMemo(
-    () =>
-      buildHistoryItemsFromTasks(
-        [...backfill.tasksById.values()],
-        nowMs,
-        input.userId,
-        backfill.localHomedTaskIds,
-      ).filter((item) => missing.includes(item.epicId)),
-    [
-      backfill.localHomedTaskIds,
-      backfill.tasksById,
-      input.userId,
-      missing,
+  const backfilled = useMemo(() => {
+    const missingSet = new Set(missing);
+    return buildHistoryItemsFromTasks(
+      [...backfill.tasksById.values()],
       nowMs,
-    ],
-  );
+      input.userId,
+      backfill.localHomedTaskIds,
+    ).filter((item) => missingSet.has(item.epicId));
+  }, [
+    backfill.localHomedTaskIds,
+    backfill.tasksById,
+    input.userId,
+    missing,
+    nowMs,
+  ]);
+  // The context batch has a five-minute title cache. Re-read its mounted
+  // batches with the list so an off-page activity key can actually catch up.
+  const refetchList = input.refetch;
+  const refetchContexts = backfill.refetch;
+  const refetchActivity = useCallback(async () => {
+    await Promise.all([refetchList(), refetchContexts()]);
+  }, [refetchContexts, refetchList]);
   useEffect(() => {
     if (!refreshEnabled || input.userId === null) return;
     const scope = JSON.stringify([input.hostId, input.userId, refreshScope]);
@@ -524,25 +656,28 @@ export function useOptimisticActivityHistoryItems(
     );
     if (generation > consumedGeneration) {
       settledGenerations.delete(scope);
-      queueActivityRefresh(scope, input.userId, generation, input.refetch);
+      queueActivityRefresh(scope, input.userId, generation, refetchActivity);
     } else {
       const state = refreshes.get(scope);
-      if (state !== undefined) state.refetch = input.refetch;
+      if (state !== undefined) state.refetch = refetchActivity;
     }
   }, [
     activitySnapshot,
     input.enabled,
     input.hostId,
-    input.refetch,
+    refetchActivity,
     refreshEnabled,
     refreshScope,
     input.userId,
     workingEpicIds,
   ]);
   useEffect(() => {
-    if (input.userId !== null)
-      settleHistoryActivity(input.userId, [...input.items, ...backfilled]);
-  }, [backfilled, input.items, input.userId]);
+    // A filtered page may contain the task while the unfiltered Recent page
+    // still omits it; only the latter can retire an off-page context row.
+    if (input.userId === null || !input.enabled) return;
+    settleHistoryActivity(input.userId, input.items);
+    settleBackfilledHistoryActivity(input.userId, backfilled);
+  }, [backfilled, input.enabled, input.items, input.userId]);
   useEffect(() => {
     if (!refreshEnabled || input.userId === null || stamps.size === 0) return;
     const earliestExpiry = Math.min(
