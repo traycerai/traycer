@@ -10,7 +10,11 @@ import {
 } from "../host-rpc";
 import { resolveHostAuth } from "../host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
-import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+  RetryableTransportError,
+} from "../../../../shared/host-transport/host-messenger";
 import { createCliCredentialsStore } from "../../store/credentials-store";
 import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
 import { CLI_ERROR_CODES } from "../../runner/errors";
@@ -424,6 +428,80 @@ describe("callHostRpc", () => {
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message: "traycer: Message exceeds the maximum size.",
+      details: null,
+    });
+  });
+
+  // A `HostTransportFailureError` means the connection itself failed or went
+  // quiet - the host never answered. This must map to HOST_UNREACHABLE
+  // rather than UNEXPECTED (its wire code is RPC_ERROR, indistinguishable by
+  // code alone from a resolver error the host actually answered with), and
+  // the transport's own message must pass through unchanged.
+  it("maps a HostTransportFailureError to HOST_UNREACHABLE with the transport's own message", async () => {
+    await expect(
+      toAgentCliError(
+        Promise.reject(
+          new HostTransportFailureError({
+            code: "RPC_ERROR",
+            message: "WebSocket frame timed out after 15000ms",
+            requestId: "r1",
+            method: METHOD,
+            fatalDetails: null,
+          }),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNREACHABLE,
+      message: "WebSocket frame timed out after 15000ms",
+      details: null,
+      exitCode: 1,
+    });
+  });
+
+  // RetryableTransportError is a subclass of HostTransportFailureError (the
+  // retrying messenger's own signal that a redial is safe); it must map the
+  // same way as its parent class.
+  it("maps a RetryableTransportError (a HostTransportFailureError subclass) to HOST_UNREACHABLE the same way", async () => {
+    await expect(
+      toAgentCliError(
+        Promise.reject(
+          new RetryableTransportError({
+            code: "RPC_ERROR",
+            message: "WebSocket frame timed out after 15000ms",
+            requestId: "r1",
+            method: METHOD,
+            fatalDetails: null,
+            replaySafetyFromKey: true,
+          }),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNREACHABLE,
+      message: "WebSocket frame timed out after 15000ms",
+      details: null,
+      exitCode: 1,
+    });
+  });
+
+  // Control: a plain HostRpcError with the SAME wire code (RPC_ERROR) that is
+  // NOT a transport failure - i.e. the host answered - must still classify as
+  // UNEXPECTED. This is the case the class-based check above must not widen.
+  it("still maps a plain HostRpcError with code RPC_ERROR to UNEXPECTED", async () => {
+    await expect(
+      toAgentCliError(
+        Promise.reject(
+          new HostRpcError({
+            code: "RPC_ERROR",
+            message: "agent not found",
+            requestId: "r1",
+            method: METHOD,
+            fatalDetails: null,
+          }),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message: "agent not found",
       details: null,
     });
   });
