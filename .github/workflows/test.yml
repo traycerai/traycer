@@ -317,6 +317,15 @@ jobs:
       - name: Update-recovery reader, real Windows open flags
         working-directory: clients/traycer-cli
         run: bunx vitest run src/host/__tests__/update-recovery-evidence-flag-fallback-real-platform.test.ts
+      # The only real run of the CLI finalize helper's Windows launch. A
+      # detached spawn there exits 0 having run no line of the script, and no
+      # stubbed test can see that: this starts a marker-only helper through
+      # the production launcher and checks it arms and outlives the process
+      # that launched it, and that a helper the CLI abandoned exits without
+      # finalizing (upgrade/finalize-helper.ts, "Launching on Windows").
+      - name: Finalize helper launch, a real PowerShell handoff
+        working-directory: clients/traycer-cli
+        run: bunx vitest run src/upgrade/__tests__/finalize-helper-launch.win32.test.ts
 
   # macOS job: the desktop workspace's packaging/signing-adjacent assertions
   # (prepack unit suite + the real electron-builder pack in test:packaging)

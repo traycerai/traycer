@@ -233,8 +233,10 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   // review found. A real end-to-end run needs an actual Windows machine
   // (PowerShell + a live OS service); `test-windows-cli-exit` is a
   // `windows-latest` job in `.github/workflows/test.yml` now, but it runs
-  // only the SEA build/smoke/exit-code checks and clients/shared's
-  // denied-read vitest file - none of which touches the finalize-helper's
+  // only the SEA build/smoke/exit-code checks, clients/shared's denied-read
+  // vitest file, and the finalize-helper launch test
+  // (`upgrade/__tests__/finalize-helper-launch.win32.test.ts`: the real
+  // PowerShell handoff that arms the helper). None of them touches the
   // rename+service-start path this test is about. Adding a
   // `skipIf(win32)`-inverted test here would still never actually run
   // against that path in this environment and would be fake coverage, so

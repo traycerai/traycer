@@ -30,12 +30,21 @@ import {
 // The detached helper closes that gap:
 //
 //   1. The CLI writes a short PowerShell (Windows) or POSIX shell
-//      script to a temp path and launches it detached with the parent
-//      CLI's pid as an argument.
-//   2. The CLI returns its result to the caller with status
-//      "scheduled-helper" and exits, releasing its lock on the live
-//      binary.
-//   3. The helper polls the parent pid (sub-second). Once the CLI
+//      script to a temp path, with the parent CLI's pid baked in, and
+//      launches it so that it outlives the CLI (see "Launching on
+//      Windows" below for why that is not a detached spawn there).
+//   2. The script's FIRST line writes an "armed" sentinel beside it. The
+//      CLI waits up to `HELPER_ARM_WAIT_MS` for that file and reports
+//      `armed` only once it exists: the one outcome on which `host
+//      restart` leaves the service start to the helper. Anything else is
+//      `failed`, and the restart relaunches the host itself - a helper
+//      that never ran must not leave the host stopped. A failure after
+//      the launch also writes an "abandoned" file the script checks
+//      before acting, so a helper that armed too late cannot finalize
+//      behind that relaunch.
+//   3. The CLI returns its result to the caller and exits, releasing its
+//      lock on the live binary.
+//   4. The helper polls the parent pid (sub-second). Once the CLI
 //      process is gone it hands off to the STAGED binary's own hidden
 //      `cli finalize-upgrade` command (`commands/cli-finalize-upgrade.ts`)
 //      rather than swapping the binary and starting the service itself.
@@ -48,24 +57,55 @@ import {
 //      PowerShell/shell would duplicate correctness-critical logic with
 //      no way to test it. The swap + service start can therefore never
 //      race another actor's apply/install/activation critical section.
-//   4. `cli finalize-upgrade` writes a marker file at
+//   5. `cli finalize-upgrade` writes a marker file at
 //      `~/.traycer/cli/post-finalize.json` describing the outcome
 //      (swapped / swap-failed), or writes nothing if it timed out
 //      waiting for the lock - `pendingUpgrade` stays populated in that
 //      case, so the next `host restart` retries the whole flow. The
 //      wrapping script writes its own "parent-still-alive" marker
 //      directly (the staged binary is never invoked in that case).
-//   5. The next CLI invocation - Doctor, `host restart`, etc. -
+//   6. The next CLI invocation - Doctor, `host restart`, etc. -
 //      calls `reconcilePostFinalizeMarker(environment)`, which folds the
 //      marker into the install manifest (clearing pendingUpgrade and
 //      updating version on success) and deletes the marker.
 //
-// Fail-safe: if the helper cannot complete (the script fails to
-// schedule, the swap fails, the lock times out, the OS service start
-// fails), the marker either isn't written or records "swap-failed", and
+// Fail-safe: if the helper cannot complete (the script never arms, the
+// swap fails, the lock times out, the OS service start fails), the
+// marker either isn't written or records "swap-failed", and
 // `pendingUpgrade` stays populated. Doctor continues to emit
 // `CLI_UPGRADE_PENDING` and Settings/Doctor surface it via the existing
 // card.
+//
+// Launching on Windows. `spawn(..., { detached: true })` there is
+// DETACHED_PROCESS (libuv v1.52.1, the version Node 24.20 bundles,
+// `src/win/process.c:1052-1064`): PowerShell starts with no console and
+// exits 0 without running a line of the script. That was measured on
+// Windows Server 2022 from node and bun, over ssh and in the console
+// session, and it is why this helper used to never run. So the CLI
+// spawns a NON-detached `powershell.exe` launcher and awaits it; the
+// launcher's one job is `Start-Process -WindowStyle Hidden -PassThru` on
+// the helper script:
+//
+//  - The launcher gets a console without a window (`windowsHide` with no
+//    inherited stdio is CREATE_NO_WINDOW, `process.c:1034-1043`), so it
+//    runs; `Start-Process` gives the helper a console of its own, hidden.
+//  - The helper outlives the CLI. libuv assigns every non-detached child
+//    to a job object that kills its members when the CLI exits
+//    (`process.c:1082-1100`, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE at
+//    `process.c:92-96`), but the same job sets
+//    JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK, so "only the processes that we
+//    explicitly add are affected, and *their* subprocesses are not"
+//    (`process.c:77-83`). The launcher is a member; the helper it starts
+//    is not.
+//  - The launcher's own script travels as `-EncodedCommand` (UTF-16LE,
+//    base64), so no path is ever quoted for a command line. The helper
+//    path inside it is a PowerShell single-quoted literal.
+//  - Its stdio is ignored, never piped. A helper that inherited a pipe
+//    would hold it open, and the CLI could not exit until the helper did
+//    - while the helper waits for the CLI to exit.
+//  - The `.ps1` starts with a UTF-8 BOM. Windows PowerShell 5.1 reads a
+//    BOM-less `-File` script in the ANSI code page, which garbles a
+//    non-ASCII path before its quoting matters.
 
 export interface ScheduleHelperOptions {
   readonly environment: Environment;
@@ -85,6 +125,9 @@ export interface ScheduleHelperOptions {
   // with stubs that record arguments instead of touching the OS.
   readonly spawnImpl: SpawnImpl;
   readonly writeImpl: WriteImpl;
+  // The clock the wait for the armed sentinel runs on. Tests pass a fake
+  // one, so the bound is proven without being waited out.
+  readonly armWait: HelperArmWaitDeps;
 }
 
 // Narrow surface of `child_process.spawn` we use. Tests substitute a
@@ -93,15 +136,65 @@ export type SpawnImpl = (
   command: string,
   args: readonly string[],
   options: SpawnOptions,
-) => { readonly pid: number | undefined; unref: () => void };
+) => SpawnedProcess;
+
+export interface SpawnedProcess {
+  readonly pid: number | undefined;
+  unref: () => void;
+  kill: () => void;
+  // Settles once the process has exited or failed to start; never
+  // rejects. Only the Windows launcher is awaited - the POSIX helper IS
+  // the spawned process, and is left running.
+  readonly exited: Promise<SpawnedProcessExit>;
+}
+
+export interface SpawnedProcessExit {
+  // null when the process never started or was killed by a signal.
+  readonly exitCode: number | null;
+  // Why there is no exit code: the start error, or the signal.
+  readonly errorMessage: string | null;
+}
 
 export type WriteImpl = (path: string, body: string) => Promise<void>;
 
+export interface HelperArmWaitDeps {
+  readonly now: () => number;
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly waitMs: number;
+  readonly pollIntervalMs: number;
+}
+
+// About 25 times the 405 ms the helper took to reach its first line on the
+// review VM: room for a cold PowerShell start under antivirus, while a
+// restart whose helper never runs still brings the host back in seconds.
+// The whole wait runs with the host stopped and the CLI lock held.
+export const HELPER_ARM_WAIT_MS = 10_000;
+
+export const defaultHelperArmWaitDeps: HelperArmWaitDeps = {
+  // Monotonic, not `Date.now()`: a wall-clock correction during the wait
+  // would stretch it by the size of the correction, with the host stopped
+  // and the CLI lock held.
+  now: () => performance.now(),
+  sleep: (ms) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    }),
+  waitMs: HELPER_ARM_WAIT_MS,
+  pollIntervalMs: 100,
+};
+
 export interface ScheduleHelperResult {
-  readonly status: "scheduled" | "skipped" | "failed";
+  // `armed`: the helper script is running - its first line wrote the
+  // sentinel - and owns the swap and the service start from here.
+  // `failed`: no running helper could be confirmed, so the caller still
+  // owns the service start.
+  readonly status: "armed" | "skipped" | "failed";
   readonly platform: NodeJS.Platform;
   readonly scriptPath: string | null;
+  // The sentinel the script's first line writes.
+  readonly armedPath: string | null;
   readonly markerPath: string;
+  // The helper script's own pid, as it wrote it into the sentinel.
   readonly helperPid: number | null;
   readonly errorMessage: string | null;
 }
@@ -111,9 +204,27 @@ export interface ScheduleHelperResult {
 // scheduling tests substitute their own.
 export const defaultSpawnImpl: SpawnImpl = (command, args, options) => {
   const child = spawn(command, [...args], options);
+  const exited = new Promise<SpawnedProcessExit>((resolve) => {
+    // A start failure (ENOENT for a missing powershell.exe) arrives as an
+    // `error` event, never a throw, and an unlistened one crashes the
+    // CLI. `on`, not `once`: a later `kill` can emit one too.
+    child.on("error", (err) => {
+      resolve({ exitCode: null, errorMessage: err.message });
+    });
+    child.once("exit", (code, signal) => {
+      resolve({
+        exitCode: code,
+        errorMessage: signal === null ? null : `killed by ${signal}`,
+      });
+    });
+  });
   return {
     pid: child.pid,
     unref: () => child.unref(),
+    kill: () => {
+      child.kill();
+    },
+    exited,
   };
 };
 
@@ -122,11 +233,10 @@ export const defaultWriteImpl: WriteImpl = async (path, body) => {
   await writeFile(path, body, { encoding: "utf8", mode: 0o700 });
 };
 
-// Schedule the detached helper. Returns a structured result so the
-// host-restart command can surface scheduling outcomes in its
-// NDJSON payload without throwing on best-effort failures. Throws
-// only for programmer errors (e.g. an unsupported platform reached
-// this path).
+// Schedule the helper and wait for it to arm. Returns a structured result
+// so the host-restart command can surface the outcome in its NDJSON
+// payload without throwing on best-effort failures. Throws only for
+// programmer errors (e.g. an unsupported platform reached this path).
 export async function scheduleFinalizationHelper(
   opts: ScheduleHelperOptions,
 ): Promise<ScheduleHelperResult> {
@@ -146,13 +256,14 @@ export async function scheduleFinalizationHelper(
       status: "skipped",
       platform,
       scriptPath: null,
+      armedPath: null,
       markerPath,
       helperPid: null,
       errorMessage: `finalize helper does not support platform '${platform}'`,
     };
   }
 
-  const scriptPath = makeHelperScriptPath(opts.environment, platform);
+  const files = makeHelperFilePaths(opts.environment, platform);
   const scriptBody =
     platform === "win32"
       ? renderWindowsHelperScript({
@@ -160,6 +271,8 @@ export async function scheduleFinalizationHelper(
           stagedBinaryPath: opts.stagedBinaryPath,
           livePath: opts.livePath,
           markerPath,
+          armedPath: files.armedPath,
+          abandonedPath: files.abandonedPath,
           timeoutSeconds: opts.parentExitTimeoutSeconds,
         })
       : renderPosixHelperScript({
@@ -167,107 +280,266 @@ export async function scheduleFinalizationHelper(
           stagedBinaryPath: opts.stagedBinaryPath,
           livePath: opts.livePath,
           markerPath,
+          armedPath: files.armedPath,
+          abandonedPath: files.abandonedPath,
           timeoutSeconds: opts.parentExitTimeoutSeconds,
         });
+  const failed = (errorMessage: string): ScheduleHelperResult => ({
+    status: "failed",
+    platform,
+    scriptPath: files.scriptPath,
+    armedPath: files.armedPath,
+    markerPath,
+    helperPid: null,
+    errorMessage,
+  });
 
   try {
-    await opts.writeImpl(scriptPath, scriptBody);
+    await opts.writeImpl(files.scriptPath, scriptBody);
   } catch (err) {
-    return {
-      status: "failed",
-      platform,
-      scriptPath,
-      markerPath,
-      helperPid: null,
-      errorMessage: err instanceof Error ? err.message : String(err),
-    };
+    return failed(err instanceof Error ? err.message : String(err));
   }
 
   const spawnDescriptor = buildSpawnDescriptor({
     platform,
-    scriptPath,
+    scriptPath: files.scriptPath,
   });
+  let launched: SpawnedProcess;
   try {
-    const child = opts.spawnImpl(
+    launched = opts.spawnImpl(
       spawnDescriptor.command,
       spawnDescriptor.args,
-      {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-        // Inherit env so PATH-based PowerShell/sh resolution works.
-        env: process.env,
-      },
+      spawnDescriptor.options,
     );
-    child.unref();
+  } catch (err) {
+    return failed(err instanceof Error ? err.message : String(err));
+  }
+
+  const armed = await awaitHelperArmed({
+    platform,
+    launched,
+    armedPath: files.armedPath,
+    wait: opts.armWait,
+  });
+  if (armed.status === "armed") {
     return {
-      status: "scheduled",
+      status: "armed",
       platform,
-      scriptPath,
+      scriptPath: files.scriptPath,
+      armedPath: files.armedPath,
       markerPath,
-      helperPid: child.pid ?? null,
+      helperPid: armed.helperPid,
       errorMessage: null,
     };
-  } catch (err) {
-    return {
-      status: "failed",
-      platform,
-      scriptPath,
-      markerPath,
-      helperPid: null,
-      errorMessage: err instanceof Error ? err.message : String(err),
-    };
+  }
+  // The caller now relaunches the host itself. A helper that arms after
+  // this point must not also finalize behind that relaunch: the script
+  // checks for this file once the CLI has exited, by which time it is
+  // written. Best-effort - if it cannot be written, a late helper runs
+  // `cli finalize-upgrade` beside a running host, which only defers the
+  // swap again.
+  try {
+    await opts.writeImpl(files.abandonedPath, "");
+  } catch {
+    // best-effort, see above
+  }
+  return failed(armed.errorMessage ?? "the finalize helper did not arm");
+}
+
+// Wait, within one `wait.waitMs` budget, for the launcher to exit (Windows
+// only) and then for the script's first line to write `armedPath`.
+async function awaitHelperArmed(opts: {
+  readonly platform: NodeJS.Platform;
+  readonly launched: SpawnedProcess;
+  readonly armedPath: string;
+  readonly wait: HelperArmWaitDeps;
+}): Promise<
+  Pick<ScheduleHelperResult, "status" | "helperPid" | "errorMessage">
+> {
+  const { launched, wait } = opts;
+  const deadline = wait.now() + wait.waitMs;
+  if (opts.platform === "win32") {
+    // Awaited: the launcher exits as soon as Start-Process returns, and a
+    // non-zero exit is a Start-Process that failed, so there is no helper
+    // to wait for.
+    const launcher: { exit: SpawnedProcessExit | null } = { exit: null };
+    void launched.exited.then((exit) => {
+      launcher.exit = exit;
+    });
+    while (launcher.exit === null) {
+      if (wait.now() >= deadline) {
+        // A ref'd child would also hold this CLI open.
+        launched.kill();
+        return {
+          status: "failed",
+          helperPid: null,
+          errorMessage: `the finalize helper launcher did not exit within ${wait.waitMs} ms`,
+        };
+      }
+      await wait.sleep(wait.pollIntervalMs);
+    }
+    if (launcher.exit.exitCode !== 0) {
+      return {
+        status: "failed",
+        helperPid: null,
+        errorMessage: `the finalize helper launcher failed (${
+          launcher.exit.errorMessage ?? `exit code ${launcher.exit.exitCode}`
+        })`,
+      };
+    }
+  } else {
+    // The detached `/bin/sh` is the helper itself.
+    launched.unref();
+  }
+  for (;;) {
+    const sentinel = await readArmedSentinel(opts.armedPath);
+    if (sentinel.armed) {
+      return { status: "armed", helperPid: sentinel.pid, errorMessage: null };
+    }
+    if (wait.now() >= deadline) {
+      return {
+        status: "failed",
+        helperPid: null,
+        errorMessage: `the finalize helper did not start within ${wait.waitMs} ms`,
+      };
+    }
+    await wait.sleep(wait.pollIntervalMs);
   }
 }
 
-function makeHelperScriptPath(
+// The sentinel existing is the proof the script runs. Its pid is
+// best-effort: the CLI can read the file between its creation and the
+// write. Any read error counts as "not yet"; the deadline bounds that.
+async function readArmedSentinel(
+  armedPath: string,
+): Promise<
+  | { readonly armed: false }
+  | { readonly armed: true; readonly pid: number | null }
+> {
+  let text: string;
+  try {
+    text = await readFile(armedPath, "utf8");
+  } catch {
+    return { armed: false };
+  }
+  const pid = Number.parseInt(text.trim(), 10);
+  return {
+    armed: true,
+    pid: Number.isSafeInteger(pid) && pid > 0 ? pid : null,
+  };
+}
+
+// The script and the two files it shares with the CLI, side by side:
+// `<stem>.ps1` (or `.sh`), `<stem>.armed`, `<stem>.abandoned`.
+function makeHelperFilePaths(
   environment: Environment,
   platform: NodeJS.Platform,
-): string {
+): {
+  readonly scriptPath: string;
+  readonly armedPath: string;
+  readonly abandonedPath: string;
+} {
   const ext = platform === "win32" ? ".ps1" : ".sh";
   const stamp = `${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
-  return join(tmpdir(), `traycer-cli-finalize-${environment}-${stamp}${ext}`);
+  const stem = join(tmpdir(), `traycer-cli-finalize-${environment}-${stamp}`);
+  return {
+    scriptPath: `${stem}${ext}`,
+    armedPath: `${stem}.armed`,
+    abandonedPath: `${stem}.abandoned`,
+  };
 }
 
 function buildSpawnDescriptor(opts: {
   readonly platform: NodeJS.Platform;
   readonly scriptPath: string;
-}): { readonly command: string; readonly args: readonly string[] } {
+}): {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly options: SpawnOptions;
+} {
   if (opts.platform === "win32") {
+    // Never `detached`: see "Launching on Windows" at the top of this file.
     return {
       command: "powershell.exe",
       args: [
         "-NoProfile",
+        "-NonInteractive",
         "-ExecutionPolicy",
         "Bypass",
-        "-WindowStyle",
-        "Hidden",
-        "-File",
-        opts.scriptPath,
+        "-EncodedCommand",
+        encodePowerShellCommand(renderWindowsLauncherScript(opts.scriptPath)),
       ],
+      options: {
+        detached: false,
+        stdio: "ignore",
+        windowsHide: true,
+        // Inherit env so PATH-based PowerShell resolution works.
+        env: process.env,
+      },
     };
   }
-  return { command: "/bin/sh", args: [opts.scriptPath] };
+  return {
+    command: "/bin/sh",
+    args: [opts.scriptPath],
+    options: {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: process.env,
+    },
+  };
 }
+
+// The Windows launcher's whole script. `Join-Path $PSHOME` starts the
+// helper under the same Windows PowerShell as the launcher.
+// `-ArgumentList` is ONE string because Windows PowerShell 5.1 joins an
+// array with spaces and quotes no element; a Windows path cannot contain
+// `"`. `-PassThru` makes a Start-Process that produced no process a
+// launcher failure rather than another silent exit 0.
+function renderWindowsLauncherScript(scriptPath: string): string {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    `$helper = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ${psString(scriptPath)} + '"') -WindowStyle Hidden -PassThru`,
+    "if ($null -eq $helper) { exit 1 }",
+    "exit 0",
+  ].join("\n");
+}
+
+// `powershell.exe -EncodedCommand` takes base64 of the script's UTF-16LE
+// bytes.
+function encodePowerShellCommand(script: string): string {
+  return Buffer.from(script, "utf16le").toString("base64");
+}
+
+const UTF8_BOM = "\uFEFF";
 
 // PowerShell helper. Polls `Get-Process -Id <pid>` until the parent CLI
 // exits, then hands off the binary swap + service start to the staged
 // CLI's own hidden `cli finalize-upgrade` command - see the module doc
 // comment above for why (own PID + start-time identity for the cli-lock
 // acquisition).
+//
+// Starts with a UTF-8 BOM, then the line that arms it: see the module doc
+// comment.
 function renderWindowsHelperScript(opts: {
   readonly parentPid: number;
   readonly stagedBinaryPath: string;
   readonly livePath: string;
   readonly markerPath: string;
+  readonly armedPath: string;
+  readonly abandonedPath: string;
   readonly timeoutSeconds: number;
 }): string {
-  return `# traycer-cli pending-upgrade finalize helper (Windows)
+  return `${UTF8_BOM}[System.IO.File]::WriteAllText(${psString(opts.armedPath)}, [string]$PID)
+# traycer-cli pending-upgrade finalize helper (Windows). The line above
+# runs first: the CLI that launched this script reports it armed, and
+# leaves the service start to it, only once that file exists.
 $ErrorActionPreference = "Continue"
 $ParentPid = ${opts.parentPid}
 $StagedBinary = ${psString(opts.stagedBinaryPath)}
 $LiveBinary = ${psString(opts.livePath)}
 $MarkerPath = ${psString(opts.markerPath)}
+$AbandonedPath = ${psString(opts.abandonedPath)}
 $TimeoutSec = ${opts.timeoutSeconds}
 
 function Write-Marker([hashtable]$Payload) {
@@ -290,6 +562,10 @@ while ((Get-Date) -lt $deadline) {
   if (-not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { break }
   Start-Sleep -Milliseconds 200
 }
+# 2. The CLI stopped waiting for this script to arm and relaunched the
+# host itself; finalizing now would race that. pendingUpgrade stays, so
+# the next 'host restart' retries.
+if (Test-Path -LiteralPath $AbandonedPath) { exit 0 }
 if (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
   Write-Marker @{
     status = "parent-still-alive";
@@ -298,7 +574,7 @@ if (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
   exit 0
 }
 
-# 2. Hand off the binary swap + service start to the staged CLI's own
+# 3. Hand off the binary swap + service start to the staged CLI's own
 # hidden 'cli finalize-upgrade' command. It acquires the cli-lock under
 # its own process identity (this invocation's PID + start time), swaps
 # the binary, starts the service, and writes its own post-finalize
@@ -326,15 +602,20 @@ function renderPosixHelperScript(opts: {
   readonly stagedBinaryPath: string;
   readonly livePath: string;
   readonly markerPath: string;
+  readonly armedPath: string;
+  readonly abandonedPath: string;
   readonly timeoutSeconds: number;
 }): string {
   return `#!/usr/bin/env sh
-# traycer-cli pending-upgrade finalize helper (POSIX)
+printf '%s' "$$" > ${shString(opts.armedPath)}
+# traycer-cli pending-upgrade finalize helper (POSIX). The line above runs
+# first, for the same reason as in the Windows script.
 set -u
 PARENT_PID=${shString(String(opts.parentPid))}
 STAGED=${shString(opts.stagedBinaryPath)}
 LIVE=${shString(opts.livePath)}
 MARKER=${shString(opts.markerPath)}
+ABANDONED=${shString(opts.abandonedPath)}
 TIMEOUT=${shString(String(opts.timeoutSeconds))}
 
 # JSON construction for the parent-still-alive marker: prefer python3
@@ -382,6 +663,8 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   if ! kill -0 "$PARENT_PID" 2>/dev/null; then break; fi
   sleep 1
 done
+# The CLI stopped waiting for this script to arm; see the Windows script.
+if [ -e "$ABANDONED" ]; then exit 0; fi
 if kill -0 "$PARENT_PID" 2>/dev/null; then
   write_marker "parent-still-alive" "parent CLI process $PARENT_PID did not exit within $TIMEOUT seconds"
   exit 0

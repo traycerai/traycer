@@ -326,10 +326,10 @@ async function runFinalizeUpgradeSwapWithStart(
   });
 
   // The service was stopped by the `host restart` that scheduled this
-  // helper, and on Windows that restart deliberately skips its own
-  // relaunch (`helperOwnsServiceStart`) - so THIS process owns bringing
-  // the host back, on every path, not just the one where the swap
-  // succeeded. Any outcome that returns without starting it leaves the
+  // helper, and on Windows that restart, once the helper armed,
+  // deliberately skips its own relaunch (`helperOwnsServiceStart`) - so
+  // THIS process owns bringing the host back, on every path, not just
+  // the one where the swap succeeded. Any outcome that returns without starting it leaves the
   // machine with no running host because a CLI self-upgrade did not
   // complete, which is a strictly worse failure than the un-upgraded CLI
   // it was trying to avoid.

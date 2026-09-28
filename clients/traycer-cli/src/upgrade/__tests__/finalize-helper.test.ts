@@ -9,12 +9,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { powershellSingleQuoted } from "@traycer-clients/shared/platform/powershell-quote";
 
 // Coverage for the detached pending-CLI-upgrade finalize helper:
 //
 //  - scheduleFinalizationHelper writes a platform-appropriate script,
-//    invokes the spawn stub with detached/ignored stdio flags, and
-//    returns a structured result identifying the helper pid.
+//    launches it (Windows: an awaited, non-detached launcher), waits for
+//    the script's first line to write its armed sentinel, and returns a
+//    structured result that is `armed` only once that file exists.
 //  - The rendered script body contains the parent pid + live/staged
 //    binary paths and, once the parent exits, hands off to the staged
 //    binary's own hidden `cli finalize-upgrade` command (tested
@@ -28,10 +30,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `store/paths` binds its home root from `os.homedir()` at module load.
 // Keep the environment mutation below, but redirect `homedir()` too.
+// `tmpdir()` is redirected the same way: the helper's script, sentinel and
+// abandoned files land under it.
 const osHome = vi.hoisted(() => ({ current: "" }));
+const osTmp = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
-  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+  return {
+    ...actual,
+    homedir: () => osHome.current || actual.tmpdir(),
+    tmpdir: () => osTmp.current || actual.tmpdir(),
+  };
 });
 
 const ORIGINAL_HOME = process.env.HOME;
@@ -40,14 +49,18 @@ const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 let workHome: string;
 
 beforeEach(() => {
+  osTmp.current = "";
   workHome = mkdtempSync(join(tmpdir(), "traycer-finalize-helper-test-"));
   osHome.current = workHome;
+  osTmp.current = join(workHome, "tmp");
+  mkdirSync(osTmp.current, { recursive: true });
   process.env.HOME = workHome;
   process.env.USERPROFILE = workHome;
   vi.resetModules();
 });
 
 afterEach(() => {
+  osTmp.current = "";
   if (ORIGINAL_HOME === undefined) {
     delete process.env.HOME;
   } else {
@@ -94,49 +107,175 @@ function writeManifest(opts: {
   return manifestPath;
 }
 
+// A clock the arm wait runs on without waiting: `sleep` advances `now`.
+function fakeArmWait(waitMs: number): {
+  readonly deps: {
+    readonly now: () => number;
+    readonly sleep: (ms: number) => Promise<void>;
+    readonly waitMs: number;
+    readonly pollIntervalMs: number;
+  };
+  readonly elapsedMs: () => number;
+} {
+  let t = 0;
+  return {
+    deps: {
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+      },
+      waitMs,
+      pollIntervalMs: 100,
+    },
+    elapsedMs: () => t,
+  };
+}
+
+interface LauncherExit {
+  readonly exitCode: number | null;
+  readonly errorMessage: string | null;
+}
+
+const LAUNCHER_OK: LauncherExit = { exitCode: 0, errorMessage: null };
+
+// Records every spawn and write. When `sentinel` is not null the spawn
+// plays the helper script's first line: it writes that text into the
+// `.armed` file beside the script the CLI just wrote.
+function makeHarness(opts: {
+  readonly sentinel: string | null;
+  readonly exited: Promise<LauncherExit>;
+}) {
+  const spawnCalls: Array<{
+    command: string;
+    args: readonly string[];
+    options: {
+      readonly detached?: boolean;
+      readonly stdio?: unknown;
+      readonly windowsHide?: boolean;
+    };
+  }> = [];
+  const writeCalls: Array<{ path: string; body: string }> = [];
+  const killed = { count: 0 };
+  const unrefed = { count: 0 };
+  return {
+    spawnCalls,
+    writeCalls,
+    killed,
+    unrefed,
+    spawnImpl: (
+      command: string,
+      args: readonly string[],
+      options: {
+        readonly detached?: boolean;
+        readonly stdio?: unknown;
+        readonly windowsHide?: boolean;
+      },
+    ) => {
+      spawnCalls.push({ command, args, options });
+      const scriptPath = writeCalls[0]?.path ?? "";
+      if (opts.sentinel !== null) {
+        writeFileSync(
+          scriptPath.replace(/\.(ps1|sh)$/, ".armed"),
+          opts.sentinel,
+        );
+      }
+      return {
+        pid: 55000,
+        unref: () => {
+          unrefed.count += 1;
+        },
+        kill: () => {
+          killed.count += 1;
+        },
+        exited: opts.exited,
+      };
+    },
+    writeImpl: async (path: string, body: string) => {
+      writeCalls.push({ path, body });
+    },
+  };
+}
+
+function decodeLauncher(args: readonly string[]): string {
+  const idx = args.indexOf("-EncodedCommand");
+  expect(idx).toBeGreaterThan(-1);
+  return Buffer.from(args[idx + 1] ?? "", "base64").toString("utf16le");
+}
+
+const BASE_OPTIONS = {
+  environment: "production",
+  stagedBinaryPath: "C:/Users/dev/AppData/.traycer/cli/traycer-1.5.0.exe",
+  livePath: "C:/Users/dev/AppData/.traycer/cli/traycer.exe",
+  parentPid: 4242,
+  parentExitTimeoutSeconds: 60,
+} as const;
+
 describe("scheduleFinalizationHelper", () => {
-  it("renders a PowerShell script with parent pid + paths and spawns powershell.exe detached on Windows", async () => {
-    const spawnCalls: Array<{
-      command: string;
-      args: readonly string[];
-      options: { readonly detached?: boolean; readonly stdio?: unknown };
-    }> = [];
-    const writeCalls: Array<{ path: string; body: string }> = [];
+  it("renders a PowerShell script with parent pid + paths, launches it through an awaited non-detached powershell.exe on Windows, and reports it armed", async () => {
+    let resolveExited: (exit: LauncherExit) => void = () => undefined;
+    const exited = new Promise<LauncherExit>((resolve) => {
+      resolveExited = resolve;
+    });
+    const harness = makeHarness({ sentinel: "4321", exited });
     const { scheduleFinalizationHelper } = await import("../finalize-helper");
-    const result = await scheduleFinalizationHelper({
-      environment: "production",
-      stagedBinaryPath: "C:/Users/dev/AppData/.traycer/cli/traycer-1.5.0.exe",
-      livePath: "C:/Users/dev/AppData/.traycer/cli/traycer.exe",
-      parentPid: 4242,
-      parentExitTimeoutSeconds: 60,
+    // The clock never runs out, so only the launcher's exit can settle it.
+    const armWait = {
+      now: () => 0,
+      sleep: () => new Promise<void>((resolve) => setTimeout(resolve, 0)),
+      waitMs: 10_000,
+      pollIntervalMs: 100,
+    };
+    let settled = false;
+    const pending = scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
       platform: "win32",
-      spawnImpl: (command, args, options) => {
-        spawnCalls.push({
-          command,
-          args,
-          options: options as { detached?: boolean; stdio?: unknown },
-        });
-        return { pid: 99001, unref: () => undefined };
-      },
-      writeImpl: async (path, body) => {
-        writeCalls.push({ path, body });
-      },
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait,
+    }).then((r) => {
+      settled = true;
+      return r;
     });
 
-    expect(result.status).toBe("scheduled");
-    expect(result.helperPid).toBe(99001);
+    // Ticks pass with the launcher still running: the CLI keeps waiting.
+    for (let i = 0; i < 20; i += 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+    expect(settled).toBe(false);
+
+    resolveExited(LAUNCHER_OK);
+    const result = await pending;
+
+    expect(result.status).toBe("armed");
+    expect(result.helperPid).toBe(4321);
     expect(result.platform).toBe("win32");
+    expect(result.armedPath).toBe(
+      harness.writeCalls[0]?.path.replace(/\.ps1$/, ".armed"),
+    );
 
-    expect(spawnCalls).toHaveLength(1);
-    expect(spawnCalls[0]?.command).toBe("powershell.exe");
-    expect(spawnCalls[0]?.args).toContain("-NoProfile");
-    expect(spawnCalls[0]?.args).toContain("-ExecutionPolicy");
-    expect(spawnCalls[0]?.args).toContain("-File");
-    expect(spawnCalls[0]?.options.detached).toBe(true);
-    expect(spawnCalls[0]?.options.stdio).toBe("ignore");
+    expect(harness.spawnCalls).toHaveLength(1);
+    const spawnCall = harness.spawnCalls[0];
+    expect(spawnCall?.command).toBe("powershell.exe");
+    expect(spawnCall?.args).toContain("-NoProfile");
+    expect(spawnCall?.args).toContain("-NonInteractive");
+    expect(spawnCall?.args).toContain("-ExecutionPolicy");
+    expect(spawnCall?.args).toContain("-EncodedCommand");
+    expect(spawnCall?.args).not.toContain("-File");
+    expect(spawnCall?.options.detached).toBe(false);
+    expect(spawnCall?.options.stdio).toBe("ignore");
+    expect(spawnCall?.options.windowsHide).toBe(true);
 
-    expect(writeCalls).toHaveLength(1);
-    const body = writeCalls[0]?.body ?? "";
+    // The launcher hands the script to a second, hidden PowerShell.
+    const launcher = decodeLauncher(spawnCall?.args ?? []);
+    expect(launcher).toContain("Start-Process");
+    expect(launcher).toContain("-WindowStyle Hidden");
+    expect(launcher).toContain("-PassThru");
+    expect(launcher).toContain(
+      powershellSingleQuoted(harness.writeCalls[0]?.path ?? ""),
+    );
+
+    expect(harness.writeCalls).toHaveLength(1);
+    const body = harness.writeCalls[0]?.body ?? "";
     expect(body).toMatch(/\$ParentPid\s*=\s*4242/);
     expect(body).toContain("C:/Users/dev/AppData/.traycer/cli/traycer.exe");
     expect(body).toContain(
@@ -154,28 +293,202 @@ describe("scheduleFinalizationHelper", () => {
     expect(body).not.toContain("Start-Service");
   });
 
+  it("reports failed within the wait bound, and abandons the helper, when the script never writes its armed sentinel", async () => {
+    const harness = makeHarness({
+      sentinel: null,
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: clock.deps,
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.helperPid).toBeNull();
+    expect(clock.elapsedMs()).toBeGreaterThanOrEqual(10_000);
+    expect(clock.elapsedMs()).toBeLessThanOrEqual(10_500);
+    // The script, then the abandoned file the late helper checks.
+    const scriptPath = harness.writeCalls[0]?.path ?? "";
+    expect(harness.writeCalls.map((c) => c.path)).toEqual([
+      scriptPath,
+      scriptPath.replace(/\.ps1$/, ".abandoned"),
+    ]);
+  });
+
+  it("reports armed with the pid the script wrote into its sentinel", async () => {
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    expect(result.status).toBe("armed");
+    expect(result.helperPid).toBe(4321);
+    // Armed: nothing is abandoned.
+    expect(harness.writeCalls).toHaveLength(1);
+  });
+
+  it("reports failed without waiting for the deadline when the launcher exits non-zero", async () => {
+    const harness = makeHarness({
+      sentinel: null,
+      exited: Promise.resolve({ exitCode: 1, errorMessage: null }),
+    });
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: clock.deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(clock.elapsedMs()).toBeLessThan(10_000);
+  });
+
+  it("kills the launcher and reports failed when it has not exited by the deadline", async () => {
+    const harness = makeHarness({
+      sentinel: null,
+      exited: new Promise<LauncherExit>(() => undefined),
+    });
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: clock.deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(harness.killed.count).toBe(1);
+    expect(clock.elapsedMs()).toBeLessThanOrEqual(10_500);
+  });
+
+  it("keeps the arm wait bounded when the wall clock is set back", async () => {
+    let wallTime = 1_000_000;
+    let elapsedMs = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => wallTime);
+    vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    const harness = makeHarness({
+      sentinel: null,
+      exited: new Promise<LauncherExit>(() => undefined),
+    });
+    const { scheduleFinalizationHelper, defaultHelperArmWaitDeps } =
+      await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      // The production clock, with only the sleeping replaced. The wall
+      // clock is stepped back a minute during the first sleep.
+      armWait: {
+        ...defaultHelperArmWaitDeps,
+        sleep: async (ms) => {
+          if (elapsedMs === 0) wallTime -= 60_000;
+          elapsedMs += ms;
+          wallTime += ms;
+        },
+      },
+    });
+    expect(result.status).toBe("failed");
+    expect(harness.killed.count).toBe(1);
+    expect(elapsedMs).toBeLessThanOrEqual(10_500);
+  });
+
+  it("writes the Windows helper script to disk with a UTF-8 BOM, then the line that arms it", async () => {
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper, defaultWriteImpl } =
+      await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: async (path, body) => {
+        await harness.writeImpl(path, body);
+        await defaultWriteImpl(path, body);
+      },
+      armWait: fakeArmWait(10_000).deps,
+    });
+    expect(result.scriptPath).not.toBeNull();
+    const bytes = readFileSync(result.scriptPath ?? "");
+    expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    const firstLine = bytes.subarray(3).toString("utf8").split("\n")[0];
+    expect(firstLine).toBe(
+      `[System.IO.File]::WriteAllText(${powershellSingleQuoted(
+        result.armedPath ?? "",
+      )}, [string]$PID)`,
+    );
+  });
+
+  it("carries a script path with an apostrophe and non-ASCII characters through the encoded launcher unchanged", async () => {
+    const oddDir = join(workHome, "O'Brien-Zoë-日本");
+    mkdirSync(oddDir, { recursive: true });
+    osTmp.current = oddDir;
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+
+    const scriptPath = harness.writeCalls[0]?.path ?? "";
+    expect(scriptPath.startsWith(oddDir)).toBe(true);
+    const args = harness.spawnCalls[0]?.args ?? [];
+    const launcher = decodeLauncher(args);
+    // The single-quoted literal between the concatenated pieces.
+    const literal = /-File "' \+ '((?:[^']|'')*)' \+ '"'\)/.exec(launcher);
+    expect(literal).not.toBeNull();
+    const undoubled = (literal?.[1] ?? "").replace(/(['‘-‛])\1/g, "$1");
+    expect(undoubled).toBe(scriptPath);
+    // The base64 is the launcher's UTF-16LE bytes, with nothing lost.
+    const encoded = args[args.indexOf("-EncodedCommand") + 1] ?? "";
+    expect(Buffer.from(launcher, "utf16le").toString("base64")).toBe(encoded);
+  });
+
   const SMART_QUOTES = ["\u2018", "\u2019", "\u201A", "\u201B"];
 
   it.each(SMART_QUOTES)(
     "doubles PowerShell single-quote %s in the Windows helper path literals",
     async (quoteChar: string) => {
-      const writeCalls: Array<{ path: string; body: string }> = [];
+      const harness = makeHarness({
+        sentinel: "4321",
+        exited: Promise.resolve(LAUNCHER_OK),
+      });
       const { scheduleFinalizationHelper } = await import("../finalize-helper");
       const staged = `C:\\Users\\O${quoteChar}Brien\\cli\\traycer-1.5.0.exe`;
       const live = `C:\\Users\\O${quoteChar}Brien\\cli\\traycer.exe`;
       await scheduleFinalizationHelper({
-        environment: "production",
+        ...BASE_OPTIONS,
         stagedBinaryPath: staged,
         livePath: live,
-        parentPid: 4242,
-        parentExitTimeoutSeconds: 60,
         platform: "win32",
-        spawnImpl: () => ({ pid: 99001, unref: () => undefined }),
-        writeImpl: async (path, body) => {
-          writeCalls.push({ path, body });
-        },
+        spawnImpl: harness.spawnImpl,
+        writeImpl: harness.writeImpl,
+        armWait: fakeArmWait(10_000).deps,
       });
-      const body = writeCalls[0]?.body ?? "";
+      const body = harness.writeCalls[0]?.body ?? "";
       expect(body).toContain(
         `$StagedBinary = 'C:\\Users\\O${quoteChar}${quoteChar}Brien\\cli\\traycer-1.5.0.exe'`,
       );
@@ -185,12 +498,11 @@ describe("scheduleFinalizationHelper", () => {
     },
   );
 
-  it("renders a POSIX shell script with parent pid + paths and spawns /bin/sh detached on linux", async () => {
-    const spawnCalls: Array<{
-      command: string;
-      args: readonly string[];
-    }> = [];
-    const writeCalls: Array<{ path: string; body: string }> = [];
+  it("renders a POSIX shell script with parent pid + paths, spawns /bin/sh detached on linux, and reports it armed", async () => {
+    const harness = makeHarness({
+      sentinel: "88001",
+      exited: new Promise<LauncherExit>(() => undefined),
+    });
     const { scheduleFinalizationHelper } = await import("../finalize-helper");
     const result = await scheduleFinalizationHelper({
       environment: "production",
@@ -199,18 +511,16 @@ describe("scheduleFinalizationHelper", () => {
       parentPid: 4242,
       parentExitTimeoutSeconds: 60,
       platform: "linux",
-      spawnImpl: (command, args) => {
-        spawnCalls.push({ command, args });
-        return { pid: 88001, unref: () => undefined };
-      },
-      writeImpl: async (path, body) => {
-        writeCalls.push({ path, body });
-      },
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
     });
-    expect(result.status).toBe("scheduled");
+    expect(result.status).toBe("armed");
     expect(result.helperPid).toBe(88001);
-    expect(spawnCalls[0]?.command).toBe("/bin/sh");
-    const body = writeCalls[0]?.body ?? "";
+    expect(harness.spawnCalls[0]?.command).toBe("/bin/sh");
+    expect(harness.spawnCalls[0]?.options.detached).toBe(true);
+    expect(harness.unrefed.count).toBe(1);
+    const body = harness.writeCalls[0]?.body ?? "";
     expect(body).toContain("#!/usr/bin/env sh");
     expect(body).toContain("4242");
     expect(body).toContain("/usr/local/share/traycer/cli/traycer");
@@ -222,23 +532,43 @@ describe("scheduleFinalizationHelper", () => {
     expect(body).not.toContain("systemctl");
   });
 
+  it("reports failed when the POSIX script never writes its armed sentinel", async () => {
+    const harness = makeHarness({
+      sentinel: null,
+      exited: new Promise<LauncherExit>(() => undefined),
+    });
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "linux",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: clock.deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(clock.elapsedMs()).toBeLessThanOrEqual(10_500);
+  });
+
   it("returns status='failed' when the write stub throws and never invokes spawn", async () => {
     const spawnCalls: Array<{ command: string }> = [];
     const { scheduleFinalizationHelper } = await import("../finalize-helper");
     const result = await scheduleFinalizationHelper({
-      environment: "production",
-      stagedBinaryPath: "/tmp/staged",
-      livePath: "/tmp/live",
-      parentPid: 4242,
-      parentExitTimeoutSeconds: 60,
+      ...BASE_OPTIONS,
       platform: "win32",
       spawnImpl: (command) => {
         spawnCalls.push({ command });
-        return { pid: 1, unref: () => undefined };
+        return {
+          pid: 1,
+          unref: () => undefined,
+          kill: () => undefined,
+          exited: Promise.resolve(LAUNCHER_OK),
+        };
       },
       writeImpl: async () => {
         throw new Error("ENOSPC: no space left on device");
       },
+      armWait: fakeArmWait(10_000).deps,
     });
     expect(result.status).toBe("failed");
     expect(result.errorMessage).toMatch(/ENOSPC/);
@@ -248,16 +578,13 @@ describe("scheduleFinalizationHelper", () => {
   it("returns status='failed' when spawn throws", async () => {
     const { scheduleFinalizationHelper } = await import("../finalize-helper");
     const result = await scheduleFinalizationHelper({
-      environment: "production",
-      stagedBinaryPath: "/tmp/staged",
-      livePath: "/tmp/live",
-      parentPid: 4242,
-      parentExitTimeoutSeconds: 60,
+      ...BASE_OPTIONS,
       platform: "win32",
       spawnImpl: () => {
         throw new Error("EPERM: permission denied to spawn child");
       },
       writeImpl: async () => undefined,
+      armWait: fakeArmWait(10_000).deps,
     });
     expect(result.status).toBe("failed");
     expect(result.errorMessage).toMatch(/EPERM/);
@@ -281,16 +608,19 @@ describe("scheduleFinalizationHelper", () => {
     );
     expect(existsSync(markerPath)).toBe(true);
 
+    const harness = makeHarness({
+      sentinel: "1",
+      exited: new Promise<LauncherExit>(() => undefined),
+    });
     const { scheduleFinalizationHelper } = await import("../finalize-helper");
     await scheduleFinalizationHelper({
-      environment: "production",
+      ...BASE_OPTIONS,
       stagedBinaryPath: "/tmp/staged",
       livePath: "/tmp/live",
-      parentPid: 4242,
-      parentExitTimeoutSeconds: 60,
       platform: "linux",
-      spawnImpl: () => ({ pid: 1, unref: () => undefined }),
-      writeImpl: async () => undefined,
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
     });
     // The stale marker must have been cleared so the helper's own
     // marker write isn't conflated with the previous attempt.

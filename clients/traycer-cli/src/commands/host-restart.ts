@@ -30,10 +30,12 @@ import {
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { cliPostFinalizeMarkerPath } from "../store/paths";
 import {
+  defaultHelperArmWaitDeps,
   defaultSpawnImpl,
   defaultWriteImpl,
   reconcilePostFinalizeMarker,
   scheduleFinalizationHelper,
+  type HelperArmWaitDeps,
   type ReconcileOutcome,
   type ScheduleHelperResult,
   type SpawnImpl,
@@ -57,9 +59,11 @@ import {
 // On Windows the *current CLI process* (the one running this command)
 // is itself executing from the live `.exe`, so even after the
 // supervisor releases its lock, renameSync still fails with EBUSY.
-// For that case we hand off to a detached helper that waits for the
-// CLI process to exit and then completes the swap + service start
-// asynchronously. See upgrade/finalize-helper.ts.
+// For that case we hand off to a helper that waits for the CLI process
+// to exit and then completes the swap + service start asynchronously -
+// but only once the helper has confirmed it is running (`armed`). A
+// helper that cannot be confirmed leaves the start to this command. See
+// upgrade/finalize-helper.ts.
 //
 // A failed in-process finalize is non-fatal: the service is still
 // started, the pending state remains visible in Doctor, and the next
@@ -241,6 +245,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             platform: osPlatform(),
             spawnImpl: defaultSpawnImpl,
             writeImpl: defaultWriteImpl,
+            armWait: defaultHelperArmWaitDeps,
             force: args.force,
           },
           capability,
@@ -308,19 +313,21 @@ interface RestartFinalizeArgs {
   readonly platform: NodeJS.Platform;
   readonly spawnImpl: SpawnImpl;
   readonly writeImpl: WriteImpl;
+  readonly armWait: HelperArmWaitDeps;
   readonly force: boolean;
 }
 
 export interface RestartFinalizeResult {
   readonly finalize: FinalizePendingCliUpgradeOutcome;
-  // Set when this restart scheduled a detached helper to complete the
-  // swap after the current CLI process exits.
+  // Set when this restart tried to hand the swap to a helper that runs
+  // after the current CLI process exits, whether or not it armed.
   readonly helper: ScheduleHelperResult | null;
   // Set when a prior helper attempt left a marker the host-restart
   // command consumed at the top of this run.
   readonly markerReconcile: ReconcileOutcome | null;
-  // True when the helper takes ownership of starting the service. When
-  // true we deliberately skip the controller.start() call.
+  // True only when the helper ARMED - its script is running - and so
+  // owns starting the service. When true we deliberately skip the
+  // relaunch.
   readonly helperOwnsServiceStart: boolean;
 }
 
@@ -394,9 +401,11 @@ async function restartWithActuators(
 
   // 3. Windows-specific: if the live binary is still locked after stop
   //    (because the *current CLI process* holds its own .exe), hand
-  //    the swap off to a detached helper. The helper will start the
-  //    service once the swap completes, so we deliberately do NOT
-  //    call controller.start() here.
+  //    the swap off to a helper. Once it has ARMED it starts the
+  //    service after the swap, so we deliberately do NOT relaunch here.
+  //    Any other outcome - it never ran, or not within the wait - falls
+  //    through to the relaunch below: a helper that never runs must not
+  //    leave the host stopped.
   let helper: ScheduleHelperResult | null = null;
   let helperOwnsServiceStart = false;
   if (finalize.status === "still-locked" && args.platform === "win32") {
@@ -409,8 +418,9 @@ async function restartWithActuators(
       platform: args.platform,
       spawnImpl: args.spawnImpl,
       writeImpl: args.writeImpl,
+      armWait: args.armWait,
     });
-    helperOwnsServiceStart = helper.status === "scheduled";
+    helperOwnsServiceStart = helper.status === "armed";
   }
 
   if (!helperOwnsServiceStart) {
@@ -470,13 +480,13 @@ function humanForRestart(
 ): string {
   const base = `requested restart for service '${labelId}'`;
   const reconcilePrefix = describeMarkerReconcile(result.markerReconcile);
-  if (result.helper !== null && result.helper.status === "scheduled") {
-    return `${reconcilePrefix}${base}; cli upgrade live binary held by current CLI process - scheduled detached helper (pid=${
+  if (result.helper !== null && result.helper.status === "armed") {
+    return `${reconcilePrefix}${base}; cli upgrade live binary held by current CLI process - armed finalize helper (pid=${
       result.helper.helperPid ?? "?"
-    }) to complete the swap after this process exits`;
+    }) completes the swap and starts the service after this process exits`;
   }
   if (result.helper !== null && result.helper.status === "failed") {
-    return `${reconcilePrefix}${base}; cli upgrade helper failed to launch (${result.helper.errorMessage}) - pending state retained`;
+    return `${reconcilePrefix}${base}; cli upgrade helper did not arm (${result.helper.errorMessage}) - service relaunched, pending state retained`;
   }
   const outcome = result.finalize;
   switch (outcome.status) {
