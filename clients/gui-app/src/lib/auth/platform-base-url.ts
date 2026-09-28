@@ -41,7 +41,7 @@ export function platformOriginFromSignInUrl(signInUrl: string): string | null {
 }
 
 /** Where a user with no configured platform origin is sent. */
-const PRODUCTION_PLATFORM_URL = "https://platform.traycer.ai";
+const PRODUCTION_PLATFORM_URL = "https://traycer.ai";
 
 /**
  * The platform origin for NAVIGATION — the Billing page jump and anything else

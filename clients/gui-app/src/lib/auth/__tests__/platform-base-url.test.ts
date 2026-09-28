@@ -24,20 +24,20 @@ describe("platformOriginFromSignInUrl", () => {
     expect(
       platformOriginFromSignInUrl("http://192.168.1.42:21003/sign-in"),
     ).toBe("http://192.168.1.42:21003");
-    expect(
-      platformOriginFromSignInUrl("https://platform.dev.traycer.ai/sign-in"),
-    ).toBe("https://platform.dev.traycer.ai");
-    expect(
-      platformOriginFromSignInUrl("https://platform.traycer.ai/sign-in"),
-    ).toBe("https://platform.traycer.ai");
+    expect(platformOriginFromSignInUrl("https://dev.traycer.ai/sign-in")).toBe(
+      "https://dev.traycer.ai",
+    );
+    expect(platformOriginFromSignInUrl("https://traycer.ai/sign-in")).toBe(
+      "https://traycer.ai",
+    );
   });
 
   it("keeps the sign-in route's own path and query out of the origin", () => {
     expect(
       platformOriginFromSignInUrl(
-        "https://platform.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth%2Fcallback",
+        "https://traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth%2Fcallback",
       ),
-    ).toBe("https://platform.traycer.ai");
+    ).toBe("https://traycer.ai");
   });
 
   it("answers null for a scheme with an OPAQUE origin", () => {
@@ -68,9 +68,7 @@ describe("resolvePlatformBaseUrl", () => {
   it("falls back to production only where nothing is carried", () => {
     // Navigation only. A person sent to the wrong dashboard sees where they
     // are and leaves; that is not the same class of mistake as sending data.
-    expect(resolvePlatformBaseUrl("not a url")).toBe(
-      "https://platform.traycer.ai",
-    );
+    expect(resolvePlatformBaseUrl("not a url")).toBe("https://traycer.ai");
   });
 });
 

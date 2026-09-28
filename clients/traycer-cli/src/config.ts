@@ -32,7 +32,7 @@ const bakedConfig = {
   // host's stamp differs.
   version: "0.0.0-dev",
   authnBaseUrl: "https://authn.traycer.ai",
-  cloudUiBaseUrl: "https://platform.traycer.ai",
+  cloudUiBaseUrl: "https://traycer.ai",
   // GitHub owner/repo hosting released-host-versions, cli-manifest, host-v*,
   // cli-v*, and desktop-v* releases. Release workflows stamp this from
   // RELEASE_REPO so forked/relocated builds fetch from the same repo they

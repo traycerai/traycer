@@ -43,7 +43,7 @@ vi.mock("@/providers/use-runner-host", () => ({
     // The platform origin is derived from `signInUrl`; without one this
     // fixture would silently exercise the production fallback instead of the
     // deployment it names.
-    signInUrl: "https://platform.traycer.ai/sign-in",
+    signInUrl: "https://traycer.ai/sign-in",
   }),
 }));
 
@@ -180,7 +180,7 @@ describe("TraycerSubscriptionSection", () => {
     // The platform origin's root is the marketing homepage, so the link names
     // the personal Billing page for the personal context.
     expect(mocks.openLink).toHaveBeenCalledWith(
-      "https://platform.traycer.ai/billing",
+      "https://traycer.ai/billing",
       "account",
       expect.objectContaining({ type: "click" }),
     );
@@ -197,7 +197,7 @@ describe("TraycerSubscriptionSection", () => {
     );
 
     expect(mocks.openLink).toHaveBeenCalledWith(
-      "https://platform.traycer.ai/team/acme/billing",
+      "https://traycer.ai/team/acme/billing",
       "account",
       expect.objectContaining({ type: "click" }),
     );
@@ -216,7 +216,7 @@ describe("TraycerSubscriptionSection", () => {
     );
 
     expect(mocks.openLink).toHaveBeenCalledWith(
-      "https://platform.traycer.ai/billing",
+      "https://traycer.ai/billing",
       "account",
       expect.objectContaining({ type: "click" }),
     );
