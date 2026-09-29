@@ -1,5 +1,11 @@
 import { createRef, type KeyboardEventHandler } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { modLabel } from "@/lib/keybindings/platform";
@@ -31,7 +37,9 @@ vi.mock("@/components/chat/composer/composer-prompt-editor", () => ({
   ),
 }));
 
-const NOOP_ACCEPT = (): void => undefined;
+type AcceptSuggestion = (suggestion: string) => boolean;
+
+const NOOP_ACCEPT: AcceptSuggestion = () => false;
 
 describe("ChatComposerEditorSlot", () => {
   afterEach(() => {
@@ -81,7 +89,7 @@ describe("ChatComposerEditorSlot", () => {
 
   describe("ArrowRight acceptance", () => {
     it("accepts a bare ArrowRight when a suggestion is offered", () => {
-      const onAcceptSuggestion = vi.fn();
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
 
       renderEditorSlot({
         suggestedPrompt: "Add a test for the new endpoint",
@@ -99,13 +107,56 @@ describe("ChatComposerEditorSlot", () => {
       );
     });
 
+    it("takes the key when the suggestion was accepted, so the caret does not move", () => {
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
+
+      renderEditorSlot({
+        suggestedPrompt: "Add a test for the new endpoint",
+        onAcceptSuggestion,
+        steerHintActive: false,
+      });
+
+      const target = screen.getByTestId("composer-placeholder");
+      const event = createEvent.keyDown(target, { key: "ArrowRight" });
+      fireEvent(target, event);
+
+      expect(onAcceptSuggestion).toHaveBeenCalledTimes(1);
+      expect(onAcceptSuggestion).toHaveBeenCalledWith(
+        "Add a test for the new endpoint",
+      );
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    // The live draft can stop being empty before the suggestion prop
+    // re-renders. The fill then declines and returns false, and the key must
+    // keep its ordinary job: moving the caret.
+    it("leaves the key alone when the fill is declined, so the caret still moves", () => {
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => false);
+
+      renderEditorSlot({
+        suggestedPrompt: "Add a test for the new endpoint",
+        onAcceptSuggestion,
+        steerHintActive: false,
+      });
+
+      const target = screen.getByTestId("composer-placeholder");
+      const event = createEvent.keyDown(target, { key: "ArrowRight" });
+      fireEvent(target, event);
+
+      expect(onAcceptSuggestion).toHaveBeenCalledTimes(1);
+      expect(onAcceptSuggestion).toHaveBeenCalledWith(
+        "Add a test for the new endpoint",
+      );
+      expect(event.defaultPrevented).toBe(false);
+    });
+
     it.each([
       ["shiftKey", { shiftKey: true }],
       ["altKey", { altKey: true }],
       ["metaKey", { metaKey: true }],
       ["ctrlKey", { ctrlKey: true }],
     ])("does not accept a modified ArrowRight (%s)", (_name, modifier) => {
-      const onAcceptSuggestion = vi.fn();
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
 
       renderEditorSlot({
         suggestedPrompt: "Add a test for the new endpoint",
@@ -122,7 +173,7 @@ describe("ChatComposerEditorSlot", () => {
     });
 
     it("does not accept ArrowRight when there is no suggestion", () => {
-      const onAcceptSuggestion = vi.fn();
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
 
       renderEditorSlot({
         suggestedPrompt: null,
@@ -140,7 +191,7 @@ describe("ChatComposerEditorSlot", () => {
     it.each(["Enter", "ArrowLeft"])(
       "does not accept another key (%s)",
       (key) => {
-        const onAcceptSuggestion = vi.fn();
+        const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
 
         renderEditorSlot({
           suggestedPrompt: "Add a test for the new endpoint",
@@ -159,7 +210,7 @@ describe("ChatComposerEditorSlot", () => {
 
   describe("touch tap acceptance", () => {
     it("accepts a touch tap that stays within the slop radius", () => {
-      const onAcceptSuggestion = vi.fn();
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
 
       renderEditorSlot({
         suggestedPrompt: "Add a test for the new endpoint",
@@ -186,7 +237,7 @@ describe("ChatComposerEditorSlot", () => {
     });
 
     it("does not accept a touch that travels past the slop radius", () => {
-      const onAcceptSuggestion = vi.fn();
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
 
       renderEditorSlot({
         suggestedPrompt: "Add a test for the new endpoint",
@@ -210,7 +261,7 @@ describe("ChatComposerEditorSlot", () => {
     });
 
     it("does not accept a mouse pointer tap", () => {
-      const onAcceptSuggestion = vi.fn();
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
 
       renderEditorSlot({
         suggestedPrompt: "Add a test for the new endpoint",
@@ -234,7 +285,7 @@ describe("ChatComposerEditorSlot", () => {
     });
 
     it("does not accept a tap cancelled between down and up", () => {
-      const onAcceptSuggestion = vi.fn();
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
 
       renderEditorSlot({
         suggestedPrompt: "Add a test for the new endpoint",
@@ -259,7 +310,7 @@ describe("ChatComposerEditorSlot", () => {
     });
 
     it("does not accept a tap when there is no suggestion", () => {
-      const onAcceptSuggestion = vi.fn();
+      const onAcceptSuggestion = vi.fn<AcceptSuggestion>(() => true);
 
       renderEditorSlot({
         suggestedPrompt: null,
@@ -286,7 +337,7 @@ describe("ChatComposerEditorSlot", () => {
 
 interface RenderEditorSlotOptions {
   readonly suggestedPrompt: string | null;
-  readonly onAcceptSuggestion: (suggestion: string) => void;
+  readonly onAcceptSuggestion: AcceptSuggestion;
   readonly steerHintActive: boolean;
 }
 

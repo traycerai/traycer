@@ -69,8 +69,12 @@ interface ChatComposerEditorSlotProps {
    * Shown as the placeholder; → or a tap on a touch device accepts it.
    */
   readonly suggestedPrompt: string | null;
-  /** Fills and focuses the composer with the suggestion. Must never send. */
-  readonly onAcceptSuggestion: (suggestion: string) => void;
+  /**
+   * Fills and focuses the composer with the suggestion. Must never send.
+   * Returns whether it filled: the live draft can stop being empty before this
+   * prop re-renders, and a declined fill must leave → its ordinary job.
+   */
+  readonly onAcceptSuggestion: (suggestion: string) => boolean;
   readonly onPaste: ClipboardEventHandler<HTMLElement>;
   readonly onDragOver: DragEventHandler<HTMLElement>;
   readonly onDrop: DragEventHandler<HTMLElement>;
@@ -139,8 +143,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
       ) {
         return;
       }
-      event.preventDefault();
-      onAcceptSuggestion(suggestedPrompt);
+      if (onAcceptSuggestion(suggestedPrompt)) event.preventDefault();
     },
     [suggestedPrompt, onAcceptSuggestion],
   );

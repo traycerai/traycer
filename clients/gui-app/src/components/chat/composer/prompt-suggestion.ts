@@ -116,15 +116,19 @@ export const PROMPT_SUGGESTION_TAP_SLOP_PX = 10;
  * Fills the composer with the suggestion and focuses it. `setContent` is the
  * real editor mutation, so the draft store records it exactly as it would a
  * paste, and the user still presses Enter. A no-op before the editor is ready.
+ *
+ * Returns whether it filled, so the → handler takes the key only when it did:
+ * a declined fill leaves the key to move the caret as it otherwise would.
  */
 export function fillComposerWithSuggestion(
   editor: SuggestionFillTarget | null,
   suggestion: string,
-): void {
-  if (editor === null || !editor.isReady()) return;
+): boolean {
+  if (editor === null || !editor.isReady()) return false;
   // The live editor may have changed since React offered the placeholder.
   // Never replace a draft based only on that earlier render's empty state.
-  if (!isSuggestionPlaceholderDocument(editor.getJSON())) return;
+  if (!isSuggestionPlaceholderDocument(editor.getJSON())) return false;
   editor.setContent(plainTextPromptContent(suggestion), null);
   editor.focusAtEnd();
+  return true;
 }

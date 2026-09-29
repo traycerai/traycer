@@ -704,9 +704,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
 
   // Accepting the suggestion (→, or a tap on touch) FILLS and focuses - it
   // never sends.
-  const fillSuggestedPrompt = useCallback((suggestion: string) => {
-    fillComposerWithSuggestion(editorRef.current, suggestion);
-  }, []);
+  const fillSuggestedPrompt = useCallback(
+    (suggestion: string): boolean =>
+      fillComposerWithSuggestion(editorRef.current, suggestion),
+    [],
+  );
   const offeredSuggestion =
     suggestedPrompt !== undefined &&
     suggestedPrompt.trim() !== "" &&

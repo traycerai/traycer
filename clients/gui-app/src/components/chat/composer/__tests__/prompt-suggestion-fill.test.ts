@@ -85,11 +85,12 @@ function makeFakeTarget(
 }
 
 describe("fillComposerWithSuggestion", () => {
-  it("fills a ready editor: setContent once with the plain-text content, then focusAtEnd, in that order", () => {
+  it("fills a ready editor: setContent once with the plain-text content, then focusAtEnd, in that order, and reports it filled", () => {
     const fake = makeFakeTarget(true, EMPTY_DOC);
 
-    fillComposerWithSuggestion(fake.target, "Run the tests");
+    const filled = fillComposerWithSuggestion(fake.target, "Run the tests");
 
+    expect(filled).toBe(true);
     expect(fake.getJSON).toHaveBeenCalledTimes(1);
     expect(fake.setContent).toHaveBeenCalledTimes(1);
     expect(fake.setContent).toHaveBeenCalledWith(
@@ -107,17 +108,16 @@ describe("fillComposerWithSuggestion", () => {
     ]);
   });
 
-  it("does nothing and does not throw when the editor is null", () => {
-    expect(() =>
-      fillComposerWithSuggestion(null, "Run the tests"),
-    ).not.toThrow();
+  it("does nothing, does not throw, and reports it did not fill when the editor is null", () => {
+    expect(fillComposerWithSuggestion(null, "Run the tests")).toBe(false);
   });
 
-  it("calls neither setContent nor focusAtEnd when the editor reports it is not ready", () => {
+  it("calls neither setContent nor focusAtEnd, and reports it did not fill, when the editor reports it is not ready", () => {
     const fake = makeFakeTarget(false, EMPTY_DOC);
 
-    fillComposerWithSuggestion(fake.target, "Run the tests");
+    const filled = fillComposerWithSuggestion(fake.target, "Run the tests");
 
+    expect(filled).toBe(false);
     expect(fake.getJSON).not.toHaveBeenCalled();
     expect(fake.setContent).not.toHaveBeenCalled();
     expect(fake.focusAtEnd).not.toHaveBeenCalled();
@@ -125,7 +125,7 @@ describe("fillComposerWithSuggestion", () => {
   });
 
   it.each(DIRTY_DRAFT_CONTENTS)(
-    "does not replace $label when it appears after the suggestion was offered",
+    "does not replace $label, and reports it did not fill, when it appears after the suggestion was offered",
     ({ content }) => {
       const fake = makeFakeTarget(true, EMPTY_DOC);
       // The suggestion was offered over EMPTY_DOC; the editor changed before
@@ -135,13 +135,15 @@ describe("fillComposerWithSuggestion", () => {
         return content;
       });
 
-      fillComposerWithSuggestion(fake.target, "Run the tests");
+      const filled = fillComposerWithSuggestion(fake.target, "Run the tests");
 
       expect({
+        filled,
         setContentCalls: fake.setContent.mock.calls.length,
         focusCalls: fake.focusAtEnd.mock.calls.length,
         calls: fake.calls,
       }).toEqual({
+        filled: false,
         setContentCalls: 0,
         focusCalls: 0,
         calls: ["isReady", "getJSON"],

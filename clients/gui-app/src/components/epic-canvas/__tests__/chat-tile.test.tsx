@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -5484,6 +5485,59 @@ describe("<ChatTile />", () => {
 
       await waitFor(() => {
         expect(composerPlaceholders()).toContain(SUGGESTION);
+      });
+    });
+
+    // → accepts the offered suggestion through the real editor. The fill
+    // re-reads the LIVE document, because the draft can change before the offer
+    // re-renders; when it declines, the key must keep moving the caret.
+    describe("accepting it with ArrowRight", () => {
+      const TYPED_TEXT = "a draft typed a moment ago";
+
+      function pasteIntoTheComposer(text: string): void {
+        fireEvent.paste(screen.getByTestId("composer-editor"), {
+          clipboardData: {
+            files: [],
+            items: [],
+            types: ["text/plain"],
+            getData: (type: string) => (type === "text/plain" ? text : ""),
+          },
+        });
+      }
+
+      it("fills the empty composer with the suggestion and takes the key", async () => {
+        await renderWithHostSuggestion();
+        emptyTheComposerDraft();
+        expect(composerPlaceholders()).toContain(SUGGESTION);
+
+        const editor = screen.getByTestId("composer-editor");
+        const event = createEvent.keyDown(editor, { key: "ArrowRight" });
+        fireEvent(editor, event);
+
+        expect(editor.textContent).toBe(SUGGESTION);
+        expect(event.defaultPrevented).toBe(true);
+      });
+
+      it("neither fills nor takes the key when the draft changed before the offer re-rendered", async () => {
+        await renderWithHostSuggestion();
+        emptyTheComposerDraft();
+        expect(composerPlaceholders()).toContain(SUGGESTION);
+
+        const editor = screen.getByTestId("composer-editor");
+        const event = createEvent.keyDown(editor, { key: "ArrowRight" });
+        // One act scope: React commits nothing until it exits, so the paste
+        // reaches the live editor while the tile still holds the offer, and
+        // the key is handled against that stale offer.
+        act(() => {
+          pasteIntoTheComposer(TYPED_TEXT);
+          expect(editor.textContent).toBe(TYPED_TEXT);
+          expect(composerPlaceholders()).toContain(SUGGESTION);
+          fireEvent(editor, event);
+        });
+
+        expect(event.defaultPrevented).toBe(false);
+        expect(editor.textContent).toBe(TYPED_TEXT);
+        expect(composerPlaceholders()).not.toContain(SUGGESTION);
       });
     });
   });
