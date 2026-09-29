@@ -63,7 +63,7 @@ export function createAppRouter(
     ...(history === undefined ? {} : { history }),
   });
   bindAuthInvalidation(router);
-  warmRouteChunks(router);
+  warmRouteChunks();
   return router;
 }
 

@@ -15,29 +15,8 @@ const DESKTOP_MODULES = [
   "@/providers/draft-surface-provider",
   "@/components/epics/history-surface",
   "@/components/settings/settings-surface",
-  "@/components/settings/settings-modal-content",
-  "@/components/epics/history-modal-content",
+  "@/components/sample-workspace/sample-workspace-surface",
 ];
-
-interface FakeRouter {
-  readonly subscribe: (eventType: "onRendered", fn: () => void) => () => void;
-  readonly render: () => void;
-  readonly listenerCount: () => number;
-}
-
-function fakeRouter(): FakeRouter {
-  const listeners = new Set<() => void>();
-  return {
-    subscribe: (_eventType, fn) => {
-      listeners.add(fn);
-      return () => listeners.delete(fn);
-    },
-    render: () => {
-      for (const listener of [...listeners]) listener();
-    },
-    listenerCount: () => listeners.size,
-  };
-}
 
 // Every warmed module is replaced by a stub that records its own evaluation,
 // so the assertions see what `warmRouteChunks` actually imported rather than
@@ -72,9 +51,6 @@ describe("warmRouteChunks", () => {
     vi.stubGlobal("requestIdleCallback", (run: () => void) =>
       window.setTimeout(run, 0),
     );
-    vi.stubGlobal("requestAnimationFrame", (run: () => void) =>
-      window.setTimeout(run, 0),
-    );
   });
 
   afterEach(async () => {
@@ -86,41 +62,33 @@ describe("warmRouteChunks", () => {
 
   it("warms every surface at idle on desktop, without waiting for a render", async () => {
     const { warmRouteChunks } = await loadWarmer(false);
-    const router = fakeRouter();
 
-    warmRouteChunks(router);
+    warmRouteChunks();
+    await settleImports();
+    expect([...imported]).toEqual([]);
     await vi.runAllTimersAsync();
     await settleImports();
 
-    // The platform is read only inside the callbacks, so the listener is
-    // always installed; on desktop it stays inert.
-    expect(router.listenerCount()).toBe(1);
     expect([...imported].toSorted()).toEqual([...DESKTOP_MODULES].toSorted());
   });
 
-  it("warms only the epic surface in the mobile app, and only after the first render", async () => {
+  it("warms only the epic surface at idle on the phone, before the first render", async () => {
     const { warmRouteChunks } = await loadWarmer(true);
-    const router = fakeRouter();
 
-    warmRouteChunks(router);
-    await vi.runAllTimersAsync();
+    warmRouteChunks();
     await settleImports();
     expect([...imported]).toEqual([]);
+    await vi.runAllTimersAsync();
+    await settleImports();
+    expect([...imported].toSorted()).toEqual([...EPIC_MODULES].toSorted());
 
-    router.render();
+    warmRouteChunks();
     await vi.runAllTimersAsync();
     await settleImports();
 
     expect([...imported].toSorted()).toEqual([...EPIC_MODULES].toSorted());
     expect(imported).not.toContain("@/components/settings/settings-surface");
-    expect(imported).not.toContain(
-      "@/components/settings/settings-modal-content",
-    );
     expect(imported).not.toContain("@/components/epics/history-surface");
-    expect(imported).not.toContain("@/components/epics/history-modal-content");
-    // One warm-up per launch: later navigations render again and must not
-    // re-arm anything.
-    expect(router.listenerCount()).toBe(0);
   });
 
   it("warms only the epic list on the phone when a router was warmed before setMobileApp", async () => {
@@ -129,24 +97,21 @@ describe("warmRouteChunks", () => {
     // never renders.
     const { warmRouteChunks } = await loadWarmer(false);
     const mobile = await import("@/lib/mobile-app");
-    const neverRenderedRouter = fakeRouter();
-    const mountedRouter = fakeRouter();
 
-    warmRouteChunks(neverRenderedRouter);
+    warmRouteChunks();
     mobile.setMobileApp(true);
-    warmRouteChunks(mountedRouter);
+    warmRouteChunks();
 
     await vi.runAllTimersAsync();
     await settleImports();
-    // Nothing is warmed before the mounted router's first render.
-    expect([...imported]).toEqual([]);
+    // Even the never-rendered module-level router warms the phone list.
+    expect([...imported].toSorted()).toEqual([...EPIC_MODULES].toSorted());
 
-    mountedRouter.render();
+    warmRouteChunks();
     await vi.runAllTimersAsync();
     await settleImports();
 
     expect([...imported].toSorted()).toEqual([...EPIC_MODULES].toSorted());
-    expect(mountedRouter.listenerCount()).toBe(0);
   });
 });
 
@@ -171,8 +136,6 @@ describe("routeChunkWarmers", () => {
       "@/components/epics/history-surface",
       "@/components/settings/settings-surface",
       "@/components/sample-workspace/sample-workspace-surface",
-      "@/components/settings/settings-modal-content",
-      "@/components/epics/history-modal-content",
     ]);
   });
 });

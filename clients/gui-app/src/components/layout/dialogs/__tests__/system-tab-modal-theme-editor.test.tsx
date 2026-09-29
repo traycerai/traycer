@@ -170,12 +170,11 @@ describe("SystemTabModalHost theme editor integration", () => {
       expect(document.body.style.pointerEvents).toBe("none");
     });
 
-    // The modal body is `lazy()`, so the panel arrives after the frame does.
-    const darkPicker = await within(settings).findByRole(
-      "button",
-      { name: "Dark theme" },
-      { timeout: 10_000 },
-    );
+    // Static overlay bodies expose their controls with the frame: deferring
+    // these bodies regressed boot and first-open timing in production builds.
+    const darkPicker = within(settings).getByRole("button", {
+      name: "Dark theme",
+    });
     await user.click(darkPicker);
     const search = await screen.findByRole("combobox", {
       name: "Search dark themes",

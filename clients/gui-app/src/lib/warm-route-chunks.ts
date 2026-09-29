@@ -18,10 +18,9 @@ import { isMobileApp } from "@/lib/mobile-app";
  * RPCs are issued here - it is pure code priming, safe to run during the
  * cold-start RPC storm because `requestIdleCallback` defers it to thread gaps.
  *
- * The mobile app warms the epic surface alone, and only once the first route
- * has rendered: every warmed chunk there is JS a phone downloads, parses and
- * holds whether or not the user goes near it, and it would compete with the
- * first paint. Settings, History and the draft surfaces load on open instead.
+ * The phone warms only its epic list at first idle. Waiting for the first
+ * route render delays a restored task without improving first paint. Settings,
+ * History and draft surfaces stay off the phone warm-up list.
  */
 let warmed = false;
 
@@ -29,11 +28,6 @@ export interface RouteChunkWarmer {
   /** The warmed module's specifier, as written in `load`. */
   readonly module: string;
   readonly load: () => Promise<unknown>;
-}
-
-/** The subset of the router `warmRouteChunks` waits on. */
-export interface FirstRenderSignal {
-  readonly subscribe: (eventType: "onRendered", fn: () => void) => () => void;
 }
 
 // The surface a phone opens all the time: its route adapters, for a deep-link
@@ -95,17 +89,6 @@ const DESKTOP_ONLY_WARMERS: ReadonlyArray<RouteChunkWarmer> = [
     load: () =>
       import("@/components/sample-workspace/sample-workspace-surface"),
   },
-  // The Settings / History modal bodies are `lazy()` in
-  // `stores/tabs/overlays/`; warming them here is what keeps the desktop
-  // modal opening instantly.
-  {
-    module: "@/components/settings/settings-modal-content",
-    load: () => import("@/components/settings/settings-modal-content"),
-  },
-  {
-    module: "@/components/epics/history-modal-content",
-    load: () => import("@/components/epics/history-modal-content"),
-  },
 ];
 
 export function routeChunkWarmers(
@@ -114,26 +97,14 @@ export function routeChunkWarmers(
   return mobileApp ? EPIC_WARMERS : [...EPIC_WARMERS, ...DESKTOP_ONLY_WARMERS];
 }
 
-export function warmRouteChunks(router: FirstRenderSignal): void {
+export function warmRouteChunks(): void {
   if (typeof window === "undefined") return;
-  // The platform is read in the callbacks, never here: `router.tsx` builds a
-  // module-level router on import, before the mobile entry has called
-  // `setMobileApp`, and that router never renders. Reading the flag at this
-  // call warmed the desktop list on the phone, ahead of its first paint.
+  // The module-level router is created before the mobile entry sets its
+  // platform flag. Read that flag at idle, never while scheduling the work.
   whenIdle(() => {
-    if (warmed || isMobileApp()) return;
+    if (warmed) return;
     warmed = true;
-    warm(routeChunkWarmers(false));
-  });
-  // `onRendered` fires from a layout effect once the first route commits, so
-  // the frame after it is the first paint; idle time after that is free.
-  const unsubscribe = router.subscribe("onRendered", () => {
-    unsubscribe();
-    if (warmed || !isMobileApp()) return;
-    warmed = true;
-    window.requestAnimationFrame(() =>
-      whenIdle(() => warm(routeChunkWarmers(true))),
-    );
+    warm(routeChunkWarmers(isMobileApp()));
   });
 }
 
