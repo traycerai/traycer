@@ -7,14 +7,14 @@ import { describe, expect, it } from "vitest";
 
 /**
  * `clients/gui-app/scripts/*-browser*.mjs` are real-browser regression
- * drivers (vite + headless Chrome over CDP, `run-tests.ts` spawns each with
- * no timeout of its own). Every driver used to carry its own copy of a
- * `connectCdp` WebSocket client, and most copies had no path to settle a
- * command once Chrome died mid-command: no `close` handler, no per-command
- * deadline. A Chrome crash or a dropped DevTools socket then left `send()`
- * pending forever, the driver never reached its `finally` to terminate
- * Chrome and Vite, and the CI job hung until ITS OWN limit, hiding the real
- * failure behind a timeout rather than a red test.
+ * drivers (vite + headless Chrome over CDP, `run-browser-regressions.ts`
+ * spawns each with no timeout of its own). Every driver used to carry its own
+ * copy of a `connectCdp` WebSocket client, and most copies had no path to
+ * settle a command once Chrome died mid-command: no `close` handler, no
+ * per-command deadline. A Chrome crash or a dropped DevTools socket then left
+ * `send()` pending forever, the driver never reached its `finally` to
+ * terminate Chrome and Vite, and the CI job hung until ITS OWN limit, hiding
+ * the real failure behind a timeout rather than a red test.
  *
  * They now all import ONE hardened client, `scripts/cdp-client.mjs`
  * (`export function connectCdp`), whose `send()` rejects - never hangs - on
@@ -50,8 +50,8 @@ const CDP_CLIENT_FILE = "cdp-client.mjs";
  * this guard exists to prevent; they are just not migrated, on purpose.
  */
 const WEBSOCKET_ALLOWLIST: readonly string[] = [
-  // A manual driver - not run by CI or `run-tests.ts` - whose client also
-  // captures `Runtime.exceptionThrown` events.
+  // A manual driver - not run by CI or `run-browser-regressions.ts` - whose
+  // client also captures `Runtime.exceptionThrown` events.
   "tab-recovery-browser-regression.mjs",
   // A development tool that attaches to the LIVE desktop app over CDP (not a
   // test), with its own event capture like the driver above.

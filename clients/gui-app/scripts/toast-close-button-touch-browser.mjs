@@ -9,8 +9,7 @@
 // `pointer` exactly as a phone reports them.
 //
 // Structure follows `destructive-dialog-focus-browser.mjs` (vite + headless
-// Chrome over CDP); wired into `scripts/run-tests.ts` behind
-// RUN_DIFF_EDIT_BROWSER_REGRESSION, which CI sets for this package.
+// Chrome over CDP); run in CI through `scripts/run-browser-regressions.ts`.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { rm } from "node:fs/promises";

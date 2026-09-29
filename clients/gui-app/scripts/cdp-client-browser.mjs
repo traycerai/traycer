@@ -2,8 +2,8 @@
 // over: when Chrome dies with a command in flight, that command must REJECT,
 // and a command sent after the socket is gone must reject at once. The copies
 // this module replaced had no `close` handler, so a Chrome crash left `send()`
-// pending forever and the driver - spawned by `run-tests.ts` with no timeout -
-// held the CI job instead of failing it.
+// pending forever and the driver - spawned by `run-browser-regressions.ts`
+// with no timeout - held the CI job instead of failing it.
 //
 // It needs a real DevTools socket to die under it, so it drives real headless
 // Chrome (via `chrome-launcher.mjs`, like every driver), parks a command that

@@ -29,9 +29,8 @@
 // `?dropIndex=` param and measures the indicator back to 4px-32px.
 //
 // Structure follows `status-bar-usage-scroll-browser.mjs` (vite + headless
-// Chrome over CDP via `scripts/chrome-launcher.mjs`); wired into
-// `scripts/run-tests.ts` behind `RUN_DIFF_EDIT_BROWSER_REGRESSION`, next to
-// that fixture's entry.
+// Chrome over CDP via `scripts/chrome-launcher.mjs`); run in CI by
+// `scripts/run-browser-regressions.ts`, next to that fixture's entry.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { rm } from "node:fs/promises";
