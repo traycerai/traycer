@@ -18,12 +18,17 @@ import { providerDisplayName } from "@/lib/provider-ordering";
  * - `pack`: the managed pack is on its way or its install failed, and nothing
  *   else on the machine can stand in for it.
  * - `cli-checking`: the host has not finished looking for a CLI.
+ * - `cli-selection-unavailable`: the host can run a CLI for this provider, but
+ *   only one the user has not selected. The host resolves a sign-in's CLI as
+ *   selected -> bundled -> PATH and never falls back to an unselected custom
+ *   path, so it resolves nothing until the selection changes.
  * - `cli-missing`: the host looked and found nothing it can run.
  */
 export type ProviderHostBlock =
   | { readonly kind: "disabled" }
   | { readonly kind: "pack"; readonly preparing: ProviderPackPreparing }
   | { readonly kind: "cli-checking" }
+  | { readonly kind: "cli-selection-unavailable" }
   | { readonly kind: "cli-missing" };
 
 /**
@@ -45,17 +50,18 @@ export type ProviderSignInGesture = "sign-in" | "sign-in-and-enable";
  * composer explains it. A sign-in has no composer in front of it: a click
  * that cannot work opens a dialog, mints a profile and ends in "Sign-in did
  * not start". So this one reads only what the host has CONFIRMED it can run,
- * an `available` candidate, and says "checking" while it has not answered.
+ * the CLI it resolved (`hostResolvedCli`), and says "checking" while it has
+ * not answered.
  */
 export function providerHostBlock(
   state: ProviderCliState,
   gesture: ProviderSignInGesture,
 ): ProviderHostBlock | null {
   if (gesture === "sign-in" && !state.enabled) return { kind: "disabled" };
-  if (state.candidates.some((candidate) => candidate.available)) return null;
+  if (hostResolvedCli(state)) return null;
   const preparing = providerPackPreparingForProvider(state);
   if (preparing !== null) {
-    // No candidate is available, so nothing stands in for the pack whatever
+    // The host resolved nothing, so nothing stands in for the pack whatever
     // the unsettled probe goes on to find; the label has to say "preparing",
     // not "updating in the background".
     return {
@@ -66,7 +72,29 @@ export function providerHostBlock(
   const checking =
     state.availabilityPending ||
     state.candidates.some((candidate) => candidate.versionPending);
-  return checking ? { kind: "cli-checking" } : { kind: "cli-missing" };
+  if (checking) return { kind: "cli-checking" };
+  return state.candidates.some((candidate) => candidate.available)
+    ? { kind: "cli-selection-unavailable" }
+    : { kind: "cli-missing" };
+}
+
+/**
+ * Whether the host resolved a CLI it would run for this provider.
+ *
+ * `cliBinaryResolved` is the host's own answer, computed by the same
+ * selected -> bundled -> PATH order `providers.startLogin` spawns with. It is
+ * read in preference to `candidates` because the two are different questions:
+ * an available but unselected custom path makes "is any candidate available"
+ * true while the host resolves nothing, and a click there ends in "Sign-in did
+ * not start". A host older than the field omits it (the schema keeps it
+ * optional for exactly that), and then "any candidate available" is the best
+ * reading left.
+ */
+function hostResolvedCli(state: ProviderCliState): boolean {
+  return (
+    state.cliBinaryResolved ??
+    state.candidates.some((candidate) => candidate.available)
+  );
 }
 
 /** The sentence a blocked control shows in place of doing anything. */
@@ -81,6 +109,8 @@ export function providerHostBlockLabel(
       return providerPackPreparingLabel(block.preparing, providerLabel);
     case "cli-checking":
       return `Checking for the ${providerLabel} CLI…`;
+    case "cli-selection-unavailable":
+      return `The selected ${providerLabel} CLI is not available on this host. Choose another under CLI & Args.`;
     case "cli-missing":
       return `The ${providerLabel} CLI is not installed on this host.`;
   }
@@ -394,7 +424,7 @@ export function providerSignInUnavailableReason(
   // After the permanent reasons, so a provider that can never sign in here is
   // not told to turn itself on first. A managed pack downloading behind a
   // binary the host can already run takes nothing away: `providerHostBlock`
-  // answers null as soon as any candidate is available.
+  // answers null as soon as the host resolved a CLI it would run.
   const block = providerHostBlock(state, gesture);
   return block === null ? null : { kind: "host", block };
 }

@@ -170,6 +170,18 @@ export function providerLoginAnswerStillStarting(
 }
 
 /**
+ * Whether the answer holds a login on the host: one that started, or one
+ * still starting. Anything else (the pack still preparing, a start the host
+ * refused, a failure) left nothing there to release, so a cancel sent for it
+ * would reach only a login someone else started under the same key.
+ */
+export function providerLoginAnswerHoldsLogin(
+  answer: ProviderStartLoginAnswer,
+): boolean {
+  return answer.started || providerLoginAnswerStillStarting(answer);
+}
+
+/**
  * Whether the answer holds a login nobody will use once the surface that
  * asked for it is gone: one still starting (above), or one that started for
  * a provider that does not open its own page (`selfOpensBrowser` null), so

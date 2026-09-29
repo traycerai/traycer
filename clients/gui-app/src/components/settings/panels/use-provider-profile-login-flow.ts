@@ -14,6 +14,7 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import {
   providerLoginAnswerHeldForNobody,
+  providerLoginAnswerHoldsLogin,
   providerLoginAnswerStillStarting,
   providerLoginAnswerWantsPackRetry,
   providerLoginNotStartedMessage,
@@ -759,9 +760,16 @@ export function useProviderProfileLoginFlow(
           // downloading ends the flow at once (`cancel`), and the dialog can
           // be gone by the time the call already on its way answers - with a
           // login it started, and a profile it minted, that only this cancel
-          // releases.
+          // releases. Only a login the answer holds is released: an answer
+          // that the pack is still preparing, or that the host did not start
+          // one, left nothing there, and an ambient reauth's cancel is keyed
+          // by the provider alone, so it would end a login another surface
+          // started for the same account.
           if (cancelRequestedRef.current) {
-            finishCancellation(nextProfileId);
+            if (providerLoginAnswerHoldsLogin(data)) {
+              cancelProfile(nextProfileId);
+            }
+            reportCancellation();
             return;
           }
           if (unmountedRef.current) {
@@ -899,6 +907,7 @@ export function useProviderProfileLoginFlow(
       loginCapability,
       mode,
       providerId,
+      reportCancellation,
       restart,
       settleAttempt,
       startLogin,
