@@ -1,0 +1,58 @@
+# Browser tests
+
+Real-browser regressions for the GUI, run by [Playwright Test](https://playwright.dev/docs/intro)
+against the fixture pages in `src/__tests__/browser/`. They exist for claims
+jsdom cannot decide: **layout** (real boxes, overflow, scroll ranges, anchor
+positioning, media queries), **paint** (rendered pixels, contrast,
+anti-aliasing) and **input** (hit testing, focus modality, native wheel
+scrolling, pointer capture). A claim that state, DOM structure or timers can
+decide belongs in a Vitest (jsdom) test next to the component, not here.
+
+```bash
+bun run test:browser                                   # every spec
+bun run test:browser browser-tests/hover-card.spec.ts  # one file
+bun run test:browser --ui                              # Playwright's UI mode
+```
+
+CI runs them in `.github/workflows/browser-regressions.yml`, sharded across
+parallel jobs. They are not a required check. A failed job uploads the
+Playwright report, with a trace for each failed test.
+
+## How the pieces fit
+
+- `playwright.config.ts` starts ONE Vite dev server for the whole run with
+  `vite.browser-tests.config.ts` (the app's config, which also compiles
+  Tailwind for the fixtures), and drives the machine's own Google Chrome
+  (`channel: "chrome"`; `CHROME_BIN` overrides it). Nothing downloads a
+  browser.
+- Each test gets a fresh browser context and page. Load a fixture with
+  `page.goto(fixture("name"))` from `support/fixtures.ts`.
+- `BROWSER_TESTS_PORT` gives a run its own server (and its own Vite cache), so
+  two worktrees can run at once.
+
+## Writing a test
+
+- **Wait for a condition, never for time.** Use `expect(locator).toHave…`,
+  `expect.poll`, or `page.waitForFunction`. A fixed sleep is either too short
+  on a loaded runner or wasted everywhere else. When a negative claim needs a
+  window ("nothing happens"), wait for the positive event that proves the
+  gesture landed, then assert the negative.
+- **Real input by coordinates when hit testing is the claim.** `page.mouse` and
+  `page.keyboard` dispatch trusted input through Chrome. A locator `.click()`
+  first waits until the element itself is the hit target, which is wrong when
+  the test is about what sits on top of it: use `centreOf(locator)` and
+  `page.mouse.click(x, y)`.
+- **Emulation**: set the viewport and device scale with `test.use` or
+  `page.setViewportSize`, and media with `page.emulateMedia`. For a mid-test
+  device-pixel-ratio switch, or any other DevTools command, open
+  `page.context().newCDPSession(page)`.
+- **One load per configuration.** A fixture that exposes a probe (for example
+  `window.__layoutCanvasProbe`) switches variants live: prefer that to a fresh
+  page load per variant. The heavy fixtures boot most of the app from
+  unbundled modules, so every load costs seconds.
+- **One test per claim**, named for the claim. Playwright shards and
+  parallelises by test, so a long phase list split into tests finishes sooner
+  and reports each red separately.
+- **Measure production, not the fixture.** A fixture that reimplements a
+  production decision (a spacing rule, a grouping wrapper) makes the test
+  prove the copy. Import the production component or function instead.

@@ -82,10 +82,6 @@ const GROUPS: readonly BrowserRegressionGroup[] = [
     regressions: [
       driver("scripts/diff-edit-browser-regression.mjs"),
       driver("scripts/pierre-tree-zoom-browser-regression.mjs"),
-      // The claim is "after Cancel the window is usable again", and jsdom has
-      // no hit testing, so only a real layout engine can tell a released
-      // modal from a modal that merely stopped being asserted about.
-      driver("scripts/quit-intercept-cancel-browser.mjs"),
       driver("scripts/destructive-dialog-focus-browser.mjs"),
       // The strongest case for a real browser in this list: the boot card's
       // escape hatch is lost to an INPUT-DISPATCH rule - a press whose element
