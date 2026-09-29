@@ -661,6 +661,120 @@ describe("providerHostBlock", () => {
       },
     });
   });
+
+  // The host resolves a sign-in's CLI as selected -> bundled -> PATH and never
+  // falls back to an unselected custom path, so "a candidate is available" is
+  // not "the host can run one". `cliBinaryResolved` is the host's own answer.
+  describe("with the host's cliBinaryResolved verdict", () => {
+    const deletedSelection: ProviderCliState["candidates"][number] = {
+      kind: "custom",
+      path: "/gone/claude",
+      version: null,
+      available: false,
+      versionPending: false,
+    };
+    const unselectedCustom: ProviderCliState["candidates"][number] = {
+      kind: "custom",
+      path: "/other/claude",
+      version: "1.0.0",
+      available: true,
+      versionPending: false,
+    };
+
+    it("holds sign-in when the host resolved nothing although an unselected custom path is available", () => {
+      const state = providerState({
+        selected: { kind: "custom", path: "/gone/claude" },
+        candidates: [deletedSelection, unselectedCustom],
+        cliBinaryResolved: false,
+      });
+      expect(providerHostBlock(state, "sign-in")).toEqual({
+        kind: "cli-selection-unavailable",
+      });
+      expect(providerHostBlock(state, "sign-in-and-enable")).toEqual({
+        kind: "cli-selection-unavailable",
+      });
+    });
+
+    it("reports the pack rather than the selection while the pack the host would fall back to is downloading", () => {
+      expect(
+        providerHostBlock(
+          providerState({
+            selected: { kind: "custom", path: "/gone/claude" },
+            candidates: [deletedSelection, unselectedCustom],
+            cliBinaryResolved: false,
+            managedInstallState: { status: "downloading", percent: 30 },
+          }),
+          "sign-in",
+        ),
+      ).toEqual({
+        kind: "pack",
+        preparing: {
+          kind: "downloading",
+          percent: 30,
+          retryAtMs: null,
+          reason: null,
+          fallbackRunnable: false,
+        },
+      });
+    });
+
+    it("reports cli-checking while the probe has not settled", () => {
+      expect(
+        providerHostBlock(
+          providerState({
+            selected: { kind: "custom", path: "/gone/claude" },
+            candidates: [deletedSelection, unselectedCustom],
+            cliBinaryResolved: false,
+            availabilityPending: true,
+          }),
+          "sign-in",
+        ),
+      ).toEqual({ kind: "cli-checking" });
+    });
+
+    it("reports cli-missing when the host resolved nothing and no candidate is available", () => {
+      expect(
+        providerHostBlock(
+          providerState({ candidates: [], cliBinaryResolved: false }),
+          "sign-in",
+        ),
+      ).toEqual({ kind: "cli-missing" });
+    });
+
+    it("is unblocked when the host resolved a CLI, even with the selected path gone", () => {
+      expect(
+        providerHostBlock(
+          providerState({
+            selected: { kind: "custom", path: "/gone/claude" },
+            candidates: [
+              deletedSelection,
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/claude",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
+            cliBinaryResolved: true,
+          }),
+          "sign-in",
+        ),
+      ).toBeNull();
+    });
+
+    // A host older than the field omits it. Nothing better is known then, so
+    // the gate keeps its any-available-candidate reading rather than holding
+    // every provider on that host.
+    it("falls back to candidate availability for a host that does not send the verdict", () => {
+      const state = providerState({
+        selected: { kind: "custom", path: "/gone/claude" },
+        candidates: [deletedSelection, unselectedCustom],
+      });
+      expect(state.cliBinaryResolved).toBeUndefined();
+      expect(providerHostBlock(state, "sign-in")).toBeNull();
+    });
+  });
 });
 
 describe("providerHostBlockLabel", () => {
@@ -675,6 +789,14 @@ describe("providerHostBlockLabel", () => {
     );
     expect(providerHostBlockLabel({ kind: "cli-missing" }, label)).toBe(
       `The ${label} CLI is not installed on this host.`,
+    );
+  });
+
+  it("labels cli-selection-unavailable with where to choose another CLI", () => {
+    expect(
+      providerHostBlockLabel({ kind: "cli-selection-unavailable" }, label),
+    ).toBe(
+      `The selected ${label} CLI is not available on this host. Choose another under CLI & Args.`,
     );
   });
 
