@@ -539,9 +539,9 @@ const fallbackWaitBackgroundItemSchema = lazySchema(() =>
   }),
 );
 
-// ─── Frozen `chat.subscribe@1.10–1.18` background-item shapes ──────────────
+// ─── Frozen `chat.subscribe@1.10–1.19` background-item shapes ──────────────
 //
-// `1.20` adds the `cron` kind below. Every line from `1.10` through `1.18`
+// `1.20` adds the `cron` kind below. Every line from `1.10` through `1.19`
 // binds this union - the live one as it stood when `1.20` opened above it -
 // and not an alias for the live one, for the reason the pre-`fallback-wait`
 // freeze above gives: a released peer's decoder is a closed discriminated
@@ -1346,7 +1346,7 @@ export const chatApprovalStateSchema = lazySchema(() =>
 export type ChatApprovalState = z.infer<typeof chatApprovalStateSchema>;
 
 /**
- * Frozen file-edit approval card, as every line through `chat.subscribe@1.17`
+ * Frozen file-edit approval card, as every line through `chat.subscribe@1.19`
  * ships it. `1.20` adds `cautious` and `displayFacts` on the live schema below.
  *
  * Do NOT add fields here. Add them to `chatFileEditApprovalStateSchema` below.
@@ -2711,7 +2711,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
   readonly action: ActionSchema;
   readonly approval: ApprovalSchema;
   /**
-   * The file-edit card: frozen pre-`cautious` on every line through `1.18`,
+   * The file-edit card: frozen pre-`cautious` on every line through `1.19`,
    * live on `1.20`, the same axis `approval` moves on.
    */
   readonly fileEditApproval: FileEditApprovalSchema;
@@ -3195,7 +3195,7 @@ const chatSubscribeSharedServerFrameSchemasV112 = [
 ];
 // `chat.subscribe@1.13`'s shared frames: the pre-`1.20` `blockDelta` (no
 // approval display facts) over the pre-port-forward common set. `1.13` through
-// `1.18` bind the same frozen event union.
+// `1.19` bind the same frozen event union.
 const chatSubscribeSharedServerFrameSchemasV113 = [
   ...chatSubscribeCommonServerFrameSchemasV113,
   blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
@@ -3917,8 +3917,8 @@ const chatSubscribeClientFrameSchemaOptionsPreAuto = [
  * and can place a tab natively), and nothing else. It is a client claim; the
  * host checks membership against its own host inventory before dialing.
  *
- * Bound to the live lines (`1.17`, `1.18` and `1.20`, neither of which adds
- * anything a client sends) only. Every line from `1.13` through `1.16`
+ * Bound to the live lines (`1.17` through `1.20`; no line after `1.17`
+ * changes a client frame) only. Every line from `1.13` through `1.16`
  * keeps the pre-key `send` / `editUserMessage` objects below, and every line
  * below `1.13` its own `send` object above. A new minor although `1.16` is
  * unreleased, for the reason `1.16` itself gives: the minor is what tells a
@@ -5256,7 +5256,7 @@ const chatWindowedSnapshotSchemaV110 = lazySchema(() =>
       chatFileEditApprovalStateSchemaPreCautious,
     ),
     accumulatedFileChangeCount: z.number().int().nonnegative(),
-    // Pre-cron: `1.10` through `1.18` inherit this binding, and only the live
+    // Pre-cron: `1.10` through `1.19` inherit this binding, and only the live
     // snapshot (`1.20`) re-widens it.
     backgroundItems: z.array(backgroundItemSchemaPreCron).optional(),
     managedCommands: z.array(managedCommandSchema).default([]),
@@ -6355,7 +6355,8 @@ export const chatSubscribeV116 = defineStreamRpcContract({
  * since `1.18` opened above it, and at the pre-parity approval cards, events
  * and `turnStateChanged` since `1.20` did
  * (`chatSubscribeServerFrameSchemaV117`). Its client frames are the live ones:
- * neither `1.18` nor `1.20` adds anything a client sends.
+ * no later line changes a client frame (`1.19`'s resume claim rides the open
+ * request, and this line keeps the pre-claim one).
  */
 export const chatSubscribeV117 = defineStreamRpcContract({
   method: "chat.subscribe",
