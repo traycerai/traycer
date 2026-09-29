@@ -27,8 +27,13 @@ Playwright report, with a trace for each failed test.
   browser.
 - Each test gets a fresh browser context and page. Load a fixture with
   `page.goto(fixture("name"))` from `support/fixtures.ts`.
-- `BROWSER_TESTS_PORT` gives a run its own server (and its own Vite cache), so
-  two worktrees can run at once.
+- `BROWSER_TESTS_PORT` gives a run its own server (and its own Vite cache),
+  and `--output=<dir>` its own results directory, so two runs in one checkout
+  or two worktrees can go at once. Without `--output` they share
+  `test-results/`, which Playwright empties at the start of every run.
+- `support/fixtures.ts` holds the helpers every spec may use: `fixture`,
+  `centreOf`, `nextFrames` (the wait for "laid out and painted") and
+  `chromeLaunchOptions` (extra Chrome flags that keep `CHROME_BIN`).
 
 ## Writing a test
 
@@ -45,11 +50,18 @@ Playwright report, with a trace for each failed test.
 - **Emulation**: set the viewport and device scale with `test.use` or
   `page.setViewportSize`, and media with `page.emulateMedia`. For a mid-test
   device-pixel-ratio switch, or any other DevTools command, open
-  `page.context().newCDPSession(page)`.
+  `page.context().newCDPSession(page)`. Chrome flags (a fine hovering pointer,
+  for instance) go through `test.use({ launchOptions:
+chromeLaunchOptions([...]) })`; assert the premise they create positively
+  before relying on it.
 - **One load per configuration.** A fixture that exposes a probe (for example
   `window.__layoutCanvasProbe`) switches variants live: prefer that to a fresh
   page load per variant. The heavy fixtures boot most of the app from
-  unbundled modules, so every load costs seconds.
+  unbundled modules, so every load costs seconds. The layout editor specs
+  share one page across a file's tests (`sharedPage` in
+  `support/layout-editor/pages.ts`), reset it through the probe before each
+  test, and turn tracing off, which a context shared across tests cannot
+  survive.
 - **One test per claim**, named for the claim. Playwright shards and
   parallelises by test, so a long phase list split into tests finishes sooner
   and reports each red separately.

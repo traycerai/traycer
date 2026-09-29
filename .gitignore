@@ -20,7 +20,7 @@ logs/
 .idea/
 tmp
 coverage*.json
-/clients/gui-app/test-results/
+/clients/gui-app/test-results*/
 /clients/gui-app/playwright-report/
 .claude
 .agents

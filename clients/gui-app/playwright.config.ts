@@ -60,6 +60,10 @@ export default defineConfig({
       ? { channel: "chrome" }
       : { launchOptions: { executablePath: chromeBin } }),
     headless: true,
+    // A heavy fixture's load takes seconds. One that never fires its load
+    // event (the old CDP drivers saw this on CI runners) fails here and is
+    // retried, rather than spending the whole test timeout.
+    navigationTimeout: 60_000,
     trace: "retain-on-failure",
   },
   webServer: {

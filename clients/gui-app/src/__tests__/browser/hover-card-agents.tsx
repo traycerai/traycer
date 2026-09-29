@@ -41,8 +41,8 @@ import "@/index.css";
  * The REAL `AgentHoverTooltip` over six sidebar-style rows in a seeded epic
  * session: four rows resolve to the owner card, the last two (no owner host)
  * to the label fallback. It exists for the one thing the canvas fixture's
- * tree cannot seed, a list MIXING the two outcomes (A6 in
- * `scripts/hover-card-browser.mjs`), and it is composed the way the sidebar
+ * tree cannot seed, a list MIXING the two outcomes (driven by
+ * `browser-tests/hover-card.spec.ts`), and it is composed the way the sidebar
  * tree composes its rows: one `HoverCardGroup` around them
  * (`ChatTreePanelBody`).
  *

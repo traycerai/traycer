@@ -1,15 +1,15 @@
 name: Browser regressions
 
-# The GUI's real-browser regressions (`clients/gui-app/scripts/*-browser*.mjs`):
-# each driver starts its own Vite and a headless Chrome and drives it over CDP,
-# for claims jsdom cannot decide - layout, painted pixels, real input dispatch.
+# The GUI's real-browser regressions: Playwright Test specs in
+# `clients/gui-app/browser-tests/`, run against the fixture pages in
+# `clients/gui-app/src/__tests__/browser/` in the runner's own Google Chrome,
+# for claims jsdom cannot decide - layout, painted pixels, real input
+# dispatch. See `clients/gui-app/browser-tests/README.md`.
 #
-# They used to run one after another at the end of gui-app Vitest shard 1 in
-# `test.yml`, the one gui-app check the `main` ruleset requires. About 31
-# minutes of drivers took that job from about 7 minutes to about 35 and held
-# every PR behind it. Here they run as their own workflow, one parallel job per
-# group of `clients/gui-app/scripts/run-browser-regressions.ts`, and are not a
-# required check. No secrets.
+# They used to be hand-rolled CDP drivers run one after another at the end of
+# gui-app Vitest shard 1 in `test.yml`, the one gui-app check the `main`
+# ruleset requires, and held every PR for about 30 minutes. Here they run as
+# their own workflow, sharded, and are not a required check. No secrets.
 
 on:
   pull_request:
@@ -24,39 +24,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The group list lives in one place, the runner. The matrix below is read
-  # from it, so a group added or renamed there cannot be silently skipped here.
-  plan:
-    name: browser regressions (plan)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      groups: ${{ steps.groups.outputs.groups }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: "1.3.14"
-      - name: List the groups
-        id: groups
-        working-directory: clients/gui-app
-        run: echo "groups=$(bun scripts/run-browser-regressions.ts --list-groups)" >> "$GITHUB_OUTPUT"
-
   browser:
-    name: browser (${{ matrix.group }})
-    needs: plan
+    name: browser (${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
-    # The longest group runs about five minutes. The drivers are spawned with
-    # no timeout of their own, so a hung Chrome or Vite would otherwise hold
-    # the runner until GitHub's six-hour default.
+    # A shard runs a few minutes. Playwright bounds each test on its own
+    # (`timeout` in playwright.config.ts); this bounds the job, so a hung
+    # server or browser cannot hold the runner until GitHub's six-hour default.
     timeout-minutes: 20
     strategy:
-      # One red group must not cancel the others: each proves different claims.
+      # One red shard must not cancel the others: each proves different claims.
       fail-fast: false
       matrix:
-        group: ${{ fromJSON(needs.plan.outputs.groups) }}
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -64,7 +43,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.3.14"
-      # The drivers start Vite under Node (`spawn("node", ...)`).
+      # Playwright's CLI and the Vite server it starts both run under Node.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24.20.0"
@@ -79,5 +58,33 @@ jobs:
       - name: Browser regressions
         working-directory: clients/gui-app
         env:
-          GROUP: ${{ matrix.group }}
-        run: bun scripts/run-browser-regressions.ts --group "$GROUP"
+          SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: bun run test:browser --shard="$SHARD"
+      # The HTML report carries a trace of every failed attempt: open it with
+      # `bunx playwright show-report <dir>` after downloading.
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report-${{ matrix.shard }}
+          path: clients/gui-app/playwright-report/
+          retention-days: 14
+
+  # The self-test of `clients/gui-app/scripts/cdp-client.mjs`, the CDP client
+  # the manual browser drivers in `clients/gui-app/scripts/` still use: a
+  # command in flight when Chrome dies must reject, not hang. It imports only
+  # Node built-ins, so it needs no install.
+  cdp-client:
+    name: browser (cdp client)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.3.14"
+      - name: CDP client regression
+        working-directory: clients/gui-app
+        run: bun scripts/cdp-client-browser.mjs

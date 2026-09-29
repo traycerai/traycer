@@ -33,6 +33,7 @@ import {
   sampleNoopAction,
 } from "@/components/sample-workspace/sample-workspace-scene";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { lowerSurfaceFrame } from "@/lib/chat/chat-lower-scroll-budget";
 import type { LayoutPresetId } from "@/lib/layout/layout-presets";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { cn } from "@/lib/utils";
@@ -50,8 +51,14 @@ import "@/index.css";
  * during a running turn does. Todo rides along as the "other" dock member, so
  * the queue is always read next to a surface that DOES fold into a pill in the
  * Compact preset; `__probeDock` adds or removes Files changed and Active agents
- * beside it (staging round 4). `scripts/composer-queue-dock-browser.mjs`
+ * beside it (staging round 4). `browser-tests/composer-queue-dock.spec.ts`
  * drives it.
+ *
+ * The composer's top spacing is the tile's OWN decision: this fixture feeds
+ * `lowerSurfaceFrame` (the function `ChatLowerInteractionSurfaces` calls) the
+ * facts it owns - which members have content, what is queued - and never
+ * computes "is the joined frame filled" itself, so what the spec measures is
+ * what production decides.
  */
 type ChatQueueState = ChatSessionState["queue"];
 
@@ -122,14 +129,16 @@ export function ComposerQueueDockFixture(): ReactElement {
   const selfAgent = members.agents ? SAMPLE_SELF_AGENT : null;
   const activeAgents = members.agents ? SAMPLE_AGENT_DESCENDANTS : [];
   const todo = members.todo ? SAMPLE_TODO : null;
+  const activeAgentsVisible = members.agents;
+  const backgroundVisible = false;
   const chrome = useChatDockChrome({
     snapshotLoaded: true,
     chatId: SAMPLE_CHAT_ID,
     restore,
     selfAgent,
     activeAgents,
-    activeAgentsVisible: members.agents,
-    backgroundVisible: false,
+    activeAgentsVisible,
+    backgroundVisible,
     backgroundItems: [],
     runningManagedCommands: [],
     heldManagedCommands: [],
@@ -174,14 +183,18 @@ export function ComposerQueueDockFixture(): ReactElement {
       ),
     }));
   };
-  // The real tile's `lowerSurfaceTopSpacing`: anything in the joined frame tucks
-  // into the input, a pills-only dock keeps the composer's own `pt-4`.
-  const frameFilled =
-    queue.items.length > 0 ||
-    chrome.dockOrder.some(
-      (section) =>
-        chrome.hotspots[section].hasContent && !chrome.folded.has(section),
-    );
+  // The real tile's own decision, from the facts this fixture owns: anything
+  // in the joined frame tucks into the input, a pills-only dock keeps the
+  // composer's own `pt-4`.
+  const frame = lowerSurfaceFrame({
+    folded: chrome.folded,
+    openSection: chrome.openSection,
+    todoHasContent: todo !== null,
+    filesChangedHasContent: chrome.hotspots.filesChanged.hasContent,
+    activeAgentsHasContent: activeAgentsVisible,
+    backgroundHasContent: backgroundVisible,
+    queueItemCount: queue.items.length,
+  });
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas text-foreground">
       <div className="min-h-0 flex-1" data-probe-transcript />
@@ -236,7 +249,7 @@ export function ComposerQueueDockFixture(): ReactElement {
             />
             <div className="shrink-0">
               <ComposerSlotShell
-                topSpacing={frameFilled ? "connected" : "normal"}
+                topSpacing={frame.topSpacing}
                 bottomSpacing="normal"
               >
                 <div className="relative flex flex-col gap-3">

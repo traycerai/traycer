@@ -7,9 +7,10 @@
  * Motion is mocked off (matches `side-tab-strip.test.tsx`'s precedent): with
  * it on, closing schedules a real `requestAnimationFrame`-driven exit before
  * the content unmounts, which is `useTransitionStyles`' concern, not this
- * primitive's open/close/group/dismiss contract.
+ * primitive's open/close/group/dismiss contract. Only the (n) cases turn it
+ * on (`motion.enabled`), because the fade IS what they pin.
  */
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -17,6 +18,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HoverCard,
@@ -39,13 +41,20 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
+const motion = vi.hoisted(() => ({ enabled: false }));
 vi.mock("@/lib/animation/use-motion-enabled", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/lib/animation/use-motion-enabled")>();
-  return { ...actual, useMotionEnabled: () => false };
+  return { ...actual, useMotionEnabled: () => motion.enabled };
 });
 
 const OPEN_DELAY_MS = 500;
+const CLOSE_DELAY_MS = 150;
+const EXIT_FADE_MS = 100;
+/** A timer tick or two: nothing beside the exit fade (100ms) is this long. */
+const TICK_SLACK_MS = 10;
+/** One animation frame, which `useTransitionStyles` waits for before it fades in. */
+const FRAME_MS = 16;
 
 function contentNode(testId: string): HTMLElement | null {
   return screen.queryByTestId(testId);
@@ -64,6 +73,17 @@ function cardIsOpen(testId: string): boolean {
 function hoverIn(trigger: HTMLElement): void {
   fireEvent.pointerEnter(trigger, { pointerType: "mouse" });
   fireEvent.mouseEnter(trigger);
+}
+
+/**
+ * The pointer leaving a trigger for somewhere far from any card. With the
+ * safe polygon, `mouseleave` only starts the judgement: the document-level
+ * `mousemove` that follows is what finds the pointer outside it and starts
+ * the close delay.
+ */
+function leave(trigger: HTMLElement): void {
+  fireEvent.mouseLeave(trigger);
+  fireEvent.mouseMove(document.body, { clientX: 4000, clientY: 4000 });
 }
 
 function settle(ms: number): void {
@@ -167,6 +187,7 @@ function renderCard(props: Partial<TestCardProps>): HTMLElement {
 
 describe("HoverCard", () => {
   beforeEach(() => {
+    motion.enabled = false;
     vi.useFakeTimers({ shouldAdvanceTime: true });
   });
 
@@ -236,6 +257,45 @@ describe("HoverCard", () => {
     // fire after the press, unlike Radix's orphaned timer.
     settle(OPEN_DELAY_MS);
     expect(cardIsOpen("content")).toBe(false);
+
+    // ...and leaving afterwards must not let it land either: the timer the
+    // press was meant to cancel is what once stuck a card open under a pointer
+    // that had already gone.
+    leave(trigger);
+    settle(OPEN_DELAY_MS * 2);
+    expect(cardIsOpen("content")).toBe(false);
+  });
+
+  it("(c) swallows it on a CONTROLLED card too: the parent is never asked to open", () => {
+    // The controlled path is the one a caller with its own `open` state takes
+    // (the sidebar rows that hide a card while renaming, the graph nodes): the
+    // press has to cancel the pending open there as well, or `onOpenChange(true)`
+    // lands after it and the caller shows a card nobody is hovering.
+    const onOpenChange = vi.fn();
+    function ControlledCard(): ReactNode {
+      const [open, setOpen] = useState(false);
+      return (
+        <TestCard
+          open={open}
+          onOpenChange={(next, reason) => {
+            onOpenChange(next, reason);
+            setOpen(next);
+          }}
+        />
+      );
+    }
+    render(<ControlledCard />);
+    const trigger = screen.getByTestId("trigger");
+
+    hoverIn(trigger);
+    settle(200);
+    fireEvent.pointerDown(trigger, { pointerType: "mouse" });
+    settle(OPEN_DELAY_MS);
+    leave(trigger);
+    settle(OPEN_DELAY_MS * 2);
+
+    expect(cardIsOpen("content")).toBe(false);
+    expect(onOpenChange).not.toHaveBeenCalledWith(true, expect.anything());
   });
 
   it("(e) closes on Escape", () => {
@@ -738,5 +798,197 @@ describe("HoverCard", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     settle(0);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  describe("(n) motion: what the fade does to the card's life", () => {
+    /**
+     * Reads the styled node's opacity at the commit that MOUNTS it. It is a
+     * callback ref on the content, which React attaches after the parent's
+     * props (its inline style) are applied and before any frame or effect
+     * could change them, so it is the first thing a user's first frame can see.
+     */
+    function OpacityAtMount(props: {
+      readonly onMount: (opacity: string) => void;
+    }): ReactNode {
+      return (
+        <span
+          ref={(node) => {
+            if (node !== null) {
+              props.onMount(node.parentElement?.style.opacity ?? "no parent");
+            }
+          }}
+        >
+          Body
+        </span>
+      );
+    }
+
+    function openAndLeave(
+      seen: string[],
+      mounted: () => void,
+    ): {
+      readonly trigger: HTMLElement;
+      readonly card: HTMLElement;
+    } {
+      const trigger = renderCard({
+        content: (
+          <OpacityAtMount
+            onMount={(opacity) => {
+              seen.push(opacity);
+              mounted();
+            }}
+          />
+        ),
+      });
+      hoverIn(trigger);
+      settle(OPEN_DELAY_MS);
+      return { trigger, card: screen.getByTestId("content") };
+    }
+
+    it("with reduced motion the card is opaque from the commit that mounts it, and leaving unmounts it when the close delay ends, with no exit", () => {
+      motion.enabled = false;
+      const seen: string[] = [];
+      const { trigger, card } = openAndLeave(seen, () => undefined);
+
+      // No inline opacity at all: it was never faded out, so there is no frame
+      // in which it is not fully drawn.
+      expect(seen[0]).toBe("");
+      expect(card.style.opacity).toBe("");
+
+      leave(trigger);
+      settle(CLOSE_DELAY_MS - 1);
+      expect(cardIsOpen("content")).toBe(true);
+      // The close delay ends and the card is gone within a tick: nothing
+      // holds it on the page for an exit. (Two acts: the close renders in the
+      // first, and the unmount timer it sets can only fire in the second.)
+      settle(1);
+      settle(TICK_SLACK_MS);
+      expect(cardIsOpen("content")).toBe(false);
+    });
+
+    it("with motion the card mounts transparent and fades in, and after leaving it stays mounted, faded out, through the exit before it unmounts", () => {
+      motion.enabled = true;
+      const seen: string[] = [];
+      const { trigger, card } = openAndLeave(seen, () => undefined);
+
+      // Mounted at opacity 0 in the very commit that mounts it: the fade-in
+      // starts from nothing, which is what the reduced-motion case must not do.
+      expect(seen[0]).toBe("0");
+      // And on to full opacity over the enter transition, one frame later.
+      settle(FRAME_MS);
+      expect(card.style.opacity).toBe("");
+      expect(card.style.transitionDuration).toBe(`${EXIT_FADE_MS}ms`);
+
+      leave(trigger);
+      settle(CLOSE_DELAY_MS + 1);
+      // The close delay is over and the card is closed, and half an exit
+      // later it is still on the page, fading out.
+      settle(EXIT_FADE_MS / 2);
+      expect(cardIsOpen("content")).toBe(true);
+      expect(card.getAttribute("data-state")).toBe("closed");
+      expect(card.style.opacity).toBe("0");
+
+      settle(EXIT_FADE_MS / 2 + TICK_SLACK_MS);
+      expect(cardIsOpen("content")).toBe(false);
+    });
+  });
+
+  it("(o) a card left open under the pointer while the keyboard moves on: no Tab stop lands in it, the control that arrives late included, and it stays open", async () => {
+    // What the sequence of real Tab presses does, not what one control's
+    // `tabIndex` says ((l) pins that): a control the sweep missed, or one whose
+    // `tabIndex` a re-render restored, is a stop only a walk of the whole page
+    // can find.
+    const user = userEvent.setup({
+      delay: null,
+      advanceTimers: (ms) => {
+        vi.advanceTimersByTime(ms);
+      },
+    });
+    function ActionsBody(): ReactNode {
+      const [late, setLate] = useState(false);
+      useEffect(() => {
+        const timer = window.setTimeout(() => {
+          setLate(true);
+        }, CLOSE_DELAY_MS);
+        return () => {
+          window.clearTimeout(timer);
+        };
+      }, []);
+      return (
+        <div>
+          <a href="#install" data-testid="content-link">
+            Install
+          </a>
+          <button type="button" data-testid="content-action">
+            Refresh
+          </button>
+          {late ? (
+            <button type="button" data-testid="content-late-action">
+              Retry
+            </button>
+          ) : null}
+        </div>
+      );
+    }
+    render(
+      <div>
+        <button type="button" data-testid="first-stop">
+          First
+        </button>
+        {/* Out of the tab order itself: the pointer opened this card, and the
+            keyboard never visits its trigger. */}
+        <HoverCard
+          trigger={
+            <button type="button" tabIndex={-1} data-testid="trigger">
+              Row
+            </button>
+          }
+          content={<ActionsBody />}
+          appearance="preview"
+          semantics={{ role: "dialog", label: "Row preview" }}
+          side="right"
+          align="start"
+          sideOffset={8}
+          enabled
+          open={null}
+          onOpenChange={null}
+          testId="content"
+          className={null}
+        />
+        <button type="button" data-testid="last-stop">
+          Last
+        </button>
+      </div>,
+    );
+
+    hoverIn(screen.getByTestId("trigger"));
+    settle(OPEN_DELAY_MS);
+    settle(CLOSE_DELAY_MS + 1);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("content-late-action")).toBeTruthy();
+
+    act(() => {
+      screen.getByTestId("last-stop").focus();
+    });
+    const stops: Array<string | null> = [];
+    for (let press = 0; press < 3; press += 1) {
+      await user.tab();
+      const active = document.activeElement;
+      expect(active?.closest('[data-slot="hover-card-content"]') ?? null).toBe(
+        null,
+      );
+      stops.push(
+        active instanceof HTMLElement ? (active.dataset.testid ?? null) : null,
+      );
+    }
+
+    // The walk went round the page's own stops (past the body, which is where
+    // a Tab off the last control leaves), and none of them was the card's.
+    expect(stops).toContain("first-stop");
+    expect(stops).toContain("last-stop");
+    expect(screen.getByTestId("content").getAttribute("data-state")).toBe(
+      "open",
+    );
   });
 });

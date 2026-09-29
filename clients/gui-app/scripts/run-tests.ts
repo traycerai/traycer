@@ -2,11 +2,9 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 
-import { SIGNAL_EXIT_CODES } from "./signal-exit-codes.ts";
-
-// The real-browser regressions are NOT run from here: they live in
-// `run-browser-regressions.ts` and CI runs them in their own workflow
-// (`.github/workflows/browser-regressions.yml`).
+// The real-browser regressions are NOT run from here: they are Playwright
+// specs (`browser-tests/`, `bun run test:browser`) and CI runs them in their
+// own workflow (`.github/workflows/browser-regressions.yml`).
 
 const testArgs = process.argv.slice(2);
 
@@ -31,6 +29,23 @@ const testArgs = process.argv.slice(2);
  * a hardcoded path (which the store layout would break). `vitest.mjs` is not
  * reachable through the package's `exports`, so resolve the manifest and join.
  */
+/**
+ * Exit codes for the signals a killed Vitest run realistically reports.
+ * 128+n is the shell convention, so 137 reads as SIGKILL (the OOM killer's
+ * signal) and 139 as SIGSEGV without needing a lookup.
+ */
+const SIGNAL_EXIT_CODES: Readonly<Record<string, number>> = {
+  SIGHUP: 129,
+  SIGINT: 130,
+  SIGQUIT: 131,
+  SIGABRT: 134,
+  SIGBUS: 138,
+  SIGFPE: 136,
+  SIGKILL: 137,
+  SIGSEGV: 139,
+  SIGTERM: 143,
+};
+
 const requireFromHere = createRequire(import.meta.url);
 
 function resolveVitestEntry(): string {

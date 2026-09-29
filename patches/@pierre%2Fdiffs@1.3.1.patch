@@ -24,7 +24,15 @@ diff --git a/dist/editor/editor.js b/dist/editor/editor.js
 diff --git a/dist/components/FileDiff.js b/dist/components/FileDiff.js
 --- a/dist/components/FileDiff.js
 +++ b/dist/components/FileDiff.js
-@@ -423,6 +423,11 @@ var FileDiff = class {
+@@ -33,6 +33,7 @@ import { ScrollSyncManager } from "../managers/ScrollSyncManager.js";
+ import { isDefaultRenderRange } from "../utils/isDefaultRenderRange.js";
+ import { isDiffPlainText } from "../utils/isDiffPlainText.js";
+ import { DiffHunksRenderer } from "../renderers/DiffHunksRenderer.js";
++import { getFiletypeFromFileName } from "../utils/getFiletypeFromFileName.js";
+ import { areDiffLineAnnotationsEqual } from "../utils/areDiffLineAnnotationsEqual.js";
+ import { areHunkDataEqual } from "../utils/areHunkDataEqual.js";
+ import { getDiffHunksRendererOptions } from "../utils/getDiffHunksRendererOptions.js";
+@@ -423,6 +424,11 @@ var FileDiff = class {
  		this.rerender();
  	}
  	handleExpandHunk = (hunkIndex, direction, expansionLineCountOverride) => {
@@ -36,6 +44,29 @@ diff --git a/dist/components/FileDiff.js b/dist/components/FileDiff.js
  		this.expandHunk(hunkIndex, direction, expansionLineCountOverride);
  	};
  	expandHunk = (hunkIndex, direction, expansionLineCountOverride) => {
+@@ -592,10 +598,18 @@ var FileDiff = class {
+ 		const fileDiff = this.fileDiffCache;
+ 		const lineAnnotations = this.lineAnnotations;
+ 		const renderRange = this.computeEditorRenderRange(this.renderRange);
+-		if (editor != null && fileContainer != null && fileDiff != null && !fileDiff.isPartial) this.hunksRenderer.initializeHighlighter().then((highlighter) => {
+-			if (!this.enabled || this.editor !== editor || this.fileContainer !== fileContainer || this.fileDiffCache !== fileDiff) return;
+-			editor.__syncRenderView(highlighter, fileContainer, fileDiff, lineAnnotations, renderRange);
+-		});
++		if (editor != null && fileContainer != null && fileDiff != null && !fileDiff.isPartial) {
++			// Local patch: hand the editor a highlighter that has the file's grammar loaded; upstream fixed this in 1.4.1.
++			// A worker-pool render never sets computedLang (it stays "text"), and the editor's tokenizer
++			// loads a missing grammar only in its 500ms-debounced prebuild. A key typed before that threw
++			// "Grammar for language ... not loaded" out of #applyChange after the text had landed, so the
++			// caret never advanced and the next key went in front of the last one.
++			this.hunksRenderer.computedLang = fileDiff.lang ?? getFiletypeFromFileName(fileDiff.name);
++			this.hunksRenderer.initializeHighlighter().then((highlighter) => {
++				if (!this.enabled || this.editor !== editor || this.fileContainer !== fileContainer || this.fileDiffCache !== fileDiff) return;
++				editor.__syncRenderView(highlighter, fileContainer, fileDiff, lineAnnotations, renderRange);
++			});
++		}
+ 	}
+ 	computeEditorRenderRange(renderRange) {
+ 		const fileDiff = this.fileDiffCache;
 diff --git a/dist/managers/InteractionManager.js b/dist/managers/InteractionManager.js
 --- a/dist/managers/InteractionManager.js
 +++ b/dist/managers/InteractionManager.js
