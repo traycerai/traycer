@@ -30,7 +30,7 @@ import { nextFrames } from "./support/fixtures.ts";
 // side strip's active row/tile/split pair, or the top header's active tab -
 // onto its task's sheet.
 //
-// `src/index.css`'s `:has([data-sheet-joined=...]) > [data-sheet-join-bridge=...]`
+// `src/index.css`'s `[data-sheet-join-bridge=...][data-join-active]`
 // rules position each arc's `::before`/`::after` pseudo-element with a plain
 // percentage offset. The bridge carries a 1px border, and an absolutely
 // positioned pseudo's containing block is its host's PADDING box - so an
