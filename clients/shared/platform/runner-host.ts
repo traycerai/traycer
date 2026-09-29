@@ -1566,6 +1566,12 @@ export interface NotificationForegroundDisplay {
 }
 
 export interface ITrayState {
+  /**
+   * Whether `setEpics` reaches a surface the user can see. False on shells
+   * whose tray is a no-op: the GUI then skips sourcing the list, which is a
+   * full History query.
+   */
+  readonly showsEpics: boolean;
   setEpics(epics: readonly TrayEpic[]): Promise<void>;
   setIndicator(state: TrayIndicatorState): Promise<void>;
   /**

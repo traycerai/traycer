@@ -357,6 +357,7 @@ function createBaseRunnerHost(): IRunnerHost {
       onClick: () => ({ dispose: () => undefined }),
     },
     tray: {
+      showsEpics: true,
       setEpics: () => Promise.resolve(),
       setIndicator: () => Promise.resolve(),
       onEpicSelected: () => ({ dispose: () => undefined }),

@@ -3,10 +3,18 @@ import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 // Type-only, so it is erased before `vi.hoisted` runs and cannot re-enter the
 // module this file mocks.
 import type { ImageReclaimOutcome } from "@/lib/composer/landing-image-store";
-import { useHostClient } from "@/lib/host";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { createEpicName } from "@/lib/epic-name";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  LANDING_IMAGE_BUDGET_BYTES,
+  registerExtraImageRootSource,
+  resetLandingImageBudgetReservationsForTesting,
+  tryReserveLandingImageBudget,
+} from "@/lib/composer/landing-image-budget";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
@@ -56,6 +64,10 @@ import {
   readEpicCreateSeed,
 } from "@/lib/worktree/pending-epic-create-seeds";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
+import {
+  recordCloudDraftImageSources,
+  resetCloudDraftImageRecoveryForTests,
+} from "@/lib/drafts/cloud-draft-image-recovery";
 import { HostTransportFailureError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createOutcomeIsDecidable } from "@/lib/epics/epic-existence-poll";
 
@@ -235,6 +247,14 @@ const imageStoreMocks = vi.hoisted(() => ({
 // here too, and a from-scratch factory that omits one makes vitest warn and the
 // importer read `undefined` at call time.
 vi.mock("@/lib/composer/landing-image-store", () => ({
+  // The real digest: recovery verifies a fetched reply against the requested
+  // hash before it consults the residency budget.
+  sha256Hex: async (bytes: ImageBytes): Promise<string> => {
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
+  },
   sessionImageBytes: imageStoreMocks.sessionImageBytes,
   getImageBytes: imageStoreMocks.getImageBytes,
   imageHashKeys: imageStoreMocks.imageHashKeys,
@@ -248,6 +268,13 @@ vi.mock("@/lib/composer/landing-image-store", () => ({
   flushReclaimCustody: imageStoreMocks.flushReclaimCustody,
   reclaimImageBytes: imageStoreMocks.reclaimImageBytes,
 }));
+
+// A hash the composer is about to send is only ever a resident candidate when
+// something names it as a live root - real drafts do this through
+// `useLandingDraftStore`, which the full-budget send case below deliberately
+// leaves empty so it can root the one hash under test directly instead.
+const composerLiveImageRoots = new Set<string>();
+registerExtraImageRootSource({ hashes: () => [...composerLiveImageRoots] });
 
 const SUBMITTED_PROMPT = "Plan the host chat bootstrap";
 
@@ -401,6 +428,9 @@ describe("useLandingComposerActions", () => {
     pollMocks.pollEpicExistence.mockReset();
     pollMocks.pollEpicExistence.mockResolvedValue("unknown");
     resetDraftBlobTransportForTests();
+    resetCloudDraftImageRecoveryForTests();
+    resetLandingImageBudgetReservationsForTesting();
+    composerLiveImageRoots.clear();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
     useWorkspaceFoldersStore.setState({ byHost: {} });
@@ -438,6 +468,9 @@ describe("useLandingComposerActions", () => {
     cleanup();
     useAuthStore.getState().setSignedOut();
     resetNegotiatedManifests();
+    resetCloudDraftImageRecoveryForTests();
+    resetLandingImageBudgetReservationsForTesting();
+    composerLiveImageRoots.clear();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
     useWorkspaceFoldersStore.setState({ byHost: {} });
@@ -1325,6 +1358,83 @@ describe("useLandingComposerActions", () => {
       landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
     ).toBe(false);
 
+    queryClient.clear();
+  });
+
+  it("a full resident budget still lands a fetched image, but only ephemerally", async () => {
+    // The local leg misses (as the toast case above) and the host leg has no
+    // acquired mirror client in this suite, so this exercises leg 3 - the
+    // cloud recovery leg - which is enough to prove the same point: a landing
+    // submit uses whatever verified bytes any leg hands back, whether or not
+    // the budget let them become resident.
+    setSingleWorkspace();
+    imageStoreMocks.sessionImageBytes.mockReturnValue(null);
+    imageStoreMocks.getImageBytes.mockResolvedValue(undefined);
+    // Filled BEFORE rooting: `rootByteCost` prices an unhydrated rooted hash
+    // at the per-image ceiling the instant it becomes a live root, so rooting
+    // first would let the target itself eat into the capacity the filler
+    // needs. See the sibling resolver-level tests in
+    // `draft-blob-transport.test.ts` and `cloud-draft-image-recovery.test.ts`
+    // for the same ordering.
+    const filler = tryReserveLandingImageBudget([
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES },
+    ]);
+    if (filler === null) throw new Error("could not fill the budget");
+    composerLiveImageRoots.add(HELLO_HASH);
+    const cloudRequest = ((method: string, _payload: unknown) => {
+      if (method === "epic.readCloudChatPayload") {
+        return Promise.resolve({
+          outcome: {
+            status: "ok" as const,
+            bytesBase64: HELLO_BASE64,
+            byteLength: HELLO_BYTES.byteLength,
+          },
+        });
+      }
+      throw new Error(`unexpected ${method}`);
+    }) as HostRequester<HostRpcRegistry>["request"];
+    recordCloudDraftImageSources({
+      identity: {
+        taskId: "scp_landing",
+        chatId: "draft-landing",
+        ownerUserId: "user-landing",
+      },
+      hostId: "host-landing",
+      client: { request: cloudRequest, requestWithOptions: cloudRequest },
+      hashes: [HELLO_HASH],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForHashImage(HELLO_HASH, "full budget"),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    // Verified, ephemeral bytes still reach the send - the budget refusal is
+    // not an availability failure, so there is nothing here for the toast.
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+    const sentAttrs = imageAttrsFromEpicCreate();
+    expect(sentAttrs.b64content).toBe(HELLO_BASE64);
+
+    filler.release();
+    resetCloudDraftImageRecoveryForTests();
     queryClient.clear();
   });
 
@@ -4387,6 +4497,9 @@ function attachmentsByHashFromEpicCreate(): boolean {
 
 const HELLO_BYTES = new Uint8Array([104, 101, 108, 108, 111]);
 const HELLO_BASE64 = "aGVsbG8=";
+// The real SHA-256 of `HELLO_BYTES` ("hello"), which recovery verifies.
+const HELLO_HASH =
+  "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
 
 function setSingleWorkspace(): void {
   setWorkspace(WORKSPACE_PATH, "traycer");

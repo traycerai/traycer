@@ -93,6 +93,12 @@ const testState = vi.hoisted(() => {
     taskContextsEnabledCalls: [] as boolean[],
     organizationRefresh: vi.fn(() => Promise.resolve()),
     organizationView,
+    // Every `request` `useHistoryQuery` derived and handed to the (mocked)
+    // cloud hook, in call order - the only way to compare what two SEPARATE
+    // consumers (the drawer, the History surface) each computed for the
+    // exact same search, since the mock below returns a fixed page and
+    // reveals nothing else about its argument.
+    requestCalls: [] as ListCloudTasksRequest[],
   };
 });
 
@@ -102,6 +108,7 @@ const testState = vi.hoisted(() => {
 // by the id-fetched union.
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: (request: ListCloudTasksRequest) => {
+    testState.requestCalls.push(request);
     const query = request.filters?.query?.trim().toLowerCase() ?? "";
     const tasks =
       query.length === 0
@@ -260,6 +267,7 @@ describe("useHistoryQuery", () => {
     testState.initialLegRefused = false;
     testState.queryIsPending = false;
     testState.taskContextsEnabledCalls = [];
+    testState.requestCalls = [];
     testState.organizationRefresh.mockReset();
     testState.organizationView = {
       catalog: [],
@@ -1303,6 +1311,37 @@ describe("useHistoryQuery", () => {
       screen.getByRole("status", { name: "History titles" }).textContent,
     ).toBe("");
   });
+
+  // The drawer is now the ONLY History warmer on the phone (the tray epics
+  // source no longer mounts there, and the epic-tab route loader skips its
+  // History prefetch under `isMobileApp()`) - so its `useHistoryQuery` call
+  // must derive the exact same cloud request the History surface's own call
+  // does for the default search. If it did not, TanStack would key the two
+  // under different cache entries and opening History after the drawer
+  // warmed it would issue a second fetch instead of reading what is already
+  // there.
+  it("derives the same cloud request as the drawer and the History surface for the default search", () => {
+    render(
+      <>
+        {/* Mirrors DrawerTaskList's call (mobile-nav-drawer.tsx): nowMs is
+            always null there. */}
+        <HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />
+        {/* Mirrors the History surface's call (epics-list-panel.tsx): a real
+            sampled `nowMs`, which must NOT be part of the derived request -
+            it only feeds local row projection, never the cloud query. */}
+        <HistorySurfaceHarness
+          search={DEFAULT_HISTORY_SEARCH}
+          // Deliberately NOT the mocked Date.now() (12:00:00): a real sampled
+          // clock reading differs from whatever the drawer's fallback would
+          // compute, and the two requests must still match despite that.
+          nowMs={Date.parse("2026-04-22T12:05:00.000Z")}
+        />
+      </>,
+    );
+
+    expect(testState.requestCalls).toHaveLength(2);
+    expect(testState.requestCalls[0]).toEqual(testState.requestCalls[1]);
+  });
 });
 
 /**
@@ -1427,6 +1466,18 @@ function HistoryQueryHarness(props: {
       </div>
     </div>
   );
+}
+
+/** Mirrors the History surface's call shape (`epics-list-panel.tsx`): a real
+ * `nowMs` rather than the drawer's hardcoded `null`. Renders nothing - this
+ * harness exists only to drive `useHistoryQuery` a second, independent time
+ * so its derived request can be compared against `HistoryQueryHarness`'s. */
+function HistorySurfaceHarness(props: {
+  readonly search: HistorySearchState;
+  readonly nowMs: number;
+}): null {
+  useHistoryQuery({ search: props.search, nowMs: props.nowMs });
+  return null;
 }
 
 function taskLight(id: string, title: string, repo: string): ListTaskLight {
