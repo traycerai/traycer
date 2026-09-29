@@ -3530,7 +3530,12 @@ export type ProvidersAwaitLoginRequest = z.infer<
 export const providersAwaitLoginResponseSchema = lazySchema(() =>
   z.object({
     // The provider's state after the login child closed and auth was re-probed.
-    // Null when no login was in flight for this provider (nothing to await).
+    // Null when no login was in flight for this provider (nothing to await),
+    // and when the provider approved a sign-in the host could not install
+    // into the account's home: the account is what it was before, so a
+    // re-probed state would show the previous account and read as this
+    // sign-in's success. Either way nothing about the provider changed, and a
+    // caller reads null as "the sign-in did not complete".
     state: providerMutationCliStateSchemaV21.nullable(),
     // Create-profile only: when the authenticated account already belongs to
     // an active profile, the host discards the pending profile instead of
