@@ -40,6 +40,7 @@ import { waitingStepCopy } from "@/components/settings/panels/waiting-step-copy"
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-login-mutation";
+import { useProvidersEnsurePack } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-env-override-mutation";
 import { useProvidersSetApiKey } from "@/hooks/providers/use-providers-set-api-key-mutation";
 import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
@@ -55,14 +56,12 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 import { SignInCopyIconButton } from "@/components/settings/panels/sign-in-copy-icon-button";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
+  providerHostBlockLabel,
   providerLoginIsRemoteSafe,
   providerSupportsTerminalLogin,
-  providerTerminalLoginPackBlock,
+  providerTerminalLoginHostBlock,
+  type ProviderHostBlock,
 } from "@/components/providers/provider-signin-availability";
-import {
-  providerPackPreparingLabel,
-  type ProviderPackPreparing,
-} from "@/components/providers/provider-pack-readiness";
 import { useProviderTerminalLogin } from "@/hooks/providers/use-provider-terminal-login";
 import { providerTerminalGuidance } from "@/lib/providers/provider-setup-guidance";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
@@ -251,12 +250,14 @@ function deriveLoginOptions(
   readonly canOauth: boolean;
   readonly canTerminalLogin: boolean;
   /**
-   * The pack state blocking the terminal login right now, or null. A terminal
-   * login spawns the provider's CLI, so a pack that cannot spawn yet turns
-   * the row's button into a request whose only answer is the host's
-   * `preparing` error; the row shows the wait instead.
+   * What blocks a sign-in on the host right now, or null: the provider is
+   * off, its CLI is missing, or its pack is still on its way. Both sign-ins
+   * spawn the provider's CLI, so while this stands a button would be a
+   * request whose only answer is the host's refusal; the banner shows the
+   * reason where the button would be. Null when neither sign-in applies to
+   * this provider here, since there is no button to stand in for.
    */
-  readonly terminalLoginPackBlock: ProviderPackPreparing | null;
+  readonly signInHostBlock: ProviderHostBlock | null;
 } {
   const loginCapability: ProviderLoginCapability | null =
     state !== null ? state.loginCapability : null;
@@ -285,17 +286,19 @@ function deriveLoginOptions(
   // guessing here instead stripped the OAuth option from the banner of the one
   // provider it was meant to serve. (The terminal row above has no such
   // constraint - a TUI is what it is for.)
-  const canOauth =
+  const oauthApplies =
     !canTerminalLogin &&
     oauthArgs !== null &&
     (isLocalHost || providerLoginIsRemoteSafe(loginCapability));
+  const signInHostBlock =
+    oauthApplies || canTerminalLogin
+      ? providerTerminalLoginHostBlock(state)
+      : null;
   return {
     envVars,
-    canOauth,
+    canOauth: oauthApplies && signInHostBlock === null,
     canTerminalLogin,
-    terminalLoginPackBlock: canTerminalLogin
-      ? providerTerminalLoginPackBlock(state)
-      : null,
+    signInHostBlock,
   };
 }
 
@@ -305,13 +308,13 @@ function deriveLoginOptions(
  * Terminal sign-in needs a canvas view to open the terminal into. Outside one
  * (the home composer) the banner falls through to the paste form / CLI stub
  * rather than drawing a button that cannot deliver a terminal. A provider
- * whose pack cannot spawn yet keeps its ROW - the wait is the thing to show -
+ * the host cannot run yet keeps its ROW - the reason is the thing to show -
  * but not its button. The `button` arm carries the ids it narrowed, so the
  * row it feeds cannot be handed a null view.
  */
 function deriveTerminalLoginRow(input: {
   readonly canTerminalLogin: boolean;
-  readonly terminalLoginPackBlock: ProviderPackPreparing | null;
+  readonly signInHostBlock: ProviderHostBlock | null;
   readonly epicId: string | null;
   readonly viewTabId: string | null;
 }):
@@ -321,7 +324,7 @@ function deriveTerminalLoginRow(input: {
       readonly epicId: string;
       readonly viewTabId: string;
     }
-  | { readonly kind: "preparing"; readonly preparing: ProviderPackPreparing } {
+  | { readonly kind: "blocked" } {
   if (
     !input.canTerminalLogin ||
     input.epicId === null ||
@@ -329,10 +332,25 @@ function deriveTerminalLoginRow(input: {
   ) {
     return { kind: "none" };
   }
-  if (input.terminalLoginPackBlock !== null) {
-    return { kind: "preparing", preparing: input.terminalLoginPackBlock };
-  }
+  if (input.signInHostBlock !== null) return { kind: "blocked" };
   return { kind: "button", epicId: input.epicId, viewTabId: input.viewTabId };
+}
+
+/**
+ * The block to show one line for, or null. It stands in for whichever sign-in
+ * this banner would otherwise offer: the OAuth form, or the terminal row. A
+ * terminal sign-in with no canvas to open into draws no row at all, so it has
+ * no reason to give either.
+ */
+function deriveBlockedSignIn(
+  signInHostBlock: ProviderHostBlock | null,
+  canTerminalLogin: boolean,
+  terminalRowKind: "none" | "button" | "blocked",
+): ProviderHostBlock | null {
+  if (signInHostBlock === null) return null;
+  return terminalRowKind === "blocked" || !canTerminalLogin
+    ? signInHostBlock
+    : null;
 }
 
 /**
@@ -456,14 +474,19 @@ function ReauthBannerInner({
   readonly viewTabId: string | null;
 }) {
   const providerLabel = PROVIDER_DISPLAY_NAMES[providerId];
-  const { envVars, canOauth, canTerminalLogin, terminalLoginPackBlock } =
+  const { envVars, canOauth, canTerminalLogin, signInHostBlock } =
     deriveLoginOptions(state, isLocalHost);
   const terminalRow = deriveTerminalLoginRow({
     canTerminalLogin,
-    terminalLoginPackBlock,
+    signInHostBlock,
     epicId,
     viewTabId,
   });
+  const blockedSignIn = deriveBlockedSignIn(
+    signInHostBlock,
+    canTerminalLogin,
+    terminalRow.kind,
+  );
   // Providers with a host-side encrypted API-key store (Cursor / Droid) save the
   // pasted key as that secret (`providers.setApiKey`) rather than a plaintext env
   // override, matching how Settings > Providers stores it.
@@ -474,6 +497,7 @@ function ReauthBannerInner({
   // vars. Direct the user to the CLI.
   if (
     !canOauth &&
+    blockedSignIn === null &&
     terminalRow.kind === "none" &&
     envVars.length === 0 &&
     !apiKeySupported
@@ -512,9 +536,9 @@ function ReauthBannerInner({
           viewTabId={terminalRow.viewTabId}
         />
       ) : null}
-      {terminalRow.kind === "preparing" ? (
+      {blockedSignIn !== null ? (
         <span role="status" className="text-ui-xs text-muted-foreground">
-          {providerPackPreparingLabel(terminalRow.preparing, providerLabel)}
+          {providerHostBlockLabel(blockedSignIn, providerLabel)}
         </span>
       ) : null}
       {envVars.length > 0 || apiKeySupported ? (
@@ -617,6 +641,7 @@ function OAuthReauthForm({
   const cancelLogin = useProvidersCancelLogin();
   const submitLoginCode = useProvidersSubmitLoginCode();
   const touchLogin = useProvidersTouchLogin();
+  const ensurePack = useProvidersEnsurePack();
 
   const flow = useProviderProfileLoginFlow({
     mode: "reauth",
@@ -630,6 +655,7 @@ function OAuthReauthForm({
     cancelLogin,
     submitLoginCode,
     touchLogin,
+    ensurePack,
     failureMessages: {
       notStarted: "Sign-in did not start. Try again.",
       notFinished: "Sign-in did not finish. Try again.",
@@ -673,11 +699,26 @@ function OAuthReauthForm({
     );
   }
 
+  // A start that is taking longer than a moment - the provider's pack is
+  // downloading, or its login child is still coming up - says so, and can be
+  // cancelled: a disabled button over a minute-long wait reads as a hang.
+  if (flow.state.kind === "starting" && flow.startingCopy !== null) {
+    return (
+      <OAuthStartingRow
+        title={flow.startingCopy.title}
+        guidance={flow.startingCopy.guidance}
+        cancelRequested={flow.state.cancelRequested}
+        cancelPending={flow.cancelPending}
+        onCancel={flow.cancel}
+      />
+    );
+  }
+
   // "start" and "cancelled" both fall back to the Authenticate button - a
   // cancelled ambient reconnect reverts straight to it, same as before code
-  // paste existed. "starting" keeps showing it too, pending/disabled, the
-  // same way the original single-mutation form did (no separate
-  // intermediate row).
+  // paste existed. An ordinary "starting" keeps showing it too,
+  // pending/disabled, the same way the original single-mutation form did (no
+  // separate intermediate row).
   return (
     <div className="flex flex-col gap-2">
       <div>
@@ -694,6 +735,42 @@ function OAuthReauthForm({
       <p className="text-ui-xs text-muted-foreground">
         Opens your browser to sign in to {providerLabel}.
       </p>
+    </div>
+  );
+}
+
+// The banner's row for a start that outlasts "a moment". Same shape as
+// `OAuthWaitingRow`'s header and footer, with nothing between them: there is
+// no link and no code until the start has settled.
+function OAuthStartingRow(props: {
+  readonly title: string;
+  readonly guidance: string;
+  readonly cancelRequested: boolean;
+  readonly cancelPending: boolean;
+  readonly onCancel: () => void;
+}): ReactNode {
+  return (
+    <div className="flex flex-col gap-2.5" aria-live="polite">
+      <div className="flex items-start gap-2 text-ui-sm text-foreground">
+        <MutedAgentSpinner />
+        <div className="min-w-0">
+          <div className="font-medium">{props.title}</div>
+          <p className="mt-0.5 text-ui-xs leading-relaxed text-muted-foreground">
+            {props.guidance}
+          </p>
+        </div>
+      </div>
+      <div className="flex justify-end">
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={props.cancelRequested || props.cancelPending}
+          onClick={props.onCancel}
+        >
+          {props.cancelPending ? <MutedAgentSpinner /> : null}
+          Cancel
+        </Button>
+      </div>
     </div>
   );
 }
@@ -792,6 +869,7 @@ function OAuthWaitingRow({
   const { title, guidance } = waitingStepCopy({
     phase: codePaste.phase,
     queuePending: false,
+    startingCopy: null,
     cancelRequested: false,
     deviceCode: userCode !== null,
   });

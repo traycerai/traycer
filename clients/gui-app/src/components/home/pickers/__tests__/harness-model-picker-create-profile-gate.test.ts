@@ -20,9 +20,56 @@ const TERMINAL_LOGIN_CAP: ProviderCliState["loginCapability"] = {
   selfOpensBrowser: null,
 };
 
+// The gate now takes the whole `providers.list` row, not just its
+// `loginCapability`, so it can also ask whether the host would act on the
+// click at all (`providerHostBlock`). Every test builds one of these rather
+// than a bare capability; the default is an enabled provider with one
+// available candidate, so a test that only cares about the argv/host checks
+// never trips the host-block branch by accident.
+function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
+  return {
+    providerId: "claude-code",
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [
+      {
+        kind: "bundled",
+        path: "/opt/traycer/bin/claude",
+        version: "1.0.0",
+        available: true,
+        versionPending: false,
+      },
+    ],
+    auth: { status: "unknown", badgeText: null, label: null, detail: null },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: OAUTH_CAP,
+    availabilityPending: false,
+    profiles: [],
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    ...overrides,
+  };
+}
+
 describe("resolveCreateProfileGate", () => {
   it("allows creating a profile on a local host with browser sign-in", () => {
-    const gate = resolveCreateProfileGate(true, OAUTH_CAP);
+    const gate = resolveCreateProfileGate(
+      true,
+      providerState({ loginCapability: OAUTH_CAP }),
+    );
     expect(gate.disabled).toBe(false);
     expect(gate.reason).toBeUndefined();
   });
@@ -31,7 +78,10 @@ describe("resolveCreateProfileGate", () => {
   // a terminal-login provider is disabled here (the picker only drives
   // browser OAuth), with copy that names the terminal, not "browser sign-in".
   it("disables profile creation for a terminal-login provider without saying 'browser sign-in'", () => {
-    const gate = resolveCreateProfileGate(true, TERMINAL_LOGIN_CAP);
+    const gate = resolveCreateProfileGate(
+      true,
+      providerState({ loginCapability: TERMINAL_LOGIN_CAP }),
+    );
     expect(gate.disabled).toBe(true);
     expect(gate.reason).not.toContain("browser sign-in");
     expect(gate.reason).toContain("terminal");
@@ -44,14 +94,19 @@ describe("resolveCreateProfileGate", () => {
   // Create profile for exactly that provider, with copy telling the user to
   // find a local host they were already on.
   it("allows creating a profile when oauthArgs is empty but non-null", () => {
-    const gate = resolveCreateProfileGate(true, {
-      oauthArgs: [],
-      token: null,
-      codePaste: null,
-      terminalLogin: null,
-      remoteSafe: null,
-      selfOpensBrowser: null,
-    });
+    const gate = resolveCreateProfileGate(
+      true,
+      providerState({
+        loginCapability: {
+          oauthArgs: [],
+          token: null,
+          codePaste: null,
+          terminalLogin: null,
+          remoteSafe: null,
+          selfOpensBrowser: null,
+        },
+      }),
+    );
     expect(gate.disabled).toBe(false);
     expect(gate.reason).toBeUndefined();
   });
@@ -62,14 +117,19 @@ describe("resolveCreateProfileGate", () => {
   // marker is what this row asserts, and the argv below is retained only as a
   // decoy proving the sniff is really gone.
   it("allows creating a profile on a remote host for a remote-safe flow", () => {
-    const gate = resolveCreateProfileGate(false, {
-      oauthArgs: ["login", "--device-auth"],
-      token: null,
-      codePaste: null,
-      terminalLogin: null,
-      remoteSafe: {},
-      selfOpensBrowser: null,
-    });
+    const gate = resolveCreateProfileGate(
+      false,
+      providerState({
+        loginCapability: {
+          oauthArgs: ["login", "--device-auth"],
+          token: null,
+          codePaste: null,
+          terminalLogin: null,
+          remoteSafe: {},
+          selfOpensBrowser: null,
+        },
+      }),
+    );
     expect(gate.disabled).toBe(false);
     expect(gate.reason).toBeUndefined();
   });
@@ -77,26 +137,36 @@ describe("resolveCreateProfileGate", () => {
   // The mirror of the row above, and the one that would have caught the
   // codex/grok regression: the same argv WITHOUT the marker must be refused.
   it("refuses a remote host for --device-auth argv with no remote-safe marker", () => {
-    const gate = resolveCreateProfileGate(false, {
-      oauthArgs: ["login", "--device-auth"],
-      token: null,
-      codePaste: null,
-      terminalLogin: null,
-      remoteSafe: null,
-      selfOpensBrowser: null,
-    });
+    const gate = resolveCreateProfileGate(
+      false,
+      providerState({
+        loginCapability: {
+          oauthArgs: ["login", "--device-auth"],
+          token: null,
+          codePaste: null,
+          terminalLogin: null,
+          remoteSafe: null,
+          selfOpensBrowser: null,
+        },
+      }),
+    );
     expect(gate.disabled).toBe(true);
   });
 
   it("allows creating a profile on a remote host for code-paste", () => {
-    const gate = resolveCreateProfileGate(false, {
-      oauthArgs: ["auth", "login"],
-      token: null,
-      codePaste: {},
-      terminalLogin: null,
-      remoteSafe: null,
-      selfOpensBrowser: null,
-    });
+    const gate = resolveCreateProfileGate(
+      false,
+      providerState({
+        loginCapability: {
+          oauthArgs: ["auth", "login"],
+          token: null,
+          codePaste: {},
+          terminalLogin: null,
+          remoteSafe: null,
+          selfOpensBrowser: null,
+        },
+      }),
+    );
     expect(gate.disabled).toBe(false);
     expect(gate.reason).toBeUndefined();
   });
@@ -105,14 +175,19 @@ describe("resolveCreateProfileGate", () => {
     // The host check is orthogonal and must survive the argv relaxation: an
     // empty argv is a sign-in the HOST performs, so the loopback constraint is
     // unchanged.
-    const gate = resolveCreateProfileGate(false, {
-      oauthArgs: [],
-      token: null,
-      codePaste: null,
-      terminalLogin: null,
-      remoteSafe: null,
-      selfOpensBrowser: null,
-    });
+    const gate = resolveCreateProfileGate(
+      false,
+      providerState({
+        loginCapability: {
+          oauthArgs: [],
+          token: null,
+          codePaste: null,
+          terminalLogin: null,
+          remoteSafe: null,
+          selfOpensBrowser: null,
+        },
+      }),
+    );
     expect(gate.disabled).toBe(true);
     expect(gate.reason).toBe(
       "Add profiles from a local host with browser sign-in available.",
@@ -126,14 +201,21 @@ describe("resolveCreateProfileGate", () => {
   // against a null/absent capability") in the source claims but the suite
   // never exercised.
   it("falls through to the generic reason for a null loginCapability", () => {
-    const gate = resolveCreateProfileGate(true, null);
+    const gate = resolveCreateProfileGate(
+      true,
+      providerState({ loginCapability: null }),
+    );
     expect(gate.disabled).toBe(true);
     expect(gate.reason).toBe(
       "Add profiles from a local host with browser sign-in available.",
     );
   });
 
-  it("falls through to the generic reason for an undefined loginCapability", () => {
+  // The row itself hasn't arrived yet - `providers.list` has not resolved for
+  // this provider. `state?.loginCapability` reads undefined the same way a
+  // null capability does, so this must fall through to the same generic
+  // reason rather than throwing on an unresolved row.
+  it("falls through to the generic reason for an unresolved row (state undefined)", () => {
     const gate = resolveCreateProfileGate(true, undefined);
     expect(gate.disabled).toBe(true);
     expect(gate.reason).toBe(
@@ -151,18 +233,57 @@ describe("resolveCreateProfileGate", () => {
   it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
     "uses the terminal reason for a terminal-login provider with no oauthArgs (%o)",
     ({ oauthArgs }) => {
-      const gate = resolveCreateProfileGate(true, {
-        oauthArgs,
-        token: null,
-        codePaste: null,
-        terminalLogin: {},
-        remoteSafe: null,
-        selfOpensBrowser: null,
-      });
+      const gate = resolveCreateProfileGate(
+        true,
+        providerState({
+          loginCapability: {
+            oauthArgs,
+            token: null,
+            codePaste: null,
+            terminalLogin: {},
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          },
+        }),
+      );
       expect(gate.disabled).toBe(true);
       expect(gate.reason).toBe(
         "This provider is signed in from a terminal, not the browser.",
       );
     },
   );
+
+  // The three outcomes of the row-level host gate (`providerHostBlock`),
+  // reached only once the permanent argv/host checks above have passed.
+
+  it("is not disabled for an enabled row with an available candidate", () => {
+    const gate = resolveCreateProfileGate(
+      true,
+      providerState({ loginCapability: OAUTH_CAP }),
+    );
+    expect(gate.disabled).toBe(false);
+    expect(gate.reason).toBeUndefined();
+  });
+
+  it("disables profile creation for a disabled provider, with the host-block label as reason", () => {
+    const gate = resolveCreateProfileGate(
+      true,
+      providerState({ enabled: false, loginCapability: OAUTH_CAP }),
+    );
+    expect(gate.disabled).toBe(true);
+    expect(gate.reason).toBe(
+      "Claude Code is turned off. Turn it on to sign in or manage its profiles.",
+    );
+  });
+
+  it("disables profile creation when no candidate is available, with the host-block label as reason", () => {
+    const gate = resolveCreateProfileGate(
+      true,
+      providerState({ candidates: [], loginCapability: OAUTH_CAP }),
+    );
+    expect(gate.disabled).toBe(true);
+    expect(gate.reason).toBe(
+      "The Claude Code CLI is not installed on this host.",
+    );
+  });
 });

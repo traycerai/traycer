@@ -64,12 +64,28 @@ export function profileEnablementTooltipText(
     : "Disabled: agents can’t use this profile.";
 }
 
+/**
+ * Why this profile's enable switch is held, or null when it may move.
+ *
+ * A provider that is off holds every profile control (`providerHostBlockLabel`
+ * says so), with one exception it cannot do without: the host refuses to turn
+ * a provider on while none of its profiles is on, so with every profile off,
+ * turning one on is the step the provider's own switch is waiting for. That
+ * single move stays open; nothing else does until the provider is on.
+ */
 export function profileEligibilityToggleDisabledReason(
   providerEnabled: boolean,
+  providerLabel: string,
   profile: ProviderProfile,
   profiles: readonly ProviderProfile[],
 ): string | null {
-  if (!providerEnabled || !profile.enabled) return null;
+  if (!providerEnabled) {
+    const anyEnabled = profiles.some((candidate) => candidate.enabled);
+    return anyEnabled
+      ? `${providerLabel} is turned off. Turn it on to change its profiles.`
+      : null;
+  }
+  if (!profile.enabled) return null;
   return profiles.some(
     (candidate) =>
       candidate.profileId !== profile.profileId && candidate.enabled,

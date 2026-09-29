@@ -863,7 +863,18 @@ function providerCliStateWithProfiles(input: {
     enabled: true,
     disabledBy: null,
     selected: { kind: "bundled" },
-    candidates: [],
+    // Capable by default: a runnable candidate, so `providerHostBlock`
+    // reports null unless a test explicitly narrows `candidates` to exercise
+    // the CLI-missing/checking gate.
+    candidates: [
+      {
+        kind: "bundled",
+        path: "/opt/traycer/resources/providers/claude/claude",
+        version: "1.0.0",
+        available: true,
+        versionPending: false,
+      },
+    ],
     auth: {
       status: "authenticated",
       badgeText: null,
