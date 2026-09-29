@@ -23,10 +23,16 @@ export function providerSupportsCustomCliPath(providerId: ProviderId): boolean {
   return providerId !== "antigravity";
 }
 
-/** Why "Add custom path" is held for this provider, or null when it is not. */
+/**
+ * Why "Add custom path" is held for this provider, or null when it is not.
+ *
+ * Worded to hold on every platform: it names no managed download, because
+ * Antigravity has none on an Intel Mac. The host's refusal
+ * (`ProviderCustomCliPathUnsupportedError`) says the same.
+ */
 export function providerCustomCliPathHeldReason(
   providerId: ProviderId,
 ): string | null {
   if (providerSupportsCustomCliPath(providerId)) return null;
-  return `${PROVIDER_DISPLAY_NAMES[providerId]} runs its own ACP server from its managed download, so a custom CLI path isn't supported.`;
+  return `${PROVIDER_DISPLAY_NAMES[providerId]} runs only its own ACP server (\`agy_acp_server\`), not the \`agy\` CLI, so a custom CLI path isn't supported.`;
 }
