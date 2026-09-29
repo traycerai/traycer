@@ -1,7 +1,8 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { mkdir, mkdtemp, rm, rmdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { createServer } from "node:net";
+import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
@@ -75,31 +76,63 @@ function hasPrepareElectronBinary(
 }
 
 /**
- * Runs `work` holding an exclusive directory lock, so two workers never
- * prepare the Electron binary at once. Two first calls race in two places:
+ * The loopback port whose listener is the Electron prepare lock: one per
+ * checkout, since each checkout's `node_modules` and desktop `dist/` hold
+ * their own binary, and below both Linux's and macOS's ephemeral ranges, so
+ * no outgoing connection is ever handed it.
+ */
+const PREPARE_LOCK_PORT =
+  20_000 +
+  (createHash("sha256").update(DESKTOP_ROOT).digest().readUInt32BE(0) % 10_000);
+
+/** Listens on the prepare-lock port; `null` while another process holds it. */
+async function tryHoldPrepareLock(): Promise<Server | null> {
+  const server = createServer();
+  return new Promise((resolve, reject) => {
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") resolve(null);
+      else reject(error);
+    });
+    server.listen({ port: PREPARE_LOCK_PORT, host: "127.0.0.1" }, () => {
+      resolve(server);
+    });
+  });
+}
+
+/**
+ * Runs `work` holding an exclusive lock, so two workers never prepare the
+ * Electron binary at once. Two first calls race in two places:
  * `require("electron")` downloads the binary when it is missing (every fresh
  * CI runner, since bun runs no postinstall) into the package's own `dist/`,
  * and on macOS `prepareElectronBinary` then builds a signed dev bundle in the
  * desktop package. Once both are current the lock is held for an instant.
+ *
+ * The lock is a listening socket, not a file: the kernel closes it when its
+ * holder exits, however it exits, so a worker killed mid-preparation cannot
+ * leave it held, and nothing ever has to guess whether a holder is still
+ * alive.
  */
-async function withDirectoryLock<T>(
-  lockPath: string,
-  work: () => T,
-): Promise<T> {
+async function withPrepareLock<T>(work: () => T): Promise<T> {
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
   for (;;) {
-    try {
-      await mkdir(lockPath);
-      break;
-    } catch (error) {
-      if (Date.now() > deadline) throw error;
-      await delay(100);
+    const lock = await tryHoldPrepareLock();
+    if (lock !== null) {
+      try {
+        return work();
+      } finally {
+        await new Promise<void>((resolve) => {
+          lock.close(() => {
+            resolve();
+          });
+        });
+      }
     }
-  }
-  try {
-    return work();
-  } finally {
-    await rmdir(lockPath);
+    if (Date.now() > deadline) {
+      throw new Error(
+        `127.0.0.1:${String(PREPARE_LOCK_PORT)}, the Electron prepare lock, was still held after ${String(STARTUP_TIMEOUT_MS)}ms: another worker is still preparing Electron, or another program listens there`,
+      );
+    }
+    await delay(100);
   }
 }
 
@@ -116,26 +149,23 @@ async function electronBinary(): Promise<string> {
       "electron-binary.cjs does not export prepareElectronBinary",
     );
   }
-  return withDirectoryLock(
-    path.join(tmpdir(), "traycer-tree-zoom-electron-prepare.lock"),
-    () => {
-      // Inside the lock: resolving `electron` is what downloads a missing
-      // binary. Two workers doing that at once on a fresh runner left one
-      // launching a half-written binary ("Electron exited before it was
-      // ready"); here the second finds it complete.
-      const defaultBinary: unknown = requireFromDesktop("electron");
-      if (typeof defaultBinary !== "string") {
-        throw new Error(
-          "the desktop package's electron did not resolve to a path",
-        );
-      }
-      return helpers.prepareElectronBinary(
-        defaultBinary,
-        DESKTOP_ROOT,
-        "Traycer Tree Zoom Test",
+  return withPrepareLock(() => {
+    // Inside the lock: resolving `electron` is what downloads a missing
+    // binary. Two workers doing that at once on a fresh runner left one
+    // launching a half-written binary ("Electron exited before it was
+    // ready"); here the second finds it complete.
+    const defaultBinary: unknown = requireFromDesktop("electron");
+    if (typeof defaultBinary !== "string") {
+      throw new Error(
+        "the desktop package's electron did not resolve to a path",
       );
-    },
-  );
+    }
+    return helpers.prepareElectronBinary(
+      defaultBinary,
+      DESKTOP_ROOT,
+      "Traycer Tree Zoom Test",
+    );
+  });
 }
 
 async function freePort(): Promise<number> {
