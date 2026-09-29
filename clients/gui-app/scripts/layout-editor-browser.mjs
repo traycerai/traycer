@@ -6688,6 +6688,69 @@ async function prepareTab(client) {
   });
 }
 
+/**
+ * Boots the canvas fixture once before any phase. A `--force` Vite compiles
+ * the fixture's whole module graph on its first boot: about 25s on a CI
+ * runner, against the 30s every later load is allowed. Since the phases run
+ * as separate CI shards, a shard whose first phase opens this fixture paid
+ * that cold boot inside its first variant and failed it ("never fired its
+ * load event"). So this one boot waits while the dev server keeps answering
+ * (compiling is progress), fails after 30s with no response or 180s in all
+ * (a reload loop answers forever), and counts as no stall retry. Same
+ * semantics as `sheet-join-geometry-browser.mjs`'s `warmUp`.
+ */
+async function warmUp(client, url) {
+  const idleMs = 30_000;
+  const capMs = 180_000;
+  await client.freshTab();
+  await prepareTab(client);
+  await client.send("Network.enable", undefined);
+  const started = Date.now();
+  let lastResponse = started;
+  const heard = () => {
+    lastResponse = Date.now();
+  };
+  const stops = [
+    client.on("Network.responseReceived", heard),
+    client.on("Network.loadingFinished", heard),
+  ];
+  try {
+    await client.send("Page.navigate", { url });
+    while (Date.now() - started < capMs) {
+      if (client.crashed())
+        throw new Error("The renderer was killed while warming up the fixture");
+      if (Date.now() - lastResponse >= idleMs)
+        throw new Error(
+          `The fixture's first boot stalled: no response from Vite for ${String(idleMs / 1000)}s and no ready probe`,
+        );
+      try {
+        if (
+          await evaluate(client, "window.__layoutCanvasProbe?.ready === true")
+        ) {
+          console.log(
+            `fixture warm-up boot: ${String(Date.now() - started)}ms`,
+          );
+          return;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (
+          !/context was destroyed|Cannot find context|Inspected target navigated/i.test(
+            message,
+          )
+        )
+          throw error;
+      }
+      await delay(250);
+    }
+    throw new Error(
+      `The fixture's first boot was not ready within ${String(capMs / 1000)}s although Vite kept answering (a reload loop?)`,
+    );
+  } finally {
+    for (const stop of stops) stop();
+  }
+}
+
 /** A CDP timeout, or a readiness timeout on a document whose module never ran. */
 function stalledBoot(message) {
   // `cdp-client.mjs`'s own timeout for a command the page never answers.
@@ -6894,6 +6957,15 @@ try {
   const origin = `http://127.0.0.1:${vitePort}`;
   const canvasUrl = `${origin}${canvasFixturePath}`;
   const phases = selectedPhases();
+  await warmUp(
+    client,
+    variantUrl(canvasUrl, {
+      tabs: "top",
+      collapsed: 0,
+      wco: "none",
+      dock: "right",
+    }),
+  );
   // Every selected phase runs even after one fails: each navigates to its own
   // document, so a red phase says nothing about the next, and one run should
   // report every red rather than the first.
