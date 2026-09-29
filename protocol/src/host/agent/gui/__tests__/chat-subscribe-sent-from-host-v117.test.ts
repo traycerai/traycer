@@ -9,6 +9,7 @@ import {
   chatSubscribeV116,
   chatSubscribeV117,
   chatSubscribeV118,
+  chatSubscribeV119,
   chatSubscribeWindowedClientFrameSchema,
   chatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -41,25 +42,34 @@ const PRE_KEY_LINES = [
   { label: "1.16", contract: chatSubscribeV116 },
 ] as const;
 
-describe("chat.subscribe registry: 1.17 below the 1.18 head, 1.16 still installed", () => {
-  it("keeps 1.17 and 1.16 bound to their own contracts - the head has since moved to 1.18", () => {
+describe("chat.subscribe registry: 1.17 below the 1.19 head, 1.16 still installed", () => {
+  it("keeps 1.17 and 1.16 bound to their own contracts - the head has since moved to 1.19", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(18);
+    expect(line.latestMinor).toBe(19);
     expect(line.versions[17].contract).toBe(chatSubscribeV117);
     expect(line.versions[16].contract).toBe(chatSubscribeV116);
   });
 
-  it("1.17 binds a distinct frozen server schema; 1.18 binds the live windowed one; both share the live client schema", () => {
+  it("1.17 and 1.18 bind frozen server schemas; 1.19 binds the live schema", () => {
     expect(chatSubscribeV117.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV118.serverFrameSchema).toBe(
+    expect(chatSubscribeV118.serverFrameSchema).not.toBe(
+      chatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV119.serverFrameSchema).toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV118.clientFrameSchema).toBe(
       chatSubscribeWindowedClientFrameSchema,
     );
     expect(chatSubscribeV117.clientFrameSchema).toBe(
+      chatSubscribeWindowedClientFrameSchema,
+    );
+    expect(chatSubscribeV118.clientFrameSchema).toBe(
+      chatSubscribeWindowedClientFrameSchema,
+    );
+    expect(chatSubscribeV119.clientFrameSchema).toBe(
       chatSubscribeWindowedClientFrameSchema,
     );
   });

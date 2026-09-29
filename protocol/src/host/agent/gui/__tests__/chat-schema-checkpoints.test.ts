@@ -24,6 +24,7 @@ import {
   chatSubscribeV115,
   chatSubscribeV116,
   chatSubscribeV117,
+  chatSubscribeV118,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -119,6 +120,9 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // and the shared `turnStateChanged` frame), and all eight digests moved. The
 // hand-frozen `lastFailedAttemptSchemaPreWaitResume` puts them back,
 // identical.
+//
+// 1.18 is captured from main's model-routing line before skeleton resume
+// opened 1.19. Its frozen union must remain byte-for-byte that line.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -192,6 +196,10 @@ const SERVER_FRAME_DIGESTS = {
     "dbf3a7e702b1e2a00cf02943c4d8284850e6a0e58403149e3243600aeb4bf7fc",
     "3cb2021ec06347cfdac037380776254b5f0677fba1ac6b2af23d42658024be33",
   ],
+  18: [
+    "dd36f3ee4468b540113ddc764ccd65a8ad719dd106e4af7d4cb40cb4f3598188",
+    "04686bfe28536663fb5d5e85ea6d69ee0e07f03d7872d03fe6299826e50d5d7c",
+  ],
 } as const;
 
 const contracts = [
@@ -213,10 +221,11 @@ const contracts = [
   chatSubscribeV115,
   chatSubscribeV116,
   chatSubscribeV117,
+  chatSubscribeV118,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.17 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.18 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

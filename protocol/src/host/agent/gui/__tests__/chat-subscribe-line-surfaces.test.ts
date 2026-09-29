@@ -58,9 +58,10 @@ const AUTO_MINOR = 13;
 const PORT_FORWARD_MINOR = 14;
 // `1.15` (message delivery), `1.16` (approval tier) and `1.17` (sender host)
 // mint no boundary a needle below can pin, so only the ceiling names them.
-// `1.18` (model routing) is the boundary for the receipt / pausedReason needles.
+// `1.18` (model routing) is the boundary for the receipt / pausedReason needles;
+// `1.19` adds only the open-request resume claim and first-chunk retainedRows.
 const MODEL_ROUTING_MINOR = 18;
-const LIVE_MINOR = MODEL_ROUTING_MINOR;
+const LIVE_MINOR = 19;
 const MODEL_ROUTING_NEEDLES = ['"receipt":', '"pausedReason":'];
 const MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
@@ -188,12 +189,12 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.18 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.19 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
