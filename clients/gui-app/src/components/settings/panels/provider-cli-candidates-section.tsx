@@ -33,6 +33,10 @@ import {
 import { useOpenLink } from "@/lib/links/open-link";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { cn } from "@/lib/utils";
+import {
+  ARIA_DISABLED_TRIGGER_CLASS,
+  resolveDisabledPresentation,
+} from "@/lib/disabled-presentation";
 import { ProviderPackVersionManagerPanel } from "./provider-pack-version-manager-panel";
 import {
   providerCustomCliPathHeldReason,
@@ -732,6 +736,11 @@ function CustomPathForm({
  * Held, not hidden, for a provider that cannot run a custom CLI
  * (`providerSupportsCustomCliPath`): the button stays where the user expects
  * it, and its tooltip says why it does nothing.
+ *
+ * Held with `aria-disabled`, never native `disabled` (`disabled-presentation.ts`):
+ * the tooltip is the only place the reason is shown, and a natively disabled
+ * button leaves the tab order and takes no pointer events, so neither a
+ * keyboard nor a pointer could reach it. Activation is blocked here instead.
  */
 function AddCustomPathButton({
   hidden,
@@ -743,21 +752,26 @@ function AddCustomPathButton({
   readonly onClick: () => void;
 }): ReactNode {
   if (hidden) return null;
+  const { ariaDisabled, nativeDisabled } = resolveDisabledPresentation(
+    heldReason !== null,
+    heldReason,
+  );
   return (
     <TooltipWrapper label={heldReason} side="top" sideOffset={6} align="start">
-      {/* Span between the tooltip and the button because a `disabled` button
-          emits no pointer events for Radix to hover-detect - and the reason it
-          is disabled is exactly what this says. */}
-      <span className="mt-2 inline-flex w-fit">
-        <button
-          type="button"
-          onClick={onClick}
-          disabled={heldReason !== null}
-          className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-ui-sm text-muted-foreground transition-colors enabled:hover:bg-accent/60 enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Plus className="size-4" /> Add custom path
-        </button>
-      </span>
+      <button
+        type="button"
+        aria-disabled={ariaDisabled ? true : undefined}
+        disabled={nativeDisabled}
+        onClick={() => {
+          if (heldReason === null) onClick();
+        }}
+        className={cn(
+          "mt-2 inline-flex w-fit items-center gap-1.5 rounded-md px-2 py-1 text-ui-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground",
+          ARIA_DISABLED_TRIGGER_CLASS,
+        )}
+      >
+        <Plus className="size-4" /> Add custom path
+      </button>
     </TooltipWrapper>
   );
 }

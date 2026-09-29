@@ -1439,7 +1439,7 @@ describe("ProviderCliCandidatesSection: keyboard reachability", () => {
  * tooltip explaining why - never silently offered-then-failed.
  */
 describe("ProviderCliCandidatesSection: custom CLI path held for antigravity", () => {
-  it("disables Add custom path for antigravity, states the reason on its tooltip, and a click reveals no input", () => {
+  it("holds Add custom path for antigravity, keyboard-reachable with the reason on its tooltip, and a click reveals no input", () => {
     const state = providerState({
       providerId: "antigravity",
       selected: { kind: "path" },
@@ -1448,7 +1448,16 @@ describe("ProviderCliCandidatesSection: custom CLI path held for antigravity", (
     renderSection(state);
 
     const button = screen.getByRole("button", { name: "Add custom path" });
-    expect(button.hasAttribute("disabled")).toBe(true);
+    // `aria-disabled`, not native `disabled`: the tooltip is the only place
+    // the reason lives, and a natively disabled button leaves the tab order.
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.hasAttribute("disabled")).toBe(false);
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    button.blur();
+    // The button itself is the trigger, so focusing it (what the probe does)
+    // opens the reason.
+    expect(button.getAttribute("data-slot")).toBe("tooltip-trigger");
     expect(tooltipTextNear(button)).toBe(
       "Antigravity runs its own ACP server from its managed download, so a custom CLI path isn't supported.",
     );
@@ -1474,6 +1483,7 @@ describe("ProviderCliCandidatesSection: custom CLI path held for antigravity", (
 
     const button = screen.getByRole("button", { name: "Add custom path" });
     expect(button.hasAttribute("disabled")).toBe(false);
+    expect(button.hasAttribute("aria-disabled")).toBe(false);
     expect(tooltipTextNear(button)).toBeNull();
 
     fireEvent.click(button);
