@@ -11,6 +11,7 @@ import {
   personalAppearanceSchema,
   taskLabelStateSchema,
   cloudListTasksRequestSchema,
+  cloudListTasksResponseSchemaV10,
   cloudListTasksResponseSchema,
 } from "./schemas";
 
@@ -177,7 +178,22 @@ export const organizationHistoryV10 = defineRpcContract({
   method: "organization.history",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: cloudListTasksRequestSchema,
+  responseSchema: cloudListTasksResponseSchemaV10,
+});
+export const organizationHistoryV11 = defineRpcContract({
+  method: "organization.history",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: cloudListTasksRequestSchema,
   responseSchema: cloudListTasksResponseSchema,
+});
+export const organizationHistoryUpgradeV10ToV11 = defineUpgradePath<
+  typeof organizationHistoryV10,
+  typeof organizationHistoryV11
+>({
+  from: organizationHistoryV10.schemaVersion,
+  to: organizationHistoryV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 export const organizationSubscribeV10 = defineStreamRpcContract({
   method: "organization.subscribe",

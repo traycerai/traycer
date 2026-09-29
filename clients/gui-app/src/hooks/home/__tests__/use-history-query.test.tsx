@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -49,6 +55,7 @@ const testState = vi.hoisted(() => {
     activityWorktrees: [] as readonly WorktreeHostEntryV12[],
     activityError: null as Error | null,
     taskContexts: new Map<string, ListTaskLight>(),
+    recentAtByTaskId: new Map<string, number>(),
     localHomedTaskIds: new Set<string>(),
     taskContextsError: null as Error | null,
     // `useEpicGetTaskContexts`'s `isFetching`, so a test can hold context
@@ -173,7 +180,16 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
       tasksById: new Map(
         taskIds.flatMap((taskId) => {
           const task = testState.taskContexts.get(taskId);
-          return task === undefined ? [] : [[taskId, task] as const];
+          if (task === undefined) return [];
+          // Model combineTaskContextResults: @1.4's sibling activity value is
+          // merged onto each found row before History receives the context map.
+          const recentAt = testState.recentAtByTaskId.get(taskId);
+          return [
+            [
+              taskId,
+              recentAt === undefined ? task : { ...task, recentAt },
+            ] as const,
+          ];
         }),
       ),
       // `epic.getTaskContexts@1.2`'s sibling home-marker list. Kept on the fake
@@ -182,6 +198,8 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
       localHomedTaskIds: testState.localHomedTaskIds,
       isFetching: testState.taskContextsFetching,
       error: testState.taskContextsError,
+      refetch: () => Promise.resolve(),
+      refetchBatches: [],
     };
   },
 }));
@@ -206,8 +224,18 @@ describe("useHistoryQuery", () => {
       Date.parse("2026-04-22T12:00:00.000Z"),
     );
     testState.tasks = [
-      taskLight("epic-alpha", "Alpha workbench", "traycer/gui-app"),
-      taskLight("epic-beta", "Beta search flow", "traycer/server"),
+      taskLightWithRecentAt(
+        "epic-alpha",
+        "Alpha workbench",
+        "traycer/gui-app",
+        Date.parse("2026-04-22T11:00:00.000Z"),
+      ),
+      taskLightWithRecentAt(
+        "epic-beta",
+        "Beta search flow",
+        "traycer/server",
+        Date.parse("2026-04-22T11:20:00.000Z"),
+      ),
     ];
     testState.response = { tasks: testState.tasks, hasMore: false };
     testState.isFetching = false;
@@ -219,6 +247,7 @@ describe("useHistoryQuery", () => {
     testState.activityWorktrees = [];
     testState.activityError = null;
     testState.taskContexts = new Map();
+    testState.recentAtByTaskId = new Map();
     testState.taskContextsError = null;
     testState.taskContextsFetching = false;
     testState.localHomedTaskIds = new Set<string>();
@@ -281,6 +310,16 @@ describe("useHistoryQuery", () => {
     expect(testState.rawRefetch).not.toHaveBeenCalled();
   });
 
+  it("refreshes only the task page for activity reconciliation", () => {
+    render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh tasks" }));
+
+    expect(testState.refetch).toHaveBeenCalledTimes(1);
+    expect(testState.organizationRefresh).not.toHaveBeenCalled();
+    expect(testState.rawRefetch).not.toHaveBeenCalled();
+  });
+
   it("keeps pending host organization state over the confirmed cloud row", () => {
     const cloudTask = taskLightWithOrganization(
       "epic-alpha",
@@ -340,7 +379,7 @@ describe("useHistoryQuery", () => {
     expect(screen.getByTestId("fetching").textContent).toBe("false");
     expect(
       screen.getByRole("status", { name: "History titles" }).textContent,
-    ).toBe("Alpha workbench|Beta search flow");
+    ).toBe("Beta search flow|Alpha workbench");
 
     rerender(
       <HistoryQueryHarness
@@ -552,6 +591,146 @@ describe("useHistoryQuery", () => {
     expect(
       screen.getByRole("status", { name: "History titles" }).textContent,
     ).toBe("Beta search flow|Alpha workbench");
+  });
+
+  it("orders filtered Recent results across the cloud page and branch-matched union", async () => {
+    const recentAt = (hour: number, minute: number): number =>
+      Date.parse(
+        `2026-04-22T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00.000Z`,
+      );
+    testState.tasks = [
+      taskLightWithRecentAt(
+        "cloud-a",
+        "rank cloud A",
+        "traycer/gui-app",
+        recentAt(11, 5),
+      ),
+      taskLightWithRecentAt(
+        "cloud-b",
+        "rank cloud B",
+        "traycer/server",
+        recentAt(11, 20),
+      ),
+    ];
+    testState.response = { tasks: testState.tasks, hasMore: false };
+    testState.worktreeIndex = [
+      {
+        ...worktreeWithPullRequest(84),
+        branch: "rank-extras",
+        owners: [
+          {
+            epicId: "context-extra",
+            ownerKind: "chat",
+            ownerId: "chat-extra",
+            updatedAt: 1,
+          },
+        ],
+      },
+    ];
+    testState.taskContexts = new Map([
+      [
+        "context-extra",
+        taskLightWithUpdatedAt(
+          "context-extra",
+          "rank extra",
+          "traycer/local",
+          recentAt(10, 50),
+        ),
+      ],
+    ]);
+    // This is the @1.4 sibling map. The row's updatedAt would put the context
+    // extra last without it; the viewer activity value puts it between the
+    // two cloud rows while remaining later than the task's edit time.
+    testState.recentAtByTaskId = new Map([["context-extra", recentAt(11, 10)]]);
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          query: "rank",
+          sort: "recent",
+          sortExplicit: true,
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("status", { name: "History titles" }).textContent,
+      ).toBe("rank cloud B|rank extra|rank cloud A");
+    });
+  });
+
+  it("preserves server Recent order when an older host omits activity timestamps", async () => {
+    // epic.listTasks@1.7 adds recentAt. An @1.6-or-earlier host omits that
+    // field but still returns the page in authoritative activity order. Task
+    // edit times can disagree with that order, so fallback sorting corrupts it.
+    const serverRecent = taskLightWithUpdatedAt(
+      "server-recent",
+      "server recent",
+      "traycer/gui-app",
+      Date.parse("2026-04-22T10:00:00.000Z"),
+    );
+    const serverOlderActivity = taskLightWithUpdatedAt(
+      "server-older-activity",
+      "server older activity",
+      "traycer/server",
+      Date.parse("2026-04-22T11:00:00.000Z"),
+    );
+    testState.tasks = [serverRecent, serverOlderActivity];
+    testState.response = { tasks: testState.tasks, hasMore: false };
+
+    const search = patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+      sort: "recent",
+      sortExplicit: true,
+    });
+    const { rerender } = render(<HistoryQueryHarness search={search} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("status", { name: "History titles" }).textContent,
+      ).toBe("server recent|server older activity");
+    });
+
+    testState.isFetching = true;
+    rerender(<HistoryQueryHarness search={search} />);
+
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("server recent|server older activity");
+  });
+
+  it("preserves pre-1.7 server Recent order during a fetching text search", async () => {
+    // Both rows match, but the exact title should win Fuse relevance and has
+    // the newer task edit time. The older peer's page order remains the
+    // authoritative activity order even while local filtering is active.
+    const serverFirst = taskLightWithUpdatedAt(
+      "server-first",
+      "matching result details",
+      "traycer/gui-app",
+      Date.parse("2026-04-22T10:00:00.000Z"),
+    );
+    const strongerMatch = taskLightWithUpdatedAt(
+      "stronger-match",
+      "match",
+      "traycer/server",
+      Date.parse("2026-04-22T11:00:00.000Z"),
+    );
+    testState.tasks = [serverFirst, strongerMatch];
+    testState.response = { tasks: testState.tasks, hasMore: false };
+    testState.isFetching = true;
+    const search = patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+      query: "match",
+      sort: "recent",
+      sortExplicit: true,
+    });
+
+    render(<HistoryQueryHarness search={search} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("status", { name: "History titles" }).textContent,
+      ).toBe("matching result details|match");
+    });
   });
 
   it("dedups a task matched by both the cloud query and a local worktree string", () => {
@@ -1016,7 +1195,7 @@ describe("useHistoryQuery", () => {
       );
       expect(
         screen.getByRole("status", { name: "History titles" }).textContent,
-      ).toBe("Alpha workbench|Beta search flow");
+      ).toBe("Beta search flow|Alpha workbench");
     });
 
     it("host-filters an id-fetched worktree match instead of dropping the local search", () => {
@@ -1153,6 +1332,14 @@ function HistoryQueryHarness(props: {
       >
         Refresh
       </button>
+      <button
+        type="button"
+        onClick={() => {
+          void result.refetchTasks();
+        }}
+      >
+        Refresh tasks
+      </button>
       <div data-testid="pending">{String(result.isPending)}</div>
       <div data-testid="fetching">{String(result.isFetching)}</div>
       <div data-testid="host-requires-cloud-to-list">
@@ -1276,6 +1463,35 @@ function taskLight(id: string, title: string, repo: string): ListTaskLight {
       roomInfo: null,
     },
     pinned: false,
+  };
+}
+
+function taskLightWithRecentAt(
+  id: string,
+  title: string,
+  repo: string,
+  recentAt: number,
+): ListTaskLight {
+  return { ...taskLight(id, title, repo), recentAt };
+}
+
+function taskLightWithUpdatedAt(
+  id: string,
+  title: string,
+  repo: string,
+  updatedAt: number,
+): ListTaskLight {
+  const task = taskLight(id, title, repo);
+  const epic = task.epic;
+  if (epic === null || epic === undefined || epic.light === null) {
+    throw new Error("Expected an epic light test fixture");
+  }
+  return {
+    ...task,
+    epic: {
+      ...epic,
+      light: { ...epic.light, updatedAt },
+    },
   };
 }
 
