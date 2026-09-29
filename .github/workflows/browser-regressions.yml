@@ -10,17 +10,26 @@ name: Browser regressions
 # every PR behind it. Here they run as their own workflow, one parallel job per
 # group of `clients/gui-app/scripts/run-browser-regressions.ts`, and are not a
 # required check. No secrets.
+#
+# A PR or a push to main runs only the cheap groups (a few minutes). The
+# groups the runner marks `nightly` - about 35 runner-minutes of layout-editor,
+# sheet-join, layout-settings, hover-card and queue-dock drivers - run on the
+# nightly schedule, or on demand from the Actions tab (Run workflow).
 
 on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: browser-regressions-${{ github.ref }}
+  # The event is in the key so a push to main cannot cancel the nightly run.
+  group: browser-regressions-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -42,7 +51,14 @@ jobs:
       - name: List the groups
         id: groups
         working-directory: clients/gui-app
-        run: echo "groups=$(bun scripts/run-browser-regressions.ts --list-groups)" >> "$GITHUB_OUTPUT"
+        env:
+          NIGHTLY: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+        run: |
+          if [ "$NIGHTLY" = "true" ]; then
+            echo "groups=$(bun scripts/run-browser-regressions.ts --list-groups --nightly)" >> "$GITHUB_OUTPUT"
+          else
+            echo "groups=$(bun scripts/run-browser-regressions.ts --list-groups)" >> "$GITHUB_OUTPUT"
+          fi
 
   browser:
     name: browser (${{ matrix.group }})

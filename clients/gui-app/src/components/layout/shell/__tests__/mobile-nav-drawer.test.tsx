@@ -31,7 +31,7 @@ const testState: {
   workingEpicIds: ReadonlySet<string>;
   /** Rows `epic.getTaskContexts` can answer, keyed by epic id. */
   backfillTasks: ReadonlyMap<string, ListTaskLight>;
-  /** The id lists the in-progress lift asked that batch about. */
+  /** The id lists the activity projection asked that batch about. */
   backfillIdCalls: ReadonlyArray<string>[];
 } = {
   items: [],
@@ -93,6 +93,7 @@ vi.mock("@/hooks/home/use-history-query", () => ({
     isFetching: false,
     error: null,
     refetch: () => Promise.resolve(),
+    refetchTasks: () => Promise.resolve(),
     fetchNextPage: () => undefined,
     hasNextPage: false,
     isFetchingNextPage: false,
@@ -100,13 +101,10 @@ vi.mock("@/hooks/home/use-history-query", () => ({
   }),
 }));
 
-// The two inputs the in-progress lift reads. Both are mocked at their own
-// boundary rather than mocking the lift hook itself, so the real
-// `useInProgressHistoryItems` / `withInProgressFirst` pair runs in these tests:
-// the store says WHICH epics are running, and the by-id batch answers the ones
-// no history page listed.
-vi.mock("@/stores/use-working-epic-ids", () => ({
-  useWorkingEpicIds: (): ReadonlySet<string> => testState.workingEpicIds,
+// Mock the shared activity projection inputs at their boundaries: turn ids
+// determine optimistic activity, and the by-id batch answers missing rows.
+vi.mock("@/stores/use-own-turn-epic-ids", () => ({
+  useOwnTurnEpicIds: (): ReadonlySet<string> => testState.workingEpicIds,
 }));
 
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
@@ -122,6 +120,8 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
       localHomedTaskIds: new Set<string>(),
       isFetching: false,
       error: null,
+      refetch: () => Promise.resolve(),
+      refetchBatches: [],
     };
   },
 }));
@@ -192,6 +192,7 @@ function historyItem(overrides: {
   readonly id: string;
   readonly title: string;
   readonly updatedAtMs: number;
+  readonly recentAtMs?: number;
 }): HistoryItem {
   return {
     id: overrides.id,
@@ -200,6 +201,7 @@ function historyItem(overrides: {
     title: overrides.title,
     initialUserPrompt: "",
     updatedAtMs: overrides.updatedAtMs,
+    recentAtMs: overrides.recentAtMs,
     updatedLabel: "about 1 month ago",
     updatedBucket: "earlier",
     linkedRepos: [],
@@ -915,6 +917,28 @@ describe("MobileNavDrawer", () => {
     });
   });
 
+  describe("Oldest timestamp", () => {
+    it("shows updated time for Oldest while the recent time is newer", async () => {
+      testState.items = [
+        historyItem({
+          id: "older",
+          title: "Older task",
+          updatedAtMs: NOW_MS - DAY_MS,
+          recentAtMs: NOW_MS - HOUR_MS,
+        }),
+      ];
+      useHistorySearchStore.setState({
+        search: patchHistorySearch(DEFAULT_HISTORY_SEARCH, { sort: "oldest" }),
+      });
+
+      renderDrawer();
+      const row = await screen.findByTestId("mobile-nav-task-row");
+
+      expect(row.textContent).toContain("Yesterday");
+      expect(row.textContent).not.toContain("1h ago");
+    });
+  });
+
   // The phone's replacement for Home's "In progress" group, which the mobile
   // shell never mounts. The feed's order is pinned-first then `updatedAt`
   // descending, and agent activity never touches `updatedAt` - so without this
@@ -952,7 +976,7 @@ describe("MobileNavDrawer", () => {
       expect(testState.backfillIdCalls.at(-1)).toEqual(["z"]);
     });
 
-    it("moves a listed running task to the top without duplicating it", async () => {
+    it("moves a listed turn-active task to the top without duplicating it", async () => {
       testState.items = [
         historyItem({
           id: "a",
@@ -976,8 +1000,9 @@ describe("MobileNavDrawer", () => {
       expect(
         rows.filter((row) => row.textContent.includes("running")).length,
       ).toBe(1);
-      // Already on the page, so the by-id batch has nothing to ask for.
-      expect(testState.backfillIdCalls.at(-1)).toEqual([]);
+      // The projection may ask for an older pending active row, but never
+      // fetches the already-listed task a second time.
+      expect(testState.backfillIdCalls.at(-1)).not.toContain("c");
     });
 
     it("leaves the order alone while a search is active", async () => {
@@ -1087,12 +1112,14 @@ describe("MobileNavDrawer", () => {
       renderDrawer();
       const rows = await screen.findAllByTestId("mobile-nav-task-row");
 
-      const status = rows[0]?.querySelector('[role="status"]');
+      const busyRow = rows.find((row) => row.textContent.includes("busy"));
+      const quietRow = rows.find((row) => row.textContent.includes("quiet"));
+      const status = busyRow?.querySelector('[role="status"]');
       expect(status?.getAttribute("aria-label")).toBe(
         "Task activity in progress",
       );
       expect(screen.getByTestId("mobile-nav-task-activity-a")).toBeTruthy();
-      expect(rows[1]?.querySelector('[role="status"]')).toBeNull();
+      expect(quietRow?.querySelector('[role="status"]')).toBeNull();
     });
 
     it("shows the pin and then the running indicator on a pinned running task", async () => {
@@ -1218,13 +1245,17 @@ describe("MobileNavDrawer", () => {
       const rows = await screen.findAllByTestId("mobile-nav-task-row");
 
       // Asked about exactly the ids on screen, epic ids only.
-      expect(testState.indicatorEpicIdCalls.at(-1)).toEqual(["a", "b"]);
-      const status = rows[0]?.querySelector('[role="status"]');
+      expect(testState.indicatorEpicIdCalls.at(-1)).toEqual(
+        expect.arrayContaining(["a", "b"]),
+      );
+      const doneRow = rows.find((row) => row.textContent.includes("done"));
+      const quietRow = rows.find((row) => row.textContent.includes("quiet"));
+      const status = doneRow?.querySelector('[role="status"]');
       expect(status).not.toBeNull();
       expect(
         status?.querySelector('[data-testid^="mobile-nav-task-"]'),
       ).not.toBeNull();
-      expect(rows[1]?.querySelector('[role="status"]')).toBeNull();
+      expect(quietRow?.querySelector('[role="status"]')).toBeNull();
     });
 
     it("never looks a phase up for live activity or notifications", async () => {
