@@ -19,18 +19,29 @@ export const useJoinGlowStore = create<JoinGlowState>()(() => ({
   glowing: false,
 }));
 
+let startFrame: number | null = null;
 let endTimer: number | null = null;
 
 export function playJoinGlow(): void {
-  if (endTimer !== null) window.clearTimeout(endTimer);
+  stopJoinGlow();
   // Off for one frame first, so a glow that is already running restarts its
   // CSS animation instead of carrying on from wherever it was.
-  useJoinGlowStore.setState({ glowing: false });
-  window.requestAnimationFrame(() => {
+  startFrame = window.requestAnimationFrame(() => {
+    startFrame = null;
     useJoinGlowStore.setState({ glowing: true });
     endTimer = window.setTimeout(() => {
       endTimer = null;
       useJoinGlowStore.setState({ glowing: false });
     }, JOIN_GLOW_MS);
   });
+}
+
+/** A glow still running, or about to start, belongs to the tab it was played for. */
+export function stopJoinGlow(): void {
+  if (startFrame !== null) window.cancelAnimationFrame(startFrame);
+  if (endTimer !== null) window.clearTimeout(endTimer);
+  startFrame = null;
+  endTimer = null;
+  if (useJoinGlowStore.getState().glowing)
+    useJoinGlowStore.setState({ glowing: false });
 }

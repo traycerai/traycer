@@ -1,8 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
-import type { EpicCanvasState, EpicViewTab } from "@/stores/epics/canvas/types";
-import { SPEC_A } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
+import type {
+  EpicCanvasState,
+  EpicCanvasTileRef,
+  EpicNodeRef,
+  EpicViewTab,
+} from "@/stores/epics/canvas/types";
+import {
+  CHAT_A,
+  SPEC_A,
+  pane,
+} from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
 import {
   useTabRecoveryHistory,
   type ClosedHeaderTab,
@@ -31,14 +40,16 @@ const mocks = vi.hoisted(() => {
         ) => void
       >(),
     navigateToTabIntent: vi.fn<(intent: unknown) => void>(),
-    preservedTileRecordIsLive:
-      vi.fn<
-        (
-          preserved: { readonly pendingCreate: boolean },
-          epicId: string,
-          pendingCreateArtifactIds: ReadonlySet<string>,
-        ) => boolean
-      >(),
+    preservedTileRecordIsLive: vi.fn<
+      (
+        preserved: {
+          readonly node: EpicCanvasTileRef;
+          readonly pendingCreate: boolean;
+        },
+        epicId: string,
+        pendingCreateArtifactIds: ReadonlySet<string>,
+      ) => boolean
+    >(),
     prepareSavedDraft:
       vi.fn<
         (item: ClosedHeaderTab, stillCurrent: () => boolean) => Promise<boolean>
@@ -47,7 +58,6 @@ const mocks = vi.hoisted(() => {
       readonly id: string;
       readonly closed: boolean;
     }>,
-    scheduleLandingImageReconcile: vi.fn<() => void>(),
     toastInfo: vi.fn<(message: string, options: unknown) => void>(),
     canvasState: {
       openTabOrder: [] as string[],
@@ -106,10 +116,6 @@ vi.mock("@/lib/terminals/plain-terminal-presentation-invalidation", () => ({
 
 vi.mock("@/lib/query-client", () => ({ queryClient: {} }));
 
-vi.mock("@/lib/composer/landing-image-gc", () => ({
-  scheduleLandingImageReconcile: mocks.scheduleLandingImageReconcile,
-}));
-
 vi.mock("@/stores/epics/canvas/migrate-canvas", () => ({
   parseEpicCanvasState: vi.fn((value: EpicCanvasState) => value),
 }));
@@ -125,11 +131,8 @@ const EMPTY_CANVAS: EpicCanvasState = {
   sizesByGroupId: {},
 };
 
-function router(
-  pathname: string,
-  navigateNestedFocus: KeybindingRouter["navigateNestedFocus"] | undefined,
-): KeybindingRouter {
-  const base: KeybindingRouter = {
+function router(pathname: string): KeybindingRouter {
+  return {
     getPathname: () => pathname,
     navigateHome: () => undefined,
     navigateSettings: () => undefined,
@@ -144,14 +147,34 @@ function router(
     canGoBack: () => false,
     canGoForward: () => false,
   };
-  return navigateNestedFocus === undefined
-    ? base
-    : { ...base, navigateNestedFocus };
+}
+
+function canvasHolding(tiles: ReadonlyArray<EpicNodeRef>): EpicCanvasState {
+  return {
+    root: pane(
+      "pane-1",
+      tiles.map((tile) => tile.instanceId),
+    ),
+    activePaneId: "pane-1",
+    tilesByInstanceId: Object.fromEntries(
+      tiles.map((tile) => [tile.instanceId, tile]),
+    ),
+    sizesByGroupId: {},
+  };
+}
+
+function restoredTaskCanvas(): EpicCanvasState {
+  const item = mocks.restoreClosedHeaderTabs.mock.calls.at(0)?.[0].at(0);
+  if (item === undefined || item.kind !== "epic") {
+    throw new Error("expected the coordinator to be handed a task");
+  }
+  return item.canvas;
 }
 
 function epicEntry(input: {
   readonly id: string;
   readonly bulk: boolean;
+  readonly canvas: EpicCanvasState;
 }): TabRecoveryEntry {
   return {
     id: input.id,
@@ -162,7 +185,7 @@ function epicEntry(input: {
         kind: "epic",
         index: 0,
         tab: { tabId: "tab-1", epicId: "epic-1", name: "Task" },
-        canvas: EMPTY_CANVAS,
+        canvas: input.canvas,
       },
     ],
   };
@@ -187,7 +210,6 @@ beforeEach(() => {
   mocks.prepareSavedDraft.mockReset();
   mocks.prepareSavedDraft.mockResolvedValue(true);
   mocks.landingDrafts.length = 0;
-  mocks.scheduleLandingImageReconcile.mockReset();
   mocks.toastInfo.mockReset();
   mocks.canvasState.openTabOrder.length = 0;
   for (const key of Object.keys(mocks.canvasState.tabsById))
@@ -203,11 +225,13 @@ beforeEach(() => {
 describe("reopenClosedTab", () => {
   it("navigates to a single recovered task from another task", async () => {
     useTabRecoveryHistory.setState({
-      entries: [epicEntry({ id: "entry-1", bulk: false })],
+      entries: [
+        epicEntry({ id: "entry-1", bulk: false, canvas: EMPTY_CANVAS }),
+      ],
       ready: true,
     });
 
-    await reopenClosedTab(router("/epics/other/other-tab", undefined));
+    await reopenClosedTab(router("/epics/other/other-tab"));
 
     expect(mocks.restoreClosedHeaderTabs).toHaveBeenCalledWith(
       [expect.objectContaining({ kind: "epic" })],
@@ -219,11 +243,11 @@ describe("reopenClosedTab", () => {
 
   it("restores a bulk close without changing focus while already on that task", async () => {
     useTabRecoveryHistory.setState({
-      entries: [epicEntry({ id: "entry-1", bulk: true })],
+      entries: [epicEntry({ id: "entry-1", bulk: true, canvas: EMPTY_CANVAS })],
       ready: true,
     });
 
-    await reopenClosedTab(router("/epics/epic-1/tab-1", undefined));
+    await reopenClosedTab(router("/epics/epic-1/tab-1"));
 
     expect(mocks.restoreClosedHeaderTabs).toHaveBeenCalledWith(
       [expect.objectContaining({ kind: "epic" })],
@@ -248,7 +272,7 @@ describe("reopenClosedTab", () => {
     };
     useTabRecoveryHistory.setState({ entries: [entry], ready: true });
 
-    await reopenClosedTab(router("/", undefined));
+    await reopenClosedTab(router("/"));
 
     expect(mocks.prepareSavedDraft).toHaveBeenCalledWith(
       item,
@@ -280,7 +304,7 @@ describe("reopenClosedTab", () => {
       return Promise.resolve(true);
     });
 
-    await reopenClosedTab(router("/", undefined));
+    await reopenClosedTab(router("/"));
 
     expect(mocks.landingDrafts).toEqual([
       { id: "host-open-draft", closed: true },
@@ -303,7 +327,7 @@ describe("reopenClosedTab", () => {
     useTabRecoveryHistory.setState({ entries: [entry], ready: true });
     mocks.prepareSavedDraft.mockRejectedValue(new Error("host unavailable"));
 
-    await reopenClosedTab(router("/", undefined));
+    await reopenClosedTab(router("/"));
 
     expect(mocks.restoreClosedHeaderTabs).not.toHaveBeenCalled();
     expect(mocks.toastInfo).toHaveBeenCalledTimes(1);
@@ -328,14 +352,14 @@ describe("reopenClosedTab", () => {
       kind: "header",
       bulk: true,
       items: [
-        ...epicEntry({ id: "entry-1", bulk: true }).items,
+        ...epicEntry({ id: "entry-1", bulk: true, canvas: EMPTY_CANVAS }).items,
         { ...draftRef("draft-1"), index: 1 },
       ],
     };
     useTabRecoveryHistory.setState({ entries: [entry], ready: true });
     mocks.prepareSavedDraft.mockRejectedValue(new Error("host unavailable"));
 
-    await reopenClosedTab(router("/", undefined));
+    await reopenClosedTab(router("/"));
 
     expect(mocks.restoreClosedHeaderTabs).toHaveBeenCalledWith(
       [expect.objectContaining({ kind: "epic" })],
@@ -361,6 +385,41 @@ describe("reopenClosedTab", () => {
     expect(toastOptions.description).toContain("kept");
   });
 
+  it("hands the tab strip the tiles a closed task had open", async () => {
+    const canvas = canvasHolding([SPEC_A, CHAT_A]);
+    useTabRecoveryHistory.setState({
+      entries: [epicEntry({ id: "entry-1", bulk: false, canvas })],
+      ready: true,
+    });
+
+    await reopenClosedTab(router("/epics/other/other-tab"));
+
+    expect(mocks.restoreClosedHeaderTabs).toHaveBeenCalledWith(
+      [expect.objectContaining({ kind: "epic", canvas })],
+      null,
+    );
+  });
+
+  it("brings a closed task back without a tile that is no longer recoverable", async () => {
+    // The parse that trims the pane's own reference to the dropped tile is
+    // mocked here; its effect is covered against the real stores in
+    // `reopen-task-canvas.test.ts`.
+    const canvas = canvasHolding([SPEC_A, CHAT_A]);
+    useTabRecoveryHistory.setState({
+      entries: [epicEntry({ id: "entry-1", bulk: false, canvas })],
+      ready: true,
+    });
+    mocks.preservedTileRecordIsLive.mockImplementation(
+      (preserved) => preserved.node.instanceId !== SPEC_A.instanceId,
+    );
+
+    await reopenClosedTab(router("/epics/other/other-tab"));
+
+    expect(restoredTaskCanvas().tilesByInstanceId).toEqual({
+      [CHAT_A.instanceId]: CHAT_A,
+    });
+  });
+
   it("does not restore a draft removed while it is being prepared", async () => {
     const item = draftRef("draft-1");
     const entry: TabRecoveryEntry = {
@@ -378,7 +437,7 @@ describe("reopenClosedTab", () => {
         }),
     );
 
-    const reopen = reopenClosedTab(router("/", undefined));
+    const reopen = reopenClosedTab(router("/"));
     await Promise.resolve();
     expect(mocks.prepareSavedDraft).toHaveBeenCalledTimes(1);
 

@@ -152,6 +152,52 @@ describe("peekStripEntrance", () => {
   });
 });
 
+describe("sweeping stale marks", () => {
+  it("drops an expired entrance when a later open marks a tab", () => {
+    const stale = epicRef("stale");
+    markOpenedTabs([stale]);
+
+    nowMs = 1001;
+    markOpenedTabs([epicRef("fresh")]);
+
+    // Back inside the stale mark's window, so only the sweep can have removed it.
+    nowMs = 0;
+    expect(delayFor(stale)).toBeNull();
+  });
+
+  it("drops an expired entrance when a later reopen marks tabs", () => {
+    const stale = epicRef("stale");
+    markOpenedTabs([stale]);
+
+    nowMs = 1001;
+    markReopenedTabs({ refs: [epicRef("fresh")], returningGroupIds: [] });
+
+    nowMs = 0;
+    expect(delayFor(stale)).toBeNull();
+  });
+
+  it("drops an expired reopen glow when a later gesture marks tabs", () => {
+    const stale = epicRef("stale");
+    markReopenedTabs({ refs: [stale], returningGroupIds: [] });
+
+    nowMs = 1001;
+    markOpenedTabs([epicRef("fresh")]);
+
+    nowMs = 0;
+    expect(takeReopenGlow([tabRefKey(stale)])).toBe(false);
+  });
+
+  it("keeps a mark that has not expired when a later gesture marks tabs", () => {
+    const recent = epicRef("recent");
+    markOpenedTabs([recent]);
+
+    nowMs = 999;
+    markOpenedTabs([epicRef("fresh")]);
+
+    expect(delayFor(recent)).toBe(0);
+  });
+});
+
 describe("settleStripEntrance", () => {
   it("clears the settled keys and keeps the rest", () => {
     const settled = epicRef("settled");

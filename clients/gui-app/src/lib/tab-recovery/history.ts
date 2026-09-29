@@ -1,4 +1,5 @@
 import type { PersistedTabStripLayout } from "@/stores/tabs/layout";
+import type { TabRef } from "@/stores/tabs/types";
 import {
   captureHeaderLocation,
   closedHeaderPlacementSchema,
@@ -342,16 +343,18 @@ function append(entry: TabRecoveryEntry): void {
   if (kept.length === 0) return;
   replaceEntries([...useTabRecoveryHistory.getState().entries, ...kept]);
 }
+/** The strip ref a closed header tab comes back as. */
+export function closedHeaderRef(item: ClosedHeaderTab): TabRef {
+  return item.kind === "epic"
+    ? { kind: "epic", id: item.tab.tabId }
+    : { kind: "draft", id: item.draftId };
+}
 export function recordClosedHeaderTab(item: ClosedHeaderTab): void {
   if (suppressed > 0) return;
   if (batch !== null) {
-    const ref =
-      item.kind === "epic"
-        ? { kind: "epic" as const, id: item.tab.tabId }
-        : { kind: "draft" as const, id: item.draftId };
     batch.items.push({
       ...item,
-      ...captureHeaderLocation(batch.layout, ref, item.index),
+      ...captureHeaderLocation(batch.layout, closedHeaderRef(item), item.index),
     });
   } else append({ kind: "header", id: uuidv4(), items: [item], bulk: false });
 }

@@ -1234,6 +1234,70 @@ describe("strip motion marks from the command coordinator", () => {
     expect(stripMotionDelayFor(survivorRef)).toBeNull();
   });
 
+  it("gives no entrance to a split side that rejoins a partner still open", () => {
+    const refA = openTaskRef("epic-motion-rejoin-a");
+    const refB = openTaskRef("epic-motion-rejoin-b");
+    const refC = openTaskRef("epic-motion-rejoin-c");
+    const split = splitItem("split-motion-rejoin", refA, refB, 0.4);
+    seedLayout({
+      version: 2,
+      items: [tabItem(refC), split],
+      activeItemId: split.id,
+      systemTabs: { history: null, settings: null },
+    });
+    expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
+    const closed = latestRecoveryItems();
+    expect(closed[0]).toMatchObject({ placement: { split } });
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(closed, null);
+
+    expect(useTabsStore.getState().items.at(1)?.kind).toBe("split");
+    expect(stripMotionDelayFor(refA)).toBeNull();
+    expect(stripMotionDelayFor(refB)).toBeNull();
+    expect(takeReopenGlow([tabRefKey(refA)])).toBe(false);
+  });
+
+  it("does not count a rejoining split side in the stagger of the tabs reopened with it", () => {
+    const refA = openTaskRef("epic-motion-mixed-a");
+    const refB = openTaskRef("epic-motion-mixed-b");
+    const refD = openTaskRef("epic-motion-mixed-d");
+    const split = splitItem("split-motion-mixed", refA, refB, 0.4);
+    seedLayout({
+      version: 2,
+      items: [split, tabItem(refD)],
+      activeItemId: split.id,
+      systemTabs: { history: null, settings: null },
+    });
+    const closed = closeTogether([refA, refD]);
+    expect(closed.map((item) => item.index)).toEqual([0, 1]);
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(closed, null);
+
+    expect(stripMotionDelayFor(refA)).toBeNull();
+    expect(stripMotionDelayFor(refD)).toBe(0);
+  });
+
+  it("enters a split at once when both of its sides were closed", () => {
+    const refA = openTaskRef("epic-motion-whole-a");
+    const refB = openTaskRef("epic-motion-whole-b");
+    const refC = openTaskRef("epic-motion-whole-c");
+    const split = splitItem("split-motion-whole", refA, refB, 0.4);
+    seedLayout({
+      version: 2,
+      items: [split, tabItem(refC)],
+      activeItemId: tabItemId(refC),
+      systemTabs: { history: null, settings: null },
+    });
+    const closed = closeTogether([refA, refB]);
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(closed, null);
+
+    expect(peekStripEntrance([tabRefKey(refA), tabRefKey(refB)])).toEqual({
+      delayMs: 0,
+    });
+    expect(stripMotionDelayFor(refC)).toBeNull();
+  });
+
   it("glows a single reopened task, once", () => {
     const refA = openTaskRef("epic-motion-glow-a");
     const survivorRef = openTaskRef("epic-motion-glow-survivor");

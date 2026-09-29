@@ -6,7 +6,9 @@ import {
   useState,
   type RefObject,
 } from "react";
+import { HORIZONTAL_STRIP_AXIS } from "@/components/epic-canvas/dnd/strip-axis";
 import { subscribeClosingTabs } from "@/stores/tabs/strip-motion";
+import { revealSelectedMember } from "./use-strip-scroller";
 
 /**
  * A closed tab's slot closes up instead of vanishing.
@@ -21,7 +23,9 @@ import { subscribeClosingTabs } from "@/stores/tabs/strip-motion";
  * The spacer takes the closed members' own width, not the distance the
  * survivors moved: under the shrink layout every surviving tab also widens
  * when one closes, so the move is smaller than the gap. A spacer as wide as
- * the closed tab gives the flex layout back exactly the space it had.
+ * the closed tab gives the flex layout back exactly the space it had. Less
+ * whatever took the closed members' place: closing one side of a split
+ * replaces the split with a lone tab, and only the difference closes up.
  */
 
 /** A snapshot no layout change used this soon was taken for a close that never landed. */
@@ -39,7 +43,8 @@ export interface StripExitGhost {
 
 /**
  * One child of the strip in flow order: a member (`item:` or `chip:`) or a
- * spacer still closing (`ghost:`), with its start in content coordinates.
+ * spacer still closing (`ghost:`), with the start of its margin box in content
+ * coordinates, so a chip's margins belong to the chip.
  */
 interface StripSlot {
   readonly key: string;
@@ -49,6 +54,7 @@ interface StripSlot {
 export interface StripGeometry {
   readonly slots: ReadonlyArray<StripSlot>;
   readonly end: number;
+  readonly scrollLeft: number;
 }
 
 export function ghostSlotKey(ghostKey: string): string {
@@ -66,9 +72,10 @@ function slotSpan(geometry: StripGeometry, index: number): number {
  * The spacers that keep every surviving member where it was.
  *
  * Walking the strip as it was, each slot that is gone now adds its span to
- * the gap before the next member that survived. A spacer whose member is gone
- * is such a slot too, so its remaining width folds into the new gap; a new gap
- * right before a spacer that is still closing merges into it.
+ * the gap before the next member that survived, and each slot that is new in
+ * the same stretch takes its span back. A spacer whose member is gone is such
+ * a slot too, so its remaining width folds into the new gap; a new gap right
+ * before a spacer that is still closing merges into it.
  */
 export function ghostsForClose(input: {
   readonly before: StripGeometry;
@@ -77,13 +84,31 @@ export function ghostsForClose(input: {
   readonly nextKey: () => string;
 }): ReadonlyArray<StripExitGhost> {
   const { before, after, current, nextKey } = input;
+  const presentBefore = new Set(before.slots.map((slot) => slot.key));
   const presentNow = new Set(after.slots.map((slot) => slot.key));
+  const isAnchor = (key: string) => !key.startsWith("ghost:");
+
+  // What appeared in each stretch, keyed by the survivor that ends it.
+  const addedBefore = new Map<string | null, number>();
+  let added = 0;
+  after.slots.forEach((slot, index) => {
+    if (!presentBefore.has(slot.key)) {
+      added += slotSpan(after, index);
+      return;
+    }
+    if (!isAnchor(slot.key)) return;
+    addedBefore.set(slot.key, added);
+    added = 0;
+  });
+  addedBefore.set(TRAILING, added);
+
   const next = new Map(
     current
       .filter((ghost) => presentNow.has(ghostSlotKey(ghost.key)))
       .map((ghost) => [ghost.beforeAnchor, ghost]),
   );
-  const addGap = (anchor: string | null, gap: number): void => {
+  const addGap = (anchor: string | null, removed: number): void => {
+    const gap = removed - (addedBefore.get(anchor) ?? 0);
     if (gap <= MIN_GAP_PX) return;
     const existing = next.get(anchor);
     const remaining =
@@ -101,18 +126,18 @@ export function ghostsForClose(input: {
       width: gap + remaining,
     });
   };
-  let gap = 0;
+  let removed = 0;
   before.slots.forEach((slot, index) => {
     if (!presentNow.has(slot.key)) {
-      gap += slotSpan(before, index);
+      removed += slotSpan(before, index);
       return;
     }
     // Spacers are not anchors: a gap before one belongs before its member.
-    if (slot.key.startsWith("ghost:")) return;
-    addGap(slot.key, gap);
-    gap = 0;
+    if (!isAnchor(slot.key)) return;
+    addGap(slot.key, removed);
+    removed = 0;
   });
-  addGap(TRAILING, gap);
+  addGap(TRAILING, removed);
   return [...next.values()];
 }
 
@@ -134,10 +159,17 @@ export function measureStripGeometry(scroller: HTMLElement): StripGeometry {
     const key = slotKeyOf(child);
     if (key === null) continue;
     const box = child.getBoundingClientRect();
-    slots.push({ key, start: box.left - origin });
-    end = Math.max(end, box.right - origin);
+    const margins = getComputedStyle(child);
+    slots.push({
+      key,
+      start: box.left - Number.parseFloat(margins.marginLeft) - origin,
+    });
+    end = Math.max(
+      end,
+      box.right + Number.parseFloat(margins.marginRight) - origin,
+    );
   }
-  return { slots, end };
+  return { slots, end, scrollLeft: scroller.scrollLeft };
 }
 
 /**
@@ -158,6 +190,10 @@ export function useStripExitGhosts(
     readonly geometry: StripGeometry;
   } | null>(null);
   const keyCounterRef = useRef(0);
+  // Reading layout before the spacers mount clamps a strip scrolled to its
+  // end by the closed width; the spacers give that width back, so the offset
+  // the close found is put back with them.
+  const restoreScrollRef = useRef<number | null>(null);
 
   useLayoutEffect(
     () =>
@@ -185,6 +221,7 @@ export function useStripExitGhosts(
     const after = measureStripGeometry(scroller);
     const fresh =
       snapshot !== null && performance.now() - snapshot.at < SNAPSHOT_TTL_MS;
+    if (fresh) restoreScrollRef.current = snapshot.geometry.scrollLeft;
     // StrictMode calls the updater twice; the discarded call only skips a
     // few key numbers.
     const nextKey = () => {
@@ -209,6 +246,16 @@ export function useStripExitGhosts(
       return kept.length === current.length ? current : kept;
     });
   }, [scrollerRef, itemIdsKey]);
+
+  useLayoutEffect(() => {
+    const scroller = scrollerRef.current;
+    const scrollLeft = restoreScrollRef.current;
+    restoreScrollRef.current = null;
+    if (scroller === null || scrollLeft === null) return;
+    scroller.scrollLeft = scrollLeft;
+    // A closed selection hands over to a neighbour that may be out of view.
+    revealSelectedMember(scroller, HORIZONTAL_STRIP_AXIS);
+  }, [scrollerRef, ghosts]);
 
   const settleGhost = useCallback((key: string) => {
     setGhosts((current) => current.filter((ghost) => ghost.key !== key));

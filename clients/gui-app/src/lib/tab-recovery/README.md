@@ -53,16 +53,6 @@ wins. The normal single/bulk navigation rules still decide selection. Plain
 tabs without placement metadata retain standalone recovery, and
 invalid optional placement metadata does not discard recoverable content.
 
-The initial empty-task fallback creates an empty pane showing the picker, not a
-blank tab. New Tab gestures focus the existing picker in an empty pane; in a
-populated pane they reuse its blank tab (even if inactive) or create one.
-Explicit New Tab focus is delivered by the active picker when its input mounts,
-without frame retries. Requests are scoped to the task tab and pane, and user
-interaction cancels a pending request.
-Closing a blank tab, including a blank-only Close All, leaves its pane intact.
-Explicit Close Group removes the pane. Loading older canvases retires blank-only
-tabs and duplicate picker tabs without removing their panes or changing splits.
-
 Draft recovery stores the saved draft ID, owner host, and header placement.
 The saved-draft store owns content and image retention; reopening a closed row
 uses its current content. An already-open row is skipped. A missing adopted
@@ -137,7 +127,7 @@ Host draft list absence remains retryable; only a matching tombstone proves
 deletion. Tile deletions use scoped recovery
 pruners and record liveness, not the legacy global bare-ID deletion set.
 
-Confirmed deletion callbacks suppress close recording, and successful terminal-agent
-deletion prunes recovery using its task, type, host and content ID. Buffered closes
+Successful terminal-agent deletion prunes recovery using its task, type, host
+and content ID. Buffered closes
 and deletion prunes remain keyed to their original account/window while hydration
 is unavailable; switching back merges them with that bucket's unread journal.

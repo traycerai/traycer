@@ -50,7 +50,7 @@ interface HeaderTabVisualProps {
   readonly isActive: boolean;
   /** Whether the active tab runs into its task's sheet; see `TabChromeBackground`. */
   readonly joined: boolean;
-  /** The selection is still sliding here; see `strip-selection-travel.tsx`. */
+  /** The selection is still sliding here; see `strip-selection-travel.ts`. */
   readonly concealed: boolean;
   readonly titleControl: ReactNode;
   readonly trailingControl: ReactNode;

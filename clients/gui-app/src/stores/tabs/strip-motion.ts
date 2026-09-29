@@ -45,8 +45,20 @@ function isFresh(markedAt: number): boolean {
   return performance.now() - markedAt < MARK_TTL_MS;
 }
 
+/**
+ * Marks for a strip that never drew them (a side strip, a tab collapsed into
+ * its group) would otherwise pile up; each new gesture sweeps the old ones.
+ */
+function sweepStaleMarks(): void {
+  for (const [key, mark] of entrances)
+    if (!isFresh(mark.markedAt)) entrances.delete(key);
+  for (const [key, markedAt] of reopenGlows)
+    if (!isFresh(markedAt)) reopenGlows.delete(key);
+}
+
 /** Tabs an ordinary open added to the strip. */
 export function markOpenedTabs(refs: ReadonlyArray<TabRef>): void {
+  sweepStaleMarks();
   const markedAt = performance.now();
   for (const ref of refs)
     entrances.set(tabRefKey(ref), { delayMs: 0, markedAt });
@@ -61,6 +73,7 @@ export function markReopenedTabs(input: {
   readonly refs: ReadonlyArray<TabRef>;
   readonly returningGroupIds: ReadonlyArray<string>;
 }): void {
+  sweepStaleMarks();
   const markedAt = performance.now();
   const lead = input.returningGroupIds.length > 0 ? GROUP_LEAD_MS : 0;
   for (const groupId of input.returningGroupIds) {

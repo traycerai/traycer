@@ -8,8 +8,11 @@ import {
   tabRefKey,
   type StripItem,
 } from "@/stores/tabs/layout";
-import { takeReopenGlow } from "@/stores/tabs/strip-motion";
-import { playJoinGlow } from "./join-glow";
+import {
+  subscribeClosingTabs,
+  takeReopenGlow,
+} from "@/stores/tabs/strip-motion";
+import { playJoinGlow, stopJoinGlow } from "./join-glow";
 
 /**
  * The selected tab's sheet slides from the tab you left to the tab you chose.
@@ -172,6 +175,16 @@ function sourceBox(
   return frame === null ? resting : boxOf(scroller, frame);
 }
 
+/** The traveller's box right now, while it is in flight. */
+function flightBox(flight: Flight, height: BoxRect): BoxRect {
+  return {
+    left: flight.left.position,
+    width: flight.width.position,
+    top: height.top,
+    height: height.height,
+  };
+}
+
 function land(flight: Flight | null, owesGlow: boolean): void {
   if (flight !== null) cancelAnimationFrame(flight.frame);
   useStripTravelStore.setState({ concealedItemId: null });
@@ -191,11 +204,11 @@ function planTravel(input: {
   readonly items: ReadonlyArray<StripItem>;
   readonly previous: string | null;
   readonly activeItemId: string | null;
-  readonly flying: boolean;
+  readonly flight: Flight | null;
   readonly resting: BoxRect | null;
   readonly reduceMotion: boolean;
 }): TravelRoute | null {
-  const { scroller, items, previous, activeItemId, flying } = input;
+  const { scroller, items, previous, activeItemId, flight } = input;
   if (
     previous === null ||
     activeItemId === null ||
@@ -210,10 +223,14 @@ function planTravel(input: {
   if (destinationFrame === null) return null;
   const to = boxOf(scroller, destinationFrame);
   if (!isWhollyInView(scroller, to)) return null;
-  if (flying) return { itemId: activeItemId, from: null, to };
-  const from = sourceBox(scroller, previous, input.resting);
+  // A turn starts wherever the traveller is now, which a quick run of
+  // switches on a scrolled strip can have left out of view.
+  const from =
+    flight === null
+      ? sourceBox(scroller, previous, input.resting)
+      : flightBox(flight, to);
   if (from === null || !isWhollyInView(scroller, from)) return null;
-  return { itemId: activeItemId, from, to };
+  return { itemId: activeItemId, from: flight === null ? from : null, to };
 }
 
 /** Starts the traveller at the route's source and springs it home. */
@@ -222,7 +239,8 @@ function fly(input: {
   readonly traveller: HTMLElement;
   readonly route: TravelRoute;
   readonly glow: boolean;
-  readonly onLanded: () => void;
+  /** Where it came to rest, or `null` when it was called off. */
+  readonly onLanded: (rest: BoxRect | null) => void;
 }): Flight | null {
   const { scroller, traveller, route, onLanded } = input;
   if (route.from === null) return null;
@@ -238,9 +256,10 @@ function fly(input: {
   placeTraveller(traveller, route.from.left, route.from.width, route.to);
   const tick = (now: number) => {
     const frame = frameOf(scroller, flight.itemId);
-    if (frame === null) {
-      onLanded();
-      land(flight, flight.glow);
+    // A drag owns the strip's geometry, and its overlay carries the join.
+    if (frame === null || useEpicDndStore.getState().activeHeaderTab !== null) {
+      onLanded(null);
+      land(flight, false);
       return;
     }
     // Re-measured every frame: a reopened slot is still opening, and the
@@ -259,7 +278,7 @@ function fly(input: {
     const settled = settledOn(flight, target);
     flight.lastTarget = target;
     if (settled) {
-      onLanded();
+      onLanded(target);
       land(flight, flight.glow);
       return;
     }
@@ -284,7 +303,9 @@ export function useSelectionTravel(input: {
   const reduceMotion = useReducedMotion() === true;
   const previousActiveRef = useRef(activeItemId);
   // Where the selected box last rested. A closed tab has no frame left to
-  // measure, and it is exactly where a slide to its successor starts.
+  // measure, and it is exactly where a slide to its successor starts. Taken
+  // when a slide lands, when a switch does not slide, and just before a close
+  // lands, while the strip still paints the tab being closed.
   const restingBoxRef = useRef<BoxRect | null>(null);
   const flightRef = useRef<Flight | null>(null);
   const layoutItemsRef = useRef(layoutItems);
@@ -293,6 +314,21 @@ export function useSelectionTravel(input: {
     layoutItemsRef.current = layoutItems;
   });
 
+  useLayoutEffect(
+    () =>
+      subscribeClosingTabs(() => {
+        const scroller = scrollerRef.current;
+        const active = previousActiveRef.current;
+        if (scroller === null || active === null) return;
+        const frame = frameOf(scroller, active);
+        if (frame === null) return;
+        const box = boxOf(scroller, frame);
+        const flight = flightRef.current;
+        restingBoxRef.current = flight === null ? box : flightBox(flight, box);
+      }),
+    [scrollerRef],
+  );
+
   useLayoutEffect(() => {
     const previous = previousActiveRef.current;
     previousActiveRef.current = activeItemId;
@@ -300,31 +336,37 @@ export function useSelectionTravel(input: {
     const traveller = travellerRef.current;
     if (previous === activeItemId || scroller === null || traveller === null)
       return;
+    // The glow belongs to the tab a reopen selected, not to the next one.
+    stopJoinGlow();
     const items = layoutItemsRef.current;
     const destination = items.find((item) => item.id === activeItemId);
-    const glow =
+    const owesGlow =
       destination !== undefined &&
-      takeReopenGlow(flattenStripItemRefs(destination).map(tabRefKey));
+      takeReopenGlow(flattenStripItemRefs(destination).map(tabRefKey)) &&
+      !reduceMotion;
     const flight = flightRef.current;
     const route = planTravel({
       scroller,
       items,
       previous,
       activeItemId,
-      flying: flight !== null,
+      flight,
       resting: restingBoxRef.current,
       reduceMotion,
     });
     if (route === null) {
       flightRef.current = null;
-      land(flight, glow || flight?.glow === true);
+      land(flight, owesGlow);
+      const frame =
+        activeItemId === null ? null : frameOf(scroller, activeItemId);
+      if (frame !== null) restingBoxRef.current = boxOf(scroller, frame);
       return;
     }
     useStripTravelStore.setState({ concealedItemId: route.itemId });
     if (flight !== null) {
       // Retarget mid-flight, keeping the momentum the eye is following.
       flight.itemId = route.itemId;
-      flight.glow = glow;
+      flight.glow = owesGlow;
       flight.lastTarget = null;
       return;
     }
@@ -332,28 +374,13 @@ export function useSelectionTravel(input: {
       scroller,
       traveller,
       route,
-      glow,
-      onLanded: () => {
+      glow: owesGlow,
+      onLanded: (rest) => {
         flightRef.current = null;
+        if (rest !== null) restingBoxRef.current = rest;
       },
     });
   }, [activeItemId, reduceMotion, scrollerRef, travellerRef]);
-
-  // After the travel effect, so a switch still reads where the box rested
-  // before it. Mid-drag the frames carry displacement transforms; the last
-  // rest before the drag is the better answer.
-  useLayoutEffect(() => {
-    const scroller = scrollerRef.current;
-    if (
-      scroller === null ||
-      activeItemId === null ||
-      flightRef.current !== null ||
-      useEpicDndStore.getState().activeHeaderTab !== null
-    )
-      return;
-    const frame = frameOf(scroller, activeItemId);
-    if (frame !== null) restingBoxRef.current = boxOf(scroller, frame);
-  });
 
   useLayoutEffect(
     () => () => {

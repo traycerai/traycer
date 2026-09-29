@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ghostSlotKey,
   ghostsForClose,
+  measureStripGeometry,
   type StripExitGhost,
   type StripGeometry,
 } from "@/components/layout/tabs/strip-exit-ghosts";
@@ -16,7 +17,7 @@ function stripOf(spans: ReadonlyArray<SlotSpan>): StripGeometry {
     start += span;
     return slot;
   });
-  return { slots, end: start };
+  return { slots, end: start, scrollLeft: 0 };
 }
 
 function sequentialKeys(): () => string {
@@ -185,6 +186,85 @@ describe("ghostsForClose", () => {
     expect(ghosts).toEqual([]);
   });
 
+  it("holds only the difference when closing one side of a split leaves a lone tab in its place", () => {
+    const ghosts = closeGhosts({
+      before: [
+        ["item:a", 100],
+        ["item:split", 400],
+        ["item:c", 100],
+      ],
+      after: [
+        ["item:a", 100],
+        ["item:b-new", 200],
+        ["item:c", 100],
+      ],
+      current: [],
+    });
+
+    expect(ghosts).toEqual([
+      { key: "ghost-1", beforeAnchor: "item:c", width: 200 },
+    ]);
+  });
+
+  it("holds nothing when what took a closed slot's place is wider than it", () => {
+    const ghosts = closeGhosts({
+      before: [
+        ["item:a", 100],
+        ["item:split", 400],
+        ["item:c", 100],
+      ],
+      after: [
+        ["item:a", 100],
+        ["item:b-new", 500],
+        ["item:c", 100],
+      ],
+      current: [],
+    });
+
+    expect(ghosts).toEqual([]);
+  });
+
+  it("takes a new tab after the last survivor off the trailing ghost", () => {
+    const ghosts = closeGhosts({
+      before: [
+        ["item:a", 100],
+        ["item:b", 100],
+        ["item:c", 100],
+      ],
+      after: [
+        ["item:a", 100],
+        ["item:new", 60],
+      ],
+      current: [],
+    });
+
+    expect(ghosts).toEqual([
+      { key: "ghost-1", beforeAnchor: null, width: 140 },
+    ]);
+  });
+
+  it("takes a new tab off only the stretch it opened in", () => {
+    const ghosts = closeGhosts({
+      before: [
+        ["item:a", 100],
+        ["item:b", 100],
+        ["item:c", 100],
+        ["item:d", 100],
+      ],
+      after: [
+        ["item:a", 100],
+        ["item:c", 100],
+        ["item:new", 50],
+        ["item:d", 100],
+      ],
+      current: [],
+    });
+
+    expect(ghosts).toEqual([
+      { key: "ghost-1", beforeAnchor: "item:c", width: 100 },
+    ]);
+  });
+
   it("ignores a closed run of half a pixel or less", () => {
     const ghosts = closeGhosts({
       before: [
@@ -317,6 +397,114 @@ describe("ghostsForClose", () => {
       expect(ghosts).toEqual([
         { key: "ghost-1", beforeAnchor: "item:c", width: 140 },
       ]);
+    });
+  });
+});
+
+describe("measureStripGeometry", () => {
+  function rect(left: number, right: number): DOMRect {
+    return {
+      x: left,
+      y: 0,
+      width: right - left,
+      height: 32,
+      top: 0,
+      right,
+      bottom: 32,
+      left,
+      toJSON: () => ({}),
+    };
+  }
+
+  function child(input: {
+    readonly dataset: Readonly<Record<string, string>>;
+    readonly box: DOMRect;
+    readonly marginLeft: string;
+    readonly marginRight: string;
+  }): HTMLElement {
+    const element = document.createElement("div");
+    Object.assign(element.dataset, input.dataset);
+    element.style.marginLeft = input.marginLeft;
+    element.style.marginRight = input.marginRight;
+    element.getBoundingClientRect = () => input.box;
+    return element;
+  }
+
+  function scrollerOf(
+    children: ReadonlyArray<HTMLElement>,
+    scrollLeft: number,
+  ): HTMLElement {
+    const scroller = document.createElement("div");
+    scroller.getBoundingClientRect = () => rect(10, 410);
+    Object.defineProperty(scroller, "scrollLeft", { value: scrollLeft });
+    scroller.append(...children);
+    return scroller;
+  }
+
+  it("measures each slot's margin box in content coordinates", () => {
+    // The scroller's content starts at 10 - 30 = -20 on screen.
+    const scroller = scrollerOf(
+      [
+        child({
+          dataset: { stripItemId: "a" },
+          box: rect(5, 105),
+          marginLeft: "0px",
+          marginRight: "0px",
+        }),
+        child({
+          dataset: { stripGroupChip: "group-1" },
+          box: rect(113, 173),
+          marginLeft: "8px",
+          marginRight: "6px",
+        }),
+      ],
+      30,
+    );
+
+    expect(measureStripGeometry(scroller)).toEqual({
+      // The chip's margin box starts at 125, exactly where the first tab ends.
+      slots: [
+        { key: "item:a", start: 25 },
+        { key: "chip:group-1", start: 125 },
+      ],
+      end: 199,
+      scrollLeft: 30,
+    });
+  });
+
+  it("names a closing spacer's slot and skips children outside the flow", () => {
+    const scroller = scrollerOf(
+      [
+        child({
+          dataset: { stripItemId: "a" },
+          box: rect(10, 110),
+          marginLeft: "0px",
+          marginRight: "0px",
+        }),
+        child({
+          dataset: { stripExitGhost: "closing" },
+          box: rect(110, 150),
+          marginLeft: "0px",
+          marginRight: "0px",
+        }),
+        // The absolute selection traveller carries none of the strip's data.
+        child({
+          dataset: {},
+          box: rect(10, 900),
+          marginLeft: "0px",
+          marginRight: "0px",
+        }),
+      ],
+      0,
+    );
+
+    expect(measureStripGeometry(scroller)).toEqual({
+      slots: [
+        { key: "item:a", start: 0 },
+        { key: ghostSlotKey("closing"), start: 100 },
+      ],
+      end: 140,
+      scrollLeft: 0,
     });
   });
 });

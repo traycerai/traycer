@@ -4,6 +4,7 @@ import {
 } from "@/lib/tab-recovery/header-layout";
 import { EMPTY_CANVAS } from "@/stores/epics/canvas/canvas-state";
 import {
+  closedHeaderRef,
   recordClosedHeaderTab,
   pruneRecoveryEpics,
   withoutTabRecovery,
@@ -404,12 +405,6 @@ function repairedLayoutPreservingHome(
   return layoutHomeIsActive(layout)
     ? { ...repaired, activeItemId: null }
     : repaired;
-}
-
-function closedHeaderRef(item: ClosedHeaderTab): TabRef {
-  return item.kind === "epic"
-    ? { kind: "epic", id: item.tab.tabId }
-    : { kind: "draft", id: item.draftId };
 }
 
 function focusedRef(layout: PersistedTabStripLayout): TabRef | null {
@@ -1590,7 +1585,20 @@ export class TabCommandCoordinator {
         : previousLayout.activeItemId;
     const refs: TabRef[] = items.map(closedHeaderRef);
     markReopenedTabs({
-      refs: items.toSorted((a, b) => a.index - b.index).map(closedHeaderRef),
+      // A tab that rejoins a split whose partner is still open does not open a
+      // slot: the partner's own tab becomes the split in place.
+      refs: items
+        .filter(
+          (item) =>
+            item.placement?.split === undefined ||
+            !flattenStripItemRefs(item.placement.split).some(
+              (partner) =>
+                tabRefKey(partner) !== tabRefKey(closedHeaderRef(item)) &&
+                findStripItemForRef(previousLayout, partner) !== null,
+            ),
+        )
+        .toSorted((a, b) => a.index - b.index)
+        .map(closedHeaderRef),
       // Only a group this reopen recreates brings its chip back; a surviving
       // group keeps the chip it already shows.
       returningGroupIds: [
@@ -1615,13 +1623,7 @@ export class TabCommandCoordinator {
             : layoutWithRemovedRef(currentLayout(), replacement);
         const layout = restoreHeaderLayout(
           base,
-          items.map((item) => ({
-            ...item,
-            ref:
-              item.kind === "epic"
-                ? { kind: "epic" as const, id: item.tab.tabId }
-                : { kind: "draft" as const, id: item.draftId },
-          })),
+          items.map((item) => ({ ...item, ref: closedHeaderRef(item) })),
           canSplitRef,
         );
         if (survivingActiveItemId === null) return layout;

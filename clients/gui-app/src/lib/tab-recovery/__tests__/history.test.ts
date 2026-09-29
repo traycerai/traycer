@@ -420,11 +420,17 @@ describe("tab recovery history", () => {
   });
 
   it("drops inner-tab entries from journals written before they stopped being recorded", async () => {
-    const task: TabRecoveryEntry = {
+    const first: TabRecoveryEntry = {
       kind: "header",
-      id: "task-header",
+      id: "first-header",
       bulk: false,
-      items: [draft("kept-draft")],
+      items: [draft("first-draft")],
+    };
+    const second: TabRecoveryEntry = {
+      kind: "header",
+      id: "second-header",
+      bulk: false,
+      items: [draft("second-draft")],
     };
     const legacyInnerTab = {
       kind: "canvas",
@@ -436,14 +442,14 @@ describe("tab recovery history", () => {
       bulk: false,
     };
 
-    await seedPersistedEntries([legacyInnerTab, task]);
+    await seedPersistedEntries([first, legacyInnerTab, second]);
     await flushTabRecoveryHistory();
 
-    expect(useTabRecoveryHistory.getState().entries).toEqual([task]);
+    expect(useTabRecoveryHistory.getState().entries).toEqual([first, second]);
     const store = createStore(persistKey("tab-recovery"), "history");
     expect(
       await idbGet<unknown>(tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE), store),
-    ).toEqual({ version: 2, entries: [task] });
+    ).toEqual({ version: 2, entries: [first, second] });
   });
 
   it("ignores version 1 snapshot journals", async () => {

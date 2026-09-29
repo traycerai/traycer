@@ -43,7 +43,7 @@ export function TabGroupChip(props: {
             ref={chipRef}
             type="button"
             // A strip member of its own: a closing slot's spacer is placed
-            // relative to it (`strip-exit-ghosts.tsx`).
+            // relative to it (`strip-exit-ghosts.ts`).
             data-strip-group-chip={groupId}
             aria-label={`${group.name || "Unnamed group"}: ${group.collapsed ? "expand" : "collapse"} group`}
             aria-expanded={!group.collapsed}

@@ -14,7 +14,8 @@ import {
 } from "react";
 import { HORIZONTAL_STRIP_AXIS } from "@/components/epic-canvas/dnd/strip-axis";
 import { useNavigate } from "@tanstack/react-router";
-import { useStripScroller } from "./use-strip-scroller";
+import { revealSelectedMember, useStripScroller } from "./use-strip-scroller";
+import { useOpenStripEntrances } from "./use-strip-entrance";
 import { useAppearanceHeaderStripItem } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabResolveIntent } from "@/stores/tabs/registry";
@@ -99,6 +100,15 @@ function TabStripBody() {
     },
     [setScrollElement],
   );
+  // Before `useStripScroller`: the slots it opens are measured and held shut
+  // before the activation reveal runs, and it keeps the selection in view
+  // while they grow, which that one-off reveal cannot.
+  const revealSelection = useCallback(() => {
+    const scroller = scrollerRef.current;
+    if (scroller !== null)
+      revealSelectedMember(scroller, HORIZONTAL_STRIP_AXIS);
+  }, []);
+  useOpenStripEntrances(revealSelection);
   const setScrollerNode = useStripScroller({
     axis: HORIZONTAL_STRIP_AXIS,
     activeItemId,
