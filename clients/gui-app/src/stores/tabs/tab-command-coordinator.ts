@@ -407,6 +407,37 @@ function repairedLayoutPreservingHome(
     : repaired;
 }
 
+/**
+ * Marks what a reopen should animate, decided from the layout the restore
+ * produced rather than from its entries: only a strip item none of whose tabs
+ * were already in the strip opens a slot. A tab that rejoined a split in place
+ * of its open partner, or came back standalone because the split could not be
+ * rebuilt, follows the layout it actually got.
+ */
+function markRestoredStripItems(input: {
+  readonly previous: PersistedTabStripLayout;
+  readonly restored: PersistedTabStripLayout;
+  readonly refs: ReadonlyArray<TabRef>;
+  readonly glowRef: TabRef | null;
+}): void {
+  const { previous, restored } = input;
+  const refKeys = new Set(input.refs.map(tabRefKey));
+  markReopenedTabs({
+    refs: restored.items.flatMap((item) => {
+      const itemRefs = flattenStripItemRefs(item);
+      const reopened = itemRefs.find((ref) => refKeys.has(tabRefKey(ref)));
+      const fresh = itemRefs.every(
+        (ref) => findStripItemForRef(previous, ref) === null,
+      );
+      return reopened !== undefined && fresh ? [reopened] : [];
+    }),
+    returningGroupIds: Object.keys(restored.groups ?? {}).filter(
+      (groupId) => previous.groups?.[groupId] === undefined,
+    ),
+    glowRef: input.glowRef,
+  });
+}
+
 function focusedRef(layout: PersistedTabStripLayout): TabRef | null {
   const active = layout.items.find((item) => item.id === layout.activeItemId);
   if (active === undefined) return null;
@@ -1584,36 +1615,6 @@ export class TabCommandCoordinator {
         ? null
         : previousLayout.activeItemId;
     const refs: TabRef[] = items.map(closedHeaderRef);
-    markReopenedTabs({
-      // A tab that rejoins a split whose partner is still open does not open a
-      // slot: the partner's own tab becomes the split in place.
-      refs: items
-        .filter(
-          (item) =>
-            item.placement?.split === undefined ||
-            !flattenStripItemRefs(item.placement.split).some(
-              (partner) =>
-                tabRefKey(partner) !== tabRefKey(closedHeaderRef(item)) &&
-                findStripItemForRef(previousLayout, partner) !== null,
-            ),
-        )
-        .toSorted((a, b) => a.index - b.index)
-        .map(closedHeaderRef),
-      // Only a group this reopen recreates brings its chip back; a surviving
-      // group keeps the chip it already shows.
-      returningGroupIds: [
-        ...new Set(
-          items.flatMap((item) => {
-            const groupId = item.placement?.customization?.groupId ?? null;
-            return groupId !== null &&
-              item.placement?.group !== undefined &&
-              previousLayout.groups?.[groupId] === undefined
-              ? [groupId]
-              : [];
-          }),
-        ),
-      ],
-    });
     if (replacement !== null) markClosingTabs();
     this.execute({
       layout: () => {
@@ -1661,6 +1662,13 @@ export class TabCommandCoordinator {
         if (replacement !== null)
           withoutTabRecovery(() => this.removeSourceRef(replacement));
       },
+    });
+    // React renders the restored layout after this returns.
+    markRestoredStripItems({
+      previous: previousLayout,
+      restored: currentLayout(),
+      refs,
+      glowRef: items.length === 1 ? closedHeaderRef(items[0]) : null,
     });
   }
 

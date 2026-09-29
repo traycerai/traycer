@@ -1234,7 +1234,7 @@ describe("strip motion marks from the command coordinator", () => {
     expect(stripMotionDelayFor(survivorRef)).toBeNull();
   });
 
-  it("gives no entrance to a split side that rejoins a partner still open", () => {
+  it("gives a split side that rejoins a partner still open the join glow but no entrance", () => {
     const refA = openTaskRef("epic-motion-rejoin-a");
     const refB = openTaskRef("epic-motion-rejoin-b");
     const refC = openTaskRef("epic-motion-rejoin-c");
@@ -1254,7 +1254,7 @@ describe("strip motion marks from the command coordinator", () => {
     expect(useTabsStore.getState().items.at(1)?.kind).toBe("split");
     expect(stripMotionDelayFor(refA)).toBeNull();
     expect(stripMotionDelayFor(refB)).toBeNull();
-    expect(takeReopenGlow([tabRefKey(refA)])).toBe(false);
+    expect(takeReopenGlow([tabRefKey(refA)])).toBe(true);
   });
 
   it("does not count a rejoining split side in the stagger of the tabs reopened with it", () => {
@@ -1275,6 +1275,7 @@ describe("strip motion marks from the command coordinator", () => {
 
     expect(stripMotionDelayFor(refA)).toBeNull();
     expect(stripMotionDelayFor(refD)).toBe(0);
+    expect(takeReopenGlow([tabRefKey(refA), tabRefKey(refD)])).toBe(false);
   });
 
   it("enters a split at once when both of its sides were closed", () => {
@@ -1296,6 +1297,28 @@ describe("strip motion marks from the command coordinator", () => {
       delayMs: 0,
     });
     expect(stripMotionDelayFor(refC)).toBeNull();
+  });
+
+  it("staggers a split restored whole as one strip item, so a standalone tab restored after it waits 30ms", () => {
+    const refA = openTaskRef("epic-motion-item-a");
+    const refB = openTaskRef("epic-motion-item-b");
+    const refC = openTaskRef("epic-motion-item-c");
+    const split = splitItem("split-motion-item", refA, refB, 0.4);
+    seedLayout({
+      version: 2,
+      items: [split, tabItem(refC)],
+      activeItemId: split.id,
+      systemTabs: { history: null, settings: null },
+    });
+    const closed = closeTogether([refA, refB, refC]);
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(closed, null);
+
+    expect(useTabsStore.getState().items).toEqual([split, tabItem(refC)]);
+    expect(peekStripEntrance([tabRefKey(refA), tabRefKey(refB)])).toEqual({
+      delayMs: 0,
+    });
+    expect(stripMotionDelayFor(refC)).toBe(30);
   });
 
   it("glows a single reopened task, once", () => {

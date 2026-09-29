@@ -55,7 +55,7 @@ describe("markOpenedTabs", () => {
 describe("markReopenedTabs", () => {
   it("staggers reopened tabs in strip order, 30ms apart", () => {
     const refs = [epicRef("a"), epicRef("b"), epicRef("c")];
-    markReopenedTabs({ refs, returningGroupIds: [] });
+    markReopenedTabs({ refs, returningGroupIds: [], glowRef: null });
 
     expect(refs.map(delayFor)).toEqual([0, 30, 60]);
   });
@@ -64,7 +64,7 @@ describe("markReopenedTabs", () => {
     const refs = Array.from({ length: 12 }, (_, index) =>
       epicRef(`tab-${index}`),
     );
-    markReopenedTabs({ refs, returningGroupIds: [] });
+    markReopenedTabs({ refs, returningGroupIds: [], glowRef: null });
 
     expect(refs.map(delayFor)).toEqual([
       0, 30, 60, 90, 120, 150, 180, 210, 240, 240, 240, 240,
@@ -73,7 +73,11 @@ describe("markReopenedTabs", () => {
 
   it("opens a returning group's chip first and holds its tabs back by 60ms", () => {
     const refs = [epicRef("a"), epicRef("b")];
-    markReopenedTabs({ refs, returningGroupIds: ["group-1", "group-2"] });
+    markReopenedTabs({
+      refs,
+      returningGroupIds: ["group-1", "group-2"],
+      glowRef: null,
+    });
 
     expect(peekStripEntrance([stripGroupMarkKey("group-1")])).toEqual({
       delayMs: 0,
@@ -84,25 +88,48 @@ describe("markReopenedTabs", () => {
     expect(refs.map(delayFor)).toEqual([60, 90]);
   });
 
-  it("gives a single reopened tab the join glow", () => {
+  it("gives the join glow to the ref it is told to", () => {
     const only = epicRef("a");
-    markReopenedTabs({ refs: [only], returningGroupIds: [] });
+    markReopenedTabs({ refs: [only], returningGroupIds: [], glowRef: only });
 
     expect(takeReopenGlow([tabRefKey(only)])).toBe(true);
   });
 
+  it("glows only the named ref, not the others opened with it", () => {
+    const refs = [epicRef("a"), epicRef("b")];
+    markReopenedTabs({ refs, returningGroupIds: [], glowRef: refs[1] });
+
+    expect(takeReopenGlow([tabRefKey(refs[0])])).toBe(false);
+    expect(takeReopenGlow([tabRefKey(refs[1])])).toBe(true);
+  });
+
   it("gives no glow when several tabs come back together", () => {
     const refs = [epicRef("a"), epicRef("b")];
-    markReopenedTabs({ refs, returningGroupIds: [] });
+    markReopenedTabs({ refs, returningGroupIds: [], glowRef: null });
 
     expect(takeReopenGlow(refs.map(tabRefKey))).toBe(false);
+  });
+
+  it("does not infer a glow from a lone ref", () => {
+    const only = epicRef("a");
+    markReopenedTabs({ refs: [only], returningGroupIds: [], glowRef: null });
+
+    expect(takeReopenGlow([tabRefKey(only)])).toBe(false);
+  });
+
+  it("glows a ref that opens no slot of its own", () => {
+    const rejoined = epicRef("a");
+    markReopenedTabs({ refs: [], returningGroupIds: [], glowRef: rejoined });
+
+    expect(delayFor(rejoined)).toBeNull();
+    expect(takeReopenGlow([tabRefKey(rejoined)])).toBe(true);
   });
 });
 
 describe("peekStripEntrance", () => {
   it("returns the smallest delay among the keys a split carries", () => {
     const refs = [epicRef("a"), epicRef("b"), epicRef("c")];
-    markReopenedTabs({ refs, returningGroupIds: [] });
+    markReopenedTabs({ refs, returningGroupIds: [], glowRef: null });
 
     expect(peekStripEntrance([tabRefKey(refs[2]), tabRefKey(refs[1])])).toEqual(
       { delayMs: 30 },
@@ -143,6 +170,7 @@ describe("peekStripEntrance", () => {
     markReopenedTabs({
       refs: [epicRef("first"), fresh],
       returningGroupIds: [],
+      glowRef: null,
     });
 
     nowMs = 1000;
@@ -170,7 +198,11 @@ describe("sweeping stale marks", () => {
     markOpenedTabs([stale]);
 
     nowMs = 1001;
-    markReopenedTabs({ refs: [epicRef("fresh")], returningGroupIds: [] });
+    markReopenedTabs({
+      refs: [epicRef("fresh")],
+      returningGroupIds: [],
+      glowRef: null,
+    });
 
     nowMs = 0;
     expect(delayFor(stale)).toBeNull();
@@ -178,7 +210,7 @@ describe("sweeping stale marks", () => {
 
   it("drops an expired reopen glow when a later gesture marks tabs", () => {
     const stale = epicRef("stale");
-    markReopenedTabs({ refs: [stale], returningGroupIds: [] });
+    markReopenedTabs({ refs: [stale], returningGroupIds: [], glowRef: stale });
 
     nowMs = 1001;
     markOpenedTabs([epicRef("fresh")]);
@@ -212,7 +244,7 @@ describe("settleStripEntrance", () => {
 
   it("leaves a single reopen's glow for the selection to take", () => {
     const only = epicRef("a");
-    markReopenedTabs({ refs: [only], returningGroupIds: [] });
+    markReopenedTabs({ refs: [only], returningGroupIds: [], glowRef: only });
 
     settleStripEntrance([tabRefKey(only)]);
 
@@ -223,7 +255,7 @@ describe("settleStripEntrance", () => {
 describe("takeReopenGlow", () => {
   it("is owed once and consumed by the first take", () => {
     const only = epicRef("a");
-    markReopenedTabs({ refs: [only], returningGroupIds: [] });
+    markReopenedTabs({ refs: [only], returningGroupIds: [], glowRef: only });
 
     expect(takeReopenGlow([tabRefKey(only)])).toBe(true);
     expect(takeReopenGlow([tabRefKey(only)])).toBe(false);
@@ -231,7 +263,7 @@ describe("takeReopenGlow", () => {
 
   it("is owed when any one of the keys carries the glow", () => {
     const only = epicRef("a");
-    markReopenedTabs({ refs: [only], returningGroupIds: [] });
+    markReopenedTabs({ refs: [only], returningGroupIds: [], glowRef: only });
 
     expect(takeReopenGlow([tabRefKey(epicRef("b")), tabRefKey(only)])).toBe(
       true,
@@ -240,7 +272,7 @@ describe("takeReopenGlow", () => {
 
   it("is not owed once the reopen is a second old", () => {
     const only = epicRef("a");
-    markReopenedTabs({ refs: [only], returningGroupIds: [] });
+    markReopenedTabs({ refs: [only], returningGroupIds: [], glowRef: only });
 
     nowMs = 1000;
     expect(takeReopenGlow([tabRefKey(only)])).toBe(false);

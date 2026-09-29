@@ -65,13 +65,15 @@ export function markOpenedTabs(refs: ReadonlyArray<TabRef>): void {
 }
 
 /**
- * Tabs a reopen put back, in strip order. `returningGroupIds` are the groups
- * the reopen recreated, whose chips lead their tabs back in. A single reopened
- * tab also earns the join glow once it is selected, so the eye finds it.
+ * The strip items a reopen opened, one ref each, in strip order.
+ * `returningGroupIds` are the groups the reopen recreated, whose chips lead
+ * their tabs back in. `glowRef` is the tab of a single reopen, which earns the
+ * join glow once it is selected so the eye finds it.
  */
 export function markReopenedTabs(input: {
   readonly refs: ReadonlyArray<TabRef>;
   readonly returningGroupIds: ReadonlyArray<string>;
+  readonly glowRef: TabRef | null;
 }): void {
   sweepStaleMarks();
   const markedAt = performance.now();
@@ -86,10 +88,8 @@ export function markReopenedTabs(input: {
       markedAt,
     });
   });
-  if (input.refs.length === 1) {
-    const [only] = input.refs;
-    reopenGlows.set(tabRefKey(only), markedAt);
-  }
+  if (input.glowRef !== null)
+    reopenGlows.set(tabRefKey(input.glowRef), markedAt);
 }
 
 /**

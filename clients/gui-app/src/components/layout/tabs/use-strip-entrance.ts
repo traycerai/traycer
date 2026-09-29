@@ -19,7 +19,6 @@ interface EntranceRequest {
   readonly kind: "tab" | "chip";
   readonly delayMs: number;
   readonly keys: ReadonlyArray<string>;
-  stop: (() => void) | null;
 }
 
 interface SlotSize {
@@ -32,6 +31,13 @@ interface SlotSize {
 
 /** Members that mounted in the current commit owing an entrance. */
 const pending = new Set<EntranceRequest>();
+/**
+ * Openings under way, by member. StrictMode reruns a member's mount effect
+ * without rerunning the strip's, so a member that is already opening must not
+ * register again, and its cleanup must not cancel the opening: nothing would
+ * start it again. An opening on a member that has since unmounted is inert.
+ */
+const opening = new WeakMap<HTMLElement, Animation>();
 
 /**
  * Registers a strip member that the coordinator marked as opened or reopened;
@@ -50,7 +56,7 @@ export function useStripEntrance(
     const keys = markKeys.split(" ");
     const entrance = peekStripEntrance(keys);
     const node = nodeRef.current;
-    if (entrance === null || node === null) return;
+    if (entrance === null || node === null || opening.has(node)) return;
     // Without Web Animations (jsdom) the slot simply appears.
     if (reduceMotion || typeof node.animate !== "function") {
       settleStripEntrance(keys);
@@ -61,12 +67,10 @@ export function useStripEntrance(
       kind,
       delayMs: entrance.delayMs,
       keys,
-      stop: null,
     };
     pending.add(request);
     return () => {
       pending.delete(request);
-      request.stop?.();
     };
   }, [nodeRef, markKeys, kind, reduceMotion]);
 }
@@ -168,32 +172,29 @@ function openSlot(request: EntranceRequest, size: SlotSize): Animation {
       fill: "backwards",
     },
   );
-  const label =
-    kind === "tab" && node.firstElementChild instanceof HTMLElement
-      ? node.firstElementChild.animate(
-          [
-            { opacity: "0", transform: `translateY(${LABEL_RISE_PX}px)` },
-            { opacity: "1", transform: "none" },
-          ],
-          {
-            duration: LABEL_RISE_MS,
-            easing: LABEL_EASE,
-            delay: delayMs + LABEL_LAG_MS,
-            fill: "backwards",
-          },
-        )
-      : null;
-  let cancelled = false;
+  if (kind === "tab" && node.firstElementChild instanceof HTMLElement) {
+    node.firstElementChild.animate(
+      [
+        { opacity: "0", transform: `translateY(${LABEL_RISE_PX}px)` },
+        { opacity: "1", transform: "none" },
+      ],
+      {
+        duration: LABEL_RISE_MS,
+        easing: LABEL_EASE,
+        delay: delayMs + LABEL_LAG_MS,
+        fill: "backwards",
+      },
+    );
+  }
+  opening.set(node, slot);
   void slot.finished.then(
     () => {
-      if (!cancelled) settleStripEntrance(request.keys);
+      opening.delete(node);
+      settleStripEntrance(request.keys);
     },
-    () => undefined,
+    () => {
+      opening.delete(node);
+    },
   );
-  request.stop = () => {
-    cancelled = true;
-    slot.cancel();
-    label?.cancel();
-  };
   return slot;
 }

@@ -6,9 +6,8 @@ import {
   useState,
   type RefObject,
 } from "react";
-import { HORIZONTAL_STRIP_AXIS } from "@/components/epic-canvas/dnd/strip-axis";
 import { subscribeClosingTabs } from "@/stores/tabs/strip-motion";
-import { revealSelectedMember } from "./use-strip-scroller";
+import { selectedStripMember } from "./use-strip-scroller";
 
 /**
  * A closed tab's slot closes up instead of vanishing.
@@ -173,6 +172,31 @@ export function measureStripGeometry(scroller: HTMLElement): StripGeometry {
 }
 
 /**
+ * A closed selection hands over to a neighbour that may be out of view. The
+ * spacers before it are about to shrink and carry it left by their width, so
+ * it is revealed where it will land, not where it is drawn now.
+ */
+function revealWhereItLands(scroller: HTMLElement): void {
+  const member = selectedStripMember(scroller);
+  if (member === null) return;
+  let closing = 0;
+  for (const child of scroller.children) {
+    if (child === member) break;
+    if (
+      child instanceof HTMLElement &&
+      child.dataset.stripExitGhost !== undefined
+    )
+      closing += child.getBoundingClientRect().width;
+  }
+  const box = member.getBoundingClientRect();
+  const view = scroller.getBoundingClientRect();
+  const start = box.left - closing;
+  const end = box.right - closing;
+  if (end > view.right) scroller.scrollLeft += end - view.right;
+  else if (start < view.left) scroller.scrollLeft -= view.left - start;
+}
+
+/**
  * `itemIdsKey` changes whenever the strip's items do; that commit is the one
  * that may have closed something.
  */
@@ -253,8 +277,7 @@ export function useStripExitGhosts(
     restoreScrollRef.current = null;
     if (scroller === null || scrollLeft === null) return;
     scroller.scrollLeft = scrollLeft;
-    // A closed selection hands over to a neighbour that may be out of view.
-    revealSelectedMember(scroller, HORIZONTAL_STRIP_AXIS);
+    revealWhereItLands(scroller);
   }, [scrollerRef, ghosts]);
 
   const settleGhost = useCallback((key: string) => {
