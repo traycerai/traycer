@@ -140,6 +140,7 @@ import {
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { transcriptRowContextSchemaPreAntigravity } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import { chatSkeletonResumeSchema } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { autoJudgeTierSchema } from "@traycer/protocol/host/auto-mode/contracts";
 
@@ -172,6 +173,26 @@ export const chatSubscribeOpenRequestSchema = lazySchema(() =>
 );
 export type ChatSubscribeOpenRequest = z.infer<
   typeof chatSubscribeOpenRequestSchema
+>;
+
+/**
+ * `1.19` and later require an explicit nullable claim. `null` states that this
+ * client holds nothing; omission is an invalid request on those lines. A
+ * malformed present claim is a cache miss, so normalize it to null at the
+ * transport validation boundary before a resolver is constructed. Every older
+ * line keeps the base schema, so its parser strips a claim from a downgraded
+ * request.
+ */
+export const chatSubscribeOpenRequestSchemaV119 = lazySchema(() =>
+  chatSubscribeOpenRequestSchema.extend({
+    resume: z
+      .unknown()
+      .refine((value) => value !== undefined)
+      .pipe(chatSkeletonResumeSchema.nullable().catch(null)),
+  }),
+);
+export type ChatSubscribeOpenRequestV119 = z.infer<
+  typeof chatSubscribeOpenRequestSchemaV119
 >;
 
 // Frozen action set of the RELEASED `chat.subscribe@≤1.5` lines. `actionAck`
@@ -5396,6 +5417,19 @@ const chatSubscribeSkeletonChunkServerFrameSchema = lazySchema(() =>
   }),
 );
 
+/**
+ * Only a resumed stream (`1.19` and later) may put `retainedRows` on its first
+ * chunk.
+ * It names whole claimed blocks, equals that chunk's `fromOrdinal`, and is
+ * absent from later chunks and all full streams. The host enforces those
+ * relationships; the client checks them before using cached entries.
+ */
+const chatSubscribeSkeletonChunkServerFrameSchemaV119 = lazySchema(() =>
+  chatSubscribeSkeletonChunkServerFrameSchema.extend({
+    retainedRows: z.number().int().positive().optional(),
+  }),
+);
+
 const chatSubscribeIndexChangedServerFrameSchema = lazySchema(() =>
   z.object({
     kind: z.literal("indexChanged"),
@@ -5618,10 +5652,10 @@ const chatSubscribeServerFrameSchemaV117 = lazySchema(() =>
 );
 
 /**
- * `chat.subscribe@1.18`'s server frames, frozen when `1.20` opened above it:
- * `1.17`'s with the queue's `pausedReason`, a notice's `receipt` and the failed
- * attempt's `waitResumesAt`, and every Claude-parity arm still at its `1.16`
- * copy - `1.18` never carried any of them.
+ * `chat.subscribe@1.18`'s server frames, frozen when `1.19` and `1.20` opened
+ * above it: `1.17`'s with the queue's `pausedReason`, a notice's `receipt` and
+ * the failed attempt's `waitResumesAt`, and every Claude-parity arm still at
+ * its `1.16` copy - `1.18` never carried any of them.
  */
 const chatSubscribeServerFrameSchemaV118 = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -5640,10 +5674,33 @@ const chatSubscribeServerFrameSchemaV118 = lazySchema(() =>
   ]),
 );
 
+/**
+ * `chat.subscribe@1.19`'s server frames, frozen when `1.20` opened above it:
+ * `1.18`'s with `retainedRows` on a resumed stream's first skeleton chunk, and
+ * every Claude-parity arm still at its `1.16` copy - `1.19` never carried any
+ * of them.
+ */
+const chatSubscribeServerFrameSchemaV119 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV118,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaV118,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV118,
+  ]),
+);
+
 export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchema,
-    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchema,
@@ -6354,14 +6411,29 @@ export const chatSubscribeV117 = defineStreamRpcContract({
  *
  * The client frames are `1.17`'s, unchanged.
  *
- * Frozen at the pre-parity approval cards, events and `turnStateChanged`
- * since `1.20` opened above it (`chatSubscribeServerFrameSchemaV118`).
+ * Frozen at the pre-resume skeleton chunk since `1.19` opened above it, and at
+ * the pre-parity approval cards, events and `turnStateChanged` since `1.20`
+ * did (`chatSubscribeServerFrameSchemaV118`).
  */
 export const chatSubscribeV118 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 18 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchemaV118,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * Main's model-routing `1.18` plus a resume claim and confirmed prefix.
+ *
+ * Frozen at the pre-parity approval cards, events and `turnStateChanged`
+ * since `1.20` opened above it (`chatSubscribeServerFrameSchemaV119`).
+ */
+export const chatSubscribeV119 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 19 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV119,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });
 
@@ -6399,15 +6471,17 @@ export const chatSubscribeV118 = defineStreamRpcContract({
  * `< 1.20` projection tier blanks them in place for it rather than dropping
  * them - dropping would renumber the rows that peer plans for itself.
  *
- * Opened above `1.18`: `main` took `1.17` for the sender-host line and `1.18`
- * for the model-routing line while this line was in flight under each of those
- * numbers in turn - a long-lived branch does not own an unreleased minor. The
- * client frames are `1.17`'s, unchanged: everything above is host-authored.
+ * Opened above `1.19`: `main` took `1.17` for the sender-host line, `1.18` for
+ * the model-routing line and `1.19` for skeleton resume while this line was in
+ * flight under each of those numbers in turn - a long-lived branch does not
+ * own an unreleased minor. It inherits `1.19`'s open request (the resume
+ * claim) and its `retainedRows` chunk; the client frames are `1.17`'s,
+ * unchanged: everything above is host-authored.
  */
 export const chatSubscribeV120 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 20 } as const,
-  openRequestSchema: chatSubscribeOpenRequestSchema,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });

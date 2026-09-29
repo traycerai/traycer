@@ -54,6 +54,7 @@ import {
   chatSubscribeV116,
   chatSubscribeV117,
   chatSubscribeV118,
+  chatSubscribeV119,
   chatSubscribeV120,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
@@ -1164,5 +1165,6 @@ export {
   chatSubscribeV116,
   chatSubscribeV117,
   chatSubscribeV118,
+  chatSubscribeV119,
   chatSubscribeV120,
 };

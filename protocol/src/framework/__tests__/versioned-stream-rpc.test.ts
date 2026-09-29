@@ -127,7 +127,8 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // Host-owned accepted-message delivery took @1.15. The approval card's
     // judge-reason tier took @1.16. The sender host on `send` /
     // `editUserMessage` and on the queued prompt item took @1.17. The model-routing
-    // receipt (`providerNotice.receipt`) and the queue's `pausedReason` took @1.18.
+    // receipt (`providerNotice.receipt`) and the queue's `pausedReason` took @1.18;
+    // the skeleton-resume open claim and retained-prefix count took @1.19.
     // The Claude-parity surfaces took @1.20.
     //
     // RESTATED rather than derived, deliberately: this file is the

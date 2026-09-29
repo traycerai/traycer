@@ -292,6 +292,7 @@ import {
   chatSubscribeV116,
   chatSubscribeV117,
   chatSubscribeV118,
+  chatSubscribeV119,
   chatSubscribeV120,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
@@ -12451,10 +12452,18 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // @1.18 adds `receipt` on a provider notice's metadata (the settled
         // fallback card) and `pausedReason` on the queue. Optional keys in
         // non-strict objects at every minor, so the host withholds nothing: a
-        // @1.17 peer drops both on parse. Frozen at the pre-parity cards and
-        // events since @1.20 opened above it.
+        // @1.17 peer drops both on parse. Frozen at the pre-resume skeleton
+        // chunk since @1.19 opened above it, and at the pre-parity cards and
+        // events since @1.20 did.
         18: {
           contract: chatSubscribeV118,
+        },
+        // @1.19 adds a nullable skeleton claim on open and `retainedRows` on
+        // the first resumed chunk. Older lines keep their complete streams.
+        // Frozen at the pre-parity cards and events since @1.20 opened above
+        // it; @1.20 keeps the claim and the chunk.
+        19: {
+          contract: chatSubscribeV119,
         },
         // @1.20 is the Claude-parity line: the suggested prompt, the
         // thinking-token estimate and its light frame, the `cron` background

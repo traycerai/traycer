@@ -99,6 +99,7 @@ function recordingCallbacks(readings: Reading[]): ChatStreamCallbacks {
       readings.push({ turnId: frame.turnId, estimate: frame.estimate });
     },
     onConnectionStatus: () => undefined,
+    readSkeletonResume: () => null,
   };
 }
 

@@ -35,6 +35,11 @@ import {
   type ChatStreamClientFactory,
 } from "@/stores/chats/chat-session-store";
 import {
+  hydrateSkeletonForResume,
+  primeDurableSkeletonsForResume,
+  shouldLoadDurableSkeletonForResume,
+} from "@/stores/chats/skeleton-resume-cache";
+import {
   ChatSessionRegistry,
   DEFAULT_CHAT_IDLE_TTL_MS,
   chatCapHasActiveWork,
@@ -104,6 +109,20 @@ registry.subscribe(() => managedDataByteBudget.noteEligibilityChange());
 getOpenEpicRegistry().subscribe(() => {
   managedDataByteBudget.noteEligibilityChange();
   scheduleByteGraceWake();
+});
+
+// The app normally knows its account before a chat tab mounts. Load its tiny
+// set of hinted entries then, off the chat-open path. A slow/missing IndexedDB
+// answer can only lose the byte saving; it cannot delay the subscribe.
+const initialSkeletonCacheUserId = useAuthStore.getState().profile?.userId;
+if (initialSkeletonCacheUserId !== undefined) {
+  primeDurableSkeletonsForResume(initialSkeletonCacheUserId);
+}
+useAuthStore.subscribe((state, previous) => {
+  const userId = state.profile?.userId;
+  if (userId !== undefined && userId !== previous.profile?.userId) {
+    primeDurableSkeletonsForResume(userId);
+  }
 });
 
 /**
@@ -446,47 +465,64 @@ export function useChatSessionHandle(
       });
     };
 
-    const next = registry.acquire(
-      { epicId, chatId, hostId, scopeKey },
-      (factoryEpicId, factoryChatId) =>
-        createChatSessionStore({
-          hostId,
-          epicId: factoryEpicId,
-          chatId: factoryChatId,
-          userId,
-          environment: createRendererRuntimeEnvironment(),
-          streamClientFactory: factory,
-          streamFlushCoordinator: STREAM_FLUSH_COORDINATOR,
-          onAuthError,
-          onProviderAuthError,
-          // THIS chat's socket, never the app-wide one. Each chat session owns
-          // its own transport, so a wake resolved from `useWsStreamClient()`
-          // would collapse the backoff on a different connection and leave
-          // this one sitting out its delay - a button that appears to work and
-          // does nothing. `probeFirst: false` because a person pressing it is
-          // demanding a re-dial, and the probe-first flavour answers a
-          // live-but-stuck socket with nothing.
-          wakeTransport: () => {
-            boundStreamClient?.reconnectAll(CHAT_SESSION_WAKE_REASON, {
-              probeFirst: false,
-              wakeProbe: null,
-            });
-          },
-          // The same socket the wake above reaches, asked instead whether it
-          // is worth waking. `?? false` covers both "no transport of ours"
-          // (the `streamClientFactoryOverride` path never assigns
-          // `boundStreamClient`) and "this transport does not measure
-          // silence" (the local `WsStreamClient` leaves the member absent):
-          // neither is evidence of a dead session, so neither escalates.
-          transportSilentFor: (ms) =>
-            boundStreamClient?.isSilentFor?.(ms) ?? false,
-        }),
-    );
-    acquiredHandle = next;
-    setHandle(next);
+    let cancelled = false;
+    let activeHandle: ChatSessionStoreHandle | null = null;
+    const acquire = (): void => {
+      if (cancelled) return;
+      const next = registry.acquire(
+        { epicId, chatId, hostId, scopeKey },
+        (factoryEpicId, factoryChatId) =>
+          createChatSessionStore({
+            hostId,
+            epicId: factoryEpicId,
+            chatId: factoryChatId,
+            userId,
+            environment: createRendererRuntimeEnvironment(),
+            streamClientFactory: factory,
+            streamFlushCoordinator: STREAM_FLUSH_COORDINATOR,
+            onAuthError,
+            onProviderAuthError,
+            // THIS chat's socket, never the app-wide one. Each chat session owns
+            // its own transport, so a wake resolved from `useWsStreamClient()`
+            // would collapse the backoff on a different connection and leave
+            // this one sitting out its delay - a button that appears to work and
+            // does nothing. `probeFirst: false` because a person pressing it is
+            // demanding a re-dial, and the probe-first flavour answers a
+            // live-but-stuck socket with nothing.
+            wakeTransport: () => {
+              boundStreamClient?.reconnectAll(CHAT_SESSION_WAKE_REASON, {
+                probeFirst: false,
+                wakeProbe: null,
+              });
+            },
+            // The same socket the wake above reaches, asked instead whether it
+            // is worth waking. `?? false` covers both "no transport of ours"
+            // (the `streamClientFactoryOverride` path never assigns
+            // `boundStreamClient`) and "this transport does not measure
+            // silence" (the local `WsStreamClient` leaves the member absent):
+            // neither is evidence of a dead session, so neither escalates.
+            transportSilentFor: (ms) =>
+              boundStreamClient?.isSilentFor?.(ms) ?? false,
+          }),
+      );
+      acquiredHandle = next;
+      activeHandle = next;
+      setHandle(next);
+    };
+
+    const cacheKey = { userId, hostId, epicId, chatId };
+    if (
+      registry.get(epicId, chatId, hostId, scopeKey) === null &&
+      shouldLoadDurableSkeletonForResume(cacheKey)
+    ) {
+      void hydrateSkeletonForResume(cacheKey).catch(() => undefined);
+    }
+    acquire();
 
     return () => {
-      registry.releaseHandle(epicId, chatId, hostId, next);
+      cancelled = true;
+      if (activeHandle !== null)
+        registry.releaseHandle(epicId, chatId, hostId, activeHandle);
     };
     // `openTransport` is referentially stable and reads its deps (auth, runner
     // host, credential source, directory) live, so the recovery wiring is never

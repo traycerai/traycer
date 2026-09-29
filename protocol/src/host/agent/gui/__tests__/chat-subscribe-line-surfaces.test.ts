@@ -36,7 +36,10 @@
  * - `1.18` is the model-routing surface, minted above `1.17`: the settled
  *   notice's `receipt` and the queue's `pausedReason`, which the older lines
  *   bind frozen schemas without, so needles pin the boundary;
- * - `1.20` is the Claude-parity surface, minted above `1.18`: the suggested
+ * - `1.19` is skeleton resume, minted above `1.18`: a claim on the open request
+ *   and `retainedRows` on a resumed stream's first chunk. No projected key, so
+ *   it is listed for the same line-count and ceiling reason as `1.15`;
+ * - `1.20` is the Claude-parity surface, minted above `1.19`: the suggested
  *   prompt, the thinking-tokens estimate and frame, the cron background item
  *   kind, and the approval card's display facts / cautious / rule-forced
  *   keys. Unlike `1.16` these are PROJECTED for an older peer, and the older
@@ -71,7 +74,8 @@ const PORT_FORWARD_MINOR = 14;
 // mint no boundary a needle below can pin, so only the ceiling names them.
 const APPROVAL_TIER_MINOR = 16;
 const SENT_FROM_HOST_MINOR = 17;
-// `1.18` (model routing) is the boundary for the receipt / pausedReason needles.
+// `1.18` (model routing) is the boundary for the receipt / pausedReason needles;
+// `1.19` adds only the open-request resume claim and first-chunk retainedRows.
 const MODEL_ROUTING_MINOR = 18;
 const MODEL_ROUTING_NEEDLES = ['"receipt":', '"pausedReason":'];
 // The Claude-parity surfaces: suggested prompt, thinking tokens, cron items,
@@ -222,7 +226,7 @@ describe("chat.subscribe line surfaces", () => {
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });

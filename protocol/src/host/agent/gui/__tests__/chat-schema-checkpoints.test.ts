@@ -25,6 +25,7 @@ import {
   chatSubscribeV116,
   chatSubscribeV117,
   chatSubscribeV118,
+  chatSubscribeV119,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -128,8 +129,15 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // 1.18 is captured ON TIME, from main's own bytes at OSS commit 5226395c0,
 // where it was the live line (model routing, released on `release-v1.4.0`),
 // before the Claude-parity surfaces - renumbered a second time for it - took
-// 1.20 above it. The merged tree's frozen 1.18 reproduces main's digests
-// exactly, server and client frames alike, and so does every line below it.
+// the line above it. The merged tree's frozen 1.18 reproduces main's digests
+// exactly, server and client frames alike, and so does every line below it;
+// re-verified from main's bytes at OSS commit a525056d8, after skeleton resume
+// took 1.19 above it: identical.
+//
+// 1.19 is captured ON TIME, from main's own bytes at OSS commit a525056d8,
+// where it was the live line (skeleton resume), before the Claude-parity
+// surfaces - renumbered a third time for it - took 1.20 above it. The merged
+// tree's frozen 1.19 reproduces main's digests exactly.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -207,6 +215,10 @@ const SERVER_FRAME_DIGESTS = {
     "dd36f3ee4468b540113ddc764ccd65a8ad719dd106e4af7d4cb40cb4f3598188",
     "04686bfe28536663fb5d5e85ea6d69ee0e07f03d7872d03fe6299826e50d5d7c",
   ],
+  19: [
+    "411078166925896389721c14a32dc933fecc71a73f648f7d468a44369ef8ec3d",
+    "ef9a1c87fb7422063363aebd4191437153827b715b212693b617e35684895d5a",
+  ],
 } as const;
 
 const contracts = [
@@ -229,10 +241,11 @@ const contracts = [
   chatSubscribeV116,
   chatSubscribeV117,
   chatSubscribeV118,
+  chatSubscribeV119,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.18 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.19 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([
