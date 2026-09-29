@@ -6695,12 +6695,13 @@ async function prepareTab(client) {
  * as separate CI shards, a shard whose first phase opens this fixture paid
  * that cold boot inside its first variant and failed it ("never fired its
  * load event"). So this one boot waits while the dev server keeps answering
- * (compiling is progress), fails after 30s with no response or 180s in all
- * (a reload loop answers forever), and counts as no stall retry. Same
+ * (compiling is progress), gives the cold compile the full 180s readiness
+ * window before timing out, and caps reload loops that answer forever. It
+ * counts as no stall retry. Same
  * semantics as `sheet-join-geometry-browser.mjs`'s `warmUp`.
  */
 async function warmUp(client, url) {
-  const idleMs = 30_000;
+  const idleMs = 180_000;
   const capMs = 180_000;
   await client.freshTab();
   await prepareTab(client);
