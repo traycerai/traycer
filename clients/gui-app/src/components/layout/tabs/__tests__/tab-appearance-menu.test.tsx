@@ -95,6 +95,8 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
       localHomedTaskIds: query.data?.localHomedTaskIds ?? new Set<string>(),
       isFetching: query.isFetching,
       error: query.error,
+      refetch: () => Promise.resolve(),
+      refetchBatches: [],
     };
   },
 }));
