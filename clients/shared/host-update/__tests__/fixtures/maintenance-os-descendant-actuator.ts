@@ -69,7 +69,13 @@ async function publish(path: string, content: string): Promise<void> {
 }
 
 async function descendant(): Promise<void> {
-  process.once("SIGTERM", () => {
+  // `on` + latch, not `once`: the supervisor signals this descendant through
+  // its group and then directly. A second TERM must not restore Node's
+  // default signal action while the first handler is publishing its barrier.
+  let termHandled = false;
+  process.on("SIGTERM", () => {
+    if (termHandled) return;
+    termHandled = true;
     void publish(
       join(barrierDir, "descendant-exited"),
       String(process.pid),

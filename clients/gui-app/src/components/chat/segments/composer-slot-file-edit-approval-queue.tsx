@@ -7,6 +7,15 @@ import {
   CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
   useRestartHighlightPulse,
 } from "@/components/chat/chat-navigation-highlight";
+import {
+  INDIVIDUAL_APPROVAL_MARKER,
+  individualApprovalCountLine,
+} from "@/components/chat/segments/approval-card-disclosure";
+import { ApprovalDisplayFacts } from "@/components/chat/segments/composer-slot-approval-queue";
+import {
+  approvalNeedsIndividualDecision,
+  bulkApprovableFileEditApprovals,
+} from "@/components/epic-canvas/renderers/chat-approval-visibility";
 import { cn } from "@/lib/utils";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -18,12 +27,21 @@ interface ComposerSlotFileEditApprovalQueueProps {
   readonly highlightedGeneration?: number;
 }
 
+/**
+ * Every pending file-edit approval, one row each.
+ *
+ * "Approve all" leaves out a row stamped `cautious` - an edit a user's ask rule
+ * forced to a person - and the header says how many it left, exactly as the
+ * command queue does. "Deny all" takes them with the rest.
+ */
 export function ComposerSlotFileEditApprovalQueue(
   props: ComposerSlotFileEditApprovalQueueProps,
 ) {
   const count = props.approvals.length;
   if (count === 0) return null;
   const showBulk = count >= 2;
+  const bulkApprovable = bulkApprovableFileEditApprovals(props.approvals);
+  const individualCount = count - bulkApprovable.length;
   return (
     <div
       className="flex flex-col gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2.5 text-ui-sm"
@@ -45,6 +63,19 @@ export function ComposerSlotFileEditApprovalQueue(
             <span className="text-ui-xs text-muted-foreground">
               {count} pending
             </span>
+            {individualCount > 0 ? (
+              <>
+                <span aria-hidden className="text-muted-foreground/40">
+                  ·
+                </span>
+                <span
+                  className="text-ui-xs text-muted-foreground"
+                  data-testid="file-edit-approval-individual-count"
+                >
+                  {individualApprovalCountLine(individualCount)}
+                </span>
+              </>
+            ) : null}
             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
               <Button
                 type="button"
@@ -64,9 +95,9 @@ export function ComposerSlotFileEditApprovalQueue(
                 type="button"
                 size="sm"
                 variant="default"
-                disabled={!props.canAct}
+                disabled={!props.canAct || bulkApprovable.length === 0}
                 onClick={() => {
-                  for (const approval of props.approvals) {
+                  for (const approval of bulkApprovable) {
                     props.onDecision(approval.approvalId, true);
                   }
                 }}
@@ -89,6 +120,9 @@ export function ComposerSlotFileEditApprovalQueue(
               props.highlightedApprovalId === approval.approvalId
             }
             highlightGeneration={props.highlightedGeneration ?? 0}
+            leftOutOfApproveAll={
+              showBulk ? approvalNeedsIndividualDecision(approval) : false
+            }
           />
         ))}
       </div>
@@ -102,6 +136,8 @@ interface FileEditApprovalRowProps {
   readonly onDecision: (approvalId: string, approved: boolean) => void;
   readonly navigationHighlighted: boolean;
   readonly highlightGeneration: number;
+  /** "Approve all" is showing and skips this row (`cautious`). */
+  readonly leftOutOfApproveAll: boolean;
 }
 
 function FileEditApprovalRow(props: FileEditApprovalRowProps) {
@@ -167,6 +203,18 @@ function FileEditApprovalRow(props: FileEditApprovalRowProps) {
       ) : (
         <p className="m-0 text-muted-foreground">No file paths reported.</p>
       )}
+      {props.approval.displayFacts !== undefined &&
+      props.approval.displayFacts.length > 0 ? (
+        <ApprovalDisplayFacts facts={props.approval.displayFacts} />
+      ) : null}
+      {props.leftOutOfApproveAll ? (
+        <p
+          className="m-0 text-ui-xs text-muted-foreground"
+          data-testid="file-edit-approval-individual-marker"
+        >
+          {INDIVIDUAL_APPROVAL_MARKER}
+        </p>
+      ) : null}
       <div className="flex items-center justify-end gap-2">
         <Button
           type="button"

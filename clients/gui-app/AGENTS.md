@@ -354,6 +354,12 @@ Prefer integrated tests (real stores/docs/watchers) over isolated units. Fake
 only external/nondeterministic boundaries. Reset stores between tests; use
 Testing Library role queries.
 
+A claim jsdom cannot decide - real layout, painted pixels, real input
+dispatch - is a Playwright spec in `browser-tests/` against a fixture page in
+`src/__tests__/browser/`; read `browser-tests/README.md` first. Run one file
+with `bun run test:browser browser-tests/<file>.spec.ts`; CI runs them all in
+`browser-regressions.yml`. Everything else stays in Vitest.
+
 ## Skills (use when matched)
 
 | Skill                             | When                           |

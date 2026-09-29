@@ -52,12 +52,13 @@ export function UnsyncedEpicMoveDialog(props: {
           // destructive "Discard and move" first, which is what puts the safe
           // action rightmost on `sm:`.
           //
-          // DERIVED, not measured. The tab-close sibling was driven in a real
-          // browser (`FOCUS_ON_OPEN = epic-tab-unsynced-discard`) and this is
-          // the identical composition - same `DialogContent`, same footer, a
-          // destructive `Button` first, nothing tabbable before it. Named as
-          // derived because "same composition, therefore same behaviour" is an
-          // inference that has been wrong on this branch before.
+          // Measured by `__tests__/unsynced-epic-move-dialog.test.tsx`, which
+          // opens this dialog and reads `document.activeElement`: with this
+          // handler's `preventDefault(); safe.focus()` removed, focus lands on
+          // `epic-move-unsynced-discard`; with it, on the safe button. It
+          // also asserts the DOM-order premise (destructive first), so it
+          // cannot go stale silently. The tab-close sibling was first driven
+          // in a real browser (`FOCUS_ON_OPEN = epic-tab-unsynced-discard`).
           const safe = waitForSyncRef.current;
           if (safe === null) return;
           event.preventDefault();

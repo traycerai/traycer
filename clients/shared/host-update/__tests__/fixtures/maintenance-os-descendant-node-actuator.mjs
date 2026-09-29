@@ -53,6 +53,9 @@ function publishSync(path, content) {
 }
 
 async function descendant() {
+  // `on` + latch, not `once`: C signals E through D's group and then
+  // directly. Keeping the listener installed makes later TERM deliveries
+  // no-ops while the first handler atomically publishes its barrier.
   let termReceived = false;
   process.on("SIGTERM", () => {
     if (termReceived) return;

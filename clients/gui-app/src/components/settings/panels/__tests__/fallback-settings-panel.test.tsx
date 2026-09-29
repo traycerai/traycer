@@ -1672,10 +1672,18 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
     // In the production shape: the refetch FAILED, and TanStack handed back the
     // policy the editor already had. `data` is present and stale; only
     // `isSuccess` says it must not be believed.
-    fallbackMocks.refetchMock.mockResolvedValueOnce({
-      isSuccess: false,
-      data: fallbackMocks.queryData,
-    });
+    //
+    // Held open, because the notice renders BEFORE this read-back settles and
+    // "Check again" is disabled for as long as it runs: a click in that window
+    // does nothing. Holding it pins that window rather than leaving it to how
+    // fast the automatic answer happens to resolve.
+    let answerAutomaticReadBack: (result: FallbackRefetchResult) => void = () =>
+      undefined;
+    fallbackMocks.refetchMock.mockReturnValueOnce(
+      new Promise<FallbackRefetchResult>((resolve) => {
+        answerAutomaticReadBack = resolve;
+      }),
+    );
     renderPanel();
 
     fireEvent.click(
@@ -1694,18 +1702,15 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
         .getAttribute("aria-checked"),
     ).toBe("false");
     const checkAgain = within(notice).getByTestId("fallback-check-again");
+    expect(checkAgain.hasAttribute("disabled")).toBe(true);
 
-    // The notice appears as soon as `save-failed` dispatches, which races the
-    // AUTOMATIC read-back `commit` fires for an "unknown" outcome
-    // (`reconcileUnknownSave`, still consuming the FIRST queued
-    // `refetchMock` resolution above): `findByTestId` can settle before that
-    // read-back's `finally` clears `readBackInFlight`, and the button is
-    // `disabled={readBackInFlight}` while it is. Clicking a disabled button
-    // is a no-op, so wait for that automatic read-back to finish - the exact
-    // observable boundary - before firing this manual retry, or the click
-    // never reaches `onCheckAgain` and the switch is never re-settled.
+    answerAutomaticReadBack({
+      isSuccess: false,
+      data: fallbackMocks.queryData,
+    });
+    // Only an enabled button is one the person can press.
     await waitFor(() => {
-      expect((checkAgain as HTMLButtonElement).disabled).toBe(false);
+      expect(checkAgain.hasAttribute("disabled")).toBe(false);
     });
 
     // This time the host answers, and it says ON - a value the failed save's
@@ -1716,19 +1721,13 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
     });
     fireEvent.click(checkAgain);
 
-    // A failed save, a standing notice and a read-back settle inside this one
-    // wait; it has missed the default 1 s twice on a loaded 20-shard runner
-    // (#2014, #2105) while passing in isolation, so it gets a real budget.
-    await waitFor(
-      () => {
-        expect(
-          screen
-            .getByRole("switch", { name: "Route automatically" })
-            .getAttribute("aria-checked"),
-        ).toBe("true");
-      },
-      { timeout: 5_000 },
-    );
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("switch", { name: "Route automatically" })
+          .getAttribute("aria-checked"),
+      ).toBe("true");
+    });
     expect(screen.queryByTestId("fallback-host-error")).toBeNull();
   });
 
@@ -1856,7 +1855,20 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
       );
 
       const notice = await screen.findByTestId("fallback-host-error");
-      fireEvent.click(within(notice).getByTestId("fallback-check-again"));
+      const checkAgain = within(notice).getByTestId("fallback-check-again");
+      // The notice renders while the automatic read-back is still running, and
+      // the button is disabled until it settles: a click before then is ignored
+      // and the button's reject path below would never run.
+      await waitFor(() => {
+        expect(checkAgain.hasAttribute("disabled")).toBe(false);
+      });
+      // The click handler reads the unknown save from a ref that a passive
+      // effect updates, so let those effects run before pressing.
+      await flushHostReplies();
+      fireEvent.click(checkAgain);
+      await waitFor(() => {
+        expect(fallbackMocks.refetchMock).toHaveBeenCalledTimes(2);
+      });
 
       // Still standing, and still offering the retry: a read-back that failed
       // settles nothing, so nothing about the notice may change.

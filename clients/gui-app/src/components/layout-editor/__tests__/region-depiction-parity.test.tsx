@@ -50,7 +50,7 @@ import type { RegionId } from "@/lib/layout/region-id";
  * nothing - a faithful picture of nothing.
  *
  * Whether the two look identical at real widths under real CSS is the browser
- * regression's question (`scripts/layout-editor-browser.mjs`), which is also
+ * regression's question (`browser-tests/layout-editor/parity.spec.ts`), which is also
  * where the hover chip's PAINTED position is asserted: anchor positioning
  * resolves to nothing in jsdom.
  */

@@ -16,8 +16,9 @@ import {
 } from "@/components/chat/chat-collapsible-key";
 import { deriveInterviewReviewModel } from "@/components/chat/segments/interview-review-model";
 import {
-  adjacentDedupedProgressItems,
   cleanSubagentNotificationText,
+  subagentHasChildText,
+  subagentProgressItems,
 } from "@/components/chat/segments/subagent-display";
 import { importedChatMarkerLabel } from "@/components/chat/segments/imported-chat-marker-display";
 import { autoJudgeUnattendedDenialText } from "@/components/chat/segments/auto-judge-unattended-denial-display";
@@ -35,6 +36,7 @@ import {
 } from "@/components/chat/segments/plan-display";
 import { normalizeSearchableText } from "@/lib/find-engine/searchable-text";
 import { formatSingleLine } from "@/lib/text/format-single-line";
+import { isThinkingShown } from "@/stores/layout/layout-store";
 import type {
   ActivityGroupModel,
   ChatActivityTimelineItem,
@@ -164,6 +166,69 @@ export function chatFindSubagentBodyUnitId(renderId: string): string {
   return `subagent:${renderId}:body`;
 }
 
+export function chatFindSubagentResultUnitId(renderId: string): string {
+  return `subagent:${renderId}:result`;
+}
+
+/** The one find row an open-as-chat view projects while it is open. */
+export function subagentChatFindRowId(cardId: string): string {
+  return `subagent-chat:${cardId}`;
+}
+
+export function chatFindSubagentChatTaskUnitId(cardId: string): string {
+  return `subagent-chat:${cardId}:task`;
+}
+
+export function chatFindSubagentChatResultUnitId(cardId: string): string {
+  return `subagent-chat:${cardId}:result`;
+}
+
+/**
+ * Find's rows while an open-as-chat view covers the transcript: ONE row, the
+ * open card's conversation exactly as `SubagentChatView` draws it - the task
+ * bubble, the conversation (the same units the card's own body projects, but
+ * rooted at the view, so no card collapsible sits in front of them), then the
+ * Result panel when the view shows one. The transcript underneath is not
+ * searched: what a reader can see is the open conversation. `null` (the card
+ * left the loaded transcript) searches nothing.
+ */
+export function buildSubagentChatFindRows(
+  card: SubagentSegment | null,
+  tileInstanceId: string,
+): ReadonlyArray<ChatFindRow> {
+  if (card === null) return [];
+  // Mirrors the view: no Result panel once the conversation has text.
+  const shownResult = subagentHasChildText(card.children) ? null : card.result;
+  return [
+    {
+      messageId: subagentChatFindRowId(card.id),
+      // A synthetic row over one card's conversation, not a persisted record:
+      // a match here confirms no index hit (the card's scope never asks the
+      // index anyway - see `use-chat-find-controller.ts`).
+      recordIds: [],
+      units: [
+        ...compactUnits([
+          chatFindUnit({
+            unitId: chatFindSubagentChatTaskUnitId(card.id),
+            text: cleanSubagentNotificationText(card.task) ?? "",
+            owningChain: [],
+          }),
+        ]),
+        ...subagentConversationSearchUnits(card, [], tileInstanceId),
+        ...compactUnits([
+          shownResult === null
+            ? null
+            : chatFindUnit({
+                unitId: chatFindSubagentChatResultUnitId(card.id),
+                text: markdownToChatSearchText(shownResult),
+                owningChain: [],
+              }),
+        ]),
+      ],
+    },
+  ];
+}
+
 export function chatFindA2ASendBodyUnitId(segmentId: string): string {
   return `a2a-send:${segmentId}:body`;
 }
@@ -217,7 +282,7 @@ function chatFindUnitsForMessage(
   // singleSpecialSegment predicate), so index the segment.
   const specialSegment = singleSpecialSegment(message.segments);
   if (specialSegment !== null) {
-    return segmentSearchUnits(specialSegment, tileInstanceId);
+    return segmentSearchUnits(specialSegment, tileInstanceId, []);
   }
 
   // Every other user/system message renders its whole body as ONE anchor
@@ -279,7 +344,7 @@ function settledCardSearchUnits(
       }),
     ]);
   }
-  return segmentSearchUnits(segment, tileInstanceId);
+  return segmentSearchUnits(segment, tileInstanceId, []);
 }
 
 function timelineItemSearchUnits(
@@ -287,7 +352,7 @@ function timelineItemSearchUnits(
   tileInstanceId: string,
 ): ReadonlyArray<ChatFindUnit> {
   if (item.kind === "segment") {
-    return segmentSearchUnits(item.segment, tileInstanceId);
+    return segmentSearchUnits(item.segment, tileInstanceId, []);
   }
   if (item.kind === "promoted_subagent") {
     const renderId = derivePromotedSubagentRenderId(item.segment.id);
@@ -299,12 +364,18 @@ function timelineItemSearchUnits(
       tileInstanceId,
     });
   }
-  return activityGroupSearchUnits(item.group, tileInstanceId);
+  return activityGroupSearchUnits(item.group, tileInstanceId, []);
 }
 
+/**
+ * `parentChain` is every collapsible a reader must open to reach the group: none
+ * at the top level, the owning card's body chain for a group inside a subagent's
+ * conversation.
+ */
 function activityGroupSearchUnits(
   group: ActivityGroupModel,
   tileInstanceId: string,
+  parentChain: ReadonlyArray<ChatCollapsibleKey>,
 ): ReadonlyArray<ChatFindUnit> {
   const groupKey = deriveActivityGroupCollapsibleKey(tileInstanceId, group.id);
   // Hoisted: a group property, not a per-child one, and computing it inside the
@@ -314,7 +385,7 @@ function activityGroupSearchUnits(
     chatFindUnit({
       unitId: chatFindActivityGroupSummaryUnitId(group.id),
       text: group.label,
-      owningChain: [],
+      owningChain: parentChain,
     }),
     // A reveal force-opens the group, and every child that renders a header
     // renders it in both the live window and the expanded body, so each of
@@ -326,7 +397,7 @@ function activityGroupSearchUnits(
       activityGroupChildSearchUnits({
         segment,
         groupId: group.id,
-        groupChain: [groupKey],
+        groupChain: [...parentChain, groupKey],
         tileInstanceId,
         headerlessReasoning,
       }),
@@ -401,9 +472,11 @@ function compactUnits(
   return units.filter((unit): unit is ChatFindUnit => unit !== null);
 }
 
+/** `parentChain`: see `activityGroupSearchUnits`. */
 function segmentSearchUnits(
   segment: MessageSegment,
   tileInstanceId: string,
+  parentChain: ReadonlyArray<ChatCollapsibleKey>,
 ): ReadonlyArray<ChatFindUnit> {
   if (segment.kind === "interview") {
     return interviewSearchUnits(segment, tileInstanceId);
@@ -413,7 +486,7 @@ function segmentSearchUnits(
     return subagentSegmentSearchUnits({
       segment,
       renderId,
-      parentChain: [],
+      parentChain,
       ownKey: deriveSubagentCollapsibleKey(tileInstanceId, renderId),
       tileInstanceId,
     });
@@ -423,7 +496,10 @@ function segmentSearchUnits(
       chatFindUnit({
         unitId: chatFindA2ASendBodyUnitId(segment.id),
         text: markdownToChatSearchText(segment.agentMessageSend.message),
-        owningChain: [deriveA2ASendCollapsibleKey(tileInstanceId, segment.id)],
+        owningChain: [
+          ...parentChain,
+          deriveA2ASendCollapsibleKey(tileInstanceId, segment.id),
+        ],
       }),
     ]);
   }
@@ -432,7 +508,7 @@ function segmentSearchUnits(
     chatFindUnit({
       unitId: chatFindSegmentUnitId(segment.id),
       text: segmentSearchText(segment).join("\n"),
-      owningChain: [],
+      owningChain: parentChain,
     }),
   ]);
 }
@@ -715,18 +791,20 @@ function providerNoticeSegmentSearchText(
   ];
 }
 
-// A subagent renders TWO independently-visible regions, so it projects to two
-// find units:
+// A subagent card projects, in DOM order:
 //   - header (name + agent type): always visible while the parent is open, so
 //     its owning chain is the PARENT chain - it must stay findable even when the
 //     subagent's own body is collapsed.
-//   - body (task + progress + result, or for a workflow card: intent +
-//     activity + result): inside the subagent's own collapsible, so its chain
-//     additionally includes the subagent's own key.
-// PLUS one recursive pass per nested agent child (the "Sub-agents" section) -
-// each renders as its own `row` inside THIS subagent's body, so its search
-// units chain through this subagent's body key exactly as deep as a user must
-// expand to reach it.
+//   - body (task + progress, or for a workflow card: intent + activity):
+//     inside the subagent's own collapsible, so its chain additionally
+//     includes the subagent's own key.
+//   - its conversation: every child entry, projected exactly as the card draws
+//     it (`SubagentConversation` runs the same activity timeline over the
+//     children), each chained through this card's body. A nested agent
+//     recurses here, one body key deeper.
+//   - result: its own unit, present only while the card draws the panel.
+// Units never nest: a unit is painted by walking its root's text, so a root
+// holding another unit's text would shift every occurrence after it.
 interface SubagentSegmentSearchUnitsArgs {
   readonly segment: SubagentSegment;
   readonly renderId: string;
@@ -740,44 +818,70 @@ function subagentSegmentSearchUnits(
 ): ReadonlyArray<ChatFindUnit> {
   const { ownKey, parentChain, renderId, segment, tileInstanceId } = args;
   const bodyChain = [...parentChain, ownKey];
-  return compactUnits([
-    chatFindUnit({
-      unitId: chatFindSubagentHeaderUnitId(renderId),
-      text: subagentHeaderSearchText(segment),
-      owningChain: parentChain,
-    }),
-    chatFindUnit({
-      unitId: chatFindSubagentBodyUnitId(renderId),
-      text: subagentBodySearchText(segment).join("\n"),
-      owningChain: bodyChain,
-    }),
-  ]).concat(
-    segment.children.flatMap((child) => {
-      if (child.kind === "subagent") {
-        return subagentSegmentSearchUnits({
-          segment: child,
-          renderId: child.id,
-          parentChain: bodyChain,
-          ownKey: deriveSubagentCollapsibleKey(tileInstanceId, child.id),
-          tileInstanceId,
-        });
-      }
-      // A nested provider notice renders as a visible row inside this
-      // subagent's own body (see `SubagentChildProviderNotices`), so its
-      // owning chain opens the SAME body key as the subagent's other content
-      // - not a further-nested key of its own.
-      if (child.kind === "provider_notice") {
-        return compactUnits([
-          chatFindUnit({
-            unitId: chatFindSegmentUnitId(child.id),
-            text: segmentSearchText(child).join("\n"),
+  // Mirrors `SubagentResultSection`: no panel once the card has child text.
+  const shownResult = subagentHasChildText(segment.children)
+    ? null
+    : segment.result;
+  return [
+    ...compactUnits([
+      chatFindUnit({
+        unitId: chatFindSubagentHeaderUnitId(renderId),
+        text: subagentHeaderSearchText(segment),
+        owningChain: parentChain,
+      }),
+      chatFindUnit({
+        unitId: chatFindSubagentBodyUnitId(renderId),
+        text: subagentBodySearchText(segment).join("\n"),
+        owningChain: bodyChain,
+      }),
+    ]),
+    ...subagentConversationSearchUnits(segment, bodyChain, tileInstanceId),
+    ...compactUnits([
+      shownResult === null
+        ? null
+        : chatFindUnit({
+            unitId: chatFindSubagentResultUnitId(renderId),
+            text: markdownToChatSearchText(shownResult),
             owningChain: bodyChain,
           }),
-        ]);
-      }
-      return [];
-    }),
-  );
+    ]),
+  ];
+}
+
+const NO_PROMOTED_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * A card's conversation, projected through the SAME timeline
+ * `SubagentConversation` renders: activity groups, standalone entries, and
+ * nested agents as `row` cards keyed by their own block id.
+ */
+function subagentConversationSearchUnits(
+  segment: SubagentSegment,
+  bodyChain: ReadonlyArray<ChatCollapsibleKey>,
+  tileInstanceId: string,
+): ReadonlyArray<ChatFindUnit> {
+  if (segment.children.length === 0) return [];
+  return buildChatActivityTimeline(segment.children, {
+    turnState: segment.isStreaming ? "active" : "complete",
+    promotedToolBlockIds: NO_PROMOTED_TOOL_BLOCK_IDS,
+    // The card groups its runs the way `SubagentConversation` renders them,
+    // and Thinking's Shown regroups them there too.
+    hideReasoning: !isThinkingShown(),
+  }).flatMap((item) => {
+    if (item.kind === "activity_group") {
+      return activityGroupSearchUnits(item.group, tileInstanceId, bodyChain);
+    }
+    if (item.kind === "promoted_subagent") {
+      return subagentSegmentSearchUnits({
+        segment: item.segment,
+        renderId: item.segment.id,
+        parentChain: bodyChain,
+        ownKey: deriveSubagentCollapsibleKey(tileInstanceId, item.segment.id),
+        tileInstanceId,
+      });
+    }
+    return segmentSearchUnits(item.segment, tileInstanceId, bodyChain);
+  });
 }
 
 // The always-visible header line: the cleaned display name (falling back to the
@@ -789,12 +893,12 @@ function subagentHeaderSearchText(segment: SubagentSegment): string {
   ].join(" ");
 }
 
+// The body unit: task + progress (intent + activity for a workflow card). The
+// result is its own unit - see `subagentSegmentSearchUnits`.
 function subagentBodySearchText(
   segment: SubagentSegment,
 ): ReadonlyArray<string> {
   const workflowMeta = segment.workflowMeta;
-  const resultText =
-    segment.result === null ? "" : markdownToChatSearchText(segment.result);
   // The workflow card replaces Task/Progress with Intent/Activity, so index
   // only what it actually renders - the base task/progressUpdates fields are
   // the dual-written degradation for old readers, never shown here.
@@ -802,17 +906,16 @@ function subagentBodySearchText(
     return [
       workflowMeta.intent ?? "",
       ...workflowMeta.activity.map((entry) => entry.text),
-      resultText,
     ];
   }
   return [
     cleanSubagentNotificationText(segment.task) ?? "",
-    // Progress is rendered raw and adjacent-deduped; index the SAME deduped raw
-    // lines so the counter matches the rendered list (no phantom duplicates).
-    ...adjacentDedupedProgressItems(segment.progressUpdates).map(
+    // Progress is rendered raw, minus the lines the conversation already
+    // shows, and adjacent-deduped; index the SAME lines so the counter matches
+    // the rendered list (no phantom duplicates).
+    ...subagentProgressItems(segment.progressUpdates, segment.children).map(
       (item) => item.text,
     ),
-    resultText,
   ];
 }
 
