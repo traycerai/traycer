@@ -11,7 +11,11 @@ import { SIGNAL_EXIT_CODES } from "./signal-exit-codes.ts";
  * dispatch. The note beside each entry says which.
  *
  * CI runs them in `.github/workflows/browser-regressions.yml`, one parallel
- * job per GROUP below; they are not a required check. They used to run one
+ * job per GROUP below; they are not a required check. A PR or push runs only
+ * the groups without `nightly`; the nightly schedule (and a manual run) runs
+ * every group. The nightly ones are about 35 runner-minutes of the #2021
+ * layout-editor-era drivers, too much to pay on every push for a check that
+ * gates nothing. They used to run one
  * after another at the end of gui-app Vitest shard 1 (`run-tests.ts`), the one
  * gui-app check the `main` ruleset requires: about 31 minutes of drivers took
  * that job from about 7 minutes to about 35 and held every PR behind it. A
@@ -21,7 +25,8 @@ import { SIGNAL_EXIT_CODES } from "./signal-exit-codes.ts";
  *
  *   bun scripts/run-browser-regressions.ts                # every group, in turn
  *   bun scripts/run-browser-regressions.ts --group <name> # one group (one CI job)
- *   bun scripts/run-browser-regressions.ts --list-groups  # the names, as JSON (CI's matrix)
+ *   bun scripts/run-browser-regressions.ts --list-groups  # per-push names, as JSON (CI's matrix)
+ *   bun scripts/run-browser-regressions.ts --list-groups --nightly # every name
  *
  * Every regression in a run starts even after an earlier one failed, so one
  * red driver does not hide the next; the exit code is the first failure's.
@@ -36,6 +41,8 @@ interface BrowserRegression {
 
 interface BrowserRegressionGroup {
   readonly name: string;
+  /** Runs only on the nightly schedule or a manual run, not per push. */
+  readonly nightly: boolean;
   readonly regressions: readonly BrowserRegression[];
 }
 
@@ -60,6 +67,7 @@ function layoutEditorShard(index: number): BrowserRegressionGroup {
   const shard = `${String(index)}/${String(LAYOUT_EDITOR_SHARDS)}`;
   return {
     name: `layout-editor-${String(index)}-of-${String(LAYOUT_EDITOR_SHARDS)}`,
+    nightly: true,
     // The layout editor's parity rule (P2, L-11, L-53) is a claim about
     // RESOLVED styles and laid-out rects - whether two pictures of the same
     // region look the same, whether a preset card is a scaled app frame
@@ -79,6 +87,7 @@ function layoutEditorShard(index: number): BrowserRegressionGroup {
 const GROUPS: readonly BrowserRegressionGroup[] = [
   {
     name: "surfaces",
+    nightly: false,
     regressions: [
       driver("scripts/diff-edit-browser-regression.mjs"),
       driver("scripts/pierre-tree-zoom-browser-regression.mjs"),
@@ -110,14 +119,6 @@ const GROUPS: readonly BrowserRegressionGroup[] = [
       // beside it stays whole are all layout - jsdom reports every box as 0px
       // wide and cannot see what a mask class does.
       driver("scripts/status-bar-usage-scroll-browser.mjs"),
-      // The message queue is never a pill (G1-G2) - it sits directly on the
-      // composer with no gap, the pill row above it, and every one-line row
-      // holds the dock's one row metric (L-171, L-172). All of that is laid
-      // out geometry plus real key input, none of which jsdom has. Ablated
-      // before wiring: HEAD's Compact queue pill fails 14 checks, and an
-      // unbudgeted row toolbar or an unfloated provenance badge fails the
-      // metric.
-      driver("scripts/composer-queue-dock-browser.mjs"),
       // Whether a non-overflowing tab strip's scroller has ANY vertical scroll
       // range, and whether a real mouse wheel over it wobbles the active tab's
       // row by a pixel, are both layout questions - jsdom reports
@@ -138,23 +139,39 @@ const GROUPS: readonly BrowserRegressionGroup[] = [
     ],
   },
   {
-    name: "sign-in-and-hover-card",
+    name: "sign-in",
+    nightly: false,
     regressions: [
       // Whether the sign-in page is legible is a question about rendered
       // colours under a given theme preset, and jsdom has no cascade and no
       // pixels. Ablated before wiring: without the page's dark palette scope,
       // "Enter code manually" reads 1.04:1 under every light preset.
       driver("scripts/sign-in-theme-contrast-browser.mjs"),
+    ],
+  },
+  {
+    name: "hover-card-and-queue-dock",
+    nightly: true,
+    regressions: [
       // Hover-card timing (G8) is pointer events, focus modality, portals and
       // frames, none of which jsdom has. Ablated before wiring: the Radix
       // cards failed 22 of 26 scenario runs, when the driver still ran each in
       // both themes (hand-off ~510ms, a card that opens after a
       // click-and-leave, a blink on click, a card under the menu).
       driver("scripts/hover-card-browser.mjs"),
+      // The message queue is never a pill (G1-G2) - it sits directly on the
+      // composer with no gap, the pill row above it, and every one-line row
+      // holds the dock's one row metric (L-171, L-172). All of that is laid
+      // out geometry plus real key input, none of which jsdom has. Ablated
+      // before wiring: HEAD's Compact queue pill fails 14 checks, and an
+      // unbudgeted row toolbar or an unfloated provenance badge fails the
+      // metric.
+      driver("scripts/composer-queue-dock-browser.mjs"),
     ],
   },
   {
     name: "layout-settings",
+    nightly: true,
     regressions: [
       // Settings ▸ Layout beside the live app column (G6, G7). An area's body
       // scrolls under a pinned rail and header, the page fits a desktop and a
@@ -175,6 +192,7 @@ const GROUPS: readonly BrowserRegressionGroup[] = [
   // both when given neither flag), so these two groups cover all of it.
   {
     name: "sheet-join-offsets",
+    nightly: true,
     regressions: [
       {
         script: "scripts/sheet-join-geometry-browser.mjs",
@@ -185,6 +203,7 @@ const GROUPS: readonly BrowserRegressionGroup[] = [
   },
   {
     name: "sheet-join-corners",
+    nightly: true,
     regressions: [
       {
         script: "scripts/sheet-join-geometry-browser.mjs",
@@ -238,7 +257,7 @@ function describeRegression(regression: BrowserRegression): string {
 }
 
 type Request =
-  | { readonly kind: "list" }
+  | { readonly kind: "list"; readonly nightly: boolean }
   | { readonly kind: "run"; readonly groups: readonly BrowserRegressionGroup[] }
   | { readonly kind: "invalid"; readonly message: string };
 
@@ -254,12 +273,21 @@ function readGroupName(args: readonly string[]): string | undefined {
 function parseRequest(args: readonly string[]): Request {
   const names = GROUPS.map((group) => group.name).join(", ");
   if (args.length === 0) return { kind: "run", groups: GROUPS };
-  if (args.length === 1 && args[0] === "--list-groups") return { kind: "list" };
+  if (args.length === 1 && args[0] === "--list-groups") {
+    return { kind: "list", nightly: false };
+  }
+  if (
+    args.length === 2 &&
+    args[0] === "--list-groups" &&
+    args[1] === "--nightly"
+  ) {
+    return { kind: "list", nightly: true };
+  }
   const groupName = readGroupName(args);
   if (groupName === undefined || groupName === "") {
     return {
       kind: "invalid",
-      message: `expected no arguments, --list-groups, or --group <name>; got: ${args.join(" ")}`,
+      message: `expected no arguments, --list-groups [--nightly], or --group <name>; got: ${args.join(" ")}`,
     };
   }
   const group = GROUPS.find((candidate) => candidate.name === groupName);
@@ -279,7 +307,11 @@ if (request.kind === "invalid") {
 }
 if (request.kind === "list") {
   process.stdout.write(
-    `${JSON.stringify(GROUPS.map((group) => group.name))}\n`,
+    `${JSON.stringify(
+      GROUPS.filter((group) => request.nightly || !group.nightly).map(
+        (group) => group.name,
+      ),
+    )}\n`,
   );
   process.exit(0);
 }
