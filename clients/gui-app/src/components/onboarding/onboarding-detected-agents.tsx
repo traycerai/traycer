@@ -1,6 +1,7 @@
 import {
   type ProviderCliState,
   type ProviderId,
+  type ProviderLoginRefusal,
   type ProvidersAwaitLoginResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import { ExternalLink, Info } from "lucide-react";
@@ -25,6 +26,10 @@ import {
   providerSignInUnavailableHint,
   providerSupportsTerminalLogin,
 } from "@/components/providers/provider-signin-availability";
+import {
+  ProviderLoginRefusalAction,
+  ProviderLoginRefusalMessage,
+} from "@/components/providers/provider-login-refusal";
 import { CodePasteField } from "@/components/settings/panels/code-paste-field";
 import { SignInCopyIconButton } from "@/components/settings/panels/sign-in-copy-icon-button";
 import type { ProviderProfileLoginFlowCodePaste } from "@/components/settings/panels/use-provider-profile-login-flow";
@@ -698,9 +703,12 @@ function resolveStartRefusal(
 }
 
 function SignInToEnableAlerts(props: {
+  readonly providerId: ProviderId;
   readonly declined: boolean;
   readonly declinedMessage: string;
   readonly notAuthenticated: boolean;
+  /** Why the provider turned the completed sign-in away, when it said. */
+  readonly refusal: ProviderLoginRefusal | null;
 }): ReactNode {
   return (
     <>
@@ -709,7 +717,19 @@ function SignInToEnableAlerts(props: {
           {props.declinedMessage}
         </span>
       ) : null}
-      {props.notAuthenticated ? (
+      {props.notAuthenticated && props.refusal !== null ? (
+        <span
+          className="flex flex-col items-start gap-1.5 text-ui-xs text-destructive"
+          role="alert"
+        >
+          <ProviderLoginRefusalMessage
+            providerId={props.providerId}
+            refusal={props.refusal}
+          />
+          <ProviderLoginRefusalAction refusal={props.refusal} />
+        </span>
+      ) : null}
+      {props.notAuthenticated && props.refusal === null ? (
         <span className="text-ui-xs text-destructive" role="alert">
           Sign-in did not complete. This provider is still off.
         </span>
@@ -1031,9 +1051,11 @@ function SignInToEnableButton(props: {
           providerId={state.providerId}
         />
         <SignInToEnableAlerts
+          providerId={state.providerId}
           declined={declined}
           declinedMessage={declinedMessage}
           notAuthenticated={notAuthenticated}
+          refusal={awaitLogin.data?.refusal ?? null}
         />
         <Button
           type="button"
