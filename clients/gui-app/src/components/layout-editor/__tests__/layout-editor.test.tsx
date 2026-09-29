@@ -142,6 +142,7 @@ describe("the mounted editor root", () => {
     expect(view.container.querySelector("[data-layout-inspector]")).toBeNull();
     expect(column.hasAttribute("aria-hidden")).toBe(false);
     expect(column.hasAttribute("data-layout-editing")).toBe(false);
+    expect(column.hasAttribute("data-inspector-dock")).toBe(false);
   });
 
   it("docks the inspector beside the column and firewalls the column", () => {
@@ -156,6 +157,9 @@ describe("the mounted editor root", () => {
     expect(inspector?.getAttribute("data-dock-mode")).toBe("right");
     expect(column.getAttribute("aria-hidden")).toBe("true");
     expect(column.getAttribute("data-layout-editing")).toBe("1");
+    // The column carries the dock itself: the left-inset rule reads this
+    // attribute, not a `:has()` over the inspector.
+    expect(column.getAttribute("data-inspector-dock")).toBe("right");
 
     act(() => {
       useLayoutEditorStore.getState().setDockMode("left");
@@ -165,12 +169,14 @@ describe("the mounted editor root", () => {
         .querySelector("[data-layout-inspector]")
         ?.getAttribute("data-dock-mode"),
     ).toBe("left");
+    expect(column.getAttribute("data-inspector-dock")).toBe("left");
 
     act(() => {
       useLayoutEditorStore.getState().endSession();
     });
     expect(column.hasAttribute("aria-hidden")).toBe(false);
     expect(column.hasAttribute("data-layout-editing")).toBe(false);
+    expect(column.hasAttribute("data-inspector-dock")).toBe(false);
   });
 
   it("walks the layout history on Mod+Z and Mod+Shift+Z (L-18)", () => {

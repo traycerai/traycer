@@ -104,8 +104,8 @@ import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
-  EMPTY_LOGIN_CAPABILITY_BY_HARNESS_ID,
-  loginCapabilityByHarnessIdFromProviderStates,
+  EMPTY_PROVIDER_STATE_BY_HARNESS_ID,
+  providerStateByHarnessIdFromProviderStates,
   resolveCreateProfileGate,
   useCreateProfileHostIsLocal,
 } from "@/components/home/pickers/harness-model-picker-create-profile-gate";
@@ -514,11 +514,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     createProfileClient,
     { enabled: activityEnabled, subscribed: activityEnabled },
   );
-  const loginCapabilityByHarnessId = useMemo(
+  const createProfileStateByHarnessId = useMemo(
     () =>
       createProfileProvidersQuery.data === undefined
-        ? EMPTY_LOGIN_CAPABILITY_BY_HARNESS_ID
-        : loginCapabilityByHarnessIdFromProviderStates(
+        ? EMPTY_PROVIDER_STATE_BY_HARNESS_ID
+        : providerStateByHarnessIdFromProviderStates(
             createProfileProvidersQuery.data.providers,
           ),
     [createProfileProvidersQuery.data],
@@ -745,12 +745,13 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     ],
   );
   // Mirrors Settings' `providerCanStartProfileOauth` gate: OAuth sign-in
-  // needs a local host that advertises login args for the browsed provider.
+  // needs a local host that advertises login args for the browsed provider,
+  // has it turned on and has a CLI to run for it.
   // A tab-bound composer gates on the TAB's host locality (`createProfileHostIsLocal`,
   // resolved from `createProfileHostId`), never the renderer-default host.
   const createProfileGate = resolveCreateProfileGate(
     createProfileHostIsLocal,
-    loginCapabilityByHarnessId.get(resolvedActiveProviderId),
+    createProfileStateByHarnessId.get(resolvedActiveProviderId),
   );
   const activeProvider = useBrowsedProviderCatalogEntry({
     runTargetClient,

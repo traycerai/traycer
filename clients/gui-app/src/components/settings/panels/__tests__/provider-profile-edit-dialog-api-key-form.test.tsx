@@ -186,6 +186,7 @@ function renderDialog(profile: ProviderProfile) {
           profile={profile}
           profiles={[profile]}
           canOauth
+          oauthUnavailableHint={null}
           startInReauth={false}
           isLocalHost
           open

@@ -57,7 +57,7 @@ describe("window-chrome.css", () => {
   });
 
   it("zeroes the band height when the column declares no band", () => {
-    expect(body(':root:has([data-app-title-band="none"])')).toBe(
+    expect(body(':root[data-app-title-band="none"]')).toBe(
       "--app-title-band-height: 0px;",
     );
   });
@@ -69,11 +69,9 @@ describe("window-chrome.css", () => {
   });
 
   it("drops the app column to a plain gutter beside a left-docked inspector, never above the platform inset", () => {
-    expect(
-      body(
-        '.wco:has([data-layout-inspector][data-dock-mode="left"]) [data-layout-column]',
-      ),
-    ).toBe("--window-leading-inset: min(env(titlebar-area-x, 82px), 0.75rem);");
+    expect(body('.wco [data-layout-column][data-inspector-dock="left"]')).toBe(
+      "--window-leading-inset: min(env(titlebar-area-x, 82px), 0.75rem);",
+    );
   });
 
   it("starts modal overlays below the band height", () => {
