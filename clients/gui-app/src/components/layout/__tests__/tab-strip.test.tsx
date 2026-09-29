@@ -837,7 +837,13 @@ describe("<TabStrip />", () => {
 
   it("uses the project color for the active outline while keeping the neutral fill", () => {
     render(
-      <TabChrome isActive joined={false} color="#12ab34" session={false} />,
+      <TabChrome
+        isActive
+        joined={false}
+        concealed={false}
+        color="#12ab34"
+        session={false}
+      />,
     );
 
     const box = screen.getByTestId("tab-chrome-box");
@@ -852,6 +858,7 @@ describe("<TabStrip />", () => {
       <TabChrome
         isActive={false}
         joined={false}
+        concealed={false}
         color="#12ab34"
         session={false}
       />,
@@ -867,6 +874,7 @@ describe("<TabStrip />", () => {
       <TabChrome
         isActive={false}
         joined={false}
+        concealed={false}
         color="#12ab34"
         session={false}
       />,
@@ -876,7 +884,13 @@ describe("<TabStrip />", () => {
     ).toBe("#12ab34");
 
     rerender(
-      <TabChrome isActive joined={false} color="#12ab34" session={false} />,
+      <TabChrome
+        isActive
+        joined={false}
+        concealed={false}
+        color="#12ab34"
+        session={false}
+      />,
     );
     // The box's own border carries the color once the tab is active; nothing
     // left for the mark to draw.
@@ -895,6 +909,7 @@ describe("<TabStrip />", () => {
       <TabChrome
         isActive
         joined={false}
+        concealed={false}
         color="var(--warning-foreground)"
         session
       />,
@@ -919,6 +934,7 @@ describe("<TabStrip />", () => {
       <TabChrome
         isActive={false}
         joined={false}
+        concealed={false}
         color="var(--warning-foreground)"
         session
       />,

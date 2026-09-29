@@ -64,7 +64,7 @@ describe("closed header placement history", () => {
     recordClosedHeaderTab(item);
 
     const entry = useTabRecoveryHistory.getState().entries.at(0);
-    if (entry === undefined || entry.kind !== "header") {
+    if (entry === undefined) {
       throw new Error("expected a plain header recovery entry");
     }
     expect(entry.items).toEqual([item]);
@@ -104,7 +104,7 @@ describe("closed header placement history", () => {
     await configureTabRecoveryHistory(ACCOUNT);
 
     const entry = useTabRecoveryHistory.getState().entries.at(0);
-    if (entry === undefined || entry.kind !== "header") {
+    if (entry === undefined) {
       throw new Error("expected the hydrated placement entry");
     }
     expect(entry.items).toEqual([item]);

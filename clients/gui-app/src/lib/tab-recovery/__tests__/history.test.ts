@@ -3,14 +3,12 @@ import * as idbKeyval from "idb-keyval";
 import { createStore, get as idbGet, set } from "idb-keyval";
 import type { UseStore } from "idb-keyval";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
-import { closeTab } from "@/stores/epics/canvas/actions";
 import type { EpicCanvasState, EpicViewTab } from "@/stores/epics/canvas/types";
 import {
   SPEC_A,
   SPEC_B,
   pane,
 } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
-import { makeBlankTileRef } from "@/stores/epics/canvas/tile-schema/blank-tile";
 import { persistKey, tabRecoveryKey } from "@/lib/persist/keys";
 import { tabItemId, type PersistedTabStripLayout } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
@@ -21,7 +19,6 @@ import {
   pruneRecoveryDraft,
   pruneRecoveryEpics,
   pruneRecoveryTiles,
-  recordClosedCanvas,
   recordClosedHeaderTab,
   flushTabRecoveryHistory,
   resetTabRecoveryHistory,
@@ -94,27 +91,8 @@ function emptyCanvas(): EpicCanvasState {
   };
 }
 
-function canvasWithBlankAndSpec(): {
-  readonly canvas: EpicCanvasState;
-  readonly blankInstanceId: string;
-} {
-  const blank = makeBlankTileRef();
-  return {
-    canvas: {
-      root: pane("p1", [blank.instanceId, SPEC_A.instanceId]),
-      activePaneId: "p1",
-      tilesByInstanceId: {
-        [blank.instanceId]: blank,
-        [SPEC_A.instanceId]: SPEC_A,
-      },
-      sizesByGroupId: {},
-    },
-    blankInstanceId: blank.instanceId,
-  };
-}
-
 async function seedPersistedEntries(
-  entries: readonly TabRecoveryEntry[],
+  entries: readonly unknown[],
 ): Promise<void> {
   await configureTabRecoveryHistory(null);
   await flushTabRecoveryHistory();
@@ -183,11 +161,9 @@ describe("tab recovery history", () => {
     const recoveredDraftIds = useTabRecoveryHistory
       .getState()
       .entries.flatMap((entry) =>
-        entry.kind === "header"
-          ? entry.items.flatMap((item) =>
-              item.kind === "draft" ? [item.draftId] : [],
-            )
-          : [],
+        entry.items.flatMap((item) =>
+          item.kind === "draft" ? [item.draftId] : [],
+        ),
       );
     expect(recoveredDraftIds).toEqual([persistedOne.draftId, pending.draftId]);
     expect(useTabRecoveryHistory.getState().ready).toBe(true);
@@ -305,7 +281,7 @@ describe("tab recovery history", () => {
 
     const recoveredItems = useTabRecoveryHistory
       .getState()
-      .entries.flatMap((entry) => (entry.kind === "header" ? entry.items : []));
+      .entries.flatMap((entry) => entry.items);
     expect(recoveredItems).toEqual([fresh]);
     const diskAfterRecovery = await idbGet<unknown>(key, store);
     if (
@@ -351,7 +327,7 @@ describe("tab recovery history", () => {
     });
   });
 
-  it("prunes deleted epics from mixed header entries and canvas entries", () => {
+  it("prunes deleted epics from mixed header entries", () => {
     const draftItem = draft("draft-survivor");
     const deletedTab = epicTab("epic-deleted", "tab-epic-deleted");
     const deletedRef: TabRef = { kind: "epic", id: deletedTab.tabId };
@@ -368,13 +344,9 @@ describe("tab recovery history", () => {
       },
       layoutForRefs([deletedRef, draftRef]),
     );
-    const before = canvasWithTwoTiles();
-    const afterA = closeTab(before, "p1", SPEC_A.instanceId);
-    const after = closeTab(afterA, "p1", SPEC_B.instanceId);
-    recordClosedCanvas(deletedTab, before, after, false);
 
     const beforePrune = useTabRecoveryHistory.getState().entries.at(0);
-    if (beforePrune === undefined || beforePrune.kind !== "header") {
+    if (beforePrune === undefined) {
       throw new Error("expected the mixed header entry before pruning");
     }
     const survivorItem = beforePrune.items.find(
@@ -392,35 +364,26 @@ describe("tab recovery history", () => {
       kind: "header",
       items: [{ ...draftItem, index: 1 }],
     });
-    const afterPrune = entries[0];
-    if (afterPrune.kind !== "header") {
-      throw new Error("expected the mixed header entry after pruning");
-    }
-    expect(afterPrune.items[0]).toBe(survivorItem);
+    expect(entries[0].items[0]).toBe(survivorItem);
   });
 
-  it("prunes deleted tile members and removes an empty canvas entry", () => {
-    const before = canvasWithTwoTiles();
-    const afterA = closeTab(before, "p1", SPEC_A.instanceId);
-    const after = closeTab(afterA, "p1", SPEC_B.instanceId);
-    recordClosedCanvas(
-      epicTab("epic-tiles", "tab-epic-tiles"),
-      before,
-      after,
-      false,
-    );
-
-    pruneRecoveryTiles((tile) => tile.id === SPEC_A.id);
-    let entries = useTabRecoveryHistory.getState().entries;
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      kind: "canvas",
-      instanceIds: [SPEC_B.instanceId],
+  it("prunes deleted tiles from a closed task's canvas and keeps the task", () => {
+    recordClosedHeaderTab({
+      kind: "epic",
+      tab: epicTab("epic-tiles", "tab-epic-tiles"),
+      canvas: canvasWithTwoTiles(),
+      index: 0,
     });
 
-    pruneRecoveryTiles((tile) => tile.id === SPEC_B.id);
-    entries = useTabRecoveryHistory.getState().entries;
-    expect(entries).toHaveLength(0);
+    pruneRecoveryTiles((tile) => tile.id === SPEC_A.id);
+
+    const entries = useTabRecoveryHistory.getState().entries;
+    expect(entries).toHaveLength(1);
+    const item = entries[0].items[0];
+    if (item.kind !== "epic") throw new Error("expected a closed task item");
+    expect(Object.keys(item.canvas.tilesByInstanceId)).toEqual([
+      SPEC_B.instanceId,
+    ]);
   });
 
   it("records saved drafts as references without an editor snapshot", () => {
@@ -428,28 +391,12 @@ describe("tab recovery history", () => {
     recordClosedHeaderTab(item);
 
     const entry = useTabRecoveryHistory.getState().entries.at(0);
-    if (entry === undefined || entry.kind !== "header") {
+    if (entry === undefined) {
       throw new Error("expected a draft recovery entry");
     }
     expect(entry.items).toEqual([item]);
     expect(entry.items[0]).not.toHaveProperty("draft");
     expect(entry.items[0]).not.toHaveProperty("content");
-  });
-
-  it("filters blank inner tiles without dropping a real closed tile", () => {
-    const { canvas: before } = canvasWithBlankAndSpec();
-    recordClosedCanvas(
-      epicTab("epic-blank-inner", "tab-blank-inner"),
-      before,
-      emptyCanvas(),
-      false,
-    );
-
-    const entry = useTabRecoveryHistory.getState().entries.at(0);
-    if (entry === undefined || entry.kind !== "canvas") {
-      throw new Error("expected a canvas recovery entry");
-    }
-    expect(entry.instanceIds).toEqual([SPEC_A.instanceId]);
   });
 
   it("retains an empty task recovery entry in the v2 journal", async () => {
@@ -470,6 +417,33 @@ describe("tab recovery history", () => {
     await seedPersistedEntries([task]);
 
     expect(useTabRecoveryHistory.getState().entries).toEqual([task]);
+  });
+
+  it("drops inner-tab entries from journals written before they stopped being recorded", async () => {
+    const task: TabRecoveryEntry = {
+      kind: "header",
+      id: "task-header",
+      bulk: false,
+      items: [draft("kept-draft")],
+    };
+    const legacyInnerTab = {
+      kind: "canvas",
+      id: "legacy-inner-tab",
+      tab: epicTab("legacy-epic", "legacy-tab"),
+      before: canvasWithTwoTiles(),
+      after: emptyCanvas(),
+      instanceIds: [SPEC_A.instanceId],
+      bulk: false,
+    };
+
+    await seedPersistedEntries([legacyInnerTab, task]);
+    await flushTabRecoveryHistory();
+
+    expect(useTabRecoveryHistory.getState().entries).toEqual([task]);
+    const store = createStore(persistKey("tab-recovery"), "history");
+    expect(
+      await idbGet<unknown>(tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE), store),
+    ).toEqual({ version: 2, entries: [task] });
   });
 
   it("ignores version 1 snapshot journals", async () => {
@@ -513,7 +487,6 @@ describe("tab recovery history", () => {
     const entries = useTabRecoveryHistory.getState().entries;
     expect(entries).toHaveLength(MAX_RECOVERY_ACTIONS);
     const ids = entries.map((entry) => {
-      if (entry.kind !== "header") return "canvas";
       const item = entry.items.at(0);
       if (item === undefined || item.kind !== "draft") return "task";
       return item.draftId;
@@ -537,11 +510,7 @@ describe("tab recovery history", () => {
     setWindow(WINDOW_ONE);
     await configureTabRecoveryHistory(ACCOUNT_ONE);
     expect(
-      useTabRecoveryHistory
-        .getState()
-        .entries.flatMap((entry) =>
-          entry.kind === "header" ? entry.items : [],
-        ),
+      useTabRecoveryHistory.getState().entries.flatMap((entry) => entry.items),
     ).toHaveLength(1);
 
     await configureTabRecoveryHistory(ACCOUNT_TWO);
@@ -556,7 +525,7 @@ describe("tab recovery history", () => {
 
     const items = useTabRecoveryHistory
       .getState()
-      .entries.flatMap((entry) => (entry.kind === "header" ? entry.items : []));
+      .entries.flatMap((entry) => entry.items);
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ kind: "draft", draftId: "draft-to-keep" });
   });

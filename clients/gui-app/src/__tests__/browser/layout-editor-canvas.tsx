@@ -226,7 +226,13 @@ const SESSION_TAB_COLOR: string | null =
 function SessionTabSpecimen(): ReactNode {
   return (
     <span data-fixture-session-tab className="relative h-9 w-48 shrink-0">
-      <TabChrome isActive joined={false} color={SESSION_TAB_COLOR} session />
+      <TabChrome
+        isActive
+        joined={false}
+        concealed={false}
+        color={SESSION_TAB_COLOR}
+        session
+      />
       {/* The label colour the real tab gives itself on this fill, restated
           rather than imported: `header-tab-visual.tsx` exports components
           only, and a string export would cost that file its fast refresh. */}

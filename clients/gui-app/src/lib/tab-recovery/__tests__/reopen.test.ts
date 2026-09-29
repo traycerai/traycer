@@ -1,14 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { PrepareNestedFocusTarget } from "@/lib/epic-nested-focus-navigation";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import type { EpicCanvasState, EpicViewTab } from "@/stores/epics/canvas/types";
+import { SPEC_A } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
 import {
-  SPEC_A,
-  pane,
-} from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
-import {
-  pruneRecoveryTiles,
   useTabRecoveryHistory,
   type ClosedHeaderTab,
   type TabRecoveryEntry,
@@ -59,20 +54,7 @@ const mocks = vi.hoisted(() => {
       tabsById,
       canvasByTabId,
       closedTilePayloadsByTabId,
-      selfDeletedArtifactIds: new Set<string>(),
       pendingCreateArtifactIds: new Set<string>(),
-      restoreCanvasForRecovery: vi.fn<
-        (
-          tabId: string,
-          options: {
-            readonly before: EpicCanvasState;
-            readonly after: EpicCanvasState;
-            readonly instanceIds: readonly string[];
-            readonly paneIds: readonly string[];
-            readonly focus: boolean;
-          },
-        ) => void
-      >(),
     },
   };
 });
@@ -133,7 +115,6 @@ vi.mock("@/stores/epics/canvas/migrate-canvas", () => ({
 }));
 
 vi.mock("@/stores/epics/canvas/tile-tree", () => ({
-  collectPanes: vi.fn(() => []),
   findPaneById: vi.fn(() => null),
 }));
 
@@ -171,7 +152,7 @@ function router(
 function epicEntry(input: {
   readonly id: string;
   readonly bulk: boolean;
-}): Extract<TabRecoveryEntry, { kind: "header" }> {
+}): TabRecoveryEntry {
   return {
     id: input.id,
     kind: "header",
@@ -187,33 +168,6 @@ function epicEntry(input: {
   };
 }
 
-function canvasSnapshot(instanceIds: readonly string[]): EpicCanvasState {
-  return {
-    root: pane("pane-1", instanceIds),
-    activePaneId: "pane-1",
-    tilesByInstanceId: Object.fromEntries(
-      instanceIds.map((instanceId) => [instanceId, SPEC_A]),
-    ),
-    sizesByGroupId: {},
-  };
-}
-
-function canvasEntry(input: {
-  readonly id: string;
-  readonly bulk: boolean;
-}): Extract<TabRecoveryEntry, { kind: "canvas" }> {
-  const before = canvasSnapshot([SPEC_A.instanceId]);
-  return {
-    id: input.id,
-    kind: "canvas",
-    bulk: input.bulk,
-    tab: { tabId: "tab-1", epicId: "epic-1", name: "Task" },
-    before,
-    after: EMPTY_CANVAS,
-    instanceIds: [SPEC_A.instanceId],
-  };
-}
-
 function draftRef(
   draftId: string,
 ): Extract<ClosedHeaderTab, { kind: "draft" }> {
@@ -223,25 +177,6 @@ function draftRef(
     hostId: "host-1",
     index: 0,
   };
-}
-
-function mountInput(testId: string | null): HTMLInputElement {
-  const input = document.createElement("input");
-  if (testId === null) {
-    document.body.append(input);
-    return input;
-  }
-  const container = document.createElement("div");
-  container.dataset.testid = testId;
-  container.append(input);
-  document.body.append(container);
-  return input;
-}
-
-function nextAnimationFrame(): Promise<void> {
-  return new Promise((resolve) => {
-    window.requestAnimationFrame(() => resolve());
-  });
 }
 
 beforeEach(() => {
@@ -261,14 +196,8 @@ beforeEach(() => {
     delete mocks.canvasState.canvasByTabId[key];
   for (const key of Object.keys(mocks.canvasState.closedTilePayloadsByTabId))
     delete mocks.canvasState.closedTilePayloadsByTabId[key];
-  mocks.canvasState.selfDeletedArtifactIds.clear();
   mocks.canvasState.pendingCreateArtifactIds.clear();
-  mocks.canvasState.restoreCanvasForRecovery.mockReset();
   useTabRecoveryHistory.setState({ entries: [], ready: true });
-});
-
-afterEach(() => {
-  document.body.replaceChildren();
 });
 
 describe("reopenClosedTab", () => {
@@ -432,224 +361,9 @@ describe("reopenClosedTab", () => {
     expect(toastOptions.description).toContain("kept");
   });
 
-  it("focuses a single inner tab when already on its owning task", async () => {
-    const entry = canvasEntry({ id: "entry-1", bulk: false });
-    useTabRecoveryHistory.setState({ entries: [entry], ready: true });
-    const navigateNestedFocus = vi.fn(
-      (_epicId: string, _tabId: string, restore: PrepareNestedFocusTarget) =>
-        restore(),
-    );
-
-    await reopenClosedTab(router("/epics/epic-1/tab-1", navigateNestedFocus));
-
-    expect(navigateNestedFocus).toHaveBeenCalledTimes(1);
-    expect(mocks.canvasState.restoreCanvasForRecovery).toHaveBeenCalledWith(
-      "tab-1",
-      {
-        before: entry.before,
-        after: entry.after,
-        instanceIds: [SPEC_A.instanceId],
-        paneIds: [],
-        focus: true,
-      },
-    );
-    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
-  });
-
-  it("blurs the pane opener before a single inner-tab restore", async () => {
-    const entry = canvasEntry({ id: "entry-1", bulk: false });
-    const opener = mountInput("pane-opener");
-    opener.focus();
-    let activeElementAtRestore: Element | null = null;
-    mocks.canvasState.restoreCanvasForRecovery.mockImplementation(() => {
-      activeElementAtRestore = document.activeElement;
-    });
-    useTabRecoveryHistory.setState({ entries: [entry], ready: true });
-
-    await reopenClosedTab(router("/epics/other/other-tab", undefined));
-
-    expect(activeElementAtRestore).toBe(document.body);
-    expect(document.activeElement).not.toBe(opener);
-  });
-
-  it("keeps focus for a bulk inner-tab restore on the current task", async () => {
-    const entry = canvasEntry({ id: "entry-1", bulk: true });
-    useTabRecoveryHistory.setState({ entries: [entry], ready: true });
-    const navigateNestedFocus = vi.fn();
-
-    await reopenClosedTab(router("/epics/epic-1/tab-1", navigateNestedFocus));
-
-    expect(navigateNestedFocus).not.toHaveBeenCalled();
-    expect(mocks.canvasState.restoreCanvasForRecovery).toHaveBeenCalledWith(
-      "tab-1",
-      {
-        before: entry.before,
-        after: entry.after,
-        instanceIds: [SPEC_A.instanceId],
-        paneIds: [],
-        focus: false,
-      },
-    );
-    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
-  });
-
-  it("keeps the pane opener focused for a bulk same-task restore", async () => {
-    const entry = canvasEntry({ id: "entry-1", bulk: true });
-    const opener = mountInput("pane-opener");
-    opener.parentElement?.setAttribute("data-group-id", "pane-1");
-    opener.focus();
-    let activeElementAtRestore: Element | null = null;
-    mocks.canvasState.restoreCanvasForRecovery.mockImplementation(() => {
-      activeElementAtRestore = document.activeElement;
-    });
-    mocks.canvasState.canvasByTabId["tab-1"] = {
-      ...EMPTY_CANVAS,
-      activePaneId: "pane-1",
-    };
-    useTabRecoveryHistory.setState({ entries: [entry], ready: true });
-
-    await reopenClosedTab(router("/epics/epic-1/tab-1", undefined));
-    await nextAnimationFrame();
-
-    expect(activeElementAtRestore).toBe(document.body);
-    expect(document.activeElement).toBe(opener);
-  });
-
-  it("does not reclaim focus after the user focuses elsewhere during bulk restore", async () => {
-    const entry = canvasEntry({ id: "entry-1", bulk: true });
-    const opener = mountInput("pane-opener");
-    opener.parentElement?.setAttribute("data-group-id", "pane-1");
-    const unrelatedInput = mountInput(null);
-    opener.focus();
-    mocks.canvasState.canvasByTabId["tab-1"] = {
-      ...EMPTY_CANVAS,
-      activePaneId: "pane-1",
-    };
-    mocks.canvasState.restoreCanvasForRecovery.mockImplementation(() => {
-      unrelatedInput.focus();
-    });
-    useTabRecoveryHistory.setState({ entries: [entry], ready: true });
-
-    await reopenClosedTab(router("/epics/epic-1/tab-1", undefined));
-    await nextAnimationFrame();
-
-    expect(document.activeElement).toBe(unrelatedInput);
-  });
-
-  it("leaves an unrelated text input focused during a single restore", async () => {
-    const entry = canvasEntry({ id: "entry-1", bulk: false });
-    const unrelatedInput = mountInput(null);
-    unrelatedInput.type = "text";
-    unrelatedInput.focus();
-    let activeElementAtRestore: Element | null = null;
-    mocks.canvasState.restoreCanvasForRecovery.mockImplementation(() => {
-      activeElementAtRestore = document.activeElement;
-    });
-    useTabRecoveryHistory.setState({ entries: [entry], ready: true });
-
-    await reopenClosedTab(router("/epics/other/other-tab", undefined));
-
-    expect(activeElementAtRestore).toBe(unrelatedInput);
-    expect(document.activeElement).toBe(unrelatedInput);
-  });
-
-  it("navigates to a single inner tab when its task is elsewhere", async () => {
-    const entry = canvasEntry({ id: "entry-1", bulk: false });
-    useTabRecoveryHistory.setState({ entries: [entry], ready: true });
-
-    await reopenClosedTab(router("/epics/other/other-tab", undefined));
-
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
-    expect(mocks.canvasState.restoreCanvasForRecovery).toHaveBeenCalledWith(
-      "tab-1",
-      {
-        before: entry.before,
-        after: entry.after,
-        instanceIds: [SPEC_A.instanceId],
-        paneIds: [],
-        focus: true,
-      },
-    );
-  });
-
-  it("restores a hidden task using its retained canvas instead of stale after state", async () => {
-    const entry = canvasEntry({ id: "entry-1", bulk: true });
-    const retained = canvasSnapshot([]);
-    mocks.canvasState.canvasByTabId["tab-1"] = retained;
-    useTabRecoveryHistory.setState({ entries: [entry], ready: true });
-
-    await reopenClosedTab(router("/epics/epic-1/tab-1", undefined));
-
-    expect(mocks.restoreClosedHeaderTabs).toHaveBeenCalledWith(
-      [expect.objectContaining({ canvas: retained })],
-      null,
-    );
-    expect(mocks.restoreClosedHeaderTabs).not.toHaveBeenCalledWith(
-      [expect.objectContaining({ canvas: entry.after })],
-      null,
-    );
-  });
-
-  it("restores a pending tile from its preserved payload when the snapshot no longer has it", async () => {
-    const entry = canvasEntry({ id: "entry-1", bulk: false });
-    mocks.canvasState.tabsById["tab-1"] = {
-      tabId: "tab-1",
-      epicId: "epic-1",
-      name: "Task",
-    };
-    mocks.canvasState.canvasByTabId["tab-1"] = canvasSnapshot([]);
-    mocks.canvasState.closedTilePayloadsByTabId["tab-1"] = {
-      [SPEC_A.instanceId]: { node: SPEC_A, pendingCreate: true },
-    };
-    // A same-id tombstone from another Epic must not suppress this scoped
-    // recovery payload; the deletion path prunes its own recovery tile.
-    mocks.canvasState.selfDeletedArtifactIds.add(SPEC_A.id);
-    mocks.preservedTileRecordIsLive.mockImplementation(
-      (preserved) => preserved.pendingCreate,
-    );
-    useTabRecoveryHistory.setState({ entries: [entry], ready: true });
-
-    await reopenClosedTab(router("/epics/other/other-tab", undefined));
-
-    expect(mocks.preservedTileRecordIsLive).toHaveBeenCalledWith(
-      expect.objectContaining({ node: SPEC_A, pendingCreate: true }),
-      "epic-1",
-      mocks.canvasState.pendingCreateArtifactIds,
-    );
-    expect(mocks.canvasState.restoreCanvasForRecovery).toHaveBeenCalledWith(
-      "tab-1",
-      expect.objectContaining({ instanceIds: [SPEC_A.instanceId] }),
-    );
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not reopen a tile removed by its scoped recovery prune", async () => {
-    const entry = canvasEntry({ id: "entry-1", bulk: false });
-    mocks.canvasState.tabsById["tab-1"] = {
-      tabId: "tab-1",
-      epicId: "epic-1",
-      name: "Task",
-    };
-    mocks.canvasState.canvasByTabId["tab-1"] = canvasSnapshot([]);
-    mocks.canvasState.closedTilePayloadsByTabId["tab-1"] = {
-      [SPEC_A.instanceId]: { node: SPEC_A, pendingCreate: true },
-    };
-    useTabRecoveryHistory.setState({ entries: [entry], ready: true });
-    pruneRecoveryTiles(
-      (tile, epicId) => epicId === "epic-1" && tile.id === SPEC_A.id,
-    );
-
-    expect(useTabRecoveryHistory.getState().entries).toEqual([]);
-
-    await reopenClosedTab(router("/epics/other/other-tab", undefined));
-
-    expect(mocks.canvasState.restoreCanvasForRecovery).not.toHaveBeenCalled();
-    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
-  });
-
   it("does not restore a draft removed while it is being prepared", async () => {
     const item = draftRef("draft-1");
-    const entry: Extract<TabRecoveryEntry, { kind: "header" }> = {
+    const entry: TabRecoveryEntry = {
       id: "entry-1",
       kind: "header",
       bulk: false,

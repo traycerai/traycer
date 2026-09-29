@@ -50,6 +50,8 @@ interface HeaderTabVisualProps {
   readonly isActive: boolean;
   /** Whether the active tab runs into its task's sheet; see `TabChromeBackground`. */
   readonly joined: boolean;
+  /** The selection is still sliding here; see `strip-selection-travel.tsx`. */
+  readonly concealed: boolean;
   readonly titleControl: ReactNode;
   readonly trailingControl: ReactNode;
   readonly leaderVisible: boolean;
@@ -68,6 +70,7 @@ export function HeaderTabVisual(props: HeaderTabVisualProps) {
         <TabChrome
           isActive={props.isActive}
           joined={props.joined}
+          concealed={props.concealed}
           color={color}
           session={sessionColor !== null}
         />
@@ -182,6 +185,7 @@ export function HeaderTabPreview(props: {
       }
       indicatorState={props.ghost?.indicatorState ?? indicatorState}
       displayName={displayName}
+      concealed={false}
       titleControl={null}
       trailingControl={null}
       leaderVisible={false}
@@ -206,6 +210,12 @@ export function SplitFillableMemberVisual(props: {
 export function TabChrome(props: {
   readonly isActive: boolean;
   readonly joined: boolean;
+  /**
+   * The selection traveller is still on its way to this tab: the box stays
+   * laid out but unpainted, so the traveller lands on exactly its rect and
+   * the two swap without a seam.
+   */
+  readonly concealed: boolean;
   readonly color: string | null;
   /** The layout editor's own tab (L-87, L-163). See `borderColor` below. */
   readonly session: boolean;
@@ -256,7 +266,10 @@ export function TabChrome(props: {
             : (props.color ?? "var(--canvas-border)")
         }
         joined={joined}
-        className="transition-opacity duration-300 ease-spring"
+        className={cn(
+          "transition-opacity duration-300 ease-spring",
+          props.concealed && "invisible",
+        )}
       />
       {/* Joined, the box's edge is the sheet's, so the tab's colour moves to
         the mark every other tab wears it as. */}

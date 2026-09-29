@@ -33,6 +33,11 @@ import { useArrangementValue } from "@/lib/layout-overrides";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
+import { useStripExitGhosts, type StripExitGhost } from "./strip-exit-ghosts";
+import { StripExitGhostSpacer } from "./strip-exit-ghost-spacer";
+import { useSelectionTravel } from "./strip-selection-travel";
+import { StripSelectionTraveller } from "./strip-selection-traveller";
+import { useJoinGlowStore } from "./join-glow";
 
 export function TabStrip() {
   const hasHydrated = useWindowsBridgeHydrated();
@@ -85,12 +90,44 @@ function TabStripBody() {
     () => stripRowsOf(headerItemIds, layoutItems, groups, customizations),
     [headerItemIds, layoutItems, groups, customizations],
   );
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const travellerRef = useRef<HTMLSpanElement | null>(null);
+  const setScrollExtras = useCallback(
+    (node: HTMLDivElement | null) => {
+      scrollerRef.current = node;
+      setScrollElement(node);
+    },
+    [setScrollElement],
+  );
   const setScrollerNode = useStripScroller({
     axis: HORIZONTAL_STRIP_AXIS,
     activeItemId,
     itemCount: headerItemIds.length,
-    extraRef: setScrollElement,
+    extraRef: setScrollExtras,
   });
+  // After `useStripScroller`, whose reveal has by then scrolled the
+  // destination into view for the travel to measure.
+  useSelectionTravel({ scrollerRef, travellerRef, activeItemId, layoutItems });
+  const { ghosts, settleGhost } = useStripExitGhosts(
+    scrollerRef,
+    headerItemIds.join("\n"),
+  );
+  const ghostBefore = useMemo(() => {
+    const byAnchor = new Map<string | null, StripExitGhost>();
+    for (const ghost of ghosts) byAnchor.set(ghost.beforeAnchor, ghost);
+    return byAnchor;
+  }, [ghosts]);
+  const renderGhost = (anchor: string | null): ReactNode => {
+    const ghost = ghostBefore.get(anchor);
+    return ghost === undefined ? null : (
+      <StripExitGhostSpacer
+        key={ghost.key}
+        ghost={ghost}
+        onSettled={settleGhost}
+      />
+    );
+  };
+  const joinGlowing = useJoinGlowStore((state) => state.glowing);
   const surfaceRef = useLayoutSurface("topBar");
   const stripRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -115,6 +152,7 @@ function TabStripBody() {
         aria-label="Open tabs"
         data-testid="tab-strip"
         data-tab-layout={taskTabLayout}
+        data-join-glow={joinGlowing ? "" : undefined}
         className="group/strip relative flex min-w-0 flex-1 items-end"
       >
         {/* Outside the scrollable list and before it: Home is fixed, so it
@@ -155,19 +193,26 @@ function TabStripBody() {
             data-strip-axis="x"
             data-strip-edge="top"
             onWheel={handleWheel}
-            className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain [-webkit-app-region:no-drag]"
+            // `relative` so the selection traveller is placed in the strip's
+            // own scrolling content, scrolled and clipped with the tabs.
+            className="no-scrollbar relative flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain [-webkit-app-region:no-drag]"
           >
+            <StripSelectionTraveller ref={travellerRef} />
             {rows.map((row) => {
               const { itemId, stripIndex: index } = row;
               return (
                 <Fragment key={itemId}>
                   {row.groupStart !== null ? (
-                    <TabGroupChip
-                      groupId={row.groupStart.groupId}
-                      group={row.groupStart.group}
-                      onClose={controller.onCloseGroup}
-                    />
+                    <>
+                      {renderGhost(`chip:${row.groupStart.groupId}`)}
+                      <TabGroupChip
+                        groupId={row.groupStart.groupId}
+                        group={row.groupStart.group}
+                        onClose={controller.onCloseGroup}
+                      />
+                    </>
                   ) : null}
+                  {!row.hidden ? renderGhost(`item:${itemId}`) : null}
                   {!row.hidden ? (
                     <HeaderStripItemRenderer
                       itemId={itemId}
@@ -201,6 +246,7 @@ function TabStripBody() {
                 </Fragment>
               );
             })}
+            {renderGhost(null)}
           </div>
           {hasOverflow ? (
             <HiddenTabsMenu

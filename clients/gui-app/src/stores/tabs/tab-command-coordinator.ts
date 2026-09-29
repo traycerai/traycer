@@ -65,6 +65,11 @@ import {
   type StripItem,
 } from "@/stores/tabs/layout";
 import { tabSourceRefs } from "@/stores/tabs/source-refs";
+import {
+  markClosingTabs,
+  markOpenedTabs,
+  markReopenedTabs,
+} from "@/stores/tabs/strip-motion";
 import type { TabRef } from "@/stores/tabs/types";
 import { canMutateTabSplits } from "@/stores/tabs/tab-split-compatibility";
 import {
@@ -399,6 +404,12 @@ function repairedLayoutPreservingHome(
   return layoutHomeIsActive(layout)
     ? { ...repaired, activeItemId: null }
     : repaired;
+}
+
+function closedHeaderRef(item: ClosedHeaderTab): TabRef {
+  return item.kind === "epic"
+    ? { kind: "epic", id: item.tab.tabId }
+    : { kind: "draft", id: item.draftId };
 }
 
 function focusedRef(layout: PersistedTabStripLayout): TabRef | null {
@@ -996,6 +1007,9 @@ export class TabCommandCoordinator {
     const priorSelection = coordinatedSelection(priorLayout);
     const resolved = this.resolveCoordinatedActivation(target, priorLayout);
     if (resolved === null) return null;
+    // Marked before the layout lands, so the strip finds the mark when the
+    // new tab mounts. Selecting a tab that is already open adds nothing.
+    markOpenedTabs(resolved.reservedAdditions);
     this.execute({
       layout: resolved.layout,
       reservedAdditions: resolved.reservedAdditions,
@@ -1574,11 +1588,25 @@ export class TabCommandCoordinator {
       previousLayout.activeItemId === replacedItem?.id
         ? null
         : previousLayout.activeItemId;
-    const refs: TabRef[] = items.map((item) =>
-      item.kind === "epic"
-        ? { kind: "epic", id: item.tab.tabId }
-        : { kind: "draft", id: item.draftId },
-    );
+    const refs: TabRef[] = items.map(closedHeaderRef);
+    markReopenedTabs({
+      refs: items.toSorted((a, b) => a.index - b.index).map(closedHeaderRef),
+      // Only a group this reopen recreates brings its chip back; a surviving
+      // group keeps the chip it already shows.
+      returningGroupIds: [
+        ...new Set(
+          items.flatMap((item) => {
+            const groupId = item.placement?.customization?.groupId ?? null;
+            return groupId !== null &&
+              item.placement?.group !== undefined &&
+              previousLayout.groups?.[groupId] === undefined
+              ? [groupId]
+              : [];
+          }),
+        ),
+      ],
+    });
+    if (replacement !== null) markClosingTabs();
     this.execute({
       layout: () => {
         const base =
@@ -1665,6 +1693,7 @@ export class TabCommandCoordinator {
       if (tab !== undefined)
         recovery = { kind: "epic", tab, canvas, ...location };
     }
+    markClosingTabs();
     this.execute({
       layout: next,
       reservedAdditions: [],

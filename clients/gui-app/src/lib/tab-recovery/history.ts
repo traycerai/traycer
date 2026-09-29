@@ -4,7 +4,6 @@ import {
   closedHeaderPlacementSchema,
   type ClosedHeaderPlacement,
 } from "./header-layout";
-import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { create } from "zustand";
 import { createStore, get, set, del, type UseStore } from "idb-keyval";
 import { z } from "zod";
@@ -53,24 +52,15 @@ const headerSchema = z.discriminatedUnion("kind", [
     placement: closedHeaderPlacementSchema.optional().catch(undefined),
   }),
 ]);
-const entrySchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("header"),
-    id: z.string(),
-    items: z.array(headerSchema),
-    bulk: z.boolean(),
-  }),
-  z.object({
-    kind: z.literal("canvas"),
-    id: z.string(),
-    tab: tabSchema,
-    before: canvasSchema,
-    after: canvasSchema,
-    instanceIds: z.array(z.string()),
-    paneIds: z.array(z.string()).optional(),
-    bulk: z.boolean(),
-  }),
-]);
+// Only task and draft tab closes are recoverable. Journals written before
+// inner-tab closes stopped being recorded still hold `kind: "canvas"` entries;
+// they fail this schema, so loading drops them and the next write retires them.
+const entrySchema = z.object({
+  kind: z.literal("header"),
+  id: z.string(),
+  items: z.array(headerSchema),
+  bulk: z.boolean(),
+});
 export type ClosedHeaderTab =
   | {
       readonly kind: "epic";
@@ -86,24 +76,12 @@ export type ClosedHeaderTab =
       readonly index: number;
       readonly placement?: ClosedHeaderPlacement;
     };
-export type TabRecoveryEntry =
-  | {
-      readonly kind: "header";
-      readonly id: string;
-      readonly items: readonly ClosedHeaderTab[];
-      readonly bulk: boolean;
-    }
-  | {
-      readonly kind: "canvas";
-      readonly id: string;
-      readonly tab: EpicViewTab;
-      readonly before: EpicCanvasState;
-      readonly after: EpicCanvasState;
-      readonly instanceIds: readonly string[];
-      readonly paneIds?: readonly string[];
-      readonly bulk: boolean;
-    };
-export type ClosedCanvasEntry = Extract<TabRecoveryEntry, { kind: "canvas" }>;
+export interface TabRecoveryEntry {
+  readonly kind: "header";
+  readonly id: string;
+  readonly items: readonly ClosedHeaderTab[];
+  readonly bulk: boolean;
+}
 export const MAX_RECOVERY_ACTIONS = 50;
 const MAX_RECOVERY_BYTES = 32 * 1024 * 1024;
 interface RecoveryHistoryState {
@@ -200,26 +178,7 @@ function database(): UseStore {
   return recoveryDatabase;
 }
 function meaningfulEntry(entry: TabRecoveryEntry): TabRecoveryEntry[] {
-  if (entry.kind === "header") {
-    return entry.items.length === 0 ? [] : [entry];
-  }
-  const instanceIds = entry.instanceIds.filter((id) => {
-    const tile = entry.before.tilesByInstanceId[id];
-    return tile !== undefined && tile.type !== "blank";
-  });
-  const paneIds = (entry.paneIds ?? []).filter(
-    (id) =>
-      findPaneById(entry.before.root, id) !== null &&
-      findPaneById(entry.after.root, id) === null,
-  );
-  return instanceIds.length === 0 && paneIds.length === 0
-    ? []
-    : [
-        instanceIds.length === entry.instanceIds.length &&
-        paneIds.length === (entry.paneIds ?? []).length
-          ? entry
-          : { ...entry, instanceIds, paneIds },
-      ];
+  return entry.items.length === 0 ? [] : [entry];
 }
 
 const entryBytes = new WeakMap<TabRecoveryEntry, number>();
@@ -396,73 +355,6 @@ export function recordClosedHeaderTab(item: ClosedHeaderTab): void {
     });
   } else append({ kind: "header", id: uuidv4(), items: [item], bulk: false });
 }
-export function recordClosedCanvas(
-  tab: EpicViewTab | undefined,
-  before: EpicCanvasState | undefined,
-  after: EpicCanvasState | undefined,
-  bulk: boolean,
-): void {
-  if (
-    suppressed > 0 ||
-    tab === undefined ||
-    before === undefined ||
-    after === undefined
-  )
-    return;
-  const instanceIds = Object.keys(before.tilesByInstanceId).filter(
-    (id) =>
-      after.tilesByInstanceId[id] === undefined &&
-      before.tilesByInstanceId[id]?.type !== "blank",
-  );
-  if (instanceIds.length > 0)
-    append({
-      kind: "canvas",
-      id: uuidv4(),
-      tab,
-      before,
-      after,
-      instanceIds,
-      bulk,
-    });
-}
-/** Explicit pane closes can recover layout even when no content was open. */
-export function recordClosedCanvasPane(
-  tab: EpicViewTab | undefined,
-  before: EpicCanvasState | undefined,
-  after: EpicCanvasState | undefined,
-  paneId: string,
-): void {
-  if (
-    suppressed > 0 ||
-    tab === undefined ||
-    before === undefined ||
-    after === undefined
-  )
-    return;
-  if (
-    before.root?.kind !== "group" ||
-    findPaneById(after.root, paneId) !== null
-  ) {
-    recordClosedCanvas(tab, before, after, true);
-    return;
-  }
-  if (!collectPanes(before.root).some((pane) => pane.id === paneId)) return;
-  const instanceIds = Object.keys(before.tilesByInstanceId).filter(
-    (id) =>
-      after.tilesByInstanceId[id] === undefined &&
-      before.tilesByInstanceId[id]?.type !== "blank",
-  );
-  append({
-    kind: "canvas",
-    id: uuidv4(),
-    tab,
-    before,
-    after,
-    instanceIds,
-    paneIds: [paneId],
-    bulk: true,
-  });
-}
 
 export function removeRecoveryEntry(id: string): void {
   replaceEntries(
@@ -483,8 +375,6 @@ export function pruneRecoveryEpics(epicIds: readonly string[]): void {
     useTabRecoveryHistory
       .getState()
       .entries.flatMap<TabRecoveryEntry>((entry) => {
-        if (entry.kind === "canvas")
-          return ids.has(entry.tab.epicId) ? [] : [entry];
         const items = entry.items.filter(
           (item) => item.kind !== "epic" || !ids.has(item.tab.epicId),
         );
@@ -498,21 +388,17 @@ export function pruneRecoveryTiles(
 ): void {
   if (!useTabRecoveryHistory.getState().ready)
     pendingTilePrunes.push(isDeleted);
-  const affected = useTabRecoveryHistory.getState().entries.some((entry) => {
-    const canvases =
-      entry.kind === "canvas"
-        ? [{ canvas: entry.before, epicId: entry.tab.epicId }]
-        : entry.items.flatMap((item) =>
-            item.kind === "epic"
-              ? [{ canvas: item.canvas, epicId: item.tab.epicId }]
-              : [],
-          );
-    return canvases.some(({ canvas, epicId }) =>
-      Object.values(canvas.tilesByInstanceId).some(
-        (tile) => tile !== undefined && isDeleted(tile, epicId),
+  const affected = useTabRecoveryHistory
+    .getState()
+    .entries.some((entry) =>
+      entry.items.some(
+        (item) =>
+          item.kind === "epic" &&
+          Object.values(item.canvas.tilesByInstanceId).some(
+            (tile) => tile !== undefined && isDeleted(tile, item.tab.epicId),
+          ),
       ),
     );
-  });
   if (!affected) return;
   const clean = (canvas: EpicCanvasState, epicId: string): EpicCanvasState => {
     if (
@@ -529,37 +415,16 @@ export function pruneRecoveryTiles(
     return parseEpicCanvasState({ ...canvas, tilesByInstanceId }) ?? canvas;
   };
   replaceEntries(
-    useTabRecoveryHistory
-      .getState()
-      .entries.flatMap<TabRecoveryEntry>((entry) => {
-        if (entry.kind === "header") {
-          const items = entry.items.map((item) => {
-            if (item.kind === "draft") return item;
-            const canvas = clean(item.canvas, item.tab.epicId);
-            return canvas === item.canvas ? item : { ...item, canvas };
-          });
-          return [
-            items.every((item, index) => item === entry.items[index])
-              ? entry
-              : { ...entry, items },
-          ];
-        }
-        const instanceIds = entry.instanceIds.filter((id) => {
-          const tile = entry.before.tilesByInstanceId[id];
-          return tile !== undefined && !isDeleted(tile, entry.tab.epicId);
-        });
-        if (instanceIds.length === 0 && (entry.paneIds ?? []).length === 0)
-          return [];
-        const before = clean(entry.before, entry.tab.epicId);
-        const after = clean(entry.after, entry.tab.epicId);
-        return [
-          before === entry.before &&
-          after === entry.after &&
-          instanceIds.length === entry.instanceIds.length
-            ? entry
-            : { ...entry, instanceIds, before, after },
-        ];
-      }),
+    useTabRecoveryHistory.getState().entries.map<TabRecoveryEntry>((entry) => {
+      const items = entry.items.map((item) => {
+        if (item.kind === "draft") return item;
+        const canvas = clean(item.canvas, item.tab.epicId);
+        return canvas === item.canvas ? item : { ...item, canvas };
+      });
+      return items.every((item, index) => item === entry.items[index])
+        ? entry
+        : { ...entry, items };
+    }),
   );
 }
 /** Permanent deletion must not be undone by a later reopen command. */
@@ -569,7 +434,6 @@ export function pruneRecoveryDraft(draftId: string): void {
     useTabRecoveryHistory
       .getState()
       .entries.flatMap<TabRecoveryEntry>((entry) => {
-        if (entry.kind !== "header") return [entry];
         const items = entry.items.filter(
           (item) => item.kind !== "draft" || item.draftId !== draftId,
         );
@@ -585,11 +449,9 @@ export function recoveryEpicIds(
   return [
     ...new Set(
       entries.flatMap((entry) =>
-        entry.kind === "canvas"
-          ? [entry.tab.epicId]
-          : entry.items.flatMap((item) =>
-              item.kind === "epic" ? [item.tab.epicId] : [],
-            ),
+        entry.items.flatMap((item) =>
+          item.kind === "epic" ? [item.tab.epicId] : [],
+        ),
       ),
     ),
   ];
@@ -600,11 +462,9 @@ export function recoveryDraftIds(): ReadonlySet<string> {
     useTabRecoveryHistory
       .getState()
       .entries.flatMap((entry) =>
-        entry.kind === "header"
-          ? entry.items.flatMap((item) =>
-              item.kind === "draft" ? [item.draftId] : [],
-            )
-          : [],
+        entry.items.flatMap((item) =>
+          item.kind === "draft" ? [item.draftId] : [],
+        ),
       ),
   );
 }
@@ -613,8 +473,6 @@ export function discardRecoveryTab(tabId: string): void {
     useTabRecoveryHistory
       .getState()
       .entries.flatMap<TabRecoveryEntry>((entry) => {
-        if (entry.kind === "canvas")
-          return entry.tab.tabId === tabId ? [] : [entry];
         const items = entry.items.filter(
           (item) => item.kind !== "epic" || item.tab.tabId !== tabId,
         );
@@ -628,21 +486,17 @@ export function recoveryTiles(): ReadonlyArray<{
   readonly epicId: string;
   readonly tile: EpicCanvasTileRef;
 }> {
-  return useTabRecoveryHistory.getState().entries.flatMap((entry) => {
-    const canvases =
-      entry.kind === "canvas"
-        ? [{ canvas: entry.before, epicId: entry.tab.epicId }]
-        : entry.items.flatMap((item) =>
-            item.kind === "epic"
-              ? [{ canvas: item.canvas, epicId: item.tab.epicId }]
-              : [],
-          );
-    return canvases.flatMap(({ canvas, epicId }) =>
-      Object.values(canvas.tilesByInstanceId).flatMap((tile) =>
-        tile === undefined ? [] : [{ epicId, tile }],
+  return useTabRecoveryHistory
+    .getState()
+    .entries.flatMap((entry) =>
+      entry.items.flatMap((item) =>
+        item.kind === "epic"
+          ? Object.values(item.canvas.tilesByInstanceId).flatMap((tile) =>
+              tile === undefined ? [] : [{ epicId: item.tab.epicId, tile }],
+            )
+          : [],
       ),
     );
-  });
 }
 
 function invalidateRecoveryHistory(): void {
