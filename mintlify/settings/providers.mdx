@@ -133,7 +133,7 @@ For CLIs that Traycer manages, open the version menu on the managed row to see t
 
 Traycer does not manage the Amp or Hermes Agent CLIs; install them yourself, then pick the detected copy or add its path.
 
-For Claude Code, Codex, and OpenCode, this tab also has **Terminal interface CLI arguments**. They are appended to the CLI when you start an agent on the Terminal interface, and they pre-fill the launch picker, where you can change them for one launch. Use bypass or auto-approval flags deliberately. Codex applies permission flags such as `--approve-for-me`, `--ask-for-approval` and `--sandbox` when a session starts; a reopened or forked Codex session keeps the permissions it started with, so Traycer leaves those flags out when it reopens one.
+For Claude Code, Codex, and OpenCode, this tab also has **Terminal interface CLI arguments**. They are appended to the CLI when you start an agent on the Terminal interface, and they pre-fill the launch picker, where you can change them for one launch. Use bypass or auto-approval flags deliberately. Codex permission flags such as `--approve-for-me`, `--ask-for-approval`, and `--sandbox` apply when a session starts; when Traycer reopens or forks a Codex session, the session keeps the permissions it started with, so Traycer leaves those flags out.
 
 ## Environment Variables
 
