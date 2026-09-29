@@ -120,7 +120,7 @@ import {
 } from "@/stores/layout/layout-store";
 import { sampleWorkspaceTabModule } from "@/stores/tabs/kinds/sample-workspace";
 import { tabItemId } from "@/stores/tabs/layout";
-import { useTabsStore } from "@/stores/tabs/store";
+import { type TabsStoreState, useTabsStore } from "@/stores/tabs/store";
 import { tabAppearance } from "@/stores/tabs/types";
 import { seedSideStripTabs } from "./side-tab-strip-seed";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
@@ -438,12 +438,15 @@ interface LayoutCanvasProbe {
    * `readings`, which are read once at mount): the layout snapshot (with the
    * URL's placement, sidebar side and strip view), the strip's width and
    * collapse, the inspector's dock, the theme, the panel's collapse, the
-   * indicators and activity a check fed in, a slowed panel-motion token, and
-   * any open session. The seeded tabs are `restoreTabs`', because putting
-   * them back re-mounts every strip row.
+   * indicators and activity a check fed in, a slowed panel-motion token, any
+   * open session, and the seeded tabs (`restoreTabs`).
    */
   readonly restoreLoadState: () => void;
-  /** The seeded tabs, as the document loaded them (a reorder or an activation undone). */
+  /**
+   * The seeded tabs, as the document loaded them: a reorder or an activation
+   * undone. It puts back the very objects the load seeded, so a strip no
+   * check changed re-renders nothing and a changed one keeps its rows mounted.
+   */
   readonly restoreTabs: () => void;
   /**
    * Which readings the strip foot (or header) holds, live: the layout's
@@ -1095,10 +1098,9 @@ function buildProbe(): LayoutCanvasProbe {
       document.documentElement.style.removeProperty(
         "--panel-animation-duration",
       );
+      restoreLoadedTabs();
     },
-    restoreTabs: () => {
-      seedVariantTabs(VARIANT);
-    },
+    restoreTabs: restoreLoadedTabs,
     setReadings: (readings) => {
       const { arrangement } = useLayoutStore.getState();
       const shown = (wanted: boolean, fallback: BarHost): BarHost =>
@@ -1124,6 +1126,9 @@ function buildProbe(): LayoutCanvasProbe {
   };
 }
 
+/** The tabs store as the load seeded it, which `restoreLoadedTabs` puts back. */
+let loadedTabs: TabsStoreState | null = null;
+
 /**
  * The seeded tabs and, for a task window, Epsilon's one-pane canvas, in the
  * order the load applies them: seeding a task's record resets its canvas.
@@ -1131,6 +1136,16 @@ function buildProbe(): LayoutCanvasProbe {
 function seedVariantTabs(variant: CanvasVariant): void {
   seedSideStripTabs(variant.surface === "sample");
   if (variant.surface === "epic") seedEpicSurfaceCanvas();
+  loadedTabs = useTabsStore.getState();
+}
+
+/**
+ * The tabs store back to the load's own objects: the order, the split pair,
+ * the group, the active tab and its activation history.
+ */
+function restoreLoadedTabs(): void {
+  if (loadedTabs === null) throw new Error("the fixture never seeded its tabs");
+  useTabsStore.setState(loadedTabs);
 }
 
 /**

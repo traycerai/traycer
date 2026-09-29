@@ -372,15 +372,24 @@ describe("SideStripNavRows", () => {
 });
 
 /**
- * The resting fill a class list paints: every `bg-*` utility with no
- * `hover:` / `dark:` / `aria-*:` modifier in front of it (a modifier makes the
- * token a state's fill, not the button's), less the `bg-clip-*` utilities,
- * which pick a clip box and paint nothing. jsdom resolves no cascade, so the
- * class list is the contract a stylesheet is handed.
+ * The background utilities that set no colour: attachment, clip, origin,
+ * repeat, size, position, image (gradients included) and blend mode, and an
+ * arbitrary value typed as one of those.
+ */
+const NON_COLOUR_BACKGROUND =
+  /^bg-(?:fixed|local|scroll|clip-|origin-|repeat|no-repeat|auto|cover|contain|size-|position-|top|bottom|center|left|right|none|linear-|radial-|conic-|gradient-|blend-|[[(](?:url\(|image:|length:|size:|position:))/;
+
+/**
+ * The resting colour fills a class list paints: its unmodified `bg-*` colour
+ * utilities. A token with a `hover:` / `dark:` / `aria-*:` modifier is a
+ * state's fill, not the button's, and starts with its modifier, never with
+ * `bg-`; the `bg-*` utilities that paint no colour are dropped by name. jsdom
+ * resolves no cascade, so the class list is the contract a stylesheet is
+ * handed.
  */
 function restingFillClasses(element: HTMLElement): ReadonlyArray<string> {
   return [...element.classList].filter(
-    (token) => token.startsWith("bg-") && !token.startsWith("bg-clip-"),
+    (token) => token.startsWith("bg-") && !NON_COLOUR_BACKGROUND.test(token),
   );
 }
 

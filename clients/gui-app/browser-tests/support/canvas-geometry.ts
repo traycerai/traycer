@@ -91,7 +91,6 @@ async function openCanvas(
   const cdp = await context.newCDPSession(page);
   await page.goto(`${fixture(CANVAS_FIXTURE)}?${query}`);
   await page.waitForFunction("window.__layoutCanvasProbe?.ready === true");
-  await rememberSeededTabs(page);
   await nextFrames(page, 2);
   const bootErrors = [...errors];
   return { context, page, cdp, errors, bootErrors };
@@ -227,9 +226,10 @@ export type EdgeSide = "left" | "right";
 
 /**
  * Back to the shipped layout with the tabs at `placement` and the sidebar on
- * `sidebar`, the strip and the panel expanded, the seeded tabs in their seeded
- * order and no leftover token override. Each geometry test starts here so it
- * never depends on the test that ran before it on the same page.
+ * `sidebar`, the strip and the panel expanded, the seeded tabs as the load
+ * left them (their order and the active tab) and no leftover token override.
+ * Each geometry test starts here so it never depends on the test that ran
+ * before it on the same page.
  */
 export async function prepareCanvas(
   page: Page,
@@ -242,26 +242,7 @@ export async function prepareCanvas(
   await probe(page, `setSidebarSide(${JSON.stringify(sidebar)})`);
   await probe(page, "setCollapsed(false)");
   await probe(page, "setPanelCollapsed(false)");
-  await restoreSeededTabs(page);
-}
-
-/** The tabs as the fixture seeded them, kept on the page so a test can put them back. */
-async function rememberSeededTabs(page: Page): Promise<void> {
-  await page.evaluate(
-    `import('/src/stores/tabs/store.ts').then((m) => {
-       const state = m.useTabsStore.getState();
-       window.__canvasGeometrySeed = { items: state.items, groups: state.groups, customizations: state.customizations };
-     })`,
-  );
-}
-
-async function restoreSeededTabs(page: Page): Promise<void> {
-  await page.evaluate(
-    `import('/src/stores/tabs/store.ts').then((m) => {
-       const seed = window.__canvasGeometrySeed;
-       m.useTabsStore.setState({ items: seed.items, groups: seed.groups, customizations: seed.customizations });
-     })`,
-  );
+  await probe(page, "restoreTabs()");
 }
 
 export async function setHomeShown(page: Page, shown: boolean): Promise<void> {
@@ -529,7 +510,8 @@ function bridgeFollowsAnchor(read: SheetJoinRead, side: JoinSide): boolean {
  * the layout change that moves its anchor (a scrolled strip, a resized window).
  * Read at once, it is where the anchor WAS - 36px off after a scroll here, and
  * past the surface frame under load - so a read is taken only once the bridge
- * is on its anchor and two reads in a row agree.
+ * is on its anchor and two reads frames apart agree (two inside one frame
+ * would agree while it is still moving).
  */
 export async function readRenderedJoin(
   page: Page,
@@ -551,6 +533,7 @@ export async function readRenderedJoin(
   await expect
     .poll(
       async () => {
+        await nextFrames(page, 2);
         const next = JSON.stringify(await readSheetJoin(page, side));
         const settled = next === previous;
         previous = next;

@@ -17,10 +17,11 @@ import { fixture, type Point, nextFrames } from "./support/fixtures.ts";
 // whether a drag / double-click / triple-click selection is still there once
 // the gesture has settled, whether a keystroke survives autosave's refetch and
 // a tile resize with the SAME editor still focused - all of that is layout and
-// input dispatch, and jsdom has neither. Four claims, each on its own page
+// input dispatch, and jsdom has neither. Five claims, each on its own page
 // load:
 //
 //   - end-of-file context expands, collapses and expands again;
+//   - fully expanded context offers its collapse control and no expander;
 //   - click-to-edit keeps drag, double-click and whole-line selections;
 //   - keystrokes land, and focus and caret survive autosave and a resize;
 //   - keys typed the moment the editor attaches land in order, the caret
@@ -31,6 +32,9 @@ import { fixture, type Point, nextFrames } from "./support/fixtures.ts";
 
 const LINE_30 = '[data-additions] [data-content] > [data-line="30"]';
 const TRAILING_EXPANDER = "[data-separator-last] [data-expand-button]";
+// An expand control, which the collapse control (also a `data-expand-button`)
+// is not.
+const EXPANDER = "[data-expand-button]:not([data-collapse-button])";
 // How long a selection must keep existing once its gesture has landed. The
 // claim IS about time (a rerender after the pointer gesture used to clear it),
 // so this is a window, not a synchronisation sleep.
@@ -348,11 +352,7 @@ test("end-of-file context expands, collapses and expands again", async ({
     "the expanded trailing context",
   ).toBeAttached();
   await expect(
-    root
-      .locator(
-        "[data-separator-last] [data-expand-button]:not([data-collapse-button])",
-      )
-      .first(),
+    root.locator(`[data-separator-last] ${EXPANDER}`).first(),
     "partial context expansion lost its remaining expander",
   ).toBeAttached();
 
@@ -375,6 +375,52 @@ test("end-of-file context expands, collapses and expands again", async ({
   await expect(
     lineThirty(page),
     "the re-expanded trailing context",
+  ).toBeAttached();
+});
+
+test("fully expanded context offers its collapse control and no expander", async ({
+  page,
+}) => {
+  await openDiff(page);
+  const root = diffRoot(page);
+  // The 20 lines above the hunk: one expand shows all of them, which leaves
+  // the region's separator nothing to expand and only a collapse to offer.
+  const leading = root.locator("[data-separator-first]");
+  const lineOne = root.locator(
+    '[data-additions] [data-content] > [data-line="1"]',
+  );
+
+  await leading.locator("[data-expand-button]").first().click();
+  await expect(lineOne, "the expanded leading context").toBeAttached();
+  await expect(
+    leading.locator("[data-separator-content]").first(),
+    "the fully expanded region's separator",
+  ).toHaveText("Collapse expanded lines");
+  await expect(
+    leading.locator(EXPANDER),
+    "a fully expanded region still offers an expander with nothing to expand",
+  ).toHaveCount(0);
+
+  // The 193 lines below it are more than one expand shows; a shift-click
+  // expands them all. After that nothing in the file is left to expand.
+  await root
+    .locator(TRAILING_EXPANDER)
+    .first()
+    .click({ modifiers: ["Shift"] });
+  await expect(
+    root.locator('[data-additions] [data-content] > [data-line="220"]'),
+    "the fully expanded trailing context",
+  ).toBeAttached();
+  await expect(
+    root.locator(EXPANDER),
+    "a fully expanded file still offers an expander with nothing to expand",
+  ).toHaveCount(0);
+
+  await leading.locator("button[data-collapse-button]").first().click();
+  await expect(lineOne, "the collapsed leading context").toHaveCount(0);
+  await expect(
+    leading.locator(EXPANDER).first(),
+    "the collapsed region lost its expander",
   ).toBeAttached();
 });
 

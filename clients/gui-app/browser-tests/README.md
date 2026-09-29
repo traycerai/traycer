@@ -63,7 +63,10 @@ chromeLaunchOptions([...]) })`; assert the premise they create positively
   share one page across a file's tests (`sharedPage` in
   `support/layout-editor/pages.ts`), reset it through the probe before each
   test, and turn tracing off, which a context shared across tests cannot
-  survive.
+  survive. The reset is the canvas probe's `restoreLoadState`: everything a
+  test can change live, the seeded tabs' order and active tab included, goes
+  back there, so a new live setter needs its undo there too. Otherwise a test's
+  result depends on the tests that ran before it on the page.
 - **One test per claim**, named for the claim. Playwright shards and
   parallelises by test, so a long phase list split into tests finishes sooner
   and reports each red separately.

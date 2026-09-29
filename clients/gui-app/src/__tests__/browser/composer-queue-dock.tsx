@@ -189,6 +189,9 @@ export function ComposerQueueDockFixture(): ReactElement {
   const frame = lowerSurfaceFrame({
     folded: chrome.folded,
     openSection: chrome.openSection,
+    // The tile passes `snapshotLoaded && todo !== null`; this fixture's
+    // snapshot has always loaded (`snapshotLoaded: true` above), and the lint
+    // rejects the always-true half.
     todoHasContent: todo !== null,
     filesChangedHasContent: chrome.hotspots.filesChanged.hasContent,
     activeAgentsHasContent: activeAgentsVisible,
