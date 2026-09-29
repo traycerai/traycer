@@ -1615,7 +1615,7 @@ export class TabCommandCoordinator {
         ? null
         : previousLayout.activeItemId;
     const refs: TabRef[] = items.map(closedHeaderRef);
-    if (replacement !== null) markClosingTabs();
+    if (replacement !== null) markClosingTabs([replacement]);
     this.execute({
       layout: () => {
         const base =
@@ -1703,7 +1703,7 @@ export class TabCommandCoordinator {
       if (tab !== undefined)
         recovery = { kind: "epic", tab, canvas, ...location };
     }
-    markClosingTabs();
+    markClosingTabs([ref]);
     this.execute({
       layout: next,
       reservedAdditions: [],

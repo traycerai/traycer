@@ -35,7 +35,8 @@ interface Mark {
 
 const entrances = new Map<string, Mark>();
 const reopenGlows = new Map<string, number>();
-const closingListeners = new Set<() => void>();
+type ClosingListener = (closingKeys: ReadonlyArray<string>) => void;
+const closingListeners = new Set<ClosingListener>();
 
 export function stripGroupMarkKey(groupId: string): string {
   return `group:${groupId}`;
@@ -129,15 +130,16 @@ export function takeReopenGlow(keys: ReadonlyArray<string>): boolean {
 }
 
 /**
- * Called just before the coordinator removes tabs the person closed, while
- * the strip still paints them, so the strip can hold their space and let it
- * close up rather than jump.
+ * Called just before the coordinator removes `refs`, tabs the person closed,
+ * while the strip still paints them, so the strip can hold their space and
+ * let it close up rather than jump.
  */
-export function markClosingTabs(): void {
-  for (const listener of closingListeners) listener();
+export function markClosingTabs(refs: ReadonlyArray<TabRef>): void {
+  const closingKeys = refs.map(tabRefKey);
+  for (const listener of closingListeners) listener(closingKeys);
 }
 
-export function subscribeClosingTabs(listener: () => void): () => void {
+export function subscribeClosingTabs(listener: ClosingListener): () => void {
   closingListeners.add(listener);
   return () => {
     closingListeners.delete(listener);

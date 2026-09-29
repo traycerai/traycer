@@ -322,9 +322,9 @@ export function useSelectionTravel(input: {
   const { scrollerRef, travellerRef, activeItemId, layoutItems } = input;
   const reduceMotion = useReducedMotion() === true;
   const previousActiveRef = useRef(activeItemId);
-  // A closed tab has no frame left to measure, and it is exactly where a
-  // slide to its successor starts; the close captures it while the strip still
-  // paints the tab.
+  // A closed selected tab has no frame left to measure, and it is exactly
+  // where a slide to its successor starts; the close captures it while the
+  // strip still paints the tab, and the selection change it causes uses it up.
   const closedBoxRef = useRef<ClosedBox | null>(null);
   const flightRef = useRef<Flight | null>(null);
   const layoutItemsRef = useRef(layoutItems);
@@ -335,15 +335,22 @@ export function useSelectionTravel(input: {
 
   useLayoutEffect(
     () =>
-      subscribeClosingTabs(() => {
+      subscribeClosingTabs((closingKeys) => {
         const scroller = scrollerRef.current;
         const active = previousActiveRef.current;
-        closedBoxRef.current = null;
         if (scroller === null || active === null) return;
-        // The layout editor's session tab closes when its session ends; it
-        // never drew a join, so nothing may slide out of it.
+        const activeItem = layoutItemsRef.current.find(
+          (item) => item.id === active,
+        );
+        // Only a close that takes the selection with it starts a slide. The
+        // layout editor's session tab closes when its session ends; it never
+        // drew a join, so nothing may slide out of it.
         if (
-          !joinsSheet(layoutItemsRef.current.find((item) => item.id === active))
+          activeItem === undefined ||
+          !joinsSheet(activeItem) ||
+          !flattenStripItemRefs(activeItem).some((ref) =>
+            closingKeys.includes(tabRefKey(ref)),
+          )
         )
           return;
         const frame = frameOf(scroller, active);
@@ -362,6 +369,8 @@ export function useSelectionTravel(input: {
   useLayoutEffect(() => {
     const previous = previousActiveRef.current;
     previousActiveRef.current = activeItemId;
+    const closed = closedBoxRef.current;
+    closedBoxRef.current = null;
     const scroller = scrollerRef.current;
     const traveller = travellerRef.current;
     if (previous === activeItemId || scroller === null || traveller === null)
@@ -381,7 +390,7 @@ export function useSelectionTravel(input: {
       previous,
       activeItemId,
       flight,
-      closed: closedBoxRef.current,
+      closed,
       reduceMotion,
     });
     if (route === null) {

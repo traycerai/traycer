@@ -1145,17 +1145,18 @@ function closeTogether(
 }
 
 /**
- * Whether `ref` is still in the strip at each closing notice: the strip
- * measures the tab it is about to lose, so it has to be there when told.
+ * Whether each closing notice names `ref` while it is still in the strip: the
+ * strip measures the tab it is about to lose, so it has to be there when told.
  */
 function watchStripAtClosingNotices(ref: TabRef): boolean[] {
-  const stillInStrip: boolean[] = [];
-  subscribeClosingTabs(() => {
-    stillInStrip.push(
-      stripRefs().some((stripRef) => tabRefKey(stripRef) === tabRefKey(ref)),
+  const namedWhileInStrip: boolean[] = [];
+  subscribeClosingTabs((closingKeys) => {
+    namedWhileInStrip.push(
+      closingKeys.includes(tabRefKey(ref)) &&
+        stripRefs().some((stripRef) => tabRefKey(stripRef) === tabRefKey(ref)),
     );
   });
-  return stillInStrip;
+  return namedWhileInStrip;
 }
 
 describe("strip motion marks from the command coordinator", () => {

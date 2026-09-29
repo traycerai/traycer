@@ -280,17 +280,21 @@ describe("takeReopenGlow", () => {
 });
 
 describe("closing listeners", () => {
-  it("notifies every subscriber each time a close is about to land", () => {
+  it("tells every subscriber which tabs each close is about to remove", () => {
     const first = vi.fn();
     const second = vi.fn();
     subscribeClosingTabs(first);
     subscribeClosingTabs(second);
 
-    markClosingTabs();
-    markClosingTabs();
+    markClosingTabs([epicRef("a")]);
+    markClosingTabs([epicRef("b"), epicRef("c")]);
 
-    expect(first).toHaveBeenCalledTimes(2);
-    expect(second).toHaveBeenCalledTimes(2);
+    for (const listener of [first, second]) {
+      expect(listener.mock.calls).toEqual([
+        [[tabRefKey(epicRef("a"))]],
+        [[tabRefKey(epicRef("b")), tabRefKey(epicRef("c"))]],
+      ]);
+    }
   });
 
   it("stops notifying a subscriber once it unsubscribes", () => {
@@ -300,7 +304,7 @@ describe("closing listeners", () => {
     subscribeClosingTabs(staying);
 
     unsubscribe();
-    markClosingTabs();
+    markClosingTabs([epicRef("a")]);
 
     expect(leaving).not.toHaveBeenCalled();
     expect(staying).toHaveBeenCalledTimes(1);
