@@ -92,13 +92,14 @@ traffic, WebSocket/TLS/TCP framing, HTTP/authn, and JavaScript assets. The
 settled interval is a sampling window, not a claim that first paint took that
 long. Check `globalThis.__traycerRemoteTraffic.droppedSessions()` too. If it
 is nonzero, the 32-session reader cap dropped older sessions: mark the total
-incomplete and repeat in a clean app session. A session that closes leaves the
-snapshot with its rows, including one opened and closed between the two
-samples. Save `globalThis.__traycerRemoteTraffic.closedSessions()` with each
-snapshot: it counts the sessions closed since the page loaded and the
-`receivedBytes` and `receivedFrames` their rows held. If its `receivedBytes`
-is nonzero, the per-session ledger no longer holds those bytes: add them to the
-total as closed-session traffic and mark the method breakdown incomplete.
+incomplete and repeat in a clean app session. A closed session is absent from
+the snapshot, rows and all, and that includes one opened and closed between the
+two samples; only its byte and frame totals remain. Save
+`globalThis.__traycerRemoteTraffic.closedSessions()` with each snapshot: it
+counts the sessions closed since the page loaded and the `receivedBytes` and
+`receivedFrames` their rows held. If its `receivedBytes` is nonzero, the
+per-session ledger no longer holds those bytes: add them to the total as
+closed-session traffic and mark the method breakdown incomplete.
 `captureSession` IDs are assigned in order and never reused, so match sessions
 across the two snapshots by that ID.
 
