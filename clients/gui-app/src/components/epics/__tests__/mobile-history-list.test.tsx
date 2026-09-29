@@ -165,8 +165,8 @@ vi.mock("@/hooks/home/use-history-query", () => ({
 // real `useInProgressHistoryItems` / `withInProgressFirst` pair runs here: the
 // store says WHICH epics are running, and the by-id batch answers the running
 // epics no listed page carries.
-vi.mock("@/stores/use-working-epic-ids", () => ({
-  useWorkingEpicIds: (): ReadonlySet<string> => testState.workingEpicIds,
+vi.mock("@/stores/use-own-turn-epic-ids", () => ({
+  useOwnTurnEpicIds: (): ReadonlySet<string> => testState.workingEpicIds,
 }));
 
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
@@ -182,6 +182,8 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
       localHomedTaskIds: new Set<string>(),
       isFetching: false,
       error: null,
+      refetch: () => Promise.resolve(),
+      refetchBatches: [],
     };
   },
 }));
@@ -253,7 +255,7 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
 }
 
 /**
- * A row as `epic.getTaskContexts` hands it back - what the in-progress lift
+ * A row as `epic.getTaskContexts` hands it back - what the shared activity projection
  * backfills a running epic from when no listed page carries it.
  */
 function backfillTask(overrides: {
@@ -489,11 +491,10 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
   });
 
-  // The phone's replacement for Home's "In progress" group: History renders
-  // the feed's order, agent activity never moves a task up it, and the mobile
-  // shell mounts no Home surface to carry those rows.
-  describe("in-progress lift", () => {
-    it("puts a running task no listed page carries at the top", async () => {
+  // Recent uses the shared durable/optimistic activity projection on every
+  // surface. Missing turn rows are fetched together; listed rows are not.
+  describe("optimistic activity ordering", () => {
+    it("puts a turn-active task no listed page carries at the top", async () => {
       testState.items = [
         historyItem({ id: "a", epicId: "a", title: "listed one" }),
         historyItem({ id: "b", epicId: "b", title: "listed two" }),
@@ -510,7 +511,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(testState.backfillIdCalls.at(-1)).toEqual(["z"]);
     });
 
-    it("moves a listed running task to the top without duplicating it", async () => {
+    it("moves a listed turn-active task to the top without duplicating it", async () => {
       testState.items = [
         historyItem({ id: "a", epicId: "a", title: "listed one" }),
         historyItem({ id: "b", epicId: "b", title: "listed two" }),
@@ -525,7 +526,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(
         cards.filter((card) => card.textContent.includes("running")).length,
       ).toBe(1);
-      expect(testState.backfillIdCalls.at(-1)).toEqual([]);
+      expect(testState.backfillIdCalls.at(-1)).not.toContain("c");
     });
 
     it("leaves the order alone while a search is active", async () => {
@@ -546,7 +547,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(testState.backfillIdCalls.at(-1)).toEqual([]);
     });
 
-    it("stands down on desktop, which shows these rows on Home instead", async () => {
+    it("uses the same activity ordering on desktop", async () => {
       setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
       testState.items = [
         historyItem({ id: "a", epicId: "a", title: "listed one" }),
@@ -556,8 +557,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("page", "/");
       const rows = await screen.findAllByTestId("epics-list-row-card");
 
-      expect(rows[0]?.textContent).toContain("listed one");
-      expect(testState.backfillIdCalls.at(-1)).toEqual([]);
+      expect(rows[0]?.textContent).toContain("running");
+      expect(testState.backfillIdCalls.at(-1)).not.toContain("c");
     });
   });
 
@@ -1085,17 +1086,22 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       ];
       renderPanelWithOpenItem("page", "/", onOpenItem);
       const cards = await screen.findAllByTestId("epics-list-row-card");
+      const secondCard = cards.find((card) =>
+        card.textContent.includes("Second history item"),
+      );
+      if (secondCard === undefined)
+        throw new Error("second row was not rendered");
 
       // Long-press the second row to enter selection mode; the first row's
       // checkbox starts unselected, so clicking it below is the toggle under
       // test rather than a re-toggle of the row the hold already selected.
       vi.useFakeTimers();
-      firePointerDown(cards[1], 300, 100);
+      firePointerDown(secondCard, 300, 100);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(460);
       });
       vi.useRealTimers();
-      firePointerUp(cards[1], 300, 100);
+      firePointerUp(secondCard, 300, 100);
 
       const checkbox = screen.getByRole("checkbox", {
         name: "Select Open from landing",
@@ -1123,17 +1129,22 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       ];
       renderPanel("page", "/");
       const cards = await screen.findAllByTestId("epics-list-row-card");
+      const firstCard = cards.find((card) =>
+        card.textContent.includes("Open from landing"),
+      );
+      if (firstCard === undefined)
+        throw new Error("first row was not rendered");
 
       // Long-press the first, deletable row to enter selection mode - a
       // viewer-only row's own long press is disabled, since a row nobody may
       // select has nothing to hold into selection mode.
       vi.useFakeTimers();
-      firePointerDown(cards[0], 300, 100);
+      firePointerDown(firstCard, 300, 100);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(460);
       });
       vi.useRealTimers();
-      firePointerUp(cards[0], 300, 100);
+      firePointerUp(firstCard, 300, 100);
 
       const viewerCheckbox = screen.getByRole("checkbox", {
         name: "Select Viewer only row",
@@ -1522,7 +1533,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         throw new Error("expected a preceding timestamp sibling span");
       }
       expect(timestamp.className).toMatch(/\btruncate\b/);
-      expect(timestamp.textContent).toMatch(/^updated/);
+      expect(timestamp.textContent).toMatch(/^activity/);
     });
 
     it("renders the preserved-orphan provenance label with a destructive tint", async () => {
@@ -1553,7 +1564,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         throw new Error("expected a preceding timestamp sibling span");
       }
       expect(timestamp.className).toMatch(/\btruncate\b/);
-      expect(timestamp.textContent).toMatch(/^updated/);
+      expect(timestamp.textContent).toMatch(/^activity/);
     });
 
     it("renders neither provenance label for an ordinary row carrying no marker", async () => {
@@ -1605,5 +1616,34 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(screen.getByTestId("epics-list-row-edit-title")).not.toBeNull();
       expect(screen.queryByTestId("epics-list-row-tray")).toBeNull();
     });
+  });
+
+  describe("oldest sort timestamp", () => {
+    it.each([
+      ["phone", MOBILE_VIEWPORT_WIDTH],
+      ["desktop", DESKTOP_VIEWPORT_WIDTH],
+    ] as const)(
+      "shows the updated timestamp on %s rows",
+      async (_label, width) => {
+        setViewportWidth(width);
+        testState.items = [
+          historyItem({
+            recentAtMs: 1_700_000_100_000,
+            recentLabel: "just now",
+            updatedLabel: "about 2 hours ago",
+          }),
+        ];
+        useHistorySearchStore.setState({
+          search: { ...DEFAULT_HISTORY_SEARCH, sort: "oldest" },
+        });
+
+        renderPanel("page", "/");
+
+        expect(
+          await screen.findByText("updated about 2 hours ago"),
+        ).not.toBeNull();
+        expect(screen.queryByText("activity just now")).toBeNull();
+      },
+    );
   });
 });

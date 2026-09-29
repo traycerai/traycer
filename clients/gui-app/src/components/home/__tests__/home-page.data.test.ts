@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   ListTaskLightPre13,
   ListTaskLightPre15,
@@ -9,6 +9,7 @@ import {
   canDeleteHistoryItem,
   canEditHistoryItemTitle,
   EMPTY_LOCAL_HOMED_TASK_IDS,
+  formatUpdatedLabel,
   collectHistoryRepos,
   filterHistoryItems,
   groupHistoryItems,
@@ -48,6 +49,16 @@ function makeItem(
 }
 
 describe("home-page history helpers", () => {
+  it("labels under-a-minute activity as just now", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(100_000);
+      expect(formatUpdatedLabel(100_000)).toBe("just now");
+      expect(formatUpdatedLabel(40_000)).toBe("1 minute ago");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("collects unique repos across items", () => {
     const items: ReadonlyArray<HistoryItem> = [
       makeItem({ id: "a", title: "A", linkedRepos: ["gui-app", "mobile"] }),

@@ -109,7 +109,7 @@ export const DEFAULT_HISTORY_SEARCH: HistorySearchState = {
  * filters, and an explicitly chosen non-default sort. Callers that must not
  * second-guess an explicit request read this: the empty state explains the
  * narrowing, and the phone's in-progress lift stands down under it (see
- * `withInProgressFirst`), because reordering - or backfilling - a feed the
+ * the optimistic activity projection), because reordering or backfilling a feed the
  * user has deliberately narrowed contradicts what they asked for.
  */
 export function hasActiveHistoryFilters(search: HistorySearchState): boolean {
