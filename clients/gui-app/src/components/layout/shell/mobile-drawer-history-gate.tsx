@@ -1,4 +1,6 @@
 import { use, useEffect, useState, type ReactNode } from "react";
+import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { FirstTaskPaintGate, GateContext } from "./mobile-drawer-history-state";
 
 /** A new signed-in shell gets its own first-paint latch. */
@@ -32,4 +34,14 @@ export function MobileDrawerTaskPaintReporter(props: {
     return () => window.clearTimeout(timer);
   }, [gate, props.ready]);
   return null;
+}
+
+/** Report only a selected tile whose payload has committed in a visible pane. */
+export function MobileDrawerVisibleTilePaintReporter(props: {
+  readonly ready: boolean;
+}): ReactNode {
+  const selected = useTabBodySelected();
+  const paneVisible = usePaneVisible();
+  const ready = props.ready && selected && paneVisible;
+  return <MobileDrawerTaskPaintReporter ready={ready} />;
 }

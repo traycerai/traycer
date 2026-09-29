@@ -1,5 +1,5 @@
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   House,
@@ -49,7 +49,10 @@ import { useHistoryQuery } from "@/hooks/home/use-history-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
-import { useMobileDrawerTaskPainted } from "./mobile-drawer-history-state";
+import {
+  useMobileDrawerTaskPaintGate,
+  useMobileDrawerTaskPainted,
+} from "./mobile-drawer-history-state";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 const ROW_CLASS = "h-11 w-full justify-start gap-3 px-3";
@@ -81,8 +84,16 @@ export function MobileNavDrawer(): ReactNode {
   const billingUrl = usePlatformBillingUrl();
   const openLink = useOpenLink();
   const [signOutOpen, setSignOutOpen] = useState(false);
+  // Latched on the first open: closing before the first task paint must not
+  // unmount the list (and its query) out from under the closing panel.
+  const [drawerRequested, setDrawerRequested] = useState(open);
+  if (open && !drawerRequested) setDrawerRequested(true);
   const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
-  const taskPainted = useMobileDrawerTaskPainted();
+  const historyEligible = useMobileDrawerTaskPainted();
+  const taskPaintGate = useMobileDrawerTaskPaintGate();
+  useEffect(() => {
+    if (open) taskPaintGate?.markDrawerRequested();
+  }, [open, taskPaintGate]);
   // Immutable after boot, so a plain read is stable for this component's
   // whole life - no resize can flip it the way the viewport hook flips.
   const installedApp = isMobileApp();
@@ -225,7 +236,9 @@ export function MobileNavDrawer(): ReactNode {
         <div
           className={cn("mt-1 min-h-0 flex-1 overflow-y-auto", LIST_FADE_CLASS)}
         >
-          {open || taskPainted ? <DrawerTaskList onNavigate={close} /> : null}
+          {open || historyEligible || drawerRequested ? (
+            <DrawerTaskList onNavigate={close} />
+          ) : null}
         </div>
       </nav>
       <div className="flex shrink-0 flex-col gap-1 border-t border-border/60 p-2">

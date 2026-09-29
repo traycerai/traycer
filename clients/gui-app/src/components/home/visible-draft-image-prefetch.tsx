@@ -24,6 +24,13 @@ interface PlannedImage {
   readonly bytes: number;
 }
 
+const subscribeDocumentVisibility = (listener: () => void): (() => void) => {
+  document.addEventListener("visibilitychange", listener);
+  return () => document.removeEventListener("visibilitychange", listener);
+};
+const documentVisible = (): boolean => document.visibilityState === "visible";
+const serverDocumentVisible = (): boolean => false;
+
 function plannedImages(content: JsonContent): ReadonlyArray<PlannedImage> {
   const declared = new Map(
     collectImageAtoms(content)
@@ -55,17 +62,18 @@ export function VisibleDraftImagePrefetch(props: {
     cloudDraftImageSourceVersion,
     cloudDraftImageSourceVersion,
   );
+  const visible = useSyncExternalStore(
+    subscribeDocumentVisibility,
+    documentVisible,
+    serverDocumentVisible,
+  );
   const plan = useMemo(
     () => (props.content === null ? [] : plannedImages(props.content)),
     [props.content],
   );
 
   useEffect(() => {
-    if (
-      !props.active ||
-      plan.length === 0 ||
-      document.visibilityState !== "visible"
-    ) {
+    if (!props.active || plan.length === 0 || !visible) {
       return;
     }
     let cancelled = false;
@@ -74,11 +82,11 @@ export function VisibleDraftImagePrefetch(props: {
     let secondFrameId: number | null = null;
     const controller = new AbortController();
     const stopWhenHidden = (): void => {
-      if (document.visibilityState !== "visible") controller.abort();
+      if (!documentVisible()) controller.abort();
     };
     document.addEventListener("visibilitychange", stopWhenHidden);
     const start = (): void => {
-      if (cancelled || document.visibilityState !== "visible") return;
+      if (cancelled || !documentVisible()) return;
       void prefetchRecordedCloudDraftImages(plan, controller.signal).catch(
         () => undefined,
       );
@@ -109,7 +117,7 @@ export function VisibleDraftImagePrefetch(props: {
       if (idleId !== null) window.cancelIdleCallback(idleId);
       if (timeoutId !== null) window.clearTimeout(timeoutId);
     };
-  }, [plan, props.active, sourceVersion]);
+  }, [plan, props.active, sourceVersion, visible]);
   return null;
 }
 

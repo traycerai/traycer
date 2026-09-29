@@ -31,6 +31,8 @@ import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
 import { EpicCanvasDragInteractionShield } from "@/components/epic-canvas/dnd/drag-interaction-shield";
 import { useEmptyShellDropActive } from "@/components/epic-canvas/dnd/dnd-store";
 import { MobileEpicTileView } from "@/components/epic-canvas/mobile/mobile-epic-tile-view";
+import { MobileDrawerTaskPaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { remeasureTileSurfaceGeometry } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
@@ -130,6 +132,7 @@ function TileCanvasLive(
   const resizeSplitInTab = useEpicCanvasStore((s) => s.resizeSplitInTab);
   const hasRecords = useEpicHasArtifactRecords();
   const isMobile = useIsMobileViewport();
+  const paneVisible = usePaneVisible();
 
   const onResizeGroup = useCallback(
     (groupId: string, sizes: ReadonlyArray<number>) => {
@@ -177,6 +180,7 @@ function TileCanvasLive(
     if (isMobile) {
       return (
         <>
+          <MobileDrawerTaskPaintReporter ready={paneVisible} />
           <EmptyShell epicId={epicId} tabId={tabId} />
           <MobileTabSwitcherMount epicId={epicId} tabId={tabId} />
         </>

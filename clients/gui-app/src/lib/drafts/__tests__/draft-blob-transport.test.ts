@@ -6,6 +6,7 @@ import type {
 } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import {
   putImage,
   sessionImageBytes,
@@ -96,6 +97,11 @@ const HOST = "host-blobs";
 // answers digest-mismatch), so naming an owner keeps them behaving exactly as
 // they did before the memo existed.
 const OWNER = "user-blobs";
+
+const liveLandingImageRoots = new Set<string>();
+registerExtraImageRootSource({
+  hashes: () => [...liveLandingImageRoots],
+});
 
 /**
  * A client that counts calls and lets the test decide each response's fate.
@@ -287,6 +293,7 @@ async function tick(): Promise<void> {
 
 beforeEach(() => {
   installFreshIndexedDb();
+  liveLandingImageRoots.clear();
   localReadMocks.getImageBytes.mockReset();
   if (localReadMocks.real !== null) {
     localReadMocks.getImageBytes.mockImplementation(localReadMocks.real);
@@ -304,6 +311,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetDraftBlobTransportForTests();
+  liveLandingImageRoots.clear();
 });
 
 /**
@@ -424,6 +432,7 @@ describe("draft blob transport", () => {
     // fence deleted.
     const bytes = new Uint8Array([...pngBytes(), 0x7a, 0x7b, 0x7c]);
     const hash = await sha256HexOfBytes(bytes);
+    liveLandingImageRoots.add(hash);
     signedInAs("user-a");
 
     const passthrough = localReadMocks.realPut;
@@ -431,6 +440,7 @@ describe("draft blob transport", () => {
     localReadMocks.putImageBytesAtHash.mockImplementationOnce(
       async (writtenHash, writtenBytes) => {
         const stored = await passthrough(writtenHash, writtenBytes);
+        liveLandingImageRoots.delete(writtenHash);
         useAuthStore.getState().setSigningIn("device");
         return stored;
       },
@@ -460,6 +470,7 @@ describe("draft blob transport", () => {
     // it names.
     const bytes = new Uint8Array([...pngBytes(), 0x9a, 0x9b, 0x9c]);
     const hash = await sha256HexOfBytes(bytes);
+    liveLandingImageRoots.add(hash);
     signedInAs("user-a");
 
     const passthrough = localReadMocks.realPut;
@@ -467,6 +478,7 @@ describe("draft blob transport", () => {
     localReadMocks.putImageBytesAtHash.mockImplementationOnce(
       async (writtenHash, writtenBytes) => {
         const stored = await passthrough(writtenHash, writtenBytes);
+        liveLandingImageRoots.delete(writtenHash);
         signedInAs("user-b");
         return stored;
       },

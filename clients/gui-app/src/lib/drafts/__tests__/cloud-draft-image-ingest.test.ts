@@ -22,6 +22,7 @@ import {
 import { resetStashMigrationForTests } from "@/lib/drafts/stash-migration";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
 
 const INGESTING_HOST = "host-a";
 const OWNER_HOST = "host-b"; // never mirrored on this window
@@ -35,6 +36,22 @@ type FakeRequest = HostRequester<HostRpcRegistry>["request"];
 interface RecordedCall {
   readonly method: string;
   readonly params: unknown;
+}
+
+function cloudPayloadImageHash(params: unknown): string | null {
+  if (typeof params !== "object" || params === null || !("ref" in params)) {
+    return null;
+  }
+  const ref = params.ref;
+  if (
+    typeof ref !== "object" ||
+    ref === null ||
+    !("sha256" in ref) ||
+    typeof ref.sha256 !== "string"
+  ) {
+    return null;
+  }
+  return ref.sha256;
 }
 
 /**
@@ -155,12 +172,8 @@ function toBase64(bytes: Uint8Array<ArrayBuffer>): string {
   return btoa(String.fromCharCode(...bytes));
 }
 
-function bytesA(): Uint8Array<ArrayBuffer> {
-  return new Uint8Array([11, 22, 33, 44]);
-}
-
 /**
- * A DIFFERENT payload, so its digest cannot collide with `bytesA`'s. The
+ * A payload distinct from the cold-boot fixtures above. The
  * landing image store's in-memory session cache outlives
  * `installFreshIndexedDb()`, so a test asserting that bytes are ABSENT has to
  * use a hash no earlier test in this file stored.
@@ -225,16 +238,29 @@ afterEach(() => {
 });
 
 describe("ingestCloudDraftSummary - cloud image recovery", () => {
-  it("recovers bytes for a hash whose owner host has no mirror on this window (case A)", async () => {
-    const bytes = bytesA();
-    const hash = await sha256HexOf(bytes);
+  it("records six cloud image sources without reading payloads until a draft needs bytes", async () => {
+    const images = await Promise.all(
+      Array.from({ length: 6 }, async (_unused, index) => {
+        const bytes = new Uint8Array([101 + index, 201, 37, 49]);
+        return { hash: await sha256HexOf(bytes), bytes };
+      }),
+    );
+    const firstImage = images[0];
+    const imagesByHash = new Map(
+      images.map((image) => [image.hash, image] as const),
+    );
     const calls = mountIngestingHostSession((method, params) => {
       if (method === "epic.readCloudChatPayload") {
+        const hash = cloudPayloadImageHash(params);
+        const image = hash === null ? undefined : imagesByHash.get(hash);
+        if (image === undefined) {
+          throw new Error(`unexpected cloud image hash ${String(hash)}`);
+        }
         return Promise.resolve({
           outcome: {
             status: "ok" as const,
-            bytesBase64: toBase64(bytes),
-            byteLength: bytes.byteLength,
+            bytesBase64: toBase64(image.bytes),
+            byteLength: image.bytes.byteLength,
           },
         });
       }
@@ -243,25 +269,44 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
     await Promise.resolve(); // let acquireDraftMirrorSession's `list` settle
 
     const cloudSummary = summary();
-    const document = newChatDocument(cloudSummary, [hash]);
 
     await ingestCloudDraftSummary({
       hostId: INGESTING_HOST,
       // Captured where the head read was issued.
       readOwner: OWNER,
       summary: cloudSummary,
-      document,
+      document: newChatDocument(
+        cloudSummary,
+        images.map(({ hash }) => hash),
+      ),
     });
 
-    expect(await getImageBytes(hash)).toEqual(bytes);
+    // The old eager ingest issued one payload read per image. Six hashes
+    // reproduce the six reads seen during a cold boot; bootstrap now records
+    // only their cloud addresses, and leaves the cleared local image bytes
+    // absent.
+    expect(
+      calls.filter((call) => call.method === "epic.readCloudChatPayload"),
+    ).toHaveLength(0);
+    for (const { hash } of images) {
+      expect(await getImageBytes(hash)).toBeUndefined();
+    }
 
-    const readCall = calls.find(
+    // This shared demand path is used when a visible draft renders an image or
+    // submit needs to inline it. The recorded address remains usable lazily.
+    await expect(
+      resolveDraftImageBytes(firstImage.hash, {
+        hostId: null,
+        client: null,
+      }),
+    ).resolves.toEqual(firstImage.bytes);
+    const readCalls = calls.filter(
       (call) => call.method === "epic.readCloudChatPayload",
     );
-    expect(readCall).toBeDefined();
-    expect(readCall?.params).toEqual({
+    expect(readCalls).toHaveLength(1);
+    expect(readCalls[0]?.params).toEqual({
       ...cloudSummary.identity,
-      ref: { kind: "image-attachment", sha256: hash },
+      ref: { kind: "image-attachment", sha256: firstImage.hash },
     });
     // There is no mirror for the owner host, so `drafts.readBlob` - which
     // only ever targets `document.ownerHostId` - must never be requested.
@@ -469,6 +514,8 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
         summary: cloudSummary,
         document: newChatDocument(cloudSummary, [hash]),
       });
+    const resolveOnDemand = () =>
+      resolveDraftImageBytes(hash, { hostId: null, client: null });
     const payloadReads = (calls: RecordedCall[]): number =>
       calls.filter((call) => call.method === "epic.readCloudChatPayload")
         .length;
@@ -490,18 +537,22 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
     await Promise.resolve();
 
     await ingestOnce();
+    expect(payloadReads(refusingCalls)).toBe(0);
+    await expect(resolveOnDemand()).resolves.toBeNull();
     expect(payloadReads(refusingCalls)).toBe(1);
     expect(await getImageBytes(hash)).toBeUndefined();
 
-    // A second ingest against the SAME session spends no request: an old host
-    // answers this for every image, so it is remembered once.
+    // A second ingest plus another on-demand resolve against the SAME session
+    // spends no extra request: an old host answers this for every image, so
+    // the unsupported result is remembered once.
     await ingestOnce();
+    await expect(resolveOnDemand()).resolves.toBeNull();
     expect(payloadReads(refusingCalls)).toBe(1);
 
     // A new mirror session is a new host connection, so the memo is dropped
     // and a host that upgraded while this renderer stayed up is asked again -
-    // the wiring in `acquireDraftMirrorSession`. Without that reset the ingest
-    // below would spend zero requests and store nothing.
+    // the wiring in `acquireDraftMirrorSession`. The ingest remains read-free;
+    // the next on-demand resolve reaches the new session.
     releaseDraftMirrorSession(INGESTING_HOST);
     const upgradedCalls = mountIngestingHostSession((method) => {
       if (method === "epic.readCloudChatPayload") {
@@ -518,7 +569,11 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
     await Promise.resolve();
 
     await ingestOnce();
+    expect(payloadReads(upgradedCalls)).toBe(0);
+    await expect(resolveOnDemand()).resolves.toEqual(bytes);
     expect(payloadReads(upgradedCalls)).toBe(1);
-    expect(await getImageBytes(hash)).toEqual(bytes);
+    // New-chat draft bytes are returned to the waiting resolver and are not
+    // admitted to the landing image partition as a persistent root.
+    expect(await getImageBytes(hash)).toBeUndefined();
   });
 });

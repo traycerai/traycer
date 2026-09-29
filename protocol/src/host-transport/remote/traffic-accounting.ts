@@ -14,6 +14,7 @@ export interface RemoteTrafficStreamSnapshot {
   readonly frames: number;
   readonly compressedFrames: number;
   readonly incomplete: boolean;
+  /** Connection drops this stream was still open across. */
   readonly reconnects: number;
 }
 
@@ -29,6 +30,10 @@ export interface RemoteTrafficSnapshot {
   readonly unclassifiedBinaryFrames: number;
   /** New streams after the row cap remain in the unclassified residual. */
   readonly truncatedStreamRegistrations: number;
+  /**
+   * Live connections dropped into recovery. Not dial attempts: a retry that
+   * fails before it connects adds nothing, and a caller close adds nothing.
+   */
   readonly reconnects: number;
   readonly streams: ReadonlyArray<RemoteTrafficStreamSnapshot>;
 }

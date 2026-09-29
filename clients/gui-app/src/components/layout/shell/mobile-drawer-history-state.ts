@@ -1,7 +1,9 @@
 import { createContext, use, useSyncExternalStore } from "react";
 
+/** History remains eligible after either first content paint or drawer use. */
 export class FirstTaskPaintGate {
   private painted = false;
+  private drawerRequested = false;
   private readonly listeners = new Set<() => void>();
 
   readonly subscribe = (listener: () => void): (() => void) => {
@@ -9,11 +11,17 @@ export class FirstTaskPaintGate {
     return () => this.listeners.delete(listener);
   };
 
-  readonly snapshot = (): boolean => this.painted;
+  readonly snapshot = (): boolean => this.painted || this.drawerRequested;
 
   markPainted(): void {
     if (this.painted) return;
     this.painted = true;
+    for (const listener of this.listeners) listener();
+  }
+
+  markDrawerRequested(): void {
+    if (this.drawerRequested) return;
+    this.drawerRequested = true;
     for (const listener of this.listeners) listener();
   }
 }
@@ -29,4 +37,8 @@ export function useMobileDrawerTaskPainted(): boolean {
     gate?.snapshot ?? notPainted,
     notPainted,
   );
+}
+
+export function useMobileDrawerTaskPaintGate(): FirstTaskPaintGate | null {
+  return use(GateContext);
 }

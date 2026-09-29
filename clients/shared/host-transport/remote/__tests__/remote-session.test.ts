@@ -39,6 +39,7 @@ import {
   SESSION_CLOSED_FATAL_CODE,
   SESSION_NOT_READY_FATAL_CODE,
 } from "@traycer/protocol/framework/stream-ws-protocol";
+import { RemoteTrafficAccounting } from "@traycer/protocol/host-transport/remote/traffic-accounting";
 import {
   createResponderHandshake,
   generateStaticKeyPair,
@@ -107,6 +108,8 @@ import {
 } from "../active-remote-sessions";
 import {
   HOST_STATUS_LIVENESS_PROBE,
+  readRemoteTrafficDebugSnapshots,
+  REMOTE_TRAFFIC_DEBUG_STORAGE_KEY,
   RemoteSession,
   type RemoteSessionOptions,
 } from "../remote-session";
@@ -9344,6 +9347,152 @@ describe("RemoteSession host_attached always rebuilds (D1)", () => {
       }
     },
     SILENCE_PIN_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession opt-in traffic accounting", () => {
+  function createMemoryStorage(): Storage {
+    const values = new Map<string, string>();
+    return {
+      get length() {
+        return values.size;
+      },
+      clear: () => values.clear(),
+      getItem: (key) => values.get(key) ?? null,
+      key: (index) => Array.from(values.keys()).at(index) ?? null,
+      removeItem: (key) => values.delete(key),
+      setItem: (key, value) => values.set(key, value),
+    };
+  }
+
+  it("enables the debug reader from localStorage and stays off with both flags absent", () => {
+    const sessionStore = createMemoryStorage();
+    const localStore = createMemoryStorage();
+    vi.stubGlobal("sessionStorage", sessionStore);
+    vi.stubGlobal("localStorage", localStore);
+
+    try {
+      const readerCountBefore = readRemoteTrafficDebugSnapshots().length;
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("fixture-bearer", "fixture-owner");
+      const makeSession = (): RemoteSession<
+        VersionedRpcRegistry,
+        VersionedStreamRpcRegistry
+      > =>
+        new RemoteSession({
+          ...buildSessionOptions(relay, lease, null),
+          streamRegistry: cursorStreamRegistry,
+        });
+
+      expect(sessionStore.getItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY)).toBeNull();
+      expect(localStore.getItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY)).toBeNull();
+      const noOptInSession = makeSession();
+      try {
+        expect(noOptInSession.readTrafficSnapshot()).toBeNull();
+        expect(readRemoteTrafficDebugSnapshots()).toHaveLength(
+          readerCountBefore,
+        );
+      } finally {
+        noOptInSession.close();
+      }
+
+      localStore.setItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY, "1");
+      const localOptInSession = makeSession();
+      try {
+        expect(localOptInSession.readTrafficSnapshot()).not.toBeNull();
+        const readers = readRemoteTrafficDebugSnapshots();
+        expect(readers).toHaveLength(readerCountBefore + 1);
+        expect(readers.at(-1)?.captureSession).toBe(readerCountBefore);
+      } finally {
+        localOptInSession.close();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it(
+    "keeps the accounting tracker absent while an ordinary session receives frames",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const realDateNow = Date.now.bind(Date);
+      const accountingClockReads: string[] = [];
+      const diagnosticClock = vi.spyOn(Date, "now").mockImplementation(() => {
+        const stack = new Error().stack ?? "";
+        if (stack.includes("traffic-accounting.ts")) {
+          accountingClockReads.push(stack);
+        }
+        return realDateNow();
+      });
+      const accountingMethodSpies = [
+        vi.spyOn(RemoteTrafficAccounting.prototype, "register"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "receiveBinary"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "receiveText"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "classifyHandshake"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "classifyMux"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "end"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "connectionLost"),
+      ];
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      let receivedFrames = 0;
+      stream.onServerFrame(() => {
+        receivedFrames += 1;
+      });
+
+      try {
+        // The debug switch is the only implicit opt-in. With it off, even a
+        // real handshake and repeated in-channel frames must not instantiate
+        // the per-session counter or create snapshots/rows on the hot path.
+        // This suite runs in Node without either browser storage, so the
+        // diagnostic switch remains off. The accounting constructor's
+        // `startedAt` stamp and receiveBinary's elapsed-time stamp are the only
+        // accounting clock reads; asserting no accounting stack reaches Date.now
+        // plus no method calls pins the disabled path.
+        expect(session.readTrafficSnapshot()).toBeNull();
+        expect(accountingClockReads).toEqual([]);
+        session.start();
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+        if (streamId === undefined) {
+          throw new Error("expected the cursor subscription to open");
+        }
+
+        for (let index = 0; index < 8; index += 1) {
+          await relay.sendStreamFrame(
+            streamId,
+            { kind: "snapshot", hasBinaryPayload: false },
+            null,
+            QosClass.INTERACTIVE,
+          );
+        }
+        await vi.waitFor(() => expect(receivedFrames).toBe(8), WAIT);
+
+        expect(session.readTrafficSnapshot()).toBeNull();
+        for (const spy of accountingMethodSpies) {
+          expect(spy).not.toHaveBeenCalled();
+        }
+        expect(accountingClockReads).toEqual([]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        stream.close();
+        session.close();
+        for (const spy of accountingMethodSpies) spy.mockRestore();
+        diagnosticClock.mockRestore();
+      }
+    },
+    TEST_BUDGET_MS,
   );
 });
 

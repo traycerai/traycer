@@ -37,7 +37,7 @@ export const HOST_STATUS_LIVENESS_PROBE: SessionLivenessProbe = {
   params: {},
 };
 
-/** Set to `1` in sessionStorage before reload; absent in ordinary sessions. */
+/** Set to `1` in sessionStorage for reloads or localStorage for app relaunches. */
 export const REMOTE_TRAFFIC_DEBUG_STORAGE_KEY = "traycer:remote-traffic-debug";
 
 const debugReaders: Array<() => RemoteTrafficSnapshot | null> = [];
@@ -54,7 +54,14 @@ export function readRemoteTrafficDebugSnapshots(): ReadonlyArray<
 
 function remoteTrafficDebugEnabled(): boolean {
   try {
-    return sessionStorage.getItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY) === "1";
+    if (sessionStorage.getItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY) === "1") {
+      return true;
+    }
+  } catch {
+    // A denied session store must not hide a persistent diagnostic opt-in.
+  }
+  try {
+    return localStorage.getItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY) === "1";
   } catch {
     return false;
   }
@@ -121,12 +128,15 @@ export class RemoteSession<
       unaryResponseMs: UNARY_RESPONSE_TIMEOUT_MS,
     });
     if (remoteTrafficDebugEnabled() && this.enableTrafficAccounting()) {
-      debugReaders.push(() => this.readTrafficSnapshot());
-      if (debugReaders.length > 32) {
-        debugReaders.shift();
-        droppedDebugSessions += 1;
+      const reader = this.trafficSnapshotReader();
+      if (reader !== null) {
+        debugReaders.push(reader);
+        if (debugReaders.length > 32) {
+          debugReaders.shift();
+          droppedDebugSessions += 1;
+        }
+        installRemoteTrafficDebugSurface();
       }
-      installRemoteTrafficDebugSurface();
     }
   }
 }

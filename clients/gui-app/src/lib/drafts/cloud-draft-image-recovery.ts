@@ -751,12 +751,13 @@ async function verifyAndMaybeStoreCloudImage(
 ): Promise<"stored" | "ephemeral" | "invalid"> {
   // Stash conversion has no root yet. A full partition also cannot gain a
   // session/IDB entry. Both get verified bytes for the waiting caller only.
+  // Verify before reserving so a concurrent corrupt reply cannot claim this
+  // hash's residency at a smaller size than the valid bytes would need.
+  if ((await sha256Hex(bytes)) !== hash) return "invalid";
   const reservation = landingLiveImageRootHashes().has(hash)
     ? tryReserveLandingImageResidency([{ hash, bytes: bytes.byteLength }])
     : null;
-  if (reservation === null) {
-    return (await sha256Hex(bytes)) === hash ? "ephemeral" : "invalid";
-  }
+  if (reservation === null) return "ephemeral";
   try {
     return (await putImageBytesAtHash(hash, bytes)) ? "stored" : "invalid";
   } finally {

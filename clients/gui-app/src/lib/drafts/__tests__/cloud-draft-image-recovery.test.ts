@@ -6,6 +6,7 @@ import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import {
   getImageBytes,
   sessionImageBytes,
@@ -69,6 +70,15 @@ vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
  * the identity it was minted under and is not spendable under another.
  */
 const OWNER = "user-1";
+
+const liveLandingImageRoots = new Set<string>();
+registerExtraImageRootSource({
+  hashes: () => [...liveLandingImageRoots],
+});
+
+function rootLandingImages(...hashes: string[]): void {
+  for (const hash of hashes) liveLandingImageRoots.add(hash);
+}
 
 const IDENTITY: CloudChatIdentity = {
   taskId: "scp_1",
@@ -159,6 +169,7 @@ function bytesB(): Uint8Array<ArrayBuffer> {
 
 beforeEach(() => {
   installFreshIndexedDb();
+  liveLandingImageRoots.clear();
   useAuthStore.setState({
     status: "signed-in",
     // The store guarantees non-null `contextMetadata` in every signed-in
@@ -172,6 +183,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetCloudDraftImageRecoveryForTests();
+  liveLandingImageRoots.clear();
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
@@ -180,6 +192,7 @@ describe("cloud-draft-image-recovery", () => {
     const bytes = bytesA();
     const hash = await sha256HexOf(bytes);
     const { client, calls } = okClient(toBase64(bytes), bytes.byteLength);
+    rootLandingImages(hash);
 
     recordCloudDraftImageSources({
       identity: IDENTITY,
@@ -210,6 +223,7 @@ describe("cloud-draft-image-recovery", () => {
     const bytes = bytesA();
     const hash = await sha256HexOf(bytes);
     const { client } = okClient(toBase64(bytes), bytes.byteLength);
+    rootLandingImages(hash);
 
     recordCloudDraftImageSources({
       identity: IDENTITY,
@@ -247,6 +261,7 @@ describe("cloud-draft-image-recovery", () => {
     // above would go red if verification were removed.
     const goodBytes = bytesB();
     const goodHash = await sha256HexOf(goodBytes);
+    rootLandingImages(goodHash);
     const { client: matchClient } = okClient(
       toBase64(goodBytes),
       goodBytes.byteLength,
@@ -282,17 +297,19 @@ describe("cloud-draft-image-recovery", () => {
       });
     });
 
-    await recoverCloudDraftImages({
+    const recovered = await recoverCloudDraftImages({
       identity: IDENTITY,
       hostId: "host-a",
       client,
       hashes: [missingHash, availableHash],
     });
 
+    expect(recovered.has(missingHash)).toBe(false);
+    expect(recovered.get(availableHash)).toEqual(availableBytes);
     expect(await getImageBytes(missingHash)).toBeUndefined();
-    // Sibling hash in the same eager pass: proves the pass ran to completion
-    // rather than dying on the first miss.
-    expect(await getImageBytes(availableHash)).toEqual(availableBytes);
+    // An explicit recovery can return verified bytes to its waiting caller,
+    // while an unrooted hash stays out of persistent landing-image storage.
+    expect(await getImageBytes(availableHash)).toBeUndefined();
   });
 
   it("never throws: a transport rejection answers null through both the lazy leg and the eager pass", async () => {
@@ -318,7 +335,7 @@ describe("cloud-draft-image-recovery", () => {
         client,
         hashes: [hash],
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(new Map());
   });
 
   it("issues no request for an unrecorded hash, paired with a recorded hash that does", async () => {
@@ -464,6 +481,7 @@ describe("cloud-draft-image-recovery", () => {
     const localHash = await sha256HexOf(localBytes);
     const remoteBytes = bytesB();
     const remoteHash = await sha256HexOf(remoteBytes);
+    rootLandingImages(localHash, remoteHash);
 
     // Pre-seed the partition for `localHash` via a first, independent
     // recovery (exercises real production code, not a store bypass).
@@ -557,6 +575,7 @@ describe("cloud-draft-image-recovery", () => {
     // permanently unreachable.
     const bytes = bytesA();
     const hash = await sha256HexOf(bytes);
+    rootLandingImages(hash);
 
     const good = recordingClient((_method, _params) => ({
       outcome: {
@@ -951,6 +970,7 @@ describe("cloud-draft-image-recovery", () => {
       status: "signed-in",
       contextMetadata: { userId: OWNER, username: OWNER },
     });
+    rootLandingImages(hash);
 
     const { client } = okClient(toBase64(bytes), bytes.byteLength);
     recordCloudDraftImageSources({
@@ -968,6 +988,7 @@ describe("cloud-draft-image-recovery", () => {
         // The switch lands after the bytes are durable and before the caller
         // is answered - the window the pre-write check cannot see.
         useAuthStore.setState(useAuthStore.getInitialState(), true);
+        liveLandingImageRoots.delete(hash);
         return stored;
       },
     );
@@ -995,6 +1016,7 @@ describe("cloud-draft-image-recovery", () => {
       status: "signed-in",
       contextMetadata: { userId: OWNER, username: OWNER },
     });
+    rootLandingImages(hash);
 
     const { client } = okClient(toBase64(bytes), bytes.byteLength);
     recordCloudDraftImageSources({
@@ -1013,6 +1035,7 @@ describe("cloud-draft-image-recovery", () => {
           status: "signed-in",
           contextMetadata: { userId: "user-other", username: "other" },
         });
+        liveLandingImageRoots.delete(hash);
         return stored;
       },
     );

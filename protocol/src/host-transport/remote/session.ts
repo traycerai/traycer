@@ -1196,6 +1196,12 @@ export class RemoteSession<
     return this.traffic?.snapshot() ?? null;
   }
 
+  /** A debug reader bound only to accounting, never to this session's auth. */
+  protected trafficSnapshotReader(): (() => RemoteTrafficSnapshot) | null {
+    const accounting = this.traffic;
+    return accounting === null ? null : accounting.snapshot.bind(accounting);
+  }
+
   /** Kicks off the first connect if the session is idle. Idempotent. */
   start(): void {
     if (this.phase === "idle") {
@@ -2090,6 +2096,7 @@ export class RemoteSession<
       connection.scheduler.dropStreamOutbound(streamId);
       connection.reassembler.forget(streamId);
       this.markStreamTerminal(streamId);
+      this.traffic?.end(streamId, true);
       this.subscriptions.delete(streamId);
       this.restoredStreamIds.delete(streamId);
       const nextSeq = this.retireOutboundSeq(streamId);
@@ -2605,6 +2612,7 @@ export class RemoteSession<
       connection.reassembler.forget(frame.streamId);
     }
     this.markStreamTerminal(frame.streamId);
+    this.traffic?.end(frame.streamId, true);
     // Retired BEFORE the enqueue even though the delete used to sit below
     // it: the CLOSE draws its seq when the scheduler pulls, which is after
     // every synchronous line of this method, so a delete anywhere in here
@@ -2826,7 +2834,7 @@ export class RemoteSession<
         // across re-keys, and the old id stays tombstoned so relay-delayed
         // frames from before the verdict remain dead.
         this.subscriptions.delete(message.streamId);
-        this.traffic?.end(message.streamId, false);
+        this.traffic?.end(message.streamId, true);
         const reopenAttempts = this.streamReopenAttempts.get(message.streamId);
         this.streamReopenAttempts.delete(message.streamId);
         const freshStreamId = this.allocateStreamId();
@@ -2850,7 +2858,7 @@ export class RemoteSession<
         return;
       }
       stream.goFatal(details);
-      this.traffic?.end(message.streamId, false);
+      this.traffic?.end(message.streamId, true);
       this.subscriptions.delete(message.streamId);
       this.restoredStreamIds.delete(message.streamId);
       this.outboundSeq.delete(message.streamId);
@@ -3222,6 +3230,7 @@ export class RemoteSession<
   ): void {
     connection.reassembler.forget(streamId);
     this.markStreamTerminal(streamId);
+    this.traffic?.end(streamId, true);
     this.restoredStreamIds.delete(streamId);
     const nextSeq = this.retireOutboundSeq(streamId);
     this.subscriptions.delete(streamId);
@@ -3577,6 +3586,7 @@ export class RemoteSession<
           hostShouldUpgrade: true,
         },
       });
+      this.traffic?.end(stream.streamId, true);
       this.subscriptions.delete(stream.streamId);
       return;
     }
@@ -3622,6 +3632,7 @@ export class RemoteSession<
           )
         : compat.details;
       stream.goFatal(details);
+      this.traffic?.end(stream.streamId, true);
       this.subscriptions.delete(stream.streamId);
       this.stallReopenedStreamIds.delete(stream.streamId);
       return;

@@ -807,12 +807,14 @@ async function storeRecoveredHostBlob(
 ): Promise<"stored" | "ephemeral" | "invalid"> {
   // An unrooted pre-apply read and a full partition may hand verified bytes
   // to this caller, but must not create a resident session/IDB entry.
+  // Verify before reserving: overlapping replies for this hash can have
+  // different lengths until their digests have been checked. An unverified
+  // smaller reply must not reserve on behalf of a larger valid reply.
+  if ((await sha256Hex(bytes)) !== hash) return "invalid";
   const reservation = landingLiveImageRootHashes().has(hash)
     ? tryReserveLandingImageResidency([{ hash, bytes: bytes.byteLength }])
     : null;
-  if (reservation === null) {
-    return (await sha256Hex(bytes)) === hash ? "ephemeral" : "invalid";
-  }
+  if (reservation === null) return "ephemeral";
   try {
     return (await putImageBytesAtHash(hash, bytes)) ? "stored" : "invalid";
   } finally {

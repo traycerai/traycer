@@ -24,6 +24,7 @@ import { ArtifactAttachmentScopeContext } from "@/lib/attachments/artifact-attac
 import { useArtifactAttachmentScopeValue } from "@/lib/attachments/use-artifact-attachment-scope-value";
 import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { MobileDrawerVisibleTilePaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 import { collabTileNotice } from "./collab-tile-availability-copy";
 import { TILE_CONTENT_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
 import { LINK_DOWN_ESCALATION_MS } from "@/lib/link-down-escalation";
@@ -735,6 +736,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   // the document instead of holding the tile edge.
   return (
     <div className="relative flex h-full min-h-0 w-full flex-col">
+      <MobileDrawerVisibleTilePaintReporter ready={editor !== null} />
       <CollabTileBodySyncStrip artifactId={node.id} testId={testId} />
       <ArtifactHeadingMinimapMount
         editor={editor}
