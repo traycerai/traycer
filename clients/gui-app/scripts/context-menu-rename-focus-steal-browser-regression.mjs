@@ -1,6 +1,7 @@
 // Real-Chrome regression for the "Edit Title" pointer-drift focus steal (see
 // the fixture doc comment). Structure follows `destructive-dialog-focus-
-// browser.mjs`. Not wired into `scripts/run-tests.ts` - run it directly:
+// browser.mjs`. Not wired into `scripts/run-browser-regressions.ts` - run it
+// directly:
 //   bun run scripts/context-menu-rename-focus-steal-browser-regression.mjs
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
