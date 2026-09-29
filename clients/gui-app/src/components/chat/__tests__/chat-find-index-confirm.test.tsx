@@ -502,6 +502,8 @@ function renderFind(input: {
       getNavigationGeneration,
       setScrolledActiveUserMessageIdIfChanged:
         callbacks.setScrolledActiveUserMessageIdIfChanged,
+      openSubagentId: null,
+      getSubagentViewRoot: () => null,
     });
     useChatFindIndexFeed({
       client: input.client,
@@ -2191,6 +2193,59 @@ function assistantSegmentsRowSpec(input: {
 // the same message - so the row cannot pass vacuously.
 // ===========================================================================
 
+// Not a census row: a subagent-owned tool call's inputSummary IS painted - the
+// card draws its conversation, the nested tool's header among it - so the
+// hydrated projection carries it and an index hit on it is confirmed like any
+// painted text. Pinned below so the case cannot drift back into the census.
+const SUBAGENT_NESTED_TOOL_MODEL: ChatMessageModel = assistantSegmentsRow({
+  rowId: "assistant:t-subagent-tool",
+  persistentMessageId: "a-subagent-tool",
+  createdAt: 5,
+  segments: [
+    {
+      id: "subagent-1",
+      kind: "subagent",
+      name: "Researcher",
+      agentType: "analysis",
+      task: "Investigate",
+      progressUpdates: [],
+      result: null,
+      isStreaming: false,
+      endState: null,
+      stopped: false,
+      startedAt: 1,
+      durationMs: null,
+      spawnToolCallId: null,
+      parentId: null,
+      workflowMeta: null,
+      children: [
+        {
+          id: "nested-tool-1",
+          kind: "tool",
+          toolName: "grep",
+          inputSummary: "grep needle in nested tool",
+          inputDetail: null,
+          taskTodoItems: null,
+          error: null,
+          agentMessageSend: null,
+          managedCommand: null,
+          agentMessageReceipt: null,
+          isStreaming: false,
+          endState: null,
+          stopped: false,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          imageResults: [],
+          durationMs: null,
+          startedAt: 0,
+          parentId: "subagent-1",
+        },
+      ],
+    },
+  ],
+});
+
 interface CensusRow {
   readonly name: string;
   readonly indexText: string;
@@ -2241,65 +2296,7 @@ const CENSUS_ROWS: ReadonlyArray<CensusRow> = [
     }),
   },
   {
-    // 3. A subagent-owned tool call's inputSummary, nested in the subagent's
-    // `children`. `subagentSegmentSearchUnits`'s children loop only produces
-    // units for nested "subagent" and "provider_notice" children - a "tool"
-    // child (or file_change/command) yields nothing at all.
-    name: "a subagent-owned tool call's inputSummary (nested child)",
-    indexText: "grep needle in nested tool",
-    indexTier: "card",
-    query: "needle",
-    hydratedModel: assistantSegmentsRow({
-      rowId: "assistant:t-subagent-tool",
-      persistentMessageId: "a-subagent-tool",
-      createdAt: 5,
-      segments: [
-        {
-          id: "subagent-1",
-          kind: "subagent",
-          name: "Researcher",
-          agentType: "analysis",
-          task: "Investigate",
-          progressUpdates: [],
-          result: null,
-          isStreaming: false,
-          endState: null,
-          stopped: false,
-          startedAt: 1,
-          durationMs: null,
-          spawnToolCallId: null,
-          parentId: null,
-          workflowMeta: null,
-          children: [
-            {
-              id: "nested-tool-1",
-              kind: "tool",
-              toolName: "grep",
-              inputSummary: "grep needle in nested tool",
-              inputDetail: null,
-              taskTodoItems: null,
-              error: null,
-              agentMessageSend: null,
-              managedCommand: null,
-              agentMessageReceipt: null,
-              isStreaming: false,
-              endState: null,
-              stopped: false,
-              progress: null,
-              backgroundOutput: null,
-              backgroundTask: false,
-              imageResults: [],
-              durationMs: null,
-              startedAt: 0,
-              parentId: "subagent-1",
-            },
-          ],
-        },
-      ],
-    }),
-  },
-  {
-    // 4. A markdown link target: `[text](url)` - `tokenToText` for a "link"
+    // 3. A markdown link target: `[text](url)` - `tokenToText` for a "link"
     // token returns the LABEL's tokens, never the href.
     name: "a markdown link's URL, [text](url)",
     indexText: "see https://example.com/needle for details",
@@ -2320,7 +2317,7 @@ const CENSUS_ROWS: ReadonlyArray<CensusRow> = [
     }),
   },
   {
-    // 5. A TRAYCER_NEXT_STEPS option line - find indexes only the prose
+    // 4. A TRAYCER_NEXT_STEPS option line - find indexes only the prose
     // (`part.prose`), never an option's own `prompt` text.
     name: "a TRAYCER_NEXT_STEPS option line's own text",
     indexText: "pick the needle option next",
@@ -2349,7 +2346,7 @@ const CENSUS_ROWS: ReadonlyArray<CensusRow> = [
     }),
   },
   {
-    // 6. A `$`-written skill chip - literal fixture copied from
+    // 5. A `$`-written skill chip - literal fixture copied from
     // chat-find-projection.test.ts's own "$-triggered chip" cell: the index
     // holds the canonical `/name`, the rendered chip is `$name`.
     name: "a $-written skill chip (index holds /name, DOM paints $name)",
@@ -2379,7 +2376,7 @@ const CENSUS_ROWS: ReadonlyArray<CensusRow> = [
     },
   },
   {
-    // 7. A `fallback_applied` notice's `message` field - only the title is
+    // 6. A `fallback_applied` notice's `message` field - only the title is
     // painted (`providerNoticeSegmentSearchText`'s `fallback_applied` branch
     // discards `message`).
     name: "a fallback_applied notice's message field",
@@ -2407,7 +2404,7 @@ const CENSUS_ROWS: ReadonlyArray<CensusRow> = [
     }),
   },
   {
-    // 8. A settled card's absorbed anchor error: `routingSettledNoticeId` +
+    // 7. A settled card's absorbed anchor error: `routingSettledNoticeId` +
     // `manualRungAnchorId` pair the notice with the error segment on the same
     // row; `settledCardSearchUnits` returns `[]` for the anchor segment
     // itself (`segment.id === settled.anchorId`) - its error message is
@@ -2494,6 +2491,20 @@ describe("chat find: census of index text the transcript does not paint", () => 
     restoreFrames();
     scroller.remove();
     vi.restoreAllMocks();
+  });
+
+  it("a subagent-owned tool call's inputSummary is painted, so the hydrated projection carries it", () => {
+    const units = buildChatFindRows(
+      [SUBAGENT_NESTED_TOOL_MODEL],
+      TILE_INSTANCE_ID,
+      EMPTY_PROMOTED,
+      { hideReasoning: false, queuePauseReasonProtocolSupported: null },
+    ).flatMap((projectedRow) => projectedRow.units);
+    expect(
+      units.some((unit) =>
+        asciiLower(unit.text).includes("grep needle in nested tool"),
+      ),
+    ).toBe(true);
   });
 
   it.each(CENSUS_ROWS.map((row) => [row.name, row] as const))(

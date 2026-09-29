@@ -7,10 +7,9 @@
 // handler that rejected only the connect, and no per-command deadline. A
 // Chrome crash or a dropped DevTools socket then left `send()` pending
 // forever, the driver never reached its `finally` to terminate Chrome and
-// Vite, and the runner (`run-browser-regressions.ts`, which spawns each driver
-// without a timeout) held the CI job until the job's own limit, hiding the real
-// error. The copies that had been hardened each did it differently. This is
-// the one hardened client.
+// Vite, and the run hung instead of failing, hiding the real error. The copies
+// that had been hardened each did it differently. This is the one hardened
+// client.
 
 const CONNECT_TIMEOUT_MS = 15_000;
 // A command's own ceiling. Every page-side wait the drivers evaluate is under a

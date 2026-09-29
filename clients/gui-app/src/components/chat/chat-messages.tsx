@@ -126,6 +126,11 @@ import {
   subagentOpenInitializedScopes,
   useSubagentOpenStore,
 } from "@/stores/chats/subagent-open-store";
+import {
+  OpenSubagentAsChatContext,
+  useSubagentDrillIn,
+} from "@/components/chat/segments/subagent-open-as-chat";
+import { SubagentChatView } from "@/components/chat/subagent-chat-view";
 import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
 import { LayoutClusterContextMenu } from "@/components/layout-editor/region-quick-verbs";
 import { useArrangementValue, useRegionShown } from "@/lib/layout-overrides";
@@ -2079,6 +2084,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const followLatchRef = useRef<ChatTimelineFollowLatch | null>(null);
   const minimapInViewRefreshRef = useRef<() => void>(() => undefined);
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
+  // The open-as-chat view's scroll area while a card is open (`null` while the
+  // transcript shows): the scroll keys and chat find address it instead of the
+  // timeline it covers.
+  const subagentViewScrollRef = useRef<HTMLDivElement | null>(null);
   // Width AND typography invalidate every remembered height at once - see
   // `observeLayoutBasis`. A ResizeObserver on the container rather than React
   // state, for the reason the memory itself is not state: a resize must not
@@ -2569,10 +2578,20 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   const handleKeyDownCapture = useCallback(
     (event: globalThis.KeyboardEvent): void => {
-      const scroller = chatTimelineRef.current?.getScrollableNode();
-      if (!scroller) return;
       const scrollAction = chatKeyboardScrollAction(event);
       if (scrollAction === null) return;
+      // An open-as-chat view covers the timeline: the keys scroll the
+      // conversation the reader is looking at, and the timeline's follow state
+      // is left exactly as it was.
+      const drillInScroller = subagentViewScrollRef.current;
+      if (drillInScroller !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        applyChatKeyboardScroll(drillInScroller, scrollAction);
+        return;
+      }
+      const scroller = chatTimelineRef.current?.getScrollableNode();
+      if (!scroller) return;
       event.preventDefault();
       event.stopPropagation();
       // Freeze an owned native smooth-scroll at its current pixel first, then
@@ -3846,6 +3865,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     [],
   );
 
+  // Open-as-chat: a card's conversation drawn over the transcript, inside
+  // this tile. Declared before find, which searches only that conversation
+  // while it is open.
+  const subagentDrillIn = useSubagentDrillIn();
+  const { close: closeSubagentDrillIn } = subagentDrillIn;
+  const getSubagentViewRoot = useCallback(
+    (): HTMLElement | null => subagentViewScrollRef.current,
+    [],
+  );
+
   const {
     onRenderedDataChange: onChatFindRenderedDataChange,
     scheduleMountedHighlightSync: scheduleChatFindMountedHighlightSync,
@@ -3869,6 +3898,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     cancelManualNavigation: cancelManualNavigationForFind,
     getNavigationGeneration: getReaderNavigationGeneration,
     setScrolledActiveUserMessageIdIfChanged,
+    openSubagentId: subagentDrillIn.openId,
+    getSubagentViewRoot,
   });
   useLayoutEffect(() => {
     findLandingSettledRef.current = onChatFindTranscriptLandingSettled;
@@ -3927,6 +3958,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     if (request === null) return;
     if (handledScrollRequestIdRef.current === request.requestId) return;
     handledScrollRequestIdRef.current = request.requestId;
+    // A jump from outside the tile targets the transcript: an open-as-chat
+    // view covering it would hide where the jump lands.
+    closeSubagentDrillIn();
     if (request.kind === "end") {
       scrollToEnd(true);
       scrollRequestRef.current = null;
@@ -3985,6 +4019,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   }, [
     activityGroupOpenStore,
     cancelTimelineLiveFollowForUserNavigation,
+    closeSubagentDrillIn,
     identity,
     scrollRequest?.requestId,
     scrollToEnd,
@@ -4046,6 +4081,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     unseenCompletion: hasUnseenTurnCompletion,
     workingVerb,
   });
+  // The rail navigates the transcript, which an open-as-chat view covers; it
+  // would float over that view (z-40), so it steps aside until the view closes.
+  const showTurnMinimap =
+    subagentDrillIn.openId === null &&
+    shouldMountChatTurnMinimap({
+      hasContent,
+      shown: minimapShown,
+      mobileViewport: isMobileViewport,
+    });
 
   return (
     <ChatOpenStoreScopeProvider value={instanceId}>
@@ -4054,93 +4098,112 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             pointer (G3-10): timestamps, activity rows and reasoning blocks
             repeat on every message, and a root per item was a Radix menu per
             row of a long chat. The minimap is inside it too (L-144). */}
-        <LayoutClusterContextMenu>
-          <div
-            ref={transcriptContainerRef}
-            data-testid="chat-transcript-container"
-            // Ctrl/Cmd+A selects the transcript, not the whole window (#592).
-            // Marked here rather than on the chat tile's transcript wrapper: that
-            // wrapper also holds the absolutely-positioned lower-surfaces dock
-            // (composer, approvals, todo), which must stay out of the selection.
-            // The timeline is virtualized, so this covers the mounted rows.
-            data-selection-root=""
-            onPointerDown={handleTranscriptPointerDown}
-            className="relative flex-1 overflow-hidden"
-          >
-            <ChatTimeline
-              rows={listRows}
-              onVisibleRowRangeChange={onChatTimelineVisibleRowsChange}
-              taskTitle={taskTitle}
-              backgroundToolBlockIds={backgroundToolBlockIds}
-              getMessageActions={getMessageActions}
-              nextStepActions={nextStepActions}
-              listRef={chatTimelineRef}
-              onScroll={handleScroll}
-              initialScrollAtEnd={initialScrollAtEnd}
-              initialScrollIndex={initialScrollIndexAnchor}
-              contentInsetEndAdjustment={endInset}
-              onFollowIntentChange={onFollowIntentChange}
-              onReaderGesture={handleTimelineReaderGesture}
-              followLatchRef={followLatchRef}
-              isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
-              resolveSuppressedEndLanding={resolveSuppressedEndLanding}
-              navigationHighlightedMessageId={
-                navigationHighlight?.messageId ?? null
+        <OpenSubagentAsChatContext.Provider value={subagentDrillIn.open}>
+          <LayoutClusterContextMenu>
+            <div
+              ref={transcriptContainerRef}
+              data-testid="chat-transcript-container"
+              // Ctrl/Cmd+A selects the transcript, not the whole window (#592).
+              // Marked here rather than on the chat tile's transcript wrapper: that
+              // wrapper also holds the absolutely-positioned lower-surfaces dock
+              // (composer, approvals, todo), which must stay out of the selection.
+              // The timeline is virtualized, so this covers the mounted rows.
+              // While an open-as-chat view covers it the view declares the root
+              // instead (an outer root would shadow it), so Ctrl/Cmd+A selects
+              // the conversation on screen, not the transcript underneath.
+              data-selection-root={
+                subagentDrillIn.openId === null ? "" : undefined
               }
-              navigationHighlightedBlockId={
-                navigationHighlight?.blockId ?? null
-              }
-              rowHeightMemory={rowHeightMemory}
-              onItemSizeChanged={onChatTimelineItemSizeChanged}
-              onRowMount={onChatTimelineRowMount}
-              onListMetricsChange={onListMetricsChange}
-              data-testid="chat-messages-scroll"
-              data-scroll-mode={scrollMode}
-            />
-            {/* The minimap rail is untappable on touch and its hover-expand
+              onPointerDown={handleTranscriptPointerDown}
+              className="relative flex-1 overflow-hidden"
+            >
+              {/* What an open-as-chat view covers is inert while it is open:
+                  covering it is visual only, so without this Shift+Tab walks
+                  back into the hidden timeline and a screen reader reads both
+                  conversations. `contents` leaves the layout untouched. The
+                  quote popover stays outside: it serves selections in the
+                  view too. Closing drops `inert` in the same commit, before
+                  the view's layout effect returns focus to the open control. */}
+              <div className="contents" inert={subagentDrillIn.openId !== null}>
+                <ChatTimeline
+                  rows={listRows}
+                  onVisibleRowRangeChange={onChatTimelineVisibleRowsChange}
+                  taskTitle={taskTitle}
+                  backgroundToolBlockIds={backgroundToolBlockIds}
+                  getMessageActions={getMessageActions}
+                  nextStepActions={nextStepActions}
+                  listRef={chatTimelineRef}
+                  onScroll={handleScroll}
+                  initialScrollAtEnd={initialScrollAtEnd}
+                  initialScrollIndex={initialScrollIndexAnchor}
+                  contentInsetEndAdjustment={endInset}
+                  onFollowIntentChange={onFollowIntentChange}
+                  onReaderGesture={handleTimelineReaderGesture}
+                  followLatchRef={followLatchRef}
+                  isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
+                  resolveSuppressedEndLanding={resolveSuppressedEndLanding}
+                  navigationHighlightedMessageId={
+                    navigationHighlight?.messageId ?? null
+                  }
+                  navigationHighlightedBlockId={
+                    navigationHighlight?.blockId ?? null
+                  }
+                  rowHeightMemory={rowHeightMemory}
+                  onItemSizeChanged={onChatTimelineItemSizeChanged}
+                  onRowMount={onChatTimelineRowMount}
+                  onListMetricsChange={onListMetricsChange}
+                  data-testid="chat-messages-scroll"
+                  data-scroll-mode={scrollMode}
+                />
+                {/* The minimap rail is untappable on touch and its hover-expand
                 never fires; hide it below md and reclaim the right edge.
                 `contents` keeps the absolutely-positioned rail's layout
                 identical on desktop (>=768px). The `side` setting is a user
                 preference, not a viewport rule, so it cannot stand in for this. */}
-            {shouldMountChatTurnMinimap({
-              hasContent,
-              shown: minimapShown,
-              mobileViewport: isMobileViewport,
-            }) ? (
-              <div className="contents max-md:hidden">
-                <ChatTurnMinimap
-                  ref={minimapHotspotRef}
-                  rows={listRows}
-                  transcriptWindow={transcriptWindow}
-                  inViewRefreshRef={minimapInViewRefreshRef}
-                  listRef={chatTimelineRef}
-                  topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
-                  viewportRef={transcriptContainerRef}
-                  bottomInset={endInset}
-                  onSelect={onMinimapItemSelect}
-                  shown={minimapShown}
-                  side={minimapSide}
-                />
+                {showTurnMinimap ? (
+                  <div className="contents max-md:hidden">
+                    <ChatTurnMinimap
+                      ref={minimapHotspotRef}
+                      rows={listRows}
+                      transcriptWindow={transcriptWindow}
+                      inViewRefreshRef={minimapInViewRefreshRef}
+                      listRef={chatTimelineRef}
+                      topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
+                      viewportRef={transcriptContainerRef}
+                      bottomInset={endInset}
+                      onSelect={onMinimapItemSelect}
+                      shown={minimapShown}
+                      side={minimapSide}
+                    />
+                  </div>
+                ) : null}
+                {hasContent ? (
+                  <ScrollToEndPill
+                    state={scrollToEndPillState}
+                    onClick={() => scrollToEnd(true)}
+                    bottomOffsetPx={endInset + 4}
+                  />
+                ) : null}
               </div>
-            ) : null}
-            {hasContent ? (
-              <ScrollToEndPill
-                state={scrollToEndPillState}
-                onClick={() => scrollToEnd(true)}
-                bottomOffsetPx={endInset + 4}
+              {quoteSelection.snapshot !== null ? (
+                <QuoteSelectionPopover
+                  taskId={taskId}
+                  snapshot={quoteSelection.snapshot}
+                  onDismiss={quoteSelection.dismiss}
+                  boundaryRef={transcriptContainerRef}
+                  bottomOverlayInsetPx={endInset}
+                />
+              ) : null}
+              <SubagentChatView
+                drillIn={subagentDrillIn}
+                messages={messages}
+                bottomInset={endInset}
+                scrollRef={subagentViewScrollRef}
+                transcriptRef={transcriptContainerRef}
               />
-            ) : null}
-            {quoteSelection.snapshot !== null ? (
-              <QuoteSelectionPopover
-                taskId={taskId}
-                snapshot={quoteSelection.snapshot}
-                onDismiss={quoteSelection.dismiss}
-                boundaryRef={transcriptContainerRef}
-                bottomOverlayInsetPx={endInset}
-              />
-            ) : null}
-          </div>
-        </LayoutClusterContextMenu>
+            </div>
+          </LayoutClusterContextMenu>
+        </OpenSubagentAsChatContext.Provider>
         {hostId !== null && transcriptWindow !== null ? (
           <>
             <ChatFindIndexSource

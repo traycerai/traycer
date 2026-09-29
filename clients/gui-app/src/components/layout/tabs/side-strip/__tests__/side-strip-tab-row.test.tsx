@@ -60,6 +60,8 @@ function reportRatio(ratio: number): void {
   });
 }
 
+const EDGES: ReadonlyArray<EdgeSide> = ["left", "right"];
+
 const EPIC_TAB: Extract<HeaderTab, { kind: "epic" }> = {
   kind: "epic",
   id: "e-joined",
@@ -74,6 +76,17 @@ const EPIC_TAB: Extract<HeaderTab, { kind: "epic" }> = {
   appearance: null,
 };
 
+/** The layout editor's session tab: its own solid amber object, never joined (audit F2). */
+const SAMPLE_WORKSPACE_TAB: Extract<HeaderTab, { kind: "sample-workspace" }> = {
+  kind: "sample-workspace",
+  id: "s-session",
+  route: "/sample-workspace/s-session",
+  name: "Sample workspace",
+  icon: null,
+  canDuplicate: false,
+  canOpenInNewWindow: false,
+};
+
 const DRAFT_TAB: Extract<HeaderTab, { kind: "draft" }> = {
   kind: "draft",
   id: "d-joined",
@@ -86,9 +99,12 @@ const DRAFT_TAB: Extract<HeaderTab, { kind: "draft" }> = {
 };
 
 /** The hook's own caller: a CHILD of the edge provider, as a real row is. */
-function Row(props: { readonly tab: HeaderTab | null }): ReactNode {
+function Row(props: {
+  readonly tab: HeaderTab | null;
+  readonly active: boolean;
+}): ReactNode {
   const [node, setNode] = useState<HTMLDivElement | null>(null);
-  const join = useSideTabJoin(true, node, props.tab);
+  const join = useSideTabJoin(props.active, node, props.tab);
   return <div ref={setNode} data-testid="row" {...joinedAttribute(join)} />;
 }
 
@@ -96,12 +112,13 @@ function Row(props: { readonly tab: HeaderTab | null }): ReactNode {
 function Harness(props: {
   readonly edge: EdgeSide;
   readonly tab?: HeaderTab | null;
+  readonly active?: boolean;
 }): ReactNode {
   return (
     <ColumnEdgeContext.Provider value={props.edge}>
       <SheetJoinScope>
         <div data-strip-axis="y">
-          <Row tab={props.tab ?? null} />
+          <Row tab={props.tab ?? null} active={props.active ?? true} />
         </div>
         <SheetJoinBridge edge={props.edge} />
       </SheetJoinScope>
@@ -287,20 +304,101 @@ describe("useSideTabJoin", () => {
       expect(bridge().getAttribute("data-join-pane")).toBe("rail");
     });
 
-    it("leaves the layout editor's sample-workspace tab unjoined, and its bridge inactive", () => {
+    // The whole rule, written out as a table rather than computed: the join
+    // draws on the strip's own edge whatever side the sidebar is on, and takes
+    // the pane's fill only when the sidebar is on that same edge. This is the
+    // matrix the sheet-join browser driver used to walk one page load at a
+    // time (side x strip x panel x split); which fill a join takes is decided
+    // here, and the browser spec only measures where the arcs land.
+    const EPIC_PANES: ReadonlyArray<{
+      readonly edge: EdgeSide;
+      readonly sidebar: EdgeSide;
+      readonly collapsed: boolean;
+      readonly pane: "panel" | "rail" | "canvas";
+    }> = [
+      { edge: "left", sidebar: "left", collapsed: false, pane: "panel" },
+      { edge: "left", sidebar: "left", collapsed: true, pane: "rail" },
+      { edge: "left", sidebar: "right", collapsed: false, pane: "canvas" },
+      { edge: "left", sidebar: "right", collapsed: true, pane: "canvas" },
+      { edge: "right", sidebar: "right", collapsed: false, pane: "panel" },
+      { edge: "right", sidebar: "right", collapsed: true, pane: "rail" },
+      { edge: "right", sidebar: "left", collapsed: false, pane: "canvas" },
+      { edge: "right", sidebar: "left", collapsed: true, pane: "canvas" },
+    ];
+
+    it.each(EPIC_PANES)(
+      "an epic tab on the $edge strip, sidebar $sidebar, panel collapsed=$collapsed: joins $edge on the $pane pane",
+      ({ edge, sidebar, collapsed, pane }) => {
+        act(() => {
+          useLayoutStore.setState({
+            arrangement: { ...DEFAULT_ARRANGEMENT, sidebarSide: sidebar },
+          });
+          useLeftPanelStore.setState({
+            mainCollapsedByTabId: collapsed ? { [EPIC_TAB.id]: true } : {},
+          });
+        });
+
+        render(<Harness edge={edge} tab={EPIC_TAB} />);
+
+        expect(joinedEdge()).toBe(edge);
+        expect(joinedPane()).toBe(pane);
+      },
+    );
+
+    it.each(EDGES)(
+      "a non-epic tab on the %s strip is on the canvas even beside a collapsed panel on its own edge",
+      (edge) => {
+        act(() => {
+          useLayoutStore.setState({
+            arrangement: { ...DEFAULT_ARRANGEMENT, sidebarSide: edge },
+          });
+          useLeftPanelStore.setState({
+            mainCollapsedByTabId: { [DRAFT_TAB.id]: true },
+          });
+        });
+
+        render(<Harness edge={edge} tab={DRAFT_TAB} />);
+
+        expect(joinedEdge()).toBe(edge);
+        expect(joinedPane()).toBe("canvas");
+      },
+    );
+  });
+
+  // Each case also reads the bridge: a row that draws no join must not
+  // publish one either, or the bridge paints a join no row owns.
+  describe("never joined", () => {
+    it.each(EDGES)(
+      "the layout editor's session tab on the %s strip draws a plain active row, and its bridge stays inactive: its solid amber fill must not be painted over",
+      (edge) => {
+        render(<Harness edge={edge} tab={SAMPLE_WORKSPACE_TAB} />);
+
+        expect(joinedEdge()).toBeUndefined();
+        expect(bridge().hasAttribute("data-join-active")).toBe(false);
+      },
+    );
+
+    it.each(EDGES)(
+      "an inactive row on the %s strip draws no join, an epic tab included, and its bridge stays inactive",
+      (edge) => {
+        render(<Harness edge={edge} tab={EPIC_TAB} active={false} />);
+
+        expect(joinedEdge()).toBeUndefined();
+        expect(bridge().hasAttribute("data-join-active")).toBe(false);
+      },
+    );
+
+    it("a row outside any strip's column draws no join and publishes none: with no edge provider the edge is null", () => {
+      // The same active epic row the matrix above joins, minus the edge
+      // provider: `ColumnEdgeContext` answers its default, `null`, so there
+      // is no edge to join on.
       render(
-        <Harness
-          edge="left"
-          tab={{
-            kind: "sample-workspace",
-            id: "sample-1",
-            route: "/sample-workspace/sample-1",
-            name: "Sample workspace",
-            icon: null,
-            canDuplicate: false,
-            canOpenInNewWindow: false,
-          }}
-        />,
+        <SheetJoinScope>
+          <div data-strip-axis="y">
+            <Row tab={EPIC_TAB} active />
+          </div>
+          <SheetJoinBridge edge="left" />
+        </SheetJoinScope>,
       );
 
       expect(joinedEdge()).toBeUndefined();
