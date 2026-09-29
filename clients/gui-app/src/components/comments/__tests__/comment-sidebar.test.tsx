@@ -18,7 +18,11 @@ import type {
 import type { HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
-import { CommentSidebar } from "@/components/comments/comment-sidebar";
+import {
+  CommentSidebar,
+  type CommentSidebarProps,
+} from "@/components/comments/comment-sidebar";
+import { useEpicCommentRoomAvailability } from "@/lib/epic-selectors";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import {
   type EpicStreamClientFactory,
@@ -200,6 +204,25 @@ const noopEpicStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
+/**
+ * `commentRoomAvailability` moved from an internal read to a prop
+ * (`CommentSidebarPanel` now resolves it and passes it down). This harness
+ * resolves it the same way the panel does - the real hook, reading whatever
+ * `EpicSessionContext` the caller wrapped it in - so these tests keep
+ * exercising the real gate rather than a fixed stand-in.
+ */
+function CommentSidebarWithRealAvailability(
+  props: Omit<CommentSidebarProps, "commentRoomAvailability">,
+) {
+  const commentRoomAvailability = useEpicCommentRoomAvailability();
+  return (
+    <CommentSidebar
+      {...props}
+      commentRoomAvailability={commentRoomAvailability}
+    />
+  );
+}
+
 function renderSidebar(
   epicHandle: OpenEpicStoreHandle,
   laneThreads: readonly CommentThreadWire[] | null,
@@ -207,7 +230,7 @@ function renderSidebar(
   return render(
     <QueryClientProvider client={queryClient}>
       <EpicSessionContext.Provider value={epicHandle}>
-        <CommentSidebar
+        <CommentSidebarWithRealAvailability
           epicId={EPIC_ID}
           hostClient={hostClientRef.current}
           artifactType="spec"
@@ -612,7 +635,7 @@ describe("<CommentSidebar /> host scope", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <CommentSidebar
+        <CommentSidebarWithRealAvailability
           epicId={EPIC_ID}
           hostClient={hostClientRef.current}
           artifactType="spec"

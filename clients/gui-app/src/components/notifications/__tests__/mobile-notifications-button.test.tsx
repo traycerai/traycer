@@ -84,6 +84,38 @@ describe("MobileNotificationsButton", () => {
     ).not.toBeNull();
   });
 
+  // `99+` is not a number: parsing it back would print `99` and rolling it
+  // would roll the `+`. The primitive's own test id is what tells the two
+  // paths apart - it is absent on the capped badge and present under it.
+  it("rolls a numeric count and prints 99+ as plain text", async () => {
+    testState.bellState = { kind: "attention", count: 7 };
+    render(<MobileNotificationsButton />);
+
+    const badge = await screen.findByTestId(
+      "mobile-notifications-attention-badge",
+    );
+    expect(badge.textContent).toBe("7");
+    expect(
+      screen.getByTestId("mobile-notifications-attention-count").textContent,
+    ).toBe("7");
+    // The count is inside an already-hidden badge; the button's own label is
+    // the whole accessible story.
+    expect(badge.getAttribute("aria-hidden")).toBe("true");
+    cleanup();
+
+    testState.bellState = { kind: "attention", count: 250 };
+    render(<MobileNotificationsButton />);
+
+    const cappedBadge = await screen.findByTestId(
+      "mobile-notifications-attention-badge",
+    );
+    expect(cappedBadge.textContent).toBe("99+");
+    expect(
+      screen.queryByTestId("mobile-notifications-attention-count"),
+    ).toBeNull();
+    expect(cappedBadge.getAttribute("aria-hidden")).toBe("true");
+  });
+
   it("carries the shared accessible label", async () => {
     testState.bellState = { kind: "attention", count: 1 };
     render(<MobileNotificationsButton />);

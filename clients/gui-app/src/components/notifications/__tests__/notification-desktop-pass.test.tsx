@@ -290,6 +290,7 @@ function PopoverShell(props: {
   return (
     <TooltipProvider delayDuration={0}>
       <NotificationsPopover
+        variant="center"
         onNavigate={() => undefined}
         headingRef={headingRef}
         shellRef={shellRef}

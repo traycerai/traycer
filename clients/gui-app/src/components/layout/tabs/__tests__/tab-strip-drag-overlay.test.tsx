@@ -83,7 +83,9 @@ describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () =>
     mocks.useEpicActivityStatus.mockReturnValue("turn");
     mocks.useRegisteredEpicTitleGenerating.mockReturnValue(false);
 
-    render(<HeaderTabDragOverlay tab={tab} ghost={ghost} width={200} />);
+    render(
+      <HeaderTabDragOverlay tab={tab} ghost={ghost} width={200} isActive />,
+    );
 
     // `--swatch-border`, not `borderTopColor`: the chrome carries its identity
     // colour as a custom property and paints with
@@ -93,7 +95,7 @@ describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () =>
     // it against nothing.
     expect(
       screen
-        .getByTestId("tab-chrome-center")
+        .getByTestId("tab-chrome-box")
         .style.getPropertyValue("--swatch-border"),
     ).toBe("#654321");
     // Identity icon (emoji) and the running-activity status render together.
@@ -112,7 +114,9 @@ describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () =>
     mocks.useEpicActivityStatus.mockReturnValue("idle");
     mocks.useRegisteredEpicTitleGenerating.mockReturnValue(false);
 
-    render(<HeaderTabDragOverlay tab={tab} ghost={ghost} width={200} />);
+    render(
+      <HeaderTabDragOverlay tab={tab} ghost={ghost} width={200} isActive />,
+    );
 
     expect(screen.queryByTestId("header-tab-activity-tab-1")).toBeNull();
     expect(screen.getByText("\u{1f680}")).toBeTruthy();
@@ -130,12 +134,14 @@ describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () =>
     mocks.useEpicActivityStatus.mockReturnValue("idle");
     mocks.useRegisteredEpicTitleGenerating.mockReturnValue(false);
 
-    render(<HeaderTabDragOverlay tab={tab} ghost={ghost} width={200} />);
+    render(
+      <HeaderTabDragOverlay tab={tab} ghost={ghost} width={200} isActive />,
+    );
 
     expect(screen.getByTestId("header-tab-approval-tab-1")).toBeTruthy();
     expect(
       screen
-        .getByTestId("tab-chrome-center")
+        .getByTestId("tab-chrome-box")
         .style.getPropertyValue("--swatch-border"),
     ).toBe("#334455");
   });
@@ -145,7 +151,9 @@ describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () =>
     mocks.useEpicActivityStatus.mockReturnValue("idle");
     mocks.useRegisteredEpicTitleGenerating.mockReturnValue(false);
 
-    render(<HeaderTabDragOverlay tab={tab} ghost={null} width={200} />);
+    render(
+      <HeaderTabDragOverlay tab={tab} ghost={null} width={200} isActive />,
+    );
 
     expect(screen.getByTestId("header-tab-drag-overlay")).toBeTruthy();
     expect(screen.queryByTestId("header-tab-approval-tab-1")).toBeNull();

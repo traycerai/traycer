@@ -12,11 +12,7 @@ import type {
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { isWindows } from "@/lib/keybindings/platform";
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
+import { HoverCard } from "@/components/ui/hover-card";
 import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -697,15 +693,15 @@ function TerminalShellGroup(props: {
  * The WSL boundary in one quiet line: the setting changes terminal tabs, but
  * the host and agent chats stay Windows processes. The full explanation and
  * the primary remedy (the Linux Traycer app running through WSLg) live
- * in the hover card - reachable because `HoverCard`'s close grace lets the
- * pointer travel into the card's link. The hover card is pointer-only, so the
- * Info glyph is itself a focusable anchor to the install page - keyboard
- * users reach the remedy without a mouse.
+ * in the hover card - reachable because `HoverCard`'s safe pointer path lets
+ * the pointer travel into the card's link. The card's content is outside the
+ * tab order, so the Info glyph is itself a focusable anchor to the install
+ * page - keyboard users reach the remedy without a mouse.
  */
 function WslAgentCaption() {
   return (
-    <HoverCard>
-      <HoverCardTrigger asChild>
+    <HoverCard
+      trigger={
         <span className="inline-flex cursor-default items-center gap-1.5 text-ui-xs text-muted-foreground">
           <span
             aria-hidden
@@ -719,23 +715,32 @@ function WslAgentCaption() {
             <Info className="size-3" />
           </WslInstallDocsLink>
         </span>
-      </HoverCardTrigger>
-      <HoverCardContent
-        align="end"
-        className="w-[min(90vw,20rem)] space-y-2 text-ui-xs"
-      >
-        <p className="text-muted-foreground">
-          Choosing WSL here changes the shell for new terminal tabs. It does not
-          move the Traycer host or agents into WSL.
-        </p>
-        <WslInstallDocsLink
-          ariaLabel={undefined}
-          className="inline-block font-medium text-foreground underline underline-offset-4 hover:opacity-80"
-        >
-          Install Traycer in WSL
-        </WslInstallDocsLink>
-      </HoverCardContent>
-    </HoverCard>
+      }
+      content={
+        <>
+          <p className="text-muted-foreground">
+            Choosing WSL here changes the shell for new terminal tabs. It does
+            not move the Traycer host or agents into WSL.
+          </p>
+          <WslInstallDocsLink
+            ariaLabel={undefined}
+            className="inline-block font-medium text-foreground underline underline-offset-4 hover:opacity-80"
+          >
+            Install Traycer in WSL
+          </WslInstallDocsLink>
+        </>
+      }
+      appearance="preview"
+      semantics={{ role: "dialog", label: "WSL applies to terminal tabs only" }}
+      side="bottom"
+      align="end"
+      sideOffset={4}
+      enabled
+      open={null}
+      onOpenChange={null}
+      testId={null}
+      className="w-[min(90vw,20rem)] space-y-2 text-ui-xs"
+    />
   );
 }
 
@@ -797,8 +802,8 @@ function WslCaptionSlot(props: { readonly caption: WslCaption }) {
 function WslUnavailableCaption(props: { readonly health: WslHealthValue }) {
   const notInstalled = props.health === "not-installed";
   return (
-    <HoverCard>
-      <HoverCardTrigger asChild>
+    <HoverCard
+      trigger={
         <span
           data-testid="settings-shell-wsl-unavailable"
           className="inline-flex cursor-default items-center gap-1.5 text-ui-xs text-muted-foreground"
@@ -817,27 +822,41 @@ function WslUnavailableCaption(props: { readonly health: WslHealthValue }) {
             <Info className="size-3" />
           </WslInstallDocsLink>
         </span>
-      </HoverCardTrigger>
-      <HoverCardContent
-        align="end"
-        className="w-[min(90vw,20rem)] space-y-2 text-ui-xs"
-      >
-        <p className="text-muted-foreground">
-          {notInstalled
-            ? "wsl.exe on this machine is only the Windows installer stub, so a terminal tab opens, prints its usage text, and exits. Run the command below from an elevated terminal, restart Windows, then re-detect shells."
-            : "WSL runs, but no Linux distribution is registered, so a terminal tab exits immediately. Run the command below, then re-detect shells."}
-        </p>
-        <code className="block rounded bg-foreground/5 px-2 py-1 font-mono">
-          {notInstalled ? "wsl --install" : "wsl --install -d Ubuntu"}
-        </code>
-        <WslInstallDocsLink
-          ariaLabel={undefined}
-          className="inline-block font-medium text-foreground underline underline-offset-4 hover:opacity-80"
-        >
-          Install Traycer in WSL
-        </WslInstallDocsLink>
-      </HoverCardContent>
-    </HoverCard>
+      }
+      content={
+        <>
+          <p className="text-muted-foreground">
+            {notInstalled
+              ? "wsl.exe on this machine is only the Windows installer stub, so a terminal tab opens, prints its usage text, and exits. Run the command below from an elevated terminal, restart Windows, then re-detect shells."
+              : "WSL runs, but no Linux distribution is registered, so a terminal tab exits immediately. Run the command below, then re-detect shells."}
+          </p>
+          <code className="block rounded bg-foreground/5 px-2 py-1 font-mono">
+            {notInstalled ? "wsl --install" : "wsl --install -d Ubuntu"}
+          </code>
+          <WslInstallDocsLink
+            ariaLabel={undefined}
+            className="inline-block font-medium text-foreground underline underline-offset-4 hover:opacity-80"
+          >
+            Install Traycer in WSL
+          </WslInstallDocsLink>
+        </>
+      }
+      appearance="preview"
+      semantics={{
+        role: "dialog",
+        label: notInstalled
+          ? "WSL isn't installed"
+          : "WSL has no Linux distribution",
+      }}
+      side="bottom"
+      align="end"
+      sideOffset={4}
+      enabled
+      open={null}
+      onOpenChange={null}
+      testId={null}
+      className="w-[min(90vw,20rem)] space-y-2 text-ui-xs"
+    />
   );
 }
 

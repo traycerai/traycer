@@ -12,6 +12,7 @@ import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -62,8 +63,8 @@ import {
   type ChatArchiveVisibility,
   type ChatOwnershipFilter,
   type ChatOriginFilter,
-  type LeftPanelId,
 } from "@/stores/epics/left-panel-store";
+import { type LeftPanelId } from "@/lib/left-panel-ids";
 import {
   usePanelHeaderMenuOpen,
   usePanelHeaderMenuStore,
@@ -87,7 +88,6 @@ interface ViewMenuState<TDetail extends string> {
 function useViewMenuState<TDetail extends string>(
   tabId: string,
   panelId: LeftPanelId,
-  collapsed: boolean,
 ): ViewMenuState<TDetail> {
   const open = usePanelHeaderMenuOpen(tabId, panelId, "filter");
   const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
@@ -95,14 +95,9 @@ function useViewMenuState<TDetail extends string>(
   const [detail, setDetail] = useState<TDetail | null>(null);
   const [triggerElement, setTriggerElement] =
     useState<HTMLButtonElement | null>(null);
-  const setPanelSectionCollapsed = useLeftPanelStore(
-    (state) => state.setPanelSectionCollapsed,
-  );
-
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
       if (nextOpen) {
-        if (collapsed) setPanelSectionCollapsed(panelId, false);
         const triggerRight = triggerElement?.getBoundingClientRect().right ?? 0;
         setDrillIn(
           window.innerWidth - triggerRight < TWO_COLUMN_MENU_MIN_AVAILABLE_PX,
@@ -112,14 +107,7 @@ function useViewMenuState<TDetail extends string>(
       }
       setMenuOpen(tabId, panelId, "filter", nextOpen);
     },
-    [
-      collapsed,
-      panelId,
-      setMenuOpen,
-      setPanelSectionCollapsed,
-      tabId,
-      triggerElement,
-    ],
+    [panelId, setMenuOpen, tabId, triggerElement],
   );
 
   const openDetail = useCallback((nextDetail: TDetail) => {
@@ -177,6 +165,7 @@ function ViewDetailEntry<TDetail extends string>(props: {
   readonly children: ReactNode;
 }) {
   const [subOpen, setSubOpen] = useState(false);
+  const placement = useColumnOverlayPlacement("row");
   if (props.drillIn) {
     return (
       <DropdownMenuItem
@@ -209,7 +198,7 @@ function ViewDetailEntry<TDetail extends string>(props: {
       <DropdownMenuSubContent
         sideOffset={8}
         alignOffset={-4}
-        avoidCollisions={false}
+        avoidCollisions={placement?.side === "left"}
         className="min-w-52"
       >
         {props.children}
@@ -242,7 +231,6 @@ function DrillInHeader(props: {
 export function ChatFilterMenu(props: {
   readonly epicId: string;
   readonly tabId: string;
-  readonly collapsed: boolean;
   readonly canArchive: boolean;
 }) {
   const { epicId } = props;
@@ -265,11 +253,11 @@ export function ChatFilterMenu(props: {
     archiveVisibility !== DEFAULT_CHAT_ARCHIVE_VISIBILITY;
   const active =
     filterActive || archiveVisibilityChanged || isSortModeActive(sort);
-  const menu = useViewMenuState<ChatViewDetail>(
-    props.tabId,
-    "chats",
-    props.collapsed,
-  );
+  const menu = useViewMenuState<ChatViewDetail>(props.tabId, "chats");
+  const placement = useColumnOverlayPlacement("row") ?? {
+    side: "right" as const,
+    align: "start" as const,
+  };
 
   const detailProps = {
     filterOrigin: filter.origin,
@@ -311,8 +299,8 @@ export function ChatFilterMenu(props: {
         setTriggerElement={menu.setTriggerElement}
       />
       <DropdownMenuContent
-        side="right"
-        align="start"
+        side={placement.side}
+        align={placement.align}
         sideOffset={8}
         avoidCollisions={false}
         className={VIEW_MENU_CONTENT_CLASS}
@@ -392,7 +380,6 @@ export function ChatFilterMenu(props: {
 export function ArtifactFilterMenu(props: {
   readonly epicId: string;
   readonly tabId: string;
-  readonly collapsed: boolean;
   readonly onMarkAllRead: () => void;
   readonly markAllReadDisabled: boolean;
 }) {
@@ -418,11 +405,11 @@ export function ArtifactFilterMenu(props: {
   const filterActive = isArtifactFilterActive(filter);
   const filterCount = artifactFilterCount(filter);
   const active = filterActive || isSortModeActive(sort);
-  const menu = useViewMenuState<ArtifactViewDetail>(
-    props.tabId,
-    "artifacts",
-    props.collapsed,
-  );
+  const menu = useViewMenuState<ArtifactViewDetail>(props.tabId, "artifacts");
+  const placement = useColumnOverlayPlacement("row") ?? {
+    side: "right" as const,
+    align: "start" as const,
+  };
 
   const detailProps = {
     filterStatuses: filter.statuses,
@@ -461,8 +448,8 @@ export function ArtifactFilterMenu(props: {
         setTriggerElement={menu.setTriggerElement}
       />
       <DropdownMenuContent
-        side="right"
-        align="start"
+        side={placement.side}
+        align={placement.align}
         sideOffset={8}
         avoidCollisions={false}
         className={VIEW_MENU_CONTENT_CLASS}

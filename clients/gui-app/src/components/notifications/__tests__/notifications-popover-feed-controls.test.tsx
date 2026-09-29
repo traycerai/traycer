@@ -314,6 +314,7 @@ function PopoverShell(): ReactNode {
   const shellRef = useRef<HTMLDivElement>(null);
   return (
     <NotificationsPopover
+      variant="center"
       onNavigate={() => undefined}
       headingRef={headingRef}
       shellRef={shellRef}
@@ -340,6 +341,7 @@ function GeometryPopoverShell(props: {
       style={{ transform: "translate(0, -200%)" }}
     >
       <NotificationsPopover
+        variant="center"
         onNavigate={() => undefined}
         headingRef={headingRef}
         shellRef={geometry.shellRef}
@@ -371,6 +373,35 @@ function renderPopover(): void {
       <RouterProvider
         router={buildRouter(() => (
           <PopoverShell />
+        ))}
+      />
+    </QueryClientProvider>,
+  );
+}
+
+/** The strip's Notifications drawer variant (finding 2): Needs you rows are pulled
+ * out of Attention/Recent but must still feed scroll anchoring and arrivals. */
+function InboxPopoverShell(): ReactNode {
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
+  return (
+    <NotificationsPopover
+      variant="inbox"
+      onNavigate={() => undefined}
+      headingRef={headingRef}
+      shellRef={shellRef}
+      shellStyle={{}}
+      onFilterMenuOpenChange={() => undefined}
+    />
+  );
+}
+
+function renderInboxPopover(): void {
+  render(
+    <QueryClientProvider client={createTestQueryClient()}>
+      <RouterProvider
+        router={buildRouter(() => (
+          <InboxPopoverShell />
         ))}
       />
     </QueryClientProvider>,
@@ -1484,6 +1515,36 @@ describe("NotificationsPopover feed controls (T05)", () => {
       expect(
         useHostNotificationsStore.getState().byId["approval-1"].updatedAt,
       ).toBe(100);
+    });
+  });
+
+  describe("Inbox variant: Needs you feeds arrivals (finding 2)", () => {
+    it("counts an unresolved approval prompt arriving while scrolled away from top", async () => {
+      applyHostSnapshot({
+        entries: [hostDone("baseline", 100, null)],
+        summary: { unreadCount: 1, attentionCount: 0 },
+        recentCursor: null,
+        attentionCursor: null,
+      });
+      renderInboxPopover();
+
+      await screen.findByTestId("notification-entry");
+      const scrollport = screen.getByTestId("notifications-feed-scrollport");
+      expect(screen.queryByTestId("notifications-new-arrivals")).toBeNull();
+
+      setScrollTop(scrollport, 80);
+
+      act(() => {
+        useHostNotificationsStore
+          .getState()
+          .applyUpsertFrame(hostPrompt("approval-new", 200), [], {
+            unreadCount: 2,
+            attentionCount: 1,
+          });
+      });
+
+      const pill = await screen.findByTestId("notifications-new-arrivals");
+      expect(pill.textContent).toMatch(/1 new notification$/);
     });
   });
 

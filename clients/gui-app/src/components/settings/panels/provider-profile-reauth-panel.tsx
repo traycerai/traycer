@@ -17,6 +17,7 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
 import { useHostScopedProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
 import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-login-mutation";
+import { useProvidersEnsurePack } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLogin } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useOpenLink } from "@/lib/links/open-link";
@@ -70,6 +71,7 @@ export function ProviderProfileReauthPanel({
   const cancelLogin = useProvidersCancelLogin();
   const submitLoginCode = useProvidersSubmitLoginCode();
   const touchLogin = useProvidersTouchLogin();
+  const ensurePack = useProvidersEnsurePack();
   // The `profile` prop is LIVE, and it turns over mid-flow:
   // `providers.awaitLogin`'s hook-level `onSuccess` commits the fresh row into
   // the `providers.list` cache, and query-core awaits that before the flow's
@@ -92,6 +94,7 @@ export function ProviderProfileReauthPanel({
     cancelLogin,
     submitLoginCode,
     touchLogin,
+    ensurePack,
     failureMessages: {
       notStarted: "Sign-in did not start. Try again when ready.",
       notFinished: "Sign-in did not finish. Try again.",
@@ -235,6 +238,7 @@ function ProviderProfileReauthState({
           loginCapability={loginCapability}
           isLocalHost={isLocalHost}
           queuePending={flow.startPending}
+          startingCopy={flow.startingCopy}
           cancelRequested={
             flow.state.kind === "starting" && flow.state.cancelRequested
           }

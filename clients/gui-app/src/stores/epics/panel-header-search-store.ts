@@ -16,7 +16,7 @@
  * renders up in the header.
  */
 import { create } from "zustand";
-import type { LeftPanelId } from "@/stores/epics/left-panel-store";
+import type { LeftPanelId } from "@/lib/left-panel-ids";
 
 type SurfaceRecord<T> = Readonly<Partial<Record<string, T>>>;
 

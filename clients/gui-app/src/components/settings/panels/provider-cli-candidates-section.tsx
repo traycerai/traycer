@@ -33,7 +33,15 @@ import {
 import { useOpenLink } from "@/lib/links/open-link";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { cn } from "@/lib/utils";
+import {
+  ARIA_DISABLED_TRIGGER_CLASS,
+  resolveDisabledPresentation,
+} from "@/lib/disabled-presentation";
 import { ProviderPackVersionManagerPanel } from "./provider-pack-version-manager-panel";
+import {
+  providerCustomCliPathHeldReason,
+  providerSupportsCustomCliPath,
+} from "./provider-cli-path-support";
 import { useProviderPackVersionManagerSupport } from "./provider-pack-version-manager-capability";
 import {
   managedInstallFailureMessage,
@@ -319,6 +327,7 @@ function CandidateEmptyArea({
     <CliBinaryMissingNotice
       providerLabel={PROVIDER_DISPLAY_NAMES[providerId]}
       installGuideUrl={PROVIDER_INSTALL_GUIDE_URL[providerId]}
+      customPathSupported={providerSupportsCustomCliPath(providerId)}
     />
   );
 }
@@ -348,16 +357,21 @@ function CliBinaryProbePendingNotice({
 function CliBinaryMissingNotice({
   providerLabel,
   installGuideUrl,
+  customPathSupported,
 }: {
   readonly providerLabel: string;
   readonly installGuideUrl: string | null;
+  readonly customPathSupported: boolean;
 }): ReactNode {
   const openLink = useOpenLink();
   return (
     <div className="rounded-lg border border-border/60 bg-foreground/2 p-3 text-ui-sm text-muted-foreground">
       <p>
         No {providerLabel} CLI was found on this machine, and Traycer ships no
-        bundled copy of it. Install it, or add its path below.
+        bundled copy of it.{" "}
+        {customPathSupported
+          ? "Install it, or add its path below."
+          : "Install it."}
       </p>
       {installGuideUrl === null ? null : (
         <a
@@ -520,7 +534,11 @@ export function ProviderCliCandidatesSection({
           probeVersion: probe.data?.version ?? null,
         }}
       />
-      <AddCustomPathButton hidden={adding} onClick={() => setAdding(true)} />
+      <AddCustomPathButton
+        hidden={adding}
+        heldReason={providerCustomCliPathHeldReason(providerId)}
+        onClick={() => setAdding(true)}
+      />
     </>
   );
 }
@@ -714,22 +732,47 @@ function CustomPathForm({
   );
 }
 
+/**
+ * Held, not hidden, for a provider that cannot run a custom CLI
+ * (`providerSupportsCustomCliPath`): the button stays where the user expects
+ * it, and its tooltip says why it does nothing.
+ *
+ * Held with `aria-disabled`, never native `disabled` (`disabled-presentation.ts`):
+ * the tooltip is the only place the reason is shown, and a natively disabled
+ * button leaves the tab order and takes no pointer events, so neither a
+ * keyboard nor a pointer could reach it. Activation is blocked here instead.
+ */
 function AddCustomPathButton({
   hidden,
+  heldReason,
   onClick,
 }: {
   readonly hidden: boolean;
+  readonly heldReason: string | null;
   readonly onClick: () => void;
 }): ReactNode {
   if (hidden) return null;
+  const { ariaDisabled, nativeDisabled } = resolveDisabledPresentation(
+    heldReason !== null,
+    heldReason,
+  );
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="mt-2 inline-flex w-fit items-center gap-1.5 rounded-md px-2 py-1 text-ui-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-    >
-      <Plus className="size-4" /> Add custom path
-    </button>
+    <TooltipWrapper label={heldReason} side="top" sideOffset={6} align="start">
+      <button
+        type="button"
+        aria-disabled={ariaDisabled ? true : undefined}
+        disabled={nativeDisabled}
+        onClick={() => {
+          if (heldReason === null) onClick();
+        }}
+        className={cn(
+          "mt-2 inline-flex w-fit items-center gap-1.5 rounded-md px-2 py-1 text-ui-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground",
+          ARIA_DISABLED_TRIGGER_CLASS,
+        )}
+      >
+        <Plus className="size-4" /> Add custom path
+      </button>
+    </TooltipWrapper>
   );
 }
 

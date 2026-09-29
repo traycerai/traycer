@@ -88,6 +88,13 @@ const DESKTOP_ONLY_WARMERS: ReadonlyArray<RouteChunkWarmer> = [
     module: "@/components/settings/settings-surface",
     load: () => import("@/components/settings/settings-surface"),
   },
+  // The experimental layout editor's sample workspace (Settings >
+  // Appearance). Off by default, and never a phone boot path.
+  {
+    module: "@/components/sample-workspace/sample-workspace-surface",
+    load: () =>
+      import("@/components/sample-workspace/sample-workspace-surface"),
+  },
   // The Settings / History modal bodies are `lazy()` in
   // `stores/tabs/overlays/`; warming them here is what keeps the desktop
   // modal opening instantly.

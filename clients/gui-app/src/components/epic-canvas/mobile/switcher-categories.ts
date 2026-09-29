@@ -2,10 +2,8 @@ import {
   LEFT_PANEL_DEFINITIONS,
   type LeftPanelMetadataDefinition,
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
-import {
-  DEFAULT_LEFT_PANEL_ID,
-  type LeftPanelId,
-} from "@/stores/epics/left-panel-store";
+import { DEFAULT_LEFT_PANEL_ID } from "@/stores/epics/left-panel-store";
+import { type LeftPanelId } from "@/lib/left-panel-ids";
 
 /**
  * The mobile "Switch tab" sheet exposes the desktop left-panel categories as a

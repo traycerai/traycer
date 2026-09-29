@@ -171,6 +171,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -194,6 +195,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -220,6 +222,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings
+        trigger={null}
       />,
     );
 
@@ -241,6 +244,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -260,6 +264,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -288,6 +293,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -318,6 +324,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings
+        trigger={null}
       />,
     );
 
@@ -341,6 +348,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -375,6 +383,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -409,6 +418,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -460,6 +470,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl="https://example.com/ada.png"
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -481,5 +492,35 @@ describe("<UserMenu />", () => {
         value: originalImage,
       });
     }
+  });
+
+  // The strip foot's account row passes its own trigger element; the menu
+  // must open it through Radix's own pointerdown handling rather than an
+  // onClick this component wires itself (jsdom has no PointerEvent capture,
+  // so a plain click on a trigger with no onClick of its own would not open
+  // it if Radix's mechanism were bypassed).
+  it("opens a custom trigger through Radix's own pointerdown handling", async () => {
+    const host = buildHost();
+    const result = mountMenu(
+      host,
+      <UserMenu
+        userName="Ada Lovelace"
+        email="ada@example.com"
+        avatarUrl={null}
+        showAppSettings={false}
+        trigger={
+          <button type="button" data-testid="custom-trigger">
+            Custom
+          </button>
+        }
+      />,
+    );
+
+    const trigger = await screen.findByTestId("custom-trigger");
+    expect(screen.queryByTestId("user-menu-content")).toBeNull();
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    expect(await screen.findByTestId("user-menu-content")).toBeTruthy();
+
+    result.cleanupClient();
   });
 });

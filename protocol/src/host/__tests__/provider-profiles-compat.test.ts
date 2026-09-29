@@ -19,6 +19,8 @@ import {
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersSetEnabledRequestSchemaV21,
+  providersStartLoginResponseSchemaV12,
+  providersStartLoginResponseSchemaV13,
 } from "@traycer/protocol/host/provider-schemas";
 // Construction is structural-only. The full schema-compatibility pass is
 // the explicit `validateVersionedRpcRegistry(hostRpcRegistry)` below, which
@@ -519,6 +521,104 @@ describe("providers.startLogin@1.2 (device-code userCode / failure)", () => {
       url: null,
       started: true,
       profileId: "profile-1",
+      userCode: null,
+      failure: null,
+    });
+  });
+});
+
+describe("providers.startLogin@1.3 (pending / pack)", () => {
+  it("upgrades a v1.2 response to v1.3 with pending and pack defaulted to null", () => {
+    const upgradedResponse = upgradeResponseToVersion(
+      hostRpcRegistry["providers.startLogin"],
+      { major: 1, minor: 2 },
+      { major: 1, minor: 3 },
+      {
+        url: null,
+        started: true,
+        profileId: "profile-1",
+        userCode: null,
+        failure: null,
+      },
+    );
+    expect(upgradedResponse).toEqual({
+      url: null,
+      started: true,
+      profileId: "profile-1",
+      userCode: null,
+      failure: null,
+      pending: null,
+      pack: null,
+    });
+  });
+
+  it("the v1.3 schema parses a body without pending/pack to null", () => {
+    const parsed = providersStartLoginResponseSchemaV13.parse({
+      url: null,
+      started: true,
+      profileId: null,
+      userCode: null,
+      failure: null,
+    });
+    expect(parsed.pending).toBeNull();
+    expect(parsed.pack).toBeNull();
+  });
+
+  it("maps an unknown pending value to null rather than failing the parse", () => {
+    const parsed = providersStartLoginResponseSchemaV13.parse({
+      url: null,
+      started: false,
+      profileId: null,
+      userCode: null,
+      failure: null,
+      // A future host's `pending` vocabulary grew a value this build has
+      // never heard of - it reads as "not started", not as a parse failure.
+      pending: "a-future-pending-kind",
+      pack: null,
+    });
+    expect(parsed.pending).toBeNull();
+  });
+
+  it("maps an unknown pack.reason to 'unknown' rather than failing the parse", () => {
+    const parsed = providersStartLoginResponseSchemaV13.parse({
+      url: null,
+      started: false,
+      profileId: null,
+      userCode: null,
+      failure: null,
+      pending: "pack_preparing",
+      pack: {
+        percent: 10,
+        // Same degrade-not-fail contract as `pending`: an install-error
+        // reason this build has never heard of is still a failed install.
+        reason: "a-future-error-reason",
+        retryAtMs: null,
+      },
+    });
+    expect(parsed.pack).toEqual({
+      percent: 10,
+      reason: "unknown",
+      retryAtMs: null,
+    });
+  });
+
+  it("the v1.2 schema drops pending and pack from a v1.3 body", () => {
+    const v13Body = providersStartLoginResponseSchemaV13.parse({
+      url: null,
+      started: false,
+      profileId: null,
+      userCode: null,
+      failure: null,
+      pending: "starting",
+      pack: null,
+    });
+    const parsedAsV12 = providersStartLoginResponseSchemaV12.parse(v13Body);
+    expect(parsedAsV12).not.toHaveProperty("pending");
+    expect(parsedAsV12).not.toHaveProperty("pack");
+    expect(parsedAsV12).toEqual({
+      url: null,
+      started: false,
+      profileId: null,
       userCode: null,
       failure: null,
     });

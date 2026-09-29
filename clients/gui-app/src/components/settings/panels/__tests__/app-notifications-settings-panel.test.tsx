@@ -21,6 +21,7 @@ import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-
 import {
   isPushPermissionGroupAvailable,
   isSystemNotificationsGroupAvailable,
+  type SettingsAvailabilityContext,
 } from "@/lib/settings/settings-availability";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -222,11 +223,10 @@ describe("<AppNotificationsSettingsPanel />", () => {
     for (const testCase of cases) {
       it(`matches the index with ${testCase.name}`, () => {
         const { container, runnerHost } = mountPanel(testCase.capabilities);
-        const context = {
+        const context: SettingsAvailabilityContext = {
           runnerHost,
           featureSettings: null,
           mobileApp: false,
-          mobileFooter: false,
         };
         expect(isSystemNotificationsGroupAvailable(context)).toBe(
           testCase.system,

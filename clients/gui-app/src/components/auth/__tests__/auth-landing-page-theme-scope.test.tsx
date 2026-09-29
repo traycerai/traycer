@@ -17,7 +17,7 @@ afterEach(() => {
 
 /**
  * jsdom cannot see a colour, so this is not the proof that the page is legible
- * under every theme - `scripts/sign-in-theme-contrast-browser.mjs` is. It
+ * under every theme - `browser-tests/sign-in-theme-contrast.spec.ts` is. It
  * guards the mechanism that proof depends on: the page root carries the dark
  * palette scope, and the sign-in controls render inside it.
  */

@@ -119,6 +119,7 @@ function renderDialogFor(kind: ProviderProfile["kind"]) {
           profile={profile}
           profiles={[profile]}
           canOauth
+          oauthUnavailableHint={null}
           startInReauth={false}
           isLocalHost
           open
@@ -213,5 +214,83 @@ describe("<ProfileEditDialog /> remove gate by profile kind", () => {
     expect(
       tooltipTextNear(screen.getByRole("button", { name: "Remove profile" })),
     ).toBeNull();
+  });
+});
+
+function renderDialogWithOauthGate(
+  canOauth: boolean,
+  oauthUnavailableHint: string | null,
+) {
+  const profile = profileOfKind("managed");
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <ProfileEditDialog
+          state={opencodeState(profile)}
+          profile={profile}
+          profiles={[profile]}
+          canOauth={canOauth}
+          oauthUnavailableHint={oauthUnavailableHint}
+          startInReauth={false}
+          isLocalHost
+          open
+          onOpenChange={() => undefined}
+          remainingProfilesAfterRemoval={[]}
+          onSelectedProfileIdChange={() => undefined}
+          profileEnablementAvailable
+          profileEnablementPending={() => false}
+          onSetProfileEnabled={() => undefined}
+        />
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+}
+
+/**
+ * `canOauth`/`oauthUnavailableHint` are the same host-gate pairing every other
+ * sign-in control in this redesign takes: the switch is disabled while the
+ * host would refuse the click, and the tooltip names why - the caller's own
+ * hint when it has one, the dialog's generic sentence otherwise.
+ */
+describe("<ProfileEditDialog /> Switch account tooltip", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("disables Switch account and shows the caller's hint when canOauth is false", () => {
+    renderDialogWithOauthGate(
+      false,
+      "Claude Code is turned off. Turn it on to sign in or manage its profiles.",
+    );
+    const button = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Switch account",
+    });
+    expect(button.disabled).toBe(true);
+    expect(tooltipTextNear(button)).toBe(
+      "Claude Code is turned off. Turn it on to sign in or manage its profiles.",
+    );
+  });
+
+  it("falls back to the generic sentence when canOauth is false and no hint is given", () => {
+    renderDialogWithOauthGate(false, null);
+    const button = screen.getByRole("button", { name: "Switch account" });
+    expect(tooltipTextNear(button)).toBe(
+      "Switch account requires a local host with browser sign-in available.",
+    );
+  });
+
+  it("enables Switch account with no tooltip when canOauth is true", () => {
+    renderDialogWithOauthGate(true, "unused - canOauth true wins");
+    const button = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Switch account",
+    });
+    expect(button.disabled).toBe(false);
+    expect(tooltipTextNear(button)).toBeNull();
   });
 });

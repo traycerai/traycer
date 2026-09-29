@@ -39,9 +39,9 @@ import {
   describeManualRungRefusal,
 } from "@/components/chat/fallback/fallback-copy";
 import {
-  DEFAULT_COMPOSER_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
+} from "@/stores/layout/layout-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import {
   createComposerToolbarStore,
@@ -342,7 +342,7 @@ describe("RoutingDestinationPicker", () => {
     seedProviders();
     kit.listData = listing({ recommendedWork: false });
     useComposerHarnessMemoryStore.getState().resetForTests();
-    useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
   afterEach(() => {
@@ -764,7 +764,9 @@ describe("RoutingDestinationPicker", () => {
     });
 
     it("an effort-only edit is the user's choice: a later listing moves neither the account nor the effort", async () => {
-      useLayoutStore.getState().setComposerReasoningFooterControl("list");
+      useLayoutStore
+        .getState()
+        .setRegionValues("model", { reasoningControl: "list" });
       kit.listData = haikuListing({ recommendedWork: false });
       const view = mount(haikuEntry(HAIKU_SEED));
       await open();
@@ -1114,7 +1116,9 @@ describe("RoutingDestinationPicker", () => {
     });
 
     it("a null-effort destination is matched by the model's default, and an effort chosen away from it sends the CLIENT tuple", async () => {
-      useLayoutStore.getState().setComposerReasoningFooterControl("list");
+      useLayoutStore
+        .getState()
+        .setRegionValues("model", { reasoningControl: "list" });
       const hostTarget: ChatRunSettings = {
         ...HAIKU_SEED,
         reasoningEffort: null,

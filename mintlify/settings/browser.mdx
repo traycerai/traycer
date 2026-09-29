@@ -1,0 +1,93 @@
+---
+title: "Browser"
+description: "Set the in-app browser's search engine, whether agents use it, saved website sessions and importing sign-ins, and where browser tabs open."
+---
+
+**Browser** configures Traycer's [in-app browser](/panels/browsers). It sits in the **Application** group of [Settings](/settings).
+
+## Search
+
+**Default search engine** is used when you type search terms instead of a website address in the address bar. Choose **Google** (the default), **DuckDuckGo**, **Bing** or **Kagi**.
+
+## Browser
+
+This group appears when there is something to show in it.
+
+**Let agents use the in-app browser** is on by default. Agents get Traycer's browser as a tool and are told to use it for web pages. Turn it off to let them use their own browser tooling instead.
+
+- The row names the host it applies to: the active host of this window. The setting is stored on that host and covers every agent that runs there.
+- Running agents pick up a change on their next turn.
+- Turning it off doesn't affect your own browser tabs or saved website sessions.
+
+**Detected dev origins** lists the local sites you have opened from a terminal link, such as a dev server on `localhost` or on an explicit port. Click **Remove** next to one to forget it. The row appears once you have opened such a link.
+
+## Website Sessions
+
+Website sessions keep you signed in to sites in Traycer's browser. This group is in the desktop app and needs a connected host.
+
+| Setting | What it does |
+| --- | --- |
+| **Save website sessions on this computer** | Keeps session data from Traycer browser tabs so sites stay signed in. On by default. |
+| **Saved website sessions** | The sites you have sessions for. They are shared with your connected Traycer hosts, so removing a site may sign you out there too. |
+| **Bring in existing sessions** | **Choose source…** imports sign-ins from another browser or a cookie file. Needs **Save website sessions on this computer** turned on. |
+
+### Stop Saving Sessions
+
+Turning **Save website sessions on this computer** off asks you to confirm. Open browser tabs reload signed out, and this computer stops saving new session data. Sessions you already saved stay available to manage until you remove them, and turning saving back on returns to them.
+
+### Manage Saved Sessions
+
+The row lists your first three sites. Click **Manage all …** (or **View all … more sites**) to open the full list:
+
+- Search it by site.
+- Remove one site with the button next to it.
+- Click **Remove all…** to remove every saved session.
+
+Saved sessions are encrypted with your system keyring. If this computer has none, they stay locked and nothing new is saved.
+
+### Bring In Sign-Ins From Another Browser
+
+<Steps>
+  <Step title="Choose a source">
+    Click **Choose source…**. Traycer lists the browser profiles it finds on this computer, grouped by browser with the most recently used first. It looks for Google Chrome, Chromium, Microsoft Edge, Brave, Arc, Vivaldi, Opera, Aside, Helium, Firefox and Safari. To use an exported cookie file instead, click **Import from a file…**.
+  </Step>
+  <Step title="Choose sites">
+    Traycer lists the sites that profile has sign-ins for, all selected. Use **Filter sites**, **Select all** and **Select none** to narrow the list. Nothing is imported until you confirm. A site already signed in inside Traycer is replaced by the imported sign-in.
+  </Step>
+  <Step title="Import">
+    Click **Import N sites**. On macOS, macOS asks whether "security" may read the browser's key from your keychain; allow it to continue. On Linux, your keyring may ask to be unlocked. Traycer then shows how many sites it imported.
+  </Step>
+</Steps>
+
+<Note>
+  Google accounts are left out by default, because Google binds sign-ins to the device they were made on. An imported Google sign-in can stop working at any time, and may sign you out of Google in the browser it came from. Turn on **Import Google logins anyway** to include them, or sign in to Google inside Traycer once instead.
+</Note>
+
+On Windows, some sign-ins are protected by the browser and can't be imported. Traycer says how many; export them with a cookie extension and import the file, or sign in once inside Traycer.
+
+## Browser Placement
+
+**Open browser tabs** sets where a browser tab opens:
+
+| Option | Where it opens |
+| --- | --- |
+| **In this pane** | As a tab in the current pane. |
+| **In a new split** | Beside the current pane. This is the default. |
+| **Picture in picture** | In a small floating window over the canvas. |
+
+Changing this row gives browser tabs their own placement, separate from the other tiles in [Opening behavior](/settings/opening-behavior). Windows too narrow for a split always open browser tabs in the current pane.
+
+## Agent-Opened Tabs
+
+**Agent-opened tabs** decides what happens to a tab an agent opens while it drives a browser session:
+
+| Option | What happens |
+| --- | --- |
+| **Leave in the sidebar** | The tab runs in the background and is listed in the Browsers panel. This is the default. |
+| **Like any browser tile** | The tab opens on the canvas, using the **Open browser tabs** placement. |
+
+Tabs a web page opens, including links you click in it, always open as browser tiles.
+
+## Modifier Clicks
+
+<kbd>Shift</kbd>-click opens a tile in a split, and middle-click opens it in the background.

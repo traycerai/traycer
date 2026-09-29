@@ -4,7 +4,7 @@ import {
   insertionIndexFromPointer,
   insertionOffsetsFor,
   stripOffsetsFor,
-  overlayLeftForPointer,
+  overlayStartForPointer,
   provisionalStripOrder,
   reconstructionErrorPx,
   remapGeometryToSlots,
@@ -22,17 +22,17 @@ function slots(
   mergeable: ReadonlyArray<boolean> | null,
   gap: number,
 ): ReadonlyArray<StripSlot> {
-  let contentLeft = 0;
+  let contentStart = 0;
   return widths.map((width, index) => {
     const isLast = index === widths.length - 1;
     const slot: StripSlot = {
       itemId: `item-${index}`,
-      width,
-      contentLeft,
+      extent: width,
+      contentStart,
       advance: isLast ? width : width + gap,
       isMergeTarget: mergeable === null ? true : (mergeable[index] ?? true),
     };
-    contentLeft += width + gap;
+    contentStart += width + gap;
     return slot;
   });
 }
@@ -48,7 +48,17 @@ function geometryFor(
   sourceIndex: number,
   mergeable: ReadonlyArray<boolean> | null,
 ): StripDragGeometry {
-  const built = slots(widths, mergeable, 0);
+  return gappedGeometryFor(widths, sourceIndex, mergeable, 0);
+}
+
+/** `geometryFor` over a strip whose measured advance carries `gap`. */
+function gappedGeometryFor(
+  widths: ReadonlyArray<number>,
+  sourceIndex: number,
+  mergeable: ReadonlyArray<boolean> | null,
+  gap: number,
+): StripDragGeometry {
+  const built = slots(widths, mergeable, gap);
   if (sourceIndex < 0 || sourceIndex >= built.length) {
     throw new Error("bad source index");
   }
@@ -56,18 +66,18 @@ function geometryFor(
   return {
     slots: built,
     sourceIndex,
-    grabOffsetX: source.width / 2,
-    sourceInitialLeft: ORIGIN + source.contentLeft,
-    sourceWidth: source.width,
-    stripTop: 0,
-    stripBottom: 38,
+    grabOffset: source.extent / 2,
+    sourceInitialStart: ORIGIN + source.contentStart,
+    sourceExtent: source.extent,
+    bandStart: 0,
+    bandEnd: 38,
   };
 }
 
 /** Pointer x that puts the dragged tab's centre exactly at `centre`. */
 function pointerForCentre(geometry: StripDragGeometry, centre: number): number {
-  const sourceWidth = geometry.slots[geometry.sourceIndex]?.width ?? 0;
-  return centre + geometry.grabOffsetX - sourceWidth / 2;
+  const sourceExtent = geometry.slots[geometry.sourceIndex]?.extent ?? 0;
+  return centre + geometry.grabOffset - sourceExtent / 2;
 }
 
 function sweep(
@@ -76,11 +86,11 @@ function sweep(
 ): ReadonlyArray<StripDragState> {
   const states: StripDragState[] = [];
   let previous: StripDragState | null = null;
-  for (const pointerX of xs) {
+  for (const pointer of xs) {
     previous = resolveStripDragState({
       geometry,
-      contentOriginX: ORIGIN,
-      pointerX,
+      contentOrigin: ORIGIN,
+      pointer,
       previous,
     });
     states.push(previous);
@@ -111,8 +121,8 @@ describe("header strip drag model", () => {
         x: ORIGIN + offset,
         index: resolveStripDragState({
           geometry,
-          contentOriginX: ORIGIN,
-          pointerX: ORIGIN + offset,
+          contentOrigin: ORIGIN,
+          pointer: ORIGIN + offset,
           previous: null,
         }).targetIndex,
       }));
@@ -129,8 +139,8 @@ describe("header strip drag model", () => {
       for (let x = swapForward?.x ?? 0; x > ORIGIN - 400; x -= 1) {
         const next = resolveStripDragState({
           geometry,
-          contentOriginX: ORIGIN,
-          pointerX: x,
+          contentOrigin: ORIGIN,
+          pointer: x,
           previous,
         });
         previous = next;
@@ -194,8 +204,8 @@ describe("header strip drag model", () => {
       const geometry = geometryFor([191, 191, 191, 191], 0, null);
       const jumped = resolveStripDragState({
         geometry,
-        contentOriginX: ORIGIN,
-        pointerX: ORIGIN + 700,
+        contentOrigin: ORIGIN,
+        pointer: ORIGIN + 700,
         previous: { kind: "reorder", targetIndex: 0 },
       });
       expect(jumped.targetIndex).toBe(3);
@@ -260,6 +270,36 @@ describe("header strip drag model", () => {
         }
       }
     });
+
+    // The model is one-dimensional: a side strip feeds it y positions and row
+    // heights. What it adds over the tables above is a measured gap in every
+    // advance (the strip's 2px row gap) and a split pair as one taller item.
+    it("holds on a gapped strip of rows, from every source", () => {
+      const heights = [32, 32, 66, 32, 32];
+      for (let source = 0; source < heights.length; source += 1) {
+        const geometry = gappedGeometryFor(heights, source, null, 2);
+        const indices = sweep(
+          geometry,
+          range(ORIGIN - 100, ORIGIN + 350, 1),
+        ).map((state) => state.targetIndex);
+        for (let i = 2; i < indices.length; i += 1) {
+          const alternating =
+            indices[i] === indices[i - 2] && indices[i] !== indices[i - 1];
+          expect(alternating).toBe(false);
+        }
+      }
+      const fromTop = sweep(
+        gappedGeometryFor(heights, 0, null, 2),
+        range(ORIGIN, ORIGIN + 300, 1),
+      ).map((state) => state.targetIndex);
+      for (let i = 1; i < fromTop.length; i += 1) {
+        expect(fromTop[i]).toBeGreaterThanOrEqual(fromTop[i - 1] ?? 0);
+        expect(
+          Math.abs((fromTop[i] ?? 0) - (fromTop[i - 1] ?? 0)),
+        ).toBeLessThanOrEqual(1);
+      }
+      expect(fromTop.at(-1)).toBe(heights.length - 1);
+    });
   });
 
   describe("scroll independence", () => {
@@ -270,8 +310,8 @@ describe("header strip drag model", () => {
         for (let offset = 0; offset < 800; offset += 1) {
           previous = resolveStripDragState({
             geometry,
-            contentOriginX: originX,
-            pointerX: originX + offset,
+            contentOrigin: originX,
+            pointer: originX + offset,
             previous,
           });
           if (previous.targetIndex === 1) return offset;
@@ -293,8 +333,8 @@ describe("header strip drag model", () => {
       const fromLeft = geometryFor(widths, 0, null);
       const leftApproach = resolveStripDragState({
         geometry: fromLeft,
-        contentOriginX: ORIGIN,
-        pointerX: pointerForCentre(fromLeft, targetCentre - 25),
+        contentOrigin: ORIGIN,
+        pointer: pointerForCentre(fromLeft, targetCentre - 25),
         previous: null,
       });
       expect(leftApproach.kind).toBe("merge");
@@ -308,8 +348,8 @@ describe("header strip drag model", () => {
       expect(
         resolveStripDragState({
           geometry: fromLeft,
-          contentOriginX: ORIGIN,
-          pointerX: pointerForCentre(fromLeft, targetCentre + 1),
+          contentOrigin: ORIGIN,
+          pointer: pointerForCentre(fromLeft, targetCentre + 1),
           previous: leftApproach,
         }).kind,
       ).toBe("reorder");
@@ -317,8 +357,8 @@ describe("header strip drag model", () => {
       const fromRight = geometryFor(widths, 2, null);
       const rightApproach = resolveStripDragState({
         geometry: fromRight,
-        contentOriginX: ORIGIN,
-        pointerX: pointerForCentre(fromRight, targetCentre + 25),
+        contentOrigin: ORIGIN,
+        pointer: pointerForCentre(fromRight, targetCentre + 25),
         previous: null,
       });
       expect(rightApproach.kind).toBe("merge");
@@ -332,8 +372,8 @@ describe("header strip drag model", () => {
       expect(
         resolveStripDragState({
           geometry: fromRight,
-          contentOriginX: ORIGIN,
-          pointerX: pointerForCentre(fromRight, targetCentre - 1),
+          contentOrigin: ORIGIN,
+          pointer: pointerForCentre(fromRight, targetCentre - 1),
           previous: rightApproach,
         }).kind,
       ).toBe("reorder");
@@ -347,8 +387,8 @@ describe("header strip drag model", () => {
       const geometry = geometryFor([191, 191, 191], 0, null);
       const merged = resolveStripDragState({
         geometry,
-        contentOriginX: ORIGIN,
-        pointerX: pointerForCentre(geometry, ORIGIN + 191 + 191 / 2),
+        contentOrigin: ORIGIN,
+        pointer: pointerForCentre(geometry, ORIGIN + 191 + 191 / 2),
         previous: null,
       });
       expect(merged.kind).toBe("merge");
@@ -360,7 +400,7 @@ describe("header strip drag model", () => {
     it("keeps a merge on the approaching half, then reorders past midpoint", () => {
       const geometry = geometryFor([191, 191, 191], 0, null);
       const centre = ORIGIN + 191 + 191 / 2;
-      const pointerX = pointerForCentre(geometry, centre);
+      const pointer = pointerForCentre(geometry, centre);
       const merge: StripDragState = {
         kind: "merge",
         targetIndex: 0,
@@ -369,16 +409,16 @@ describe("header strip drag model", () => {
       };
       const insideHalf = resolveStripDragState({
         geometry,
-        contentOriginX: ORIGIN,
-        pointerX: pointerX - 4,
+        contentOrigin: ORIGIN,
+        pointer: pointer - 4,
         previous: merge,
       });
       expect(insideHalf.kind).toBe("merge");
 
       const pastMidpoint = resolveStripDragState({
         geometry,
-        contentOriginX: ORIGIN,
-        pointerX: pointerX + 4,
+        contentOrigin: ORIGIN,
+        pointer: pointer + 4,
         previous: merge,
       });
       expect(pastMidpoint.kind).toBe("reorder");
@@ -393,8 +433,8 @@ describe("header strip drag model", () => {
       const geometry = geometryFor([100, 100, 100], 0, null);
       const swapped = resolveStripDragState({
         geometry,
-        contentOriginX: ORIGIN,
-        pointerX: pointerForCentre(geometry, ORIGIN + 151),
+        contentOrigin: ORIGIN,
+        pointer: pointerForCentre(geometry, ORIGIN + 151),
         previous: null,
       });
       expect(swapped.kind).toBe("reorder");
@@ -404,8 +444,8 @@ describe("header strip drag model", () => {
       // centre at 50, so centre 75 is on its right half.
       const reversed = resolveStripDragState({
         geometry,
-        contentOriginX: ORIGIN,
-        pointerX: pointerForCentre(geometry, ORIGIN + 75),
+        contentOrigin: ORIGIN,
+        pointer: pointerForCentre(geometry, ORIGIN + 75),
         previous: swapped,
       });
       expect(reversed.kind).toBe("merge");
@@ -420,11 +460,11 @@ describe("header strip drag model", () => {
     it("never merges into a split group - it reorders past it", () => {
       const geometry = geometryFor([191, 382, 191], 0, [true, false, true]);
       const splitCentre = ORIGIN + 191 + 382 / 2;
-      const pointerX = pointerForCentre(geometry, splitCentre);
+      const pointer = pointerForCentre(geometry, splitCentre);
       const state = resolveStripDragState({
         geometry,
-        contentOriginX: ORIGIN,
-        pointerX,
+        contentOrigin: ORIGIN,
+        pointer,
         previous: null,
       });
       expect(state.kind).toBe("reorder");
@@ -440,7 +480,7 @@ describe("header strip drag model", () => {
       const widths = [100, 100, 100];
       const targetCentre = ORIGIN + 50;
       const centreGrab = geometryFor(widths, 1, null);
-      const edgeGrab: StripDragGeometry = { ...centreGrab, grabOffsetX: 95 };
+      const edgeGrab: StripDragGeometry = { ...centreGrab, grabOffset: 95 };
 
       for (const geometry of [centreGrab, edgeGrab]) {
         // Dragged tab's centre on the target's near (right) half: merge, with
@@ -449,8 +489,8 @@ describe("header strip drag model", () => {
         // matter.
         const nearHalf = resolveStripDragState({
           geometry,
-          contentOriginX: ORIGIN,
-          pointerX: pointerForCentre(geometry, targetCentre + 25),
+          contentOrigin: ORIGIN,
+          pointer: pointerForCentre(geometry, targetCentre + 25),
           previous: null,
         });
         expect(nearHalf.kind).toBe("merge");
@@ -460,8 +500,8 @@ describe("header strip drag model", () => {
         // Centre past the target's midpoint: the swap fires.
         const pastMidpoint = resolveStripDragState({
           geometry,
-          contentOriginX: ORIGIN,
-          pointerX: pointerForCentre(geometry, targetCentre - 1),
+          contentOrigin: ORIGIN,
+          pointer: pointerForCentre(geometry, targetCentre - 1),
           previous: nearHalf,
         });
         expect(pastMidpoint.kind).toBe("reorder");
@@ -476,8 +516,8 @@ describe("header strip drag model", () => {
       const centre = ORIGIN + 191 + 191 / 2;
       const state = resolveStripDragState({
         geometry,
-        contentOriginX: ORIGIN,
-        pointerX: pointerForCentre(geometry, centre),
+        contentOrigin: ORIGIN,
+        pointer: pointerForCentre(geometry, centre),
         previous: null,
       });
       expect(state.kind).toBe("merge");
@@ -519,8 +559,8 @@ describe("header strip drag model", () => {
       const removed: ReadonlyArray<StripSlot> = [
         {
           itemId: "item-0",
-          width: 191,
-          contentLeft: 0,
+          extent: 191,
+          contentStart: 0,
           advance: 191,
           isMergeTarget: true,
         },
@@ -545,19 +585,19 @@ describe("header strip drag model", () => {
       const geometry: StripDragGeometry = {
         slots: built,
         sourceIndex: 0,
-        grabOffsetX: 60,
-        sourceInitialLeft: ORIGIN,
-        sourceWidth: 120,
-        stripTop: 0,
-        stripBottom: 38,
+        grabOffset: 60,
+        sourceInitialStart: ORIGIN,
+        sourceExtent: 120,
+        bandStart: 0,
+        bandEnd: 38,
       };
-      // Neighbour 1 sits at contentLeft 140, so its centre is ORIGIN + 200.
+      // Neighbour 1 sits at contentStart 140, so its centre is ORIGIN + 200.
       // Ignoring the gap would put it at ORIGIN + 180 and every boundary with it.
       const centre = ORIGIN + 200;
       const state = resolveStripDragState({
         geometry,
-        contentOriginX: ORIGIN,
-        pointerX: pointerForCentre(geometry, centre),
+        contentOrigin: ORIGIN,
+        pointer: pointerForCentre(geometry, centre),
         previous: null,
       });
       expect(state.kind).toBe("merge");
@@ -574,35 +614,35 @@ describe("header strip drag model", () => {
       // partway through a drag and stopped tracking, because the clamp was
       // computed against a rect that follows the sliding placeholder while the
       // transform was measured from the original position.
-      for (const grabOffsetX of [0, 95, W]) {
+      for (const grabOffset of [0, 95, W]) {
         for (
-          let pointerX = STRIP_LEFT + grabOffsetX;
-          pointerX < STRIP_RIGHT - W + grabOffsetX;
-          pointerX += 7
+          let pointer = STRIP_LEFT + grabOffset;
+          pointer < STRIP_RIGHT - W + grabOffset;
+          pointer += 7
         ) {
-          const left = overlayLeftForPointer({
-            pointerX,
-            grabOffsetX,
-            sourceWidth: W,
-            stripLeft: STRIP_LEFT,
-            stripRight: STRIP_RIGHT,
+          const left = overlayStartForPointer({
+            pointer,
+            grabOffset,
+            sourceExtent: W,
+            stripStart: STRIP_LEFT,
+            stripEnd: STRIP_RIGHT,
           });
-          expect(pointerX - left).toBeCloseTo(grabOffsetX, 6);
+          expect(pointer - left).toBeCloseTo(grabOffset, 6);
         }
       }
     });
 
     it("never pins at the source's original right edge", () => {
       // 213/404/594.4 are the three source positions whose right edge WAS the
-      // observed pin. At pointerX 888 the true answer is the strip's right
+      // observed pin. At pointer 888 the true answer is the strip's right
       // bound (784.16), which is legitimately clamped - the defect pinned at
       // 404.3, a third of the strip away and unrelated to any bound.
-      const left = overlayLeftForPointer({
-        pointerX: 888,
-        grabOffsetX: 95,
-        sourceWidth: W,
-        stripLeft: STRIP_LEFT,
-        stripRight: STRIP_RIGHT,
+      const left = overlayStartForPointer({
+        pointer: 888,
+        grabOffset: 95,
+        sourceExtent: W,
+        stripStart: STRIP_LEFT,
+        stripEnd: STRIP_RIGHT,
       });
       expect(left).toBeCloseTo(STRIP_RIGHT - W, 6);
       for (const sourceLeft of [213, 404]) {
@@ -617,32 +657,32 @@ describe("header strip drag model", () => {
     });
 
     it("clamps to the strip at both ends and nowhere else", () => {
-      const atLeft = overlayLeftForPointer({
-        pointerX: 0,
-        grabOffsetX: 95,
-        sourceWidth: W,
-        stripLeft: STRIP_LEFT,
-        stripRight: STRIP_RIGHT,
+      const atLeft = overlayStartForPointer({
+        pointer: 0,
+        grabOffset: 95,
+        sourceExtent: W,
+        stripStart: STRIP_LEFT,
+        stripEnd: STRIP_RIGHT,
       });
       expect(atLeft).toBe(STRIP_LEFT);
-      const atRight = overlayLeftForPointer({
-        pointerX: 5000,
-        grabOffsetX: 95,
-        sourceWidth: W,
-        stripLeft: STRIP_LEFT,
-        stripRight: STRIP_RIGHT,
+      const atRight = overlayStartForPointer({
+        pointer: 5000,
+        grabOffset: 95,
+        sourceExtent: W,
+        stripStart: STRIP_LEFT,
+        stripEnd: STRIP_RIGHT,
       });
       expect(atRight).toBeCloseTo(STRIP_RIGHT - W, 6);
     });
 
     it("degrades to the strip's left edge when the strip is narrower than the tab", () => {
       expect(
-        overlayLeftForPointer({
-          pointerX: 900,
-          grabOffsetX: 0,
-          sourceWidth: 400,
-          stripLeft: 100,
-          stripRight: 300,
+        overlayStartForPointer({
+          pointer: 900,
+          grabOffset: 0,
+          sourceExtent: 400,
+          stripStart: 100,
+          stripEnd: 300,
         }),
       ).toBe(100);
     });
@@ -654,11 +694,11 @@ describe("header strip drag model", () => {
       const neighbourCentre = ORIGIN + 130 + 101 / 2;
       const justBefore = pointerForCentre(geometry, neighbourCentre - 1);
       const justAfter = pointerForCentre(geometry, neighbourCentre + 1);
-      const at = (pointerX: number) =>
+      const at = (pointer: number) =>
         resolveStripDragState({
           geometry,
-          contentOriginX: ORIGIN,
-          pointerX,
+          contentOrigin: ORIGIN,
+          pointer,
           previous: null,
         });
       expect(at(justBefore).targetIndex).toBe(0);
@@ -672,15 +712,15 @@ describe("header strip drag model", () => {
       const centre = ORIGIN + 130 + 101 / 2;
       let state = resolveStripDragState({
         geometry,
-        contentOriginX: ORIGIN,
-        pointerX: pointerForCentre(geometry, centre),
+        contentOrigin: ORIGIN,
+        pointer: pointerForCentre(geometry, centre),
         previous: null,
       });
       expect(state.kind).toBe("reorder");
       state = resolveStripDragState({
         geometry,
-        contentOriginX: ORIGIN,
-        pointerX: pointerForCentre(geometry, centre),
+        contentOrigin: ORIGIN,
+        pointer: pointerForCentre(geometry, centre),
         previous: state,
       });
       expect(state.kind).toBe("reorder");
@@ -766,8 +806,8 @@ describe("header strip drag model", () => {
   describe("cross-group insertion index", () => {
     it("counts slot centres passed, with no source slot to skip", () => {
       const slots = slotsFor([130, 101, 192]);
-      const at = (pointerX: number) =>
-        insertionIndexFromPointer(slots, ORIGIN, pointerX);
+      const at = (pointer: number) =>
+        insertionIndexFromPointer(slots, ORIGIN, pointer);
       expect(at(ORIGIN + 1)).toBe(0);
       expect(at(ORIGIN + 64)).toBe(0);
       expect(at(ORIGIN + 66)).toBe(1);

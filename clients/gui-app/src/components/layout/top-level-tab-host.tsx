@@ -16,6 +16,7 @@ import { useDroppable } from "@dnd-kit/core";
 import { useNavigate } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
+import { browserGuestCssSheetAnchorName } from "@/lib/browser-view/guest/persistent-browser-guest-host";
 import {
   flattenStripItemRefs,
   tabRefKey,
@@ -27,7 +28,7 @@ import {
 import { tabSurfaceDescriptor } from "@/stores/tabs/registry";
 import { useHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useRegionShown } from "@/lib/layout-overrides";
 import { homeHeaderTab } from "@/stores/tabs/kinds/home";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { draftTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
@@ -103,7 +104,7 @@ export function TopLevelTabHost() {
     })),
   );
   const headerTabs = useHeaderTabs();
-  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
+  const homeTabEnabled = useRegionShown("homeTab");
   // Home holds the selection as `activeItemId === null`, so it is the one
   // surface whose visibility is not a question about `items`.
   const homeIsActive = homeTabEnabled && activeItemId === null;
@@ -369,6 +370,7 @@ function TopLevelSurfaceMount(props: {
         aria-hidden={!mount.activity.visible}
         className={surfaceClassName(mount.placement)}
         data-focused={mount.activity.focused ? "true" : "false"}
+        data-shell-sheet={mount.tab.kind === "epic" ? undefined : "route"}
         data-surface-kind={mount.tab.kind}
         data-surface-ref={tabRefKey(mount.tab)}
         data-testid={`top-level-surface-${mount.tab.kind}-${mount.tab.id}`}
@@ -376,7 +378,13 @@ function TopLevelSurfaceMount(props: {
         onFocusCapture={paneActivation.onFocusCapture}
         onPointerDownCapture={paneActivation.onPointerDownCapture}
         onPointerCancelCapture={paneActivation.onPointerCancelCapture}
-        style={surfaceStyle(mount.placement)}
+        style={{
+          ...surfaceStyle(mount.placement),
+          anchorName:
+            mount.tab.kind === "epic"
+              ? undefined
+              : browserGuestCssSheetAnchorName(mount.tab.id),
+        }}
       >
         <TabSurfaceActivityProvider activity={mount.activity}>
           <SurfacePresentationBoundary
@@ -595,6 +603,8 @@ function TabSurface(props: { readonly tab: HeaderTab }): ReactNode {
   switch (props.tab.kind) {
     case "epic":
       return <EpicTabSurface tab={props.tab} />;
+    case "sample-workspace":
+      return tabSurfaceDescriptor("sample-workspace").render(props.tab);
     case "draft":
       return tabSurfaceDescriptor("draft").render(props.tab);
     case "history":

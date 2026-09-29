@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import {
   hostIsLocalForLoginAutoOpen,
+  providerHostBlock,
+  providerHostBlockLabel,
   providerLoginIsRemoteSafe,
   providerSignInUnavailableHint,
   providerStartLoginFailureMessage,
   providerSupportsTerminalLogin,
   shouldAutoOpenLoginUrl,
+  type ProviderHostBlock,
 } from "@/components/providers/provider-signin-availability";
 
 function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
@@ -64,7 +67,9 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
  */
 describe("providerSignInUnavailableHint", () => {
   it("is null when sign-in actually works", () => {
-    expect(providerSignInUnavailableHint(providerState({}), true)).toBeNull();
+    expect(
+      providerSignInUnavailableHint(providerState({}), true, "sign-in"),
+    ).toBeNull();
   });
 
   it("names the provider's own capability before anything situational", () => {
@@ -73,6 +78,7 @@ describe("providerSignInUnavailableHint", () => {
     const hint = providerSignInUnavailableHint(
       providerState({ loginCapability: null }),
       false,
+      "sign-in",
     );
     expect(hint).toContain("does not support browser sign-in");
     expect(hint).toContain("Account tab");
@@ -103,6 +109,7 @@ describe("providerSignInUnavailableHint", () => {
           },
         }),
         true,
+        "sign-in",
       ),
     ).toBeNull();
   });
@@ -111,6 +118,7 @@ describe("providerSignInUnavailableHint", () => {
     const hint = providerSignInUnavailableHint(
       providerState({ providerId: "traycer", loginCapability: null }),
       true,
+      "sign-in",
     );
     expect(hint).toContain("does not support browser sign-in");
     expect(hint).not.toContain("CLI");
@@ -118,7 +126,11 @@ describe("providerSignInUnavailableHint", () => {
   });
 
   it("explains the remote-host case in terms of what sign-in does", () => {
-    const hint = providerSignInUnavailableHint(providerState({}), false);
+    const hint = providerSignInUnavailableHint(
+      providerState({}),
+      false,
+      "sign-in",
+    );
     expect(hint).toContain("opens a browser on the machine running Traycer");
   });
 
@@ -136,6 +148,7 @@ describe("providerSignInUnavailableHint", () => {
           },
         }),
         false,
+        "sign-in",
       ),
     ).toBeNull();
   });
@@ -155,6 +168,7 @@ describe("providerSignInUnavailableHint", () => {
           },
         }),
         false,
+        "sign-in",
       ),
     ).toBeNull();
   });
@@ -169,6 +183,7 @@ describe("providerSignInUnavailableHint", () => {
         managedInstallState: { status: "downloading", percent: 30 },
       }),
       true,
+      "sign-in",
     );
     expect(hint).toContain("30%");
     expect(hint).not.toContain("local host");
@@ -183,6 +198,7 @@ describe("providerSignInUnavailableHint", () => {
           managedInstallState: { status: "downloading", percent: 30 },
         }),
         true,
+        "sign-in",
       ),
     ).toBeNull();
   });
@@ -203,6 +219,7 @@ describe("providerSignInUnavailableHint", () => {
         },
       }),
       true,
+      "sign-in",
     );
     expect(hint).toContain("signed in from a terminal");
     expect(hint).not.toContain("browser sign-in");
@@ -234,7 +251,11 @@ describe("providerSignInUnavailableHint", () => {
       });
       const terminalHint = `${name} is signed in from a terminal. Open its model picker in a chat or on the start page and use the terminal sign-in there.`;
       for (const isSelectedHostLocal of [true, false]) {
-        const hint = providerSignInUnavailableHint(state, isSelectedHostLocal);
+        const hint = providerSignInUnavailableHint(
+          state,
+          isSelectedHostLocal,
+          "sign-in",
+        );
         if (apiKeySupported) {
           expect(hint).toBe(
             `${terminalHint} Or set an API key on the Account tab.`,
@@ -268,6 +289,7 @@ describe("providerSignInUnavailableHint", () => {
           },
         }),
         true,
+        "sign-in",
       );
       expect(hint).toContain("Qwen Code is signed in from a terminal");
       expect(hint).not.toContain("its own CLI");
@@ -290,6 +312,7 @@ describe("providerLoginIsRemoteSafe", () => {
       providerSignInUnavailableHint(
         providerState({ providerId: "kimi", loginCapability: kimiCapability }),
         false,
+        "sign-in",
       ),
     ).toBeNull();
     expect(
@@ -524,5 +547,150 @@ describe("providerStartLoginFailureMessage", () => {
         "Sign-in did not start.",
       ),
     ).toContain("did not print a device code");
+  });
+});
+
+describe("providerHostBlock", () => {
+  it("blocks a disabled provider for the sign-in gesture", () => {
+    expect(
+      providerHostBlock(providerState({ enabled: false }), "sign-in"),
+    ).toEqual({ kind: "disabled" });
+  });
+
+  // Onboarding's "Sign in & enable" turns the provider on as its LAST step,
+  // so being off is where it starts from, not a reason to refuse the click.
+  it("does not block a disabled provider for sign-in-and-enable", () => {
+    expect(
+      providerHostBlock(
+        providerState({ enabled: false }),
+        "sign-in-and-enable",
+      ),
+    ).toBeNull();
+  });
+
+  it("is unblocked whenever any candidate is available, whatever the pack state says", () => {
+    expect(
+      providerHostBlock(
+        providerState({
+          candidates: [
+            {
+              kind: "bundled",
+              path: "/opt/traycer/bin/claude",
+              version: "1.0.0",
+              available: true,
+              versionPending: false,
+            },
+          ],
+          managedInstallState: { status: "downloading", percent: 10 },
+        }),
+        "sign-in",
+      ),
+    ).toBeNull();
+  });
+
+  it("reports the pack with fallbackRunnable forced to false", () => {
+    // No candidate is available, so nothing stands in for the pack whatever
+    // the raw preparing state says - the label has to say "preparing", not
+    // "updating in the background".
+    expect(
+      providerHostBlock(
+        providerState({
+          candidates: [],
+          managedInstallState: { status: "downloading", percent: 42 },
+        }),
+        "sign-in",
+      ),
+    ).toEqual({
+      kind: "pack",
+      preparing: {
+        kind: "downloading",
+        percent: 42,
+        retryAtMs: null,
+        reason: null,
+        fallbackRunnable: false,
+      },
+    });
+  });
+
+  it("reports cli-checking while the CLI probe has not settled", () => {
+    expect(
+      providerHostBlock(
+        providerState({ candidates: [], availabilityPending: true }),
+        "sign-in",
+      ),
+    ).toEqual({ kind: "cli-checking" });
+    expect(
+      providerHostBlock(
+        providerState({
+          candidates: [
+            {
+              kind: "bundled",
+              path: "/opt/traycer/bin/claude",
+              version: null,
+              available: false,
+              versionPending: true,
+            },
+          ],
+        }),
+        "sign-in",
+      ),
+    ).toEqual({ kind: "cli-checking" });
+  });
+
+  it("reports cli-missing once the probe has settled with nothing to run", () => {
+    expect(
+      providerHostBlock(providerState({ candidates: [] }), "sign-in"),
+    ).toEqual({ kind: "cli-missing" });
+  });
+
+  it("answers disabled for sign-in and pack for sign-in-and-enable on a disabled provider with a downloading pack", () => {
+    const state = providerState({
+      enabled: false,
+      candidates: [],
+      managedInstallState: { status: "downloading", percent: 5 },
+    });
+    expect(providerHostBlock(state, "sign-in")).toEqual({ kind: "disabled" });
+    expect(providerHostBlock(state, "sign-in-and-enable")).toEqual({
+      kind: "pack",
+      preparing: {
+        kind: "downloading",
+        percent: 5,
+        retryAtMs: null,
+        reason: null,
+        fallbackRunnable: false,
+      },
+    });
+  });
+});
+
+describe("providerHostBlockLabel", () => {
+  const label = "Claude Code";
+
+  it("labels the disabled, cli-checking and cli-missing kinds", () => {
+    expect(providerHostBlockLabel({ kind: "disabled" }, label)).toBe(
+      `${label} is turned off. Turn it on to sign in or manage its profiles.`,
+    );
+    expect(providerHostBlockLabel({ kind: "cli-checking" }, label)).toBe(
+      `Checking for the ${label} CLI…`,
+    );
+    expect(providerHostBlockLabel({ kind: "cli-missing" }, label)).toBe(
+      `The ${label} CLI is not installed on this host.`,
+    );
+  });
+
+  it("renders a pack block through providerPackPreparingLabel", () => {
+    const block: ProviderHostBlock = {
+      kind: "pack",
+      preparing: {
+        kind: "downloading",
+        percent: 42,
+        retryAtMs: null,
+        reason: null,
+        fallbackRunnable: false,
+      },
+    };
+    expect(providerHostBlockLabel(block, label)).toBe(
+      `Preparing ${label}… 42%`,
+    );
   });
 });

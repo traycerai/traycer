@@ -1,4 +1,4 @@
-import { type CSSProperties } from "react";
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useRouter } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
@@ -10,10 +10,6 @@ import {
 } from "@/lib/history-navigation";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
-
-// `-webkit-app-region` isn't in the standard CSSProperties typings; the cluster
-// opts out of title-bar drag so the arrows stay clickable on frameless desktop.
-const NO_DRAG_STYLE = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
 /**
  * In-app back/forward arrows for the desktop title bar. Walk the global
@@ -43,6 +39,7 @@ export function HistoryNavButtons() {
  * built with), so this boundary is stable and costs no remount.
  */
 function HistoryNavArrows() {
+  const placement = useColumnOverlayPlacement("top");
   const router = useRouter();
   const { canGoBack, canGoForward } = useHistoryNavState();
   const backChord = useBindingForAction("nav.back");
@@ -56,16 +53,24 @@ function HistoryNavArrows() {
       ? "Go forward"
       : `Go forward (${formatChordForDisplay(forwardChord)})`;
   return (
-    <div className="flex shrink-0 items-center" style={NO_DRAG_STYLE}>
+    // Non-editable chrome: the layout editor dims this cluster while a session
+    // is live (4.2). The marker sits on the arrows' own box, which contains no
+    // customizable region - a `filter` on an ancestor of one would dim the
+    // region it contains. The cluster opts out of the title-bar drag region so
+    // the arrows stay clickable on frameless desktop.
+    <div
+      data-layout-passive
+      className="flex shrink-0 items-center [-webkit-app-region:no-drag]"
+    >
       {/* Tooltip trigger is the wrapping <span>, not the Button: a disabled
           Button receives no pointer events, so a tooltip attached directly to it
           would vanish exactly when the arrow is disabled - the moment a user most
           needs the label to know what the greyed control does. */}
       <TooltipWrapper
         label={backTooltip}
-        side="top"
+        side={placement?.side ?? "top"}
         sideOffset={6}
-        align={undefined}
+        align={placement?.align}
       >
         <span className="inline-flex">
           <Button
@@ -83,9 +88,9 @@ function HistoryNavArrows() {
       </TooltipWrapper>
       <TooltipWrapper
         label={forwardTooltip}
-        side="top"
+        side={placement?.side ?? "top"}
         sideOffset={6}
-        align={undefined}
+        align={placement?.align}
       >
         <span className="inline-flex">
           <Button

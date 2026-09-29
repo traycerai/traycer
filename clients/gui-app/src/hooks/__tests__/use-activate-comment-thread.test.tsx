@@ -29,15 +29,14 @@ function activate(): void {
 
 /**
  * Every field the hook writes, back to empty. `setActivePanelIdAndExpand`
- * touches three slices of the left-panel store and `revealCommentsPanel` a
- * fourth, so resetting the active-panel map alone would leave a test's expand
+ * touches two slices of the left-panel store and `revealCommentsPanel` a
+ * third, so resetting the active-panel map alone would leave a test's expand
  * and reveal state visible to the next one.
  */
 function resetStores(): void {
   useLeftPanelStore.setState({
     activePanelIdByTabId: {},
     mainCollapsedByTabId: {},
-    panelSectionCollapsedByPanelId: {},
     commentsPanelRevealedByTabId: {},
   });
   useMobileSwitcherStore.setState({ openTabId: null });

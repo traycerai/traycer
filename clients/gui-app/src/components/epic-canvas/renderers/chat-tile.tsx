@@ -63,6 +63,10 @@ import {
   WorkingVerbContext,
   pickWorkingVerb,
 } from "@/components/chat/working-verb";
+import {
+  ThinkingTokensSourceContext,
+  type ThinkingTokensSource,
+} from "@/components/chat/thinking-tokens-source";
 import { ContextUsageChip } from "@/components/chat/context-usage-chip";
 import { ChatRestoreProvider } from "@/components/chat/chat-restore-context";
 import { RevertOnEditDialog } from "@/components/chat/segments/revert-on-edit-dialog";
@@ -101,6 +105,7 @@ import type {
   ChatComposerSideChatInput,
   ChatComposerSubmitInput,
 } from "@/components/chat/composer/chat-composer";
+import { suggestionOfferableWhilePending } from "@/components/chat/composer/prompt-suggestion";
 import {
   sideChatPlacementForTile,
   startSideChat,
@@ -1497,13 +1502,18 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
              * get a definite height (h-full on LegendList needs a real
              * containing block all the way up). The overlay dock below is
              * absolutely positioned, so it does not participate in this flex
-             * layout regardless. */}
-            <div className="relative flex min-h-0 flex-1 flex-col">
+             * layout regardless. The definite flex height also makes this a
+             * size container for the dock panel's proportional height. */}
+            <div
+              data-chat-pane=""
+              className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
+            >
               <TranscriptQueuePauseReasonSupportContext
                 value={queuePauseReasonSupport}
               >
                 <ChatSessionMessagesSurface
                   snapshotLoaded={view.snapshotLoaded}
+                  thinkingTokensSource={view.handle.store}
                   connectionStatus={view.connectionStatus}
                   fatalClose={view.fatalClose}
                   preSnapshotRetries={view.preSnapshotRetries}
@@ -1852,6 +1862,9 @@ function useChatTileSessionViewModel(
       // ride this slice rather than earning a second subscription path.
       pendingFallback: s.pendingFallback,
       pendingReturn: s.pendingReturn,
+      // Changes a handful of times per turn at most (set after a turn, cleared
+      // on the next send), so it rides this slice too.
+      suggestedPrompt: s.suggestedPrompt,
       pendingBackgroundStops: s.pendingBackgroundStops,
       pendingBackgroundStopAll: s.pendingBackgroundStopAll,
       pendingBackgroundSessionStop: s.pendingBackgroundSessionStop,
@@ -3529,6 +3542,10 @@ function useChatTileSessionViewModel(
       onSettingsChange: handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
+      suggestedPrompt: suggestionOfferableWhilePending(
+        state.suggestedPrompt,
+        state.pendingActions,
+      ),
     }),
     [
       state.currentComposerSettings,
@@ -3544,6 +3561,8 @@ function useChatTileSessionViewModel(
       handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
+      state.suggestedPrompt,
+      state.pendingActions,
     ],
   );
 
@@ -3733,6 +3752,12 @@ function useChatTileSessionViewModel(
 
 interface ChatSessionMessagesSurfaceProps {
   readonly snapshotLoaded: boolean;
+  /**
+   * The chat session store, handed to the streaming "Thinking" label so it can
+   * subscribe to the thinking-token estimate on its own - see
+   * `ThinkingTokensSourceContext` for why a source and not the number.
+   */
+  readonly thinkingTokensSource: ThinkingTokensSource;
   readonly connectionStatus: StreamConnectionStatus;
   readonly fatalClose: FatalErrorDetails | null;
   /** Failed pre-snapshot attempts; see `ChatTilePreContent`. */
@@ -3865,33 +3890,37 @@ function ChatSessionMessagesSurface(
       <MobileDrawerVisibleTilePaintReporter ready />
       <ChatPlanActionsContext.Provider value={props.planActions}>
         <WorkingVerbContext.Provider value={workingVerb}>
-          <ChatMarkdownLinkProvider
-            tabId={props.viewTabId}
-            workspaceRoots={props.workspaceRoots}
+          <ThinkingTokensSourceContext.Provider
+            value={props.thinkingTokensSource}
           >
-            <ChatMessages
-              taskTitle={props.taskTitle}
-              taskId={props.node.id}
-              epicId={props.epicId}
-              hostId={props.tabHostId}
-              messages={props.messages}
-              transcriptWindow={props.transcriptWindow}
-              onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
-              onFindReadOrdinalChange={props.onFindReadOrdinalChange}
-              baselineEpoch={props.baselineEpoch}
-              hydrationSequence={props.hydrationSequence}
-              coldRewrittenMessageIds={props.coldRewrittenMessageIds}
-              backgroundItems={props.backgroundItems}
-              scrollRequest={props.scrollRequest}
-              onScrollRequestSettled={props.onScrollRequestSettled}
-              getMessageActions={props.getMessageActions}
-              nextStepActions={props.nextStepActions}
-              instanceId={props.node.instanceId}
-              visible={props.surfaceVisible}
-              systemOverlayActive={props.systemOverlayActive}
-              composerOverlayHeight={props.composerOverlayHeight}
-            />
-          </ChatMarkdownLinkProvider>
+            <ChatMarkdownLinkProvider
+              tabId={props.viewTabId}
+              workspaceRoots={props.workspaceRoots}
+            >
+              <ChatMessages
+                taskTitle={props.taskTitle}
+                taskId={props.node.id}
+                epicId={props.epicId}
+                hostId={props.tabHostId}
+                messages={props.messages}
+                transcriptWindow={props.transcriptWindow}
+                onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
+                onFindReadOrdinalChange={props.onFindReadOrdinalChange}
+                baselineEpoch={props.baselineEpoch}
+                hydrationSequence={props.hydrationSequence}
+                coldRewrittenMessageIds={props.coldRewrittenMessageIds}
+                backgroundItems={props.backgroundItems}
+                scrollRequest={props.scrollRequest}
+                onScrollRequestSettled={props.onScrollRequestSettled}
+                getMessageActions={props.getMessageActions}
+                nextStepActions={props.nextStepActions}
+                instanceId={props.node.instanceId}
+                visible={props.surfaceVisible}
+                systemOverlayActive={props.systemOverlayActive}
+                composerOverlayHeight={props.composerOverlayHeight}
+              />
+            </ChatMarkdownLinkProvider>
+          </ThinkingTokensSourceContext.Provider>
         </WorkingVerbContext.Provider>
       </ChatPlanActionsContext.Provider>
     </ChatRestoreProvider>

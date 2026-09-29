@@ -3,7 +3,7 @@ import { History } from "lucide-react";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { historyTabIntent } from "@/lib/tab-navigation/intents";
 import type { SystemTab, TabKindModule } from "@/stores/tabs/types";
-import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import { TAB_KIND_SPLIT_ELIGIBILITY } from "@/stores/tabs/tab-kind-policy";
 
 const HISTORY_TAB_LABEL = "History";
 const HISTORY_DEFAULT_PATH = "/epics";
@@ -35,7 +35,7 @@ export const historyTabModule: TabKindModule<"history", SystemTab> = {
     surface: {
       render: () => createElement(historySurface),
       canonicalRoute: (tab) => tab.route,
-      splitEligibility: "eligible",
+      splitEligibility: TAB_KIND_SPLIT_ELIGIBILITY.history,
       duplication: "forbidden",
       singleton: "per-window",
       newWindow: "copy",
@@ -48,11 +48,8 @@ export const historyTabModule: TabKindModule<"history", SystemTab> = {
     activate: () => {
       useLandingDraftStore.getState().clearActiveDraft();
     },
-    requestClose: () => {
-      tabCommandCoordinator.closeRefAfterConfirmed({
-        kind: "history",
-        id: "history",
-      });
+    requestClose: (_tab, close) => {
+      close({ kind: "history", id: "history" });
     },
     requiresCloseConfirm: () => false,
     openInNewWindow: (tab, deps) => {

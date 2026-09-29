@@ -17,7 +17,8 @@ import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
  *     entry would be inert; toggling it is the mic button's job);
  *   - `desktopOnly` actions in the installed mobile app (the surface they
  *     act on is never drawn there);
- *   - `app.home.open` while the Home tab setting is off.
+ *   - `app.home.open` while the Home tab setting is off;
+ *   - `app.tabs.vertical.collapse` while this window's tabs are at the top.
  */
 import { useMemo } from "react";
 import {
@@ -26,9 +27,10 @@ import {
   type ActionId,
   type ActionMeta,
 } from "@/lib/keybindings/actions";
+import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-placement";
 import { isMobileApp } from "@/lib/mobile-app";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import type { CommandItem, ReactCommandSource } from "@/lib/commands/types";
 
 export const actionsSource: ReactCommandSource = {
@@ -38,24 +40,29 @@ export const actionsSource: ReactCommandSource = {
     const canRecover = useTabRecoveryHistory(
       (state) => state.ready && state.entries.length > 0,
     );
-    const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
+    const homeTabEnabled = isHomeTabEnabled();
+    const verticalTabs = useTabStripPlacement() !== "top";
     return useMemo<ReadonlyArray<CommandItem>>(() => {
       const items: Array<CommandItem> = [];
       for (const id of ACTION_IDS) {
         const meta = ACTION_META[id];
         if (
-          !isPaletteEligible(meta, homeTabEnabled) ||
+          !isPaletteEligible(meta, homeTabEnabled, verticalTabs) ||
           (id === "tab.reopen" && !canRecover)
         )
           continue;
         items.push(buildActionItem(meta, bindings[id] ?? null));
       }
       return items;
-    }, [bindings, canRecover, homeTabEnabled]);
+    }, [bindings, canRecover, homeTabEnabled, verticalTabs]);
   },
 };
 
-function isPaletteEligible(meta: ActionMeta, homeTabEnabled: boolean): boolean {
+function isPaletteEligible(
+  meta: ActionMeta,
+  homeTabEnabled: boolean,
+  verticalTabs: boolean,
+): boolean {
   if (meta.kind !== "chord") return false;
   // The installed mobile app never draws the surface a desktop-only action
   // acts on, and nothing there registers its handler - so the row would offer
@@ -65,6 +72,8 @@ function isPaletteEligible(meta: ActionMeta, homeTabEnabled: boolean): boolean {
   // Its handler no-ops while the Home tab is off, and a palette row that does
   // nothing is worse than no row.
   if (meta.id === "app.home.open" && !homeTabEnabled) return false;
+  // Only the vertical strip registers its handler (`side-tab-strip.tsx`).
+  if (meta.id === "app.tabs.vertical.collapse" && !verticalTabs) return false;
   if (meta.id === "app.palette.open") return false;
   // No dispatchAction handler; handled by the capture-phase dictation hook.
   if (meta.id === "composer.dictation.toggle") return false;
@@ -75,6 +84,11 @@ function isPaletteEligible(meta: ActionMeta, homeTabEnabled: boolean): boolean {
   return true;
 }
 
+/** Former names a person may still type: the strip's drawer was "Inbox". */
+const ACTION_SYNONYMS: Partial<Record<ActionId, ReadonlyArray<string>>> = {
+  "app.notifications.open": ["inbox"],
+};
+
 function buildActionItem(
   meta: ActionMeta,
   shortcut: string | null,
@@ -84,7 +98,7 @@ function buildActionItem(
     id: `action:${actionId}`,
     label: meta.label,
     description: meta.description,
-    keywords: [meta.category],
+    keywords: [meta.category, ...(ACTION_SYNONYMS[actionId] ?? [])],
     group: "actions",
     scope: "actions",
     shortcut,

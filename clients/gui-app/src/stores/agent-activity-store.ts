@@ -663,6 +663,37 @@ export function selectAgentActivityCoverage(
 }
 
 /**
+ * {@link AgentActivityCoverage} for something whose agents may be on ANY of
+ * the account's machines - a task, or the account as a whole. Which machines
+ * a cold task uses is unknown, so it is covered only when the union reaches
+ * all of them:
+ *
+ * - a fleet-spanning union -> `covered`, the shortcut;
+ * - the directory has not settled (`knownHostIds` is `null`) or lists no
+ *   host -> `indeterminate`: no claim about which machines exist;
+ * - every known host's own slice covers it -> `covered`, which is what lets a
+ *   one-host account on a local plane (free tier, cloud sync off) read idle;
+ * - otherwise a known host the plane does not reach -> `unserved`, unless
+ *   nothing answers at all, which stays `indeterminate`.
+ */
+export function selectKnownHostsActivityCoverage(
+  byHost: ReadonlyMap<string, HostAgentActivity>,
+  knownHostIds: readonly string[] | null,
+): AgentActivityCoverage {
+  if (selectPlaneSpansFleet(byHost)) return "covered";
+  if (knownHostIds === null || knownHostIds.length === 0) {
+    return "indeterminate";
+  }
+  let unserved = false;
+  for (const hostId of knownHostIds) {
+    const coverage = selectAgentActivityCoverage(byHost, hostId);
+    if (coverage === "indeterminate") return "indeterminate";
+    if (coverage === "unserved") unserved = true;
+  }
+  return unserved ? "unserved" : "covered";
+}
+
+/**
  * Reactive {@link selectAgentActivityCoverage}. Returns a primitive, so
  * Zustand's `Object.is` comparison re-renders a consumer only when the answer
  * itself flips - never on the unrelated `byHost` replacements every frame and

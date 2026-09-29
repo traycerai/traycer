@@ -691,6 +691,18 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   /**
+   * Every host the account is known to have, or `null` while
+   * {@link hasSettledFleet} is false: before the registry has answered, the
+   * rows are a local-only snapshot that cannot say which other machines exist.
+   * The flag and the rows are read together here, so a caller asking "is every
+   * machine accounted for" never pairs one listing with another's flag.
+   */
+  knownHostIds(): readonly string[] | null {
+    if (!this.hasObservedRemoteListing) return null;
+    return this.snapshot().map((entry) => entry.hostId);
+  }
+
+  /**
    * Whether an attempt to read the registry has FINISHED under the current
    * identity, whatever it said - see {@link hasConcludedRemoteAttempt}.
    *

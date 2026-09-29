@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { pinShortDateLocale } from "@/components/chat-search/__tests__/pin-short-date-locale";
 import { CHAT_SEARCH_MAX_QUERY_CHARS } from "@traycer/protocol/host/chat-search/schemas";
 import type {
   ChatSearchChatMatch,
@@ -177,6 +178,8 @@ afterEach(() => {
   effectiveHostId.current = "host-1";
   setReachable(true);
 });
+
+pinShortDateLocale();
 
 describe("ChatSearchPanel: host reachability", () => {
   it("sends no request while the host is unreachable, then sends one once it connects", async () => {

@@ -387,6 +387,8 @@ function ProfileEditAccountSection(props: {
   readonly startInReauth: boolean;
   readonly isLocalHost: boolean;
   readonly canOauth: boolean;
+  /** Why `canOauth` is false, from the same helper that decided it. */
+  readonly oauthUnavailableHint: string | null;
   readonly savePending: boolean;
   readonly invalid: boolean;
   readonly onStartSwitchingAccount: () => void;
@@ -423,7 +425,8 @@ function ProfileEditAccountSection(props: {
         label={
           props.canOauth
             ? null
-            : "Switch account requires a local host with browser sign-in available."
+            : (props.oauthUnavailableHint ??
+              "Switch account requires a local host with browser sign-in available.")
         }
         side="top"
         sideOffset={6}
@@ -461,6 +464,8 @@ export function ProfileEditDialog(props: {
   readonly profile: ProviderProfile;
   readonly profiles: readonly ProviderProfile[];
   readonly canOauth: boolean;
+  /** Why `canOauth` is false, shown on the Switch account control. */
+  readonly oauthUnavailableHint: string | null;
   readonly startInReauth: boolean;
   readonly isLocalHost: boolean;
   readonly open: boolean;
@@ -515,6 +520,7 @@ export function ProfileEditDialog(props: {
   const dialogCopy = profileEditDialogCopy(props.profile, props.startInReauth);
   const eligibilityDisabledReason = profileEligibilityToggleDisabledReason(
     props.state.enabled,
+    PROVIDER_DISPLAY_NAMES[providerId],
     props.profile,
     props.profiles,
   );
@@ -639,6 +645,7 @@ export function ProfileEditDialog(props: {
               startInReauth={props.startInReauth}
               isLocalHost={props.isLocalHost}
               canOauth={props.canOauth}
+              oauthUnavailableHint={props.oauthUnavailableHint}
               savePending={savePending}
               invalid={invalid}
               onStartSwitchingAccount={() => setSwitchingAccount(true)}

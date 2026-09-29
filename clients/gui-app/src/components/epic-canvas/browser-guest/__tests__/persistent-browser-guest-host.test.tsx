@@ -132,8 +132,13 @@ describe("PersistentBrowserGuestHost", () => {
     if (remountedClipper === null) {
       throw new Error("expected remounted guest clipper");
     }
+    const remountedSheetClipper = remountedClipper.parentElement;
+    if (remountedSheetClipper === null) {
+      throw new Error("expected remounted sheet clipper");
+    }
     expect(remounted).not.toBe(firstGuest);
-    expect(remountedClipper.parentNode).toBe(replacementHost);
+    expect(remountedSheetClipper.parentNode).toBe(replacementHost);
+    expect(remountedSheetClipper.dataset.browserGuestSheet).toBe("view-1");
     expect(remounted.parentNode).toBe(remountedClipper);
     expect(wrapperState(REGISTRATION_A)).toBe("presented");
 

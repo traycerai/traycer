@@ -38,14 +38,10 @@ export function useArtifactRowDisplay(input: {
   const activeHostId = useTabHostId();
   const { openTile } = useEpicTileNavigation();
 
-  const displayKind: EpicArtifactKind =
-    live?.kind ?? input.artifactKind ?? "spec";
-  const title =
-    nonEmpty(live?.title) ??
-    nonEmpty(input.fallbackTitle) ??
-    EPIC_NODE_LABELS[displayKind];
-  const isDeleted = input.operation === "delete";
-  const canOpen = live !== null && !isDeleted;
+  const { displayKind, title, isDeleted, canOpen } = rowDisplayFields(
+    live,
+    input,
+  );
 
   const openArtifact = (): void => {
     if (live === null || input.artifactId === null) {
@@ -68,4 +64,42 @@ export function useArtifactRowDisplay(input: {
   };
 
   return { displayKind, title, isDeleted, canOpen, openArtifact };
+}
+
+/**
+ * The same row with no open epic behind it (the layout editor's sample
+ * workspace): the captured tag's kind and title, and nothing to open.
+ */
+export function sessionlessArtifactRowDisplay(input: {
+  readonly artifactKind: EpicArtifactKind | null;
+  readonly fallbackTitle: string | null;
+  readonly operation: CheckpointFileOperation;
+}): ArtifactRowDisplay {
+  return {
+    ...rowDisplayFields(null, input),
+    openArtifact: () => undefined,
+  };
+}
+
+function rowDisplayFields(
+  live: { readonly kind: EpicArtifactKind; readonly title: string } | null,
+  input: {
+    readonly artifactKind: EpicArtifactKind | null;
+    readonly fallbackTitle: string | null;
+    readonly operation: CheckpointFileOperation;
+  },
+): Omit<ArtifactRowDisplay, "openArtifact"> {
+  const displayKind: EpicArtifactKind =
+    live?.kind ?? input.artifactKind ?? "spec";
+  const title =
+    nonEmpty(live?.title) ??
+    nonEmpty(input.fallbackTitle) ??
+    EPIC_NODE_LABELS[displayKind];
+  const isDeleted = input.operation === "delete";
+  return {
+    displayKind,
+    title,
+    isDeleted,
+    canOpen: live !== null && !isDeleted,
+  };
 }

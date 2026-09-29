@@ -73,7 +73,7 @@ export function TileCanvas(props: TileCanvasProps) {
   const renderLive = snapshotLoaded || hasActiveHandoff;
   return (
     <div
-      className="canvas-token-scope relative h-full min-h-0 w-full overflow-hidden border border-canvas-border/70 bg-canvas text-canvas-foreground max-md:border-0"
+      className="canvas-token-scope relative h-full min-h-0 w-full overflow-hidden bg-canvas text-canvas-foreground"
       data-testid="tile-canvas"
     >
       <TileCanvasBody

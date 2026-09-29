@@ -36,6 +36,11 @@ export function WorktreeChangedStreamMount(): ReactNode {
   // Rebuild when capabilities change; the session's negotiated version below
   // is the authority for whether replay coverage is safe to claim.
   const schemaVersion = useStreamMethodSchemaVersion("worktree.changed");
+  const schemaVersionKey =
+    schemaVersion === null
+      ? "unknown"
+      : `${schemaVersion.major}.${schemaVersion.minor}`;
+  const unsupported = support === "unsupported";
   // Both the rebuild key AND the identity the reopen lane and the query
   // invalidations below are scoped to - so it must come off the same
   // `StreamRuntimeBinding` as `wsStreamClient` (one binding, one answer),
@@ -51,11 +56,7 @@ export function WorktreeChangedStreamMount(): ReactNode {
   } | null>(null);
 
   useEffect(() => {
-    if (
-      wsStreamClient === null ||
-      hostId === null ||
-      support === "unsupported"
-    ) {
+    if (wsStreamClient === null || hostId === null || unsupported) {
       return;
     }
     // The host's freshness sweep pushes one event per re-derived row; the
@@ -174,7 +175,7 @@ export function WorktreeChangedStreamMount(): ReactNode {
       scheduler.dispose();
       hostConnection.release();
     };
-  }, [hostId, queryClient, schemaVersion, support, wsStreamClient]);
+  }, [hostId, queryClient, schemaVersionKey, unsupported, wsStreamClient]);
 
   return null;
 }

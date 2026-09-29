@@ -290,7 +290,7 @@ describe("<QueuedMessagePanel />", () => {
     const header = screen.getByTestId("queued-message-header");
     const toggle = screen.getByTestId("queued-message-header-toggle");
     const runningDot = screen.getByLabelText("Queue running");
-    const title = screen.getByText("Message Queue");
+    const title = screen.getByText("Message queue");
     const divider = screen.getByTestId("queued-message-header-divider");
     const statusIcon = screen.getByTestId("queued-message-header-status-icon");
     const count = screen.getByText("2 messages");
@@ -514,7 +514,7 @@ describe("<QueuedMessagePanel />", () => {
     const content = within(
       screen.getByTestId("queued-message-row"),
     ).getByTestId("queued-message-content-scroll");
-    expect(content.className).toContain("max-h-[3lh]");
+    expect(content.className).toContain("max-h-[calc(3lh+--spacing(1))]");
     expect(content.className).toContain("overflow-y-auto");
   });
 
@@ -1575,6 +1575,7 @@ function renderPanel(input: PanelInput) {
         readOnly={input.readOnly}
         editingQueueItemId={null}
         scrollRegionMaxHeightClass="max-h-96"
+        separated={false}
         onPause={input.onPause ?? (() => null)}
         onResume={input.onResume ?? (() => null)}
         onEdit={vi.fn()}

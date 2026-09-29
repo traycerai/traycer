@@ -14,12 +14,17 @@ const { mockAppState, mockMenuState, trayInstances } = vi.hoisted(() => ({
 
 interface MockTrayInstanceLike {
   readonly toolTips: string[];
+  // Every menu handed to `setContextMenu`, in call order - lets a test count
+  // rebuilds (`.length`) rather than only inspect the latest one.
+  readonly contextMenus: unknown[];
   readonly eventHandlers: Record<string, Array<() => void>>;
   contextMenu: unknown;
   destroyed: boolean;
+  destroyCallCount: number;
   setToolTip(text: string): void;
   on(event: string, handler: () => void): void;
   setContextMenu(menu: unknown): void;
+  isDestroyed(): boolean;
   destroy(): void;
 }
 
@@ -49,9 +54,11 @@ interface CapturedMenuItemLike {
 vi.mock("electron", () => {
   class MockTrayClass implements MockTrayInstanceLike {
     readonly toolTips: string[] = [];
+    readonly contextMenus: unknown[] = [];
     readonly eventHandlers: Record<string, Array<() => void>> = {};
     contextMenu: unknown = null;
     destroyed = false;
+    destroyCallCount = 0;
 
     constructor(_image: unknown) {
       trayInstances.push(this);
@@ -66,8 +73,13 @@ vi.mock("electron", () => {
     }
     setContextMenu(menu: unknown): void {
       this.contextMenu = menu;
+      this.contextMenus.push(menu);
+    }
+    isDestroyed(): boolean {
+      return this.destroyed;
     }
     destroy(): void {
+      this.destroyCallCount += 1;
       this.destroyed = true;
     }
   }
@@ -717,5 +729,78 @@ describe("DesktopTrayController menu structure", () => {
     expect(labels.some((l) => l.toString().startsWith("Update to"))).toBe(
       false,
     );
+  });
+
+  // Cold-review: the controller outlives its tray during quit, when
+  // subscriptions (epics, presentation, the summon accelerator, the
+  // indicator) can still push updates after `dispose()` has already
+  // destroyed the native tray. Electron throws "Object has been destroyed"
+  // on any call into a destroyed Tray, so every setter above must check
+  // `this.tray.isDestroyed()` first and become a no-op rather than crash.
+  describe("dispose", () => {
+    it("drives the native tray before dispose() - control for the no-op assertions below", () => {
+      const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+        onEpicSelected: null,
+        onCommand: null,
+      });
+      const tray = mostRecentTray();
+      const contextMenuCallsBefore = tray.contextMenus.length;
+
+      controller.setEpics([
+        { epicId: "e1", title: "Before Dispose", subtitle: "just now" },
+      ]);
+
+      // The harness can genuinely observe a rebuild - so the "no rebuild
+      // after dispose" assertions in the next test aren't vacuously true.
+      expect(tray.contextMenus.length).toBeGreaterThan(contextMenuCallsBefore);
+    });
+
+    it("stops driving the native tray once destroyed, without throwing", () => {
+      const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+        onEpicSelected: null,
+        onCommand: null,
+      });
+      const tray = mostRecentTray();
+
+      controller.dispose();
+      expect(tray.isDestroyed()).toBe(true);
+
+      const contextMenuCallsAfterDispose = tray.contextMenus.length;
+      const toolTipCallsAfterDispose = tray.toolTips.length;
+
+      expect(() => {
+        controller.setEpics([
+          { epicId: "e2", title: "After Dispose", subtitle: "later" },
+        ]);
+        controller.setPresentation({
+          authStatus: "signed-in",
+          account: { name: "Post Dispose", email: "post@example.com" },
+          canCheckForUpdates: true,
+          hostUpdateAvailableVersion: "9.9.9",
+        });
+        controller.setSummonAccelerator("CommandOrControl+Shift+Space");
+        controller.setIndicator("attention");
+      }).not.toThrow();
+
+      // None of the four setters above reached `setContextMenu` /
+      // `setToolTip` again - the destroyed tray was left alone.
+      expect(tray.contextMenus.length).toBe(contextMenuCallsAfterDispose);
+      expect(tray.toolTips.length).toBe(toolTipCallsAfterDispose);
+    });
+
+    it("is idempotent: a second dispose() does not call destroy() again", () => {
+      const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+        onEpicSelected: null,
+        onCommand: null,
+      });
+      const tray = mostRecentTray();
+
+      controller.dispose();
+      expect(tray.destroyCallCount).toBe(1);
+      expect(tray.isDestroyed()).toBe(true);
+
+      controller.dispose();
+      expect(tray.destroyCallCount).toBe(1);
+    });
   });
 });

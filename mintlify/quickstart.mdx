@@ -1,6 +1,6 @@
 ---
 title: "Quickstart"
-description: "Select a workspace folder, create your first Task, and run your first agent."
+description: "Sign in, send your first prompt to start a Task and its first agent, and review the result."
 keywords:
   [
     "quickstart",
@@ -23,31 +23,30 @@ This guide gets you from a fresh Traycer install to one useful coding-agent inte
 You need:
 
 - Traycer installed.
-- A local code folder you want Traycer to work with.
-- At least one coding agent path available.
+- A coding agent you can use, such as Claude Code or Codex with your own account, or the Traycer provider, which uses Traycer credits. See [Agents & Models](/agents-and-models/coding-agents).
+- Optionally, a local code folder for Traycer to work in.
 
 ## First Run
 
 <Steps>
-  <Step title="Open Traycer Desktop">
-    Launch Traycer and choose the workspace folder for the repository or project
-    you want to work on.
+  <Step title="Sign in">
+    Open Traycer and click **Sign in** on the **Welcome to Traycer** screen. You approve the sign-in in your browser. See [Sign In](/account/sign-in).
   </Step>
-  <Step title="Create a Task">
-    A Task is the container for this piece of work. It can hold agents,
-    terminals, files, git diff, and artifacts.
+  <Step title="Finish onboarding">
+    A short onboarding lets you choose your coding agents and import your existing Claude Code, Codex, and OpenCode chats. See [First run and importing](/first-run).
   </Step>
-  <Step title="Start your first agent">
-    Pick a coding agent and model, then describe what you want. Traycer keeps
-    the work connected to the Task, workspace, files, and artifacts.
+  <Step title="Pick a folder (optional)">
+    On the start page, click **Add folder** to choose the project Traycer should work in, then choose where the agent runs: **Local**, a **New worktree**, or an **Existing worktree**. See [Worktrees](/concepts/worktrees). You can also start without a folder.
   </Step>
-  <Step title="Describe the change">
-    Ask for a small, concrete change or investigation. Keep the first run narrow
-    so you can inspect the result easily.
+  <Step title="Send your first prompt">
+    <Warning>
+      New conversations start in **Full access**: the agent runs commands and edits files without asking. To be asked first, pick another mode in the composer's permission picker before you send, or change the default in Settings › Permissions › Modes › **New conversations start in**. See [Permissions](/settings/permissions).
+    </Warning>
+
+    Pick a coding agent, model and permission mode, describe a small, concrete change or investigation, and press **Enter**. Sending the prompt creates the Task and its first agent together, and the agent starts working.
   </Step>
   <Step title="Review the result">
-    Use the File Tree and Git Diff panels inside the Task to inspect what
-    changed.
+    Use the [File Tree](/panels/file-tree) and [Git Diff](/panels/git-diff) panels inside the Task to inspect what changed. To roll back a turn's changes, see [Undo a turn](/panels/agents/undo-a-turn).
   </Step>
 </Steps>
 
@@ -57,6 +56,7 @@ You need:
 | -------------------- | ------------------------------------------------------- |
 | **Workspace folder** | The local code folder Traycer is working against.       |
 | **Task**             | The top-level container for this work.                  |
+| **Agent**            | A coding-agent session inside the Task.                 |
 | **Artifact**         | A durable spec, ticket, story, or review inside a Task. |
 
 ## Next Steps
@@ -70,10 +70,10 @@ You need:
     attachments, voice input, and per-turn settings.
   </Card>
   <Card title="Set up Agents & Models" href="/agents-and-models/coding-agents">
-    Configure Codex, Claude Code, OpenCode, Cursor, or Traycer.
+    Compare the supported coding agents and set up their accounts.
   </Card>
-  <Card title="Review changes" href="/panels/artifacts">
-    Use git diff and review artifacts to inspect work before shipping.
+  <Card title="Review changes" href="/panels/git-diff">
+    Inspect changed files and review diffs before shipping.
   </Card>
   <Card title="Artifact workflow" href="/concepts/artifact-workflow">
     How a Task holds artifacts, and which planning skills to run for a large

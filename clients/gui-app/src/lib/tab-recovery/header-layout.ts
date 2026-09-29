@@ -28,6 +28,7 @@ const persistedKinds = {
   // affordance, and the close path only builds a recovery entry for `draft` and
   // `epic`, so nothing can record one.
   home: "home",
+  "sample-workspace": "sample-workspace",
   settings: "settings",
 } as const satisfies { [Kind in TabRef["kind"]]: Kind };
 
@@ -38,7 +39,11 @@ const persistedKinds = {
 // which the singleton has no way to reconcile. Derived by subtraction rather
 // than written out, so a newly registered kind is recoverable by default and
 // only a deliberate exclusion needs a line here.
-const { home: _home, ...recoverableKinds } = persistedKinds;
+const {
+  home: _home,
+  "sample-workspace": _sample,
+  ...recoverableKinds
+} = persistedKinds;
 const refSchema = z.object({ kind: z.enum(recoverableKinds), id: z.string() });
 const sideSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("tab"), ref: refSchema }),

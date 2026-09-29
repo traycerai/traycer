@@ -186,8 +186,11 @@ describe("<ChatProgressIcon />", () => {
       screen.getByRole("status", { name: BACKGROUND_RUNNING_LABEL }),
     ).toBeDefined();
     expect(
-      screen.getByTestId(BACKGROUND_TEST_ID).getAttribute("class"),
-    ).toContain("lucide-message-square-clock");
+      screen
+        .getByTestId(BACKGROUND_TEST_ID)
+        .closest("[data-status-glyph]")
+        ?.getAttribute("data-status-glyph"),
+    ).toBe("background");
     expect(
       screen.queryByRole("status", { name: TURN_RUNNING_LABEL }),
     ).toBeNull();

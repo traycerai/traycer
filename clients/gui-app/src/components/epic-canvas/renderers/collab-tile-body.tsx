@@ -64,7 +64,12 @@ import {
 } from "@/stores/comments/comment-threads-store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { cn } from "@/lib/utils";
+import {
+  useArrangementValue,
+  useReadingWidthClass,
+  useRegionShown,
+} from "@/lib/layout-overrides";
 import type { EpicArtifactRoomAvailability } from "@/stores/epics/open-epic/types";
 import type { Editor } from "@tiptap/core";
 import { EditorContent } from "@tiptap/react";
@@ -303,6 +308,7 @@ function CollabTileSkeleton(props: {
   readonly bodyBoundOnce: boolean;
   readonly budgetElapsed: boolean;
 }) {
+  const readingWidth = useReadingWidthClass();
   const testIdSuffix =
     props.subscribeAnswered && props.bodyAvailability === "unavailable"
       ? "unavailable"
@@ -321,7 +327,10 @@ function CollabTileSkeleton(props: {
       data-body-subscribe-answered={props.subscribeAnswered ? "true" : "false"}
       data-body-bound-once={props.bodyBoundOnce ? "true" : "false"}
       data-budget-elapsed={props.budgetElapsed ? "true" : "false"}
-      className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 py-8"
+      className={cn(
+        "mx-auto flex w-full flex-col gap-3 px-6 py-8",
+        readingWidth,
+      )}
     >
       {notice === null ? (
         <>
@@ -381,6 +390,7 @@ function draftRangeOwnedByTile(
 }
 
 function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
+  const readingWidth = useReadingWidthClass();
   const {
     node,
     viewTabId,
@@ -751,7 +761,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
         className="flex h-full min-h-0 flex-col overflow-y-auto px-6 py-8"
         onScroll={onScroll}
       >
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+        <div className={cn("mx-auto flex w-full flex-col gap-4", readingWidth)}>
           <div className="tc-editor-surface">
             <div
               className="tc-editor-body"
@@ -893,10 +903,11 @@ function CollabTileBodySyncStrip(props: {
  * artifact kinds get an outline - a workspace file tile shares this body but
  * is not a document with a heading skeleton.
  *
- * `hide` unmounts it on a desktop viewport, exactly as before the phone tile
- * bar existed - the rail is the only consumer there. On a phone viewport it
- * stays mounted and suppresses only its own rail, because the tile bar's
- * button reads the outline it registers and does not obey `hide`.
+ * A hidden minimap unmounts on a desktop viewport, exactly as before the phone
+ * tile bar existed - the rail is the only consumer there. On a phone viewport
+ * it stays mounted and suppresses only its own rail, because the tile bar's
+ * button reads the outline it registers and ignores the region's `shown`
+ * value.
  */
 function ArtifactHeadingMinimapMount(props: {
   readonly editor: Editor | null;
@@ -904,12 +915,13 @@ function ArtifactHeadingMinimapMount(props: {
   readonly refreshRef: RefObject<() => void>;
   readonly scroller: HTMLElement | null;
 }) {
-  const side = useSettingsStore((state) => state.chatTurnMinimapSide);
+  const minimapShown = useRegionShown("minimap");
+  const minimapSide = useArrangementValue("minimapSide");
   const isMobileViewport = useIsMobileViewport();
   if (
     props.editor === null ||
     !isEpicArtifactKind(props.node.type) ||
-    (side === "hide" && !isMobileViewport)
+    (!minimapShown && !isMobileViewport)
   ) {
     return null;
   }
@@ -918,7 +930,8 @@ function ArtifactHeadingMinimapMount(props: {
       editor={props.editor}
       refreshRef={props.refreshRef}
       scroller={props.scroller}
-      side={side}
+      shown={minimapShown}
+      side={minimapSide}
     />
   );
 }

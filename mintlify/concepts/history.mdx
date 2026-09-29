@@ -1,54 +1,120 @@
 ---
 title: "History"
-description: "Find, filter, open, rename, and clean up previous Tasks."
+description: "Find, search, filter, organize, open, and clean up previous Tasks."
 ---
 
-<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Sort, filter, search, and open Task history">
-  <source src="https://assets.traycer.ai/docs/videos/history.mp4" type="video/mp4" />
-  Unable to load video.
-</video>
+import { FeatureVideo } from "/snippets/feature-video.jsx";
 
-History is the place to find Tasks you have worked on before. It is a Task-level view, not an agent transcript view.
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/history.mp4" label="Sort, filter, search, and open Task history" />
 
-Open History when you want to return to earlier work, find a shared Task, or clean up Tasks you no longer need.
+History is the place to find Tasks you have worked on before, and the messages inside them. Press **⌘Y / Ctrl+Y** to open it.
+
+Open History when you want to return to earlier work, find a shared Task, organize Tasks with labels and groups, or clean up Tasks you no longer need.
 
 ## What History Shows
 
-Each History row represents a Task and shows a Task icon, title, and relative updated time. Hover a row to reveal pin, rename, and delete actions.
+Each row is a Task. From left to right, a row shows:
 
-Repositories, workspace folders, Hosts, and **Mine / Shared** ownership are filters inside the **Filter** popover; they are not row badges.
+- An icon that shows when the Task's agents are working or need your attention.
+- The Task's own icon and color, if you set a [Task appearance](#labels-groups-and-appearance).
+- The title, with an **Open** badge when the Task is already open in a tab.
+- The Task's group and up to two labels (one when it's in a group), with "+N" for the rest.
+- When it was last updated. Hovering a row whose worktrees have pull requests swaps the time for PR pills.
+
+Hovering a row also reveals its actions: pin, rename, [Sweep](/concepts/sweep) ("Sweep this task's worktrees"), and delete.
 
 Opening a row opens that Task.
 
-## Search, Filter, And Sort
+## Search
 
-History has search and filters for narrowing long lists of Tasks.
+The search box looks through Tasks and the messages inside them. Three tabs choose what you see, each with a count while you're searching:
 
-| Control | What it changes |
+| Tab | What it shows |
 |---|---|
-| **Search** | Finds Tasks by title, repository, branch, or PR number. |
-| **Ownership** | Filters between your Tasks and shared Tasks. |
-| **Repositories** | Filters by linked repo. |
-| **Workspaces** | Filters by linked workspace folder. |
-| **Hosts** | Filters by Host. |
-| **Sort** | Orders Tasks by most recent, last viewed, oldest, title, or relevance. |
+| **All** | Matching Tasks, then matching messages. |
+| **Tasks** | Only Tasks. The box reads "Search by title, repo, branch, or PR". |
+| **Messages** | Only chats with matching messages. The box names the host it searches. |
 
-When search text is active, relevance can be used as the sort order.
+Task search matches:
 
-## Managing History
+- The Task's title and repositories.
+- The branch of any of its worktrees, and its pull request number (`84`, `#84`, or `PR #84`).
+- A worktree's folder name, or its full path when the query contains `/`.
 
-History supports management actions for Tasks you can edit.
+Branch, pull request, and worktree matches come only from worktrees on the active host.
 
-| Action | What it does |
+Message search looks through the chats stored on the active host, across all your Tasks, and needs at least 2 characters. Click a result to open that chat at the message. History's filters don't apply to messages; when a filter is on, the Messages section says "Filters apply to tasks only." Use **Refine in chat search** to continue in [Search chats](/concepts/search-and-navigation).
+
+Press **Esc** to clear the search. The arrow keys move from the search box into the results and back.
+
+## Filter And Sort
+
+Click **Filter** to narrow the Task list:
+
+| Filter | What it matches |
 |---|---|
-| **Open** | Opens the selected Task. |
-| **Rename** | Changes the Task title. |
-| **Select** | Enters selection mode for bulk actions. |
-| **Sweep Worktrees…** | Opens [Sweep](/concepts/sweep) to remove worktrees for one or more Tasks while keeping their conversations and artifacts. |
-| **Delete** | Deletes selected Tasks when your permission allows it. |
+| **Ownership** | **Mine** or **Shared** Tasks. |
+| **Labels** | Tasks with the labels you pick. |
+| **Groups** | Tasks in the groups you pick, or with **No group**. |
+| **Repositories** | Tasks linked to the repositories you pick. |
+| **Hosts** | Tasks whose agents ran on the hosts you pick. |
+| **Workspaces** | Tasks linked to the workspace folders you pick. |
+
+When you pick more than one label, repository, host, or workspace, an **OR** / **AND** toggle appears next to that filter: **OR** matches Tasks with any of them, **AND** only Tasks with all of them. **Clear** removes every filter.
+
+The sort menu orders Tasks by **Most recent**, **Last viewed**, **Relevance**, **Oldest**, **Title A → Z**, or **Title Z → A**. Typing a search switches to **Relevance** unless you picked a sort yourself.
+
+### Pin Tasks
+
+Hover a row and click its pin icon to pin the Task to the top. Pinned Tasks stay above the others in every sort. Click the pin again to unpin it.
+
+Pinning needs a confirmed sign-in, and some Tasks can't be pinned; the pin's tooltip explains why.
+
+## Labels, Groups, And Appearance
+
+You can organize Tasks with labels, groups, and a personal icon and color. Right-click a row to reach them:
+
+| Menu item | What it does |
+|---|---|
+| **Labels** | Opens "Task organization", where you add or remove your labels, create a label, or copy someone else's label to your own list. |
+| **Task appearance** | Sets an **Icon** (an emoji or initials) and a **Color** for the Task. |
+| **Add to group** / **Move to group** | Puts the Task in one of your groups, or a **New group…**. |
+| **Remove from group** | Takes the Task out of its group. |
+
+Clicking a row's group or label chips also opens "Task organization". To rename, recolor, or delete your labels across every Task, open the **⋯** menu in the History toolbar and choose **Manage Labels**.
+
+Who sees what:
+
+| What | Visible to |
+|---|---|
+| **Labels** | Everyone with access to the Task ("Labels are visible to everyone with access to this task."). You can only add your own labels; viewers can inspect labels and copy them. |
+| **Groups** | Only you. A Task can be in one of your groups at a time, and a group with no Tasks left disappears. |
+| **Task appearance** | Only you. |
+
+**Imported** and **Automation** are system labels that Traycer adds. They're marked "System" and can't be edited or removed.
+
+Labels, groups, and appearance need a confirmed sign-in. Changes that haven't reached the cloud yet show "Waiting to sync", or "Sign in to sync your changes" when you need to sign in again.
+
+## Open And Manage Tasks
+
+| Action | How |
+|---|---|
+| **Open** | Click the row. |
+| **Open in Background** | Right-click the row, or middle-click it. Opens the Task in a tab without switching to it. |
+| **Open in New Window** | Right-click the row. |
+| **Rename** | Hover the row and click the pencil next to the title. |
+| **Select** | Click **Select** in the toolbar, or Cmd/Ctrl-click a row. **Select all**, **Deselect all**, and **Cancel** work on the selection. |
+| **Sweep Worktrees…** | Right-click a row, or use the row's paintbrush. With a selection, the toolbar's paintbrush sweeps all selected Tasks. See [Sweep](/concepts/sweep). |
+| **Delete** | Hover a row and click its delete button, or select Tasks and click delete in the toolbar. |
 | **Refresh** | Reloads the History list. |
 
-Viewer-only shared Tasks may not allow rename or delete actions.
+Viewers of a shared Task can't rename or delete it. Renaming, deleting, and pinning also need a confirmed sign-in.
+
+### Delete Tasks
+
+Deleting asks for confirmation and can't be undone. If the Tasks you're deleting have worktrees on the active host that no other Task uses, the confirmation adds **Remove local worktrees too?**, listing each worktree with anything that would be lost, such as uncommitted changes or commits not on the default branch. Worktrees proven safe to remove are checked for you; check or uncheck the rest.
+
+Checked worktrees are removed the same way [Sweep](/concepts/sweep) removes them, including their teardown script. Unchecked worktrees stay on disk; find them later in [Settings › Worktrees](/settings/worktrees).
 
 ## What History Is Not
 

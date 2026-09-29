@@ -1,8 +1,10 @@
-// The shared headless-Chrome launcher for the browser regression drivers:
-// all four CI-gated scripts (see `run-tests.ts`) plus `toast-over-modal-
-// hittest.mjs`. The two manual instruments (`window-host-modal-alignment-
-// browser.mjs`, `host-boot-family-gallery-browser.mjs`) still carry their own
-// standalone launchers.
+// The shared headless-Chrome launcher for the manual browser drivers in this
+// directory, and for `cdp-client-browser.mjs`, which CI runs
+// (`.github/workflows/browser-regressions.yml`). The CI-run regressions are
+// Playwright specs in `browser-tests/` and launch Chrome through Playwright.
+// Two manual instruments (`window-host-modal-alignment-browser.mjs`,
+// `host-boot-family-gallery-browser.mjs`) still carry their own standalone
+// launchers.
 //
 // Each driver used to carry its own copy of "find Chrome, spawn it, wait for
 // DevTools", and the copies drifted: only one of them honoured `CHROME_BIN`,

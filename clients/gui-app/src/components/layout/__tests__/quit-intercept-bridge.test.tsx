@@ -979,10 +979,9 @@ describe("QuitInterceptBridge", () => {
 
   // NOT COVERED HERE - COVERED IN A REAL BROWSER: the third dismissal path, an
   // outside/overlay pointer-down, is asserted end to end by
-  // `scripts/quit-intercept-cancel-browser.mjs` (headless Chrome over CDP,
-  // wired into `scripts/run-tests.ts` behind the same env flag CI already sets
-  // for the diff-edit browser regression). There it responds `userCancelled`,
-  // unmounts, and the window is measurably interactive again afterwards. Read
+  // `browser-tests/quit-intercept-cancel.spec.ts` (Playwright, real Chrome).
+  // There it responds `userCancelled`, unmounts, and the window is measurably
+  // interactive again afterwards. Read
   // the rest of this note as "why not in jsdom", not as "untested".
   //
   // It could not be driven in this jsdom/vitest

@@ -57,7 +57,12 @@ async function waitForProcessGone(pid: number): Promise<boolean> {
 }
 
 async function descendant(): Promise<void> {
-  process.once("SIGTERM", () => {
+  // `on` + latch, not `once`: see the node actuator's `descendant()`. A
+  // repeated TERM must not hit the default action mid-write.
+  let termHandled = false;
+  process.on("SIGTERM", () => {
+    if (termHandled) return;
+    termHandled = true;
     void writeFile(
       join(barrierDir, "descendant-exited"),
       String(process.pid),

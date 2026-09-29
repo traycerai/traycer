@@ -2,16 +2,20 @@ import { describe, expect, it } from "vitest";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   backgroundHeaderSummary,
-  backgroundRunningRowCount,
+  backgroundSectionCounts,
+  buildBackgroundTree,
+  buildRememberedBackgroundNodes,
+  dedupeByTaskId,
+  type BackgroundTreeNode,
 } from "@/lib/chat/background-item-tree";
 
-function wakeup(taskId: string): BackgroundItem {
+function wakeup(taskId: string, parentTaskId: string | null): BackgroundItem {
   return {
     taskId,
     kind: "wakeup",
     title: `Wake ${taskId}`,
     blockId: `${taskId}-block`,
-    parentTaskId: null,
+    parentTaskId,
     scheduledFor: 1,
   };
 }
@@ -28,64 +32,143 @@ function command(taskId: string): BackgroundItem {
   };
 }
 
+function cron(taskId: string): BackgroundItem {
+  return {
+    taskId,
+    kind: "cron",
+    title: `Cron ${taskId}`,
+    blockId: `${taskId}-block`,
+    parentTaskId: null,
+    schedule: "*/5 * * * *",
+    humanSchedule: "Every 5 minutes",
+    prompt: "check the build",
+    recurring: true,
+  };
+}
+
+/** The tree {@link backgroundSectionCounts} takes, over the deduped items. */
+function treeFor(
+  items: ReadonlyArray<BackgroundItem>,
+): ReadonlyArray<BackgroundTreeNode> {
+  const deduped = dedupeByTaskId(items);
+  return buildBackgroundTree(
+    deduped,
+    buildRememberedBackgroundNodes(deduped, new Map()),
+  );
+}
+
 /**
- * The predicate behind the compact chip's number and its whole live treatment.
- * A shell whose process is alive belongs in it however it was started - the
- * caller passes ids the store has already filtered to `status.state ===
- * "running"`, and a `monitoring` shell reaches that state like any other.
+ * The one count of what the Background section lists, shared by the panel's
+ * header and the compact chip. A shell whose process is alive belongs in the
+ * running count however it was started - the caller passes ids the store has
+ * already filtered to `status.state === "running"`, and a `monitoring` shell
+ * reaches that state like any other.
  */
-describe("backgroundRunningRowCount", () => {
+describe("backgroundSectionCounts", () => {
   it("counts every live shell the caller hands it", () => {
     expect(
-      backgroundRunningRowCount({
-        items: [],
+      backgroundSectionCounts({
+        tree: treeFor([]),
         runningManagedCommandIds: ["watcher-1", "watcher-2"],
         heldManagedCommandIds: [],
+        portForwardCount: 0,
       }),
-    ).toBe(2);
+    ).toMatchObject({ runningCount: 2, total: 2 });
   });
 
   // A hold is what the panel renders instead of the running row, so counting
-  // both would name a row that is not on screen.
-  it("leaves a held shell out of the running total", () => {
+  // both as running would name a row that is not on screen - but the hold
+  // still joins the total, since it is a row the panel does show.
+  it("leaves a held shell out of the running count, and counts it as held instead", () => {
     expect(
-      backgroundRunningRowCount({
-        items: [],
+      backgroundSectionCounts({
+        tree: treeFor([]),
         runningManagedCommandIds: ["watcher-1"],
         heldManagedCommandIds: ["watcher-1"],
+        portForwardCount: 0,
       }),
-    ).toBe(0);
+    ).toMatchObject({ runningCount: 0, heldCount: 1, total: 1 });
   });
 
-  // A wake is scheduled, not running; every other kind of delivered row is
-  // work in flight. Both halves add up, since a shell is not a harness row.
-  it("counts delivered rows but never a pending wake", () => {
+  // A wake is scheduled, not running, so it never joins the running count -
+  // but it is not dropped either: it has its own group, `waitingWakeCount`,
+  // and that group is counted even when the wake is nested under a running
+  // parent, since the panel still renders it as its own row.
+  it("counts a pending wake as waiting, never as running, nested or not", () => {
     expect(
-      backgroundRunningRowCount({
-        items: [wakeup("w1")],
+      backgroundSectionCounts({
+        tree: treeFor([wakeup("w1", null)]),
         runningManagedCommandIds: [],
         heldManagedCommandIds: [],
+        portForwardCount: 0,
       }),
-    ).toBe(0);
+    ).toMatchObject({ runningCount: 0, waitingWakeCount: 1, total: 1 });
+
+    // A wake nested under a running parent: the parent's group is running,
+    // and the nested wake is still its own waiting row.
     expect(
-      backgroundRunningRowCount({
-        items: [command("c1"), wakeup("w1")],
-        runningManagedCommandIds: ["watcher-1"],
+      backgroundSectionCounts({
+        tree: treeFor([command("c1"), wakeup("w1", "c1")]),
+        runningManagedCommandIds: [],
         heldManagedCommandIds: [],
+        portForwardCount: 0,
       }),
-    ).toBe(2);
+    ).toMatchObject({ runningCount: 1, waitingWakeCount: 1, total: 2 });
   });
 
   // The panel collapses a transient duplicate `taskId` to one row, so this
   // must too - the chip and the header read from here for exactly that reason.
   it("counts a duplicated task once", () => {
     expect(
-      backgroundRunningRowCount({
-        items: [command("c1"), command("c1")],
+      backgroundSectionCounts({
+        tree: treeFor([command("c1"), command("c1")]),
         runningManagedCommandIds: [],
         heldManagedCommandIds: [],
+        portForwardCount: 0,
       }),
-    ).toBe(1);
+    ).toMatchObject({ runningCount: 1, total: 1 });
+  });
+
+  // Every part at once: running items, a managed shell, a held shell and port
+  // forwards all add into the one total the chip prints.
+  it("sums running, held, waiting and port forwards into one total", () => {
+    expect(
+      backgroundSectionCounts({
+        tree: treeFor([command("c1"), wakeup("w1", null)]),
+        runningManagedCommandIds: ["watcher-1"],
+        heldManagedCommandIds: ["watcher-2"],
+        portForwardCount: 2,
+      }),
+    ).toMatchObject({
+      runningCount: 2,
+      heldCount: 1,
+      waitingWakeCount: 1,
+      scheduledJobCount: 0,
+      portForwardCount: 2,
+      total: 6,
+    });
+  });
+});
+
+// A scheduled job waits on its schedule the way a wake waits on its time: it
+// is listed, so the chip counts it, but it is never "running".
+describe("backgroundSectionCounts with scheduled jobs", () => {
+  it("counts a cron job as scheduled, not running, and in the total", () => {
+    expect(
+      backgroundSectionCounts({
+        tree: treeFor([cron("cron-1"), cron("cron-2"), command("cmd-1")]),
+        runningManagedCommandIds: [],
+        heldManagedCommandIds: [],
+        portForwardCount: 0,
+      }),
+    ).toEqual({
+      runningCount: 1,
+      heldCount: 0,
+      waitingWakeCount: 0,
+      scheduledJobCount: 2,
+      portForwardCount: 0,
+      total: 3,
+    });
   });
 });
 
@@ -96,6 +179,7 @@ describe("backgroundHeaderSummary", () => {
         runningCount: 0,
         heldCount: 0,
         waitingWakeCount: 0,
+        scheduledJobCount: 0,
         portForwardCount: 0,
       }),
     ).toBe("0 running");
@@ -107,6 +191,7 @@ describe("backgroundHeaderSummary", () => {
         runningCount: 0,
         heldCount: 0,
         waitingWakeCount: 0,
+        scheduledJobCount: 0,
         portForwardCount: 1,
       }),
     ).toBe("1 port forward");
@@ -118,6 +203,7 @@ describe("backgroundHeaderSummary", () => {
         runningCount: 0,
         heldCount: 0,
         waitingWakeCount: 0,
+        scheduledJobCount: 0,
         portForwardCount: 3,
       }),
     ).toBe("3 port forwards");
@@ -129,6 +215,7 @@ describe("backgroundHeaderSummary", () => {
         runningCount: 2,
         heldCount: 1,
         waitingWakeCount: 0,
+        scheduledJobCount: 0,
         portForwardCount: 0,
       }),
     ).toBe("2 running · 1 held");
@@ -142,8 +229,21 @@ describe("backgroundHeaderSummary", () => {
         runningCount: 2,
         heldCount: 1,
         waitingWakeCount: 4,
+        scheduledJobCount: 0,
         portForwardCount: 1,
       }),
     ).toBe("2 running · 1 held · 4 waiting · 1 port forward");
+  });
+
+  it("names scheduled jobs after the waiting wakes", () => {
+    expect(
+      backgroundHeaderSummary({
+        runningCount: 1,
+        heldCount: 0,
+        waitingWakeCount: 1,
+        scheduledJobCount: 2,
+        portForwardCount: 0,
+      }),
+    ).toBe("1 running · 1 waiting · 2 scheduled");
   });
 });

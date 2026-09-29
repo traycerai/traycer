@@ -19,6 +19,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 // and its reveal lapses at the deadline.
 export const HOST_OVERVIEW = defineSettingsSection("host", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Overview",
     description: "The selected host's status, version, and installation.",
     // The header's words: it is drawn over every tab, so a result for any of
