@@ -13,7 +13,10 @@ import type {
 import { createElement, type ReactNode } from "react";
 import { ProviderCliCandidatesSection } from "@/components/settings/panels/provider-cli-candidates-section";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
+import {
+  anyTooltipHasText,
+  tooltipTextNear,
+} from "@/components/ui/__tests__/tooltip-probe";
 
 type CapturedVersionManagerProps = {
   readonly hostId: string | null;
@@ -1426,5 +1429,93 @@ describe("ProviderCliCandidatesSection: keyboard reachability", () => {
     });
     versionMenu.focus();
     expect(document.activeElement).toBe(versionMenu);
+  });
+});
+
+/**
+ * Antigravity's agent runs its managed pack's own ACP server, not a CLI a
+ * custom path could point at, so "Add custom path" is HELD rather than
+ * hidden: the button stays where the user expects it, disabled, with a
+ * tooltip explaining why - never silently offered-then-failed.
+ */
+describe("ProviderCliCandidatesSection: custom CLI path held for antigravity", () => {
+  it("disables Add custom path for antigravity, states the reason on its tooltip, and a click reveals no input", () => {
+    const state = providerState({
+      providerId: "antigravity",
+      selected: { kind: "path" },
+      candidates: [],
+    });
+    renderSection(state);
+
+    const button = screen.getByRole("button", { name: "Add custom path" });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(tooltipTextNear(button)).toBe(
+      "Antigravity runs its own ACP server from its managed download, so a custom CLI path isn't supported.",
+    );
+
+    fireEvent.click(button);
+    expect(
+      screen.queryByPlaceholderText("/absolute/path/to/binary"),
+    ).toBeNull();
+  });
+
+  it("leaves Add custom path enabled for codex, with no tooltip, and a click reveals the path input", () => {
+    // The complement of the case above, proving the positive path would have
+    // been observable here too: same button, same query, only the provider
+    // differs.
+    const state = providerState({
+      providerId: "codex",
+      selected: { kind: "path" },
+      candidates: [
+        pathCandidate({ path: "/usr/local/bin/codex", available: true }),
+      ],
+    });
+    renderSection(state);
+
+    const button = screen.getByRole("button", { name: "Add custom path" });
+    expect(button.hasAttribute("disabled")).toBe(false);
+    expect(tooltipTextNear(button)).toBeNull();
+
+    fireEvent.click(button);
+    expect(
+      screen.getByPlaceholderText("/absolute/path/to/binary"),
+    ).toBeDefined();
+  });
+});
+
+/**
+ * `CliBinaryMissingNotice`'s advice changes with `customPathSupported`: a
+ * provider that cannot take a custom path must not be told it can add one.
+ */
+describe("ProviderCliCandidatesSection: missing-binary notice reflects custom-path support", () => {
+  it("tells antigravity only to install it - no mention of a custom path", () => {
+    const state = providerState({
+      providerId: "antigravity",
+      selected: { kind: "path" },
+      candidates: [],
+    });
+    renderSection(state);
+
+    expect(
+      screen.getByText(
+        "No Antigravity CLI was found on this machine, and Traycer ships no bundled copy of it. Install it.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/add its path below/u)).toBeNull();
+  });
+
+  it("still tells codex it can add its path below", () => {
+    const state = providerState({
+      providerId: "codex",
+      selected: { kind: "path" },
+      candidates: [],
+    });
+    renderSection(state);
+
+    expect(
+      screen.getByText(
+        "No Codex CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+      ),
+    ).toBeDefined();
   });
 });
