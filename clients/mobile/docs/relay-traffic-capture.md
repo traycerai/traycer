@@ -93,10 +93,14 @@ settled interval is a sampling window, not a claim that first paint took that
 long. Check `globalThis.__traycerRemoteTraffic.droppedSessions()` too. If it
 is nonzero, the 32-session reader cap dropped older sessions: mark the total
 incomplete and repeat in a clean app session. A session that closes leaves the
-snapshot with its rows. `captureSession` IDs are assigned in order and never
-reused, so match sessions across the two snapshots by that ID; an ID missing
-from the settled snapshot, or a gap in the sequence, is a session whose bytes
-the snapshot no longer holds. Mark that total incomplete too.
+snapshot with its rows, including one opened and closed between the two
+samples. Save `globalThis.__traycerRemoteTraffic.closedSessions()` with each
+snapshot: it counts the sessions closed since the page loaded and the
+`receivedBytes` and `receivedFrames` their rows held. If its `receivedBytes`
+is nonzero, the per-session ledger no longer holds those bytes: add them to the
+total as closed-session traffic and mark the method breakdown incomplete.
+`captureSession` IDs are assigned in order and never reused, so match sessions
+across the two snapshots by that ID.
 
 For an image-heavy submit check, use a visible draft with several images, an
 empty local byte store and an offline **owner** host while this device still

@@ -51,6 +51,28 @@ const debugReaders = new Map<number, () => RemoteTrafficSnapshot>();
 let nextDebugCaptureSession = 0;
 let droppedDebugSessions = 0;
 
+/** Sessions that closed while registered, and what their rows had received. */
+export interface RemoteTrafficDebugClosedSessions {
+  readonly sessions: number;
+  readonly receivedBytes: number;
+  readonly receivedFrames: number;
+}
+
+/**
+ * A closed session's reader leaves with it, so a session opened and closed
+ * between two samples would otherwise leave no trace in either: no row, no
+ * ID gap, no drop. These totals are what a capture checks for that loss.
+ */
+let closedDebugSessions: RemoteTrafficDebugClosedSessions = {
+  sessions: 0,
+  receivedBytes: 0,
+  receivedFrames: 0,
+};
+
+export function readRemoteTrafficDebugClosedSessions(): RemoteTrafficDebugClosedSessions {
+  return closedDebugSessions;
+}
+
 export function readRemoteTrafficDebugSnapshots(): ReadonlyArray<
   RemoteTrafficSnapshot & { readonly captureSession: number }
 > {
@@ -72,6 +94,19 @@ function registerRemoteTrafficDebugReader(
     droppedDebugSessions += 1;
   }
   return captureSession;
+}
+
+function releaseRemoteTrafficDebugReader(captureSession: number): void {
+  const read = debugReaders.get(captureSession);
+  // Already evicted by the cap, and counted there.
+  if (read === undefined) return;
+  debugReaders.delete(captureSession);
+  const final = read();
+  closedDebugSessions = {
+    sessions: closedDebugSessions.sessions + 1,
+    receivedBytes: closedDebugSessions.receivedBytes + final.receivedBytes,
+    receivedFrames: closedDebugSessions.receivedFrames + final.receivedFrames,
+  };
 }
 
 function remoteTrafficDebugEnabled(): boolean {
@@ -96,6 +131,7 @@ function installRemoteTrafficDebugSurface(): void {
       value: Object.freeze({
         snapshot: readRemoteTrafficDebugSnapshots,
         droppedSessions: () => droppedDebugSessions,
+        closedSessions: readRemoteTrafficDebugClosedSessions,
       }),
     });
   } catch {
@@ -155,9 +191,9 @@ export class RemoteSession<
         const captureSession = registerRemoteTrafficDebugReader(reader);
         // Caller close and terminal fatal both end here. A closed session's
         // accounting is final, so keeping its reader would only pin its rows
-        // and crowd live sessions out of the cap.
+        // and crowd live sessions out of the cap; its totals stay counted.
         this.onClosed(() => {
-          debugReaders.delete(captureSession);
+          releaseRemoteTrafficDebugReader(captureSession);
         });
         installRemoteTrafficDebugSurface();
       }

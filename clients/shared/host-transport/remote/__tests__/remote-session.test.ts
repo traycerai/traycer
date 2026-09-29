@@ -39,7 +39,10 @@ import {
   SESSION_CLOSED_FATAL_CODE,
   SESSION_NOT_READY_FATAL_CODE,
 } from "@traycer/protocol/framework/stream-ws-protocol";
-import { RemoteTrafficAccounting } from "@traycer/protocol/host-transport/remote/traffic-accounting";
+import {
+  RemoteTrafficAccounting,
+  type RemoteTrafficSnapshot,
+} from "@traycer/protocol/host-transport/remote/traffic-accounting";
 import {
   createResponderHandshake,
   generateStaticKeyPair,
@@ -108,6 +111,7 @@ import {
 } from "../active-remote-sessions";
 import {
   HOST_STATUS_LIVENESS_PROBE,
+  readRemoteTrafficDebugClosedSessions,
   readRemoteTrafficDebugSnapshots,
   REMOTE_TRAFFIC_DEBUG_STORAGE_KEY,
   RemoteSession,
@@ -9586,12 +9590,16 @@ describe("RemoteSession opt-in traffic accounting", () => {
         const [firstId, secondId] = captureSessions().slice(before.length);
         expect(captureSessions()).toHaveLength(before.length + 2);
 
+        const closedBefore = readRemoteTrafficDebugClosedSessions().sessions;
         first.close();
         // A closed session's accounting is final: its reader, and the rows it
         // pins, leave the registry, and the live session keeps the id an
         // earlier sample recorded it under.
         expect(captureSessions()).not.toContain(firstId);
         expect(captureSessions()).toEqual([...before, secondId]);
+        expect(readRemoteTrafficDebugClosedSessions().sessions).toBe(
+          closedBefore + 1,
+        );
       } finally {
         first.close();
         second.close();
@@ -9601,6 +9609,68 @@ describe("RemoteSession opt-in traffic accounting", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it(
+    "counts the bytes of a session opened and closed between two samples, which leaves no row or id gap",
+    async () => {
+      const sessionStore = createMemoryStorage();
+      vi.stubGlobal("sessionStorage", sessionStore);
+      vi.stubGlobal("localStorage", createMemoryStorage());
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+
+      try {
+        const idsBefore = readRemoteTrafficDebugSnapshots().map(
+          (row) => row.captureSession,
+        );
+        const closedBefore = readRemoteTrafficDebugClosedSessions();
+        sessionStore.setItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY, "1");
+        const session = new RemoteSession({
+          ...buildSessionOptions(relay, lease, null),
+          streamRegistry: cursorStreamRegistry,
+        });
+        const stream = session.subscribe("cursor.subscribe", {
+          cursor: null,
+        });
+        let received: RemoteTrafficSnapshot | null = null;
+        try {
+          await vi.waitFor(
+            () => expect(relay.subscribeStreamIds).toHaveLength(1),
+            WAIT,
+          );
+          received = session.readTrafficSnapshot();
+        } finally {
+          stream.close();
+          session.close();
+        }
+        if (received === null) {
+          throw new Error("expected traffic accounting to be enabled");
+        }
+        expect(received.receivedBytes).toBeGreaterThan(0);
+
+        // The newest session is gone without a gap: the ids alone cannot
+        // tell a sample it ever existed.
+        expect(
+          readRemoteTrafficDebugSnapshots().map((row) => row.captureSession),
+        ).toEqual(idsBefore);
+        const closed = readRemoteTrafficDebugClosedSessions();
+        expect(closed.sessions).toBe(closedBefore.sessions + 1);
+        expect(closed.receivedBytes).toBeGreaterThanOrEqual(
+          closedBefore.receivedBytes + received.receivedBytes,
+        );
+        expect(closed.receivedFrames).toBeGreaterThanOrEqual(
+          closedBefore.receivedFrames + received.receivedFrames,
+        );
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
 
   it(
     "keeps the accounting tracker absent while an ordinary session receives frames",
