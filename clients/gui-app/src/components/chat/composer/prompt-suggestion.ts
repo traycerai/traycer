@@ -2,6 +2,7 @@ import type { ComposerTopBannerKind } from "./chat-composer-top-banner";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 import { plainTextPromptContent } from "@/components/epic-canvas/renderers/chat-tile-session-state";
+import type { PendingChatAction } from "@/stores/chats/chat-session-store";
 
 /**
  * Whether the composer may offer the suggestion at all, before asking whether
@@ -79,6 +80,30 @@ export function isPromptSuggestionAcceptKey(event: {
     !event.shiftKey &&
     !event.isComposing
   );
+}
+
+/**
+ * The suggestion this surface may offer, given the actions it has in flight.
+ *
+ * The host retires the suggestion on any send - an edit-and-resend included -
+ * and broadcasts that clear BEFORE it acknowledges the action (`handleSend`
+ * drops it ahead of the accept, and a run opening clears it ahead of an edit's
+ * accept). So while a `send` or `editUserMessage` is still pending, the value
+ * this client holds is either the one that send retires or one a frame the
+ * host emitted before it saw the send; offering it would let → fill a prompt
+ * for a conversation that has already moved on. Once the ack lands, the held
+ * value is the host's again: cleared, or - for a send the host refused before
+ * retiring anything - the suggestion it still stands by.
+ */
+export function suggestionOfferableWhilePending(
+  suggestedPrompt: string | undefined,
+  pendingActions: Readonly<Record<string, Pick<PendingChatAction, "action">>>,
+): string | undefined {
+  const sendPending = Object.values(pendingActions).some(
+    (pending) =>
+      pending.action === "send" || pending.action === "editUserMessage",
+  );
+  return sendPending ? undefined : suggestedPrompt;
 }
 
 /**

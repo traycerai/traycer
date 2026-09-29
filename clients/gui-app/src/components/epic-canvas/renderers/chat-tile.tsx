@@ -105,6 +105,7 @@ import type {
   ChatComposerSideChatInput,
   ChatComposerSubmitInput,
 } from "@/components/chat/composer/chat-composer";
+import { suggestionOfferableWhilePending } from "@/components/chat/composer/prompt-suggestion";
 import {
   sideChatPlacementForTile,
   startSideChat,
@@ -3540,7 +3541,10 @@ function useChatTileSessionViewModel(
       onSettingsChange: handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
-      suggestedPrompt: state.suggestedPrompt,
+      suggestedPrompt: suggestionOfferableWhilePending(
+        state.suggestedPrompt,
+        state.pendingActions,
+      ),
     }),
     [
       state.currentComposerSettings,
@@ -3557,6 +3561,7 @@ function useChatTileSessionViewModel(
       workspaceControls,
       workspaceAvailability,
       state.suggestedPrompt,
+      state.pendingActions,
     ],
   );
 

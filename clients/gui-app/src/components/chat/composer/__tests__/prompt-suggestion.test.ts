@@ -4,7 +4,9 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   isPromptSuggestionAcceptKey,
   promptSuggestionAllowed,
+  suggestionOfferableWhilePending,
 } from "@/components/chat/composer/prompt-suggestion";
+import type { PendingChatAction } from "@/stores/chats/chat-session-store";
 
 const EMPTY_DOC: JsonContent = {
   type: "doc",
@@ -187,4 +189,92 @@ describe("isPromptSuggestionAcceptKey", () => {
       expect(isPromptSuggestionAcceptKey({ ...ACCEPT_EVENT, key })).toBe(false);
     },
   );
+});
+
+type PendingActionKind = PendingChatAction["action"];
+
+// The parameter is `Pick<PendingChatAction, "action">`, so each in-flight
+// action is the bare `{ action }` the helper reads, keyed by its action id.
+function pendingOf(
+  ...kinds: ReadonlyArray<PendingActionKind>
+): Record<string, Pick<PendingChatAction, "action">> {
+  const pending: Record<string, Pick<PendingChatAction, "action">> = {};
+  kinds.forEach((action, index) => {
+    pending[`action-${String(index)}`] = { action };
+  });
+  return pending;
+}
+
+const OTHER_ACTION_KINDS: ReadonlyArray<PendingActionKind> = [
+  "stop",
+  "approvalDecision",
+  "queueCancel",
+];
+
+describe("suggestionOfferableWhilePending", () => {
+  it("passes the suggestion through when nothing is pending", () => {
+    expect(suggestionOfferableWhilePending("run the tests", pendingOf())).toBe(
+      "run the tests",
+    );
+  });
+
+  it("keeps an absent suggestion absent when nothing is pending", () => {
+    expect(suggestionOfferableWhilePending(undefined, pendingOf())).toBe(
+      undefined,
+    );
+  });
+
+  it("withholds the suggestion while a send is pending", () => {
+    expect(
+      suggestionOfferableWhilePending("run the tests", pendingOf("send")),
+    ).toBe(undefined);
+  });
+
+  it("withholds the suggestion while an edit-and-resend is pending", () => {
+    expect(
+      suggestionOfferableWhilePending(
+        "run the tests",
+        pendingOf("editUserMessage"),
+      ),
+    ).toBe(undefined);
+  });
+
+  it.each(OTHER_ACTION_KINDS)(
+    "passes the suggestion through while only a %s is pending",
+    (kind) => {
+      expect(
+        suggestionOfferableWhilePending("run the tests", pendingOf(kind)),
+      ).toBe("run the tests");
+    },
+  );
+
+  it("passes the suggestion through while several non-send actions are pending", () => {
+    expect(
+      suggestionOfferableWhilePending(
+        "run the tests",
+        pendingOf(...OTHER_ACTION_KINDS),
+      ),
+    ).toBe("run the tests");
+  });
+
+  it.each(OTHER_ACTION_KINDS)(
+    "withholds the suggestion when a send is pending beside a %s",
+    (kind) => {
+      expect(
+        suggestionOfferableWhilePending(
+          "run the tests",
+          pendingOf(kind, "send"),
+        ),
+      ).toBe(undefined);
+    },
+  );
+
+  it("withholds the suggestion when an edit is pending beside another kind", () => {
+    expect(
+      suggestionOfferableWhilePending(
+        "run the tests",
+        pendingOf("stop", "editUserMessage"),
+      ),
+    ).toBe(undefined);
+  });
 });
