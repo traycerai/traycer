@@ -31,8 +31,8 @@ export interface RemoteTrafficSnapshot {
   /** New streams after the row cap remain in the unclassified residual. */
   readonly truncatedStreamRegistrations: number;
   /**
-   * Live connections dropped into recovery. Not dial attempts: a retry that
-   * fails before it connects adds nothing, and a caller close adds nothing.
+   * Relay WebSocket legs that opened and then dropped into recovery. A dial
+   * that never opens adds nothing, and a caller close adds nothing.
    */
   readonly reconnects: number;
   readonly streams: ReadonlyArray<RemoteTrafficStreamSnapshot>;

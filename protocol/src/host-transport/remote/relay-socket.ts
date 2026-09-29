@@ -329,6 +329,14 @@ export class RelaySocket {
     return this.probeUnanswered && this.probeImmediateRedialOnFailure;
   }
 
+  /**
+   * Whether this leg reached WebSocket open. Retained after close so drop
+   * accounting can distinguish a lost live leg from a failed dial.
+   */
+  hasOpened(): boolean {
+    return this.opened;
+  }
+
   close(code: number, reason: string): void {
     if (this.closed) {
       return;

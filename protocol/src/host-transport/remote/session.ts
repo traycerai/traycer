@@ -4099,7 +4099,9 @@ export class RemoteSession<
     cause: string,
     retryCause: FatalErrorDetails | null,
   ): void {
-    if (this.connection !== null) this.traffic?.connectionLost();
+    if (this.traffic !== null && this.connection?.relaySocket.hasOpened()) {
+      this.traffic.connectionLost();
+    }
     // Before anything else: a connection that is being lost never earned its
     // ladder reset, however close it came.
     this.clearStableResetTimer();

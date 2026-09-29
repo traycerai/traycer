@@ -55,8 +55,9 @@ per captured remote session (up to 32), with per-stream method, stream ID,
 safe `epic`/`chat` UUIDs, first/last receive times, incoming ciphertext bytes,
 pre-decompression mux bytes, frame/compressed-frame counts, an incomplete
 marker and the number of connection drops the stream stayed open across. The
-session-level `reconnects` counts live connections dropped into recovery, not
-dial attempts. It contains no payload body.
+session-level `reconnects` counts relay WebSocket legs that opened and then
+dropped into recovery, not dials that never opened or caller closes. It
+contains no payload body.
 Stream times are milliseconds relative to that session's `startedAt`; the
 stopwatch records navigation-relative paint and settled times.
 

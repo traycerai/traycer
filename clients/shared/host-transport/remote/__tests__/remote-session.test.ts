@@ -9445,6 +9445,53 @@ describe("RemoteSession host_attached always rebuilds (D1)", () => {
 });
 
 describe("RemoteSession opt-in traffic accounting", () => {
+  it.each([
+    [false, 0],
+    [true, 1],
+  ] as const)(
+    "counts only a dropped live relay leg (opened=%s), not failed redials",
+    async (opened, expectedDrops) => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("fixture-bearer", "fixture-owner");
+      const sockets: FakeSocket[] = [];
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        webSocketFactory: {
+          create: () => {
+            const socket = new FakeSocket(vi.fn(), vi.fn());
+            sockets.push(socket);
+            return socket;
+          },
+        },
+      });
+      expect(session.enableTrafficAccounting()).toBe(true);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+        const first = sockets[0];
+        if (first === undefined) throw new Error("expected the first dial");
+        expect(first.onopen).not.toBeNull();
+        expect(first.onerror).not.toBeNull();
+        if (opened) first.onopen?.({ type: "open" });
+        first.onerror?.({ message: "fixture transport failure" });
+        expect(session.readTrafficSnapshot()?.reconnects).toBe(expectedDrops);
+        expect(session.readTrafficSnapshot()?.receivedFrames).toBe(0);
+
+        // A new socket must not inherit the prior leg's established state.
+        await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
+        const retry = sockets[1];
+        if (retry === undefined) throw new Error("expected the retry dial");
+        expect(retry.onerror).not.toBeNull();
+        retry.onerror?.({ message: "fixture dial failure" });
+        expect(session.readTrafficSnapshot()?.reconnects).toBe(expectedDrops);
+      } finally {
+        session.close();
+      }
+      expect(session.readTrafficSnapshot()?.reconnects).toBe(expectedDrops);
+    },
+    TEST_BUDGET_MS,
+  );
+
   function createMemoryStorage(): Storage {
     const values = new Map<string, string>();
     return {
