@@ -65,6 +65,11 @@ import {
 import { useProviderTerminalLogin } from "@/hooks/providers/use-provider-terminal-login";
 import { providerTerminalGuidance } from "@/lib/providers/provider-setup-guidance";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import {
+  ProviderLoginRefusalAction,
+  ProviderLoginRefusalMessage,
+} from "@/components/providers/provider-login-refusal";
+import { providerLoginRetryLabel } from "@/lib/providers/provider-login-retry-label";
 
 function noop(): void {}
 
@@ -688,11 +693,19 @@ function OAuthReauthForm({
     return (
       <div className="flex flex-col gap-2">
         <span className="text-ui-xs text-destructive">
-          {flow.state.message}
+          {flow.state.refusal === null ? (
+            flow.state.message
+          ) : (
+            <ProviderLoginRefusalMessage
+              providerId={providerId}
+              refusal={flow.state.refusal}
+            />
+          )}
         </span>
-        <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <ProviderLoginRefusalAction refusal={flow.state.refusal} />
           <Button size="sm" variant="secondary" onClick={onAuthenticate}>
-            Try again
+            {providerLoginRetryLabel(flow.state.refusal, "Try again")}
           </Button>
         </div>
       </div>

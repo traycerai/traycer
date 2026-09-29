@@ -172,7 +172,6 @@ export interface ServiceSpawnEdgeLease {
  * from every other start failure.
  */
 
-
 /**
  * Post-registration failures whose lease then waited the ack out in vain
  * (see the catch in {@link runWithLeaseAtServiceSpawnEdge}). Identity-keyed,

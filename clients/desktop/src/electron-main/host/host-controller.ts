@@ -4847,7 +4847,12 @@ export class HostController {
                 : applied;
             }
             if (await this.isPackagedMacOwned()) {
-              return this.runLockedMacActivationCycle(force, "activate", false, false);
+              return this.runLockedMacActivationCycle(
+                force,
+                "activate",
+                false,
+                false,
+              );
             }
             return this.activateInstalledCliOwned(force);
           });
@@ -6093,7 +6098,12 @@ export class HostController {
       "[host-controller] restart found no host running and no host label loaded in launchd - registering the login item again instead of restarting through the CLI",
       { loginItemStatus },
     );
-    return this.runLockedMacActivationCycle(true, "retry-with-force", false, true);
+    return this.runLockedMacActivationCycle(
+      true,
+      "retry-with-force",
+      false,
+      true,
+    );
   }
 
   // ---- freePortAndRestart --------------------------------------------------

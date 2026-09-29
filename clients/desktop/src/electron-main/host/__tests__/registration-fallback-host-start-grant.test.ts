@@ -107,7 +107,10 @@ vi.mock("../host-readiness", async (importOriginal) => {
 });
 
 import { registerHostLoginItem } from "../../app/host-login-item";
-import { HostController, type HostControllerHostLifecycle } from "../host-controller";
+import {
+  HostController,
+  type HostControllerHostLifecycle,
+} from "../host-controller";
 import { getHostFsLayout, cliLockPath } from "../host-paths";
 import { DEV_DESKTOP_SLOT_ENV } from "../dev-desktop-slot";
 import { HostLifecyclePolicyStore } from "../host-lifecycle-policy";
@@ -212,18 +215,16 @@ describe("#2267: registering the login item as a restart fallback must mint a ho
     // instance a prior test (or the file's own static type-only imports,
     // which carry no runtime module) already evaluated.
     vi.resetModules();
-    const { hostHomeDir } = await import(
-      "../../../../../traycer-cli/src/store/paths"
-    );
+    const { hostHomeDir } =
+      await import("../../../../../traycer-cli/src/store/paths");
     const {
       readDesktopPresence,
       probeDesktopPresenceLiveness,
       readHostLifecyclePolicy,
       writeHostLifecyclePolicyFromCli,
     } = await import("../../../../../traycer-cli/src/host/lifecycle-files");
-    const { admitSupervisorLifecycle } = await import(
-      "../../../../../traycer-cli/src/host/lifecycle-admission"
-    );
+    const { admitSupervisorLifecycle } =
+      await import("../../../../../traycer-cli/src/host/lifecycle-admission");
     const { consumeHostStartAdoption, readHostStartAdoptionNonce } =
       await import("../../../../../traycer-cli/src/host/host-start-adoption");
 
@@ -285,10 +286,17 @@ describe("#2267: registering the login item as a restart fallback must mint a ho
     const lifecycleService = new HostLifecycleService({
       store: presenceStore,
       controller: {
-        convergeReady: async () => ({ kind: "ok", value: { running: true, version: null } }),
+        convergeReady: async () => ({
+          kind: "ok",
+          value: { running: true, version: null },
+        }),
         applyStaged: async () => ({
           kind: "ok",
-          value: { appliedVersion: "1.7.0", runningActivated: true, applied: false },
+          value: {
+            appliedVersion: "1.7.0",
+            runningActivated: true,
+            applied: false,
+          },
         }),
         stopHost: async () => ({ kind: "stopped", forced: false }),
         refreshServiceDefinition: async () => ({

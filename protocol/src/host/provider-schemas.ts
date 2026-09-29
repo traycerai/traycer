@@ -3508,7 +3508,7 @@ export type ProvidersStartLoginResponseV13 = z.infer<
 // field on the released 2.0 line; the 2.0 shapes are frozen without it below
 // and the 2.0→2.1 upgrade fills `null`). The v2->v1 downgrade bridge in
 // registry.ts explicitly drops it before the strict v1.0 parse (see
-// `providersAwaitLoginDowngradeV21ToV10`).
+// `providersAwaitLoginDowngradeV22ToV10`).
 export const providersAwaitLoginRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
@@ -3525,9 +3525,31 @@ export type ProvidersAwaitLoginRequest = z.infer<
 >;
 
 /**
- * `providers.awaitLogin@2.1` response. Returns the re-probed `state`.
+ * Why a provider refused a sign-in the user completed in the browser, in the
+ * provider's own words, and where it sends the user to resolve it.
+ *
+ * The consent page can succeed and the provider still turn the account away
+ * afterwards: Antigravity asks Google whether the account may use it, and an
+ * account Google wants verified first is refused with a verification link.
+ * The provider discards the sign-in, so nothing about the account changed.
+ *
+ * `reason` is text the provider wrote. A client renders it as text, never as
+ * markup. `actionUrl` is an `https` link the host has already checked against
+ * the provider's own sign-in hosts, or null when the provider offered none.
  */
-export const providersAwaitLoginResponseSchema = lazySchema(() =>
+export const providerLoginRefusalSchema = lazySchema(() =>
+  z.object({
+    reason: z.string(),
+    actionUrl: z.string().nullable(),
+  }),
+);
+export type ProviderLoginRefusal = z.infer<typeof providerLoginRefusalSchema>;
+
+/**
+ * Frozen `providers.awaitLogin@2.1` response. Released, so it never grows:
+ * the refusal below is 2.2's. Keep construction inside the lazy factory.
+ */
+export const providersAwaitLoginResponseSchemaV21 = lazySchema(() =>
   z.object({
     // The provider's state after the login child closed and auth was re-probed.
     // Null when no login was in flight for this provider (nothing to await),
@@ -3554,10 +3576,23 @@ export const providersAwaitLoginResponseSchema = lazySchema(() =>
     // precedent as `providers.startLogin@1.1`'s
     // `createProfile.shareSkillsAndPlugins`): old hosts never emit it and
     // `.default(false)` keeps old-client parses byte-identical to today.
-    // `providers.awaitLogin` is now in `released-baseline-surface.json` at
-    // canonical 2.1, so 2.1 is frozen and the next field here costs 2.2 - do
-    // not read this as a standing licence to widen in place.
     codeRejected: z.boolean().default(false),
+  }),
+);
+
+/**
+ * `providers.awaitLogin@2.2` response. Returns the re-probed `state`, and
+ * `refusal` when the provider turned the sign-in away.
+ */
+export const providersAwaitLoginResponseSchema = lazySchema(() =>
+  z.object({
+    ...providersAwaitLoginResponseSchemaV21.shape,
+    // Non-null when the provider refused the sign-in after the browser leg
+    // (`providerLoginRefusalSchema`). `state` is null then: the refusal is
+    // the answer, and a re-probe would describe whatever account was there
+    // before. A 2.1 caller drops the key and reads the null state as "the
+    // sign-in did not complete", which is still true.
+    refusal: providerLoginRefusalSchema.nullable().default(null),
   }),
 );
 export const providersAwaitLoginResponseSchemaV20 = lazySchema(() =>

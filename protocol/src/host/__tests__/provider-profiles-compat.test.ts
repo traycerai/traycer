@@ -16,6 +16,8 @@ import {
   providerCliStateSchemaV30,
   providerMutationCliStateSchemaV20,
   providerProfileActionSchema,
+  providersAwaitLoginResponseSchema,
+  providersAwaitLoginResponseSchemaV21,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersSetEnabledRequestSchemaV21,
@@ -27,7 +29,7 @@ import {
 // is what holds `providers.startLogin@1.1` / `providers.setEnabled@2.1` and
 // their bridges.
 import {
-  providersAwaitLoginDowngradeV21ToV10,
+  providersAwaitLoginDowngradeV22ToV10,
   providersSetEnabledDowngradeV2ToV1,
 } from "@traycer/protocol/host/registry";
 import { prepareTuiLaunchRequestSchema } from "@traycer/protocol/host/agent/tui/unary-schemas";
@@ -655,7 +657,7 @@ describe("providers.startLogin@1.1 (create profile / re-login to a profile)", ()
 
 describe("providers.awaitLogin v2->v1 downgrade strips profileId", () => {
   it("drops profileId before the strict v1.0 request parse", () => {
-    const downgraded = providersAwaitLoginDowngradeV21ToV10.downgradeRequest({
+    const downgraded = providersAwaitLoginDowngradeV22ToV10.downgradeRequest({
       providerId: "claude-code",
       profileId: "profile-1",
     });
@@ -673,6 +675,120 @@ describe("providers.awaitLogin v2->v1 downgrade strips profileId", () => {
       { providerId: "codex", profileId: "profile-1" },
     );
     expect(downgraded).toEqual({ ok: true, value: { providerId: "codex" } });
+  });
+});
+
+describe("providers.awaitLogin@2.2 (provider refusal)", () => {
+  const refusal = {
+    reason: "Your current account is not eligible for Antigravity.",
+    actionUrl: "https://accounts.google.com/signin/continue?sarp=1",
+  };
+
+  it("upgrades a 2.1 response to 2.2 with refusal: null, keeping the rest", () => {
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.awaitLogin"],
+      { major: 2, minor: 1 },
+      { major: 2, minor: 2 },
+      { state: null, existingProfileId: "profile-1", codeRejected: true },
+    );
+    expect(upgraded).toEqual({
+      state: null,
+      existingProfileId: "profile-1",
+      codeRejected: true,
+      refusal: null,
+    });
+  });
+
+  it("upgrades a 2.0 response across both minors to 2.2 with refusal: null", () => {
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.awaitLogin"],
+      { major: 2, minor: 0 },
+      { major: 2, minor: 2 },
+      { state: null },
+    );
+    expect(upgraded.state).toBeNull();
+    expect(upgraded.existingProfileId).toBeNull();
+    expect(upgraded.codeRejected).toBe(false);
+    expect(upgraded.refusal).toBeNull();
+  });
+
+  it("parses a 2.2 response with a refusal", () => {
+    const parsed = providersAwaitLoginResponseSchema.parse({
+      state: null,
+      refusal,
+    });
+    expect(parsed.refusal).toEqual(refusal);
+    expect(parsed.state).toBeNull();
+  });
+
+  it("accepts a refusal that offers no action link", () => {
+    const parsed = providersAwaitLoginResponseSchema.parse({
+      state: null,
+      refusal: { reason: "No.", actionUrl: null },
+    });
+    expect(parsed.refusal).toEqual({ reason: "No.", actionUrl: null });
+  });
+
+  it("defaults refusal to null when the response omits it", () => {
+    const parsed = providersAwaitLoginResponseSchema.parse({ state: null });
+    expect(parsed.refusal).toBeNull();
+    expect(parsed.existingProfileId).toBeNull();
+    expect(parsed.codeRejected).toBe(false);
+  });
+
+  it("rejects a refusal without a reason", () => {
+    expect(
+      providersAwaitLoginResponseSchema.safeParse({
+        state: null,
+        refusal: { actionUrl: null },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps the frozen 2.1 response schema free of refusal", () => {
+    const parsed = providersAwaitLoginResponseSchemaV21.parse({
+      state: null,
+      refusal,
+    });
+    expect(parsed).not.toHaveProperty("refusal");
+    expect(parsed.state).toBeNull();
+  });
+
+  it("wires the registry's 2.1 contract to the frozen schema and 2.2 to the live one", () => {
+    const line = hostRpcRegistry["providers.awaitLogin"][2];
+    expect(line.latestMinor).toBe(2);
+    expect(
+      line.versions[1].contract.responseSchema.parse({ state: null, refusal }),
+    ).not.toHaveProperty("refusal");
+    expect(
+      line.versions[2].contract.responseSchema.parse({ state: null, refusal })
+        .refusal,
+    ).toEqual(refusal);
+  });
+
+  it("downgrades a 2.2 response carrying a refusal to the v1.0 shape", () => {
+    const downgraded = providersAwaitLoginDowngradeV22ToV10.downgradeResponse({
+      state: null,
+      existingProfileId: null,
+      codeRejected: false,
+      refusal,
+    });
+    expect(downgraded).toEqual({ ok: true, value: { state: null } });
+  });
+
+  it("downgrades a refused 2.2 response through the registry (major 2 -> major 1)", () => {
+    const downgraded = downgradeResponseAcrossMajors(
+      hostRpcRegistry["providers.awaitLogin"],
+      2,
+      1,
+      {
+        state: null,
+        existingProfileId: null,
+        codeRejected: false,
+        refusal,
+      },
+    );
+    expect(downgraded).toEqual({ ok: true, value: { state: null } });
   });
 });
 

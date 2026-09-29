@@ -104,18 +104,16 @@ describe("registerHostLoginItemWithStartGrant", () => {
     // instance a prior test (or this file's own static type-only imports,
     // which carry no runtime module) already evaluated.
     vi.resetModules();
-    const { hostHomeDir } = await import(
-      "../../../../../traycer-cli/src/store/paths"
-    );
+    const { hostHomeDir } =
+      await import("../../../../../traycer-cli/src/store/paths");
     const {
       readDesktopPresence,
       probeDesktopPresenceLiveness,
       readHostLifecyclePolicy,
       writeHostLifecyclePolicyFromCli,
     } = await import("../../../../../traycer-cli/src/host/lifecycle-files");
-    const { admitSupervisorLifecycle } = await import(
-      "../../../../../traycer-cli/src/host/lifecycle-admission"
-    );
+    const { admitSupervisorLifecycle } =
+      await import("../../../../../traycer-cli/src/host/lifecycle-admission");
     const { consumeHostStartAdoption, readHostStartAdoptionNonce } =
       await import("../../../../../traycer-cli/src/host/host-start-adoption");
 
@@ -320,11 +318,11 @@ describe("registerHostLoginItemWithStartGrant", () => {
       // means to prove.
       const {
         withUpdateContender: withUpdateContenderFreshModule,
-        verifyUpdateMutationCapability: verifyUpdateMutationCapabilityFreshModule,
+        verifyUpdateMutationCapability:
+          verifyUpdateMutationCapabilityFreshModule,
       } = await import("@traycer-clients/shared/host-update");
-      const { SpawnAcknowledgementTimeoutError } = await import(
-        "@traycer-clients/shared/host-start-adoption/spawn-acknowledgement-error"
-      );
+      const { SpawnAcknowledgementTimeoutError } =
+        await import("@traycer-clients/shared/host-start-adoption/spawn-acknowledgement-error");
 
       const proofPath = join(layout.rootDir, ".host-start-adoption.json");
       const captured: { capability?: UpdateMutationCapability } = {};
@@ -338,7 +336,11 @@ describe("registerHostLoginItemWithStartGrant", () => {
         },
         (capability) => {
           captured.capability = capability;
-          return registerWithShortAckWait(capability, layout.rootDir, SERVICE_LABEL);
+          return registerWithShortAckWait(
+            capability,
+            layout.rootDir,
+            SERVICE_LABEL,
+          );
         },
       );
 
