@@ -2742,7 +2742,12 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
   candidates - the host-bundled binary, the binary auto-detected on PATH
   (shown by its real absolute path), and any custom paths the user added
   (deletable). The radio picks the active binary; "Add custom path" reveals an
-  inline input with a live `--version` probe. The rail + config area fills the
+  inline input with a live `--version` probe. For Antigravity that button is
+  HELD (disabled, the reason as its tooltip): its agent runs as the ACP server
+  its managed pack ships with a companion, and the `agy` CLI users reach for is
+  a different program. `providerSupportsCustomCliPath` mirrors the host's id
+  check of the same name, which refuses the write and reads a path saved
+  earlier as absent. The rail + config area fills the
   settings scroll container's height (via the shell's `fillHeight`, capped by
   `bodyClassName` max-height) so switching providers never resizes it; the
   config pane - not the outer overlay - owns the scroll, and the height follows
