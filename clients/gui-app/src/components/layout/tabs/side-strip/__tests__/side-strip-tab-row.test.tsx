@@ -26,6 +26,7 @@ import {
   useLeftPanelStore,
 } from "@/stores/epics/left-panel-store";
 import type { HeaderTab } from "@/stores/tabs/types";
+import { SheetJoinBridge, SheetJoinScope } from "../../sheet-join";
 import { joinedAttribute, useSideTabJoin } from "../side-tab-join";
 
 /** A controllable stand-in for the real `IntersectionObserver` (jsdom has none). */
@@ -98,11 +99,21 @@ function Harness(props: {
 }): ReactNode {
   return (
     <ColumnEdgeContext.Provider value={props.edge}>
-      <div data-strip-axis="y">
-        <Row tab={props.tab ?? null} />
-      </div>
+      <SheetJoinScope>
+        <div data-strip-axis="y">
+          <Row tab={props.tab ?? null} />
+        </div>
+        <SheetJoinBridge edge={props.edge} />
+      </SheetJoinScope>
     </ColumnEdgeContext.Provider>
   );
+}
+
+/** The strip's bridge: its published state must track the row's join. */
+function bridge(): HTMLElement {
+  const found = document.querySelector<HTMLElement>("[data-sheet-join-bridge]");
+  if (found === null) throw new Error("Expected the join bridge");
+  return found;
 }
 
 function joinedEdge(): string | undefined {
@@ -148,12 +159,18 @@ describe("useSideTabJoin", () => {
 
     // Starts true, so the row joins on its first frame before any report.
     expect(joinedEdge()).toBe("left");
+    expect(bridge().hasAttribute("data-join-active")).toBe(true);
 
+    // Clipped: the row falls back to a plain active row, and the bridge the
+    // list cannot clip goes with it.
     reportRatio(0.4);
     expect(joinedEdge()).toBeUndefined();
+    expect(bridge().hasAttribute("data-join-active")).toBe(false);
+    expect(bridge().hasAttribute("data-join-pane")).toBe(false);
 
     reportRatio(1);
     expect(joinedEdge()).toBe("left");
+    expect(bridge().hasAttribute("data-join-active")).toBe(true);
 
     if (restore === undefined) {
       Reflect.deleteProperty(globalThis, "IntersectionObserver");
@@ -223,6 +240,7 @@ describe("useSideTabJoin", () => {
 
       expect(joinedEdge()).toBe("left");
       expect(joinedPane()).toBe("canvas");
+      expect(bridge().getAttribute("data-join-pane")).toBe("canvas");
     });
 
     it("is canvas for an epic tab when the strip sits on the OTHER edge from the sidebar", () => {
@@ -249,6 +267,7 @@ describe("useSideTabJoin", () => {
 
       expect(joinedEdge()).toBe("left");
       expect(joinedPane()).toBe("panel");
+      expect(bridge().getAttribute("data-join-pane")).toBe("panel");
     });
 
     it("is rail for an epic tab on the sidebar's own edge, collapsed", () => {
@@ -265,6 +284,27 @@ describe("useSideTabJoin", () => {
 
       expect(joinedEdge()).toBe("left");
       expect(joinedPane()).toBe("rail");
+      expect(bridge().getAttribute("data-join-pane")).toBe("rail");
+    });
+
+    it("leaves the layout editor's sample-workspace tab unjoined, and its bridge inactive", () => {
+      render(
+        <Harness
+          edge="left"
+          tab={{
+            kind: "sample-workspace",
+            id: "sample-1",
+            route: "/sample-workspace/sample-1",
+            name: "Sample workspace",
+            icon: null,
+            canDuplicate: false,
+            canOpenInNewWindow: false,
+          }}
+        />,
+      );
+
+      expect(joinedEdge()).toBeUndefined();
+      expect(bridge().hasAttribute("data-join-active")).toBe(false);
     });
   });
 });

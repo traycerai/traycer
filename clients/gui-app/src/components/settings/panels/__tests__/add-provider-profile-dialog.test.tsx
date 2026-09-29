@@ -52,6 +52,7 @@ describe("<AddProfileWaitingStep />", () => {
           }}
           isLocalHost={false}
           queuePending={false}
+          startingCopy={null}
           cancelRequested={false}
           cancelPending={false}
           cancelDisabled={false}
@@ -127,6 +128,7 @@ describe("<AddProfileWaitingStep />", () => {
         }}
         isLocalHost
         queuePending={false}
+        startingCopy={null}
         cancelRequested={false}
         cancelPending={false}
         cancelDisabled={false}
@@ -164,6 +166,7 @@ describe("<AddProfileWaitingStep />", () => {
         }}
         isLocalHost
         queuePending={false}
+        startingCopy={null}
         cancelRequested={false}
         cancelPending={false}
         cancelDisabled={false}
@@ -208,6 +211,7 @@ describe("<AddProfileWaitingStep />", () => {
           }}
           isLocalHost={false}
           queuePending={false}
+          startingCopy={null}
           cancelRequested={false}
           cancelPending={false}
           cancelDisabled={false}

@@ -4,17 +4,22 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
-import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
+  providerDisplayName,
+  providerIdToGuiHarnessId,
+} from "@/lib/provider-ordering";
+import {
+  providerHostBlock,
+  providerHostBlockLabel,
   providerLoginIsRemoteSafe,
   providerSupportsTerminalLogin,
 } from "@/components/providers/provider-signin-availability";
 
 const EMPTY_HOST_DIRECTORY: ReadonlyArray<HostDirectoryEntry> = [];
 
-export const EMPTY_LOGIN_CAPABILITY_BY_HARNESS_ID: ReadonlyMap<
+export const EMPTY_PROVIDER_STATE_BY_HARNESS_ID: ReadonlyMap<
   GuiHarnessId,
-  ProviderCliState["loginCapability"]
+  ProviderCliState
 > = new Map();
 
 /**
@@ -24,15 +29,20 @@ export const EMPTY_LOGIN_CAPABILITY_BY_HARNESS_ID: ReadonlyMap<
  * gate (`providers-settings-panel.tsx`), scoped to whichever host the
  * picker's `createProfileHostId` prop resolves to (a tab's host, or the
  * app-wide default when `null`) instead of always the renderer-default host.
+ *
+ * The whole row, not its `loginCapability` alone: whether the host would act
+ * on the click (the provider is on, a CLI is there to run) is on the row
+ * beside the capability, and a gate that read only the capability offered a
+ * profile the host then refused to sign in.
  */
 
-export function loginCapabilityByHarnessIdFromProviderStates(
+export function providerStateByHarnessIdFromProviderStates(
   providers: ReadonlyArray<ProviderCliState>,
-): ReadonlyMap<GuiHarnessId, ProviderCliState["loginCapability"]> {
+): ReadonlyMap<GuiHarnessId, ProviderCliState> {
   return new Map(
     providers.map((provider) => [
       providerIdToGuiHarnessId(provider.providerId),
-      provider.loginCapability,
+      provider,
     ]),
   );
 }
@@ -67,8 +77,9 @@ export function useCreateProfileHostIsLocal(
 
 export function resolveCreateProfileGate(
   hostIsLocal: boolean,
-  loginCapability: ProviderCliState["loginCapability"] | undefined,
+  state: ProviderCliState | undefined,
 ): { readonly disabled: boolean; readonly reason: string | undefined } {
+  const loginCapability = state?.loginCapability;
   // A terminal-login provider is answered before the `oauthArgs` gate below,
   // whichever way its `oauthArgs` point. Copilot carries real ones (its
   // headless command exists, the host just refuses it), so without this it
@@ -90,11 +101,22 @@ export function resolveCreateProfileGate(
   // for the full reasoning - these two gates must not disagree about whether a
   // provider can browser-sign-in.
   const remoteSafe = providerLoginIsRemoteSafe(loginCapability);
-  const disabled = oauthArgs === null || (!hostIsLocal && !remoteSafe);
+  if (oauthArgs === null || (!hostIsLocal && !remoteSafe)) {
+    return {
+      disabled: true,
+      reason: "Add profiles from a local host with browser sign-in available.",
+    };
+  }
+  // After the permanent reasons, as in `providerSignInUnavailableReason`. A
+  // row that has not arrived never reaches here: it has no capability either.
+  const block =
+    state === undefined ? null : providerHostBlock(state, "sign-in");
+  if (block === null) return { disabled: false, reason: undefined };
   return {
-    disabled,
-    reason: disabled
-      ? "Add profiles from a local host with browser sign-in available."
-      : undefined,
+    disabled: true,
+    reason: providerHostBlockLabel(
+      block,
+      state === undefined ? "" : providerDisplayName(state.providerId),
+    ),
   };
 }

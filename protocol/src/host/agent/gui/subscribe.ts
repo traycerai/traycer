@@ -138,6 +138,7 @@ import {
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { transcriptRowContextSchemaPreAntigravity } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import { chatSkeletonResumeSchema } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { autoJudgeTierSchema } from "@traycer/protocol/host/auto-mode/contracts";
 
@@ -170,6 +171,25 @@ export const chatSubscribeOpenRequestSchema = lazySchema(() =>
 );
 export type ChatSubscribeOpenRequest = z.infer<
   typeof chatSubscribeOpenRequestSchema
+>;
+
+/**
+ * `1.19` requires an explicit nullable claim. `null` states that this client
+ * holds nothing; omission is an invalid 1.19 request. A malformed present
+ * claim is a cache miss, so normalize it to null at the transport validation
+ * boundary before a resolver is constructed. Every older line keeps the base
+ * schema, so its parser strips a claim from a downgraded request.
+ */
+export const chatSubscribeOpenRequestSchemaV119 = lazySchema(() =>
+  chatSubscribeOpenRequestSchema.extend({
+    resume: z
+      .unknown()
+      .refine((value) => value !== undefined)
+      .pipe(chatSkeletonResumeSchema.nullable().catch(null)),
+  }),
+);
+export type ChatSubscribeOpenRequestV119 = z.infer<
+  typeof chatSubscribeOpenRequestSchemaV119
 >;
 
 // Frozen action set of the RELEASED `chat.subscribe@≤1.5` lines. `actionAck`
@@ -5092,6 +5112,18 @@ const chatSubscribeSkeletonChunkServerFrameSchema = lazySchema(() =>
   }),
 );
 
+/**
+ * Only a resumed `1.19` stream may put `retainedRows` on its first chunk.
+ * It names whole claimed blocks, equals that chunk's `fromOrdinal`, and is
+ * absent from later chunks and all full streams. The host enforces those
+ * relationships; the client checks them before using cached entries.
+ */
+const chatSubscribeSkeletonChunkServerFrameSchemaV119 = lazySchema(() =>
+  chatSubscribeSkeletonChunkServerFrameSchema.extend({
+    retainedRows: z.number().int().positive().optional(),
+  }),
+);
+
 const chatSubscribeIndexChangedServerFrameSchema = lazySchema(() =>
   z.object({
     kind: z.literal("indexChanged"),
@@ -5294,10 +5326,26 @@ const chatSubscribeServerFrameSchemaV117 = lazySchema(() =>
   ]),
 );
 
-export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+// Preserve main's released 1.18 frame union exactly before widening the head.
+const chatSubscribeServerFrameSchemaV118 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchema,
     chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemas,
+  ]),
+);
+
+export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema,
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchema,
@@ -6006,6 +6054,15 @@ export const chatSubscribeV118 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 18 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV118,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/** Main's model-routing 1.18 plus a resume claim and confirmed prefix. */
+export const chatSubscribeV119 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 19 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });

@@ -1,4 +1,5 @@
 import { use } from "react";
+import { usePublishSheetJoin } from "../sheet-join-context";
 import { ColumnEdgeContext } from "@/components/layout/column-edge-context";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { EdgeSide } from "@/lib/layout/layout-arrangement";
@@ -41,11 +42,15 @@ export function useSideTabJoin(
   // leaves it unjoined for the same reason (`TabChromeBackground`).
   const joins = edge !== null && active && tab?.kind !== "sample-workspace";
   const inList = useWhollyInTabStrip(node, joins);
-  if (edge === null || !joins || !inList) return null;
-  if (tab?.kind !== "epic" || sidebarSide !== edge) {
-    return { edge, pane: "canvas" };
+  let pane: SheetJoinPane | null = null;
+  if (joins && inList) {
+    pane = "canvas";
+    if (tab?.kind === "epic" && sidebarSide === edge) {
+      pane = collapsed ? "rail" : "panel";
+    }
   }
-  return { edge, pane: collapsed ? "rail" : "panel" };
+  usePublishSheetJoin(pane);
+  return edge === null || pane === null ? null : { edge, pane };
 }
 
 /** The marker the sheet join in `index.css` keys on. */

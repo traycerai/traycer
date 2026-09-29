@@ -67,7 +67,7 @@ export const SIDE_TAB_LEADING_TILE_SLOT_CLASS: Readonly<
 };
 /** A custom icon or monogram tile in that slot, the slot's own size. */
 export const SIDE_TAB_LEADING_TILE_CLASS =
-  "size-full rounded-sm text-[0.5625rem] font-semibold leading-none tracking-[0.02em]";
+  "size-full rounded-sm text-[0.5625rem] font-semibold leading-none tracking-tight";
 export const SIDE_TAB_TITLE_CLASS = "text-[0.8125rem] leading-4";
 export const SIDE_TAB_TRAILING_CLASS = "min-w-5 h-5";
 export const SIDE_TAB_ACTIVE_CLASS = "bg-foreground/8";

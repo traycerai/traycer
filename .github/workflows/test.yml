@@ -211,9 +211,12 @@ jobs:
       # together ("Arguments tui and outputStyle are mutually exclusive") and
       # exits 1 before running anything, which would redden every job here.
       # `stream` is already a non-TUI style, so nothing is lost.
+      #
+      # The GUI's real-browser regressions do not run here: they have their own
+      # workflow, `browser-regressions.yml`, which runs them in parallel jobs.
+      # Serially at the end of gui-app shard 1 they took this required check
+      # from about 7 minutes to about 35.
       - name: Test
-        env:
-          RUN_DIFF_EDIT_BROWSER_REGRESSION: ${{ matrix.project == 'traycer-clients-gui-app' && '1' || '0' }}
         run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --outputStyle=stream ${{ matrix.test_args }}
       # Diagnostics for the gui-app shard flake: shards die with every visible
       # test passing, a log truncated mid-write, and exit 1 with no vitest

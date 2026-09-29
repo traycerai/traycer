@@ -351,7 +351,12 @@ export function AppFrameSideStrip({
         </div>
         <AppFrameAccount collapsed={collapsed} />
       </div>
-      <span aria-hidden data-sheet-join-bridge={edge} />
+      <span
+        aria-hidden
+        data-sheet-join-bridge={edge}
+        data-join-active=""
+        data-join-pane={join.pane}
+      />
     </div>
   );
 }

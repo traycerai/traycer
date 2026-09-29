@@ -29,6 +29,7 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
+import { SheetJoinBridge } from "@/components/layout/tabs/sheet-join";
 import {
   HEADER_TAB_DND_TYPE,
   getHeaderTabDragId,
@@ -139,6 +140,7 @@ async function mountTopStrip(): Promise<void> {
     <QueryClientProvider client={new QueryClient()}>
       <RootDndProvider>
         <TopStrip />
+        <SheetJoinBridge edge="top" />
       </RootDndProvider>
     </QueryClientProvider>
   ));
@@ -184,6 +186,12 @@ function releaseAt(drag: Drag): void {
   });
 }
 
+function topBridge(): Element {
+  const bridge = document.querySelector('[data-sheet-join-bridge="top"]');
+  if (bridge === null) throw new Error("Expected the top join bridge");
+  return bridge;
+}
+
 function overlayContainer(): HTMLElement {
   return screen.getByTestId("header-tab-drag-overlay");
 }
@@ -209,6 +217,9 @@ describe("top strip drag overlay: active/inactive chrome and sheet join", () => 
     const overlay = overlayContainer();
     expect(within(overlay).queryByTestId("tab-chrome-box")).toBeNull();
     expect(within(overlay).getByTestId("tab-hover-box")).toBeTruthy();
+    // The rows here are bare buttons, so only an ACTIVE overlay can publish:
+    // the inactive one leaves the bridge unowned.
+    expect(topBridge().hasAttribute("data-join-active")).toBe(false);
 
     releaseAt(drag);
   });
@@ -224,6 +235,8 @@ describe("top strip drag overlay: active/inactive chrome and sheet join", () => 
         .getByTestId("tab-chrome-box")
         .getAttribute("data-sheet-joined"),
     ).toBe("top");
+    // The joined overlay is the one publisher, so it owns the bridge.
+    expect(topBridge().hasAttribute("data-join-active")).toBe(true);
 
     releaseAt(drag);
   });

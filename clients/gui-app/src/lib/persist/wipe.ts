@@ -40,6 +40,8 @@ import {
   transcriptImageMetaDbName,
 } from "@/lib/attachments/transcript-image-bytes-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { SKELETON_RESUME_DB_NAME } from "@/stores/chats/skeleton-resume-durable-cache";
+import { clearAllSkeletonsForResume } from "@/stores/chats/skeleton-resume-cache";
 
 // The `:` boundary is load-bearing: a bare `startsWith(PERSIST_PREFIX)` would
 // also sweep a hypothetical `traycer-gui-appX:foo` key. Anchoring on the colon
@@ -156,6 +158,7 @@ async function deleteRendererDatabases(): Promise<void> {
   names.add(transcriptImageMetaDbName(null));
   names.add(transcriptImageDbName(accountId));
   names.add(transcriptImageMetaDbName(accountId));
+  names.add(SKELETON_RESUME_DB_NAME);
   // Recovery history must actually be deleted before reload. Other partitions
   // remain best-effort: a single db whose delete errors must not abort
   // the rest of the wipe or - critically - the reload (step 4), which is the
@@ -244,6 +247,7 @@ export async function clearAllPersistedStores(args: {
       error: describeLogError(error),
     });
   });
+  await clearAllSkeletonsForResume();
   await deleteRendererDatabases();
 
   // 4. Reload last.
