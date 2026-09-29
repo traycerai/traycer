@@ -235,6 +235,42 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
     ).toBeDefined();
   });
 
+  it("shows the CLI & Args link when the host resolved no CLI although an unselected one is available", () => {
+    renderSection({
+      canAddProfile: false,
+      state: opencodeState({
+        enabled: true,
+        loginCapability: OAUTH_CAP,
+        selected: { kind: "custom", path: "/gone/opencode" },
+        candidates: [
+          {
+            kind: "custom",
+            path: "/gone/opencode",
+            version: null,
+            available: false,
+            versionPending: false,
+          },
+          {
+            kind: "custom",
+            path: "/other/opencode",
+            version: "1.0.0",
+            available: true,
+            versionPending: false,
+          },
+        ],
+        cliBinaryResolved: false,
+      }),
+    });
+
+    expect(screen.getByRole("button", { name: "CLI & Args" })).toBeDefined();
+    expect(
+      screen.getByText(
+        "The selected OpenCode CLI is not available on this host.",
+        { exact: false },
+      ),
+    ).toBeDefined();
+  });
+
   it("does not show the CLI & Args link when sign-in is blocked because the provider is off", () => {
     renderSection({
       canAddProfile: false,
