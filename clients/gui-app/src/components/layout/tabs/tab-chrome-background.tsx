@@ -1,4 +1,5 @@
 import { useState, type CSSProperties } from "react";
+import { usePublishSheetJoin } from "./sheet-join-context";
 import { cn } from "@/lib/utils";
 import { TAB_BOX_CLASS, TAB_COLOR_MARK_CLASS } from "./tab-chrome-tokens";
 import { useWhollyInTabStrip } from "./use-wholly-in-tab-strip";
@@ -19,6 +20,7 @@ export function TabChromeBackground(props: {
 }) {
   const [node, setNode] = useState<HTMLSpanElement | null>(null);
   const inStrip = useWhollyInTabStrip(node, props.joined);
+  usePublishSheetJoin(props.joined && inStrip ? "canvas" : null);
   return (
     <span
       ref={setNode}

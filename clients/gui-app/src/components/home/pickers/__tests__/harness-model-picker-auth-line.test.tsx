@@ -117,6 +117,24 @@ function withTerminalLoginCapability(
   };
 }
 
+// A runnable candidate, so `providerHostBlock` reads null and the terminal
+// setup's placement is decided by the SURFACE/scope facts these tests are
+// actually about, not by whether the CLI is even on this host.
+function withRunnableCandidate(state: ProviderCliState): ProviderCliState {
+  return {
+    ...state,
+    candidates: [
+      {
+        kind: "path",
+        path: "/usr/local/bin/reasonix",
+        version: "1.35.0",
+        available: true,
+        versionPending: false,
+      },
+    ],
+  };
+}
+
 function harnessOption(
   id: GuiHarnessId,
   enabled: boolean,
@@ -236,7 +254,9 @@ describe("<PickerProviderAuthLine />", () => {
   it("renders the setup-guidance row (steps + manual-command sentence, no button) for a signed-out provider with guidance (reasonix)", () => {
     renderAuthLine(
       <PickerProviderAuthLine
-        state={withTerminalLoginCapability(baseProviderState("reasonix"))}
+        state={withRunnableCandidate(
+          withTerminalLoginCapability(baseProviderState("reasonix")),
+        )}
         harness={null}
         terminalLoginSurface={null}
         runTargetHostId={null}
@@ -314,7 +334,9 @@ describe("<PickerProviderAuthLine />", () => {
   it("renders the terminal action button when the capability is present and a landing surface is available", () => {
     renderAuthLine(
       <PickerProviderAuthLine
-        state={withTerminalLoginCapability(baseProviderState("reasonix"))}
+        state={withRunnableCandidate(
+          withTerminalLoginCapability(baseProviderState("reasonix")),
+        )}
         harness={null}
         terminalLoginSurface={{
           kind: "landing",
@@ -345,7 +367,9 @@ describe("<PickerProviderAuthLine />", () => {
 
     renderAuthLine(
       <PickerProviderAuthLine
-        state={withTerminalLoginCapability(baseProviderState("reasonix"))}
+        state={withRunnableCandidate(
+          withTerminalLoginCapability(baseProviderState("reasonix")),
+        )}
         harness={null}
         terminalLoginSurface={{
           kind: "landing",

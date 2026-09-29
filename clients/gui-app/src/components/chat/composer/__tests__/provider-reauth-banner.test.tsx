@@ -336,7 +336,20 @@ function claudeState(
     enabled: true,
     disabledBy: null,
     selected: { kind: "bundled" },
-    candidates: [],
+    // Capable by default: a runnable candidate, so `providerHostBlock` reads
+    // null and every OAuth/terminal button in this file is gated by the fact
+    // it is actually testing, not by whether the host has found a CLI. The
+    // one test that models "the pack is preparing and nothing else can run"
+    // overrides `candidates` back to `[]` itself.
+    candidates: [
+      {
+        kind: "bundled",
+        path: "/opt/traycer/bin/claude",
+        version: "1.0.0",
+        available: true,
+        versionPending: false,
+      },
+    ],
     auth: {
       status: "unauthenticated",
       badgeText: null,
@@ -495,6 +508,30 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
   });
 
+  // The host-gating redesign: a control that spawns a CLI is refused for a
+  // provider that is off, whatever its login capability says. The banner
+  // shows the block's own sentence where the button would be, and no OAuth
+  // form at all.
+  it("shows the host-block status line and no OAuth form for a disabled provider", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={{ ...claudeState(CLAUDE_CAP), enabled: false }}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Claude Code is turned off. Turn it on to sign in or manage its profiles.",
+    );
+  });
+
   // `canOauth` required `oauthArgs.length > 0`, so the banner offered
   // antigravity the API-key paste form and no reconnect button at all - the
   // one affordance that actually signs it back in. Rendered AS antigravity,
@@ -650,6 +687,9 @@ describe("<ProviderReauthBanner />", () => {
         providerId="copilot"
         state={{
           ...copilotState(COPILOT_TERMINAL_CAP),
+          // Nothing to fall back to - this is the one test in the file where
+          // the CLI itself, not just the pack, is unavailable.
+          candidates: [],
           managedInstallState: { status: "downloading", percent: 30 },
         }}
         reason="provider_unauthenticated"
@@ -1452,6 +1492,99 @@ describe("<ProviderReauthBanner />", () => {
     const cancelButton = screen.getByRole("button", { name: "Cancel" });
     expect(cancelButton.textContent).toContain("Cancel");
     expect(cancelButton).toHaveProperty("disabled", true);
+  });
+
+  // A start that outlasts "a moment" - the host answered `pending: "starting"`
+  // - swaps the Authenticate button for the dedicated row, which says so and
+  // still lets the user back out. `startProviderLoginUntilSettled` attaches to
+  // the still-running child with a second `providers.startLogin` call; that
+  // one is left hanging here, since only the row and its Cancel are under
+  // test.
+  it("shows the starting row with title/guidance and a working Cancel for a slow start", async () => {
+    let calls = 0;
+    mocks.startLoginMutate.mockImplementation(
+      (
+        _vars: { providerId: string },
+        opts: {
+          readonly onSuccess: (data: {
+            readonly url: string | null;
+            readonly started: boolean;
+            readonly profileId: string | null;
+            readonly pending: "starting" | null;
+          }) => void;
+        },
+      ) => {
+        calls += 1;
+        if (calls === 1) {
+          opts.onSuccess({
+            url: null,
+            started: false,
+            profileId: null,
+            pending: "starting",
+          });
+        }
+        // The attaching call is left unanswered on purpose.
+      },
+    );
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+
+    expect(screen.getByText("Starting Claude Code…")).toBeDefined();
+    expect(
+      screen.getByText(
+        "This can take up to a minute. The sign-in page opens as soon as it is ready.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(mocks.cancelLoginMutate).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      profileId: null,
+    });
+  });
+
+  // The ordinary case - no `pending` on the first answer, so the flow's
+  // `startingCopy` stays null the whole time and the original single-button
+  // rendering is what shows while the call is in flight.
+  it("keeps the plain Authenticate button with spinner for an ordinary start", () => {
+    mocks.startLoginMutate.mockImplementation(() => {
+      // Never answers: this is the very first call, before the host has said
+      // anything, which is `startingCopy === null` for the whole test.
+    });
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+
+    const authenticateButton = screen.getByRole("button", {
+      name: /Authenticate/,
+    });
+    expect(authenticateButton).toHaveProperty("disabled", true);
+    expect(screen.queryByText("Starting Claude Code…")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
   });
 
   it("saves a pasted token as an env override for the first credential var", () => {

@@ -402,7 +402,12 @@ function PresetMiniature(props: {
         </div>
         <MiniatureStatusBar {...frame} />
         {edge === null ? (
-          <span aria-hidden data-sheet-join-bridge="top" />
+          <span
+            aria-hidden
+            data-sheet-join-bridge="top"
+            data-join-active=""
+            data-join-pane="canvas"
+          />
         ) : null}
       </div>
     </div>
