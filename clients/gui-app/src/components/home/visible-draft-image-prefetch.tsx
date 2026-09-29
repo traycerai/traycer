@@ -11,6 +11,7 @@ import {
   hashOnlyImageHashes,
 } from "@/lib/composer/image-atoms";
 import { LANDING_IMAGE_MAX_BYTES_PER_IMAGE } from "@/lib/composer/landing-image-budget";
+import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
 import {
   cloudDraftImageSourceVersion,
   prefetchRecordedCloudDraftImages,
@@ -40,6 +41,9 @@ function plannedImages(content: JsonContent): ReadonlyArray<PlannedImage> {
   let remaining = getRetentionProfile().visibleDraftImagePrefetchBytes;
   const selected: PlannedImage[] = [];
   for (const hash of hashOnlyImageHashes(content)) {
+    // Bytes this partition already holds cost no transfer, so they must not
+    // spend the allowance a missing image needs.
+    if (hasLandingImageBytes(hash)) continue;
     const claimedSize = declared.get(hash);
     const size =
       claimedSize !== undefined && claimedSize !== null && claimedSize > 0
