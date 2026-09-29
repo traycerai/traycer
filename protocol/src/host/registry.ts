@@ -292,7 +292,7 @@ import {
   chatSubscribeV116,
   chatSubscribeV117,
   chatSubscribeV118,
-  chatSubscribeV119,
+  chatSubscribeV120,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -12348,7 +12348,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 19,
+      latestMinor: 20,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -12444,7 +12444,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // a non-strict object at every minor, so the host withholds nothing.
         // Frozen at the pre-`pausedReason` queue and the pre-receipt bodies
         // since @1.18 opened above it, and at the pre-parity cards and events
-        // since @1.19 did.
+        // since @1.20 did.
         17: {
           contract: chatSubscribeV117,
         },
@@ -12452,18 +12452,18 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // fallback card) and `pausedReason` on the queue. Optional keys in
         // non-strict objects at every minor, so the host withholds nothing: a
         // @1.17 peer drops both on parse. Frozen at the pre-parity cards and
-        // events since @1.19 opened above it.
+        // events since @1.20 opened above it.
         18: {
           contract: chatSubscribeV118,
         },
-        // @1.19 is the Claude-parity line: the suggested prompt, the
+        // @1.20 is the Claude-parity line: the suggested prompt, the
         // thinking-token estimate and its light frame, the `cron` background
         // kind, and the approval card's display facts / `cautious` /
         // `ruleForced`. All live-only; the host PROJECTS every one of them
         // away below this minor (keys deleted, the frame dropped, the item
         // omitted) rather than refusing the subscribe.
-        19: {
-          contract: chatSubscribeV119,
+        20: {
+          contract: chatSubscribeV120,
         },
       },
     },

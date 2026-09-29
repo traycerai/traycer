@@ -117,10 +117,10 @@ function thinkingTokensFrame(
 }
 
 describe("ChatStreamClient thinkingTokens frame", () => {
-  it("reaches onThinkingTokens on a windowed 1.19 session", () => {
+  it("reaches onThinkingTokens on a windowed 1.20 session", () => {
     const { wsStreamClient, session } = stubClientAtVersion({
       major: 1,
-      minor: 19,
+      minor: 20,
     });
     const readings: Reading[] = [];
     const client = new ChatStreamClient({

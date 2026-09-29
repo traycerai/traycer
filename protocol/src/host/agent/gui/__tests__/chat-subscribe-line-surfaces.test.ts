@@ -36,7 +36,7 @@
  * - `1.18` is the model-routing surface, minted above `1.17`: the settled
  *   notice's `receipt` and the queue's `pausedReason`, which the older lines
  *   bind frozen schemas without, so needles pin the boundary;
- * - `1.19` is the Claude-parity surface, minted above `1.18`: the suggested
+ * - `1.20` is the Claude-parity surface, minted above `1.18`: the suggested
  *   prompt, the thinking-tokens estimate and frame, the cron background item
  *   kind, and the approval card's display facts / cautious / rule-forced
  *   keys. Unlike `1.16` these are PROJECTED for an older peer, and the older
@@ -76,7 +76,7 @@ const MODEL_ROUTING_MINOR = 18;
 const MODEL_ROUTING_NEEDLES = ['"receipt":', '"pausedReason":'];
 // The Claude-parity surfaces: suggested prompt, thinking tokens, cron items,
 // approval display facts / cautious / rule-forced.
-const CLAUDE_PARITY_MINOR = 19;
+const CLAUDE_PARITY_MINOR = 20;
 const LIVE_MINOR = CLAUDE_PARITY_MINOR;
 // Object keys carry their colon so a needle cannot hit an enum value or a
 // description that merely mentions the name; the two literals (`thinkingTokens`
@@ -217,7 +217,7 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.19 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.20 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.

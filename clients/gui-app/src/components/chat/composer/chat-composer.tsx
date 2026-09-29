@@ -239,9 +239,9 @@ interface ChatComposerProps {
    */
   readonly topSlot: ReactNode | null;
   /**
-   * The provider's predicted next prompt (`chat.subscribe@1.19`), offered as
+   * The provider's predicted next prompt (`chat.subscribe@1.20`), offered as
    * the empty composer's placeholder: → or a tap fills it. `undefined` offers
-   * nothing - which is also every host below `1.19`.
+   * nothing - which is also every host below `1.20`.
    */
   readonly suggestedPrompt: string | undefined;
 }

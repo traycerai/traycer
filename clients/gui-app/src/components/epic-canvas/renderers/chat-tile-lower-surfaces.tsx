@@ -249,7 +249,7 @@ export interface ChatLowerComposerState {
   readonly workspaceControls: ReactNode;
   readonly workspaceAvailability: WorkspaceComposerAvailability;
   /**
-   * The host's `suggestedPrompt` (`chat.subscribe@1.19`), offered as the
+   * The host's `suggestedPrompt` (`chat.subscribe@1.20`), offered as the
    * composer's placeholder.
    */
   readonly suggestedPrompt: string | undefined;

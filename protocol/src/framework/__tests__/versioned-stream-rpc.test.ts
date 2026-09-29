@@ -128,12 +128,12 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // judge-reason tier took @1.16. The sender host on `send` /
     // `editUserMessage` and on the queued prompt item took @1.17. The model-routing
     // receipt (`providerNotice.receipt`) and the queue's `pausedReason` took @1.18.
-    // The Claude-parity surfaces took @1.19.
+    // The Claude-parity surfaces took @1.20.
     //
     // RESTATED rather than derived, deliberately: this file is the
     // change-detector for the line set, so deriving it from the registry would
     // assert the registry against itself.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(19);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(20);
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
     // @1.1 carries the resume cursor that lets a reconnect skip the catch-up.
     expect(hostStreamRpcRegistry["worktree.changed"][1].latestMinor).toBe(1);

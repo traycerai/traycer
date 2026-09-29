@@ -128,7 +128,7 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // 1.18 is captured ON TIME, from main's own bytes at OSS commit 5226395c0,
 // where it was the live line (model routing, released on `release-v1.4.0`),
 // before the Claude-parity surfaces - renumbered a second time for it - took
-// 1.19 above it. The merged tree's frozen 1.18 reproduces main's digests
+// 1.20 above it. The merged tree's frozen 1.18 reproduces main's digests
 // exactly, server and client frames alike, and so does every line below it.
 const SERVER_FRAME_DIGESTS = {
   0: [
