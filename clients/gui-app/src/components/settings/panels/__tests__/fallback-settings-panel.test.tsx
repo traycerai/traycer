@@ -1675,8 +1675,8 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
     //
     // Held open, because the notice renders BEFORE this read-back settles and
     // "Check again" is disabled for as long as it runs: a click in that window
-    // does nothing, and only how fast the automatic answer resolves decided
-    // whether this test's click was one. Holding it makes the window certain.
+    // does nothing. Holding it pins that window rather than leaving it to how
+    // fast the automatic answer happens to resolve.
     let answerAutomaticReadBack: (result: FallbackRefetchResult) => void = () =>
       undefined;
     fallbackMocks.refetchMock.mockReturnValueOnce(
@@ -1862,6 +1862,9 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
       await waitFor(() => {
         expect(checkAgain.hasAttribute("disabled")).toBe(false);
       });
+      // The click handler reads the unknown save from a ref that a passive
+      // effect updates, so let those effects run before pressing.
+      await flushHostReplies();
       fireEvent.click(checkAgain);
       await waitFor(() => {
         expect(fallbackMocks.refetchMock).toHaveBeenCalledTimes(2);
