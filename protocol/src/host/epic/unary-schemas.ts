@@ -1001,9 +1001,18 @@ export const epicListPreservationSchema = lazySchema(() =>
 export type EpicListPreservation = z.infer<typeof epicListPreservationSchema>;
 
 // `epic.listTasks@1.5` list row: adds the preservation marker.
-export const listTaskLightSchema = lazySchema(() =>
+export const listTaskLightSchemaPre17 = lazySchema(() =>
   listTaskLightSchemaPre15.extend({
     preservation: epicListPreservationSchema.optional(),
+  }),
+);
+export type ListTaskLightPre17 = z.infer<typeof listTaskLightSchemaPre17>;
+
+// `epic.listTasks@1.7` adds the per-viewer activity key. `updatedAt` inside
+// the Epic/Phase light remains the task document edit time.
+export const listTaskLightSchema = lazySchema(() =>
+  listTaskLightSchemaPre17.extend({
+    recentAt: z.number().optional(),
   }),
 );
 export type ListTaskLight = z.infer<typeof listTaskLightSchema>;
@@ -1237,7 +1246,7 @@ export type ListTasksCompleteness = z.infer<typeof listTasksCompletenessSchema>;
 // below picked up `home` and `preservation` at an ALREADY-RELEASED `@1.2`,
 // with nobody touching a getTaskContexts schema, and the released-baseline
 // gate reported it as a BREAKING structural change at a shipped version.
-export const listTaskLightSchemaPre16 = listTaskLightSchema;
+export const listTaskLightSchemaPre16 = listTaskLightSchemaPre17;
 export type ListTaskLightPre16 = z.infer<typeof listTaskLightSchemaPre16>;
 
 // `epic.listTasks@1.5` response: `@1.4`'s rows plus the preservation marker and
@@ -1258,10 +1267,19 @@ export type ListTasksResponsePre16 = z.infer<
 // this line simply omits them; absence remains "this host cannot say", never
 // "complete". The `tasks` redeclaration below carries the LIVE row and is the
 // one place on this line that should.
-export const listTasksResponseSchema = lazySchema(() =>
+export const listTasksResponseSchemaPre17 = lazySchema(() =>
   listTasksResponseSchemaPre16.extend({
-    tasks: z.array(listTaskLightSchema),
+    tasks: z.array(listTaskLightSchemaPre17),
     completeness: listTasksCompletenessSchema.optional(),
+  }),
+);
+export type ListTasksResponsePre17 = z.infer<
+  typeof listTasksResponseSchemaPre17
+>;
+
+export const listTasksResponseSchema = lazySchema(() =>
+  listTasksResponseSchemaPre17.extend({
+    tasks: z.array(listTaskLightSchema),
   }),
 );
 export type ListTasksResponse = z.infer<typeof listTasksResponseSchema>;
@@ -1407,12 +1425,9 @@ export const taskContextResolutionSchema = lazySchema(() =>
       // getTaskContexts schema, and the released-baseline gate caught it as a
       // BREAKING structural change at a shipped version.
       //
-      // Nothing wants the newer keys here: `@1.3` deliberately answers the
-      // local-home question with the `localHomedTaskIds` SIBLING list rather
-      // than a row field, and `combineTaskPinnedStateResults` reads that list.
-      // A later minor that genuinely needs a richer row must add its own
-      // resolution schema against the frozen alias of ITS release, never move
-      // this one forward.
+      // `@1.3` answers the local-home question with a sibling id list.
+      // `@1.4` likewise carries recent activity in a sibling map, because
+      // changing this record value would reshape a released minor.
       task: listTaskLightSchemaPre14,
     }),
     z.object({
@@ -1490,9 +1505,15 @@ export type GetTaskContextsResponsePre13 = z.infer<
  * Absence means the host did not say - an older host, or a `@1.0`-`@1.2`
  * negotiation - and must be read as cloud-or-unknown, never as local.
  */
-export const getTaskContextsResponseSchema = lazySchema(() =>
+export const getTaskContextsResponseSchemaPre14 = lazySchema(() =>
   getTaskContextsResponseSchemaPre13.extend({
     localHomedTaskIds: z.array(z.string()).optional(),
+  }),
+);
+/** `@1.4` carries viewer activity beside frozen context rows. */
+export const getTaskContextsResponseSchema = lazySchema(() =>
+  getTaskContextsResponseSchemaPre14.extend({
+    recentAtByTaskId: z.record(z.string(), z.number()).optional(),
   }),
 );
 export type GetTaskContextsResponse = z.infer<

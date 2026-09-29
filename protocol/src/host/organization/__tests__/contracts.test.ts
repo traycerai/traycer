@@ -7,6 +7,9 @@ import {
   organizationRefreshUpgradeV10ToV11,
   organizationRefreshV10,
   organizationRefreshV11,
+  organizationHistoryV10,
+  organizationHistoryV11,
+  organizationHistoryUpgradeV10ToV11,
   organizationSubscribeV10,
   organizationSubscribeV11,
   organizationViewSchemaV10,
@@ -75,6 +78,22 @@ describe("organization metadata invalidation contract versions", () => {
 });
 
 describe("organization contract registry minors", () => {
+  it("strips recentAt from history v1.0 and retains it in v1.1", () => {
+    const response = {
+      tasks: [{ epic: null, phase: null, recentAt: 1_234 }],
+      hasMore: false,
+    };
+    const v10 = organizationHistoryV10.responseSchema.parse(response);
+    const v11 = organizationHistoryV11.responseSchema.parse(response);
+    const upgraded = organizationHistoryUpgradeV10ToV11.upgradeResponse(v10);
+    const line = hostRpcRegistry["organization.history"][1];
+
+    expect(v10.tasks[0]).not.toHaveProperty("recentAt");
+    expect(v11.tasks[0]).toHaveProperty("recentAt", 1_234);
+    expect(upgraded.tasks[0]).not.toHaveProperty("recentAt");
+    expect(line.latestMinor).toBe(1);
+  });
+
   it("installs v1.0 and v1.1 for unary organization reads", () => {
     for (const method of [
       "organization.read",
