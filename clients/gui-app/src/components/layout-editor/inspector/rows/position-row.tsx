@@ -8,7 +8,6 @@ import {
   SIDE_TAB_ALIGNMENT_HELPER,
   sideTabFootAlignment,
 } from "@/components/layout-editor/regions/region-grammar";
-import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { writeArrangement } from "@/lib/layout/arrangement-gestures";
 import {
   positionAxisChanged,
@@ -87,10 +86,10 @@ export function PositionSideRow(props: {
 }): ReactNode {
   const { regionId, arrangement, snapshot, description } = props;
   const bar = asBarRegionId(regionId);
-  const narrow = useIsMobileViewport();
+  // A bar reading's row is never drawn narrow (`regionRowAvailable`), so a
+  // vertical strip's foot is the only other place its ends read differently.
   const footAlignment =
     bar !== null &&
-    !narrow &&
     sideTabFootAlignment(
       barPlacement(arrangement, bar).host,
       arrangement.tabStripPlacement,

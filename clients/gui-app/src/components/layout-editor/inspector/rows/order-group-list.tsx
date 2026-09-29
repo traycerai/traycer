@@ -356,14 +356,19 @@ function ProviderLists(props: {
             onClick={() => {
               setShowAll(!showAll);
             }}
+            // Allowed to narrow with its row, so the label ends in an ellipsis
+            // on a phone's column instead of running off its edge.
+            className="min-w-0 shrink"
           >
             <ChevronRight
               aria-hidden
               className={cn("transition-transform", showAll && "rotate-90")}
             />
-            {showAll
-              ? "Hide other providers"
-              : `Show all providers (${String(others.length)} not configured on this host)`}
+            <span className="truncate">
+              {showAll
+                ? "Hide other providers"
+                : `Show all providers (${String(others.length)} not configured on this host)`}
+            </span>
           </Button>
         </div>
       )}

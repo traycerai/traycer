@@ -413,6 +413,46 @@ describe("Settings - Layout", () => {
         ).toHaveLength(1);
       }
     });
+
+    it("keeps only what the phone footer honours: no Location, Alignment or Display (L-162)", async () => {
+      setPhoneLayoutOnly(true);
+      // Both in the Tab strip, where a desktop window would offer Display.
+      useLayoutStore.setState({
+        ...DEFAULT_LAYOUT_SNAPSHOT,
+        arrangement: {
+          ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+          usageHost: "header",
+          resourceHost: "header",
+        },
+      });
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "statusBar");
+
+      const names = {
+        usageLimits: "Usage limits",
+        resourceMonitor: "Resource monitor",
+      } as const;
+      for (const regionId of ["usageLimits", "resourceMonitor"] as const) {
+        await user.click(row(regionId));
+        const name = names[regionId];
+        const opened = within(row(regionId));
+        expect(
+          opened.queryByRole("radiogroup", { name: `${name} position` }),
+        ).toBeNull();
+        expect(
+          opened.queryByRole("radiogroup", { name: `${name} side` }),
+        ).toBeNull();
+        expect(opened.queryByRole("radio", { name: "Icon only" })).toBeNull();
+      }
+      // The readouts themselves still apply to the footer.
+      expect(
+        within(row("usageLimits")).getByRole("radio", { name: "Remaining" }),
+      ).not.toBeNull();
+      expect(
+        within(row("resourceMonitor")).getByRole("checkbox", { name: "CPU" }),
+      ).not.toBeNull();
+    });
   });
 
   describe("the rail's tri-state (L-93, D5)", () => {

@@ -566,8 +566,10 @@ export function statusBarHostsAnyRegion(
  * (L-51), which is off by default - and it ignores them for the CONTENTS too
  * (L-162): a footer switched on draws both readings whichever bar each of
  * them names, because the phone has one bar and a footer that honoured a
- * header pick would silently drop a readout. The picks are kept, not
- * overridden, so the desktop window they were made in still honours them.
+ * header pick would silently drop a readout. Its ends are fixed as well -
+ * usage left, resources right - since an end picked for a desktop bar says
+ * nothing about the phone's. The picks are kept, not overridden, so the
+ * desktop window they were made in still honours them.
  */
 export function statusBarShown(
   arrangement: LayoutArrangement,

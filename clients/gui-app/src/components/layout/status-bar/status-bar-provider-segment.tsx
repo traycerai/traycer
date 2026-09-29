@@ -63,8 +63,9 @@ export interface StatusBarProviderSegmentProps {
  * One account's usage, at the detail the preferences ask for.
  *
  * Always the whole reading: the cluster this sits in scrolls when its
- * segments outgrow the strip, so nothing here is shortened to make room, and
- * the width of the window never changes what a segment says. What CAN vary is
+ * segments outgrow the strip, so nothing here is shortened to make room -
+ * except the account NAME on a phone, which truncates to a floor first (see
+ * `SegmentBody`). The numbers never change with the width of the window. What CAN vary is
  * what the user switched on - the mode word, the mini bar, the countdown -
  * which arrives as `parts`.
  *
@@ -115,7 +116,10 @@ export function StatusBarProviderSegment(
   );
   return (
     <span
-      className="inline-flex min-w-0 items-center gap-1"
+      // `min-w-min` on a phone, where the strip's row can shrink: the
+      // segment gives no further than its readings' floor, so a squeezed
+      // strip scrolls instead of drawing one segment over the next.
+      className="inline-flex min-w-0 items-center gap-1 max-md:min-w-min"
       data-testid={`status-bar-provider-segment-${segment.providerId}`}
       data-provider-id={segment.providerId}
       data-profile-id={segment.profileId ?? ""}
@@ -178,13 +182,19 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
   // The account's name before the reading rather than after, so `Work 57%`
   // and `Personal 12%` read as two labelled figures rather than one figure
   // with two trailing words.
+  //
+  // On a phone the name is the one part of the strip that gives when the
+  // readings outgrow it: it truncates down to a `5ch` floor before the strip
+  // falls back to scrolling. A one-track grid is what sets that floor as the
+  // name's MIN-CONTENT width - a plain truncating span still contributes its
+  // whole text to every ancestor's minimum, so nothing above it could shrink.
   const accountName =
     segment.account === null ? null : (
       <span
         data-testid="status-bar-provider-account"
-        className="whitespace-nowrap"
+        className="whitespace-nowrap max-md:inline-grid max-md:grid-cols-[minmax(5ch,max-content)]"
       >
-        {segment.account.label}
+        <span className="min-w-0 truncate">{segment.account.label}</span>
       </span>
     );
   const isCold = segment.state === "cold";
