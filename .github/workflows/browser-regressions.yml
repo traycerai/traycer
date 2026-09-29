@@ -48,7 +48,9 @@ jobs:
       # configs), the two workspace packages it imports throughout
       # (`@traycer-clients/shared`, `@traycer/protocol`), the dependency set
       # and its patches (`@pierre/diffs`), the desktop package's Electron
-      # (the tree-zoom spec launches it) and this workflow. Markdown and
+      # (the tree-zoom spec launches it) and this workflow. A package is
+      # listed whole, never by subdirectory: its exports reach past `src/`
+      # (`@traycer/protocol/utils/*` is `protocol/utils/`). Markdown and
       # Vitest files change none of that. A push with no usable `before`
       # (a new branch) and a manual run always run the suite.
       - name: Does this change touch what the browser suite depends on?
@@ -75,7 +77,7 @@ jobs:
           esac
           relevant=$(git diff --name-only "$range" | awk '
             /\.md$/ || /\.test\.tsx?$/ { next }
-            /^clients\/gui-app\// || /^clients\/shared\// || /^protocol\/src\// ||
+            /^clients\/gui-app\// || /^clients\/shared\// || /^protocol\// ||
             /^patches\// || /^package\.json$/ || /^bun\.lock$/ ||
             /^clients\/desktop\/package\.json$/ ||
             /^clients\/desktop\/scripts\/dev\/electron-binary\.cjs$/ ||
