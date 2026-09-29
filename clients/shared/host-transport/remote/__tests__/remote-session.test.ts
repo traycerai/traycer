@@ -113,6 +113,8 @@ import {
   RemoteSession,
   type RemoteSessionOptions,
 } from "../remote-session";
+import { RemoteSession as ProtocolRemoteSession } from "@traycer/protocol/host-transport/remote/session";
+import type { RemoteSessionAuth } from "@traycer/protocol/host-transport/remote/auth";
 import { RemoteStreamClient } from "../remote-stream-client";
 import {
   getNegotiatedStreamMethodVersion,
@@ -6069,6 +6071,98 @@ describe("RemoteSession reassembly progress watchdog", () => {
   );
 
   it(
+    "retires the old row incomplete on a retryable-FATAL re-key, counts no reconnect on either row, and leaves the session's own reconnect counter untouched",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      expect(session.enableTrafficAccounting()).toBe(true);
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      let delivered = 0;
+      stream.onServerFrame(() => {
+        delivered += 1;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const originalId = relay.subscribeStreamIds[0];
+        const [seedFirst, seedLast] = buildChunkFrames(originalId);
+        relay.deliverToClient(await relay.encryptFrame(seedFirst));
+        relay.deliverToClient(await relay.encryptFrame(seedLast));
+        await vi.waitFor(() => expect(delivered).toBe(1), WAIT);
+
+        // A retryable per-stream FATAL re-keys the stream: the OLD id's row
+        // must retire incomplete, and the replacement must open its OWN row
+        // - not resume the old one.
+        await relay.sendStreamFatal(originalId, retryableDropDetails());
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const replacementId = relay.subscribeStreamIds[1];
+        if (replacementId === undefined) {
+          throw new Error("expected the re-keyed replacement subscribe");
+        }
+
+        const snapshot = session.readTrafficSnapshot();
+        if (snapshot === null) {
+          throw new Error("expected traffic accounting to be enabled");
+        }
+        const oldRow = snapshot.streams.find(
+          (row) => row.streamId === originalId,
+        );
+        const newRow = snapshot.streams.find(
+          (row) => row.streamId === replacementId,
+        );
+        if (oldRow === undefined || newRow === undefined) {
+          throw new Error("expected both the retired and replacement rows");
+        }
+        expect(oldRow.incomplete).toBe(true);
+        expect(oldRow.reconnects).toBe(0);
+        expect(newRow.incomplete).toBe(false);
+        // A per-stream re-key is not a CONNECTION drop: the socket never
+        // dropped, so the session-level reconnect counter - the one
+        // `connectionLost()` alone feeds - must stay at zero.
+        expect(snapshot.reconnects).toBe(0);
+
+        const streamBytes = snapshot.streams.reduce(
+          (total, row) => total + row.ciphertextBytes,
+          0,
+        );
+        const streamFrames = snapshot.streams.reduce(
+          (total, row) => total + row.frames,
+          0,
+        );
+        expect(
+          snapshot.relayTextBytes +
+            snapshot.noiseHandshakeBytes +
+            snapshot.unclassifiedBinaryBytes +
+            streamBytes,
+        ).toBe(snapshot.receivedBytes);
+        expect(
+          snapshot.relayTextFrames +
+            snapshot.noiseHandshakeFrames +
+            snapshot.unclassifiedBinaryFrames +
+            streamFrames,
+        ).toBe(snapshot.receivedFrames);
+      } finally {
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "moves the stall license through a retryable-FATAL re-key - the verdict answers one attempt, not the stream's proven stall",
     async () => {
       // stall -> licensed replacement B -> host answers B with a retryable
@@ -9438,6 +9532,15 @@ describe("RemoteSession opt-in traffic accounting", () => {
         vi.spyOn(RemoteTrafficAccounting.prototype, "end"),
         vi.spyOn(RemoteTrafficAccounting.prototype, "connectionLost"),
       ];
+      // `RelaySocket`'s dialer wires `onTextBytes` from a single ternary
+      // (`session.ts` around `this.traffic === null ? undefined : (bytes) =>
+      // this.traffic?.receiveText(bytes)`), so an absent tracker means the
+      // handler itself is `undefined`, not merely a wired no-op - spying on
+      // `RelaySocket` or on the global `TextEncoder` constructor to observe
+      // that from the outside breaks real `new` construction in this
+      // environment (both attempts made the session's own dial fail), so
+      // this is pinned by the `receiveText` spy below instead: it is the
+      // only call `onTextBytes` would ever make, and it never fires.
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
         streamRegistry: cursorStreamRegistry,
@@ -9490,6 +9593,125 @@ describe("RemoteSession opt-in traffic accounting", () => {
         session.close();
         for (const spy of accountingMethodSpies) spy.mockRestore();
         diagnosticClock.mockRestore();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * A host dialing another host constructs the protocol base class directly -
+ * never the clients/shared adapter, which is client-only (bearer auth, the
+ * debug-storage opt-in, negotiated-manifest recording). Traffic accounting is
+ * opt-in on the base class too (b, task list item b): a host dialer that never
+ * calls `enableTrafficAccounting()` must carry the same null tracker through a
+ * real handshake and real frames.
+ */
+describe("RemoteSession host-dialer traffic accounting (protocol base class, task b)", () => {
+  function hostAuth(): RemoteSessionAuth {
+    return {
+      missingOpenAuthCause: "missing-host-credential",
+      readOpenAuth: () => ({
+        bearer: "host-bearer",
+        authz: null,
+        fingerprint: "host-bearer",
+      }),
+      readCredentialUpdateBearer: () => "host-bearer",
+      currentFingerprint: () => "host-bearer",
+      revalidateForReconnect: null,
+    };
+  }
+
+  function buildHostSession(
+    relay: FakeRelayHost,
+  ): InstanceType<
+    typeof ProtocolRemoteSession<
+      VersionedRpcRegistry,
+      VersionedStreamRpcRegistry
+    >
+  > {
+    let nextRequestId = 0;
+    return new ProtocolRemoteSession({
+      hostId: "host-2",
+      attachBaseUrl: "wss://relay.test/attach",
+      hostStaticPublicKey: relay.hostStaticPublicKey,
+      grantProvider: () =>
+        Promise.resolve({
+          kind: "ok" as const,
+          grant: { grant: "grant-jws", expiresInSeconds: 300 },
+        }),
+      auth: hostAuth(),
+      clock: null,
+      rpcRegistry: emptyRpcRegistry,
+      streamRegistry: cursorStreamRegistry,
+      webSocketFactory: relay.factory,
+      requestId: () => `host-req-${(nextRequestId += 1)}`,
+      // Host dialers pass null for both: no selection authority to feed, and
+      // no client-side capability publication hook.
+      evidence: null,
+      onNegotiatedMethods: null,
+      servedStreamMajors: {},
+      // Host dialers pass the 330s budget, not the 30s GUI default.
+      unaryResponseMs: 330_000,
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      livenessProbe: null,
+    });
+  }
+
+  it(
+    "never instantiates the accounting tracker through a real handshake and real frames, and enableTrafficAccounting() refuses once started",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const session = buildHostSession(relay);
+
+      try {
+        // Never opted in: no traffic to read before this session has even
+        // dialed.
+        expect(session.readTrafficSnapshot()).toBeNull();
+
+        const stream = session.subscribe("cursor.subscribe", {
+          cursor: null,
+        });
+        let receivedFrames = 0;
+        stream.onServerFrame(() => {
+          receivedFrames += 1;
+        });
+
+        session.start();
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+        if (streamId === undefined) {
+          throw new Error("expected the cursor subscription to open");
+        }
+
+        for (let index = 0; index < 4; index += 1) {
+          await relay.sendStreamFrame(
+            streamId,
+            { kind: "snapshot", hasBinaryPayload: false },
+            null,
+            QosClass.INTERACTIVE,
+          );
+        }
+        await vi.waitFor(() => expect(receivedFrames).toBe(4), WAIT);
+
+        // Real frames arrived on a real, started session - still null.
+        expect(session.readTrafficSnapshot()).toBeNull();
+
+        // Opting in AFTER start() is refused: `enableTrafficAccounting()`
+        // only succeeds from the idle phase (session.ts, "Public surface").
+        expect(session.enableTrafficAccounting()).toBe(false);
+        expect(session.readTrafficSnapshot()).toBeNull();
+
+        stream.close();
+      } finally {
+        session.close();
       }
     },
     TEST_BUDGET_MS,

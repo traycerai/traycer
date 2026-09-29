@@ -6,7 +6,12 @@ import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
-import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import {
+  LANDING_IMAGE_BUDGET_BYTES,
+  registerExtraImageRootSource,
+  resetLandingImageBudgetReservationsForTesting,
+  tryReserveLandingImageBudget,
+} from "@/lib/composer/landing-image-budget";
 import {
   getImageBytes,
   sessionImageBytes,
@@ -235,6 +240,104 @@ describe("cloud-draft-image-recovery", () => {
 
     expect(await readCloudDraftImageBytes(hash)).toEqual(bytes);
     expect(imageGcMocks.scheduleLandingImageReconcile).toHaveBeenCalled();
+  });
+
+  it("a full resident budget returns verified bytes ephemerally: no IDB/session entry afterward", async () => {
+    // Fill the whole budget with an unrelated, unreleased reservation BEFORE
+    // this hash is rooted, then ask the cloud leg to recover it. The
+    // write-back has somewhere to reserve for exactly zero bytes.
+    const filler = tryReserveLandingImageBudget([
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES },
+    ]);
+    expect(filler).not.toBeNull();
+
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+    rootLandingImages(hash);
+    const { client } = okClient(toBase64(bytes), bytes.byteLength);
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [hash],
+    });
+
+    const result = await readCloudDraftImageBytes(hash);
+
+    expect(result).toEqual(bytes);
+    expect(await getImageBytes(hash)).toBeUndefined();
+
+    filler?.release();
+    resetLandingImageBudgetReservationsForTesting();
+  });
+
+  it("a tried-and-rejected corrupt candidate never under-charges the next candidate's reservation", async () => {
+    // Verification runs BEFORE reservation (`verifyAndMaybeStoreCloudImage`),
+    // so a corrupt response for a hash never touches the ledger at all - it
+    // cannot leave a residual charge for a LATER, larger valid response for
+    // the SAME hash to dedupe onto. The walk tries the newest candidate
+    // first, so the corrupt one (recorded second, on a newer draft) is tried
+    // and rejected before the older, valid one is tried at all - with almost
+    // the whole budget already spent, so the valid reply only lands resident
+    // if the rejected attempt left it an under-charge to dedupe onto.
+    const validBytes = bytesA();
+    const hash = await sha256HexOf(validBytes);
+    const corruptBytes = bytesB(); // does NOT hash to `hash`
+
+    const filler = tryReserveLandingImageBudget([
+      {
+        hash: null,
+        bytes: LANDING_IMAGE_BUDGET_BYTES - validBytes.byteLength + 1,
+      },
+    ]);
+    expect(filler).not.toBeNull();
+    rootLandingImages(hash);
+
+    const valid = recordingClient((_method, _params) =>
+      Promise.resolve({
+        outcome: {
+          status: "ok" as const,
+          bytesBase64: toBase64(validBytes),
+          byteLength: validBytes.byteLength,
+        },
+      }),
+    );
+    const corrupt = recordingClient((_method, _params) =>
+      Promise.resolve({
+        outcome: {
+          status: "ok" as const,
+          bytesBase64: toBase64(corruptBytes),
+          byteLength: corruptBytes.byteLength,
+        },
+      }),
+    );
+    // Older draft, valid bytes for this hash.
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-valid",
+      client: valid.client,
+      hashes: [hash],
+    });
+    // Newer draft, corrupt bytes for the SAME hash - tried FIRST.
+    recordCloudDraftImageSources({
+      identity: { ...IDENTITY, chatId: "draft-2" },
+      hostId: "host-corrupt",
+      client: corrupt.client,
+      hashes: [hash],
+    });
+
+    const result = await readCloudDraftImageBytes(hash);
+
+    expect(corrupt.calls).toHaveLength(1);
+    expect(valid.calls).toHaveLength(1);
+    // The valid reply still reaches its caller, ephemerally: its own
+    // (correctly-sized) reservation is refused near the cap, so nothing
+    // becomes resident.
+    expect(result).toEqual(validBytes);
+    expect(await getImageBytes(hash)).toBeUndefined();
+
+    filler?.release();
+    resetLandingImageBudgetReservationsForTesting();
   });
 
   it("refuses a digest mismatch: stores nothing and answers null, with a matching-bytes positive control", async () => {

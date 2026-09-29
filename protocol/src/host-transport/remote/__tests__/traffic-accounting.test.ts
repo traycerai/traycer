@@ -196,4 +196,151 @@ describe("RemoteTrafficAccounting", () => {
         snapshot.streams.reduce((total, stream) => total + stream.frames, 0),
     ).toBe(snapshot.receivedFrames);
   });
+
+  it("keeps a chunked row incomplete until the final chunk arrives, and counts only compressed chunks as compressed frames", () => {
+    vi.spyOn(Date, "now").mockReturnValue(30_000);
+    const traffic = new RemoteTrafficAccounting();
+    const streamId = 11;
+    traffic.register(streamId, "cursor.subscribe", "stream", null);
+
+    const firstChunkAt = traffic.receiveBinary(64);
+    traffic.classifyMux(
+      {
+        type: MuxFrameType.STREAM_FRAME,
+        streamId,
+        seq: 0,
+        qos: QosClass.BULK,
+        chunked: true,
+        chunkFirst: true,
+        chunkLast: false,
+        compressed: true,
+        json: null,
+        binary: null,
+      } satisfies MuxFrame,
+      64,
+      50,
+      firstChunkAt,
+    );
+
+    let snapshot = traffic.snapshot();
+    let row = snapshot.streams.find(
+      (candidate) => candidate.streamId === streamId,
+    );
+    if (row === undefined) throw new Error("expected the chunked stream row");
+    expect(row.incomplete).toBe(true);
+    expect(row.compressedFrames).toBe(1);
+    expect(row.frames).toBe(1);
+
+    const lastChunkAt = traffic.receiveBinary(48);
+    traffic.classifyMux(
+      {
+        type: MuxFrameType.STREAM_FRAME,
+        streamId,
+        seq: 1,
+        qos: QosClass.BULK,
+        chunked: true,
+        chunkFirst: false,
+        chunkLast: true,
+        compressed: false,
+        json: null,
+        binary: null,
+      } satisfies MuxFrame,
+      48,
+      38,
+      lastChunkAt,
+    );
+
+    snapshot = traffic.snapshot();
+    row = snapshot.streams.find((candidate) => candidate.streamId === streamId);
+    if (row === undefined) throw new Error("expected the chunked stream row");
+    expect(row.incomplete).toBe(false);
+    // Only the first chunk declared itself compressed; the second did not.
+    expect(row.compressedFrames).toBe(1);
+    expect(row.frames).toBe(2);
+
+    const streamBytes = snapshot.streams.reduce(
+      (total, stream) => total + stream.ciphertextBytes,
+      0,
+    );
+    const streamFrames = snapshot.streams.reduce(
+      (total, stream) => total + stream.frames,
+      0,
+    );
+    expect(
+      snapshot.relayTextBytes +
+        snapshot.noiseHandshakeBytes +
+        snapshot.unclassifiedBinaryBytes +
+        streamBytes,
+    ).toBe(snapshot.receivedBytes);
+    expect(
+      snapshot.relayTextFrames +
+        snapshot.noiseHandshakeFrames +
+        snapshot.unclassifiedBinaryFrames +
+        streamFrames,
+    ).toBe(snapshot.receivedFrames);
+  });
+
+  it("truncates stream registrations past the row cap into the unclassified residual, with totals still reconciling", () => {
+    vi.spyOn(Date, "now").mockReturnValue(40_000);
+    const traffic = new RemoteTrafficAccounting();
+    const ROW_CAP = 1024;
+    for (let streamId = 1; streamId <= ROW_CAP; streamId += 1) {
+      traffic.register(streamId, "cursor.subscribe", "stream", null);
+    }
+    const overflowStreamId = ROW_CAP + 1;
+    traffic.register(overflowStreamId, "cursor.subscribe", "stream", null);
+
+    let snapshot = traffic.snapshot();
+    expect(snapshot.streams).toHaveLength(ROW_CAP);
+    expect(snapshot.truncatedStreamRegistrations).toBe(1);
+
+    // A frame for the overflowed stream has no row to attribute to, so it
+    // lands - and stays - in the unclassified residual instead of vanishing.
+    const receivedAt = traffic.receiveBinary(77);
+    traffic.classifyMux(
+      {
+        type: MuxFrameType.STREAM_FRAME,
+        streamId: overflowStreamId,
+        seq: 0,
+        qos: QosClass.INTERACTIVE,
+        chunked: false,
+        chunkFirst: false,
+        chunkLast: false,
+        compressed: false,
+        json: null,
+        binary: null,
+      } satisfies MuxFrame,
+      77,
+      60,
+      receivedAt,
+    );
+
+    snapshot = traffic.snapshot();
+    expect(snapshot.unclassifiedBinaryBytes).toBe(77);
+    expect(snapshot.unclassifiedBinaryFrames).toBe(1);
+    expect(
+      snapshot.streams.some((row) => row.streamId === overflowStreamId),
+    ).toBe(false);
+
+    const streamBytes = snapshot.streams.reduce(
+      (total, stream) => total + stream.ciphertextBytes,
+      0,
+    );
+    const streamFrames = snapshot.streams.reduce(
+      (total, stream) => total + stream.frames,
+      0,
+    );
+    expect(
+      snapshot.relayTextBytes +
+        snapshot.noiseHandshakeBytes +
+        snapshot.unclassifiedBinaryBytes +
+        streamBytes,
+    ).toBe(snapshot.receivedBytes);
+    expect(
+      snapshot.relayTextFrames +
+        snapshot.noiseHandshakeFrames +
+        snapshot.unclassifiedBinaryFrames +
+        streamFrames,
+    ).toBe(snapshot.receivedFrames);
+  });
 });

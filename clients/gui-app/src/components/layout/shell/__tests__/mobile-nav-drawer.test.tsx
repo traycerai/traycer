@@ -293,6 +293,8 @@ function drawerWithVisibleTileReporter(props: {
   readonly metadataReady: boolean;
   readonly selectedContentReporterMounted: boolean;
   readonly selectedContentReady: boolean;
+  readonly selected: boolean;
+  readonly paneVisible: boolean;
 }) {
   return (
     <MobileDrawerHistoryGateProvider>
@@ -301,8 +303,8 @@ function drawerWithVisibleTileReporter(props: {
           {props.metadataReady ? (
             <span data-testid="epic-metadata-ready" />
           ) : null}
-          <TabBodySelectedContext.Provider value>
-            <PaneVisibilityContext.Provider value>
+          <TabBodySelectedContext.Provider value={props.selected}>
+            <PaneVisibilityContext.Provider value={props.paneVisible}>
               {props.selectedContentReporterMounted ? (
                 <MobileDrawerVisibleTilePaintReporter
                   ready={props.selectedContentReady}
@@ -422,6 +424,8 @@ describe("MobileNavDrawer", () => {
           selectedContentReporterMounted:
             reporterMounted || selectedContentReady,
           selectedContentReady,
+          selected: true,
+          paneVisible: true,
         });
       const view = render(renderTree(false));
 
@@ -439,6 +443,44 @@ describe("MobileNavDrawer", () => {
         await vi.advanceTimersByTimeAsync(50);
       });
       expect(testState.historyQueryMounts).toBe(1);
+    },
+  );
+
+  it.each([
+    { label: "unselected tab", selected: false, paneVisible: true },
+    { label: "hidden pane", selected: true, paneVisible: false },
+  ] as const)(
+    "does not release the gate for a $label even when ready is true",
+    async ({ selected, paneVisible }) => {
+      testState.items = [
+        historyItem({
+          id: "unreleased-task",
+          title: "Task content ready",
+          updatedAtMs: NOW_MS,
+        }),
+      ];
+      setMobileApp(true);
+      useMobileNavStore.setState({ open: false });
+      render(
+        drawerWithVisibleTileReporter({
+          metadataReady: true,
+          selectedContentReporterMounted: true,
+          selectedContentReady: true,
+          selected,
+          paneVisible,
+        }),
+      );
+
+      await screen.findByTestId("mobile-nav-drawer");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+
+      // The reporter's own `ready` prop is true, but it is not the SELECTED,
+      // VISIBLE tile - an unselected tab or a hidden pane must not count as
+      // the first paint, so the gate stays closed and history stays unmounted.
+      expect(testState.historyQueryMounts).toBe(0);
+      expect(screen.queryByText("Task content ready")).toBeNull();
     },
   );
 

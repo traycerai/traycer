@@ -6,8 +6,14 @@ import type {
 } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
-import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import {
+  LANDING_IMAGE_BUDGET_BYTES,
+  registerExtraImageRootSource,
+  resetLandingImageBudgetReservationsForTesting,
+  tryReserveLandingImageBudget,
+} from "@/lib/composer/landing-image-budget";
+import {
+  getImageBytes,
   putImage,
   sessionImageBytes,
 } from "@/lib/composer/landing-image-store";
@@ -312,6 +318,9 @@ beforeEach(() => {
 afterEach(() => {
   resetDraftBlobTransportForTests();
   liveLandingImageRoots.clear();
+  // Belt and braces: a test that throws before its own release() would
+  // otherwise leak a reservation into the next test's budget arithmetic.
+  resetLandingImageBudgetReservationsForTesting();
 });
 
 /**
@@ -418,6 +427,102 @@ describe("draft blob transport", () => {
       "ab".repeat(32),
     ]);
     expect(images.size).toBe(0);
+  });
+
+  it("a full resident budget returns verified bytes ephemerally: no IDB/session entry afterward", async () => {
+    signedInAs(OWNER);
+    // Fill the whole budget with an unrelated, unreleased reservation BEFORE
+    // this hash is rooted, then ask the host leg to recover it. The write-back
+    // has somewhere to reserve for exactly zero bytes.
+    const filler = tryReserveLandingImageBudget([
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES },
+    ]);
+    expect(filler).not.toBeNull();
+
+    const bytes = pngBytesTagged(200);
+    const hash = await sha256HexOfBytes(bytes);
+    liveLandingImageRoots.add(hash);
+    const request = ((method, _params) => {
+      expect(method).toBe("drafts.readBlob");
+      return Promise.resolve({
+        ok: true as const,
+        bytesBase64: bytesToBase64(bytes),
+      });
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
+
+    const images = await readDraftBlobsIntoLocalStore(HOST, client, [hash]);
+
+    expect(images.get(hash)?.bytes).toEqual(bytes);
+    expect(await getImageBytes(hash)).toBeUndefined();
+    expect(sessionImageBytes(hash)).toBeNull();
+
+    filler?.release();
+    resetLandingImageBudgetReservationsForTesting();
+  });
+
+  it("an overlapping corrupt reply for the same hash never under-charges the valid reply's reservation", async () => {
+    signedInAs(OWNER);
+    // Verification runs BEFORE reservation (`storeRecoveredHostBlob`), so a
+    // corrupt response for a hash never touches the ledger at all - it cannot
+    // let a later, larger valid response for the SAME hash dedupe onto its
+    // smaller charge. Proven here by actually racing two calls for one hash,
+    // with almost the whole budget already spent, so the valid reply only
+    // lands resident if something under-charges it.
+    const validBytes = pngBytesTagged(201);
+    const hash = await sha256HexOfBytes(validBytes);
+    const corruptBytes = pngBytesTagged(202); // does NOT hash to `hash`
+
+    // Filled BEFORE the hash is rooted: an unmeasured root costs the
+    // per-image ceiling while unhydrated, which would otherwise swamp this
+    // reservation's own arithmetic.
+    const filler = tryReserveLandingImageBudget([
+      {
+        hash: null,
+        bytes: LANDING_IMAGE_BUDGET_BYTES - validBytes.byteLength + 1,
+      },
+    ]);
+    expect(filler).not.toBeNull();
+    liveLandingImageRoots.add(hash);
+
+    const corruptRequest = ((method, _params) => {
+      expect(method).toBe("drafts.readBlob");
+      return Promise.resolve({
+        ok: true as const,
+        bytesBase64: bytesToBase64(corruptBytes),
+      });
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const corruptClient: DraftBlobClient = {
+      request: corruptRequest,
+      requestWithOptions: corruptRequest,
+    };
+    const validRequest = ((method, _params) => {
+      expect(method).toBe("drafts.readBlob");
+      return Promise.resolve({
+        ok: true as const,
+        bytesBase64: bytesToBase64(validBytes),
+      });
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const validClient: DraftBlobClient = {
+      request: validRequest,
+      requestWithOptions: validRequest,
+    };
+
+    const [corruptResult, validResult] = await Promise.all([
+      readDraftBlobsIntoLocalStore(HOST, corruptClient, [hash]),
+      readDraftBlobsIntoLocalStore(HOST, validClient, [hash]),
+    ]);
+
+    // The corrupt reply never becomes a local read result at all.
+    expect(corruptResult.has(hash)).toBe(false);
+    // The valid reply still reaches its caller, ephemerally: one byte short
+    // of the remaining capacity, so its own (correctly-sized) reservation is
+    // refused and nothing becomes resident.
+    expect(validResult.get(hash)?.bytes).toEqual(validBytes);
+    expect(await getImageBytes(hash)).toBeUndefined();
+
+    filler?.release();
+    resetLandingImageBudgetReservationsForTesting();
   });
 
   it("a SIGN-IN ATTEMPT during the write is retired too, though the owner id never moves (DRIVE RED)", async () => {
