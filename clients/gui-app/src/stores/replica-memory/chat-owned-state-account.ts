@@ -190,6 +190,8 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   liveTurnUsage: true,
   worktreeBinding: true,
   missingWorktreePaths: true,
+  suggestedPrompt: true,
+  thinkingTokens: true,
 } as const satisfies Readonly<Record<ChatSessionDataKey, true | string>>;
 
 const OWNED_STATE_KEYS = (
