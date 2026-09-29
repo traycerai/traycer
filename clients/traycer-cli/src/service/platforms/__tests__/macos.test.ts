@@ -4643,14 +4643,30 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     // normal launchctl path. Exercises all three operations (not just
     // start): a regression where the guard incorrectly blocks a legitimate
     // stop/restart on a CLI-managed machine must be caught here too.
+    //
+    // A CLI-managed machine is one where the CLI label HAS a job, so that
+    // label's print answers loaded. It used to answer not-found here too,
+    // which is the state `start` and `restart` now refuse (neither label
+    // loaded - pinned in "neither host label loaded" below), so the fixture
+    // would no longer describe a machine those operations can proceed on.
+    // `start` and `restart` therefore print twice - the Desktop-agent probe,
+    // then the CLI label the refusal guard confirms is loaded - and `stop`
+    // never asks about the CLI label.
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
       if (args[0] === "print") {
+        if (args[1]?.endsWith(".agent") === true) {
+          return {
+            stdout: "",
+            stderr: "Could not find specified service\n",
+            exitCode: 113,
+          };
+        }
         return {
-          stdout: "",
-          stderr: "Could not find specified service\n",
-          exitCode: 113,
+          stdout: `path = /Users/me/Library/LaunchAgents/${label.id}.plist\ntype = LaunchAgent\n`,
+          stderr: "",
+          exitCode: 0,
         };
       }
       return buildSuccessResult();
@@ -4661,18 +4677,330 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     // that `before === null` lets stop return right after the kill call.
     MOCKS.readHostPidMetadata.mockResolvedValue(null);
 
-    for (const [op, expectedSecondCall] of [
-      [() => controller.stop(label, { force: false }), "kill"],
-      [() => controller.start(label), "kickstart"],
-      [() => controller.restart(label), "kickstart"],
+    for (const [op, expectedCalls] of [
+      [() => controller.stop(label, { force: false }), ["print", "kill"]],
+      [() => controller.start(label), ["print", "print", "kickstart"]],
+      [() => controller.restart(label), ["print", "print", "kickstart"]],
     ] as const) {
       calls.length = 0;
       await expect(op()).resolves.toBeUndefined();
-      expect(calls.map((c) => c.args[0])).toEqual([
-        "print",
-        expectedSecondCall,
-      ]);
+      expect(calls.map((c) => c.args[0])).toEqual(expectedCalls);
     }
+  });
+
+  // The CLI label is where a start or relaunch goes whenever no Desktop agent
+  // is loaded, which is right only while that label HAS a job. Field report:
+  // the app's Restart, after the agent job was booted out of launchd, ran
+  // `traycer host restart --force --defer-if-parked`, which kickstarted
+  // `ai.traycer.host` and failed with launchctl exit 113, `Could not find
+  // service "ai.traycer.host" in domain for user gui: 501` - a label that
+  // machine never had. With neither label loaded the CLI refuses instead,
+  // naming both; anything short of a definite absence of BOTH goes on as it
+  // always did, because the probe is advisory and must never block a start.
+  describe("neither host label loaded", () => {
+    const uid = process.getuid?.() ?? 0;
+    const cliTarget = `gui/${uid}/${label.id}`;
+    const agentLabelId = smAppServiceAgentLabelId(label);
+    const agentTarget = `gui/${uid}/${agentLabelId}`;
+    const smAgentPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
+
+    // What one label's `launchctl print` answers. Every kind but `throws` and
+    // `times-out` is a RETURNED result: the probes pass `tolerateNonZeroExit`,
+    // so a not-found print is exit 113 on the result, not a rejection.
+    type PrintAnswer =
+      | { readonly kind: "not-found" }
+      | { readonly kind: "loaded"; readonly stdout: string }
+      | {
+          readonly kind: "exit";
+          readonly exitCode: number;
+          readonly stderr: string;
+        }
+      | { readonly kind: "throws" }
+      | { readonly kind: "times-out" };
+
+    // Answers `print` per label - the agent label by its `.agent` suffix,
+    // everything else as the CLI label - and records every call. Any
+    // non-print call succeeds, so a `kickstart` in `calls` is the proof the
+    // command went ahead.
+    function stageLaunchd(answers: {
+      readonly cli: PrintAnswer;
+      readonly agent: PrintAnswer;
+    }): { calls: RecordedCall[]; controller: ServiceController } {
+      const calls: RecordedCall[] = [];
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] !== "print") return buildSuccessResult();
+        const target = args[1] ?? "";
+        const answer = target.endsWith(".agent") ? answers.agent : answers.cli;
+        switch (answer.kind) {
+          case "not-found":
+            // launchctl's own words, naming the label it was asked about -
+            // the field replay's exact stderr.
+            return {
+              stdout: "",
+              stderr: `Could not find service "${target.slice(target.lastIndexOf("/") + 1)}" in domain for user gui: ${uid}\n`,
+              exitCode: 113,
+            };
+          case "loaded":
+            return { stdout: answer.stdout, stderr: "", exitCode: 0 };
+          case "exit":
+            return {
+              stdout: "",
+              stderr: answer.stderr,
+              exitCode: answer.exitCode,
+            };
+          case "throws":
+            throw new ProcessSpawnError(
+              `${command} ${args.join(" ")} could not be spawned (ENOENT): `,
+              command,
+              args,
+              -1,
+              "",
+              "",
+            );
+          case "times-out":
+            throw new ProcessTimeoutError(
+              `${command} ${args.join(" ")} timed out after 10000ms (killed via SIGTERM): `,
+              command,
+              args,
+              -1,
+              "",
+              "",
+              10_000,
+            );
+        }
+      };
+      return { calls, controller: createMacosController(runner) };
+    }
+
+    function printTargets(calls: readonly RecordedCall[]): readonly string[] {
+      return calls
+        .filter((call) => call.args[0] === "print")
+        .map((call) => call.args[1] ?? "");
+    }
+
+    function kickstartArgs(
+      calls: readonly RecordedCall[],
+    ): readonly (readonly string[])[] {
+      return calls
+        .filter((call) => call.args[0] === "kickstart")
+        .map((call) => call.args);
+    }
+
+    const cliLoaded: PrintAnswer = {
+      kind: "loaded",
+      stdout: `path = /Users/me/Library/LaunchAgents/${label.id}.plist\ntype = LaunchAgent\n`,
+    };
+    const notFound: PrintAnswer = { kind: "not-found" };
+
+    // Every way a `print` can fail to be an ANSWER. None may be read as
+    // "definitely absent": each proceeds to the kickstart.
+    const INDETERMINATE_ANSWERS = [
+      ["a spawn failure", { kind: "throws" }],
+      ["a timeout", { kind: "times-out" }],
+      [
+        "a permission refusal",
+        { kind: "exit", exitCode: 1, stderr: "Operation not permitted\n" },
+      ],
+      [
+        "a non-zero exit with unrecognized output",
+        { kind: "exit", exitCode: 5, stderr: "Could not kickstart service: 5" },
+      ],
+    ] as const;
+
+    it("refuses to relaunch, naming both labels and issuing no kickstart, when launchd answers not-found for both (the field replay)", async () => {
+      const { calls, controller } = stageLaunchd({
+        cli: notFound,
+        agent: notFound,
+      });
+
+      const rejection: unknown = await controller
+        .relaunchAfterRestart(label, { forcedRecycle: true })
+        .then(() => null)
+        .catch((error: unknown) => error);
+
+      expect(rejection).toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        // Quoted, because the CLI label is a prefix of the agent label: an
+        // unquoted match on either would be satisfied by the other's name.
+        message: expect.stringContaining(`'${agentLabelId}'`),
+        details: { label: label.id, agentLabel: agentLabelId },
+      });
+      expect(rejection).toMatchObject({
+        message: expect.stringContaining(`'${label.id}'`),
+      });
+      // Both labels were asked about, and nothing was kickstarted - the old
+      // behaviour was `kickstart -k` of the CLI label, which is the failure
+      // the field report shows.
+      expect(printTargets(calls)).toContain(cliTarget);
+      expect(printTargets(calls)).toContain(agentTarget);
+      expect(kickstartArgs(calls)).toEqual([]);
+    });
+
+    it.each([
+      [
+        "relaunchAfterRestart (plain kickstart)",
+        (controller: ServiceController) =>
+          controller.relaunchAfterRestart(label, { forcedRecycle: false }),
+      ],
+      ["restart", (controller: ServiceController) => controller.restart(label)],
+      ["start", (controller: ServiceController) => controller.start(label)],
+    ] as const)(
+      "refuses %s the same way, issuing no kickstart",
+      async (_entryPoint, run) => {
+        const { calls, controller } = stageLaunchd({
+          cli: notFound,
+          agent: notFound,
+        });
+
+        await expect(run(controller)).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message: expect.stringContaining(`'${agentLabelId}'`),
+          details: { label: label.id, agentLabel: agentLabelId },
+        });
+        expect(kickstartArgs(calls)).toEqual([]);
+      },
+    );
+
+    it.each([
+      [
+        "relaunchAfterRestart (forced recycle)",
+        (controller: ServiceController) =>
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ["kickstart", "-k", cliTarget],
+      ],
+      [
+        "relaunchAfterRestart (plain kickstart)",
+        (controller: ServiceController) =>
+          controller.relaunchAfterRestart(label, { forcedRecycle: false }),
+        ["kickstart", cliTarget],
+      ],
+      [
+        "restart",
+        (controller: ServiceController) => controller.restart(label),
+        ["kickstart", "-k", cliTarget],
+      ],
+      [
+        "start",
+        (controller: ServiceController) => controller.start(label),
+        ["kickstart", cliTarget],
+      ],
+    ] as const)(
+      "%s kickstarts the CLI label as before when it is loaded, and never re-probes the agent label",
+      async (_entryPoint, run, expectedKickstart) => {
+        const { calls, controller } = stageLaunchd({
+          cli: cliLoaded,
+          agent: notFound,
+        });
+
+        await expect(run(controller)).resolves.toBeUndefined();
+
+        expect(kickstartArgs(calls)).toEqual([expectedKickstart]);
+        // The agent label is printed once, by the Desktop-agent ownership
+        // probe. The guard asks about the CLI label first and stops there
+        // when it is loaded, so this machine pays one extra print, not two.
+        expect(printTargets(calls)).toEqual([agentTarget, cliTarget]);
+      },
+    );
+
+    it.each(INDETERMINATE_ANSWERS)(
+      "still kickstarts the CLI label when the CLI label is not-found and the agent label's print is %s",
+      async (_name, agentAnswer) => {
+        const { calls, controller } = stageLaunchd({
+          cli: notFound,
+          agent: agentAnswer,
+        });
+
+        await expect(
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ).resolves.toBeUndefined();
+
+        // The probe is advisory: an agent label that could not be asked about
+        // is not proof it is absent, so it must never block the kickstart.
+        expect(kickstartArgs(calls)).toEqual([["kickstart", "-k", cliTarget]]);
+      },
+    );
+
+    it.each(INDETERMINATE_ANSWERS)(
+      "still kickstarts the CLI label when its own print is %s and the agent label is not-found",
+      async (_name, cliAnswer) => {
+        const { calls, controller } = stageLaunchd({
+          cli: cliAnswer,
+          agent: notFound,
+        });
+
+        await expect(
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ).resolves.toBeUndefined();
+
+        expect(kickstartArgs(calls)).toEqual([["kickstart", "-k", cliTarget]]);
+        // An unreadable CLI label ends the guard: the agent label is asked
+        // about only after the CLI label is DEFINITELY absent.
+        expect(printTargets(calls)).toEqual([agentTarget, cliTarget]);
+      },
+    );
+
+    it("still kickstarts the CLI label when the agent label is loaded but not SMAppService-managed and the CLI label is not-found", async () => {
+      // Loaded, but as a plain LaunchAgent rather than Desktop's registration,
+      // so the ownership probe reads it as not-Desktop's and the CLI path runs.
+      // The refusal is for BOTH labels absent; a loaded agent label is a job
+      // launchd has, whoever registered it.
+      const { calls, controller } = stageLaunchd({
+        cli: notFound,
+        agent: {
+          kind: "loaded",
+          stdout: `path = /Users/me/Library/LaunchAgents/${agentLabelId}.plist\ntype = LaunchAgent\n`,
+        },
+      });
+
+      await expect(
+        controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+      ).resolves.toBeUndefined();
+
+      expect(kickstartArgs(calls)).toEqual([["kickstart", "-k", cliTarget]]);
+    });
+
+    it.each([
+      [
+        "relaunchAfterRestart (forced recycle)",
+        (controller: ServiceController) =>
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ["kickstart", "-k", agentTarget],
+      ],
+      [
+        "relaunchAfterRestart (plain kickstart)",
+        (controller: ServiceController) =>
+          controller.relaunchAfterRestart(label, { forcedRecycle: false }),
+        ["kickstart", agentTarget],
+      ],
+      [
+        "restart",
+        (controller: ServiceController) => controller.restart(label),
+        ["kickstart", agentTarget],
+      ],
+      [
+        "start",
+        (controller: ServiceController) => controller.start(label),
+        ["kickstart", agentTarget],
+      ],
+    ] as const)(
+      "%s on a Desktop-managed machine never asks about the CLI label, whose absence is that machine's normal state",
+      async (_entryPoint, run, expectedKickstart) => {
+        // The CLI label has no job on a Desktop-managed machine, so it reads
+        // not-found there by design. Only the CLI path's guard asks about it.
+        MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+        const { calls, controller } = stageLaunchd({
+          cli: notFound,
+          agent: { kind: "loaded", stdout: `path = ${smAgentPath}\n` },
+        });
+
+        await expect(run(controller)).resolves.toBeUndefined();
+
+        expect(printTargets(calls)).not.toContain(cliTarget);
+        expect(kickstartArgs(calls)).toEqual([expectedKickstart]);
+      },
+    );
   });
 
   it("still reports stopped for a CLI-owned LaunchAgents registration", async () => {
@@ -5908,31 +6236,45 @@ describe("macOS controller — spawn-edge placement", () => {
     expect(error).toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
   });
 
-  it("relaunchAfterRestart(forcedRecycle: true) on a CLI-owned machine runs exactly one ownership probe before kickstart -k", async () => {
-    const calls: string[] = [];
-    const runner: ProcessRunner = async (_command, args) => {
-      calls.push(args[0] ?? "");
+  // The Desktop-agent ownership probe runs ONCE - `restartService` and
+  // `startService` used to repeat it with nothing in between that could change
+  // the answer. The CLI-label guard adds one print of a different target, and
+  // only that one when the CLI label is loaded (the plain-success runner's
+  // exit-0 print reads as loaded), so the agent label is still asked about a
+  // single time. Both prints precede the spawn.
+  it("relaunchAfterRestart(forcedRecycle: true) on a CLI-owned machine probes the agent label once and confirms the CLI label is loaded before kickstart -k", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
       return buildSuccessResult();
     };
     const controller = createMacosController(runner);
 
     await controller.relaunchAfterRestart(label, { forcedRecycle: true });
 
-    expect(calls.filter((c) => c === "print")).toHaveLength(1);
-    expect(calls.indexOf("print")).toBeLessThan(calls.indexOf("kickstart"));
+    const uid = process.getuid?.() ?? 0;
+    const verbs = calls.map((c) => c.args[0]);
+    expect(
+      calls.filter((c) => c.args[0] === "print").map((c) => c.args[1]),
+    ).toEqual([`gui/${uid}/${label.id}.agent`, `gui/${uid}/${label.id}`]);
+    expect(verbs.lastIndexOf("print")).toBeLessThan(verbs.indexOf("kickstart"));
   });
 
-  it("relaunchAfterRestart(forcedRecycle: false) on a CLI-owned machine runs exactly one ownership probe before the plain kickstart", async () => {
-    const calls: string[] = [];
-    const runner: ProcessRunner = async (_command, args) => {
-      calls.push(args[0] ?? "");
+  it("relaunchAfterRestart(forcedRecycle: false) on a CLI-owned machine probes the agent label once and confirms the CLI label is loaded before the plain kickstart", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
       return buildSuccessResult();
     };
     const controller = createMacosController(runner);
 
     await controller.relaunchAfterRestart(label, { forcedRecycle: false });
 
-    expect(calls.filter((c) => c === "print")).toHaveLength(1);
-    expect(calls.indexOf("print")).toBeLessThan(calls.indexOf("kickstart"));
+    const uid = process.getuid?.() ?? 0;
+    const verbs = calls.map((c) => c.args[0]);
+    expect(
+      calls.filter((c) => c.args[0] === "print").map((c) => c.args[1]),
+    ).toEqual([`gui/${uid}/${label.id}.agent`, `gui/${uid}/${label.id}`]);
+    expect(verbs.lastIndexOf("print")).toBeLessThan(verbs.indexOf("kickstart"));
   });
 });

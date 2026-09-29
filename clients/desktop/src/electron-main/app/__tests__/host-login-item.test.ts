@@ -215,6 +215,7 @@ function makeFakeChild(): FakeChildHandle {
 // Imported AFTER the mocks so module-init evaluates against them.
 const {
   registerHostLoginItem,
+  readHostLaunchdJobs,
   readHostLoginItemStatus,
   readParkedRegistrationTakeover,
   retireCompetingCliRegistrationAtLaunch,
@@ -1171,6 +1172,214 @@ describe("readHostLoginItemStatus", () => {
     });
 
     expect(readHostLoginItemStatus()).toBe("not-registered");
+  });
+});
+
+// `readHostLaunchdJobs` answers whether launchd has a job under EITHER host
+// label. The login item's status cannot: it reads the BTM record, and a
+// `launchctl bootout` of the agent unloads the job while the record still
+// reads `enabled` - the state that sent the app's Restart to the CLI, whose
+// relaunch then had no loaded label to start (in-app field report). Only a
+// definite not-found from BOTH labels is `neither-loaded`; an unanswerable
+// label is `indeterminate`, and callers act on `neither-loaded` alone.
+describe("readHostLaunchdJobs", () => {
+  // The labels the mocked "production" config yields, as the neighbouring
+  // suites spell them.
+  const HOST_AGENT_LABEL = "ai.traycer.host.agent";
+  const CLI_HOST_LABEL = "ai.traycer.host";
+  const uid = process.getuid?.() ?? 0;
+  const agentTarget = `gui/${uid}/${HOST_AGENT_LABEL}`;
+  const cliTarget = `gui/${uid}/${CLI_HOST_LABEL}`;
+
+  function printResult(fields: {
+    readonly exitCode: number;
+    readonly stdout: string;
+    readonly stderr: string;
+    readonly timedOut: boolean;
+    readonly spawnFailed: boolean;
+  }): ProbeCommandResult {
+    return { ...fields, signal: null };
+  }
+
+  const notFound = printResult({
+    exitCode: 113,
+    stdout: "",
+    stderr:
+      'Could not find service "ai.traycer.host" in domain for user gui: 501\n',
+    timedOut: false,
+    spawnFailed: false,
+  });
+
+  function loaded(stdout: string): ProbeCommandResult {
+    return printResult({
+      exitCode: 0,
+      stdout,
+      stderr: "",
+      timedOut: false,
+      spawnFailed: false,
+    });
+  }
+
+  // Every way a print can fail to be an ANSWER. None may read as "absent".
+  const spawnFailed = printResult({
+    exitCode: -1,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    spawnFailed: true,
+  });
+  const timedOut = printResult({
+    exitCode: -1,
+    stdout: "",
+    stderr: "",
+    timedOut: true,
+    spawnFailed: false,
+  });
+  const permissionDenied = printResult({
+    exitCode: 1,
+    stdout: "",
+    stderr: "Operation not permitted\n",
+    timedOut: false,
+    spawnFailed: false,
+  });
+  const unrecognizedExit = printResult({
+    exitCode: 5,
+    stdout: "",
+    stderr: "Could not kickstart service: 5",
+    timedOut: false,
+    spawnFailed: false,
+  });
+
+  let printRunner: Mock<(target: string) => Promise<ProbeCommandResult>>;
+
+  // Answers per label and records every target, so a test states which label
+  // answered what and asserts which labels were asked about, in order.
+  function stagePrints(answers: {
+    readonly agent: ProbeCommandResult | Error;
+    readonly cli: ProbeCommandResult | Error;
+  }): void {
+    printRunner.mockImplementation(async (target) => {
+      const answer = target.endsWith(`/${HOST_AGENT_LABEL}`)
+        ? answers.agent
+        : answers.cli;
+      if (answer instanceof Error) throw answer;
+      return answer;
+    });
+  }
+
+  function printedTargets(): readonly string[] {
+    return printRunner.mock.calls.map((call) => call[0]);
+  }
+
+  // Same convention as the neighbouring launchd-probe suites: the runner is
+  // always stubbed so the suite never reads the developer's real launchd
+  // domain.
+  beforeEach(() => {
+    printRunner = vi.fn<(target: string) => Promise<ProbeCommandResult>>(
+      async () => notFound,
+    );
+    overrideAgentPrintRunnerForTests(printRunner);
+  });
+
+  afterEach(() => {
+    overrideAgentPrintRunnerForTests(null);
+  });
+
+  it("is `neither-loaded` when launchd answers not-found for both labels, having asked about the agent label first", async () => {
+    stagePrints({ agent: notFound, cli: notFound });
+
+    await expect(readHostLaunchdJobs()).resolves.toBe("neither-loaded");
+
+    expect(printedTargets()).toEqual([agentTarget, cliTarget]);
+  });
+
+  // A print that succeeds is a job launchd found, whatever it says about the
+  // job's state: a job that is loaded but idle or waiting is still loaded.
+  it.each([
+    ["no output", ""],
+    ["an idle job", "\tstate = waiting\n\tpath = /some/path\n"],
+    ["a running job", "\tstate = running\n\tpid = 4242\n"],
+  ] as const)(
+    "is `loaded` as soon as the agent label prints successfully (%s), without asking about the CLI label",
+    async (_name, stdout) => {
+      stagePrints({ agent: loaded(stdout), cli: notFound });
+
+      await expect(readHostLaunchdJobs()).resolves.toBe("loaded");
+
+      expect(printedTargets()).toEqual([agentTarget]);
+    },
+  );
+
+  it("is `loaded` when the agent label is not-found and the CLI label prints successfully", async () => {
+    stagePrints({
+      agent: notFound,
+      cli: loaded("\tstate = waiting\n"),
+    });
+
+    await expect(readHostLaunchdJobs()).resolves.toBe("loaded");
+
+    expect(printedTargets()).toEqual([agentTarget, cliTarget]);
+  });
+
+  // A loaded label settles it: the other label being unanswerable leaves no
+  // question about whether launchd has SOME job.
+  it.each([
+    ["a spawn failure", spawnFailed],
+    ["a timeout", timedOut],
+  ] as const)(
+    "is `loaded`, not `indeterminate`, when the agent label's print is %s but the CLI label is loaded",
+    async (_name, agentAnswer) => {
+      stagePrints({ agent: agentAnswer, cli: loaded("") });
+
+      await expect(readHostLaunchdJobs()).resolves.toBe("loaded");
+    },
+  );
+
+  it.each([
+    ["a spawn failure", spawnFailed],
+    ["a timeout", timedOut],
+  ] as const)(
+    "is `indeterminate` when the agent label's print is %s and the CLI label is not-found, and still asks about both",
+    async (_name, agentAnswer) => {
+      stagePrints({ agent: agentAnswer, cli: notFound });
+
+      await expect(readHostLaunchdJobs()).resolves.toBe("indeterminate");
+
+      expect(printedTargets()).toEqual([agentTarget, cliTarget]);
+    },
+  );
+
+  it.each([
+    ["a permission refusal", permissionDenied],
+    ["a non-zero exit with unrecognized output", unrecognizedExit],
+    ["a spawn failure", spawnFailed],
+    ["a timeout", timedOut],
+  ] as const)(
+    "is `indeterminate` when the agent label is not-found and the CLI label's print is %s",
+    async (_name, cliAnswer) => {
+      stagePrints({ agent: notFound, cli: cliAnswer });
+
+      await expect(readHostLaunchdJobs()).resolves.toBe("indeterminate");
+    },
+  );
+
+  it("is `indeterminate` when the print runner itself rejects for the agent label and the CLI label is not-found", async () => {
+    stagePrints({
+      agent: new Error("spawn EAGAIN"),
+      cli: notFound,
+    });
+
+    await expect(readHostLaunchdJobs()).resolves.toBe("indeterminate");
+    expect(printedTargets()).toEqual([agentTarget, cliTarget]);
+  });
+
+  it("is `indeterminate` when the print runner itself rejects for the CLI label and the agent label is not-found", async () => {
+    stagePrints({
+      agent: notFound,
+      cli: new Error("spawn EAGAIN"),
+    });
+
+    await expect(readHostLaunchdJobs()).resolves.toBe("indeterminate");
   });
 });
 
