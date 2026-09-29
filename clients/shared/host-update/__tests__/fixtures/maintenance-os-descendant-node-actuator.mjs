@@ -31,24 +31,33 @@ async function waitFor(path) {
 }
 
 async function descendant() {
-  if (!termResistant) {
-    process.once("SIGTERM", () => {
+  // `on`, never `once`, in both modes. C signals E twice - through D's group
+  // and then directly - and on a loaded machine C can be descheduled between
+  // the two kill() calls long enough for E to run the first handler. A
+  // `once` listener removes itself, Node then closes its signal handle and
+  // SIGTERM reverts to the default action, so the second TERM kills E before
+  // the async barrier write below has created its file. A listener that
+  // stays installed makes every later TERM a no-op: only SIGKILL can end a
+  // TERM-resistant E, and the graceful path runs exactly once.
+  let termHandled = false;
+  process.on("SIGTERM", () => {
+    if (termHandled) return;
+    termHandled = true;
+    if (!termResistant) {
       void writeFile(
         join(barrierDir, "descendant-exited"),
         String(process.pid),
       ).then(() => process.exit(0));
-    });
-  } else {
+      return;
+    }
     // The supervisor must escalate a real, TERM-resistant descendant to
     // SIGKILL and still keep the C envelope published until the reap. There
     // is deliberately no release-barrier exit path in this mode.
-    process.once("SIGTERM", () => {
-      void writeFile(
-        join(barrierDir, "descendant-term-received"),
-        String(Date.now()),
-      );
-    });
-  }
+    void writeFile(
+      join(barrierDir, "descendant-term-received"),
+      String(Date.now()),
+    );
+  });
   await writeFile(join(barrierDir, "descendant-ready"), String(process.pid));
   if (termResistant) {
     setInterval(() => undefined, 1_000);

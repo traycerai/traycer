@@ -53,11 +53,14 @@ export function UnsyncedCloseDialog(props: UnsyncedCloseDialogProps) {
           // destructive control. Radix's `FocusScope` focuses the first
           // tabbable descendant, and this footer's DOM order puts the
           // destructive "Close anyway" first, which is what puts the safe
-          // action rightmost on `sm:` per the layout convention. Measured in
-          // `scripts/destructive-dialog-focus-browser.mjs`:
+          // action rightmost on `sm:` per the layout convention; without
+          // this, measured in real Chrome:
           //
           //   FOCUS_ON_OPEN = epic-tab-unsynced-discard
           //   TAB_ORDER     = discard > wait > close-x
+          //
+          // `__tests__/unsynced-close-dialog.test.tsx` pins both the focus
+          // and the DOM order it compensates for.
           //
           // Focus is moved rather than the footer reordered - reordering would
           // trade a keyboard hazard for a visual-convention break. Fails safe:

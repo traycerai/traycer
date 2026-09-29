@@ -362,6 +362,7 @@ export function AssistantMessageBody({
             <ChatBlockNavigationAnchor key={key} blockId={item.segment.id}>
               <SubagentSegment
                 id={item.id}
+                cardId={item.segment.id}
                 name={item.segment.name}
                 agentType={item.segment.agentType}
                 task={item.segment.task}
@@ -1105,7 +1106,7 @@ function RunElapsedTimer({
   );
 }
 
-interface AssistantSegmentProps {
+export interface AssistantSegmentProps {
   id: string;
   segment: MessageSegment;
   backgroundToolBlockIds: ReadonlySet<string>;
@@ -1146,9 +1147,11 @@ function ApprovalSegmentCard({
 }
 
 // Renders one of many assistant segment kinds; the branch count is the segment
-// taxonomy (one arm per kind), not reducible nesting.
+// taxonomy (one arm per kind), not reducible nesting. Exported because a
+// subagent card draws its own conversation through this same renderer
+// (`SubagentConversation`), so a child reads exactly as it would top-level.
 // eslint-disable-next-line complexity
-function AssistantSegment({
+export function AssistantSegment({
   id,
   segment,
   backgroundToolBlockIds,
@@ -1268,6 +1271,7 @@ function AssistantSegment({
       return (
         <SubagentSegment
           id={id}
+          cardId={segment.id}
           name={segment.name}
           agentType={segment.agentType}
           task={segment.task}

@@ -47,10 +47,11 @@ const queryClient = new QueryClient({
  *
  * What is asserted here is the RECIPE, read off `chat-dock-panel-row.ts`
  * rather than spelled out as class strings: jsdom resolves no `min-h-8` into a
- * number, so the height itself is the real-Chrome driver's claim
- * (`scripts/layout-editor-browser.mjs`, the `DOCK_ROW_METRIC_PROBE` phase).
- * This file is what keeps a panel from quietly leaving the recipe between
- * driver runs - a sixth member, or a row rewritten with its own padding.
+ * number, so the height itself is the real-Chrome test's claim
+ * (`browser-tests/layout-editor/parity.spec.ts`, "the attached dock panels
+ * share one row metric to the pixel"). This file is what keeps a panel from
+ * quietly leaving the recipe between browser runs - a sixth member, or a row
+ * rewritten with its own padding.
  */
 
 /**

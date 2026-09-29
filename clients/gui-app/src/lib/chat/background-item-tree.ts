@@ -193,17 +193,27 @@ export function buildBackgroundTree(
     .map((node) => backgroundTreeNodeFromNested(node));
 }
 
+// A wake and a scheduled (cron) job are both waiting on a time, not running.
 function treeHasRunningTask(node: BackgroundTreeNode): boolean {
-  if (node.item !== null && node.item.kind !== "wakeup") return true;
+  if (
+    node.item !== null &&
+    node.item.kind !== "wakeup" &&
+    node.item.kind !== "cron"
+  ) {
+    return true;
+  }
   return node.children.some((child) => treeHasRunningTask(child));
 }
 
-function waitingWakeCount(nodes: ReadonlyArray<BackgroundTreeNode>): number {
+function countKindInTree(
+  nodes: ReadonlyArray<BackgroundTreeNode>,
+  kind: "wakeup" | "cron",
+): number {
   return nodes.reduce(
     (count, node) =>
       count +
-      (node.item?.kind === "wakeup" ? 1 : 0) +
-      waitingWakeCount(node.children),
+      (node.item?.kind === kind ? 1 : 0) +
+      countKindInTree(node.children, kind),
     0,
   );
 }
@@ -212,6 +222,8 @@ export interface BackgroundSectionCounts {
   readonly runningCount: number;
   readonly heldCount: number;
   readonly waitingWakeCount: number;
+  /** The agent's scheduled (cron) jobs. */
+  readonly scheduledJobCount: number;
   readonly portForwardCount: number;
   /** Every group of rows the section lists: the chip's number. */
   readonly total: number;
@@ -234,13 +246,16 @@ export function backgroundSectionCounts(input: {
     input.tree.filter(treeHasRunningTask).length +
     input.runningManagedCommandIds.filter((id) => !held.has(id)).length;
   const heldCount = input.heldManagedCommandIds.length;
-  const waiting = waitingWakeCount(input.tree);
+  const waiting = countKindInTree(input.tree, "wakeup");
+  const scheduled = countKindInTree(input.tree, "cron");
   return {
     runningCount,
     heldCount,
     waitingWakeCount: waiting,
+    scheduledJobCount: scheduled,
     portForwardCount: input.portForwardCount,
-    total: runningCount + heldCount + waiting + input.portForwardCount,
+    total:
+      runningCount + heldCount + waiting + scheduled + input.portForwardCount,
   };
 }
 
@@ -265,6 +280,7 @@ export function backgroundHeaderSummary(input: {
   readonly runningCount: number;
   readonly heldCount: number;
   readonly waitingWakeCount: number;
+  readonly scheduledJobCount: number;
   /**
    * The agent's port forwards, in whatever state. Their own part, not folded
    * into `running`: "Stop all" does not reach a forward, and a header that
@@ -281,6 +297,9 @@ export function backgroundHeaderSummary(input: {
   }
   if (input.waitingWakeCount > 0) {
     parts.push(`${input.waitingWakeCount} waiting`);
+  }
+  if (input.scheduledJobCount > 0) {
+    parts.push(`${input.scheduledJobCount} scheduled`);
   }
   if (input.portForwardCount > 0) {
     parts.push(

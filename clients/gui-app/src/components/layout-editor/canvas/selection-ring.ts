@@ -213,7 +213,7 @@ export function createSelectionRing(): SelectionRingController {
  * is nothing there to frame, and a collapsed box would draw a bar against the
  * edge instead.
  */
-function insideWindow(box: RingBox): RingBox {
+export function insideWindow(box: RingBox): RingBox {
   const left = Math.max(box.x, RING_BLEED);
   const top = Math.max(box.y, RING_BLEED);
   const right = Math.min(box.x + box.width, window.innerWidth - RING_BLEED);
