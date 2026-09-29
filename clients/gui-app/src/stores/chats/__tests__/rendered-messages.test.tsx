@@ -6929,10 +6929,29 @@ describe("useRenderedMessages: a subagent's own conversation nests under its car
     beforeHash: string,
     afterHash: string,
   ): AssistantBlock {
+    return editAtPath(blockId, parentBlockId, "/repo/src/a.ts", [
+      beforeHash,
+      afterHash,
+    ]);
+  }
+
+  function childSubagent(
+    blockId: string,
+    parentBlockId: string,
+  ): AssistantBlock {
+    return { ...subagentBlock(blockId, null), parentBlockId };
+  }
+
+  function editAtPath(
+    blockId: string,
+    parentBlockId: string,
+    filePath: string,
+    [beforeHash, afterHash]: readonly [string, string],
+  ): AssistantBlock {
     return {
       type: "file_change",
       blockId,
-      filePath: "/repo/src/a.ts",
+      filePath,
       operation: "edit",
       diffSource: "snapshot",
       beforeHash: beforeHash.repeat(64),
@@ -7104,6 +7123,115 @@ describe("useRenderedMessages: a subagent's own conversation nests under its car
     const files = card.children.filter((child) => child.kind === "file_change");
     expect(files).toHaveLength(1);
     expect(files[0]?.filePath).toBe("/repo/src/a.ts");
+  });
+
+  function childShape(card: SubagentSegment): ReadonlyArray<string> {
+    return card.children.map((child) => `${child.kind}:${child.id}`);
+  }
+
+  it("keeps a subagent's prose between two same-path edits, so the later edit is not pulled above it", () => {
+    const rows = segmentsFor([
+      subagentBlock("agent-1", null),
+      edit("fc-1", "agent-1", "a", "b"),
+      childText("t1", "agent-1", "now the second change"),
+      edit("fc-2", "agent-1", "b", "c"),
+    ]);
+    const card = onlyCard(rows[0]?.segments ?? []);
+    expect(childShape(card)).toEqual([
+      "file_change:fc-1",
+      "text:t1",
+      "file_change:fc-2",
+    ]);
+    const files = card.children.filter((child) => child.kind === "file_change");
+    expect(files.map((file) => file.filePath)).toEqual([
+      "/repo/src/a.ts",
+      "/repo/src/a.ts",
+    ]);
+  });
+
+  const boundaries: ReadonlyArray<{
+    name: string;
+    kind: string;
+    build: (blockId: string, parentBlockId: string) => AssistantBlock;
+  }> = [
+    { name: "a reasoning child", kind: "reasoning", build: childReasoning },
+    { name: "an error child", kind: "error", build: childError },
+    { name: "a nested subagent card", kind: "subagent", build: childSubagent },
+  ];
+
+  it.each(boundaries)(
+    "treats $name as a boundary that two same-path edits do not merge across",
+    ({ kind, build }) => {
+      const rows = segmentsFor([
+        subagentBlock("agent-1", null),
+        edit("fc-1", "agent-1", "a", "b"),
+        build("boundary-1", "agent-1"),
+        edit("fc-2", "agent-1", "b", "c"),
+      ]);
+      const card = onlyCard(rows[0]?.segments ?? []);
+      expect(childShape(card)).toEqual([
+        "file_change:fc-1",
+        `${kind}:boundary-1`,
+        "file_change:fc-2",
+      ]);
+    },
+  );
+
+  it("does not treat a tool row as a boundary: same-path edits around it merge where the first edit was", () => {
+    const rows = segmentsFor([
+      subagentBlock("agent-1", null),
+      edit("fc-1", "agent-1", "a", "b"),
+      toolBlock("tool-1", "Read", "agent-1", null),
+      edit("fc-2", "agent-1", "b", "c"),
+    ]);
+    const card = onlyCard(rows[0]?.segments ?? []);
+    expect(childShape(card)).toEqual(["file_change:fc-1+fc-2", "tool:tool-1"]);
+    const merged = card.children.at(0);
+    if (merged?.kind !== "file_change") {
+      throw new Error("expected the merged file row first");
+    }
+    expect(merged.filePath).toBe("/repo/src/a.ts");
+    expect(merged.beforeHash).toBe("a".repeat(64));
+    expect(merged.afterHash).toBe("c".repeat(64));
+  });
+
+  it("lists a path once in the completed turn's Changes group even when the card keeps its edits in separate runs", () => {
+    const rows = segmentsFor([
+      subagentBlock("agent-1", null),
+      edit("fc-1", "agent-1", "a", "b"),
+      childText("t1", "agent-1", "now the second change"),
+      edit("fc-2", "agent-1", "b", "c"),
+    ]);
+    const group = (rows[0]?.segments ?? []).find(
+      (segment) => segment.kind === "file_change_group",
+    );
+    if (group === undefined) {
+      throw new Error("expected a file change group");
+    }
+    expect(group.files.map((file) => file.filePath)).toEqual([
+      "/repo/src/a.ts",
+    ]);
+  });
+
+  it("keeps different files' runs apart and still merges same-path edits inside the second run", () => {
+    const rows = segmentsFor([
+      subagentBlock("agent-1", null),
+      edit("fc-1", "agent-1", "a", "b"),
+      childText("t1", "agent-1", "on to the next file"),
+      editAtPath("fc-2", "agent-1", "/repo/src/b.ts", ["a", "b"]),
+      editAtPath("fc-3", "agent-1", "/repo/src/b.ts", ["b", "c"]),
+    ]);
+    const card = onlyCard(rows[0]?.segments ?? []);
+    expect(childShape(card)).toEqual([
+      "file_change:fc-1",
+      "text:t1",
+      "file_change:fc-2+fc-3",
+    ]);
+    const files = card.children.filter((child) => child.kind === "file_change");
+    expect(files.map((file) => file.filePath)).toEqual([
+      "/repo/src/a.ts",
+      "/repo/src/b.ts",
+    ]);
   });
 
   it("resolves a parented text child's block id to its row for jump-to-block", () => {

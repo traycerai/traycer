@@ -4422,23 +4422,54 @@ function resolveSubagentChildren(
  * superseded by their file_change card, then collapse repeated edits to the
  * same file into one row (first edit's pre-state -> last edit's post-state, the
  * net diff) using the same `mergeFileChangesByPath` that powers the top-level
- * "Changes" block. Tool calls and denied/failed edits keep their order and
- * position; the merged file rows land where the first real edit appeared.
+ * "Changes" block.
+ *
+ * The card draws its children as ONE ordered list, so the collapse runs within
+ * each contiguous run of activity (tool, file change, command) and never across
+ * anything else - the subagent's prose, a notice, a nested card. Merging across
+ * those would pull a later edit above the text that preceded it. A card with no
+ * such entries is one run, so it coalesces exactly as before. The turn-level
+ * "Changes" group still merges every edit of the turn.
  */
 function coalesceSubagentChildren(
   children: ReadonlyArray<SubagentChildSegment>,
 ): ReadonlyArray<SubagentChildSegment> {
-  const suppressed = suppressEditToolCalls(children);
-  const realChanges = suppressed.filter(
+  const out: SubagentChildSegment[] = [];
+  let run: SubagentChildSegment[] = [];
+  for (const segment of suppressEditToolCalls(children)) {
+    if (
+      segment.kind === "tool" ||
+      segment.kind === "file_change" ||
+      segment.kind === "command"
+    ) {
+      run.push(segment);
+      continue;
+    }
+    out.push(...coalesceSubagentActivityRun(run), segment);
+    run = [];
+  }
+  out.push(...coalesceSubagentActivityRun(run));
+  return out;
+}
+
+/**
+ * One contiguous activity run of a card: tool calls and denied/failed edits
+ * keep their order and position; the merged file rows land where the run's
+ * first real edit appeared.
+ */
+function coalesceSubagentActivityRun(
+  run: ReadonlyArray<SubagentChildSegment>,
+): ReadonlyArray<SubagentChildSegment> {
+  const realChanges = run.filter(
     (segment): segment is FileChangeSegment =>
       segment.kind === "file_change" && isRealFileChange(segment),
   );
-  if (realChanges.length <= 1) return suppressed;
+  if (realChanges.length <= 1) return run;
 
   const merged = mergeFileChangesByPath(realChanges);
   let inserted = false;
   const out: SubagentChildSegment[] = [];
-  for (const segment of suppressed) {
+  for (const segment of run) {
     if (segment.kind === "file_change" && isRealFileChange(segment)) {
       if (!inserted) {
         out.push(...merged);
