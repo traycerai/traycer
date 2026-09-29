@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, type ReactNode } from "react";
 import { useNotificationClick } from "@/hooks/notifications/use-notifications";
 import { useTrayEpicsSource } from "@/hooks/tray/use-tray-epics-source";
 import { useTrayProjection } from "@/hooks/tray/use-tray-projection";
@@ -23,11 +23,11 @@ import { useTrayProjectionStore } from "@/stores/tray/tray-projection-store";
  *   `RouterProvider` and has no `useNavigate`.
  *
  * The runner host contract guarantees tray/notifications are always
- * present (no-op on shells without a native surface), so this bridge does
- * not branch on capability.
+ * present (no-op on shells without a native surface). The one branch is
+ * `tray.showsEpics`: the epic list is a History query, so it is skipped where
+ * the tray shows nothing.
  */
-export function RunnerHostBridges(): null {
-  useTrayEpicsSource();
+export function RunnerHostBridges(): ReactNode {
   const epics = useTrayProjectionStore((state) => state.epics);
   const indicator = useTrayProjectionStore((state) => state.indicator);
 
@@ -67,5 +67,15 @@ export function RunnerHostBridges(): null {
     }
   }, [desktopLogLevel]);
 
+  return runnerHost.tray.showsEpics ? <TrayEpicsSource /> : null;
+}
+
+/**
+ * The tray's recent-epic list. A full History query, so it mounts only where
+ * a tray shows it: the phone's tray is a no-op, and there the query would
+ * compete with the restored task's first paint for nothing.
+ */
+function TrayEpicsSource(): null {
+  useTrayEpicsSource();
   return null;
 }
