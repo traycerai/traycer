@@ -3545,41 +3545,39 @@ export const providerLoginRefusalSchema = lazySchema(() =>
 );
 export type ProviderLoginRefusal = z.infer<typeof providerLoginRefusalSchema>;
 
-const providersAwaitLoginResponseShapeV21 = {
-  // The provider's state after the login child closed and auth was re-probed.
-  // Null when no login was in flight for this provider (nothing to await),
-  // and when the provider approved a sign-in the host could not install
-  // into the account's home: the account is what it was before, so a
-  // re-probed state would show the previous account and read as this
-  // sign-in's success. Either way nothing about the provider changed, and a
-  // caller reads null as "the sign-in did not complete".
-  state: providerMutationCliStateSchemaV21.nullable(),
-  // Create-profile only: when the authenticated account already belongs to
-  // an active profile, the host discards the pending profile instead of
-  // activating a duplicate and identifies the existing profile here. Ships
-  // with `providers.awaitLogin@2.1`; the frozen 2.0 response below never
-  // carried it.
-  existingProfileId: z.string().nullable().default(null),
-  // Code-paste only: true when this call resolved because a previously
-  // submitted `providers.submitLoginCode` was rejected by the exchange (the
-  // login child exited nonzero without auth success on re-probe - see the
-  // code-paste decision log's "Failure classification" row), distinct from
-  // the default outcome (a successful re-probe, or nothing was in flight).
-  // The GUI uses this to drive its bounded auto-restart (decision log's
-  // "Bad-code recovery" row) instead of surfacing a generic failed state.
-  // Added as a bare additive field while the 2.1 line was unreleased (same
-  // precedent as `providers.startLogin@1.1`'s
-  // `createProfile.shareSkillsAndPlugins`): old hosts never emit it and
-  // `.default(false)` keeps old-client parses byte-identical to today.
-  codeRejected: z.boolean().default(false),
-};
-
 /**
  * Frozen `providers.awaitLogin@2.1` response. Released, so it never grows:
- * the refusal below is 2.2's.
+ * the refusal below is 2.2's. Keep construction inside the lazy factory.
  */
 export const providersAwaitLoginResponseSchemaV21 = lazySchema(() =>
-  z.object(providersAwaitLoginResponseShapeV21),
+  z.object({
+    // The provider's state after the login child closed and auth was re-probed.
+    // Null when no login was in flight for this provider (nothing to await),
+    // and when the provider approved a sign-in the host could not install
+    // into the account's home: the account is what it was before, so a
+    // re-probed state would show the previous account and read as this
+    // sign-in's success. Either way nothing about the provider changed, and a
+    // caller reads null as "the sign-in did not complete".
+    state: providerMutationCliStateSchemaV21.nullable(),
+    // Create-profile only: when the authenticated account already belongs to
+    // an active profile, the host discards the pending profile instead of
+    // activating a duplicate and identifies the existing profile here. Ships
+    // with `providers.awaitLogin@2.1`; the frozen 2.0 response below never
+    // carried it.
+    existingProfileId: z.string().nullable().default(null),
+    // Code-paste only: true when this call resolved because a previously
+    // submitted `providers.submitLoginCode` was rejected by the exchange (the
+    // login child exited nonzero without auth success on re-probe - see the
+    // code-paste decision log's "Failure classification" row), distinct from
+    // the default outcome (a successful re-probe, or nothing was in flight).
+    // The GUI uses this to drive its bounded auto-restart (decision log's
+    // "Bad-code recovery" row) instead of surfacing a generic failed state.
+    // Added as a bare additive field while the 2.1 line was unreleased (same
+    // precedent as `providers.startLogin@1.1`'s
+    // `createProfile.shareSkillsAndPlugins`): old hosts never emit it and
+    // `.default(false)` keeps old-client parses byte-identical to today.
+    codeRejected: z.boolean().default(false),
+  }),
 );
 
 /**
@@ -3588,7 +3586,7 @@ export const providersAwaitLoginResponseSchemaV21 = lazySchema(() =>
  */
 export const providersAwaitLoginResponseSchema = lazySchema(() =>
   z.object({
-    ...providersAwaitLoginResponseShapeV21,
+    ...providersAwaitLoginResponseSchemaV21.shape,
     // Non-null when the provider refused the sign-in after the browser leg
     // (`providerLoginRefusalSchema`). `state` is null then: the refusal is
     // the answer, and a re-probe would describe whatever account was there
