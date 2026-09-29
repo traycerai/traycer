@@ -237,6 +237,52 @@ function tokenFromUtcMicros(utcMicros: number, seventhDigit: string): string {
 describe.skipIf(process.platform !== "win32")(
   "matchLiveProcessStartIdentity: a real denied read on this Windows machine",
   () => {
+    // No `test.retry`/`hookTimeout` override in this project's vitest.config.ts
+    // (clients/shared), so the effective outer budget is vitest's 5_000ms
+    // default. Retained CI (cold review, 2026-09-29): 3 successful runs at
+    // 3_224/4_123/2_849ms, all under 5_000; the branch-head run timed out at
+    // 5_947ms. 85_000ms below is a conservative first-owned-child-route
+    // ALLOCATION (a sum of configured subprocess timeout ALLOWANCES, not an
+    // observed or expected elapsed time) - its headroom over the measured
+    // runs is by design, not evidence that the route normally takes anywhere
+    // near 85s.
+    //
+    // This budget is sized for ONE specific normal passing route - the
+    // OWNED-CHILD route, where `spawnDeniedReadChild()` succeeds on its
+    // first attempt (spawn a child, DACL-deny it, confirm the deny via WMI,
+    // all in that one call). It is NOT sized for the FALLBACK-SCAN route:
+    // `samplePrecondition`'s retry loop (up to `PRECONDITION_SAMPLE_ATTEMPTS`
+    // = 3 attempts) and `findDeniedReadCandidate()`'s scan of already-running
+    // processes are real, legitimate ways this test can ALSO pass (not only
+    // failure recovery - a loaded runner where the owned-child DACL write
+    // races something, or a machine where the scan finds a candidate faster,
+    // both pass through this route too), and are deliberately left
+    // unbudgeted here: each extra attempt adds up to 45_000ms
+    // (spawnDeniedReadChild 30_000 + findDeniedReadCandidate 15_000), which
+    // would push this test's real-worst-case well past any budget this file
+    // can reasonably carry without evidence that the fallback route actually
+    // fires often. If retained CI history ever shows this test routinely
+    // taking the fallback/retry route, this budget needs revisiting to
+    // include it explicitly rather than relying on the margin below to
+    // absorb it.
+    //
+    // Owned-child route, sequential:
+    //  - seDebugHeld(): execFileSync timeout 15_000.
+    //  - spawnDeniedReadChild() (one attempt): execFileSync timeout 30_000.
+    //  - Two matchLiveProcessStartIdentity() calls (production, in
+    //    clients/shared/host-lock/process-identity.ts): each first tries
+    //    processStartIdentityReader() (win32: execFileSync powershell,
+    //    timeout 5_000), and - since the DACL-denied pid's exact read never
+    //    succeeds - always falls through to windowsDeniedReadCreationReader()
+    //    (execFileSync powershell, WINDOWS_START_IDENTITY_TIMEOUT_MS=5_000);
+    //    2 * (5_000 + 5_000) = 20_000.
+    //  - One readProcessStartIdentity() call: processStartIdentityReader()
+    //    again, win32 execFileSync timeout 5_000.
+    //  Total: 15_000 + 30_000 + 20_000 + 5_000 = 70_000ms.
+    //  +15_000ms margin for process spawn/teardown overhead => 85_000ms. This
+    //  margin is headroom for the owned-child route's own variance (spawn
+    //  jitter, WMI query latency under load), not a claim that it also
+    //  covers a fallback/retry pass.
     it("resolves a real inaccessible process through WMI, and the exact reader stays primary-only", async (ctx) => {
       const held = seDebugHeld();
       if (held && process.env.CI) throw new Error(SEDEBUG_HELD_REASON);
@@ -258,6 +304,6 @@ describe.skipIf(process.platform !== "win32")(
       // never be recorded as a token, or a WMI creation time would compare
       // as `different` against every later exact read of the same process.
       expect(readProcessStartIdentity(candidate.pid)).toBeNull();
-    });
+    }, 85_000);
   },
 );
