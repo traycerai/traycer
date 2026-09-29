@@ -317,6 +317,17 @@ export function SortableList<Id extends string>(
       event.target.closest(ROW_CONTROL_SELECTOR) !== null
     )
       return;
+    // A finger is a scroll everywhere but the grip (the line is
+    // `touch-pan-y`), so a list that fills a phone's screen still scrolls
+    // under it; a mouse or a pen still picks the row up from anywhere on it.
+    if (
+      event.pointerType === "touch" &&
+      !(
+        event.target instanceof Element &&
+        event.target.closest(ROW_GRIP_SELECTOR) !== null
+      )
+    )
+      return;
     armLayoutDrag({
       event: event.nativeEvent,
       resolve: () => {
@@ -579,7 +590,7 @@ function SortableRowLine<Id extends string>(props: {
         // One line in both hosts: the name (and its revert) on the left, the
         // control on the right, vertically centred. Only the page below `md`,
         // a phone's one layout surface, drops the control under the name (L-64).
-        "flex touch-none items-center gap-2",
+        "flex touch-pan-y items-center gap-2",
         page && "max-md:flex-wrap max-md:gap-y-3",
         item.dimmed && "text-muted-foreground",
         padding,
@@ -608,11 +619,17 @@ function SortableRowLine<Id extends string>(props: {
           {instructionsId === null ? (
             <span aria-hidden className="size-3.5 shrink-0" />
           ) : (
-            <GripVertical
+            // The one place a finger picks the row up, so the one place that
+            // is `touch-none`. The same 14px slot as every row's spacer; the
+            // padding the margin cancels widens its hit area to a fingertip
+            // without moving anything.
+            <span
               aria-hidden
               data-row-grip
-              className="size-3.5 shrink-0 cursor-grab text-muted-foreground"
-            />
+              className="-m-2 box-content flex size-3.5 shrink-0 cursor-grab touch-none p-2"
+            >
+              <GripVertical className="size-3.5 text-muted-foreground" />
+            </span>
           )}
           <SortableRowGlyph item={item} />
           {/* A divider IS a line, so its row draws one where a panel's name
@@ -820,6 +837,9 @@ function SortableStackMembers(props: {
  * refused every drag that started where a hand would take hold.
  */
 const ROW_CONTROL_SELECTOR = "button:not([data-row-grab])";
+
+/** The row's grip, the only place a touch starts a drag. */
+const ROW_GRIP_SELECTOR = "[data-row-grip]";
 
 /** Everything the row's disclosure opened, which the row itself must not claim. */
 const DETAIL_SELECTOR = "[data-sortable-detail]";

@@ -9,7 +9,10 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InspectorShell } from "@/components/layout-editor/inspector/inspector-shell";
 import { SurfaceSection } from "@/components/layout-editor/inspector/surface-section";
-import { stackRailPanels } from "@/lib/layout/layout-arrangement";
+import {
+  insertRailDivider,
+  stackRailPanels,
+} from "@/lib/layout/layout-arrangement";
 import { railStackId, type RailEntry } from "@/lib/layout/rail";
 import type { RegionId } from "@/lib/layout/region-id";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
@@ -300,6 +303,61 @@ describe("stacking a panel from its own row (L-166, L-168)", () => {
           entry.id === railStackId(["railAgents", "railArtifacts"]),
       ),
     ).toBe(true);
+  });
+});
+
+describe("the rail list on a phone, which has no rail", () => {
+  const originalWidth = window.innerWidth;
+  beforeEach(() => {
+    window.innerWidth = 500;
+    const state = useLayoutStore.getState();
+    // A divider as well as the shipped Agents + Artifacts stack, so both of
+    // the kinds a phone cannot draw are in the rail.
+    state.setArrangement(insertRailDivider(state.arrangement, 3));
+  });
+  afterEach(() => {
+    window.innerWidth = originalWidth;
+  });
+
+  it("lists only the panels, with no divider, stack or Stack verb, and the pinned More line", () => {
+    render(section("railAgents", vi.fn()));
+    // Positive control: the rail really holds a divider and a stack.
+    expect(rail().some((entry) => entry.kind === "divider")).toBe(true);
+    expect(rail().some((entry) => entry.kind === "stack")).toBe(true);
+
+    expect(rowIds()).toEqual(panelIds(rail()));
+    expect(screen.queryByRole("button", { name: "Add divider" })).toBeNull();
+    expect(screen.queryAllByRole("button", { name: /^Stack / })).toHaveLength(
+      0,
+    );
+    expect(screen.getByTestId("layout-rail-more-row")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Drag to reorder. Turn a panel off to move it into More.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("reorders the panels among their slots, leaving the divider and the stack where they are", () => {
+    render(section("railAgents", vi.fn()));
+    const before = rail();
+    const panels = panelIds(before);
+    const grabbed = row(panels[2]);
+
+    fireEvent.keyDown(grabbed, { key: " " });
+    fireEvent.keyDown(grabbed, { key: "ArrowUp" });
+    fireEvent.keyDown(grabbed, { key: "ArrowUp" });
+    fireEvent.keyDown(grabbed, { key: " " });
+
+    expect(panelIds(rail())).toEqual([
+      panels[2],
+      panels[0],
+      panels[1],
+      ...panels.slice(3),
+    ]);
+    expect(rail().filter((entry) => entry.kind !== "panel")).toEqual(
+      before.filter((entry) => entry.kind !== "panel"),
+    );
   });
 });
 

@@ -10,7 +10,7 @@ import userEvent, { type UserEvent } from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
-import { setMobileApp } from "@/lib/mobile-app";
+import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
   LAYOUT_REGION_LIST,
   regionFacts,
@@ -115,6 +115,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   setMobileApp(false);
+  setPhoneLayoutOnly(false);
   resetLayout();
   setSystemTabModalApi(null);
   useSettingsSearchStore.setState({
@@ -918,7 +919,7 @@ describe("Settings - Layout", () => {
       expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
     });
 
-    it("withholds Placement, Side tab view and Side in the installed mobile app, and never disables Tab overflow there", async () => {
+    it("withholds the desktop-only rows and the editor door in the installed mobile app", async () => {
       setMobileApp(true);
       useLayoutStore.setState({
         ...DEFAULT_LAYOUT_SNAPSHOT,
@@ -937,25 +938,60 @@ describe("Settings - Layout", () => {
       expect(
         screen.queryByRole("radiogroup", { name: "Side tab view" }),
       ).toBeNull();
-      const taskTabLayout = within(surface("topBar")).getByRole("radiogroup", {
-        name: "Tab overflow",
-      });
+      // No tab strip on the phone, so nothing for overflow to fit.
       expect(
-        within(taskTabLayout)
-          .getAllByRole<HTMLButtonElement>("radio")
-          .map((radio) => radio.disabled),
-      ).toEqual([false, false]);
-      expect(surface("topBar").textContent).not.toContain(
-        "Available when tabs are at the top.",
+        screen.queryByRole("radiogroup", { name: "Tab overflow" }),
+      ).toBeNull();
+      // No window there is ever wide enough, so neither the button nor the
+      // "needs a wider window" line that stands in for it.
+      expect(
+        screen.queryByRole("button", { name: "Customize layout" }),
+      ).toBeNull();
+      expect(document.body.textContent).not.toContain(
+        "The editor needs a wider window",
       );
 
-      // "Sidebar side" lives on a different tab, so it has to be checked on
+      // Each of the rest lives on a different tab, so it has to be checked on
       // ITS tab - on topBar's it would read as absent whether or not the
       // mobile-app guard withheld it.
       await goToSurfaceTab(user, "sidebar");
       expect(
         screen.queryByRole("radiogroup", { name: "Sidebar side" }),
       ).toBeNull();
+      expect(
+        screen.queryByRole("switch", { name: "Readings on agent rows" }),
+      ).toBeNull();
+      await goToSurfaceTab(user, "chat");
+      expect(
+        screen.queryByRole("radiogroup", { name: "Reading width" }),
+      ).toBeNull();
+      // The phone's minimap is a bottom drawer with no side, so the Minimap
+      // row keeps its Shown control and opens nothing.
+      const minimap = surface("chat").querySelector(
+        '[data-sortable-id="minimap"]',
+      );
+      if (!(minimap instanceof HTMLElement)) throw new Error("no Minimap row");
+      expect(
+        within(minimap)
+          .getByRole("button", { name: /^Minimap/ })
+          .hasAttribute("aria-expanded"),
+      ).toBe(false);
+      expect(minimap.querySelector("[data-region-detail]")).toBeNull();
+    });
+
+    it("says what the Home tab still decides on a phone, which has no tab strip", async () => {
+      setPhoneLayoutOnly(true);
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "topBar");
+      const row = surface("topBar").querySelector(
+        '[data-sortable-id="homeTab"]',
+      );
+      if (!(row instanceof HTMLElement)) throw new Error("no Home tab row");
+
+      await user.click(within(row).getByRole("button", { name: /^Home tab/ }));
+
+      expect(row.textContent).toContain("Adds Home to the menu");
     });
 
     it.each(["vertical tabs", "side tabs"])(

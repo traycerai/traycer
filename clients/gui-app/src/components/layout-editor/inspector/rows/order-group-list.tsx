@@ -4,7 +4,7 @@ import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-av
 import { isVoiceInputRowAvailable } from "@/lib/settings/settings-availability";
 import { NoLayoutUsageProviders } from "@/components/layout-editor/inspector/provider-limit-windows";
 import { useState, type ReactNode } from "react";
-import { ChevronRight, Plus } from "lucide-react";
+import { ChevronRight, MoreHorizontal, Plus } from "lucide-react";
 import { SortableList } from "@/components/layout-editor/inspector/sortable-list";
 import { useLayoutFormHost } from "@/components/layout-editor/inspector/layout-form-host";
 import { useSortableRowPadding } from "@/components/layout-editor/inspector/sortable-row-padding";
@@ -22,6 +22,7 @@ import {
   ORDER_GROUPS,
   orderGroupInstruction,
   orderGroupListLabel,
+  PHONE_RAIL_INSTRUCTION,
 } from "@/components/layout-editor/regions/surface-groups";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -38,7 +39,7 @@ import type {
   RegionId,
   ToolbarRegionId,
 } from "@/lib/layout/region-id";
-import { railDividerInsertIndex } from "@/lib/layout/rail";
+import { normalizeRail, railDividerInsertIndex } from "@/lib/layout/rail";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 
 /**
@@ -61,10 +62,29 @@ export function OrderGroupList(props: {
 }): ReactNode {
   const { group, arrangement } = props;
   const gutter = useSortableRowPadding();
+  const narrow = useIsMobileViewport();
   return (
     <div className="flex flex-col">
       <OrderGroupRows {...props} />
-      {ORDER_GROUPS[group].dividers ? (
+      {narrow && group === "rail" ? (
+        // A phone has no rail: these rows order its tab switcher, whose last
+        // entry is always More - where a panel set to In More goes. Drawn as
+        // the list's pinned last line so the list reads the way the bar does.
+        <div
+          data-testid="layout-rail-more-row"
+          className={cn(
+            gutter.row,
+            "flex items-center gap-2 border-t border-border/40 text-muted-foreground",
+          )}
+        >
+          <span aria-hidden className="size-3.5 shrink-0" />
+          <MoreHorizontal aria-hidden className="size-3.5 shrink-0" />
+          <span className="font-medium">More</span>
+          <span className="ml-auto text-ui-xs">Panels set to In More</span>
+        </div>
+      ) : null}
+      {/* No dividers on a phone: its switcher is a flat chip bar. */}
+      {ORDER_GROUPS[group].dividers && !narrow ? (
         // In the rows' own gutter: it is the last line of the same list, not a
         // button parked under a card (L-25, L-155).
         <div className={cn(gutter.row, "flex")}>
@@ -128,7 +148,9 @@ export function OrderGroupHeader(props: {
           page ? "text-ui-sm" : "text-ui-xs",
         )}
       >
-        {orderGroupInstruction(group)}
+        {narrow && group === "rail"
+          ? PHONE_RAIL_INSTRUCTION
+          : orderGroupInstruction(group)}
       </p>
     </div>
   );
@@ -226,6 +248,37 @@ function OrderGroupRows(props: {
         />
       );
     case "rail":
+      if (narrow) {
+        // A phone's switcher is a flat chip bar, so the list is just the
+        // panels: no divider rows, no stack rows and no Stack verb. The
+        // dividers and stacks stay in the rail for the desktop.
+        const panelIds = arrangement.rail.flatMap((entry) =>
+          entry.kind === "panel" ? [entry.id] : [],
+        );
+        return (
+          <SortableList<string>
+            label={orderGroupListLabel(group)}
+            selectedId={selectedId}
+            items={panelIds.map((regionId) => ({
+              ...railPanelOrderItem(regionId, arrangement, values, decorate),
+              onStack: null,
+            }))}
+            onMove={(id, toIndex) => {
+              const target = panelIds.at(toIndex);
+              if (target === undefined) return;
+              // Moved to where the panel it lands on stands in the whole
+              // rail, exactly as the desktop list would place it; the rail's
+              // own normalization then keeps or splits the stacks around it.
+              const moved = moveRailEntry(
+                arrangement,
+                id,
+                arrangement.rail.findIndex((entry) => entry.id === target),
+              );
+              writeArrangement({ ...moved, rail: normalizeRail(moved.rail) });
+            }}
+          />
+        );
+      }
       return (
         <SortableList<string>
           label={orderGroupListLabel(group)}

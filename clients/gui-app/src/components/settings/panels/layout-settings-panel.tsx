@@ -38,8 +38,10 @@ import { scrollPaneToCenter } from "@/components/settings/use-settings-anchor-re
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import { Button } from "@/components/ui/button";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { useLayoutEditorFitsWindow } from "@/lib/layout/editor-width";
 import { openLayoutEditor } from "@/lib/layout/editor-session";
+import { isLayoutEditorAvailable } from "@/lib/settings/settings-availability";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import type { LayoutSnapshot } from "@/lib/layout/layout-snapshot";
 import {
@@ -351,10 +353,16 @@ function ChangedDot(): ReactNode {
  * it would navigate to the page the user is already reading - and says so in
  * its place, because it is still the guide's final coachmark target (L-50)
  * and the search result "Customize layout" lands on it.
+ *
+ * In the installed app it is nothing at all: no window there is ever wide
+ * enough, so "needs a wider window" names a remedy that does not exist. The
+ * search result and the guide's step are withheld by the same predicate.
  */
 function OpenEditorAction(props: { readonly area: LayoutAreaId }): ReactNode {
   const navigate = useNavigate();
   const fits = useLayoutEditorFitsWindow();
+  const availability = useSettingsAvailabilityContext();
+  if (!isLayoutEditorAvailable(availability)) return null;
   return (
     <div data-settings-anchor={LAYOUT.definitions.customizeEntry.anchor}>
       {fits ? (

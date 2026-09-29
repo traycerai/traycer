@@ -89,6 +89,31 @@ export function isMobileFooterRowAvailable(
   return context.mobileApp;
 }
 
+/**
+ * Layout › Customize layout - the canvas editor, and every door that offers it
+ * by name. It needs a window wider than the phone layout ever draws
+ * (`LAYOUT_EDITOR_MIN_WIDTH`), and the installed app is a phone-layout product
+ * on every device, so there it can never open. A narrow DESKTOP window keeps
+ * it: widening the window is the way in, and the page says so.
+ */
+export function isLayoutEditorAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return !context.mobileApp;
+}
+
+/**
+ * Layout › Chat › Minimap ▸ Side - the installed app never draws the edge
+ * rail (the chat minimap is withheld on the phone layout, the artifact one
+ * needs a fine pointer): its minimap is the tile bar's bottom drawer, which has
+ * no side. The region's Shown switch still decides the drawer.
+ */
+export function isMinimapSideRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return !context.mobileApp;
+}
+
 /** General › Experimental — the desktop feature-settings bridge. */
 export function isExperimentalGroupAvailable(
   context: SettingsAvailabilityContext,

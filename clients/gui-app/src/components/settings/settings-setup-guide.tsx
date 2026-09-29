@@ -3,8 +3,10 @@ import { useLayoutLitMoment } from "@/components/layout-editor/lit-moment";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import { setupGuide } from "@/stores/onboarding/setup-guides";
+import { setupGuideStepsFor } from "@/stores/onboarding/setup-guides";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { isLayoutEditorAvailable } from "@/lib/settings/settings-availability";
 import { scrollPaneToCenter } from "@/components/settings/use-settings-anchor-reveal";
 
 const Coachmark = lazy(() =>
@@ -23,9 +25,15 @@ export function SettingsSetupGuide(props: {
   // screen and its Escape, and a coachmark pointing into Settings would float
   // over it. The guide resumes at the same step when the session ends.
   const customizing = useLayoutEditorStore((state) => state.session !== null);
-  const guide = active === null ? null : setupGuide(active.id);
-  const step =
-    guide === null || active === null ? null : guide.steps[active.step];
+  // Where the editor can never open, the guide ends on the page before its
+  // door (`requiresLayoutEditor`) rather than pointing at a missing control.
+  const availability = useSettingsAvailabilityContext();
+  const editorAvailable = isLayoutEditorAvailable(availability);
+  const steps =
+    active === null
+      ? []
+      : setupGuideStepsFor(active.id, { layoutEditor: editorAvailable });
+  const step = active === null ? null : (steps[active.step] ?? null);
   // Resolved above the early returns, because it is a hook: the lit moment
   // belongs to the step that asked for it and ends when that step does,
   // however it ends - Continue, Escape, or the surface closing (L-50).
@@ -40,12 +48,12 @@ export function SettingsSetupGuide(props: {
   // moment it started. `activeSetup` is session-local presence, so a closed
   // Settings simply resumes the same step when it reopens - and closing the
   // surface is not a user skip, so it must not finish the card either.
-  if (active === null || guide === null || step === null) return null;
+  if (active === null || step === null) return null;
   if (customizing) return null;
   if (step.section !== props.section) return null;
-  const last = active.step + 1 === guide.steps.length;
+  const last = active.step + 1 === steps.length;
   const go = (index: number): void => {
-    const target = guide.steps[index];
+    const target = steps[index];
     if (target.section !== step.section)
       navigateToSettingsSection(target.section);
   };
@@ -57,7 +65,7 @@ export function SettingsSetupGuide(props: {
         content={step.content}
         progress={{
           step: active.step + 1,
-          total: guide.steps.length,
+          total: steps.length,
         }}
         rootRef={props.rootRef}
         selector={step.selector}
@@ -83,9 +91,15 @@ export function SettingsSetupGuide(props: {
             : {
                 label: last ? "Done" : "Continue",
                 onClick: () => {
-                  useOnboardingStore.getState().advanceSetup();
-                  if (last) navigateToSettingsSection("getting-started");
-                  else go(active.step + 1);
+                  // Completing rather than advancing: the last step SHOWN
+                  // is not the stored last one where a step was left out.
+                  if (last) {
+                    complete(active.id);
+                    navigateToSettingsSection("getting-started");
+                  } else {
+                    useOnboardingStore.getState().advanceSetup();
+                    go(active.step + 1);
+                  }
                 },
               }
         }
