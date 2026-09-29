@@ -9,7 +9,7 @@ name: Browser regressions
 # They used to be hand-rolled CDP drivers run one after another at the end of
 # gui-app Vitest shard 1 in `test.yml`, the one gui-app check the `main`
 # ruleset requires, and held every PR for about 30 minutes. Here they run as
-# their own workflow, sharded, and are not a required check. No secrets.
+# their own workflow, sharded, as required checks on `main`. No secrets.
 
 on:
   pull_request:
@@ -34,6 +34,9 @@ jobs:
     strategy:
       # One red shard must not cancel the others: each proves different claims.
       fail-fast: false
+      # Each job's name (`browser (k/4)`) is a required check in the `main`
+      # ruleset, so a different shard count renames the checks: change the
+      # ruleset's required checks in the same sitting.
       matrix:
         shard: [1, 2, 3, 4]
     steps:

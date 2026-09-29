@@ -11,7 +11,7 @@ import { defineConfig } from "@playwright/test";
  * shared Vite dev server serves (`vite.browser-tests.config.ts`).
  *
  * CI runs them in `.github/workflows/browser-regressions.yml`, sharded across
- * parallel jobs; they are not a required check. Locally:
+ * parallel jobs that are required checks on `main`. Locally:
  *
  *   bun run test:browser                                  # every spec
  *   bun run test:browser browser-tests/hover-card.spec.ts # one file

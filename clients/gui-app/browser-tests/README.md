@@ -15,8 +15,8 @@ bun run test:browser --ui                              # Playwright's UI mode
 ```
 
 CI runs them in `.github/workflows/browser-regressions.yml`, sharded across
-parallel jobs. They are not a required check. A failed job uploads the
-Playwright report, with a trace for each failed test.
+parallel jobs that are required checks on `main`, so a red one blocks a merge.
+A failed job uploads the Playwright report, with a trace for each failed test.
 
 ## How the pieces fit
 
