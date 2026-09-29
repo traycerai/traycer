@@ -67,6 +67,13 @@ chromeLaunchOptions([...]) })`; assert the premise they create positively
   test can change live, the seeded tabs' order and active tab included, goes
   back there, so a new live setter needs its undo there too. Otherwise a test's
   result depends on the tests that ran before it on the page.
+- **A shared page keeps its tests in one worker.** The config is
+  `fullyParallel`, so Playwright hands a file's tests to any worker, and every
+  worker that gets one boots its own copy of a shared page. `sharedPage` pins
+  its group with `test.describe.configure({ mode: "default" })`, and a file
+  that shares a page through a worker-scoped fixture (the canvas pages in
+  `support/canvas-geometry.ts`, the tree-zoom spec's Electron app) says the
+  same at its top.
 - **One test per claim**, named for the claim. Playwright shards and
   parallelises by test, so a long phase list split into tests finishes sooner
   and reports each red separately.

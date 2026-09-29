@@ -26,6 +26,11 @@ import {
 } from "./support/canvas-geometry.ts";
 import { nextFrames } from "./support/fixtures.ts";
 
+// Every test here runs in one worker, so the worker-scoped pages boot once
+// per run instead of once per worker that gets a test (the config is
+// `fullyParallel`).
+test.describe.configure({ mode: "default" });
+
 // The "sheet join": the concave corners (arcs) that stitch a joined tab - a
 // side strip's active row/tile/split pair, or the top header's active tab -
 // onto its task's sheet.

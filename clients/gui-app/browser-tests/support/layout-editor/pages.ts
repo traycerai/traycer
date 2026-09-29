@@ -116,6 +116,12 @@ export interface PageLoad {
  * uncaught fixture error. Returns the page getter.
  */
 export function sharedPage(load: PageLoad): () => Page {
+  // The group runs in one worker, in order. The config is `fullyParallel`,
+  // which would hand the group's tests to several workers (and CI shards),
+  // and every worker that gets one boots its own copy of the page: the
+  // layout-editor files booted 15 pages for 11 groups on 2 workers, and 11
+  // like this, in the same time.
+  test.describe.configure({ mode: "default" });
   let shared: Page | null = null;
   let loadsSeen = 0;
   let loadsAtTestStart = 0;

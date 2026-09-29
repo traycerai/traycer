@@ -42,6 +42,8 @@ function viteBin(): string {
 export default defineConfig({
   testDir: "./browser-tests",
   testMatch: "**/*.spec.ts",
+  // Test by test, across workers and shards; a group sharing one page opts
+  // out with `mode: "default"`, so it boots once (browser-tests/README.md).
   fullyParallel: true,
   forbidOnly: isCi,
   // One retry on CI absorbs a runner hiccup; the report still marks such a

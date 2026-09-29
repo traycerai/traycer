@@ -383,6 +383,11 @@ const test = base.extend<
   ],
 });
 
+// Every test here runs in one worker, so the Electron app launches once per
+// run instead of once per worker that gets a test (the config is
+// `fullyParallel`).
+test.describe.configure({ mode: "default" });
+
 interface TreeReading {
   readonly rows: number;
   readonly markerOpacities: string[];

@@ -8,6 +8,11 @@ import {
 } from "./support/canvas-geometry.ts";
 import { centreOf, fixture, nextFrames } from "./support/fixtures.ts";
 
+// Every test here runs in one worker, so the worker-scoped pages boot once
+// per run instead of once per worker that gets a test (the config is
+// `fullyParallel`).
+test.describe.configure({ mode: "default" });
+
 // SETTINGS > LAYOUT, IN REAL CHROME (G6, G7, H2).
 //
 // `layout-editor-canvas.html?settings=1` mounts the REAL Settings > Layout
