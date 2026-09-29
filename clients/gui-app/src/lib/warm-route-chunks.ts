@@ -115,25 +115,30 @@ export function routeChunkWarmers(
 }
 
 export function warmRouteChunks(router: FirstRenderSignal): void {
-  if (warmed) return;
-  warmed = true;
   if (typeof window === "undefined") return;
-
-  const mobileApp = isMobileApp();
-  const warm = () => {
-    for (const warmer of routeChunkWarmers(mobileApp)) void warmer.load();
-  };
-
-  if (!mobileApp) {
-    whenIdle(warm);
-    return;
-  }
+  // The platform is read in the callbacks, never here: `router.tsx` builds a
+  // module-level router on import, before the mobile entry has called
+  // `setMobileApp`, and that router never renders. Reading the flag at this
+  // call warmed the desktop list on the phone, ahead of its first paint.
+  whenIdle(() => {
+    if (warmed || isMobileApp()) return;
+    warmed = true;
+    warm(routeChunkWarmers(false));
+  });
   // `onRendered` fires from a layout effect once the first route commits, so
   // the frame after it is the first paint; idle time after that is free.
   const unsubscribe = router.subscribe("onRendered", () => {
     unsubscribe();
-    window.requestAnimationFrame(() => whenIdle(warm));
+    if (warmed || !isMobileApp()) return;
+    warmed = true;
+    window.requestAnimationFrame(() =>
+      whenIdle(() => warm(routeChunkWarmers(true))),
+    );
   });
+}
+
+function warm(warmers: ReadonlyArray<RouteChunkWarmer>): void {
+  for (const warmer of warmers) void warmer.load();
 }
 
 function whenIdle(run: () => void): void {

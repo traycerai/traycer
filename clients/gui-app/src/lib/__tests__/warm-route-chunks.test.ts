@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { routeChunkWarmers } from "@/lib/warm-route-chunks";
 
 const EPIC_MODULES = [
   "@/routes/epics-layout-route-components",
@@ -91,7 +92,9 @@ describe("warmRouteChunks", () => {
     await vi.runAllTimersAsync();
     await settleImports();
 
-    expect(router.listenerCount()).toBe(0);
+    // The platform is read only inside the callbacks, so the listener is
+    // always installed; on desktop it stays inert.
+    expect(router.listenerCount()).toBe(1);
     expect([...imported].toSorted()).toEqual([...DESKTOP_MODULES].toSorted());
   });
 
@@ -118,5 +121,58 @@ describe("warmRouteChunks", () => {
     // One warm-up per launch: later navigations render again and must not
     // re-arm anything.
     expect(router.listenerCount()).toBe(0);
+  });
+
+  it("warms only the epic list on the phone when a router was warmed before setMobileApp", async () => {
+    // Mirrors boot: `router.tsx` builds and warms a module-level router
+    // before the mobile entry calls `setMobileApp(true)`, and that router
+    // never renders.
+    const { warmRouteChunks } = await loadWarmer(false);
+    const mobile = await import("@/lib/mobile-app");
+    const neverRenderedRouter = fakeRouter();
+    const mountedRouter = fakeRouter();
+
+    warmRouteChunks(neverRenderedRouter);
+    mobile.setMobileApp(true);
+    warmRouteChunks(mountedRouter);
+
+    await vi.runAllTimersAsync();
+    await settleImports();
+    // Nothing is warmed before the mounted router's first render.
+    expect([...imported]).toEqual([]);
+
+    mountedRouter.render();
+    await vi.runAllTimersAsync();
+    await settleImports();
+
+    expect([...imported].toSorted()).toEqual([...EPIC_MODULES].toSorted());
+    expect(mountedRouter.listenerCount()).toBe(0);
+  });
+});
+
+describe("routeChunkWarmers", () => {
+  it("pins the exact phone warmer list, in order", () => {
+    expect(routeChunkWarmers(true).map((warmer) => warmer.module)).toEqual([
+      "@/routes/epics-layout-route-components",
+      "@/routes/epic-tab-route-components",
+      "@/components/epic-tabs/epic-surface",
+    ]);
+  });
+
+  it("pins the exact desktop warmer list, in order", () => {
+    expect(routeChunkWarmers(false).map((warmer) => warmer.module)).toEqual([
+      "@/routes/epics-layout-route-components",
+      "@/routes/epic-tab-route-components",
+      "@/components/epic-tabs/epic-surface",
+      "@/routes/draft-route-components",
+      "@/components/home-focus/home-focus-view",
+      "@/components/home/landing-draft-surface",
+      "@/providers/draft-surface-provider",
+      "@/components/epics/history-surface",
+      "@/components/settings/settings-surface",
+      "@/components/sample-workspace/sample-workspace-surface",
+      "@/components/settings/settings-modal-content",
+      "@/components/epics/history-modal-content",
+    ]);
   });
 });
