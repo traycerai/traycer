@@ -1159,7 +1159,9 @@ describe("<LandingTerminalPanel />", () => {
     );
 
     view.rerender(panelUiForDraft("draft-a"));
-    expect(screen.getByTestId("landing-terminal-panel").style.width).toBe("0%");
+    expect(screen.getByTestId("landing-terminal-panel").style.marginRight).toBe(
+      "-36%",
+    );
     fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
     expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
       "36%",
@@ -4399,7 +4401,7 @@ describe("<LandingTerminalPanel />", () => {
     ).toBe(false);
   });
 
-  it("refits the active terminal after reopening from zero width to the stored panel width", async () => {
+  it("slides by margin at a fixed width and refits the active terminal once the reveal ends", async () => {
     mocks.activeHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = listWith([runningSession("session-1")], "/Users/dev");
@@ -4424,24 +4426,29 @@ describe("<LandingTerminalPanel />", () => {
     await flushAnimationFrame();
     mocks.reconcileXtermHostAfterLayoutTransition.mockClear();
 
+    // Collapsing parks the panel off the row's edge at its open width: the
+    // terminal inside never passes through intermediate sizes, which each
+    // reached the shell as a PTY resize.
     fireEvent.click(screen.getByTestId("landing-terminal-collapse"));
     await waitFor(() => {
-      expect(panel.style.width).toBe("0%");
+      expect(panel.style.marginRight).toBe("-42%");
     });
-    fireEvent.transitionEnd(panel, { propertyName: "width" });
+    expect(panel.style.width).toBe("42%");
+    fireEvent.transitionEnd(panel, { propertyName: "margin-right" });
     expect(
       mocks.reconcileXtermHostAfterLayoutTransition,
     ).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
     await waitFor(() => {
-      expect(panel.style.width).toBe("42%");
+      expect(panel.style.marginRight).toBe("0%");
     });
+    expect(panel.style.width).toBe("42%");
     expect(
       mocks.reconcileXtermHostAfterLayoutTransition,
     ).not.toHaveBeenCalled();
 
-    fireEvent.transitionEnd(panel, { propertyName: "width" });
+    fireEvent.transitionEnd(panel, { propertyName: "margin-right" });
     await flushAnimationFrame();
     expect(
       mocks.reconcileXtermHostAfterLayoutTransition,
@@ -4480,7 +4487,7 @@ describe("<LandingTerminalPanel />", () => {
     fireEvent.click(screen.getByTestId("landing-terminal-collapse"));
     fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
     await waitFor(() => {
-      expect(panel.style.width).toBe("42%");
+      expect(panel.style.marginRight).toBe("0%");
     });
     await flushAnimationFrame();
 
@@ -4528,7 +4535,7 @@ describe("<LandingTerminalPanel />", () => {
 
     fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
     const panel = screen.getByTestId("landing-terminal-panel");
-    fireEvent.transitionEnd(panel, { propertyName: "width" });
+    fireEvent.transitionEnd(panel, { propertyName: "margin-right" });
     await flushAnimationFrame();
     expect(mocks.reconcileXtermHostAfterLayoutTransition).toHaveBeenCalledWith(
       "tab-1",
@@ -4597,7 +4604,7 @@ describe("<LandingTerminalPanel />", () => {
       pointerId: 7,
       clientX: 580,
     });
-    fireEvent.transitionCancel(panel, { propertyName: "width" });
+    fireEvent.transitionCancel(panel, { propertyName: "margin-right" });
     await flushAnimationFrame();
     expect(
       mocks.reconcileXtermHostAfterLayoutTransition,
@@ -5344,8 +5351,10 @@ describe("<LandingTerminalPanel />", () => {
       await screen.findByTestId("landing-terminal-directory-picker"),
     ).toBeTruthy();
     const panel = screen.getByTestId("landing-terminal-panel");
-    expect(panel.className).toContain("transition-[width]");
-    expect(panel.className).not.toContain("transition-[width,visibility]");
+    expect(panel.className).toContain("transition-[margin-right]");
+    expect(panel.className).not.toContain(
+      "transition-[margin-right,visibility]",
+    );
     const pickerInput = screen.getByRole("combobox", {
       name: "Create terminal in workspace",
     });

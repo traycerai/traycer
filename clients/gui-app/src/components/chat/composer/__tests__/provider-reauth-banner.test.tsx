@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ProviderCliState,
   ProviderLoginCapability,
+  ProviderLoginRefusal,
 } from "@traycer/protocol/host/provider-schemas";
 
 // The banner shows only for web-login providers; it receives live provider
@@ -23,12 +24,17 @@ type AwaitLoginVariables = {
   readonly profileId: string | null;
 };
 // Mirrors only the fields the ambient flow hook actually reads off
-// `providers.awaitLogin`'s response (`codeRejected`, `state.auth.status`) -
-// not the full `ProviderCliState` schema, since the mocked hook below never
-// goes through real schema parsing.
+// `providers.awaitLogin`'s response (`codeRejected`, `state.auth.status`,
+// `refusal`) - not the full `ProviderCliState` schema, since the mocked hook
+// below never goes through real schema parsing. `refusal` is absent from a
+// host before `providers.awaitLogin@2.2`.
 type AwaitLoginResult = {
   readonly codeRejected: boolean;
-  readonly state: { readonly auth: { readonly status: string } } | undefined;
+  readonly state:
+    | { readonly auth: { readonly status: string } }
+    | null
+    | undefined;
+  readonly refusal?: ProviderLoginRefusal | null;
 };
 type AwaitLoginOptions = {
   readonly onSuccess: (result: AwaitLoginResult) => void;
@@ -1895,5 +1901,151 @@ describe("<ProviderReauthBanner />", () => {
         hostId: null,
       });
     });
+  });
+});
+
+// A provider that accepts the browser consent and then refuses the account
+// (`providers.awaitLogin@2.2` `refusal`) ends the ambient reconnect on the
+// provider's own words, not on a quiet return to the Authenticate button.
+describe("<ProviderReauthBanner /> when the provider refuses the sign-in", () => {
+  const REFUSAL: ProviderLoginRefusal = {
+    reason:
+      "Your current account is not eligible for Antigravity. Verify your account to continue.",
+    actionUrl: "https://accounts.google.com/signin/continue?sarp=1&scc=1",
+  };
+  const HEADLINE = "Antigravity turned down this sign-in.";
+
+  beforeEach(() => {
+    mocks.startLoginMutate.mockReset();
+    mocks.awaitLoginMutate.mockClear();
+    mocks.openLink.mockClear();
+    mocks.hostKind = "local";
+    mockStartLoginAlwaysSucceeds();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function renderAntigravityBanner(): void {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="antigravity"
+        state={antigravityState(ANTIGRAVITY_ACP_AUTH_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+  }
+
+  async function refuseWith(refusal: ProviderLoginRefusal): Promise<void> {
+    await clickAuthenticate();
+    const [, awaitOptions] = latestAwaitLoginCall();
+    await act(() => {
+      awaitOptions.onSuccess({ codeRejected: false, state: null, refusal });
+      return Promise.resolve();
+    });
+  }
+
+  it("says which provider refused, gives its reason, and offers Verify account and 'Try another account'", async () => {
+    renderAntigravityBanner();
+
+    await refuseWith(REFUSAL);
+
+    expect(screen.getByText(HEADLINE)).toBeDefined();
+    expect(screen.getByText(REFUSAL.reason)).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Verify account" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Try another account" }),
+    ).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+  });
+
+  it("opens the provider's verification link through the auth link opener", async () => {
+    renderAntigravityBanner();
+    await refuseWith(REFUSAL);
+    // Waiting on the consent page opened it once already; count only the
+    // press.
+    mocks.openLink.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "Verify account" }));
+
+    expect(mocks.openLink).toHaveBeenCalledTimes(1);
+    expect(mocks.openLink).toHaveBeenCalledWith(
+      REFUSAL.actionUrl,
+      "auth",
+      expect.anything(),
+    );
+  });
+
+  it("starts a fresh sign-in from 'Try another account'", async () => {
+    renderAntigravityBanner();
+    await refuseWith(REFUSAL);
+    expect(mocks.startLoginMutate).toHaveBeenCalledTimes(1);
+
+    await act(() => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Try another account" }),
+      );
+      return Promise.resolve();
+    });
+
+    expect(mocks.startLoginMutate).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers no Verify account button when the provider offered no link", async () => {
+    renderAntigravityBanner();
+
+    await refuseWith({
+      reason: "This account cannot be used.",
+      actionUrl: null,
+    });
+
+    expect(screen.getByText(HEADLINE)).toBeDefined();
+    expect(screen.getByText("This account cannot be used.")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Verify account" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Try another account" }),
+    ).toBeDefined();
+  });
+
+  it("keeps the flow's own wording and 'Try again' for a failure that is not a refusal", async () => {
+    mocks.startLoginMutate.mockImplementation(
+      (_vars: unknown, opts: { readonly onError: (error: Error) => void }) => {
+        opts.onError(new Error("host refused"));
+      },
+    );
+    renderAntigravityBanner();
+
+    await clickAuthenticate();
+
+    expect(screen.getByText("Sign-in did not start. Try again.")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeDefined();
+    expect(screen.queryByText(HEADLINE)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Verify account" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Try another account" }),
+    ).toBeNull();
+  });
+
+  it("treats an answer from a host before 2.2, which carries no refusal, as the ordinary not-authenticated return to Authenticate", async () => {
+    renderAntigravityBanner();
+    await clickAuthenticate();
+    const [, awaitOptions] = latestAwaitLoginCall();
+
+    await act(() => {
+      awaitOptions.onSuccess({ codeRejected: false, state: null });
+      return Promise.resolve();
+    });
+
+    expect(screen.queryByText(HEADLINE)).toBeNull();
+    expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
   });
 });

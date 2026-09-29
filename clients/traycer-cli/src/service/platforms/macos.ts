@@ -669,33 +669,7 @@ async function probeLabelForTakeover(
   target: string,
   run: ProcessRunner,
 ): Promise<TakeoverLabelProbe> {
-  let result: ProbeCommandResult;
-  try {
-    const value = await run("launchctl", ["print", target], {
-      env: undefined,
-      cwd: undefined,
-      timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
-      tolerateNonZeroExit: true,
-    });
-    result = {
-      exitCode: value.exitCode,
-      stdout: value.stdout,
-      stderr: value.stderr,
-      timedOut: false,
-      spawnFailed: false,
-      signal: null,
-    };
-  } catch (cause) {
-    if (isServiceMutationAuthorityError(cause)) throw cause;
-    result = {
-      exitCode: -1,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      spawnFailed: true,
-      signal: null,
-    };
-  }
+  const result = await printLaunchdTarget(target, run);
   const probe = classifyLaunchctlPrintResult(result, null, null);
   if (probe.kind === "absent") return { kind: "absent" };
   if (probe.kind === "indeterminate") {
@@ -723,6 +697,84 @@ async function probeLabelForTakeover(
         jobState.value.toLowerCase() === "running"),
     startIdentity: livePid === null ? null : readProcessStartIdentity(livePid),
   };
+}
+
+// One `launchctl print`, as the shared classifier's input. A spawn that failed
+// or a runner fault reads as `spawnFailed`, which that classifier answers
+// `indeterminate`; a revoked mutation capability still rethrows.
+async function printLaunchdTarget(
+  target: string,
+  run: ProcessRunner,
+): Promise<ProbeCommandResult> {
+  try {
+    const value = await run("launchctl", ["print", target], {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
+      tolerateNonZeroExit: true,
+    });
+    return {
+      exitCode: value.exitCode,
+      stdout: value.stdout,
+      stderr: value.stderr,
+      timedOut: false,
+      spawnFailed: false,
+      signal: null,
+    };
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    return {
+      exitCode: -1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      spawnFailed: true,
+      signal: null,
+    };
+  }
+}
+
+// Whether launchd has a job under `labelId` at all, loaded or running. The
+// takeover probe's reading without the process evidence only a takeover
+// needs: `absent` only on launchctl's own not-found answer, `indeterminate`
+// for everything that is not an answer.
+async function probeLabelLoaded(
+  labelId: string,
+  run: ProcessRunner,
+): Promise<"absent" | "loaded" | "indeterminate"> {
+  const result = await printLaunchdTarget(`${guiDomain()}/${labelId}`, run);
+  const probe = classifyLaunchctlPrintResult(result, null, labelId);
+  return probe.kind === "observed" ? "loaded" : probe.kind;
+}
+
+// The CLI label is where a start or relaunch goes whenever no Desktop agent is
+// loaded, which is right only while that label HAS a job. With neither label
+// loaded - Desktop's agent booted out by hand, or a registration that was
+// removed - launchctl answers "Could not find service" for the CLI label, a
+// label this machine may never have registered, and the command fails naming
+// the wrong thing to fix. That is how the Traycer app's Restart reported
+// `ai.traycer.host` missing on a machine that only ever ran
+// `ai.traycer.host.agent` (in-app report rpt_d761e0b00e2c400482ece24821a20920).
+//
+// So a definite absence of BOTH refuses, naming both. Anything short of that
+// goes on exactly as before: this runs ahead of every CLI-managed start, and an
+// unanswerable probe must never block one. Called only once the Desktop agent
+// probe came back empty, so it costs a CLI-managed machine one more `launchctl
+// print` and asks about the agent label only when the CLI label is absent.
+async function refuseWhenNeitherLabelIsLoaded(
+  label: ServiceLabel,
+  operation: "start" | "restart",
+  run: ProcessRunner,
+): Promise<void> {
+  if ((await probeLabelLoaded(label.id, run)) !== "absent") return;
+  const agentLabelId = smAppServiceAgentLabelId(label);
+  if ((await probeLabelLoaded(agentLabelId, run)) !== "absent") return;
+  throw cliError({
+    code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    message: `Cannot ${operation} the host: launchd has no job loaded under either host label - neither '${agentLabelId}' (registered by the Traycer app) nor '${label.id}' (registered by 'traycer host service install') - so there is nothing to ${operation}. Quit and reopen the Traycer app, which registers its agent again, or run 'traycer host service install' to register the CLI's own.`,
+    details: { label: label.id, agentLabel: agentLabelId },
+    exitCode: 1,
+  });
 }
 
 // The process evidence a takeover bootout is checked against afterwards.
@@ -2732,10 +2784,12 @@ async function startService(
   // is the one launchd can start. Kickstart of an already-loaded job
   // mutates no registration, so this is safe on both worlds.
   const desktopAgent = await probeDesktopAgentOwnership(label, run);
-  await kickstartJob(
-    desktopAgent === null ? label.id : desktopAgent.agentLabelId,
-    run,
-  );
+  if (desktopAgent !== null) {
+    await kickstartJob(desktopAgent.agentLabelId, run);
+    return;
+  }
+  await refuseWhenNeitherLabelIsLoaded(label, "start", run);
+  await kickstartJob(label.id, run);
 }
 
 // `host restart`'s stop half. On a Desktop-managed machine an unreachable or
@@ -2795,6 +2849,7 @@ async function relaunchServiceAfterRestart(
     await kickstartDesktopAgent(desktopAgent, stop.forcedRecycle, run);
     return;
   }
+  await refuseWhenNeitherLabelIsLoaded(label, "restart", run);
   if (stop.forcedRecycle) {
     await recycleJob(label.id, run);
     return;
@@ -2811,6 +2866,7 @@ async function restartService(
     await restartDesktopManagedHost(label, desktopAgent, run);
     return;
   }
+  await refuseWhenNeitherLabelIsLoaded(label, "restart", run);
   await recycleJob(label.id, run);
 }
 

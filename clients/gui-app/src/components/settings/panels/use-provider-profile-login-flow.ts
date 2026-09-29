@@ -10,10 +10,12 @@ import {
   providerProfileSchema,
   type ProviderCliState,
   type ProviderLoginCapability,
+  type ProviderLoginRefusal,
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   providerLoginAnswerHeldForNobody,
+  providerLoginAnswerHoldsLogin,
   providerLoginAnswerStillStarting,
   providerLoginAnswerWantsPackRetry,
   providerLoginNotStartedMessage,
@@ -98,7 +100,16 @@ export type ProviderProfileLoginFlowState =
       readonly profiles: readonly ProviderProfile[];
       readonly existingProfileId: string | null;
     }
-  | { readonly kind: "failed"; readonly message: string }
+  | {
+      readonly kind: "failed";
+      readonly message: string;
+      /**
+       * The provider refused the sign-in after the browser leg, in its own
+       * words (`message` is its reason then), with where it sends the user to
+       * resolve it. Null for every failure the flow words itself.
+       */
+      readonly refusal: ProviderLoginRefusal | null;
+    }
   | { readonly kind: "cancelled" };
 
 /**
@@ -144,9 +155,23 @@ type AwaitLoginResolution =
         readonly existingProfileId: string | null;
       } | null;
     }
+  | { readonly kind: "refused"; readonly refusal: ProviderLoginRefusal }
   | { readonly kind: "codeRejected" }
   | { readonly kind: "authPending" }
   | { readonly kind: "notAuthenticated" };
+
+/**
+ * The provider refused the sign-in (`providers.awaitLogin@2.2`). Decided
+ * before anything the re-probed state says: the host sends no state with a
+ * refusal, and over an account that was already signed in a state would only
+ * describe the previous account. A host before 2.2 reports none.
+ */
+function refusedAwaitResult(
+  result: AwaitLoginResult,
+): AwaitLoginResolution | null {
+  const refusal = result.refusal ?? null;
+  return refusal === null ? null : { kind: "refused", refusal };
+}
 
 /**
  * Ambient reauth (no profile picker - the in-chat banner's OAuth reconnect)
@@ -159,6 +184,8 @@ type AwaitLoginResolution =
 function classifyAmbientAwaitResult(
   result: AwaitLoginResult,
 ): AwaitLoginResolution {
+  const refused = refusedAwaitResult(result);
+  if (refused !== null) return refused;
   if (result.state?.auth.status === "authenticated") {
     return { kind: "authenticated", payload: null };
   }
@@ -181,6 +208,8 @@ function classifyProfileAwaitResult(
   result: AwaitLoginResult,
   awaitedProfileId: string | null,
 ): AwaitLoginResolution {
+  const refused = refusedAwaitResult(result);
+  if (refused !== null) return refused;
   const profiles = (result.state?.profiles ?? []).map((profile) =>
     providerProfileSchema.parse(profile),
   );
@@ -546,7 +575,11 @@ export function useProviderProfileLoginFlow(
   // message - UI copy like "Sign-in did not…" would misclassify everything
   // as `authentication`.
   const fail = useCallback(
-    (message: string, blocker: AnalyticsBlocker): void => {
+    (
+      message: string,
+      blocker: AnalyticsBlocker,
+      refusal: ProviderLoginRefusal | null,
+    ): void => {
       // Flow-level failures otherwise surface only as inline dialog copy -
       // log them so a failed sign-in/switch is diagnosable from the desktop
       // log after the fact.
@@ -554,14 +587,16 @@ export function useProviderProfileLoginFlow(
         provider: providerId,
         mode,
         blocker,
-        message,
+        // Provider-authored refusal text can contain account identifiers.
+        // Keep it in the UI; the host already records it at DEBUG.
+        message: refusal === null ? message : "Provider refused sign-in",
       });
       Analytics.getInstance().track(AnalyticsEvent.ProviderProfileLinkFailed, {
         provider: providerId,
         mode,
         blocker,
       });
-      setState({ kind: "failed", message });
+      setState({ kind: "failed", message, refusal });
       onFailed(message);
     },
     [mode, onFailed, providerId],
@@ -580,7 +615,7 @@ export function useProviderProfileLoginFlow(
         return;
       }
       if (restartCountRef.current >= CODE_PASTE_RESTART_CAP) {
-        fail(CODE_PASTE_RESTART_LIMIT_MESSAGES[cause], "timeout");
+        fail(CODE_PASTE_RESTART_LIMIT_MESSAGES[cause], "timeout", null);
         return;
       }
       restartCountRef.current += 1;
@@ -654,7 +689,7 @@ export function useProviderProfileLoginFlow(
         setState({ kind: "start" });
         return;
       }
-      fail(failureMessages.notFinished, "authentication");
+      fail(failureMessages.notFinished, "authentication", null);
     },
     [existingProfileId, fail, failureMessages, mode, providerId, restart],
   );
@@ -759,9 +794,16 @@ export function useProviderProfileLoginFlow(
           // downloading ends the flow at once (`cancel`), and the dialog can
           // be gone by the time the call already on its way answers - with a
           // login it started, and a profile it minted, that only this cancel
-          // releases.
+          // releases. Only a login the answer holds is released: an answer
+          // that the pack is still preparing, or that the host did not start
+          // one, left nothing there, and an ambient reauth's cancel is keyed
+          // by the provider alone, so it would end a login another surface
+          // started for the same account.
           if (cancelRequestedRef.current) {
-            finishCancellation(nextProfileId);
+            if (providerLoginAnswerHoldsLogin(data)) {
+              cancelProfile(nextProfileId);
+            }
+            reportCancellation();
             return;
           }
           if (unmountedRef.current) {
@@ -792,6 +834,7 @@ export function useProviderProfileLoginFlow(
                 failureMessages.notStarted,
               ),
               refusal.blocker,
+              null,
             );
             return;
           }
@@ -847,6 +890,17 @@ export function useProviderProfileLoginFlow(
               settleAttempt(thisAttemptId);
               return;
             }
+            // Final, whatever a pasted code is still doing: the provider has
+            // already turned this account away, and the ambient reconnect
+            // must say so too rather than return quietly to `start`.
+            if (resolution.kind === "refused") {
+              fail(
+                resolution.refusal.reason,
+                "authentication",
+                resolution.refusal,
+              );
+              return;
+            }
             if (resolution.kind === "codeRejected") {
               restart("codeRejected");
               return;
@@ -883,7 +937,11 @@ export function useProviderProfileLoginFlow(
             finishCancellation(null);
             return;
           }
-          fail(failureMessages.notStarted, analyticsBlockerFromError(error));
+          fail(
+            failureMessages.notStarted,
+            analyticsBlockerFromError(error),
+            null,
+          );
         },
       );
     },
@@ -899,6 +957,7 @@ export function useProviderProfileLoginFlow(
       loginCapability,
       mode,
       providerId,
+      reportCancellation,
       restart,
       settleAttempt,
       startLogin,
