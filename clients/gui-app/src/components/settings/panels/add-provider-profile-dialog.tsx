@@ -13,6 +13,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   PROVIDER_PROFILE_ACCENT_COLORS,
   type ProviderCliState,
+  type ProviderLoginRefusal,
   type ProviderProfile,
   type ProviderProfileAccentColor,
 } from "@traycer/protocol/host/provider-schemas";
@@ -43,6 +44,11 @@ import { useRenameProviderProfileForClient } from "@/hooks/providers/use-rename-
 import { useOpenLink } from "@/lib/links/open-link";
 import { redactEmail } from "@/lib/providers/redact-email";
 import type { ProviderLoginStartCopy } from "@/components/providers/provider-login-start";
+import {
+  ProviderLoginRefusalAction,
+  ProviderLoginRefusalMessage,
+} from "@/components/providers/provider-login-refusal";
+import { providerLoginRetryLabel } from "@/lib/providers/provider-login-retry-label";
 import { CodePasteField, CodePasteRestartNotice } from "./code-paste-field";
 import { SignInCopyIconButton } from "./sign-in-copy-icon-button";
 import {
@@ -345,6 +351,7 @@ export function AddProviderProfileDialog({
           ) : null}
 
           <AddProfileAccountSection
+            providerId={state.providerId}
             flowState={flow.state}
             loginCapability={state.loginCapability}
             isLocalHost={isLocalHost}
@@ -423,6 +430,7 @@ export function AddProviderProfileDialog({
 }
 
 function AddProfileAccountSection({
+  providerId,
   flowState,
   loginCapability,
   isLocalHost,
@@ -445,6 +453,7 @@ function AddProfileAccountSection({
   onRetryLogin,
   onRetryFinalize,
 }: {
+  readonly providerId: ProviderCliState["providerId"];
   readonly flowState: ProviderProfileLoginFlowState;
   readonly loginCapability: ProviderCliState["loginCapability"] | null;
   readonly isLocalHost: boolean;
@@ -519,7 +528,9 @@ function AddProfileAccountSection({
   if (flowState.kind === "failed") {
     return (
       <AddProfileFailureStep
+        providerId={providerId}
         message={flowState.message}
+        refusal={flowState.refusal}
         onCancel={onCancel}
         onRetry={onRetryLogin}
       />
@@ -554,7 +565,9 @@ function AddProfileAccountSection({
   if (finalizeError !== null) {
     return (
       <AddProfileFailureStep
+        providerId={providerId}
         message="The account was linked, but the profile color could not be saved."
+        refusal={null}
         onCancel={onCancel}
         onRetry={onRetryFinalize}
       />
@@ -895,11 +908,15 @@ export function AddProfileIdentityStep({
 }
 
 function AddProfileFailureStep({
+  providerId,
   message,
+  refusal,
   onCancel,
   onRetry,
 }: {
+  readonly providerId: ProviderCliState["providerId"];
   readonly message: string;
+  readonly refusal: ProviderLoginRefusal | null;
   readonly onCancel: () => void;
   readonly onRetry: () => void;
 }): ReactNode {
@@ -907,14 +924,22 @@ function AddProfileFailureStep({
     <div className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-ui-sm text-destructive">
       <div className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-        <span>{message}</span>
+        {refusal === null ? (
+          <span>{message}</span>
+        ) : (
+          <ProviderLoginRefusalMessage
+            providerId={providerId}
+            refusal={refusal}
+          />
+        )}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
           Cancel
         </Button>
+        <ProviderLoginRefusalAction refusal={refusal} />
         <Button type="button" size="sm" variant="secondary" onClick={onRetry}>
-          Retry
+          {providerLoginRetryLabel(refusal, "Retry")}
         </Button>
         <ReportIssueAction
           context={createReportIssueContext({

@@ -1028,6 +1028,7 @@ import {
   providersAwaitLoginResponseSchema,
   providersAwaitLoginResponseSchemaV10,
   providersAwaitLoginResponseSchemaV20,
+  providersAwaitLoginResponseSchemaV21,
   providersCancelLoginRequestSchemaV10,
   providersAwaitMcpAuthRequestSchema,
   providersAwaitMcpAuthResponseSchema,
@@ -3731,7 +3732,7 @@ export const providersAwaitLoginV21 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 2, minor: 1 } as const,
   requestSchema: providersAwaitLoginRequestSchema,
-  responseSchema: providersAwaitLoginResponseSchema,
+  responseSchema: providersAwaitLoginResponseSchemaV21,
 });
 
 export const providersAwaitLoginUpgradeV20ToV21 = defineUpgradePath<
@@ -3758,6 +3759,29 @@ export const providersAwaitLoginUpgradeV20ToV21 = defineUpgradePath<
     existingProfileId: null,
     codeRejected: false,
   }),
+});
+
+// v2.2 adds `refusal` to the response: the provider turned the sign-in away
+// after the browser leg, in its own words, with the link it sends the user to.
+// A key a v2.1 caller has never heard of is dropped by that caller's own
+// parse, and the host answers a refusal with a null `state`, which a v2.1
+// caller already reads as "the sign-in did not complete".
+export const providersAwaitLoginV22 = defineRpcContract({
+  method: "providers.awaitLogin",
+  schemaVersion: { major: 2, minor: 2 } as const,
+  requestSchema: providersAwaitLoginRequestSchema,
+  responseSchema: providersAwaitLoginResponseSchema,
+});
+
+export const providersAwaitLoginUpgradeV21ToV22 = defineUpgradePath<
+  typeof providersAwaitLoginV21,
+  typeof providersAwaitLoginV22
+>({
+  from: { major: 2, minor: 1 },
+  to: { major: 2, minor: 2 },
+  upgradeRequest: (request) => request,
+  // A v2.1 host never read the provider's refusal, so it has none to report.
+  upgradeResponse: (response) => ({ ...response, refusal: null }),
 });
 
 export const providersAwaitLoginDowngradeV21ToV20 = defineDowngradePath<
@@ -3787,11 +3811,11 @@ export const providersAwaitLoginDowngradeV21ToV20 = defineDowngradePath<
   },
 });
 
-export const providersAwaitLoginDowngradeV21ToV10 = defineDowngradePath<
-  typeof providersAwaitLoginV21,
+export const providersAwaitLoginDowngradeV22ToV10 = defineDowngradePath<
+  typeof providersAwaitLoginV22,
   typeof providersAwaitLoginV10
 >({
-  from: { major: 2, minor: 1 },
+  from: { major: 2, minor: 2 },
   to: { major: 1, minor: 0 },
   // Drop `profileId` before the parse: `providersAwaitLoginRequestSchemaV10`
   // is a strict object that never learned it, so passing the full request
@@ -10568,7 +10592,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: providersAwaitLoginV20,
@@ -10578,9 +10602,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersAwaitLoginV21,
           upgradeFromPreviousVersion: providersAwaitLoginUpgradeV20ToV21,
         },
+        2: {
+          contract: providersAwaitLoginV22,
+          upgradeFromPreviousVersion: providersAwaitLoginUpgradeV21ToV22,
+        },
       },
       downgradePathsFromLatest: {
-        1: providersAwaitLoginDowngradeV21ToV10,
+        1: providersAwaitLoginDowngradeV22ToV10,
       },
     },
   },
