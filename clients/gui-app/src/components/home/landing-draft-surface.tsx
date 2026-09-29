@@ -130,7 +130,14 @@ export function LandingDraftSurface() {
       // composer sheet (`composer-shell.tsx`) relies on that being true on
       // both surfaces that mount it. Nothing else in here positions against
       // the viewport; the overlays that do are portalled out.
-      className="relative flex min-h-0 flex-1 overflow-hidden bg-background text-foreground contain-layout"
+      //
+      // `overflow-clip`, never `overflow-hidden`: the collapsed terminal panel
+      // keeps its open width parked past this row's right edge
+      // (`landingTerminalPanelStyle`). `hidden` would still make the row a
+      // scroll container, so anything that scrolls an element inside that
+      // panel into view (its tab strip does on mount) would scroll the whole
+      // page sideways and leave a blank band where the panel sits.
+      className="relative flex min-h-0 flex-1 overflow-clip bg-background text-foreground contain-layout"
       data-primary-focus-scope="true"
       data-testid="landing-draft-surface"
     >
@@ -138,7 +145,7 @@ export function LandingDraftSurface() {
           auto track's minimum is its items' min-content, so the composer
           toolbar's intrinsic width would lock the whole column wider than a
           narrow viewport (or the space left beside the terminal panel) and
-          the outer overflow-hidden would clip the right edge instead of
+          the outer overflow-clip would clip the right edge instead of
           letting content reflow. */}
       {/* Row 2 bottom-aligns the hero and row 3 top-anchors the composer, so
           the boundary between them is where the pair sits. An even 1fr/1fr
