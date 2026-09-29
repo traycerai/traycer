@@ -75,10 +75,12 @@ function hasPrepareElectronBinary(
 }
 
 /**
- * Runs `work` holding an exclusive directory lock. On macOS the first call of
- * `prepareElectronBinary` builds a signed dev bundle in the desktop package,
- * which two workers must not do at once; once the bundle is current it
- * returns at once and the lock is only ever held for an instant.
+ * Runs `work` holding an exclusive directory lock, so two workers never
+ * prepare the Electron binary at once. Two first calls race in two places:
+ * `require("electron")` downloads the binary when it is missing (every fresh
+ * CI runner, since bun runs no postinstall) into the package's own `dist/`,
+ * and on macOS `prepareElectronBinary` then builds a signed dev bundle in the
+ * desktop package. Once both are current the lock is held for an instant.
  */
 async function withDirectoryLock<T>(
   lockPath: string,
@@ -106,13 +108,9 @@ async function electronBinary(): Promise<string> {
   const requireFromDesktop = createRequire(
     path.join(DESKTOP_ROOT, "package.json"),
   );
-  const defaultBinary: unknown = requireFromDesktop("electron");
   const helpers: unknown = requireFromDesktop(
     "./scripts/dev/electron-binary.cjs",
   );
-  if (typeof defaultBinary !== "string") {
-    throw new Error("the desktop package's electron did not resolve to a path");
-  }
   if (!hasPrepareElectronBinary(helpers)) {
     throw new Error(
       "electron-binary.cjs does not export prepareElectronBinary",
@@ -120,12 +118,23 @@ async function electronBinary(): Promise<string> {
   }
   return withDirectoryLock(
     path.join(tmpdir(), "traycer-tree-zoom-electron-prepare.lock"),
-    () =>
-      helpers.prepareElectronBinary(
+    () => {
+      // Inside the lock: resolving `electron` is what downloads a missing
+      // binary. Two workers doing that at once on a fresh runner left one
+      // launching a half-written binary ("Electron exited before it was
+      // ready"); here the second finds it complete.
+      const defaultBinary: unknown = requireFromDesktop("electron");
+      if (typeof defaultBinary !== "string") {
+        throw new Error(
+          "the desktop package's electron did not resolve to a path",
+        );
+      }
+      return helpers.prepareElectronBinary(
         defaultBinary,
         DESKTOP_ROOT,
         "Traycer Tree Zoom Test",
-      ),
+      );
+    },
   );
 }
 
