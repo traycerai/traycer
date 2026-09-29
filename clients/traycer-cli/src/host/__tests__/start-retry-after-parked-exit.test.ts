@@ -86,12 +86,25 @@ vi.mock("node:os", async (importOriginal) => {
 // every wait in this file runs on the REAL clock, just against a much
 // smaller ack-wait budget, so ordering is whatever it would really be and
 // nothing needs advancing.
+// Targets the shared leaf directly, not this project's own
+// `../../service/spawn-edge-bounds` (a thin `export *` wrapper post-#2267
+// extraction): `publishHostStartAdoption`'s `waitForSpawn` reads
+// `HOST_START_ADOPTION_ACK_WAIT_MS` from
+// `@traycer-clients/shared/host-start-adoption/index.ts`'s own `"./spawn-
+// edge-bounds"` import - the SHARED file, a different module specifier than
+// the CLI wrapper - so mocking the wrapper alone would never shrink the
+// budget this test actually waits on.
 const ACK_WAIT_MS_FOR_TEST = vi.hoisted(() => 300);
-vi.mock("../../service/spawn-edge-bounds", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../service/spawn-edge-bounds")>();
-  return { ...actual, HOST_START_ADOPTION_ACK_WAIT_MS: ACK_WAIT_MS_FOR_TEST };
-});
+vi.mock(
+  "@traycer-clients/shared/host-start-adoption/spawn-edge-bounds",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-start-adoption/spawn-edge-bounds")
+      >();
+    return { ...actual, HOST_START_ADOPTION_ACK_WAIT_MS: ACK_WAIT_MS_FOR_TEST };
+  },
+);
 
 // `status()` reporting "running" is not, by itself, evidence a host is
 // positively serving - on Linux/Windows it is derived from pid metadata

@@ -1,3 +1,5 @@
+import { SpawnAcknowledgementTimeoutError } from "@traycer-clients/shared/host-start-adoption/spawn-acknowledgement-error";
+export { SpawnAcknowledgementTimeoutError } from "@traycer-clients/shared/host-start-adoption/spawn-acknowledgement-error";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { cliError, type CliError, type CliErrorCode } from "../runner/errors";
 import { didServiceRegistrationCommit } from "./cli-invocation-record";
@@ -169,12 +171,7 @@ export interface ServiceSpawnEdgeLease {
  * `startRetryingUnacknowledged` in `host/update-mutation.ts`) can tell it
  * from every other start failure.
  */
-export class SpawnAcknowledgementTimeoutError extends Error {
-  constructor() {
-    super("host-start supervisor did not acknowledge its spawn");
-    this.name = "SpawnAcknowledgementTimeoutError";
-  }
-}
+
 
 /**
  * Post-registration failures whose lease then waited the ack out in vain

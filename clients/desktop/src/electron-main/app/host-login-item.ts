@@ -327,6 +327,51 @@ async function probeLaunchdJobProcess(
   return "none";
 }
 
+/**
+ * Whether launchd has a job under either host label: the agent this app
+ * registers, or the CLI's own.
+ *
+ * The login item's status cannot answer this. It reads the BTM record, and a
+ * `launchctl bootout` of the agent unloads the job while the record still
+ * reads `enabled` - which is the state that sent the app's Restart to the CLI,
+ * where the relaunch had no loaded label to start (in-app report
+ * rpt_d761e0b00e2c400482ece24821a20920).
+ *
+ * `neither-loaded` only when launchd answered not-found for BOTH labels;
+ * `indeterminate` when either could not be asked and the other was not
+ * loaded. Callers act only on `neither-loaded`.
+ */
+export type HostLaunchdJobs = "neither-loaded" | "loaded" | "indeterminate";
+
+export async function readHostLaunchdJobs(): Promise<HostLaunchdJobs> {
+  let indeterminate = false;
+  for (const labelId of [HOST_AGENT_LABEL, CLI_HOST_LABEL]) {
+    const job = await probeLaunchdJobLoaded(labelId);
+    if (job === "loaded") return "loaded";
+    if (job === "indeterminate") indeterminate = true;
+  }
+  return indeterminate ? "indeterminate" : "neither-loaded";
+}
+
+/**
+ * Whether launchd has a job under `labelId` at all, running or not. `absent`
+ * only on launchctl's own not-found answer; an exit-0 print of any shape is a
+ * job launchd found.
+ */
+async function probeLaunchdJobLoaded(
+  labelId: string,
+): Promise<"absent" | "loaded" | "indeterminate"> {
+  if (typeof process.getuid !== "function") return "indeterminate";
+  let result: ProbeCommandResult;
+  try {
+    result = await runAgentPrint(`gui/${process.getuid()}/${labelId}`);
+  } catch {
+    return "indeterminate";
+  }
+  const probe = classifyLaunchctlPrintResult(result, null, labelId);
+  return probe.kind === "observed" ? "loaded" : probe.kind;
+}
+
 function readLoginItemStatus(serviceName: string): HostLoginItemStatus {
   const evidence = readLoginItemStatusEvidence(serviceName);
   if (evidence.kind === "read") return evidence.status;

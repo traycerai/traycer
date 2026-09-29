@@ -70,12 +70,25 @@ vi.mock("node:os", async (importOriginal) => {
 // `findLiveServiceSupervisor` this scenario also runs through use real
 // `setTimeout`-based polling of their own), just against a much smaller
 // budget.
+// Targets the shared leaf directly, not this project's own
+// `../../service/spawn-edge-bounds` (a thin `export *` wrapper post-#2267
+// extraction): `publishHostStartAdoption`'s `waitForSpawn` reads
+// `HOST_START_ADOPTION_ACK_WAIT_MS` from
+// `@traycer-clients/shared/host-start-adoption/index.ts`'s own `"./spawn-
+// edge-bounds"` import - the SHARED file, a different module specifier than
+// the CLI wrapper - so mocking the wrapper alone would never shrink the
+// budget this test actually waits on.
 const ACK_WAIT_MS_FOR_TEST = vi.hoisted(() => 300);
-vi.mock("../../service/spawn-edge-bounds", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../service/spawn-edge-bounds")>();
-  return { ...actual, HOST_START_ADOPTION_ACK_WAIT_MS: ACK_WAIT_MS_FOR_TEST };
-});
+vi.mock(
+  "@traycer-clients/shared/host-start-adoption/spawn-edge-bounds",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-start-adoption/spawn-edge-bounds")
+      >();
+    return { ...actual, HOST_START_ADOPTION_ACK_WAIT_MS: ACK_WAIT_MS_FOR_TEST };
+  },
+);
 
 // Switchable, exactly as `commands/__tests__/service-start.test.ts` and the
 // sibling file do, rather than standing up a real reachable endpoint.

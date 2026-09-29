@@ -61,6 +61,14 @@ vi.mock("../../app/host-login-item", () => ({
     kind: "no-takeover",
     reason: "primary-manageable",
   })),
+  // Not `"neither-loaded"`: this suite's controller is unmanaged
+  // (`hostManagesHostLoginItem` above is `false`), so `hasNoLaunchdJobToRestart`
+  // is already `false` on that ground alone - but `respawnIfDown`/`recoverIfDown`
+  // still read this export, and an unmocked one throws (`No "readHostLaunchdJobs"
+  // export is defined on the mock`) before that first check is ever reached.
+  // "loaded" keeps every tick on the pre-existing CLI-restart route these tests
+  // assert on, the same route an un-mocked real launchd answer would also take.
+  readHostLaunchdJobs: vi.fn(async () => "loaded"),
 }));
 
 vi.mock("../../host/host-readiness", async (importOriginal) => {
