@@ -411,6 +411,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
         : [devHostEndpoint(config.devHost.host.label)]),
       ...(bundledDevelopment ? bundledBuildReload() : []),
       tanstackRouter({
+        enableRouteGeneration: false,
         target: "react",
         quoteStyle: "double",
         semicolons: true,
