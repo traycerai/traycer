@@ -10,6 +10,7 @@ import { prereleaseUpdatesEnabled } from "../app/update-preferences";
 import {
   hasUnappliedPendingLoginItemRevision,
   hostManagesHostLoginItem,
+  readHostLaunchdJobs,
   readHostLoginItemStatus,
   readParkedRegistrationTakeover,
   type HostLoginItemStatus,
@@ -4930,10 +4931,12 @@ export class HostController {
         // The flag moves the parked-activation decision INSIDE the command's
         // own contender lock, so it is made from the record as it stands when
         // the action runs rather than from a snapshot taken here beforehand.
-        const recovery = await this.runCliRecoveryServiceCycle(
-          ["host", "restart", "--force", "--defer-if-parked"],
-          prePid,
-        );
+        const recovery = (await this.hasNoLaunchdJobToRestart())
+          ? await this.registerAgentInsteadOfRestart()
+          : await this.runCliRecoveryServiceCycle(
+              ["host", "restart", "--force", "--defer-if-parked"],
+              prePid,
+            );
         // Only a completed relaunch satisfies later-submitted respawns. A
         // parked-activation safe-stop, busy result, or failure leaves the
         // queued caller's restart request outstanding.
@@ -4981,6 +4984,9 @@ export class HostController {
         if (await isHostRemovedByUser()) {
           return { kind: "deferred", message: HOST_REMOVED_BY_USER_MESSAGE };
         }
+        if (await this.hasNoLaunchdJobToRestart()) {
+          return this.registerAgentInsteadOfRestart();
+        }
         // The CLI attests the committed install record while it owns the
         // restart lock. Desktop only contributes its pre-cycle pid, then
         // stamps against that command result after readiness.
@@ -4995,6 +5001,63 @@ export class HostController {
         );
       },
     );
+  }
+
+  /**
+   * Whether a restart here has no launchd job to restart: packaged macOS, no
+   * host serving, and launchd answered not-found for BOTH host labels - the
+   * agent this app registers was booted out by hand, or its registration went
+   * missing. Every other answer, an unanswerable probe included, is `false`,
+   * and the caller restarts through the CLI exactly as before.
+   *
+   * The CLI cannot restart a host in this state. Its relaunch starts whichever
+   * label launchd has loaded, and with neither loaded it can only fail: in-app
+   * report rpt_d761e0b00e2c400482ece24821a20920 is Restart failing on
+   * `ai.traycer.host`, a label that machine never had, after its agent was
+   * booted out. The login item's status cannot see this either - a bootout
+   * leaves it `enabled` - which is why launchd itself is asked.
+   */
+  private async hasNoLaunchdJobToRestart(): Promise<boolean> {
+    if (!(await this.isPackagedMacOwned())) return false;
+    if (
+      (await readReachableHostIdentity(this.layout, this.reachabilityProbe)) !==
+      null
+    ) {
+      return false;
+    }
+    return (await readHostLaunchdJobs()) === "neither-loaded";
+  }
+
+  /**
+   * The restart for a machine `hasNoLaunchdJobToRestart` describes: register
+   * the login item again, which loads the agent and starts a host. That is what
+   * `respawn`, `recoverIfDown` and `freePortAndRestart` did on packaged macOS
+   * before they moved to the CLI for parked updates (#1480), and the register
+   * cycle still honours what that move protects: its
+   * `desktop-activation-maintenance` admission refuses while an update attempt
+   * is active or parked, under the same lock the CLI's `--defer-if-parked`
+   * reads.
+   *
+   * The login item's status is read first. One the user switched off in
+   * System Settings reads `requires-approval` and launchd unloads its agent,
+   * which is this same state; turning it back on is theirs to do, so that is
+   * reported with the approval guidance and nothing is registered.
+   */
+  private async registerAgentInsteadOfRestart(): Promise<
+    MutationOutcome<ActivateInstalledOk>
+  > {
+    const loginItemStatus = readHostLoginItemStatus();
+    if (loginItemStatus === "requires-approval") {
+      log.warn(
+        "[host-controller] restart found no host label loaded in launchd and the login item requires approval in System Settings - not registering it",
+      );
+      return this.failedAfterServiceCycle(approvalRequiredMessage());
+    }
+    log.warn(
+      "[host-controller] restart found no host running and no host label loaded in launchd - registering the login item again instead of restarting through the CLI",
+      { loginItemStatus },
+    );
+    return this.runLockedMacActivationCycle(true, "retry-with-force", false);
   }
 
   // ---- freePortAndRestart --------------------------------------------------
@@ -5026,6 +5089,30 @@ export class HostController {
         // frees a port some other process may now hold.
         const abandoned = await this.runLaneHeadGuard(intent);
         if (abandoned !== null) return abandoned;
+        if (await this.hasNoLaunchdJobToRestart()) {
+          // The command below frees the port and then restarts, and with no
+          // job loaded its restart half has nothing to start. So the port is
+          // freed on its own - the half-repair `host free-port` exists for -
+          // and the agent is registered again to bring the host up.
+          if (pid !== null && port !== null) {
+            try {
+              await this.runBundled<unknown>([
+                "host",
+                "free-port",
+                "--pid",
+                String(pid),
+                "--port",
+                String(port),
+              ]);
+            } catch (err) {
+              return this.classifyMutationSubprocessError(
+                err,
+                "retry-with-force",
+              );
+            }
+          }
+          return this.registerAgentInsteadOfRestart();
+        }
         // The port repair reaches the identical `stop-only` branch, so it is
         // the same stop-without-relaunch hazard by another entry point.
         const args = ["host", "free-port-and-restart", "--defer-if-parked"];
