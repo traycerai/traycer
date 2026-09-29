@@ -125,12 +125,22 @@ afterEach(async () => {
 });
 
 /**
- * Local-identity re-reads go through real `fs.readFile` (libuv I/O, not just
- * a microtask), so a couple of `Promise.resolve()` turns are not enough to
- * observe their completion. A real macrotask tick is.
+ * The first snapshot `fleet` publishes that satisfies `matches`. A local-host
+ * change republishes only after a real `fs.readFile` of the enrollment file
+ * (libuv I/O), so no fixed tick bounds when it lands; waiting on the publish
+ * itself is exact under any load. Subscribe BEFORE triggering the change.
  */
-function flushIo(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 10));
+function nextSnapshotWhere(
+  fleet: DesktopHostFleetSource,
+  matches: (snapshot: HostFleetSnapshot) => boolean,
+): Promise<HostFleetSnapshot> {
+  return new Promise((resolve) => {
+    const subscription = fleet.onChanged((snapshot) => {
+      if (!matches(snapshot)) return;
+      subscription.dispose();
+      resolve(snapshot);
+    });
+  });
 }
 
 /**
@@ -157,10 +167,9 @@ function flushIo(): Promise<void> {
  * Per-call deferreds (so no call can be mistaken for another) plus a start
  * signal per call, so a test can WAIT for the fact it needs - "refresh #1 is
  * now inside the fetch" - instead of assuming it. The signal is resolved from
- * inside the double itself, so it is exact under any load. `flushIo`'s 10ms
- * sleep is the weaker form of the same barrier and is deliberately not used
- * for this: a sleep long enough today is a sleep too short on a busier
- * machine.
+ * inside the double itself, so it is exact under any load. A fixed sleep is
+ * the weaker form of the same barrier and is deliberately not used for this:
+ * a sleep long enough today is a sleep too short on a busier machine.
  */
 function recordingRegistryFetch(): {
   readonly fetch: () => Promise<HostListFetchResult>;
@@ -792,8 +801,12 @@ describe("DesktopHostFleetSource", () => {
       JSON.stringify({ hostId: "local-b" }),
       "utf8",
     );
+    const republished = nextSnapshotWhere(
+      fleet,
+      (snapshot) => snapshot.localHostId === "local-b",
+    );
     host.emitChange();
-    await flushIo();
+    await republished;
 
     const finalSnapshot = snapshots.at(-1);
     expect(finalSnapshot?.identityGeneration).toBe(1);
@@ -871,8 +884,12 @@ describe("DesktopHostFleetSource", () => {
       JSON.stringify({ hostId: "local-b" }),
       "utf8",
     );
+    const republished = nextSnapshotWhere(
+      fleet,
+      (snapshot) => snapshot.localHostId === "local-b",
+    );
     host.emitChange();
-    await flushIo();
+    await republished;
 
     // The republish must carry B's cached membership, NOT the late A
     // completion that resolved after it. If the port's own cache had
@@ -1253,19 +1270,22 @@ describe("DesktopHostFleetSource", () => {
         resolve();
       };
     });
+    const fetchStarted = deferred<void>();
     const fleet = buildFleetSource({
       identity,
       authSession,
       host,
       listRegisteredHosts: async () => {
+        fetchStarted.resolve();
         await fetchGate;
         return { kind: "ok", response: { hosts: [] } };
       },
     });
 
-    // In flight, having already read `local-host-1`.
+    // In flight, having already read `local-host-1`: `refresh` reads the id
+    // before it fetches, so a started fetch proves the read is done.
     const refreshing = fleet.refresh();
-    await flushIo();
+    await fetchStarted.promise;
 
     // The machine re-enrolls while that fetch is outstanding.
     await writeFile(
@@ -1273,13 +1293,16 @@ describe("DesktopHostFleetSource", () => {
       JSON.stringify({ hostId: "local-host-2" }),
       "utf8",
     );
+    const republished = nextSnapshotWhere(
+      fleet,
+      (snapshot) => snapshot.localHostId === "local-host-2",
+    );
     host.emitChange();
-    await flushIo();
+    await republished;
     expect(fleet.snapshot().localHostId).toBe("local-host-2");
 
     releaseFetch();
     await refreshing;
-    await flushIo();
 
     // The older refresh still adopts its ROWS; only its stale id is declined.
     expect(fleet.snapshot().localHostId).toBe("local-host-2");
