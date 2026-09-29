@@ -83,32 +83,34 @@ function StatusPill(props: {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          disabled={updateStatus.isPending || !epicId}
-          data-testid="status-pill"
-          // muted-fill-ok: tile chrome on bg-canvas, no bg-card ancestor; --canvas never equals --muted
-          className="inline-flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2.5 py-1 text-ui-xs text-muted-foreground transition-colors hover:bg-muted/60 disabled:opacity-50"
-        >
-          {updateStatus.isPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : (
-            <span className={cn("size-2 rounded-full", current.dotClass)} />
-          )}
-          {current.label}
-        </button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            disabled={updateStatus.isPending || !epicId}
+            data-testid="status-pill"
+            // muted-fill-ok: tile chrome on bg-canvas, no bg-card ancestor; --canvas never equals --muted
+            className="inline-flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2.5 py-1 text-ui-xs text-muted-foreground transition-colors hover:bg-muted/60 disabled:opacity-50"
+          >
+            {updateStatus.isPending ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : (
+              <span className={cn("size-2 rounded-full", current.dotClass)} />
+            )}
+            {current.label}
+          </button>
+        }
+      />
       <DropdownMenuContent align="start" data-testid="status-pill-menu">
         {STATUS_OPTIONS.map((option) => (
           <DropdownMenuItem
             key={option.value}
             data-testid={`status-option-${option.value}`}
-            onSelect={() => {
+            onClick={() => {
               if (option.value === currentStatus) return;
               updateStatus.mutate({
                 epicId,

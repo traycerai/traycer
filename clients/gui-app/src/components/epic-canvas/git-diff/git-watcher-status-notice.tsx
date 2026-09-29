@@ -84,22 +84,28 @@ export function GitWatcherStatusNotice(props: GitWatcherStatusNoticeProps) {
           box, the focus ring and the type are the design system's - while
           `cursor-default` says this particular button does nothing when
           pressed; it exists to be hovered and focused. */}
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="muted"
-          size="xs"
-          className={cn("shrink-0 cursor-default select-none", props.className)}
-          data-testid="git-watcher-status-notice"
-          data-watcher-state={status.state}
-          // Carries the label when the text is not rendered, so the compact
-          // form is not an unnamed button to assistive tech.
-          aria-label={props.compact ? copy.label : undefined}
-        >
-          <Icon className="size-3.5 text-muted-foreground/60" />
-          {props.compact ? null : copy.label}
-        </Button>
-      </TooltipTrigger>
+
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            variant="muted"
+            size="xs"
+            className={cn(
+              "shrink-0 cursor-default select-none",
+              props.className,
+            )}
+            data-testid="git-watcher-status-notice"
+            data-watcher-state={status.state}
+            // Carries the label when the text is not rendered, so the compact
+            // form is not an unnamed button to assistive tech.
+            aria-label={props.compact ? copy.label : undefined}
+          >
+            <Icon className="size-3.5 text-muted-foreground/60" />
+            {props.compact ? null : copy.label}
+          </Button>
+        }
+      />
       {/* No width cap here: `TooltipContent` already applies `w-fit max-w-xs`,
           so this was a redundant restatement of the primitive's own value.
           Whether that cap should be viewport-bounded is a question about the

@@ -1,11 +1,11 @@
-import { Activity, memo, type ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { PlanRestrictedUpgradeAction } from "@/components/settings/host-scope/plan-restricted-upgrade-action";
-import { PortalConcealmentProvider } from "@/components/ui/portal-concealment-context";
+import { PortalConcealmentBoundary } from "@/components/ui/portal-concealment-context";
 import {
   PLAN_RESTRICTED_MOBILE_DETAIL,
   planRestrictedMobileTitle,
@@ -129,17 +129,11 @@ export function HostScopeGate(props: {
   return (
     <>
       {notice}
-      <Activity key={scope.host.hostId} mode={usable ? "visible" : "hidden"}>
-        {/* The provider sits INSIDE the Activity but OUTSIDE the freeze:
-            context, unlike props, must keep flowing while the subtree is
-            frozen, so portal surfaces learn they are concealed (their DOM
-            escapes the Activity's own styling — see the context's docs). */}
-        <PortalConcealmentProvider value={!usable}>
-          <FrozenWhileConcealed usable={usable}>
-            {props.children}
-          </FrozenWhileConcealed>
-        </PortalConcealmentProvider>
-      </Activity>
+      <PortalConcealmentBoundary key={scope.host.hostId} concealed={!usable}>
+        <FrozenWhileConcealed usable={usable}>
+          {props.children}
+        </FrozenWhileConcealed>
+      </PortalConcealmentBoundary>
     </>
   );
 }

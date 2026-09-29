@@ -68,42 +68,54 @@ export function NotificationFilterMenu(
     props.categories.size === ALL_NOTIFICATION_CATEGORIES.size;
 
   return (
-    <DropdownMenu onOpenChange={props.onOpenChange}>
+    <DropdownMenu
+      onOpenChange={(next, details) => {
+        if (
+          !next &&
+          details.reason === "outside-press" &&
+          details.event instanceof MouseEvent
+        ) {
+          props.onPointerDownOutside({
+            clientX: details.event.clientX,
+            clientY: details.event.clientY,
+          });
+        }
+        props.onOpenChange(next);
+      }}
+    >
       <TooltipWrapper label="Filter" side="bottom" sideOffset={6} align="end">
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="muted"
-            size="icon-sm"
-            data-testid="notifications-filter-trigger"
-            aria-label="Filter notifications"
-            className="relative"
-          >
-            <ListFilter className="size-3.5" aria-hidden />
-            {!isDefault && (
-              <span
-                aria-hidden
-                data-testid="notifications-filter-active-dot"
-                className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary"
-              />
-            )}
-          </Button>
-        </DropdownMenuTrigger>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="muted"
+              size="icon-sm"
+              data-testid="notifications-filter-trigger"
+              aria-label="Filter notifications"
+              className="relative"
+            >
+              <ListFilter className="size-3.5" aria-hidden />
+              {!isDefault && (
+                <span
+                  aria-hidden
+                  data-testid="notifications-filter-active-dot"
+                  className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary"
+                />
+              )}
+            </Button>
+          }
+        />
       </TooltipWrapper>
       <DropdownMenuContent
         align="end"
         data-testid="notifications-filter-menu"
         className="w-52"
-        onPointerDownOutside={(event) => {
-          const { clientX, clientY } = event.detail.originalEvent;
-          props.onPointerDownOutside({ clientX, clientY });
-        }}
       >
         <DropdownMenuCheckboxItem
           checked={props.unreadOnly}
           onCheckedChange={props.onUnreadOnlyChange}
-          onSelect={(event) => event.preventDefault()}
           data-testid="notifications-filter-unread-only"
+          closeOnClick={false}
         >
           Unread only
         </DropdownMenuCheckboxItem>
@@ -114,8 +126,8 @@ export function NotificationFilterMenu(
             key={category}
             checked={props.categories.has(category)}
             onCheckedChange={() => props.onToggleCategory(category)}
-            onSelect={(event) => event.preventDefault()}
             data-testid={`notifications-filter-category-${category}`}
+            closeOnClick={false}
           >
             {CATEGORY_LABEL[category]}
           </DropdownMenuCheckboxItem>

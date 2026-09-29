@@ -41,7 +41,6 @@ import {
 } from "@/components/ui/tooltip";
 import { useEpicPinLocalHomeSupported } from "@/hooks/epic/use-epic-pin-local-home-support";
 import {
-  closeOpenTooltips,
   StatusGlyphFocusContext,
   useStatusGlyphFocusHold,
 } from "@/components/notifications/status-glyph-focus";
@@ -123,7 +122,6 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
       event.target.matches(ROW_TARGET_SELECTOR) &&
       !event.target.hasAttribute(ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE);
     focusSessionRef.current += 1;
-    if (keyboardFocused) closeOpenTooltips(event.currentTarget.ownerDocument);
     setRowFocusSession(keyboardFocused ? focusSessionRef.current : null);
   }, []);
   const onRowBlur = useCallback(() => {
@@ -226,10 +224,8 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
         rowCard
       ) : (
         <ContextMenu>
-          <ContextMenuTrigger asChild>{rowCard}</ContextMenuTrigger>
-          <ContextMenuContent
-            onCloseAutoFocus={(event) => event.preventDefault()}
-          >
+          <ContextMenuTrigger render={rowCard} />
+          <ContextMenuContent finalFocus={false}>
             {props.contextMenuItems}
             {props.openInNewWindowControl}
             {props.sweepMenuItem}
@@ -290,7 +286,7 @@ function HistoryRowTrailingMetadata(props: {
           worktrees={props.worktrees}
           detailOnHover
           maximumVisible={1}
-          className="pointer-events-none col-start-1 row-start-1 justify-end overflow-hidden opacity-0 md:w-0 md:min-w-full transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100 has-data-[state=open]:pointer-events-auto has-data-[state=open]:opacity-100 max-md:pointer-events-auto max-md:max-w-full max-md:opacity-100"
+          className="pointer-events-none col-start-1 row-start-1 justify-end overflow-hidden opacity-0 md:w-0 md:min-w-full transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100 has-data-popup-open:pointer-events-auto has-data-popup-open:opacity-100 max-md:pointer-events-auto max-md:max-w-full max-md:opacity-100"
           testId={`task-history-prs-${props.epicId}`}
           openPrInApp={null}
         />
@@ -348,33 +344,35 @@ function HistoryPinControl(props: {
       : historyPinUnavailableTooltip(unavailableReason);
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={label}
-          aria-pressed={props.item.isPinned}
-          data-testid="epics-list-row-pin"
-          data-local-home-pin-unavailable={pinUnavailable || undefined}
-          aria-disabled={pinUnavailable || undefined}
-          disabled={props.isPending}
-          className={cn(
-            "pointer-events-auto flex size-5 shrink-0 items-center justify-center rounded-sm outline-none transition-[color,opacity] hover:bg-foreground/5 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-wait",
-            historyPinClassName({
-              pinUnavailable,
-              isPinned: props.item.isPinned,
-              alwaysVisible: props.alwaysVisible,
-            }),
-          )}
-          onClick={() => {
-            if (pinUnavailable) return;
-            props.onSetPinned(props.item.epicId, !props.item.isPinned);
-          }}
-        >
-          <Pin
-            className={cn("size-3.5", props.item.isPinned && "fill-current")}
-          />
-        </button>
-      </TooltipTrigger>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label={label}
+            aria-pressed={props.item.isPinned}
+            data-testid="epics-list-row-pin"
+            data-local-home-pin-unavailable={pinUnavailable || undefined}
+            aria-disabled={pinUnavailable || undefined}
+            disabled={props.isPending}
+            className={cn(
+              "pointer-events-auto flex size-5 shrink-0 items-center justify-center rounded-sm outline-none transition-[color,opacity] hover:bg-foreground/5 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-wait",
+              historyPinClassName({
+                pinUnavailable,
+                isPinned: props.item.isPinned,
+                alwaysVisible: props.alwaysVisible,
+              }),
+            )}
+            onClick={() => {
+              if (pinUnavailable) return;
+              props.onSetPinned(props.item.epicId, !props.item.isPinned);
+            }}
+          >
+            <Pin
+              className={cn("size-3.5", props.item.isPinned && "fill-current")}
+            />
+          </button>
+        }
+      />
       <TooltipContent>{unavailableTooltip ?? label}</TooltipContent>
     </Tooltip>
   );

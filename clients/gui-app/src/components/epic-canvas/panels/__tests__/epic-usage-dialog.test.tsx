@@ -334,8 +334,8 @@ describe("<EpicUsageDialog />", () => {
       epicId: "epic-1",
     });
     expect(
-      screen.getByTestId("usage-window-7").getAttribute("data-state"),
-    ).toBe("active");
+      screen.getByTestId("usage-window-7").hasAttribute("data-active"),
+    ).toBe(true);
   });
 
   it("renders the headline and the by-chat breakdown once open", async () => {
@@ -435,8 +435,8 @@ describe("<EpicUsageDialog />", () => {
       });
     });
     expect(
-      screen.getByTestId("usage-window-90").getAttribute("data-state"),
-    ).toBe("active");
+      screen.getByTestId("usage-window-90").hasAttribute("data-active"),
+    ).toBe(true);
 
     // A 90-day empty offers none - a chip that re-requests the current
     // window would be a broken control.

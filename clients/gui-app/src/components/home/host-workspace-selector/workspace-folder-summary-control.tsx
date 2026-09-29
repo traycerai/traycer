@@ -1,13 +1,15 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   type ReactNode,
+  type ReactElement,
 } from "react";
 import { FolderPlus } from "lucide-react";
 import { FirstTaskWorkspaceSetup } from "@/components/onboarding/first-task-workspace-setup";
-import { Slot } from "radix-ui";
+import { useRender } from "@base-ui/react/use-render";
 import {
   Popover,
   PopoverContent,
@@ -26,7 +28,7 @@ import type { WorktreeWorkspacesRefresh } from "@/hooks/worktree/use-worktree-wo
 import { isEditableEventTarget } from "@/lib/keybindings/editable-target";
 import { useBareKeyClaimer } from "@/lib/keybindings/use-bare-key-claimer";
 import { useCompactRelativeTime } from "@/lib/relative-time";
-import { preserveWhenNestedOverlay } from "./preserve-when-nested-overlay";
+import { isNestedOverlayTarget } from "./preserve-when-nested-overlay";
 import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
 import {
   ADD_FOLDER_LABEL,
@@ -173,6 +175,9 @@ export function WorkspaceFolderSummaryControl(props: {
   // the context reads wide, so the word stays.
   const iconOnly = useIsComposerNarrow();
   const [popoverOpen, setPopoverOpen] = useState(false);
+  // Both faces own the same Base trigger, including while an add is pending.
+  // A replacement with this id takes over anchoring, ARIA and focus return.
+  const triggerId = useId();
   const preview = useWorkspaceFolderPreviewReveal();
   const refreshUi = useWorkspaceRefreshUi(props.refresh);
   const triggerRefresh = refreshUi.triggerRefresh;
@@ -250,31 +255,7 @@ export function WorkspaceFolderSummaryControl(props: {
     setPopoverOpen(false);
   };
 
-  if (props.readOnly) {
-    return (
-      <WorkspaceSummaryTrigger
-        items={props.items}
-        readOnly
-        bindingResolved={props.bindingResolved}
-        draftPending={props.draftPending === true}
-        className="max-w-full"
-      />
-    );
-  }
-
   const emptyRecentTrigger = itemCount === 0 && props.bindingResolved;
-  if (emptyRecentTrigger && props.recentWorkspaceCount === 0) {
-    return (
-      <AddFolderButton
-        onAddFolder={handleExternalAddFolder}
-        pending={props.addFolderPending}
-        disabled={props.addFolderDisabled}
-        disabledReason={props.addFolderDisabledReason}
-        iconOnly={iconOnly}
-      />
-    );
-  }
-
   const emptyRecentDisabled = props.addFolderPending || props.addFolderDisabled;
   const trigger = emptyRecentTrigger ? (
     <button
@@ -298,9 +279,38 @@ export function WorkspaceFolderSummaryControl(props: {
       className="justify-start overflow-hidden"
     />
   );
+  const previewTrigger = useRender({
+    render: trigger,
+    props: { ...preview.triggerProps },
+  });
+  if (props.readOnly) {
+    return (
+      <WorkspaceSummaryTrigger
+        items={props.items}
+        readOnly
+        bindingResolved={props.bindingResolved}
+        draftPending={props.draftPending === true}
+        className="max-w-full"
+      />
+    );
+  }
+
+  if (emptyRecentTrigger && props.recentWorkspaceCount === 0) {
+    return (
+      <AddFolderButton
+        onAddFolder={handleExternalAddFolder}
+        pending={props.addFolderPending}
+        disabled={props.addFolderDisabled}
+        disabledReason={props.addFolderDisabledReason}
+        iconOnly={iconOnly}
+      />
+    );
+  }
+
   // Shut while the picker is open: the preview repeats what the picker shows.
   const popoverTrigger = emptyRecentTrigger ? (
     <EmptyRecentFolderTrigger
+      triggerId={triggerId}
       trigger={trigger}
       disabled={emptyRecentDisabled}
       disabledReason={
@@ -311,12 +321,9 @@ export function WorkspaceFolderSummaryControl(props: {
   ) : (
     <HoverCard
       trigger={
-        <PopoverTrigger asChild>
-          {/* Innermost, so the press guard runs BEFORE the popover's own open
-              handler and can prevent it - `Slot` composes a child's handler
-              ahead of the slot's. */}
-          <Slot.Root {...preview.triggerProps}>{trigger}</Slot.Root>
-        </PopoverTrigger>
+        // Innermost, so the press guard runs BEFORE the popover's own open
+        // handler and can cancel it (`preventBaseUIHandler`).
+        <PopoverTrigger id={triggerId} render={previewTrigger} />
       }
       content={<WorkspaceFolderHoverList items={props.items} />}
       appearance="preview"
@@ -362,8 +369,23 @@ export function WorkspaceFolderSummaryControl(props: {
   const picker = (
     <Popover
       open={popoverOpen}
-      onOpenChange={(open) => {
-        setPopoverOpen(open);
+      onOpenChange={(next, details) => {
+        if (
+          !next &&
+          (details.reason === "outside-press" ||
+            details.reason === "focus-out") &&
+          isNestedOverlayTarget(
+            details.reason === "focus-out" &&
+              details.event instanceof FocusEvent
+              ? details.event.relatedTarget
+              : details.event.target,
+            contentRef.current,
+          )
+        )
+          details.cancel();
+        if (details.isCanceled) return;
+
+        setPopoverOpen(next);
         // Opening the picker is an explicit intent edge - the user is about to
         // decide something per folder - so re-derive from disk once, here.
         // Without it the manual button would only ever repair a label the user
@@ -382,7 +404,7 @@ export function WorkspaceFolderSummaryControl(props: {
         // folder set whose host is unbound would reject into "Couldn't refresh
         // folder details" - an error toast the user never asked for, next to a
         // Refresh button correctly rendered disabled.
-        if (open && canRefresh) triggerRefresh();
+        if (next && canRefresh) triggerRefresh();
       }}
     >
       {popoverTrigger}
@@ -393,18 +415,15 @@ export function WorkspaceFolderSummaryControl(props: {
         align="start"
         collisionPadding={12}
         container={dialogBoundaryEl ?? undefined}
-        className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] overflow-hidden"
+        className="w-[min(92vw,42rem)] max-w-[var(--available-width)] max-h-[min(var(--available-height),32rem)] overflow-hidden"
         data-testid={props.popoverTestId}
-        onOpenAutoFocus={(event) => event.preventDefault()}
-        onCloseAutoFocus={(event) => {
-          if (!confirmingSetupRef.current) return;
+        initialFocus={false}
+        finalFocus={() => {
+          if (!confirmingSetupRef.current) return true;
           confirmingSetupRef.current = false;
-          event.preventDefault();
           props.onFirstTaskSetupComplete?.();
+          return false;
         }}
-        onInteractOutside={(event) =>
-          preserveWhenNestedOverlay(event, contentRef.current)
-        }
       >
         {/* Match the sidebar owner card's structure: the content owns the
             scroll, while the refresh row stays outside it. This keeps one
@@ -468,11 +487,19 @@ function EmptyRecentAddFolderContent(props: {
 }
 
 function EmptyRecentFolderTrigger(props: {
-  readonly trigger: ReactNode;
+  readonly triggerId: string;
+  readonly trigger: ReactElement;
   readonly disabled: boolean;
   readonly disabledReason: string | null;
   readonly iconOnly: boolean;
 }): ReactNode {
+  const trigger = (
+    <PopoverTrigger
+      id={props.triggerId}
+      disabled={props.disabled}
+      render={props.trigger}
+    />
+  );
   if (!props.disabled) {
     // An icon-only trigger names itself on hover; `null` renders no tooltip.
     return (
@@ -482,11 +509,11 @@ function EmptyRecentFolderTrigger(props: {
         sideOffset={undefined}
         align={undefined}
       >
-        <PopoverTrigger asChild>{props.trigger}</PopoverTrigger>
+        {trigger}
       </TooltipWrapper>
     );
   }
-  if (props.disabledReason === null) return props.trigger;
+  if (props.disabledReason === null) return trigger;
   return (
     <TooltipWrapper
       label={props.disabledReason}
@@ -498,7 +525,7 @@ function EmptyRecentFolderTrigger(props: {
         className="inline-flex w-fit"
         data-testid="folder-add-disabled-reason"
       >
-        {props.trigger}
+        {trigger}
       </span>
     </TooltipWrapper>
   );

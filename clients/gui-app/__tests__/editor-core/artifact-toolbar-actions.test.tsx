@@ -283,15 +283,9 @@ describe("ArtifactToolbar actions", () => {
     expect(names).not.toContain("Bold");
     expect(names).toContain("Formatting");
 
-    // The trigger is a `ToolbarActionButton` under `asChild`, so Radix merges
-    // its handlers and ref into that component and the component spreads them
-    // onto the real <button>. Opening the menu here is what proves the
-    // composition survives the tooltip wrapper: a trigger that never received
-    // Radix's props would sit inert and this would find no items.
-    fireEvent.pointerDown(
-      findButton(toolbar, "Formatting"),
-      new MouseEvent("pointerdown", { bubbles: true, button: 0 }),
-    );
+    // Base UI opens dropdown menus on click; opening it proves the trigger
+    // remains composed with the tooltip wrapper.
+    fireEvent.click(findButton(toolbar, "Formatting"));
     const menu = await screen.findByRole("menu", { hidden: true });
     const items = within(menu)
       .getAllByRole("menuitem", { hidden: true })

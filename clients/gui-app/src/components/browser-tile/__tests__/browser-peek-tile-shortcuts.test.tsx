@@ -1414,7 +1414,7 @@ describe("BrowserPeekTile address shortcut through the real KeybindingProvider",
     await flushMacrotask();
     const dialog = document.createElement("div");
     dialog.setAttribute("role", "dialog");
-    dialog.setAttribute("data-state", "open");
+    dialog.setAttribute("data-open", "");
     document.body.appendChild(dialog);
     document.body.focus();
 

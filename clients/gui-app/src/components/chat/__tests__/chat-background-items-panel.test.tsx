@@ -1022,7 +1022,7 @@ describe("<BackgroundItemsPanel />", () => {
     ]);
     try {
       render(
-        <TooltipProvider delayDuration={0}>
+        <TooltipProvider delay={0}>
           {panelElement({
             items: [],
             onItemClick: () => undefined,

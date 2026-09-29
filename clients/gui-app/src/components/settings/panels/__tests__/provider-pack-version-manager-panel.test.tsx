@@ -1423,7 +1423,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     const toggle = screen.getByRole("switch", {
       name: "Auto-download updates",
     });
-    expect(toggle.hasAttribute("disabled")).toBe(false);
+    expect(toggle.getAttribute("aria-disabled")).not.toBe("true");
 
     const checkButton = screen.getByRole("button", { name: CHECK_BUTTON_NAME });
     expect(checkButton.hasAttribute("disabled")).toBe(true);

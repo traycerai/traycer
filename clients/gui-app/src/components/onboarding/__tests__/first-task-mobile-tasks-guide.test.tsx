@@ -121,7 +121,7 @@ function mountTrigger(): HTMLElement {
  */
 const OPEN_SHEET: Readonly<Record<string, string>> = {
   "data-slot": "sheet-content",
-  "data-state": "open",
+  "data-open": "",
 };
 
 const DRAWER_WIDTH_PX = 295;

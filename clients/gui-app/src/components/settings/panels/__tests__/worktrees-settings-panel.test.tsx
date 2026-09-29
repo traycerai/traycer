@@ -129,15 +129,21 @@ vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
   openOrFocusEpicIntent: tabNavigationMock.openOrFocusEpicIntent,
 }));
 
-// Render the Radix dropdown menus inline + always-open so tests can assert /
+// Render the dropdown menus inline + always-open so tests can assert /
 // click the Select and Sort menu items without fighting pointer-open semantics
 // in jsdom (mirrors the established mock in folder-controls.test).
 vi.mock("@/components/ui/dropdown-menu", () => {
   const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
     props.children;
+  // Base's Trigger is composed via `render={<Element/>}`, not children - a
+  // caller can supply either, so the mock renders whichever is present.
+  const trigger = (props: {
+    readonly children?: ReactNode;
+    readonly render?: ReactNode;
+  }): ReactNode => props.render ?? props.children;
   const item = (props: {
     readonly children: ReactNode;
-    readonly onSelect?: () => void;
+    readonly onClick?: () => void;
     readonly disabled?: boolean;
     readonly "aria-label"?: string;
     readonly className?: string;
@@ -152,7 +158,7 @@ vi.mock("@/components/ui/dropdown-menu", () => {
       data-variant={props.variant}
       data-testid={props["data-testid"]}
       disabled={props.disabled ?? false}
-      onClick={props.onSelect}
+      onClick={props.onClick}
       title={props.title}
     >
       {props.children}
@@ -160,7 +166,7 @@ vi.mock("@/components/ui/dropdown-menu", () => {
   );
   const checkboxItem = (props: {
     readonly children: ReactNode;
-    readonly onSelect?: () => void;
+    readonly onClick?: () => void;
     readonly checked?: boolean;
     readonly "data-testid"?: string;
   }): ReactNode => (
@@ -169,14 +175,14 @@ vi.mock("@/components/ui/dropdown-menu", () => {
       role="menuitemcheckbox"
       aria-checked={props.checked ? "true" : "false"}
       data-testid={props["data-testid"]}
-      onClick={props.onSelect}
+      onClick={props.onClick}
     >
       {props.children}
     </button>
   );
   return {
     DropdownMenu: passthrough,
-    DropdownMenuTrigger: passthrough,
+    DropdownMenuTrigger: trigger,
     DropdownMenuContent: (props: {
       readonly children: ReactNode;
       readonly className?: string;
@@ -3438,7 +3444,10 @@ describe("WorktreesList v1.2 signals", () => {
 
     const chip = screen.getByTestId("worktree-pr-chip");
     screen.getByText("traycer · 7 unmerged commits");
-    fireEvent.pointerMove(chip);
+    // floating-ui's `useHover` (`move: true` by default) only starts its
+    // delay timer on `mousemove`; `mouseenter` alone never opens the tooltip.
+    fireEvent.mouseEnter(chip);
+    fireEvent.mouseMove(chip);
     expect(
       (
         await screen.findAllByText(
@@ -3484,7 +3493,8 @@ describe("WorktreesList v1.2 signals", () => {
       onVisiblePathsChange: undefined,
     });
 
-    fireEvent.pointerMove(screen.getByTestId("worktree-tier-pill"));
+    fireEvent.mouseEnter(screen.getByTestId("worktree-tier-pill"));
+    fireEvent.mouseMove(screen.getByTestId("worktree-tier-pill"));
     expect(
       (await screen.findAllByText("2 uncommitted changes")).length,
     ).toBeGreaterThan(0);
@@ -3512,7 +3522,8 @@ describe("WorktreesList v1.2 signals", () => {
       onVisiblePathsChange: undefined,
     });
 
-    fireEvent.pointerMove(screen.getByTestId("worktree-tier-pill"));
+    fireEvent.mouseEnter(screen.getByTestId("worktree-tier-pill"));
+    fireEvent.mouseMove(screen.getByTestId("worktree-tier-pill"));
     expect(
       (
         await screen.findAllByText(

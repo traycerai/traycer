@@ -1,5 +1,10 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { InspectorShell } from "@/components/layout-editor/inspector/inspector-shell";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
@@ -12,8 +17,8 @@ import { useKeybindingStore } from "@/stores/settings/keybinding-store";
  */
 async function openDoneMenu(): Promise<HTMLElement> {
   render(<InspectorShell onExit={() => {}}>{null}</InspectorShell>);
-  await userEvent.click(screen.getByRole("button", { name: "More ways out" }));
-  return screen.getByRole("menuitem", { name: /^Done/ });
+  fireEvent.click(screen.getByRole("button", { name: "More ways out" }));
+  return screen.findByRole("menuitem", { name: /^Done/ });
 }
 
 beforeEach(() => {

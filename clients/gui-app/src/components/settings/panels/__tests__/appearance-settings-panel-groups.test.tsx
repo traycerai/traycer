@@ -488,7 +488,7 @@ describe("<AppearanceSettingsPanel /> groups", () => {
       name: "Color icons by type",
     });
     expect(useSettingsStore.getState().artifactIconColorMode).toBe("byType");
-    expect(enableSwitch.getAttribute("data-state")).toBe("checked");
+    expect(enableSwitch.hasAttribute("data-checked")).toBe(true);
 
     // Palette visible while type colors are on.
     const ticketColorInput = colorInput("Ticket icon color");

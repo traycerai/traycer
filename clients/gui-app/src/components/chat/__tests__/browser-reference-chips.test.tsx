@@ -11,7 +11,7 @@ import { BrowserReferenceChips } from "@/components/chat/browser-reference-chips
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 function wrapper(node: ReactNode): ReactNode {
-  return <TooltipProvider delayDuration={0}>{node}</TooltipProvider>;
+  return <TooltipProvider delay={0}>{node}</TooltipProvider>;
 }
 
 afterEach(() => {

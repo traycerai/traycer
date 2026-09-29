@@ -357,26 +357,28 @@ function ImageGenerationDetails(props: {
           className="w-full min-w-0 overflow-hidden"
           variant="card"
         >
-          <CollapsibleTrigger asChild>
-            <button
-              type="button"
-              className="group flex w-full min-w-0 items-center gap-2 px-2.5 py-2 text-left text-xs text-muted-foreground outline-none transition-colors hover:bg-muted/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-              aria-label={
-                expanded ? "Hide image details" : "Show image details"
-              }
-            >
-              <span className="shrink-0 font-medium text-foreground/80">
-                Image details
-              </span>
-              <span className="min-w-0 flex-1 truncate group-data-[state=open]:hidden">
-                {props.prompt}
-              </span>
-              <ChevronDown
-                className="ml-auto size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-180 motion-reduce:transition-none"
-                aria-hidden
-              />
-            </button>
-          </CollapsibleTrigger>
+          <CollapsibleTrigger
+            render={
+              <button
+                type="button"
+                className="group flex w-full min-w-0 items-center gap-2 px-2.5 py-2 text-left text-xs text-muted-foreground outline-none transition-colors hover:bg-muted/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                aria-label={
+                  expanded ? "Hide image details" : "Show image details"
+                }
+              >
+                <span className="shrink-0 font-medium text-foreground/80">
+                  Image details
+                </span>
+                <span className="min-w-0 flex-1 truncate group-data-panel-open:hidden">
+                  {props.prompt}
+                </span>
+                <ChevronDown
+                  className="ml-auto size-3.5 shrink-0 transition-transform group-data-panel-open:rotate-180 motion-reduce:transition-none"
+                  aria-hidden
+                />
+              </button>
+            }
+          />
           <CollapsibleContent className="border-t border-border/50 px-2.5 py-2">
             <p className="text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
               {props.prompt}

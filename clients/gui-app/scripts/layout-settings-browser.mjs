@@ -196,11 +196,11 @@ const AREA_NAME =
 const PAGE_QUERY = "settings=1&pane=full&account=1&hosts=1&readings=both";
 
 /**
- * No select list open or still animating out: until its exit animation ends
- * the list's layer stays mounted, holding the page's pointer events and the
- * top of the Escape stack.
+ * No select list open. Base keeps a select's list mounted after its first
+ * open, `hidden` and `data-closed` once it has closed (a hidden layer holds no
+ * pointer events), so "open" is a positioner that is not hidden.
  */
-const SELECT_CLOSED = `document.querySelector('[role="listbox"]') === null && document.querySelector('[data-radix-popper-content-wrapper]') === null`;
+const SELECT_CLOSED = `document.querySelector('[data-slot="select-positioner"]:not([hidden]) [role="listbox"]') === null`;
 
 /** A select's trigger, by the name the page gives it. */
 const SELECT_TRIGGER = (label) =>
@@ -832,7 +832,7 @@ async function checkNarrowSelectors(client, origin) {
     await openSelect(client, "Layout area");
     const names = await evaluate(
       client,
-      `[...document.querySelectorAll('[role="listbox"] [role="option"]')].filter((node) => node.textContent.includes(', changed') && node.querySelector('[data-testid="area-changed-dot"]') !== null).map((node) => node.querySelector('.truncate').textContent.trim())`,
+      `[...document.querySelectorAll('[data-slot="select-positioner"]:not([hidden]) [role="listbox"] [role="option"]')].filter((node) => node.textContent.includes(', changed') && node.querySelector('[data-testid="area-changed-dot"]') !== null).map((node) => node.querySelector('.truncate').textContent.trim())`,
     );
     await screenshotPage(client, `narrow-select-open-${names.length}`);
     await closeSelect(client);
@@ -904,10 +904,11 @@ async function checkNarrowSelectors(client, origin) {
     `${SELECT_TRIGGER("Provider")}.querySelector('.truncate').textContent.trim()`,
   );
   await openSelect(client, "Provider");
-  const next = await evaluate(
+  const optionNames = await evaluate(
     client,
-    `[...document.querySelectorAll('[role="listbox"] [role="option"] .truncate')].map((node) => node.textContent.trim()).find((name) => name !== ${JSON.stringify(current)}) ?? null`,
+    `[...document.querySelectorAll('[data-slot="select-positioner"]:not([hidden]) [role="listbox"] [role="option"] .truncate')].map((node) => node.textContent.trim())`,
   );
+  const next = optionNames.find((name) => name !== current) ?? null;
   await closeSelect(client);
   if (next === null) {
     failures.push("narrow select, Providers: only one provider to pick");
@@ -1352,7 +1353,7 @@ function describeFocus(client) {
     `(() => {
        const node = document.activeElement;
        const name = node?.getAttribute('aria-label') ?? node?.textContent.trim().slice(0, 30) ?? 'none';
-       return 'focus ' + node?.tagName + ' "' + name + '" role=' + node?.getAttribute('role') + ', dialog ' + (document.querySelector('[role="dialog"]') !== null) + ', listbox ' + (document.querySelector('[role="listbox"]') !== null);
+       return 'focus ' + node?.tagName + ' "' + name + '" role=' + node?.getAttribute('role') + ', dialog ' + (document.querySelector('[role="dialog"]') !== null) + ', listbox ' + (document.querySelector('[data-slot="select-positioner"]:not([hidden]) [role="listbox"]') !== null);
      })()`,
   );
 }
@@ -1365,7 +1366,10 @@ async function openSelect(client, label) {
   );
   await clickPoint(client, point);
   if (
-    !(await poll(client, `document.querySelector('[role="listbox"]') !== null`))
+    !(await poll(
+      client,
+      `document.querySelector('[data-slot="select-positioner"]:not([hidden]) [role="listbox"]') !== null`,
+    ))
   )
     failures.push(`select ${label} does not open`);
 }
@@ -1373,15 +1377,15 @@ async function openSelect(client, label) {
 /** Opens the select named `label` and picks its option `option`, by pointer. */
 async function pickFromSelect(client, label, option) {
   await openSelect(client, label);
-  const point = await evaluate(
+  // Matched here, not in the page, so no page text is spliced into code.
+  const options = await evaluate(
     client,
-    `(() => {
-       const node = [...document.querySelectorAll('[role="listbox"] [role="option"]')].find((candidate) => candidate.querySelector('.truncate')?.textContent.trim() === ${JSON.stringify(option)});
-       if (node === undefined) return null;
+    `[...document.querySelectorAll('[data-slot="select-positioner"]:not([hidden]) [role="listbox"] [role="option"]')].map((node) => {
        const r = node.getBoundingClientRect();
-       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-     })()`,
+       return { name: node.querySelector('.truncate')?.textContent.trim() ?? null, x: r.left + r.width / 2, y: r.top + r.height / 2 };
+     })`,
   );
+  const point = options.find((candidate) => candidate.name === option) ?? null;
   if (point === null) {
     failures.push(`select ${label} has no option ${option}`);
     return;
@@ -1509,7 +1513,7 @@ function appSignature(client) {
        const clone = root.cloneNode(true);
        clone.querySelector('[data-fixture-settings-pane]')?.remove();
        for (const node of clone.querySelectorAll('*')) {
-         for (const name of ['id', 'aria-labelledby', 'aria-describedby', 'aria-controls', 'style', 'data-state']) {
+         for (const name of ['id', 'aria-labelledby', 'aria-describedby', 'aria-controls', 'style', 'data-state', 'data-open', 'data-closed', 'data-starting-style', 'data-popup-open']) {
            node.removeAttribute(name);
          }
        }

@@ -218,9 +218,9 @@ describe("ChatSearchMessageHitList: the best-hit child row", () => {
 
     // Scope to the snippet row itself (by its accessible name, which still
     // carries the role) rather than a bare `getByText`, since the row's
-    // header repeats the same title text. `TooltipTrigger asChild` overwrites
-    // the badge's own `data-slot`, so key off `data-variant`/`data-size`
-    // instead, which are Badge-specific and untouched by that merge.
+    // header repeats the same title text. `TooltipTrigger`'s `render` merge
+    // overwrites the badge's own `data-slot`, so key off `data-variant`/
+    // `data-size` instead, which are Badge-specific and untouched by that merge.
     const row = screen.getByRole("button", {
       name: /^Agent reply, .*: snippet text$/,
     });

@@ -23,19 +23,39 @@ export interface CompactWorkspaceSwitcherProps {
 export function CompactWorkspaceSwitcher(props: CompactWorkspaceSwitcherProps) {
   const placement = useColumnOverlayPlacement("row");
   return (
-    <Popover open={props.open} onOpenChange={props.onOpenChange}>
-      <PopoverTrigger asChild>
-        <WorktreePickerTrigger
-          worktreeLabel={props.worktreeLabel}
-          secondaryLabel={props.secondaryLabel}
-          changeCount={null}
-          trailingStatus={null}
-          testId={props.triggerTestId}
-          className={props.triggerClassName}
-          aria-haspopup="listbox"
-          aria-expanded={props.open}
-        />
-      </PopoverTrigger>
+    <Popover
+      open={props.open}
+      onOpenChange={(next, details) => {
+        if (
+          !next &&
+          (details.reason === "outside-press" ||
+            details.reason === "focus-out") &&
+          isHostSwitcherListInteraction(
+            details.reason === "focus-out" &&
+              details.event instanceof FocusEvent
+              ? details.event.relatedTarget
+              : details.event.target,
+          )
+        )
+          details.cancel();
+        if (details.isCanceled) return;
+        props.onOpenChange(next);
+      }}
+    >
+      <PopoverTrigger
+        render={
+          <WorktreePickerTrigger
+            worktreeLabel={props.worktreeLabel}
+            secondaryLabel={props.secondaryLabel}
+            changeCount={null}
+            trailingStatus={null}
+            testId={props.triggerTestId}
+            className={props.triggerClassName}
+            aria-haspopup="listbox"
+            aria-expanded={props.open}
+          />
+        }
+      />
       <PopoverContent
         side={placement?.side}
         align={placement?.align ?? "start"}
@@ -45,11 +65,6 @@ export function CompactWorkspaceSwitcher(props: CompactWorkspaceSwitcherProps) {
         // this content, so every click in it arrives here as an interaction
         // from outside. Dismissing on those would close the panel the picker
         // exists to scope, and no host could ever be chosen from it.
-        onInteractOutside={(event) => {
-          if (isHostSwitcherListInteraction(event.target)) {
-            event.preventDefault();
-          }
-        }}
       >
         {props.children}
       </PopoverContent>

@@ -374,7 +374,7 @@ describe("<ChatAccumulatedChangesPanel /> attached to the open pill", () => {
 
   function renderAttached(openSection: ChatDockSection | null) {
     return render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <ChatDiffTargetContext.Provider value={null}>
           <ChatDockCompactStripProvider
             value={{
@@ -421,7 +421,7 @@ describe("<ChatAccumulatedChangesPanel /> attached to the open pill", () => {
 
   it("stays collapsed with no strip provider", () => {
     render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <ChatDiffTargetContext.Provider value={null}>
           <ChatAccumulatedChangesPanel
             restore={baseRestore([fileChange("/repo/src/app.ts")], null)}
@@ -445,7 +445,7 @@ describe("<ChatAccumulatedChangesPanel /> attached to the open pill", () => {
  *
  * Radix mounts tooltip content only while open, so the label cannot be read
  * from the resting DOM - the trigger has to be focused first. The harness
- * already provides `delayDuration={0}`, so no timers are involved.
+ * already provides `delay={0}`, so no timers are involved.
  */
 async function undoAllTooltipText(): Promise<string> {
   fireEvent.focus(screen.getByTestId("accumulated-undo-all"));
@@ -461,7 +461,7 @@ function renderPanel(input: {
   readonly accumulatedSetComplete?: boolean;
 }) {
   return render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <ChatDiffTargetContext.Provider value={input.opener}>
         <ChatAccumulatedChangesPanel
           restore={{

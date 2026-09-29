@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -473,8 +474,10 @@ function paramsOfOpenedLink(url: string): URLSearchParams {
   return new URLSearchParams(url.slice(queryStart + 1));
 }
 
-function switchState(name: string): string | null {
-  return screen.getByRole("switch", { name }).getAttribute("data-state");
+function switchState(name: string): "checked" | "unchecked" {
+  return screen.getByRole("switch", { name }).hasAttribute("data-checked")
+    ? "checked"
+    : "unchecked";
 }
 
 async function submitSatisfiedManualBug(intent: string): Promise<void> {
@@ -666,9 +669,10 @@ describe("Report issue capture dialog (deep interactions)", () => {
       );
       expect(harness.submittedForms).toEqual([]);
 
-      fireEvent.click(screen.getByRole("combobox"));
-      fireEvent.click(await screen.findByRole("option", { name: "Chat" }));
-      fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("combobox"));
+      await user.click(await screen.findByRole("option", { name: "Chat" }));
+      await user.click(screen.getByRole("button", { name: "Send report" }));
 
       expect(
         await screen.findByRole("heading", { name: "Report sent" }),

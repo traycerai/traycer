@@ -315,9 +315,7 @@ export function ProfileRateLimitSwitchBanner(
               <Checkbox
                 id={checkboxId}
                 checked={includeOtherChats}
-                onCheckedChange={(checked) =>
-                  setIncludeOtherChats(checked === true)
-                }
+                onCheckedChange={(checked) => setIncludeOtherChats(checked)}
               />
               <label
                 htmlFor={checkboxId}
@@ -392,7 +390,27 @@ function ProfileRateLimitDestinationMenu(
   };
 
   return (
-    <DropdownMenu modal={false} open={menuOpen} onOpenChange={setOpen}>
+    <DropdownMenu
+      modal={false}
+      open={menuOpen}
+      onOpenChange={(next, details) => {
+        if (
+          !next &&
+          details.reason !== "presentation-loss" &&
+          (details.reason === "outside-press" || details.reason === "focus-out")
+        ) {
+          const target =
+            details.event instanceof FocusEvent
+              ? details.event.relatedTarget
+              : details.event.target;
+          if (isProfileUsageSidecarTarget(target)) {
+            details.cancel();
+            return;
+          }
+        }
+        setOpen(next);
+      }}
+    >
       <ProfileRateLimitMenuTrigger
         harnessId={props.harnessId}
         primaryTarget={props.primaryTarget}
@@ -440,17 +458,19 @@ function ProfileRateLimitMenuTrigger({
   if (primaryTarget === null) {
     const label = readOnly ? "View profile limits" : "Choose a profile";
     return (
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          aria-label={label}
-          className="w-full min-w-0 sm:w-auto sm:justify-self-end"
-        >
-          <span className="min-w-0 truncate">{label}</span>
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            aria-label={label}
+            className="w-full min-w-0 sm:w-auto sm:justify-self-end"
+          >
+            <span className="min-w-0 truncate">{label}</span>
+          </Button>
+        }
+      />
     );
   }
   const label = switchLabel(primaryTarget.profile);
@@ -479,23 +499,25 @@ function ProfileRateLimitMenuTrigger({
           profile={primaryTarget.profile}
         />
       </Button>
-      <DropdownMenuTrigger asChild>
-        <TooltipWrapper
-          label="More profiles"
-          side="top"
-          sideOffset={6}
-          align="end"
-        >
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="outline"
-            aria-label="Choose another profile"
+      <DropdownMenuTrigger
+        render={
+          <TooltipWrapper
+            label="More profiles"
+            side="top"
+            sideOffset={6}
+            align="end"
           >
-            <ChevronDown className="size-3.5" aria-hidden />
-          </Button>
-        </TooltipWrapper>
-      </DropdownMenuTrigger>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="outline"
+              aria-label="Choose another profile"
+            >
+              <ChevronDown className="size-3.5" aria-hidden />
+            </Button>
+          </TooltipWrapper>
+        }
+      />
     </ButtonGroup>
   );
 }
@@ -539,9 +561,6 @@ function ProfileRateLimitMenuContent({
       side="top"
       sideOffset={8}
       className="w-[min(90vw,24rem)]"
-      onInteractOutside={(event) => {
-        if (isProfileUsageSidecarTarget(event.target)) event.preventDefault();
-      }}
       onKeyDownCapture={(event) => {
         if (!PREVIEW_NAVIGATION_KEYS.has(event.key)) return;
         onKeyboardNavigation();
@@ -624,13 +643,11 @@ function ProfileRateLimitMenuRow({
       className="gap-2"
       onFocus={(event) => onFocusPreview(row.profile, event.currentTarget)}
       onPointerMove={(event) => onPreview(row.profile, event.currentTarget)}
-      onSelect={(event) => {
-        if (preventSwitch) {
-          event.preventDefault();
-          return;
-        }
+      onClick={() => {
+        if (preventSwitch) return;
         onSwitchProfile(row.destination.profileId);
       }}
+      closeOnClick={!preventSwitch}
     >
       <AccentDot
         profileId={row.profile.profileId}

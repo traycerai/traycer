@@ -15,8 +15,10 @@ import { profileCommitId } from "../provider-profile-model";
 // click its rows without fighting pointer-open semantics in jsdom (mirrors
 // the established mock in worktrees-settings-panel.test / folder-controls.test).
 vi.mock("@/components/ui/dropdown-menu", () => {
-  const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
-    props.children;
+  const passthrough = (props: {
+    readonly children?: ReactNode;
+    readonly render?: ReactNode;
+  }): ReactNode => props.render ?? props.children;
   return {
     DropdownMenu: (props: {
       readonly children: ReactNode;
@@ -291,10 +293,8 @@ describe("<ProfileDropdown />", () => {
     ).not.toBeNull();
     expect(triggerSwitchWrapper.className).toContain("absolute");
     expect(triggerSwitchWrapper.className).toContain("end-10");
-    expect(triggerSwitch.dataset.state).toBe("checked");
-    expect(triggerSwitch.className).toContain(
-      "data-[state=checked]:bg-primary",
-    );
+    expect(triggerSwitch.hasAttribute("data-checked")).toBe(true);
+    expect(triggerSwitch.className).toContain("data-checked:bg-primary");
 
     fireEvent.pointerDown(triggerSwitch);
     fireEvent.click(triggerSwitch);
@@ -413,10 +413,10 @@ describe("<ProfileDropdown />", () => {
     });
     expect(workRow.parentElement).toBe(workGroup);
     expect(workSwitch.parentElement?.parentElement).toBe(workGroup);
-    expect(workSwitch.dataset.state).toBe("checked");
+    expect(workSwitch.hasAttribute("data-checked")).toBe(true);
     expect(workSwitch.className).toContain("h-[1.15rem]");
     expect(workSwitch.className).toContain("w-8");
-    expect(workSwitch.className).toContain("data-[state=checked]:bg-primary");
+    expect(workSwitch.className).toContain("data-checked:bg-primary");
     fireEvent.click(workSwitch);
 
     expect(onSetProfileEnabled).toHaveBeenCalledWith("work-profile", false);
@@ -532,11 +532,11 @@ describe("<ProfileDropdown />", () => {
     fireEvent.click(terminalRow);
     expect(onSelectProfile).toHaveBeenCalledWith(null);
 
-    expect(workSwitch.getAttribute("aria-disabled")).toBeNull();
-    if (!(workSwitch instanceof HTMLButtonElement)) {
-      throw new Error("Expected the profile switch to render as a button.");
-    }
-    expect(workSwitch.disabled).toBe(true);
+    // Base's Switch root is a non-native <span>: a `disabled` root gets an
+    // explicit `aria-disabled` (a native <button disabled> needs none) and
+    // drops out of the tab order instead of exposing a `.disabled` property.
+    expect(workSwitch.getAttribute("aria-disabled")).toBe("true");
+    expect(workSwitch.tabIndex).toBe(-1);
     fireEvent.click(workSwitch);
     expect(onSetProfileEnabled).not.toHaveBeenCalled();
   });
@@ -595,11 +595,8 @@ describe("<ProfileDropdown />", () => {
     const workSwitch = within(
       screen.getByRole("group", { name: "Work profile controls" }),
     ).getByRole("switch", { name: "Allow agents to use Work" });
-    expect(workSwitch.getAttribute("aria-disabled")).toBeNull();
-    if (!(workSwitch instanceof HTMLButtonElement)) {
-      throw new Error("Expected the profile switch to render as a button.");
-    }
-    expect(workSwitch.disabled).toBe(true);
+    expect(workSwitch.getAttribute("aria-disabled")).toBe("true");
+    expect(workSwitch.tabIndex).toBe(-1);
     fireEvent.click(workSwitch);
     expect(onSetProfileEnabled).not.toHaveBeenCalled();
   });
@@ -618,11 +615,12 @@ describe("<ProfileDropdown />", () => {
     const workSwitch = within(
       screen.getByRole("group", { name: "Work profile controls" }),
     ).getByRole("switch", { name: "Allow agents to use Work" });
+    // Base's own `disabled` state is false here (only the call site's
+    // manual `aria-disabled` is set), so the switch keeps tabIndex 0 and
+    // never gets a `data-disabled` attribute — it stays reachable by focus.
     expect(workSwitch.getAttribute("aria-disabled")).toBe("true");
-    if (!(workSwitch instanceof HTMLButtonElement)) {
-      throw new Error("Expected the profile switch to render as a button.");
-    }
-    expect(workSwitch.disabled).toBe(false);
+    expect(workSwitch.getAttribute("data-disabled")).toBeNull();
+    expect(workSwitch.tabIndex).toBe(0);
     expect(tooltipTextNear(workSwitch)).toBe(disabledReason);
     workSwitch.focus();
     expect(document.activeElement).toBe(workSwitch);

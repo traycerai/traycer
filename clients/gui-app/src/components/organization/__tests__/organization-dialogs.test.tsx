@@ -170,12 +170,12 @@ function DropdownFocusHarness() {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button type="button">Open menu</button>
+      <DropdownMenuTrigger render={<button type="button" />}>
+        Open menu
       </DropdownMenuTrigger>
       <DropdownMenuContent>
         <DropdownMenuItem
-          onSelect={() => {
+          onClick={() => {
             setReturnFocusTo(captureOrganizationDialogOpener());
             setDialog({ kind: "labels", taskId: "task-1", canEdit: false });
           }}
@@ -198,14 +198,12 @@ function ContextFocusHarness() {
 
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div data-testid="context-row">
-          <button type="button">Row control</button>
-        </div>
+      <ContextMenuTrigger render={<div data-testid="context-row" />}>
+        <button type="button">Row control</button>
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem
-          onSelect={() => {
+          onClick={() => {
             setReturnFocusTo(captureOrganizationDialogOpener());
             setDialog({ kind: "labels", taskId: "task-1", canEdit: false });
           }}
@@ -255,8 +253,9 @@ describe("organization dialogs", () => {
     render(<DropdownFocusHarness />);
     const trigger = screen.getByRole("button", { name: "Open menu" });
     await user.click(trigger);
+    // Base opens pointer-driven menus on the next animation frame.
     await user.click(
-      screen.getByRole("menuitem", { name: "Open organization" }),
+      await screen.findByRole("menuitem", { name: "Open organization" }),
     );
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 

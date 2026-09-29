@@ -69,7 +69,7 @@ interface RenderArgs {
 
 function renderSegment(args: RenderArgs) {
   return render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <ChatRestoreProvider
         value={{
           accessRole: args.accessRole,

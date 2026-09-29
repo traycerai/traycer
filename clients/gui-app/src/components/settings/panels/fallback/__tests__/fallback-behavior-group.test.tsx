@@ -14,7 +14,7 @@ function policy(overrides: Partial<FallbackPolicy>): FallbackPolicy {
   return { ...createDefaultFallbackPolicy(), ...overrides };
 }
 
-/** Radix's select: open with the keyboard, then commit the named option. */
+/** Base's select: open with the keyboard, then commit the named option. */
 function openCombobox(name: string): void {
   fireEvent.keyDown(screen.getByRole("combobox", { name }), {
     key: "ArrowDown",
@@ -42,9 +42,9 @@ describe("FallbackBehaviorGroup - out-of-range stored values", () => {
 
     openCombobox("Time to cancel a switch");
     const option = screen.getByRole("option", { name: "42 seconds" });
-    // `data-state` reflects selection alone (Radix's `isSelected`), unlike
+    // `data-selected` reflects selection alone (Base's item state), unlike
     // `aria-selected`, which is additionally gated on focus timing.
-    expect(option.getAttribute("data-state")).toBe("checked");
+    expect(option.hasAttribute("data-selected")).toBe(true);
 
     // The pin: opening the page and reading the control must not itself save
     // anything. Stub `withStoredNumber` to drop the out-of-range value (or
@@ -66,7 +66,7 @@ describe("FallbackBehaviorGroup - out-of-range stored values", () => {
 
     openCombobox("Longest wait for a usage limit to reset");
     const option = screen.getByRole("option", { name: "999 minutes" });
-    expect(option.getAttribute("data-state")).toBe("checked");
+    expect(option.hasAttribute("data-selected")).toBe(true);
     expect(onChange).not.toHaveBeenCalled();
   });
 

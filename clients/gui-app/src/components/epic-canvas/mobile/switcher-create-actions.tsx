@@ -119,26 +119,28 @@ export function SwitcherNewArtifactMenu(props: {
   );
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="muted"
-          size="icon-sm"
-          aria-label="New artifact"
-          data-testid="switcher-new-artifact"
-          disabled={isPending}
-        >
-          {isPending ? (
-            <AgentSpinningDots
-              className="size-4"
-              testId="switcher-new-artifact-pending"
-              variant="dots2"
-            />
-          ) : (
-            <Plus className="size-4" />
-          )}
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="muted"
+            size="icon-sm"
+            aria-label="New artifact"
+            data-testid="switcher-new-artifact"
+            disabled={isPending}
+          >
+            {isPending ? (
+              <AgentSpinningDots
+                className="size-4"
+                testId="switcher-new-artifact-pending"
+                variant="dots2"
+              />
+            ) : (
+              <Plus className="size-4" />
+            )}
+          </Button>
+        }
+      />
       <DropdownMenuContent align="end">
         {ARTIFACT_KINDS.map((kind) => {
           const Icon = EPIC_NODE_ICONS[kind];
@@ -146,7 +148,7 @@ export function SwitcherNewArtifactMenu(props: {
             <DropdownMenuItem
               key={kind}
               data-testid={`switcher-new-artifact-${kind}`}
-              onSelect={() => create(kind)}
+              onClick={() => create(kind)}
             >
               <Icon className="size-3.5" />
               {EPIC_NODE_LABELS[kind]}

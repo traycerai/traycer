@@ -224,7 +224,7 @@ function LandingRateLimitBannerHarness(props: {
   });
 
   return (
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <div>
         <div data-testid="profile-id">{profileId ?? "ambient"}</div>
         <div data-testid="banner-visible">{String(visible)}</div>
@@ -270,7 +270,7 @@ function ChatSurfaceDismissHarness(props: {
     client: null,
   });
   return (
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <div>
         <div data-testid="chat-banner-visible">
           {String(prompt.kind === "visible")}
@@ -335,7 +335,7 @@ function LoadingSeedHarness(props: {
     client: null,
   });
   return (
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <div>
         <div data-testid="banner-visible">
           {String(prompt.kind === "visible")}
@@ -723,7 +723,7 @@ describe("Landing rate-limit banner durability", () => {
       expect(
         screen.getByRole("button", { name: "Switch to First" }),
       ).toBeDefined();
-      fireEvent.pointerDown(
+      fireEvent.click(
         screen.getByRole("button", { name: "Choose another profile" }),
       );
       await macrotaskTick();

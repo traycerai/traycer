@@ -5,8 +5,6 @@ import type { ProfileDropdownUsageEntry } from "../profile-dropdown-usage";
 import { ProfileUsageSidecar } from "../profile-usage-sidecar";
 
 const NOW = Date.now();
-const UNPOSITIONED_TRANSFORM = "translate(0px, -200%)";
-const POSITIONED_TRANSFORM = "translate(228px, 100px)";
 const PROFILE: ProviderProfile = {
   profileId: "work",
   enabled: true,
@@ -290,16 +288,16 @@ describe("ProfileUsageSidecar entrance-animation readiness", () => {
   });
 });
 
-// Models the real Radix Popper sequence (see `@radix-ui/react-popper`'s
-// `PopperContent`, node_modules/.../@radix-ui/react-popper/dist/index.mjs):
-// `[data-radix-popper-content-wrapper]` holds the unpositioned sentinel while
-// measuring, which CSSOM may serialize as `translate(0px, -200%)`. Content's
-// entrance animation is explicitly suppressed (`animation: "none"`) until
-// Floating UI's `isPositioned` flips true. In a nested transformed popper the
-// sentinel can produce an in-viewport phantom rect, while
-// `document.getAnimations()` is genuinely empty, so neither animation state
-// nor viewport intersection can prove placement.
-describe("ProfileUsageSidecar Radix placement readiness", () => {
+// Models the real Base Positioner sequence (see
+// `profile-usage-sidecar-anchor-readiness.ts`'s `isPopperWrapperPlaced`):
+// a `[data-slot="dropdown-menu-positioner"]` wrapper paints at `opacity: 0`
+// with its `position` already assigned while measuring, until Floating UI
+// lands its first real placement and the wrapper's opacity flips. Content's
+// entrance animation only starts once that placement lands. In a nested
+// transformed popper the anchor can still report an in-viewport phantom rect
+// while unplaced, while `document.getAnimations()` is genuinely empty, so
+// neither animation state nor viewport intersection can prove placement.
+describe("ProfileUsageSidecar Positioner placement readiness", () => {
   let wrapper: HTMLDivElement;
   let anchor: HTMLButtonElement;
   let currentAnimations: ReadonlyArray<{
@@ -312,8 +310,9 @@ describe("ProfileUsageSidecar Radix placement readiness", () => {
 
   beforeEach(() => {
     wrapper = document.createElement("div");
-    wrapper.setAttribute("data-radix-popper-content-wrapper", "");
-    wrapper.style.transform = UNPOSITIONED_TRANSFORM;
+    wrapper.setAttribute("data-slot", "dropdown-menu-positioner");
+    wrapper.style.position = "fixed";
+    wrapper.style.opacity = "0";
     anchor = document.createElement("button");
     wrapper.append(anchor);
     document.body.append(wrapper);
@@ -326,7 +325,7 @@ describe("ProfileUsageSidecar Radix placement readiness", () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
       function mockRect(this: HTMLElement) {
         if (this === anchor) {
-          return wrapper.style.transform === UNPOSITIONED_TRANSFORM
+          return wrapper.style.opacity === "0"
             ? new DOMRect(0, 0, 240, 32)
             : new DOMRect(100, 100, 240, 32);
         }
@@ -359,9 +358,10 @@ describe("ProfileUsageSidecar Radix placement readiness", () => {
       name: "Usage details for Work",
     });
 
-    // Phase 1: Radix's genuine unpositioned window. No animation exists
-    // (Radix suppresses it), and the nested-popover failure mode can report
-    // an on-screen phantom rect even though the sentinel is still present.
+    // Phase 1: Base's genuine unpositioned window. No animation exists yet
+    // (the Positioner paints at opacity 0 with no entrance animation until
+    // placed), and the nested-popover failure mode can report an on-screen
+    // phantom rect even though the wrapper is still unplaced.
     // This is exactly the condition an animation-only wait cannot detect -
     // it would find `getAnimations()` empty and show immediately using the
     // invalid phantom rect. Flushed via `act` + a real macrotask tick (not
@@ -375,8 +375,8 @@ describe("ProfileUsageSidecar Radix placement readiness", () => {
     expect(sidecar.dataset.side).toBeUndefined();
 
     // Phase 2: Floating UI lands its first real placement - the wrapper's
-    // style mutates, the anchor's rect is now on-screen, and Radix's
-    // suppression lifts so the entrance animation begins.
+    // opacity flips, the anchor's rect is now on-screen, and the entrance
+    // animation begins.
     let releaseAnimation: (value: undefined) => void = () => undefined;
     const finished = new Promise<undefined>((resolve) => {
       releaseAnimation = resolve;
@@ -388,7 +388,7 @@ describe("ProfileUsageSidecar Radix placement readiness", () => {
       },
     ];
     await act(async () => {
-      wrapper.style.transform = POSITIONED_TRANSFORM;
+      wrapper.style.opacity = "1";
       // Still hidden - the entrance animation itself hasn't settled yet.
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -406,7 +406,7 @@ describe("ProfileUsageSidecar Radix placement readiness", () => {
   });
 
   it("re-anchors instantly to a different row within an already-placed menu (no placement wait)", async () => {
-    wrapper.style.transform = POSITIONED_TRANSFORM;
+    wrapper.style.opacity = "1";
     const { rerender } = render(
       <ProfileUsageSidecar
         anchor={anchor}

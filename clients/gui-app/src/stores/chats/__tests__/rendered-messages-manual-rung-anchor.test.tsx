@@ -629,7 +629,7 @@ function renderMounted(ui: ReactNode) {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <TabHostProvider hostId={HOST_ID}>
           <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: HOST_ID }}>
             <ChatExpansionTestProviders tileInstanceId="manual-rung-anchor-tile">

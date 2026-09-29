@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -63,7 +69,12 @@ function reasoningConfig(
   return { value, options, disabled: false, onChange };
 }
 
-function renderFooter(config: ReasoningFooterConfig): void {
+// Base's edge-aligned Slider Thumb measures its own position in a layout
+// effect that only resolves after a real microtask tick (`queueMicrotask` /
+// a passive-effect fallback), so `render()` alone leaves the thumb
+// `visibility: hidden` - out of the accessibility tree - in jsdom. Every
+// caller awaits this rather than each test working out its own flush.
+async function renderFooter(config: ReasoningFooterConfig): Promise<void> {
   render(
     <HarnessModelPickerModelSettingsFooter
       pickerOpen
@@ -71,6 +82,7 @@ function renderFooter(config: ReasoningFooterConfig): void {
       serviceTier={null}
     />,
   );
+  await act(() => Promise.resolve());
 }
 
 /**
@@ -78,7 +90,9 @@ function renderFooter(config: ReasoningFooterConfig): void {
  * Returns the running list of selections. Needed wherever a gesture's SECOND
  * event has to see what its first one did.
  */
-function renderStatefulFooter(initial: string): ReadonlyArray<string> {
+async function renderStatefulFooter(
+  initial: string,
+): Promise<ReadonlyArray<string>> {
   const selections: Array<string> = [];
   function StatefulFooter() {
     const [value, setValue] = useState(initial);
@@ -99,38 +113,74 @@ function renderStatefulFooter(initial: string): ReadonlyArray<string> {
     );
   }
   render(<StatefulFooter />);
+  await act(() => Promise.resolve());
   return selections;
 }
 
+// The native `input[type=range]` (role, aria, keyboard, focus) - separate
+// from `thumbVisual()` below because the two are different DOM nodes now.
 function thumb(): HTMLElement {
   return screen.getByRole("slider", { name: "Thinking effort" });
+}
+
+/** The styled `span` a thumb visual/size assertion means - not the input. */
+function thumbVisual(): HTMLElement {
+  const element = screen
+    .getByTestId("model-reasoning-slider")
+    .querySelector('[data-slot="slider-thumb"]');
+  if (!(element instanceof HTMLElement)) {
+    throw new Error("No thumb visual");
+  }
+  return element;
 }
 
 function stops(): ReadonlyArray<HTMLElement> {
   return screen.getAllByTestId(/^model-reasoning-stop-/);
 }
 
+/**
+ * The thumb-centre rem offset baked into the range's `width: calc(...)`.
+ * The browser's CSSOM re-serializes `calc(x% + -yrem)` as `calc(x% - yrem)`
+ * on readback, so the sign is its own capture group.
+ */
+function rangeInsetRem(): number {
+  const width = screen.getByTestId("model-reasoning-range").style.width;
+  const match = /([+-])\s*([\d.]+)rem\)$/.exec(width);
+  if (match === null) {
+    throw new Error(`No rem offset in width: ${width}`);
+  }
+  return parseFloat(match[2]) * (match[1] === "-" ? -1 : 1);
+}
+
 describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
+  // Base's Slider Thumb positions itself from a real measurement and stays
+  // `visibility: hidden` (so out of the accessibility tree) until it has one;
+  // jsdom reports every rect as zero-sized, so every test - not just the drag
+  // ones - needs the stub, or `thumb()` itself cannot find the control.
+  let restoreSliderGeometry: () => void;
+
   beforeEach(() => {
     useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    restoreSliderGeometry = stubSliderGeometry();
   });
 
   afterEach(() => {
     cleanup();
     useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    restoreSliderGeometry();
   });
 
-  it("is what the footer draws with no setting touched", () => {
+  it("is what the footer draws with no setting touched", async () => {
     expect(PRESET_VALUES.default.model.reasoningControl).toBe("slider");
 
-    renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+    await renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
     expect(screen.getByTestId("model-reasoning-slider")).toBeDefined();
     expect(screen.queryByTestId("model-reasoning-scroller")).toBeNull();
   });
 
-  it("draws one stop per catalog level, in catalog order", () => {
-    renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
+  it("draws one stop per catalog level, in catalog order", async () => {
+    await renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
 
     expect(stops().map((stop) => stop.getAttribute("aria-label"))).toEqual([
       "Low",
@@ -140,12 +190,14 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     ]);
   });
 
-  it("parks the thumb on the selected level and names it, not its index", () => {
-    renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+  it("parks the thumb on the selected level and names it, not its index", async () => {
+    await renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
     expect(thumb().getAttribute("aria-valuenow")).toBe("2");
-    expect(thumb().getAttribute("aria-valuemin")).toBe("0");
-    expect(thumb().getAttribute("aria-valuemax")).toBe("3");
+    // The native input carries `min`/`max`, not explicit `aria-valuemin`/
+    // `aria-valuemax` - the browser computes those from the native pair.
+    expect(thumb().getAttribute("min")).toBe("0");
+    expect(thumb().getAttribute("max")).toBe("3");
     expect(thumb().getAttribute("aria-valuetext")).toBe("High");
     // The name sits beside the track too, so the dots never stand alone.
     expect(screen.getByTestId("model-reasoning-level-name").textContent).toBe(
@@ -153,75 +205,65 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     );
   });
 
-  it("selects the level under a stop that is clicked", () => {
+  it("selects the level under a stop that is clicked", async () => {
     const onChange = vi.fn<(next: string) => void>();
-    renderFooter(reasoningConfig("low", FOUR_OPTIONS, onChange));
+    await renderFooter(reasoningConfig("low", FOUR_OPTIONS, onChange));
 
     fireEvent.click(screen.getByTestId("model-reasoning-stop-3"));
 
     expect(onChange).toHaveBeenCalledWith("max");
   });
 
-  it("keeps the level a drag landed on, even though the click lands back on the stop it started from", () => {
+  it("keeps the level a drag landed on, even though the click lands back on the stop it started from", async () => {
     // The browser dispatches the trailing click to the element the pointer went
     // DOWN on, whatever it was released over - so a drag that starts on a dot
     // ends with a click on that dot, and an unconditional handler there would
     // undo the drag it just finished. Stateful, because the bug only shows once
     // the level has actually moved away from the stop the click lands on.
-    const restore = stubSliderGeometry();
-    try {
-      const selections = renderStatefulFooter("low");
-      const start = screen.getByTestId("model-reasoning-stop-0");
+    const selections = await renderStatefulFooter("low");
+    const start = screen.getByTestId("model-reasoning-stop-0");
 
-      fireEvent.pointerDown(start, { pointerId: 1, clientX: 0, button: 0 });
-      // `buttons: 1` - the primary button still held through the move, or the
-      // gesture's own `event.buttons === 0` guard now (correctly) treats this
-      // as a release and clears the "moved" flag before the click below.
-      fireEvent.pointerMove(start, { pointerId: 1, clientX: 400, buttons: 1 });
-      fireEvent.pointerUp(start, { pointerId: 1, clientX: 400 });
-      fireEvent.click(start);
+    fireEvent.pointerDown(start, { pointerId: 1, clientX: 0, button: 0 });
+    // `buttons: 1` - the primary button still held through the move, or the
+    // gesture's own `event.buttons === 0` guard now (correctly) treats this
+    // as a release and clears the "moved" flag before the click below.
+    fireEvent.pointerMove(start, { pointerId: 1, clientX: 400, buttons: 1 });
+    fireEvent.pointerUp(start, { pointerId: 1, clientX: 400 });
+    fireEvent.click(start);
 
-      // Radix moved it along the track; the click must not drag it home.
-      expect(selections.at(-1)).toBe("max");
-      expect(screen.getByTestId("model-reasoning-level-name").textContent).toBe(
-        "Max",
-      );
-    } finally {
-      restore();
-    }
+    // The drag already moved it along the track; the click must not drag it home.
+    expect(selections.at(-1)).toBe("max");
+    expect(screen.getByTestId("model-reasoning-level-name").textContent).toBe(
+      "Max",
+    );
   });
 
-  it("still selects on a click that no gesture moved", () => {
+  it("still selects on a click that no gesture moved", async () => {
     // The other half of the same rule: a tap that never travelled, and an
     // assistive technology activating the button, produce a click with nothing
     // behind it and must still pick the level.
-    const restore = stubSliderGeometry();
-    try {
-      const selections = renderStatefulFooter("low");
-      const stop = screen.getByTestId("model-reasoning-stop-2");
+    const selections = await renderStatefulFooter("low");
+    const stop = screen.getByTestId("model-reasoning-stop-2");
 
-      fireEvent.pointerDown(stop, { pointerId: 1, clientX: 0, button: 0 });
-      fireEvent.pointerUp(stop, { pointerId: 1, clientX: 0 });
-      fireEvent.click(stop);
+    fireEvent.pointerDown(stop, { pointerId: 1, clientX: 0, button: 0 });
+    fireEvent.pointerUp(stop, { pointerId: 1, clientX: 0 });
+    fireEvent.click(stop);
 
-      expect(selections.at(-1)).toBe("high");
-    } finally {
-      restore();
-    }
+    expect(selections.at(-1)).toBe("high");
   });
 
-  it("writes nothing when the stop already selected is clicked", () => {
+  it("writes nothing when the stop already selected is clicked", async () => {
     const onChange = vi.fn<(next: string) => void>();
-    renderFooter(reasoningConfig("low", FOUR_OPTIONS, onChange));
+    await renderFooter(reasoningConfig("low", FOUR_OPTIONS, onChange));
 
     fireEvent.click(screen.getByTestId("model-reasoning-stop-0"));
 
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("steps one level per arrow key and jumps to the ends on Home/End", () => {
+  it("steps one level per arrow key and jumps to the ends on Home/End", async () => {
     const onChange = vi.fn<(next: string) => void>();
-    renderFooter(reasoningConfig("medium", FOUR_OPTIONS, onChange));
+    await renderFooter(reasoningConfig("medium", FOUR_OPTIONS, onChange));
 
     fireEvent.keyDown(thumb(), { key: "ArrowRight" });
     expect(onChange).toHaveBeenLastCalledWith("high");
@@ -236,9 +278,26 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     expect(onChange).toHaveBeenLastCalledWith("low");
   });
 
-  it("keeps a zero-effort level as the leftmost stop", () => {
+  it("jumps toward an end on PageUp/PageDown, clamped to the real range", async () => {
+    // Base's own `largeStep` defaults to 10 (`SliderRoot.js`) and the
+    // production Slider never overrides it, so on a 4-level (0-3) range
+    // PageUp/PageDown always overshoot and clamp - a distinct branch from
+    // Home/End (`SliderThumb.js`'s `onKeyDown` sets `newValue` directly for
+    // Home/End, but routes Page keys through the same `getNewValue` clamp
+    // arrow keys use, just with `increment = largeStep`).
     const onChange = vi.fn<(next: string) => void>();
-    renderFooter(reasoningConfig("low", ZERO_EFFORT_OPTIONS, onChange));
+    await renderFooter(reasoningConfig("medium", FOUR_OPTIONS, onChange));
+
+    fireEvent.keyDown(thumb(), { key: "PageUp" });
+    expect(onChange).toHaveBeenLastCalledWith("max");
+
+    fireEvent.keyDown(thumb(), { key: "PageDown" });
+    expect(onChange).toHaveBeenLastCalledWith("low");
+  });
+
+  it("keeps a zero-effort level as the leftmost stop", async () => {
+    const onChange = vi.fn<(next: string) => void>();
+    await renderFooter(reasoningConfig("low", ZERO_EFFORT_OPTIONS, onChange));
 
     expect(stops().at(0)?.getAttribute("aria-label")).toBe("Off");
 
@@ -278,8 +337,8 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
       return screen.getByTestId("model-reasoning-level-name");
     }
 
-    it("sits after the track in a fixed-width, right-aligned slot", () => {
-      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+    it("sits after the track in a fixed-width, right-aligned slot", async () => {
+      await renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
       const name = label();
       expect(name.textContent).toBe("High");
@@ -300,19 +359,19 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
 
     // The class set is what a jsdom test can read of the geometry: if the
     // selected level could change it, it could change the layout.
-    it("draws the same label cell at the first level as at the last", () => {
-      renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
+    it("draws the same label cell at the first level as at the last", async () => {
+      await renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
       const atFirst = label().className;
       cleanup();
 
-      renderFooter(reasoningConfig("max", FOUR_OPTIONS, vi.fn()));
+      await renderFooter(reasoningConfig("max", FOUR_OPTIONS, vi.fn()));
 
       expect(label().className).toBe(atFirst);
     });
 
-    it("names a level the catalog does not list, and truncates a long one", () => {
+    it("names a level the catalog does not list, and truncates a long one", async () => {
       const remembered = "a-remembered-level-nobody-advertises-any-more";
-      renderFooter(reasoningConfig(remembered, FOUR_OPTIONS, vi.fn()));
+      await renderFooter(reasoningConfig(remembered, FOUR_OPTIONS, vi.fn()));
 
       expect(label().textContent).toBe(remembered);
       expect(label().className).toContain("truncate");
@@ -321,12 +380,12 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
       expect(thumb().getAttribute("aria-valuetext")).toBe(remembered);
     });
 
-    it("leaves the list control without a label at all", () => {
+    it("leaves the list control without a label at all", async () => {
       useLayoutStore
         .getState()
         .setRegionValues("model", { reasoningControl: "list" });
 
-      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+      await renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
       expect(screen.queryByTestId("model-reasoning-level-name")).toBeNull();
     });
@@ -344,19 +403,19 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
       return element;
     }
 
-    it("asks the primitive for the pill size on the track and the thumb alike", () => {
-      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+    it("asks the primitive for the pill size on the track and the thumb alike", async () => {
+      await renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
       expect(track().getAttribute("data-size")).toBe("pill");
-      expect(thumb().getAttribute("data-size")).toBe("pill");
+      expect(thumbVisual().getAttribute("data-size")).toBe("pill");
       // The pill's own height is a LOCAL override (h-4, slimmer than the
       // primitive's own h-9 pill default), merged on top via `cn()` -
       // `cn` strips the primitive's conflicting class.
       expect(track().className).toContain("data-[size=pill]:h-4");
       expect(track().className).not.toContain("data-[size=pill]:h-9");
       expect(track().className).toContain("h-1");
-      expect(thumb().className).toContain("data-[size=pill]:size-6");
-      expect(thumb().className).toContain("size-4");
+      expect(thumbVisual().className).toContain("data-[size=pill]:size-6");
+      expect(thumbVisual().className).toContain("size-4");
     });
 
     // A 1px border, not the primitive's own pill default (`border-2`) and not
@@ -365,10 +424,10 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     // separation without the primitive's thicker ring. Token-exact match
     // (not `.toContain`) because "border" is also a literal substring of
     // "border-2" and "border-popover".
-    it("restores a 1px thumb border over the primitive's own pill default", () => {
-      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+    it("restores a 1px thumb border over the primitive's own pill default", async () => {
+      await renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
-      const classes = thumb().className.split(/\s+/);
+      const classes = thumbVisual().className.split(/\s+/);
       expect(classes).toContain("data-[size=pill]:border");
       expect(classes).not.toContain("data-[size=pill]:border-2");
       expect(classes).not.toContain("data-[size=pill]:border-0");
@@ -376,11 +435,11 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
       expect(classes).toContain("data-[size=pill]:border-popover");
     });
 
-    // Radix parks the thumb's CENTRE half a thumb inside each end
-    // (`getThumbInBoundsOffset`), so the overlay the stops are laid out in has
-    // to be inset by exactly that - 0.75rem for the 1.5rem pill thumb.
-    it("insets the stop overlay by half the pill thumb", () => {
-      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+    // `thumbAlignment="edge"` parks the thumb's CENTRE half a thumb inside
+    // each end, so the overlay the stops are laid out in has to be inset by
+    // exactly that - 0.75rem for the 1.5rem pill thumb.
+    it("insets the stop overlay by half the pill thumb", async () => {
+      await renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
       const overlay = stops().at(0)?.parentElement?.parentElement;
       expect(overlay?.className).toContain("px-3");
@@ -398,8 +457,8 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
       );
     });
 
-    it("keeps each stop taller than the slim track with a coarse-pointer width", () => {
-      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+    it("keeps each stop taller than the slim track with a coarse-pointer width", async () => {
+      await renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
       for (const stop of stops()) {
         expect(stop.className).toContain("h-6");
@@ -408,8 +467,8 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
       }
     });
 
-    it("colours a dot for the surface under it: fill to the left, base to the right", () => {
-      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+    it("colours a dot for the surface under it: fill to the left, base to the right", async () => {
+      await renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
       const dots = FOUR_OPTIONS.map((_, index) =>
         screen.getByTestId(`model-reasoning-dot-${index}`),
@@ -426,82 +485,74 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
       expect(stops().at(2)?.className).toContain("pointer-events-none");
     });
 
-    it("fills solid up to the thumb", () => {
-      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+    it("fills solid up to the thumb", async () => {
+      await renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
       const range = screen.getByTestId("model-reasoning-range");
       expect(range.className).toContain("bg-primary");
       expect(range.className).not.toContain("bg-primary/70");
     });
 
-    it("draws a square covered edge - no rounded-full crescent between the range and the track", () => {
-      renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+    it("draws a square covered edge - no rounded-full crescent between the range and the track", async () => {
+      await renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
       expect(
         screen.getByTestId("model-reasoning-range").className,
       ).not.toContain("rounded-full");
     });
 
-    it("insets the range's covered edge by the thumb-centre offset, scaled by position", () => {
-      // FOUR_OPTIONS has lastIndex 3. `marginInlineEnd` interpolates linearly
-      // from -0.75rem at the lowest stop to +0.75rem at the highest,
-      // matching Radix's own thumb-centre inset at each end
-      // (`getThumbInBoundsOffset`) instead of leaving the range on raw,
-      // uninset percentages.
+    it("insets the range's covered edge by the thumb-centre offset, scaled by position", async () => {
+      // FOUR_OPTIONS has lastIndex 3. Base's Range fills a raw percentage
+      // with no inset of its own, so the call site adds the thumb-centre
+      // offset directly into its `width` (not a `marginInlineEnd`, which is
+      // how a prior Radix-based version read this): +0.75rem of extra width
+      // at the lowest stop, shrinking to -0.75rem at the highest, matching
+      // the thumb-centre inset `thumbAlignment="edge"` gives each end
+      // instead of leaving the range on raw, uninset percentages.
       const cases: ReadonlyArray<readonly [string, number]> = [
-        ["low", -0.75],
-        ["medium", -0.25], // (2 * (1 / 3) - 1) * 0.75
-        ["high", 0.25], // (2 * (2 / 3) - 1) * 0.75
-        ["max", 0.75],
+        ["low", 0.75],
+        ["medium", 0.25], // (1 - 2 * (1 / 3)) * 0.75
+        ["high", -0.25], // (1 - 2 * (2 / 3)) * 0.75
+        ["max", -0.75],
       ];
       for (const [value, expectedRem] of cases) {
         cleanup();
-        renderFooter(reasoningConfig(value, FOUR_OPTIONS, vi.fn()));
-        const margin = parseFloat(
-          screen.getByTestId("model-reasoning-range").style.marginInlineEnd,
-        );
-        expect(margin, value).toBeCloseTo(expectedRem, 6);
+        await renderFooter(reasoningConfig(value, FOUR_OPTIONS, vi.fn()));
+        expect(rangeInsetRem(), value).toBeCloseTo(expectedRem, 6);
       }
     });
 
-    it("insets by the magnetically-pulled preview position during a drag, not the raw pointer position", () => {
-      const restore = stubSliderGeometry();
-      try {
-        renderStatefulFooter("low");
-        const stop = screen.getByTestId("model-reasoning-stop-0");
+    it("insets by the magnetically-pulled preview position during a drag, not the raw pointer position", async () => {
+      await renderStatefulFooter("low");
+      const stop = screen.getByTestId("model-reasoning-stop-0");
 
-        fireEvent.pointerDown(stop, {
-          pointerId: 1,
-          clientX: 0,
-          clientY: 0,
-          button: 0,
-        });
-        // 150 / 400 (stubbed track) * lastIndex(3) = 1.125 raw, pulled to
-        // ~1.0953 by the (lastIndex-capped) magnetic pull.
-        fireEvent.pointerMove(stop, {
-          pointerId: 1,
-          clientX: 150,
-          clientY: 0,
-          buttons: 1,
-        });
+      fireEvent.pointerDown(stop, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+        button: 0,
+      });
+      // 153 lands the finger exactly on 1.125 once the 12px thumb-centre
+      // inset on each edge is subtracted (376px usable span): (153-12)/376*3.
+      fireEvent.pointerMove(stop, {
+        pointerId: 1,
+        clientX: 153,
+        clientY: 0,
+        buttons: 1,
+      });
 
-        const pulledPosition = reasoningDragPosition(1.125, 3);
-        const expectedMargin = ((2 * pulledPosition) / 3 - 1) * 0.75;
-        const rawMargin = ((2 * 1.125) / 3 - 1) * 0.75;
-        const margin = parseFloat(
-          screen.getByTestId("model-reasoning-range").style.marginInlineEnd,
-        );
+      const pulledPosition = reasoningDragPosition(1.125, 3);
+      const expectedRemOffset = (1 - (2 * pulledPosition) / 3) * 0.75;
+      const rawRemOffset = (1 - (2 * 1.125) / 3) * 0.75;
+      const rem = rangeInsetRem();
 
-        expect(margin).toBeCloseTo(expectedMargin, 6);
-        expect(margin).not.toBeCloseTo(rawMargin, 4);
-      } finally {
-        restore();
-      }
+      expect(rem).toBeCloseTo(expectedRemOffset, 6);
+      expect(rem).not.toBeCloseTo(rawRemOffset, 4);
     });
   });
 
-  it("falls back to the list for a model that advertises a single level", () => {
-    renderFooter(
+  it("falls back to the list for a model that advertises a single level", async () => {
+    await renderFooter(
       reasoningConfig(
         "only",
         [{ id: "only", label: "Only", description: null }],
@@ -516,12 +567,12 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     ).toBe("true");
   });
 
-  it("renders the list, and no slider, under the `list` setting", () => {
+  it("renders the list, and no slider, under the `list` setting", async () => {
     useLayoutStore
       .getState()
       .setRegionValues("model", { reasoningControl: "list" });
 
-    renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+    await renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
     expect(screen.queryByTestId("model-reasoning-slider")).toBeNull();
     expect(screen.getByTestId("model-reasoning-scroller")).toBeDefined();
@@ -530,15 +581,15 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     }
   });
 
-  it("keeps the thinking-effort group's name in either control", () => {
-    renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
+  it("keeps the thinking-effort group's name in either control", async () => {
+    await renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
     expect(
       screen.getByRole("group", { name: "Thinking effort" }),
     ).not.toBeNull();
   });
 
-  it("refuses every route while the model's levels are disabled", () => {
+  it("refuses every route while the model's levels are disabled", async () => {
     const onChange = vi.fn<(next: string) => void>();
     render(
       <HarnessModelPickerModelSettingsFooter
@@ -552,22 +603,33 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
         serviceTier={null}
       />,
     );
+    await act(() => Promise.resolve());
+
+    // The native `<input type=range disabled>` (Base wires `disabled`
+    // straight onto it - `SliderThumb.js`) is what a real browser refuses to
+    // focus or deliver a keydown to; firing `keyDown` directly on it would
+    // pass even if the contract broke, since jsdom does not gate a
+    // programmatic dispatch on `disabled` the way it gates a real click.
+    // Prove the disabled attribute and the resulting unfocusability instead
+    // of simulating an interaction no real user could produce.
+    expect(thumb()).toHaveProperty("disabled", true);
+    thumb().focus();
+    expect(document.activeElement).not.toBe(thumb());
 
     fireEvent.click(screen.getByTestId("model-reasoning-stop-2"));
-    fireEvent.keyDown(thumb(), { key: "ArrowRight" });
 
     expect(onChange).not.toHaveBeenCalled();
   });
 
   // `data-dragging` is a LOCAL gesture read (raw pointer distance from
   // pointerdown, gated on a button actually being held) - separate from
-  // Radix's own value-changing pointer math, which the drag tests above
+  // Base's own value-changing pointer math, which the drag tests above
   // already cover. It only flips `.reasoning-effort-slider[data-dragging]`'s
   // CSS (disables the travel transition mid-drag), so it is asserted here as
   // the `data-dragging` attribute rather than through a selection.
   describe("drag arming", () => {
-    it("does not arm on jitter of 3px or less from pointerdown", () => {
-      renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
+    it("does not arm on jitter of 3px or less from pointerdown", async () => {
+      await renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
       const slider = screen.getByTestId("model-reasoning-slider");
 
       fireEvent.pointerDown(slider, {
@@ -595,8 +657,8 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
       expect(slider.getAttribute("data-dragging")).toBe("true");
     });
 
-    it("does not arm on a move reporting no button held", () => {
-      renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
+    it("does not arm on a move reporting no button held", async () => {
+      await renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
       const slider = screen.getByTestId("model-reasoning-slider");
 
       fireEvent.pointerDown(slider, {
@@ -617,214 +679,203 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     });
   });
 
-  // `useReasoningSliderGesture` previews the drag continuously (`step:
-  // 0.001`, `value: [pointerValue ?? thumbIndex]`) so the thumb glides
+  // `useReasoningSliderGesture` previews the drag continuously (`step: 0.001`,
+  // `position: pointerValue ?? thumbIndex`, a scalar - Base's single-thumb
+  // Slider takes a bare number, not a one-element array) so the thumb glides
   // instead of hopping between stops, but the ONLY thing ever handed to
   // `onChange` is `Math.round(position)` - a real catalog index.
   describe("continuous drag preview", () => {
-    it("rounds every fractional pointer position to a real catalog level, never an invalid one", () => {
-      // Stateful: `aria-valuenow` reads off the COMMITTED `value` prop
-      // (`thumbIndex`), so a stateless footer would never re-render with the
-      // rounded selection and this assertion would still see the pre-drag
-      // level.
-      const restore = stubSliderGeometry();
-      try {
-        const selections = renderStatefulFooter("low");
-        const stop = screen.getByTestId("model-reasoning-stop-0");
+    it("rounds every fractional pointer position to a real catalog level, never an invalid one", async () => {
+      // Stateful: `selectLevel` commits on every rounding-boundary crossing,
+      // not just on release, so a stateless footer would never re-render with
+      // the rounded selection and this assertion would still see the
+      // pre-drag level.
+      const selections = await renderStatefulFooter("low");
+      const stop = screen.getByTestId("model-reasoning-stop-0");
 
-        fireEvent.pointerDown(stop, {
-          pointerId: 1,
-          clientX: 0,
-          clientY: 0,
-          button: 0,
-        });
-        // 150 / 400 (stubbed track) * lastIndex(3) = 1.125 - a position with
-        // no catalog entry at all - rounds to index 1 ("medium").
-        fireEvent.pointerMove(stop, {
-          pointerId: 1,
-          clientX: 150,
-          clientY: 0,
-          buttons: 1,
-        });
+      fireEvent.pointerDown(stop, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+        button: 0,
+      });
+      // 153 -> raw position 1.125 - a position with no catalog entry at all -
+      // rounds to index 1 ("medium").
+      fireEvent.pointerMove(stop, {
+        pointerId: 1,
+        clientX: 153,
+        clientY: 0,
+        buttons: 1,
+      });
 
-        expect(selections.length).toBeGreaterThan(0);
-        const validIds = new Set(FOUR_OPTIONS.map((option) => option.id));
-        for (const selection of selections) {
-          expect(validIds.has(selection)).toBe(true);
-        }
-        expect(selections.at(-1)).toBe("medium");
-        // The thumb's own announced value stays the rounded catalog index -
-        // an explicit `aria-valuenow` override, since Radix would otherwise
-        // announce the raw fractional preview value mid-drag.
-        expect(thumb().getAttribute("aria-valuenow")).toBe("1");
-      } finally {
-        restore();
+      expect(selections.length).toBeGreaterThan(0);
+      const validIds = new Set(FOUR_OPTIONS.map((option) => option.id));
+      for (const selection of selections) {
+        expect(validIds.has(selection)).toBe(true);
       }
+      expect(selections.at(-1)).toBe("medium");
+      // The thumb's spoken name is the rounded catalog level even mid-drag
+      // (`aria-valuetext` tracks the committed `value` prop). Its numeric
+      // `aria-valuenow` is Base's own, and stays the raw continuous preview
+      // until release - that fractional reading is not a promise this
+      // control makes to assistive tech, only the settled value is (covered
+      // below, on release).
+      expect(thumb().getAttribute("aria-valuetext")).toBe("Medium");
     });
 
-    it("settles to the whole level on release, and a subsequent arrow key still steps by exactly one level", () => {
-      const restore = stubSliderGeometry();
-      try {
-        const selections = renderStatefulFooter("low");
-        const stop = screen.getByTestId("model-reasoning-stop-0");
+    it("settles to the whole level on release, and a subsequent arrow key still steps by exactly one level", async () => {
+      const selections = await renderStatefulFooter("low");
+      const stop = screen.getByTestId("model-reasoning-stop-0");
 
-        fireEvent.pointerDown(stop, {
-          pointerId: 1,
-          clientX: 0,
-          clientY: 0,
-          button: 0,
-        });
-        fireEvent.pointerMove(stop, {
-          pointerId: 1,
-          clientX: 150,
-          clientY: 0,
-          buttons: 1,
-        });
-        fireEvent.pointerUp(stop, { pointerId: 1, clientX: 150, clientY: 0 });
+      fireEvent.pointerDown(stop, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+        button: 0,
+      });
+      fireEvent.pointerMove(stop, {
+        pointerId: 1,
+        clientX: 153,
+        clientY: 0,
+        buttons: 1,
+      });
+      fireEvent.pointerUp(stop, { pointerId: 1, clientX: 153, clientY: 0 });
 
-        expect(selections.at(-1)).toBe("medium");
-        expect(
-          screen
-            .getByTestId("model-reasoning-slider")
-            .getAttribute("data-dragging"),
-        ).toBeNull();
+      expect(selections.at(-1)).toBe("medium");
+      expect(
+        screen
+          .getByTestId("model-reasoning-slider")
+          .getAttribute("data-dragging"),
+      ).toBeNull();
+      // Released: Base's own thumb value is no longer the continuous preview,
+      // so its numeric `aria-valuenow` settles on the rounded catalog index,
+      // and the spoken name agrees with it.
+      expect(thumb().getAttribute("aria-valuenow")).toBe("1");
+      expect(thumb().getAttribute("aria-valuetext")).toBe("Medium");
 
-        fireEvent.keyDown(thumb(), { key: "ArrowRight" });
+      fireEvent.keyDown(thumb(), { key: "ArrowRight" });
 
-        // One whole level up from "medium" ("high") - not a fractional step,
-        // and not the pre-drag "low" either.
-        expect(selections.at(-1)).toBe("high");
-      } finally {
-        restore();
-      }
+      // One whole level up from "medium" ("high") - not a fractional step,
+      // and not the pre-drag "low" either. A keyboard step is never
+      // fractional, so both the number and the name land on it together.
+      expect(selections.at(-1)).toBe("high");
+      expect(thumb().getAttribute("aria-valuenow")).toBe("2");
+      expect(thumb().getAttribute("aria-valuetext")).toBe("High");
     });
 
-    it("keeps every dot visible mid-drag, hiding only the settled selection once released", () => {
+    it("keeps every dot visible mid-drag, hiding only the settled selection once released", async () => {
       // `selected`/`overFill` compare against the CONTINUOUS `gesture.position`,
       // not the rounded committed index - so a dot the thumb has not visually
       // reached yet cannot be marked "selected" (and hidden) ahead of it.
-      const restore = stubSliderGeometry();
-      try {
-        renderStatefulFooter("low");
-        const stop = screen.getByTestId("model-reasoning-stop-0");
+      await renderStatefulFooter("low");
+      const stop = screen.getByTestId("model-reasoning-stop-0");
 
-        fireEvent.pointerDown(stop, {
-          pointerId: 1,
-          clientX: 0,
-          clientY: 0,
-          button: 0,
-        });
-        // 1.125 - between stops 1 and 2, exactly equal to neither.
-        fireEvent.pointerMove(stop, {
-          pointerId: 1,
-          clientX: 150,
-          clientY: 0,
-          buttons: 1,
-        });
+      fireEvent.pointerDown(stop, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+        button: 0,
+      });
+      // 153 -> raw position 1.125 - between stops 1 and 2, exactly equal to
+      // neither.
+      fireEvent.pointerMove(stop, {
+        pointerId: 1,
+        clientX: 153,
+        clientY: 0,
+        buttons: 1,
+      });
 
-        for (let index = 0; index < FOUR_OPTIONS.length; index += 1) {
-          expect(
-            screen.getByTestId(`model-reasoning-dot-${index}`).className,
-            `dot ${index} mid-drag`,
-          ).not.toContain("opacity-0");
-        }
-
-        fireEvent.pointerUp(stop, { pointerId: 1, clientX: 150, clientY: 0 });
-
-        // Settled on "medium" (index 1) - now exactly that dot hides.
-        expect(screen.getByTestId("model-reasoning-dot-1").className).toContain(
-          "opacity-0",
-        );
+      for (let index = 0; index < FOUR_OPTIONS.length; index += 1) {
         expect(
-          screen.getByTestId("model-reasoning-dot-0").className,
+          screen.getByTestId(`model-reasoning-dot-${index}`).className,
+          `dot ${index} mid-drag`,
         ).not.toContain("opacity-0");
-      } finally {
-        restore();
       }
+
+      fireEvent.pointerUp(stop, { pointerId: 1, clientX: 153, clientY: 0 });
+
+      // Settled on "medium" (index 1) - now exactly that dot hides.
+      expect(screen.getByTestId("model-reasoning-dot-1").className).toContain(
+        "opacity-0",
+      );
+      expect(
+        screen.getByTestId("model-reasoning-dot-0").className,
+      ).not.toContain("opacity-0");
     });
 
-    it("resets the stale moved/active flags on a buttons-0 pointermove, so a later assistive click still selects", () => {
+    it("resets the stale moved/active flags on a buttons-0 pointermove, so a later assistive click still selects", async () => {
       // Without this reset, `movedByGesture()` (active && moved) would still
       // read true from the earlier drag and swallow the next click outright -
       // e.g. an assistive-technology activation that never goes through
       // pointerdown/pointerup at all.
-      const restore = stubSliderGeometry();
-      try {
-        const onChange = vi.fn<(next: string) => void>();
-        renderFooter(reasoningConfig("low", FOUR_OPTIONS, onChange));
-        const stop0 = screen.getByTestId("model-reasoning-stop-0");
+      const onChange = vi.fn<(next: string) => void>();
+      await renderFooter(reasoningConfig("low", FOUR_OPTIONS, onChange));
+      const stop0 = screen.getByTestId("model-reasoning-stop-0");
 
-        fireEvent.pointerDown(stop0, {
-          pointerId: 1,
-          clientX: 0,
-          clientY: 0,
-          button: 0,
-        });
-        // A real drag, so Radix's `onValueChange` marks the gesture "moved".
-        fireEvent.pointerMove(stop0, {
-          pointerId: 1,
-          clientX: 150,
-          clientY: 0,
-          buttons: 1,
-        });
-        // The pointer let go without a `pointerup` ever reaching this
-        // element - only a move reporting no button held, the exact edge
-        // case the reset targets.
-        fireEvent.pointerMove(stop0, {
-          pointerId: 1,
-          clientX: 150,
-          clientY: 0,
-          buttons: 0,
-        });
+      fireEvent.pointerDown(stop0, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+        button: 0,
+      });
+      // A real drag, so Base's `onValueChange` marks the gesture "moved".
+      fireEvent.pointerMove(stop0, {
+        pointerId: 1,
+        clientX: 150,
+        clientY: 0,
+        buttons: 1,
+      });
+      // The pointer let go without a `pointerup` ever reaching this
+      // element - only a move reporting no button held, the exact edge
+      // case the reset targets.
+      fireEvent.pointerMove(stop0, {
+        pointerId: 1,
+        clientX: 150,
+        clientY: 0,
+        buttons: 0,
+      });
 
-        onChange.mockClear();
-        fireEvent.click(screen.getByTestId("model-reasoning-stop-3"));
+      onChange.mockClear();
+      fireEvent.click(screen.getByTestId("model-reasoning-stop-3"));
 
-        expect(onChange).toHaveBeenLastCalledWith("max");
-      } finally {
-        restore();
-      }
+      expect(onChange).toHaveBeenLastCalledWith("max");
     });
 
-    it("previews a position pulled toward the nearest stop while still committing the raw rounded level", () => {
+    it("previews a position pulled toward the nearest stop while still committing the raw rounded level", async () => {
       // Ties the pure `reasoningDragPosition` math (unit-tested on its own in
       // use-reasoning-slider-gesture.test.ts) to this exact drag scenario:
       // the same 1.125 raw position the "rounds every fractional..." test
       // above commits as "medium".
-      const restore = stubSliderGeometry();
-      try {
-        const selections = renderStatefulFooter("low");
-        const stop = screen.getByTestId("model-reasoning-stop-0");
+      const selections = await renderStatefulFooter("low");
+      const stop = screen.getByTestId("model-reasoning-stop-0");
 
-        fireEvent.pointerDown(stop, {
-          pointerId: 1,
-          clientX: 0,
-          clientY: 0,
-          button: 0,
-        });
-        fireEvent.pointerMove(stop, {
-          pointerId: 1,
-          clientX: 150,
-          clientY: 0,
-          buttons: 1,
-        });
+      fireEvent.pointerDown(stop, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+        button: 0,
+      });
+      // 153 -> raw position 1.125.
+      fireEvent.pointerMove(stop, {
+        pointerId: 1,
+        clientX: 153,
+        clientY: 0,
+        buttons: 1,
+      });
 
-        // FOUR_OPTIONS has lastIndex 3, so the small-ladder cap scales the
-        // pull to 0.07 * (3/5) = 0.042 here, not the uncapped 0.07.
-        const rawPosition = 1.125;
-        const pulledPreview = reasoningDragPosition(rawPosition, 3);
-        expect(pulledPreview).not.toBe(rawPosition);
-        expect(pulledPreview).toBeCloseTo(1.095301515, 6);
-        expect(selections.at(-1)).toBe("medium");
-      } finally {
-        restore();
-      }
+      // FOUR_OPTIONS has lastIndex 3, so the small-ladder cap scales the
+      // pull to 0.07 * (3/5) = 0.042 here, not the uncapped 0.07.
+      const rawPosition = 1.125;
+      const pulledPreview = reasoningDragPosition(rawPosition, 3);
+      expect(pulledPreview).not.toBe(rawPosition);
+      expect(pulledPreview).toBeCloseTo(1.095301515, 6);
+      expect(selections.at(-1)).toBe("medium");
     });
   });
 
   describe("pressed state", () => {
-    it("is set for the whole physical gesture and clears on release", () => {
-      renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
+    it("is set for the whole physical gesture and clears on release", async () => {
+      await renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
       const slider = screen.getByTestId("model-reasoning-slider");
 
       fireEvent.pointerDown(slider, {
@@ -839,8 +890,8 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
       expect(slider.getAttribute("data-pressed")).toBeNull();
     });
 
-    it("clears on pointercancel", () => {
-      renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
+    it("clears on pointercancel", async () => {
+      await renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
       const slider = screen.getByTestId("model-reasoning-slider");
 
       fireEvent.pointerDown(slider, {
@@ -854,8 +905,8 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
       expect(slider.getAttribute("data-pressed")).toBeNull();
     });
 
-    it("clears on losing pointer capture", () => {
-      renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
+    it("clears on losing pointer capture", async () => {
+      await renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
       const slider = screen.getByTestId("model-reasoning-slider");
 
       fireEvent.pointerDown(slider, {
@@ -869,8 +920,8 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
       expect(slider.getAttribute("data-pressed")).toBeNull();
     });
 
-    it("clears on a move reporting no button held", () => {
-      renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
+    it("clears on a move reporting no button held", async () => {
+      await renderFooter(reasoningConfig("low", FOUR_OPTIONS, vi.fn()));
       const slider = screen.getByTestId("model-reasoning-slider");
 
       fireEvent.pointerDown(slider, {

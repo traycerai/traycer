@@ -170,7 +170,8 @@ function ProviderLimitsPick(props: {
                               selection,
                               windows.map((entry) => entry.windowKey),
                               window.windowKey,
-                              next === true,
+
+                              next,
                             ),
                           );
                         }}

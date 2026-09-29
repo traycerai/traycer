@@ -569,7 +569,9 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
       name: "Disable stale-server",
     });
     fireEvent.click(toggle);
-    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(true));
+    await waitFor(() =>
+      expect(toggle.getAttribute("aria-disabled")).toBe("true"),
+    );
     expect(screen.getByText("Couldn't refresh MCP servers")).toBeDefined();
     expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
 
@@ -733,7 +735,9 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     await screen.findByText("server-a");
     const toggle = screen.getByRole("switch", { name: "Disable server-a" });
     fireEvent.click(toggle);
-    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(true));
+    await waitFor(() =>
+      expect(toggle.getAttribute("aria-disabled")).toBe("true"),
+    );
 
     await refetchMcpList(fixture);
     await screen.findByText("Couldn't refresh MCP servers");

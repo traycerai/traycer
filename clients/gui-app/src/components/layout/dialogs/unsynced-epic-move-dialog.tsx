@@ -46,23 +46,7 @@ export function UnsyncedEpicMoveDialog(props: {
     >
       <DialogContent
         data-testid="epic-move-unsynced-dialog"
-        onOpenAutoFocus={(event) => {
-          // Same shape, same reason as `unsynced-close-dialog`: Radix focuses
-          // the first tabbable descendant and this footer's DOM order puts the
-          // destructive "Discard and move" first, which is what puts the safe
-          // action rightmost on `sm:`.
-          //
-          // DERIVED, not measured. The tab-close sibling was driven in a real
-          // browser (`FOCUS_ON_OPEN = epic-tab-unsynced-discard`) and this is
-          // the identical composition - same `DialogContent`, same footer, a
-          // destructive `Button` first, nothing tabbable before it. Named as
-          // derived because "same composition, therefore same behaviour" is an
-          // inference that has been wrong on this branch before.
-          const safe = waitForSyncRef.current;
-          if (safe === null) return;
-          event.preventDefault();
-          safe.focus();
-        }}
+        initialFocus={() => waitForSyncRef.current ?? true}
       >
         <DialogHeader>
           <DialogTitle>You have unsynced changes for this Epic.</DialogTitle>

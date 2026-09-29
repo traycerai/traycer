@@ -101,7 +101,7 @@ describe("<SwitcherNewArtifactMenu />", () => {
         onClose={() => {}}
       />,
     );
-    fireEvent.pointerDown(screen.getByTestId("switcher-new-artifact"));
+    fireEvent.click(screen.getByTestId("switcher-new-artifact"));
     fireEvent.click(screen.getByTestId("switcher-new-artifact-spec"));
     expect(spies.createArtifact).toHaveBeenCalledWith("spec");
   });

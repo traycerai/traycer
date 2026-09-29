@@ -360,8 +360,10 @@ function ThemeImportDialogBody({
                     Color themes from Open VSX
                   </p>
                   <Select
+                    items={sorts}
                     value={sort}
                     onValueChange={(value) => {
+                      if (value === null) return;
                       const selected = sorts.find(
                         (entry) => entry.value === value,
                       );

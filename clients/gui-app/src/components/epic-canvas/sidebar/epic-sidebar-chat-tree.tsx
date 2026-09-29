@@ -3426,7 +3426,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
               className={cn(
                 "flex-none",
                 reserveArchiveSlot &&
-                  "group-hover/tree-item:hidden group-focus-within/tree-item:hidden group-has-[[data-state=open]]/tree-item:hidden",
+                  "group-hover/tree-item:hidden group-focus-within/tree-item:hidden group-has-data-popup-open/tree-item:hidden",
               )}
             >
               <ChatRowIdleTime updatedAt={updatedAt} />

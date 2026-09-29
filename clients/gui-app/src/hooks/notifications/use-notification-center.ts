@@ -2,10 +2,12 @@ import {
   useCallback,
   useEffect,
   useRef,
+  type ComponentProps,
   type CSSProperties,
   type KeyboardEvent,
   type RefObject,
 } from "react";
+import type { Popover } from "@/components/ui/popover";
 import { useNotificationCenterGeometry } from "@/hooks/notifications/use-notification-center-geometry";
 import { useNotificationCenterOpenLifecycle } from "@/hooks/notifications/use-notification-center-open-lifecycle";
 import {
@@ -29,10 +31,10 @@ import {
 /** The center's own surface, marked by `NotificationsPopover`. */
 const NOTIFICATION_CENTER_SELECTOR = "[data-notification-center]";
 
-/** Radix's outside-pointer event, as `PopoverContent` hands it over. */
-type PointerDownOutsideEvent = CustomEvent<{
-  readonly originalEvent: PointerEvent;
-}>;
+/** The center's `Popover` open-change callback, reasons and all. */
+type PopoverOpenChange = NonNullable<
+  ComponentProps<typeof Popover>["onOpenChange"]
+>;
 
 export interface NotificationCenter {
   readonly open: boolean;
@@ -42,13 +44,12 @@ export interface NotificationCenter {
   readonly triggerRef: RefObject<HTMLButtonElement | null>;
   readonly onTriggerPointerDown: () => void;
   readonly onTriggerKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
+  /** The center's `Popover` `onOpenChange`: the dismissal guards, then the store. */
+  readonly onOpenChange: PopoverOpenChange;
   /** Spread onto the center's `PopoverContent`. */
   readonly contentHandlers: {
-    readonly onOpenAutoFocus: (event: Event) => void;
-    readonly onEscapeKeyDown: () => void;
-    readonly onCloseAutoFocus: (event: Event) => void;
-    readonly onFocusOutside: (event: Event) => void;
-    readonly onPointerDownOutside: (event: PointerDownOutsideEvent) => void;
+    readonly initialFocus: () => HTMLElement | false;
+    readonly finalFocus: () => HTMLElement | false;
   };
   /** Spread onto `NotificationsPopover`. */
   readonly popoverProps: {
@@ -61,7 +62,7 @@ export interface NotificationCenter {
 }
 
 /**
- * Everything the notification center's Radix Popover needs apart from its
+ * Everything the notification center's Popover needs apart from its
  * trigger: the shared open state, the `app.notifications.open` binding, the
  * one-time geometry lock, the open/close focus lifecycle and the open
  * analytics. The header's bell and the strip's Notifications drawer each own one
@@ -90,7 +91,7 @@ export function useNotificationCenter(): NotificationCenter {
     setOpen(false);
   }, [setOpen]);
 
-  // Whether the nested filter menu is logically open right now, per Radix's
+  // Whether the nested filter menu is logically open right now, per the menu's
   // own onOpenChange notification - not derived from the DOM, since the menu
   // portals to document.body (so it isn't a shell descendant to query) and
   // its data-state can briefly read "closed" while still mounted mid-exit-
@@ -141,7 +142,7 @@ export function useNotificationCenter(): NotificationCenter {
     [],
   );
 
-  // Closing does NOT: an open Radix popover is a `role="dialog"`, and the
+  // Closing does NOT: an open popover is a `role="dialog"`, and the
   // keybinding provider deliberately stops dispatching chords behind one
   // (`isAnyDialogOpen`), so the dynamic handler above can never see the
   // second press. This window listener is mounted only while the center is
@@ -174,8 +175,8 @@ export function useNotificationCenter(): NotificationCenter {
   // Fires exactly once per open cycle - edge-triggered on the `open`
   // boolean's false -> true transition, so it covers every way the center
   // can open (trigger click/keyboard AND a native-notification-driven
-  // programmatic open) rather than only the ones that go through Radix's own
-  // onOpenChange handler.
+  // programmatic open) rather than only the ones that go through the
+  // popover's own onOpenChange handler.
   const wasOpenRef = useRef(open);
   useEffect(() => {
     if (open && !wasOpenRef.current) {
@@ -206,68 +207,47 @@ export function useNotificationCenter(): NotificationCenter {
     triggerRef,
     onTriggerPointerDown,
     onTriggerKeyDown,
-    contentHandlers: {
-      onOpenAutoFocus: lifecycle.onContentOpenAutoFocus,
-      onEscapeKeyDown: lifecycle.onContentEscapeKeyDown,
-      onCloseAutoFocus: lifecycle.onContentCloseAutoFocus,
-      // A nested modal menu (the filter menu) traps focus into its own
-      // portal, outside this Content's DOM subtree - without this guard,
-      // Radix's DismissableLayer reads that as focus leaving the popover
-      // and dismisses it. Escape still closes the popover normally; this
-      // only turns off the focus-outside path, which nothing else in the
-      // T04 focus contract depends on.
-      onFocusOutside: (event) => event.preventDefault(),
-      // Real-browser-only bug (jsdom's fireEvent bypasses hit-testing and
-      // never reproduced it): while the modal filter menu is open, its
-      // pointer/scroll barrier sets `body.style.pointerEvents = "none"`.
-      // A click landing inside the popover but outside the menu is then
-      // NOT hit-tested onto the clicked element at all - the browser skips
-      // every inert (pointer-events:none) node under it and resolves
-      // `event.target` to <html>. `event.target` can't be trusted to tell
-      // "inside the popover" from "truly outside" while that lock is
-      // active, so this checks the click's real screen position against
-      // the shell's own rect instead. Genuinely outside still closes
-      // everything normally.
-      //
-      // Inside the shell, this must decide whether the filter menu still
-      // needs a synthetic Escape to close it, or already closed itself -
-      // Radix's own DismissableLayer defers cross-layer
-      // onPointerDownOutside delivery (`deferPointerDownOutside`), so the
-      // menu's own outside-pointerdown handling and this popover-level
-      // handler are NOT guaranteed to run in a fixed order relative to
-      // each other. When the menu's handler runs first, it has already
-      // closed the menu by the time this fires; dispatching Escape then
-      // would hit the popover itself as the new topmost layer and close
-      // it too - reproduced live in headless Chrome. Reading
-      // `nestedMenuOpenRef` (updated synchronously by the menu's own
-      // onOpenChange, which always completes before this deferred handler
-      // runs, since it fires on an earlier event in the same gesture)
-      // makes the decision correct in both orderings: dispatch Escape only
-      // if the menu is still open; otherwise it already closed itself, so
-      // do nothing and leave the popover open.
-      onPointerDownOutside: (event) => {
+    onOpenChange: (next, details) => {
+      // A nested modal menu (the filter menu) owns focus in its own portal,
+      // outside this popover's subtree, without dismissing it. Escape still
+      // closes the popover normally.
+      if (!next && details.reason === "focus-out") details.cancel();
+      if (!next && details.reason === "escape-key") markKeyboardDismiss();
+      if (!next && details.reason === "outside-press") {
+        // While the nested filter menu is open its barrier can retarget a
+        // press inside the popover to <html>, so `event.target` cannot tell
+        // "inside" from "truly outside": the press's position against the
+        // shell's own rect can. Inside the shell, the menu may or may not
+        // have closed itself first, so Escape is sent only while it is
+        // still open - never to the popover itself as the new top layer.
         const shell = geometry.shellRef.current;
-        if (shell === null) return;
-        const { clientX, clientY } = event.detail.originalEvent;
-        const rect = shell.getBoundingClientRect();
-        const isInsideShell =
-          clientX >= rect.left &&
-          clientX <= rect.right &&
-          clientY >= rect.top &&
-          clientY <= rect.bottom;
-        if (isInsideShell) {
-          event.preventDefault();
-          if (nestedMenuOpenRef.current) {
-            document.dispatchEvent(
-              new globalThis.KeyboardEvent("keydown", {
-                key: "Escape",
-                bubbles: true,
-                cancelable: true,
-              }),
-            );
+        const event = details.event;
+        if (shell !== null && "clientX" in event && "clientY" in event) {
+          const rect = shell.getBoundingClientRect();
+          if (
+            event.clientX >= rect.left &&
+            event.clientX <= rect.right &&
+            event.clientY >= rect.top &&
+            event.clientY <= rect.bottom
+          ) {
+            details.cancel();
+            if (nestedMenuOpenRef.current)
+              document.dispatchEvent(
+                new globalThis.KeyboardEvent("keydown", {
+                  key: "Escape",
+                  bubbles: true,
+                  cancelable: true,
+                }),
+              );
           }
         }
-      },
+      }
+      if (details.isCanceled) return;
+      setOpen(next);
+    },
+    contentHandlers: {
+      initialFocus: lifecycle.initialFocus,
+      finalFocus: lifecycle.finalFocus,
     },
     popoverProps: {
       onNavigate: handleNavigate,

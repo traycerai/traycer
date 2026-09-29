@@ -279,36 +279,34 @@ export function ContextUsageChipView({
     >
       {onCompact === null ? null : <CompactAction onCompact={onCompact} />}
       <Popover>
-        <PopoverTrigger asChild>
-          {indicatorStyle === "ring-only" ? (
-            // The number is nowhere on screen in this style, so hover gets it
-            // back without opening the breakdown.
-            <TooltipWrapper
-              label={`${percent}% context left`}
-              side="top"
-              sideOffset={6}
-              align={undefined}
-            >
-              {trigger}
-            </TooltipWrapper>
-          ) : (
-            trigger
-          )}
-        </PopoverTrigger>
+        <PopoverTrigger
+          render={
+            indicatorStyle === "ring-only" ? (
+              // The number is nowhere on screen in this style, so hover gets it
+              // back without opening the breakdown.
+              <TooltipWrapper
+                label={`${percent}% context left`}
+                side="top"
+                sideOffset={6}
+                align={undefined}
+              >
+                {trigger}
+              </TooltipWrapper>
+            ) : (
+              trigger
+            )
+          }
+        />
         <PopoverContent
           align="end"
           side="top"
           sideOffset={6}
           aria-label="Context usage breakdown"
           className="w-[min(90vw,18rem)]"
-          onOpenAutoFocus={(event) => {
-            if (preserveFocusOnOpenRef.current) {
-              event.preventDefault();
-            } else {
-              event.preventDefault();
-              pinBreakdownActionRef.current?.focus();
-            }
+          initialFocus={() => {
+            const preserve = preserveFocusOnOpenRef.current;
             preserveFocusOnOpenRef.current = false;
+            return preserve ? false : (pinBreakdownActionRef.current ?? false);
           }}
         >
           <ContextUsageBreakdown

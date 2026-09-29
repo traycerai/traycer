@@ -47,7 +47,7 @@ export function FontPicker(props: FontPickerProps) {
   const [dialogContainer, setDialogContainer] = useState<HTMLElement | null>(
     null,
   );
-  const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
+  const { contentRef, initialFocus: coarseInitialFocus } =
     useCoarsePointerOpenAutoFocus();
 
   const trimmedQuery = query.trim();
@@ -102,29 +102,31 @@ export function FontPicker(props: FontPickerProps) {
           setOpen(next);
         }}
       >
-        <PopoverTrigger asChild>
-          <button
-            ref={triggerRef}
-            type="button"
-            aria-label={ariaLabel}
-            className="inline-flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-card px-2.5 py-1.5 text-ui-sm text-foreground transition-colors hover:bg-accent/50"
-          >
-            <span
-              className={cn(
-                "min-w-0 flex-1 break-words text-left",
-                value === null && "text-muted-foreground",
-              )}
-              style={
-                value !== null
-                  ? { fontFamily: quoteFontFamily(value) }
-                  : undefined
-              }
+        <PopoverTrigger
+          render={
+            <button
+              ref={triggerRef}
+              type="button"
+              aria-label={ariaLabel}
+              className="inline-flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-card px-2.5 py-1.5 text-ui-sm text-foreground transition-colors hover:bg-accent/50"
             >
-              {value ?? defaultLabel}
-            </span>
-            <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
-          </button>
-        </PopoverTrigger>
+              <span
+                className={cn(
+                  "min-w-0 flex-1 break-words text-left",
+                  value === null && "text-muted-foreground",
+                )}
+                style={
+                  value !== null
+                    ? { fontFamily: quoteFontFamily(value) }
+                    : undefined
+                }
+              >
+                {value ?? defaultLabel}
+              </span>
+              <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
+            </button>
+          }
+        />
         <PopoverContent
           layout="bare"
           align="end"
@@ -133,22 +135,22 @@ export function FontPicker(props: FontPickerProps) {
           collisionPadding={8}
           className="w-[min(85vw,18rem)] overflow-hidden"
           ref={contentRef}
-          onOpenAutoFocus={coarseOpenAutoFocus}
+          initialFocus={coarseInitialFocus}
         >
           <Command shouldFilter={false}>
             <CommandInput
               aria-label={`Search ${ariaLabel.toLowerCase()}`}
               value={query}
-              onValueChange={setQuery}
+              onChange={(event) => setQuery(event.target.value)}
               placeholder="Search fonts…"
               spellCheck={false}
             />
             <CommandList className="max-h-[min(50vh,18rem)] p-1">
               <CommandGroup>
                 <CommandItem
-                  value="__default__"
+                  itemKey="__default__"
                   data-checked={value === null ? "true" : "false"}
-                  onSelect={() => commit(null)}
+                  onAction={() => commit(null)}
                 >
                   <span className="min-w-0 flex-1 break-words text-muted-foreground">
                     {defaultLabel}
@@ -158,8 +160,8 @@ export function FontPicker(props: FontPickerProps) {
               {showCustom ? (
                 <CommandGroup>
                   <CommandItem
-                    value={`custom:${trimmedQuery}`}
-                    onSelect={() => commit(trimmedQuery)}
+                    itemKey={`custom:${trimmedQuery}`}
+                    onAction={() => commit(trimmedQuery)}
                   >
                     <span className="min-w-0 flex-1 break-words">
                       {`Use "${trimmedQuery}"`}
@@ -179,9 +181,9 @@ export function FontPicker(props: FontPickerProps) {
                   {filtered.map((font) => (
                     <CommandItem
                       key={font.family}
-                      value={font.family}
+                      itemKey={font.family}
                       data-checked={font.family === value ? "true" : "false"}
-                      onSelect={() => commit(font.family)}
+                      onAction={() => commit(font.family)}
                     >
                       <span
                         className="min-w-0 flex-1 break-words"

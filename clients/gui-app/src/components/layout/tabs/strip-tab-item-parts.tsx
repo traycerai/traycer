@@ -22,13 +22,11 @@ export function StripTabContextMenu(props: {
   const [open, setOpen] = useState(false);
   useTitleBarDragSuppression(`tab-menu:${useId()}`, open);
   return (
-    // `modal={false}` is load-bearing for Edit Title. A modal menu keeps a
-    // TRAPPED focus scope while it closes: the rename input mounts and focuses
-    // inside the trigger (outside that scope), the scope pulls focus back, the
-    // input blurs, and `useInlineRename` blur-commits and unmounts it before a
-    // keystroke lands. Un-trapped, the input keeps the focus it takes on mount.
+    // Edit Title's focus is `TabContextMenuContent`'s `finalFocus={false}`: the
+    // closing menu does not pull focus back, so the rename input keeps the
+    // focus it takes on mount instead of blurring (and `useInlineRename`
+    // blur-committing) before a keystroke lands.
     <ContextMenu
-      modal={false}
       onOpenChange={(nextOpen) => {
         setOpen(nextOpen);
         if (
@@ -46,7 +44,7 @@ export function StripTabContextMenu(props: {
         input.onTaskPinMenuOpen(input.tab.epicId);
       }}
     >
-      <ContextMenuTrigger asChild>{props.children}</ContextMenuTrigger>
+      <ContextMenuTrigger render={props.children} />
       <TabContextMenuContent
         tab={item.displayTab}
         canCloseOtherTabs={input.canCloseOtherTabs}

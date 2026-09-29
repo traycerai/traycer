@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-settings-conflict-dialog";
@@ -85,14 +91,15 @@ describe("<SteerSettingsConflictDialog /> keyboard navigation", () => {
       name: /end turn & send/i,
     });
 
-    expect(document.activeElement).toBe(cancel);
+    // Base UI applies initial focus in a queued frame.
+    await waitFor(() => expect(document.activeElement).toBe(cancel));
     await user.tab();
     expect(document.activeElement).toBe(confirm);
     await user.tab({ shift: true });
     expect(document.activeElement).toBe(cancel);
 
     await user.keyboard("{Escape}");
-    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onOpenChange).toHaveBeenCalledWith(false, expect.anything());
     expect(onRestart).not.toHaveBeenCalled();
   });
 });

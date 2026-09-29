@@ -293,8 +293,8 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     const second = screen.getByRole("checkbox", {
       name: "Import logins for example.org",
     });
-    expect(first.getAttribute("data-state")).toBe("checked");
-    expect(second.getAttribute("data-state")).toBe("checked");
+    expect(first.hasAttribute("data-checked")).toBe(true);
+    expect(second.hasAttribute("data-checked")).toBe(true);
     expect(screen.getByText("2 of 2 sites selected")).not.toBeNull();
   });
 
@@ -324,7 +324,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
         name: "google.com can't be imported",
       },
     );
-    expect(excludedCheckbox.getAttribute("data-state")).toBe("unchecked");
+    expect(excludedCheckbox.hasAttribute("data-unchecked")).toBe(true);
     expect(excludedCheckbox.disabled).toBe(true);
     expect(
       screen.getByText(
@@ -402,7 +402,7 @@ describe("<ImportLoginsDialog /> choose-sites step", () => {
     const googleCheckbox = screen.getByRole("checkbox", {
       name: "Import logins for google.com",
     });
-    expect(googleCheckbox.getAttribute("data-state")).toBe("checked");
+    expect(googleCheckbox.hasAttribute("data-checked")).toBe(true);
     expect(screen.getByText("device-bound · 5 cookies")).not.toBeNull();
     expect(screen.getByText("2 of 2 sites selected")).not.toBeNull();
 
@@ -966,18 +966,18 @@ describe("<ImportLoginsDialog /> import", () => {
     expect(
       screen
         .getByRole("checkbox", { name: "Import logins for site-a.com" })
-        .getAttribute("data-state"),
-    ).toBe("checked");
+        .hasAttribute("data-checked"),
+    ).toBe(true);
     expect(
       screen
         .getByRole("checkbox", { name: "Import logins for site-b.com" })
-        .getAttribute("data-state"),
-    ).toBe("unchecked");
+        .hasAttribute("data-unchecked"),
+    ).toBe(true);
     expect(
       screen
         .getByRole("checkbox", { name: "Import logins for site-c.com" })
-        .getAttribute("data-state"),
-    ).toBe("checked");
+        .hasAttribute("data-checked"),
+    ).toBe(true);
     expect(
       screen.getByRole("button", { name: "Import 2 sites" }),
     ).not.toBeNull();
@@ -1028,8 +1028,8 @@ describe("<ImportLoginsDialog /> import", () => {
     expect(
       screen
         .getByRole("checkbox", { name: "Import logins for google.com" })
-        .getAttribute("data-state"),
-    ).toBe("checked");
+        .hasAttribute("data-checked"),
+    ).toBe(true);
   });
 });
 

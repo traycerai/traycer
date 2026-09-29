@@ -308,7 +308,7 @@ describe("FallbackSettingsPanel - F20 the Effort control", () => {
     openCombobox("Effort");
     const unsupported = screen.getByTestId("fallback-effort-unsupported");
     expect(unsupported.textContent).toContain("ultra-high");
-    expect(unsupported.getAttribute("data-state")).toBe("checked");
+    expect(unsupported.hasAttribute("data-selected")).toBe(true);
   });
 
   it("with ZERO options and no stored value, the Effort control is a disabled Select showing 'Any effort'", () => {

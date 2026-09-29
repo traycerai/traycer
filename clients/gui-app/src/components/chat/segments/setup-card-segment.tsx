@@ -345,7 +345,7 @@ export function SetupCardSegment(props: {
         titleLabel
       ) : (
         <Tooltip>
-          <TooltipTrigger asChild>{titleLabel}</TooltipTrigger>
+          <TooltipTrigger render={titleLabel} />
           <TooltipContent side="bottom" className="max-w-80 whitespace-normal">
             {provisionFailureDetail}
           </TooltipContent>
@@ -391,20 +391,22 @@ export function SetupCardSegment(props: {
     // renders in a portal, so the terminal session under the bar never reflows.
     return (
       <Popover open={expanded} onOpenChange={setManualExpanded}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            aria-expanded={expanded}
-            aria-label={toggleAccessibleLabel}
-            data-testid="setup-card-toggle"
-            className={cn(
-              "flex items-center rounded-sm px-1.5 py-0.5 outline-none transition-colors",
-              "hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
-            )}
-          >
-            {labelInner}
-          </button>
-        </PopoverTrigger>
+        <PopoverTrigger
+          render={
+            <button
+              type="button"
+              aria-expanded={expanded}
+              aria-label={toggleAccessibleLabel}
+              data-testid="setup-card-toggle"
+              className={cn(
+                "flex items-center rounded-sm px-1.5 py-0.5 outline-none transition-colors",
+                "hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
+              )}
+            >
+              {labelInner}
+            </button>
+          }
+        />
         <PopoverContent
           align="end"
           side="bottom"
@@ -641,20 +643,22 @@ function OpenTerminalButton(props: {
     // tooltip trigger sits on an enabled wrapper span around it.
     return (
       <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex">
-            <Button
-              type="button"
-              variant="muted"
-              size="xs"
-              disabled
-              data-testid="setup-card-open-terminal-ended"
-            >
-              Open terminal
-              <ArrowRight aria-hidden />
-            </Button>
-          </span>
-        </TooltipTrigger>
+        <TooltipTrigger
+          render={
+            <span className="inline-flex">
+              <Button
+                type="button"
+                variant="muted"
+                size="xs"
+                disabled
+                data-testid="setup-card-open-terminal-ended"
+              >
+                Open terminal
+                <ArrowRight aria-hidden />
+              </Button>
+            </span>
+          }
+        />
         <TooltipContent side="bottom">
           Setup terminal session ended
         </TooltipContent>

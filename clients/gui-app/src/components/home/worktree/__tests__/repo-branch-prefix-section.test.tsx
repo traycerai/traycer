@@ -673,11 +673,10 @@ describe("<RepoBranchPrefixSection />", () => {
 
   describe("radio keyboard navigation", () => {
     it("moves checked state between global and override with arrow keys", async () => {
-      // user-event fires keyup immediately after keydown; Radix only auto-selects
-      // the newly-focused radio while the arrow key is still considered pressed
-      // (document keydown sets a flag, keyup clears it, and focus moves via
-      // setTimeout). Drive keydown without keyup so the flag stays true through
-      // the async focus move - then flush the timer.
+      // Drive keydown without keyup and flush a tick: this dodged a
+      // Radix keyup-clears-a-flag race, and Base's synchronous composite
+      // navigation makes the flush a no-op rather than a requirement -
+      // kept so the test still passes if that internal timing changes.
       renderSection({ status: "absent" }, noop, null);
 
       const globalRadio = screen.getByRole("radio", {
@@ -687,8 +686,8 @@ describe("<RepoBranchPrefixSection />", () => {
         name: /This repository/i,
       });
 
-      expect(globalRadio.getAttribute("data-state")).toBe("checked");
-      expect(overrideRadio.getAttribute("data-state")).toBe("unchecked");
+      expect(globalRadio.hasAttribute("data-checked")).toBe(true);
+      expect(overrideRadio.hasAttribute("data-unchecked")).toBe(true);
 
       globalRadio.focus();
       expect(document.activeElement).toBe(globalRadio);
@@ -712,7 +711,7 @@ describe("<RepoBranchPrefixSection />", () => {
       const editingOverride = screen.getByRole("radio", {
         name: /This repository/i,
       });
-      expect(editingOverride.getAttribute("data-state")).toBe("checked");
+      expect(editingOverride.hasAttribute("data-checked")).toBe(true);
       editingOverride.focus();
       fireEvent.keyDown(editingOverride, {
         key: "ArrowUp",
@@ -731,8 +730,8 @@ describe("<RepoBranchPrefixSection />", () => {
       expect(
         screen
           .getByRole("radio", { name: /Global default/i })
-          .getAttribute("data-state"),
-      ).toBe("checked");
+          .hasAttribute("data-checked"),
+      ).toBe(true);
     });
 
     it("exposes accessible names on both radio options and is tab-reachable", async () => {

@@ -222,7 +222,7 @@ describe("SampleWorkspaceBody - content", () => {
     expect(screen.getByTestId("accumulated-review-all")).not.toBeNull();
     expect(screen.getByTestId("accumulated-undo-all")).not.toBeNull();
     // Collapsible, which the old `FileChangeHeader` stand-in never was.
-    expect(changes.getAttribute("data-state")).toBe("closed");
+    expect(changes.hasAttribute("data-closed")).toBe(true);
 
     const agents = screen.getByTestId("active-agents-panel");
     expect(agents.textContent).toContain("2 running");

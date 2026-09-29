@@ -1854,7 +1854,7 @@ function ArtifactAddChildButton(props: ArtifactAddChildButtonProps) {
         ...triggerIdProps,
         "aria-haspopup": "menu" as const,
         "aria-expanded": open,
-        "data-state": open ? "open" : "closed",
+        "data-popup-open": open ? "" : undefined,
         "data-slot": "dropdown-menu-trigger",
         onPointerDown,
         onKeyDown,

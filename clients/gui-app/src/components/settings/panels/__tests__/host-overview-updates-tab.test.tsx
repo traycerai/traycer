@@ -465,8 +465,8 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     expect(
       screen
         .getByTestId("host-overview-tab-panel-updates")
-        .getAttribute("data-state"),
-    ).toBe("active");
+        .hasAttribute("data-hidden"),
+    ).toBe(false);
   });
 
   it("the no-list state's Check now runs the exact check the version card uses, refreshing both from one request", async () => {

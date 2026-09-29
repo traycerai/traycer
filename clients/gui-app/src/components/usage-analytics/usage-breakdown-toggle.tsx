@@ -15,7 +15,7 @@ export function UsageBreakdownToggle(
   return (
     <Tabs
       value={props.groupBy}
-      onValueChange={(value) => {
+      onValueChange={(value: unknown) => {
         if (value === "model" || value === "day") props.onChange(value);
       }}
     >

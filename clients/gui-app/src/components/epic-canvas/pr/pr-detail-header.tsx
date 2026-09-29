@@ -14,7 +14,7 @@ import type {
   PrSourceNotice,
   PrState,
 } from "@traycer/protocol/host/pr-schemas";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { PrActorAvatar } from "@/components/epic-canvas/pr/pr-detail-avatar";
 import { PrSourceNoticeHint } from "@/components/epic-canvas/pr/pr-source-notice";
@@ -281,18 +281,20 @@ function PrDetailGitHubLink(props: {
   }
 
   return (
-    <Button type="button" size="xs" variant="ghost" asChild className="h-7">
-      <a
-        href={props.prUrl}
-        aria-label="Open on GitHub"
-        aria-disabled={isPending}
-        data-testid="pr-detail-github-link"
-        onClick={handleClick}
-        onAuxClick={onMiddleClick(handleClick)}
-      >
-        GitHub
-        <ExternalLink className="size-3" aria-hidden />
-      </a>
-    </Button>
+    <a
+      href={props.prUrl}
+      aria-label="Open on GitHub"
+      aria-disabled={isPending}
+      data-slot="button"
+      data-variant="ghost"
+      data-size="xs"
+      data-testid="pr-detail-github-link"
+      className={cn(buttonVariants({ variant: "ghost", size: "xs" }), "h-7")}
+      onClick={handleClick}
+      onAuxClick={onMiddleClick(handleClick)}
+    >
+      GitHub
+      <ExternalLink className="size-3" aria-hidden />
+    </a>
   );
 }

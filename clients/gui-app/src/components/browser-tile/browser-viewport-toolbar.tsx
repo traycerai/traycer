@@ -267,18 +267,20 @@ function ExpandedViewportToolbar({
         </span>
         <div className="hidden shrink-0 @[36rem]/viewport:block">
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="muted"
-                size="sm"
-                data-viewport-action
-                aria-label="Preview scale"
-                className="tabular-nums"
-              >
-                {Math.round(controller.previewScale * 100)}%
-                <ChevronDown className="size-3" />
-              </Button>
-            </DropdownMenuTrigger>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="muted"
+                  size="sm"
+                  data-viewport-action
+                  aria-label="Preview scale"
+                  className="tabular-nums"
+                >
+                  {Math.round(controller.previewScale * 100)}%
+                  <ChevronDown className="size-3" />
+                </Button>
+              }
+            />
             <DropdownMenuContent data-viewport-controls className="w-max">
               <ViewportScaleOptions controller={controller} />
             </DropdownMenuContent>
@@ -351,31 +353,33 @@ function ViewportPresetMenu({
   );
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          data-viewport-action
-          aria-label="Viewport dimensions"
-          className="min-w-0 shrink @[26rem]/viewport:w-[22ch] @[26rem]/viewport:justify-between @[26rem]/viewport:bg-foreground/5"
-        >
-          <span className="hidden truncate @[26rem]/viewport:inline">
-            {controller.state.intent.mode === "fit"
-              ? "Fit to pane"
-              : (preset?.[0] ?? "Responsive")}
-          </span>
-          <ChevronDown className="hidden size-3 shrink-0 text-muted-foreground @[26rem]/viewport:block" />
-          <Ellipsis className="size-4 @[26rem]/viewport:hidden" />
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-viewport-action
+            aria-label="Viewport dimensions"
+            className="min-w-0 shrink @[26rem]/viewport:w-[22ch] @[26rem]/viewport:justify-between @[26rem]/viewport:bg-foreground/5"
+          >
+            <span className="hidden truncate @[26rem]/viewport:inline">
+              {controller.state.intent.mode === "fit"
+                ? "Fit to pane"
+                : (preset?.[0] ?? "Responsive")}
+            </span>
+            <ChevronDown className="hidden size-3 shrink-0 text-muted-foreground @[26rem]/viewport:block" />
+            <Ellipsis className="size-4 @[26rem]/viewport:hidden" />
+          </Button>
+        }
+      />
       <DropdownMenuContent
         data-viewport-controls
         align="start"
         className="w-max"
       >
         <DropdownMenuLabel>Viewport dimensions</DropdownMenuLabel>
-        <DropdownMenuItem disabled={controller.disabled} onSelect={onReset}>
+        <DropdownMenuItem disabled={controller.disabled} onClick={onReset}>
           Fit to pane
         </DropdownMenuItem>
         <DropdownMenuSeparator />
@@ -387,14 +391,14 @@ function ViewportPresetMenu({
             </DropdownMenuSubContent>
           </DropdownMenuSub>
           <DropdownMenuItem
-            onSelect={() => controller.setRatioLocked(!controller.ratioLocked)}
+            onClick={() => controller.setRatioLocked(!controller.ratioLocked)}
           >
             {controller.ratioLocked ? <Link2 /> : <Unlink2 />}
             {controller.ratioLocked ? "Unlock" : "Lock"} aspect ratio
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={controller.disabled || size === null}
-            onSelect={onRotate}
+            onClick={onRotate}
           >
             <RotateCw /> Rotate viewport
           </DropdownMenuItem>
@@ -404,7 +408,7 @@ function ViewportPresetMenu({
           <DropdownMenuItem
             key={name}
             disabled={controller.disabled}
-            onSelect={() => onSelect(width, height)}
+            onClick={() => onSelect(width, height)}
             className="flex justify-between gap-6"
           >
             <span className="truncate">{name}</span>

@@ -1,5 +1,11 @@
 import { useMemo, type ReactNode } from "react";
-import { Dialog as DialogPrimitive } from "radix-ui";
+import {
+  Dialog,
+  DialogPopup,
+  DialogBackdrop,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -37,31 +43,28 @@ export function MigrationBlockingModalHost(): ReactNode {
   }
 
   return (
-    <DialogPrimitive.Root open modal>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay
+    <Dialog
+      paneAware={false}
+      open
+      modal
+      onOpenChange={(_open, details) => details.cancel()}
+    >
+      <DialogPortal>
+        <DialogBackdrop
           data-slot="dialog-overlay"
           data-testid="migration-blocking-overlay"
-          className="fixed inset-0 isolate z-60 bg-black/40 transition-opacity duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0"
+          variant="blocking"
         />
-        <DialogPrimitive.Content
+        <DialogPopup
           data-slot="dialog-content"
           data-testid="migration-blocking-modal"
           aria-describedby={undefined}
-          onEscapeKeyDown={(event) => {
-            if (isRunning) event.preventDefault();
-          }}
-          onPointerDownOutside={(event) => {
-            if (isRunning) event.preventDefault();
-          }}
-          onInteractOutside={(event) => {
-            if (isRunning) event.preventDefault();
-          }}
           // Safe centre on both axes, not the viewport's halfway marks: this
           // frame is portalled and `fixed`, so it centres over the status-bar
           // strip and the landscape sensor housing too unless it is told where
           // the app's part of the screen is.
-          className="fixed top-safe-center-y left-safe-center-x z-60 flex w-[min(90vw,28rem,var(--safe-area-width))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 rounded-xl bg-background p-6 text-foreground ring-1 ring-foreground/10 shadow-2xl outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95"
+          variant="blocking"
+          className="w-[min(90vw,28rem,var(--safe-area-width))]"
         >
           {isRunning ? (
             <RunningBody
@@ -80,9 +83,9 @@ export function MigrationBlockingModalHost(): ReactNode {
               }}
             />
           )}
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </DialogPopup>
+      </DialogPortal>
+    </Dialog>
   );
 }
 
@@ -97,12 +100,9 @@ function RunningBody(props: RunningBodyProps): ReactNode {
   const { status, totals, counts, isRemote } = props;
   return (
     <>
-      <DialogPrimitive.Title
-        data-slot="dialog-title"
-        className="font-heading text-lg leading-none font-medium"
-      >
+      <DialogTitle data-slot="dialog-title" appearance="host" size="blocking">
         {MIGRATION_PROGRESS_LABEL}
-      </DialogPrimitive.Title>
+      </DialogTitle>
       <p className="text-sm text-muted-foreground">
         {isRemote
           ? "A migration is running in another window. Please wait - it will finish shortly."
@@ -135,12 +135,9 @@ function ErrorBody(props: ErrorBodyProps): ReactNode {
       : "Migration connection was interrupted. The host-side state is preserved - re-open settings to retry.";
   return (
     <>
-      <DialogPrimitive.Title
-        data-slot="dialog-title"
-        className="font-heading text-lg leading-none font-medium"
-      >
+      <DialogTitle data-slot="dialog-title" appearance="host" size="blocking">
         Migration interrupted
-      </DialogPrimitive.Title>
+      </DialogTitle>
       <p className="text-sm text-muted-foreground">{message}</p>
       <div className="flex flex-wrap justify-end gap-2">
         <ReportIssueAction

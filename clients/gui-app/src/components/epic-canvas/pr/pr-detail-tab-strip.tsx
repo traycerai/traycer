@@ -177,7 +177,6 @@ function PrDetailTabRow(props: PrDetailTabPickerProps): ReactNode {
             aria-controls={prDetailTabPanelId(definition.id)}
             tabIndex={selected ? 0 : -1}
             data-testid={`pr-detail-tab-${definition.id}`}
-            data-state={selected ? "active" : "inactive"}
             onClick={() => props.onSelectTab(definition.id)}
             onKeyDown={handleKeyDown}
             className={cn(
@@ -222,34 +221,36 @@ function PrDetailTabMenu(props: PrDetailTabPickerProps): ReactNode {
     TABS.find((definition) => definition.id === props.tab) ?? TABS[0];
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          data-testid="pr-detail-tabs"
-          className={cn(
-            // `min-h-11` is the touch target the strip never had: its tabs are
-            // `py-1.5`, which lands around 30px.
-            "flex min-h-11 w-full min-w-0 items-center gap-2",
-            "rounded-xl border border-border/50 bg-muted/30 px-3 py-2 text-ui-sm",
-            "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
-          )}
-        >
-          <span
-            id={prDetailTabButtonId(props.tab)}
-            className="min-w-0 flex-1 truncate text-left font-medium text-foreground"
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            data-testid="pr-detail-tabs"
+            className={cn(
+              // `min-h-11` is the touch target the strip never had: its tabs are
+              // `py-1.5`, which lands around 30px.
+              "flex min-h-11 w-full min-w-0 items-center gap-2",
+              "rounded-xl border border-border/50 bg-muted/30 px-3 py-2 text-ui-sm",
+              "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+            )}
           >
-            {active.label}
-          </span>
-          <PrTabCountBadge
-            count={tabCount(active.id, props.counts)}
-            blocking={tabBlocking(active.id, props.blocking)}
-          />
-          <ChevronsUpDown
-            className="size-4 shrink-0 text-muted-foreground"
-            aria-hidden
-          />
-        </button>
-      </DropdownMenuTrigger>
+            <span
+              id={prDetailTabButtonId(props.tab)}
+              className="min-w-0 flex-1 truncate text-left font-medium text-foreground"
+            >
+              {active.label}
+            </span>
+            <PrTabCountBadge
+              count={tabCount(active.id, props.counts)}
+              blocking={tabBlocking(active.id, props.blocking)}
+            />
+            <ChevronsUpDown
+              className="size-4 shrink-0 text-muted-foreground"
+              aria-hidden
+            />
+          </button>
+        }
+      />
       {/* No `aria-label` here: Radix already points the menu's
           `aria-labelledby` at its trigger, and `aria-labelledby` wins - so one
           would be a silent no-op rather than the name it looks like. */}

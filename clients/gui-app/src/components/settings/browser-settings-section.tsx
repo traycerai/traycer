@@ -630,28 +630,28 @@ function SavedWebsiteSessionsManager(props: {
                 </li>
               ))}
             </ul>
-            <SheetTrigger asChild>
-              <Button
-                type="button"
-                variant="muted"
-                className="h-auto w-full justify-between rounded-none border-t border-border/40 px-5 py-3 text-start"
-              >
-                {disclosureLabel}
-                <ArrowRightIcon aria-hidden="true" />
-              </Button>
-            </SheetTrigger>
+            <SheetTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="muted"
+                  className="h-auto w-full justify-between rounded-none border-t border-border/40 px-5 py-3 text-start"
+                >
+                  {disclosureLabel}
+                  <ArrowRightIcon aria-hidden="true" />
+                </Button>
+              }
+            />
           </>
         )}
       </div>
       <SheetContent
         side="right"
         className="gap-0 overflow-hidden data-[side=right]:w-full data-[side=right]:sm:max-w-xl"
-        onCloseAutoFocus={(event) => {
-          if (props.sites.length > 0) return;
+        finalFocus={() => {
+          if (props.sites.length > 0) return true;
           const fallback = props.importTriggerRef.current;
-          if (fallback === null || fallback.disabled) return;
-          event.preventDefault();
-          fallback.focus();
+          return fallback && !fallback.disabled ? fallback : true;
         }}
       >
         <SheetHeader className="shrink-0">
@@ -807,9 +807,7 @@ function SavedWebsiteSessionsManager(props: {
             >
               Remove all…
             </Button>
-            <SheetClose asChild>
-              <Button type="button">Done</Button>
-            </SheetClose>
+            <SheetClose render={<Button type="button">Done</Button>} />
           </div>
         </SheetFooter>
       </SheetContent>

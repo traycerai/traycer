@@ -1268,35 +1268,37 @@ function McpServerRow(props: {
     <li className="rounded-lg border border-border/60">
       <Collapsible open={open} onOpenChange={setOpen}>
         <div className="flex flex-wrap items-center gap-2 px-3 py-2.5">
-          <CollapsibleTrigger asChild>
-            <button
-              type="button"
-              className="flex min-w-0 flex-1 items-center gap-2 text-left"
-              aria-label={
-                open ? `Collapse ${server.name}` : `Expand ${server.name}`
-              }
-            >
-              {open ? (
-                <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-              ) : (
-                <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
-              )}
-              <span className="truncate text-ui-sm font-medium text-foreground">
-                {server.name}
-              </span>
-              <StatusDot status={server.status} pending={pending} />
-              <span className="truncate text-ui-xs text-muted-foreground">
-                {statusLabel}
-              </span>
-              {server.tools.length > 0 ? (
-                <span className="text-ui-xs text-muted-foreground">
-                  {server.tools.length}{" "}
-                  {server.tools.length === 1 ? "tool" : "tools"}
+          <CollapsibleTrigger
+            render={
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                aria-label={
+                  open ? `Collapse ${server.name}` : `Expand ${server.name}`
+                }
+              >
+                {open ? (
+                  <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+                ) : (
+                  <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                )}
+                <span className="truncate text-ui-sm font-medium text-foreground">
+                  {server.name}
                 </span>
-              ) : null}
-              <ServerRowBadges server={server} shadowed={shadowed} />
-            </button>
-          </CollapsibleTrigger>
+                <StatusDot status={server.status} pending={pending} />
+                <span className="truncate text-ui-xs text-muted-foreground">
+                  {statusLabel}
+                </span>
+                {server.tools.length > 0 ? (
+                  <span className="text-ui-xs text-muted-foreground">
+                    {server.tools.length}{" "}
+                    {server.tools.length === 1 ? "tool" : "tools"}
+                  </span>
+                ) : null}
+                <ServerRowBadges server={server} shadowed={shadowed} />
+              </button>
+            }
+          />
 
           <ServerRowActions
             serverName={server.name}
@@ -1505,7 +1507,7 @@ function ServerToolsPanel(props: {
   return (
     <Tabs
       value={subTab}
-      onValueChange={(value) => {
+      onValueChange={(value: unknown) => {
         if (value === "tools" || value === "instructions") {
           onSubTabChange(value);
         }
@@ -1555,15 +1557,17 @@ function ServerToolsPanel(props: {
              */}
             {capabilities.traycerSessionsOnlyEnforcement ? (
               <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    className="cursor-help appearance-none bg-transparent p-0 text-muted-foreground hover:text-foreground"
-                    aria-label="Where tool enable/disable applies"
-                  >
-                    <Info className="size-3.5" />
-                  </button>
-                </TooltipTrigger>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      className="cursor-help appearance-none bg-transparent p-0 text-muted-foreground hover:text-foreground"
+                      aria-label="Where tool enable/disable applies"
+                    >
+                      <Info className="size-3.5" />
+                    </button>
+                  }
+                />
                 <TooltipContent>
                   Tool enable/disable applies to Traycer sessions only for this
                   provider.

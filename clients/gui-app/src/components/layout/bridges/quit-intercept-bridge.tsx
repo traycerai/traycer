@@ -314,35 +314,7 @@ export function QuitInterceptBridge(): null | React.ReactElement {
     >
       <DialogContent
         data-testid="quit-intercept-dialog"
-        onOpenAutoFocus={(event) => {
-          // Radix's `FocusScope` focuses the first tabbable descendant, and in
-          // this footer that is "Quit and discard". Measured in the browser
-          // regression before this existed:
-          //
-          //   FOCUS_ON_OPEN = quit-intercept-discard
-          //   TAB_ORDER     = discard > cancel > wait > close-x
-          //
-          // This dialog opens in response to a KEYBOARD gesture (Cmd+Q), so
-          // the hand that summoned it is already on the keys: one Enter or
-          // Space destroyed every unsynced edit, retained buffers included. A
-          // destructive confirmation must not default to its destructive
-          // control, and adding a safe exit does not help a keyboard user if
-          // the focused control is still the unsafe one.
-          //
-          // DO NOT DELETE THIS AS REDUNDANT once the footer's order is read.
-          // The footer has since been reordered - but only its two
-          // non-destructive controls, to put the acting safe action rightmost.
-          // "Quit and discard" is deliberately still FIRST in DOM order, so the
-          // first tabbable descendant is still the destructive one and this
-          // handler is the only thing standing between Cmd+Q and data loss. The
-          // reorder made it more load-bearing, not less.
-          const cancel = cancelButtonRef.current;
-          // Fail safe: with nothing to move focus to, let Radix's own default
-          // run rather than preventing it and leaving focus outside the trap.
-          if (cancel === null) return;
-          event.preventDefault();
-          cancel.focus();
-        }}
+        initialFocus={() => cancelButtonRef.current ?? true}
       >
         <DialogHeader>
           {/*

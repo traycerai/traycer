@@ -25,7 +25,7 @@ export function RevertArtifactsCheckbox(props: {
     <label className="flex cursor-pointer items-center gap-2 text-ui-sm text-muted-foreground select-none">
       <Checkbox
         checked={props.checked}
-        onCheckedChange={(value) => props.onCheckedChange(value === true)}
+        onCheckedChange={(value) => props.onCheckedChange(value)}
         disabled={props.disabled}
         data-testid="revert-artifacts-checkbox"
       />

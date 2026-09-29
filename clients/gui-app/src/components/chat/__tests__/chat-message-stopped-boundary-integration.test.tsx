@@ -38,7 +38,7 @@ import {
 
 function render(ui: ReactNode) {
   return rtlRender(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <ChatExpansionTestProviders tileInstanceId="stopped-boundary-integration-tile">
         {ui}
       </ChatExpansionTestProviders>

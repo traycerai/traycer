@@ -1,7 +1,9 @@
+import { mergeProps } from "@base-ui/react/merge-props";
 import {
   use,
   useCallback,
   type KeyboardEvent,
+  type ComponentProps,
   type MouseEvent,
   type ReactNode,
 } from "react";
@@ -416,27 +418,27 @@ function PrNumberBadge(props: { readonly item: PrLightItem }): ReactNode {
           <span className="truncate tabular-nums">{label}</span>
         </Badge>
       ) : (
-        <Badge asChild variant="outline" className={badgeClass}>
-          {/* `asChild` hands the badge's own className to this child AS A PROP -
-              a component child that doesn't forward it renders unstyled (and,
-              without the badge's `inline-flex`, wraps its glyph onto its own
-              line). Forward it explicitly; see `WorktreePrAnchor`. */}
-          <PrNumberAnchor
-            prUrl={prUrl}
-            ariaLabel={`Open ${label} on GitHub`}
-            className={undefined}
-            state={state}
-          >
-            {glyph}
-            <span className="truncate tabular-nums">{label}</span>
-            {/* Opacity rather than conditional mount, so the badge's width is
+        <Badge
+          render={
+            <PrNumberAnchor
+              prUrl={prUrl}
+              ariaLabel={`Open ${label} on GitHub`}
+              className={undefined}
+              state={state}
+            >
+              {glyph}
+              <span className="truncate tabular-nums">{label}</span>
+              {/* Opacity rather than conditional mount, so the badge's width is
                 identical hovered and not - a row of them cannot reflow. */}
-            <ExternalLink
-              className="size-3 shrink-0 opacity-0 transition-opacity group-hover/pr-pill:opacity-60 group-focus-visible/pr-pill:opacity-60"
-              aria-hidden
-            />
-          </PrNumberAnchor>
-        </Badge>
+              <ExternalLink
+                className="size-3 shrink-0 opacity-0 transition-opacity group-hover/pr-pill:opacity-60 group-focus-visible/pr-pill:opacity-60"
+                aria-hidden
+              />
+            </PrNumberAnchor>
+          }
+          variant="outline"
+          className={badgeClass}
+        />
       )}
     </TooltipWrapper>
   );
@@ -481,14 +483,14 @@ function PrChecksBadge(props: {
   );
 }
 
-function PrNumberAnchor(props: {
-  readonly prUrl: string;
-  readonly ariaLabel: string;
-  /** Injected by `Badge asChild` (Radix Slot) - must land on the anchor. */
-  readonly className: string | undefined;
-  readonly state: PrState;
-  readonly children: ReactNode;
-}): ReactNode {
+function PrNumberAnchor(
+  props: ComponentProps<"a"> & {
+    readonly prUrl: string;
+    readonly ariaLabel: string;
+    readonly state: PrState;
+  },
+): ReactNode {
+  const { prUrl, ariaLabel, state, ref, children, ...anchorProps } = props;
   // In-flight guarded: a double click on the badge would otherwise fire two
   // bridge requests and open two OS tabs (R10).
   const { isPending, openLink } = useOpenLinkWithPending();
@@ -498,24 +500,24 @@ function PrNumberAnchor(props: {
       event.stopPropagation();
       event.preventDefault();
       if (isPending) return;
-      void openLink(props.prUrl, "github", event);
+      void openLink(prUrl, "github", event);
     },
-    [isPending, openLink, props.prUrl],
+    [isPending, openLink, prUrl],
   );
   return (
     <a
-      href={props.prUrl}
-      aria-label={props.ariaLabel}
-      // The guard drops activation while a handoff is in flight, so the
-      // anchor must not keep announcing itself as actionable.
-      aria-disabled={isPending}
-      className={props.className}
-      data-testid="pr-row-number"
-      data-pr-state={props.state}
-      onClick={handleClick}
-      onAuxClick={onMiddleClick(handleClick)}
+      ref={ref}
+      {...mergeProps<"a">(anchorProps, {
+        href: prUrl,
+        "aria-label": ariaLabel,
+        "aria-disabled": isPending,
+        onClick: handleClick,
+        onAuxClick: onMiddleClick(handleClick),
+      })}
+      data-testid={"pr-row-number"}
+      data-pr-state={state}
     >
-      {props.children}
+      {children}
     </a>
   );
 }

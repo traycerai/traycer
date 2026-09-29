@@ -83,7 +83,7 @@ const ANSWERABLE_CARD: PendingInterviewView = {
 function render(ui: ReactElement) {
   return testingRender(
     <TabHostProvider hostId="host-1">
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <LazyMotion features={domAnimation}>{ui}</LazyMotion>
       </TooltipProvider>
     </TabHostProvider>,

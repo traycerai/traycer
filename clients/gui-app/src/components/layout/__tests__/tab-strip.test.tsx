@@ -1682,7 +1682,7 @@ describe("<TabStrip />", () => {
         .style.getPropertyValue("--swatch-border"),
     ).toBe("var(--color-primary)");
 
-    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(trigger);
     fireEvent.click(await screen.findByTestId("split-quick-swap-epic-e-a"));
 
     expect(useTabsStore.getState().items[0]).toMatchObject({

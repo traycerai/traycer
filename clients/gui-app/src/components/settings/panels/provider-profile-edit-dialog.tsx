@@ -129,7 +129,9 @@ function ProfileEligibilityEditor(props: {
             aria-label={`Allow agents to use ${profileDisplayLabel(props.profile)}`}
             checked={props.profile.enabled}
             disabled={props.pending}
-            aria-disabled={props.disabledReason !== null || undefined}
+            aria-disabled={
+              props.pending || props.disabledReason !== null || undefined
+            }
             onCheckedChange={(enabled) => {
               if (props.disabledReason !== null) return;
               props.onSetEnabled(enabled);

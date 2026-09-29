@@ -21,15 +21,17 @@ const LABEL = "Reply expected";
 export function ReplyExpectedIcon(): ReactNode {
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          role="img"
-          aria-label={LABEL}
-          className="flex shrink-0 items-center text-primary"
-        >
-          <Reply className="size-3.5" aria-hidden />
-        </span>
-      </TooltipTrigger>
+      <TooltipTrigger
+        render={
+          <span
+            role="img"
+            aria-label={LABEL}
+            className="flex shrink-0 items-center text-primary"
+          >
+            <Reply className="size-3.5" aria-hidden />
+          </span>
+        }
+      />
       <TooltipContent side="bottom">{LABEL}</TooltipContent>
     </Tooltip>
   );

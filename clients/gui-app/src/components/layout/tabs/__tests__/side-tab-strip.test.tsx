@@ -727,7 +727,11 @@ describe("<SideTabStrip />", () => {
     if (chord === null) throw new Error("expected a default binding");
 
     try {
-      fireEvent.pointerMove(toggle);
+      // Base's hover path: the pointer enters, then moves.
+      fireEvent.pointerEnter(toggle, { pointerType: "mouse" });
+      fireEvent.mouseEnter(toggle);
+      fireEvent.pointerMove(toggle, { pointerType: "mouse" });
+      fireEvent.mouseMove(toggle);
       const tooltip = await screen.findByRole("tooltip");
       expect(tooltip.textContent).toBe(
         `Collapse tabs (${formatChordForDisplay(chord)})`,

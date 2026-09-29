@@ -32,9 +32,7 @@ import {
 } from "@/components/command-palette/palette-cmdk";
 import {
   paletteFilter,
-  handlePalettePageNavigation,
   usePaletteController,
-  usePaletteScrollReset,
 } from "@/components/command-palette/palette-cmdk-controller";
 import { getOpenerItems } from "@/lib/commands/registry";
 import { deletedArtifactsOpenerItem } from "@/lib/commands/sources/open/deleted-artifacts-leaf";
@@ -119,7 +117,7 @@ export function PaneOpener(props: PaneOpenerProps) {
   const { activeSubpage, runItem, popSubpage } = controller;
 
   // The text-search step-2 sub-page is rendered by a bespoke view (query +
-  // options + results) rather than the generic fuzzy list, and cmdk's own
+  // options + results) rather than the generic fuzzy list, and Command's own
   // filtering is disabled for it: content search is literal/regex, so the
   // pattern must never fuzzy-filter the result rows.
   const searchRunTarget =
@@ -128,7 +126,7 @@ export function PaneOpener(props: PaneOpenerProps) {
       : null;
 
   // The Files step-2 result lists come pre-ranked from `workspace.searchPaths`
-  // (host Fuse, typo/transposition tolerant). cmdk's own filter must NOT
+  // (host Fuse, typo/transposition tolerant). Command's own filter must NOT
   // re-score/re-order them or drop typo matches, and must not hide the typed
   // notice/truncation rows under a non-matching query. Its filtering stays ON
   // for the Files step-1 source picker and every other opener page.
@@ -174,7 +172,7 @@ export function PaneOpener(props: PaneOpenerProps) {
 
   // Typing re-filters the list; `handleQueryChange` keeps the auto-selected
   // first match in view by snapping the scroll container back to the top.
-  const { listRef, handleQueryChange } = usePaletteScrollReset(setQuery);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // Escape backs out of a sub-page; at the root it does nothing (the pane
@@ -185,7 +183,6 @@ export function PaneOpener(props: PaneOpenerProps) {
       popSubpage();
       return;
     }
-    handlePalettePageNavigation(event, listRef);
   };
 
   return (
@@ -194,13 +191,10 @@ export function PaneOpener(props: PaneOpenerProps) {
       data-group-id={groupId}
       className="flex h-full min-h-0 w-full flex-col"
     >
-      {/* `label` is what actually names the search box: cmdk points the input's
-          `aria-labelledby` at its own hidden label element, so without this the
-          input's `aria-label` is overridden by an empty name. */}
       <Command
-        filter={paletteFilter}
+        scoreItem={paletteFilter}
         label="Open into pane"
-        loop
+        loopNavigation
         shouldFilter={searchRunTarget === null && !hostRankedResultSubpage}
         onKeyDown={handleKeyDown}
         variant="embedded"
@@ -210,7 +204,7 @@ export function PaneOpener(props: PaneOpenerProps) {
           <CommandInput
             ref={inputRef}
             value={query}
-            onValueChange={handleQueryChange}
+            onChange={(event) => setQuery(event.target.value)}
             leading={
               activeSubpage !== null ? (
                 <InputGroupButton

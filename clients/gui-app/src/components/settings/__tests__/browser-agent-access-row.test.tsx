@@ -254,7 +254,7 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
     render(<BrowserSettingsSection />, { wrapper: fixture.Wrapper });
 
     await waitFor(() => {
-      expect(row().getAttribute("data-state")).toBe("checked");
+      expect(row().hasAttribute("data-checked")).toBe(true);
     });
     expect(screen.queryByText("Detected dev origins")).toBeNull();
     expect(
@@ -280,7 +280,7 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
     render(<BrowserSettingsSection />, { wrapper: fixture.Wrapper });
 
     await waitFor(() => {
-      expect(row().getAttribute("data-state")).toBe("checked");
+      expect(row().hasAttribute("data-checked")).toBe(true);
     });
     fireEvent.click(row());
 
@@ -290,7 +290,7 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
     // The invalidation is the half that matters: the switch settles on what
     // the host answers, not on what the click assumed.
     await waitFor(() => {
-      expect(row().getAttribute("data-state")).toBe("unchecked");
+      expect(row().hasAttribute("data-checked")).toBe(false);
     });
     expect(fixture.gets().length).toBeGreaterThan(1);
     expect(tracked).toHaveBeenCalledWith("browser", "agentBrowserAccess");
@@ -306,14 +306,14 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
     });
 
     await waitFor(() => {
-      expect(row().getAttribute("data-state")).toBe("checked");
+      expect(row().hasAttribute("data-checked")).toBe(true);
     });
 
     fixture.activate(mockRemoteHostEntry);
     view.rerender(<BrowserSettingsSection />);
 
     await waitFor(() => {
-      expect(row().getAttribute("data-state")).toBe("unchecked");
+      expect(row().hasAttribute("data-checked")).toBe(false);
     });
     expect(fixture.gets()).toContain(mockRemoteHostEntry.hostId);
     expect(

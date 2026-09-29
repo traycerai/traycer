@@ -142,7 +142,7 @@ function ExpandableSegmentCard({ className, ...props }: SegmentCardProps) {
             aria-hidden
             className={cn(
               "relative size-3.5 shrink-0 text-muted-foreground/70 transition-transform",
-              "group-data-[state=open]/segment-card:rotate-180",
+              "group-data-panel-open/segment-card:rotate-180",
             )}
           />
         </CollapsibleTrigger>

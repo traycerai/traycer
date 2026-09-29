@@ -45,7 +45,6 @@ import {
 } from "@/components/settings/panels/permissions/rules-edit-store";
 import type { AutoPolicyGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   SystemTabModalHost,
   SystemTabModalSurface,
@@ -561,18 +560,16 @@ describe("Rules edit through the system-tab modal shell", () => {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <Lifetime open={open} />
-          <DialogPrimitive.Root open={open}>
-            {open ? (
-              <SystemTabModalSurface
-                active={{ kind: "settings", section: "permissions" }}
-                editingTheme={false}
-                onClose={() => undefined}
-                onPromote={(onRejected) => {
-                  onRejected();
-                }}
-              />
-            ) : null}
-          </DialogPrimitive.Root>
+          {open ? (
+            <SystemTabModalSurface
+              active={{ kind: "settings", section: "permissions" }}
+              editingTheme={false}
+              onClose={() => undefined}
+              onPromote={(onRejected) => {
+                onRejected();
+              }}
+            />
+          ) : null}
         </TooltipProvider>
       </QueryClientProvider>
     );

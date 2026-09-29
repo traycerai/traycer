@@ -1,12 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { Slider as SliderPrimitive } from "radix-ui";
+import { Slider as SliderPrimitive } from "@base-ui/react/slider";
 
 import { cn } from "@/lib/utils";
 
 /**
- * The Radix slider, in four wrappers rather than one component, because a
+ * The Base slider, in four wrappers rather than one component, because a
  * caller that draws something ON the track - stop dots, a scale - needs to put
  * its own children between the track and the thumb.
  *
@@ -25,13 +25,15 @@ import { cn } from "@/lib/utils";
  */
 type SliderSize = "default" | "pill";
 
-function Slider({
+function Slider<Value extends number | readonly number[]>({
   className,
   ...props
-}: React.ComponentProps<typeof SliderPrimitive.Root>) {
+}: SliderPrimitive.Root.Props<Value>) {
   return (
     <SliderPrimitive.Root
       data-slot="slider"
+      thumbAlignment="edge"
+      render={<SliderPrimitive.Control />}
       className={cn(
         "relative flex w-full touch-none select-none items-center data-[disabled]:cursor-not-allowed data-[disabled]:opacity-45",
         className,
@@ -64,10 +66,23 @@ function SliderTrack({
 function SliderRange({
   className,
   ...props
-}: React.ComponentProps<typeof SliderPrimitive.Range>) {
+}: React.ComponentProps<typeof SliderPrimitive.Indicator>) {
   return (
-    <SliderPrimitive.Range
+    <SliderPrimitive.Indicator
       data-slot="slider-range"
+      // The track fills raw percentages; edge alignment only insets the thumb.
+      render={({ style, ...elementProps }, { values, min, max }) => (
+        <div
+          {...elementProps}
+          style={{
+            ...style,
+            width:
+              props.style === undefined
+                ? `${((Math.max(...values) - (values.length > 1 ? Math.min(...values) : min)) / (max - min)) * 100}%`
+                : style?.width,
+          }}
+        />
+      )}
       className={cn("absolute h-full bg-primary/70", className)}
       {...props}
     />
@@ -106,10 +121,24 @@ function SliderThumb({
 }) {
   return (
     <SliderPrimitive.Thumb
-      data-slot="slider-thumb"
+      render={(
+        { className: thumbClassName, children, ...positionerProps },
+        state,
+      ) => (
+        <div {...positionerProps} data-slot="slider-thumb-positioner">
+          <span
+            data-slot="slider-thumb"
+            data-size={size}
+            data-disabled={state.disabled ? "" : undefined}
+            className={thumbClassName}
+          >
+            {children}
+          </span>
+        </div>
+      )}
       data-size={size}
       className={cn(
-        "relative block size-4 shrink-0 rounded-full border border-primary/60 bg-background shadow-sm outline-none transition-colors after:absolute after:-inset-x-1 after:-inset-y-2 after:content-[''] hover:border-primary focus-visible:ring-2 focus-visible:ring-ring/60 data-[disabled]:pointer-events-none data-[size=pill]:size-7 data-[size=pill]:border-2 data-[size=pill]:border-popover data-[size=pill]:bg-foreground data-[size=pill]:shadow-md data-[size=pill]:after:inset-0 data-[size=pill]:hover:border-popover",
+        "relative block size-4 shrink-0 rounded-full border border-primary/60 bg-background shadow-sm outline-none transition-colors after:absolute after:-inset-x-1 after:-inset-y-2 after:content-[''] hover:border-primary has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/60 data-[disabled]:pointer-events-none data-[size=pill]:size-7 data-[size=pill]:border-2 data-[size=pill]:border-popover data-[size=pill]:bg-foreground data-[size=pill]:shadow-md data-[size=pill]:after:inset-0 data-[size=pill]:hover:border-popover",
         className,
       )}
       {...props}

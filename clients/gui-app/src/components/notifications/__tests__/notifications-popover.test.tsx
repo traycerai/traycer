@@ -2017,10 +2017,7 @@ describe("NotificationsPopover", () => {
     const before = notificationIds(screen.getAllByTestId("notification-entry"));
     expect(before[0]).toBe("host:prompt");
 
-    // Radix DropdownMenuTrigger opens on pointerdown, not click.
-    fireEvent.pointerDown(screen.getByTestId("notifications-filter-trigger"), {
-      button: 0,
-    });
+    fireEvent.click(screen.getByTestId("notifications-filter-trigger"));
     fireEvent.click(
       await screen.findByTestId("notifications-filter-unread-only"),
     );
@@ -2057,9 +2054,7 @@ describe("NotificationsPopover", () => {
 
     expect(await screen.findByTestId("notification-entry")).not.toBeNull();
 
-    fireEvent.pointerDown(screen.getByTestId("notifications-filter-trigger"), {
-      button: 0,
-    });
+    fireEvent.click(screen.getByTestId("notifications-filter-trigger"));
     fireEvent.click(
       await screen.findByTestId("notifications-filter-unread-only"),
     );
@@ -2705,9 +2700,7 @@ describe("NotificationsPopover", () => {
 
     await screen.findByTestId("notification-entry");
 
-    fireEvent.pointerDown(screen.getByTestId("notifications-filter-trigger"), {
-      button: 0,
-    });
+    fireEvent.click(screen.getByTestId("notifications-filter-trigger"));
     fireEvent.click(
       await screen.findByTestId("notifications-filter-unread-only"),
     );
@@ -2849,6 +2842,8 @@ describe("NotificationsPopover", () => {
 
     const onNavigate = vi.fn();
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+    // The suite spies the same singleton in many tests; drop calls left by earlier ones.
+    trackSpy.mockClear();
     const captured: TargetCapture = {
       epicId: null,
       tabId: null,

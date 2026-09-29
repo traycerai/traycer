@@ -89,7 +89,7 @@ function renderBanner(input: {
   readonly probeTarget: ProfileRateLimitDestination | null;
 }) {
   return render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <ProfileRateLimitSwitchBanner
         harnessId="claude"
         providerId="claude-code"
@@ -133,7 +133,7 @@ describe("ProfileRateLimitSwitchBanner automatic unknown-destination check", () 
     expect(ensureFresh).toHaveBeenCalledTimes(1);
 
     rerender(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <ProfileRateLimitSwitchBanner
           harnessId="claude"
           providerId="claude-code"
@@ -193,7 +193,7 @@ describe("ProfileRateLimitSwitchBanner automatic unknown-destination check", () 
     expect(ensureFresh).toHaveBeenCalledTimes(1);
 
     rerender(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <ProfileRateLimitSwitchBanner
           harnessId="claude"
           providerId="claude-code"
@@ -252,7 +252,7 @@ describe("ProfileRateLimitSwitchBanner automatic unknown-destination check", () 
       usageEntry("unknown-uuid", ensureFresh, true),
     );
     rerender(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <ProfileRateLimitSwitchBanner
           harnessId="claude"
           providerId="claude-code"
@@ -287,7 +287,7 @@ describe("ProfileRateLimitSwitchBanner automatic unknown-destination check", () 
       primaryTarget: null,
       probeTarget: unknownDestination,
     });
-    fireEvent.pointerDown(
+    fireEvent.click(
       screen.getByRole("button", { name: "View profile limits" }),
     );
     expect(

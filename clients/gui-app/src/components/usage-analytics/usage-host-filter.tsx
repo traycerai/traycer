@@ -55,8 +55,16 @@ export function UsageHostFilter(props: UsageHostFilterProps): ReactNode {
   }
   return (
     <Select
+      items={[
+        { value: USAGE_ALL_HOSTS_VALUE, label: ALL_HOSTS_LABEL },
+        ...props.options.map((option) => ({
+          value: option.hostId,
+          label: option.name,
+        })),
+      ]}
       value={usageHostFilterValue(props.hostId)}
       onValueChange={(value) => {
+        if (value === null) return;
         props.onChange(usageHostFilterHostId(value));
       }}
     >

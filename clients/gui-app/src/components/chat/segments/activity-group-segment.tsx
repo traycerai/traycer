@@ -240,7 +240,7 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
               "[--shimmer-text-color:var(--color-muted-foreground)]",
               "group-hover/activity:[--shimmer-text-color:var(--color-foreground)]",
               "group-focus-visible/activity:[--shimmer-text-color:var(--color-foreground)]",
-              "group-data-[state=open]/activity:[--shimmer-text-color:var(--color-foreground)]",
+              "group-data-panel-open/activity:[--shimmer-text-color:var(--color-foreground)]",
             )}
             duration={1.35}
             spread={1}
@@ -265,7 +265,7 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
             "size-3.5 shrink-0 -translate-x-1 text-muted-foreground/65 opacity-0 transition-[opacity,transform,color]",
             "group-hover/activity:translate-x-0 group-hover/activity:text-foreground group-hover/activity:opacity-100",
             "group-focus-visible/activity:translate-x-0 group-focus-visible/activity:text-foreground group-focus-visible/activity:opacity-100",
-            "group-data-[state=open]/activity:translate-x-0 group-data-[state=open]/activity:rotate-90 group-data-[state=open]/activity:text-foreground group-data-[state=open]/activity:opacity-100",
+            "group-data-panel-open/activity:translate-x-0 group-data-panel-open/activity:rotate-90 group-data-panel-open/activity:text-foreground group-data-panel-open/activity:opacity-100",
           )}
           aria-hidden
         />

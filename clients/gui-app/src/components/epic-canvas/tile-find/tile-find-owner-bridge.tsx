@@ -99,7 +99,7 @@ function subscribeBlockingDomDialog(listener: () => void): () => void {
     subtree: true,
     childList: true,
     attributes: true,
-    attributeFilter: ["data-state", "role"],
+    attributeFilter: ["data-open", "data-closed", "role"],
   });
   return () => {
     observer.disconnect();
@@ -108,9 +108,7 @@ function subscribeBlockingDomDialog(listener: () => void): () => void {
 
 function hasBlockingDomDialog(): boolean {
   if (typeof document === "undefined") return false;
-  const dialogs = document.querySelectorAll(
-    '[role="dialog"][data-state="open"]',
-  );
+  const dialogs = document.querySelectorAll('[role="dialog"][data-open]');
   return Array.from(dialogs).some((dialog) => {
     if (!(dialog instanceof HTMLElement)) return true;
     return dialog.closest("[data-tile-find-scope]") === null;

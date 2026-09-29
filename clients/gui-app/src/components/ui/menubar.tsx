@@ -1,13 +1,23 @@
 import type { ComponentProps } from "react";
-import { Menubar as Primitive } from "radix-ui";
+import { Menubar as MenubarPrimitive } from "@base-ui/react/menubar";
+import { Menu as Primitive } from "@base-ui/react/menu";
+import { isToastEvent } from "@/components/ui/overlay-guards";
 import { cn } from "@/lib/utils";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 
-export function Menubar(props: ComponentProps<typeof Primitive.Root>) {
-  return <Primitive.Root {...props} />;
+export function Menubar(props: ComponentProps<typeof MenubarPrimitive>) {
+  return <MenubarPrimitive {...props} />;
 }
-export function MenubarMenu(props: ComponentProps<typeof Primitive.Menu>) {
-  return <Primitive.Menu {...props} />;
+export function MenubarMenu({ onOpenChange, ...props }: Primitive.Root.Props) {
+  return (
+    <Primitive.Root
+      {...props}
+      onOpenChange={(open, details) => {
+        if (!open && isToastEvent(details)) details.cancel();
+        else onOpenChange?.(open, details);
+      }}
+    />
+  );
 }
 // The app's one menubar draws the hover, open and focus treatments on a span
 // INSIDE the trigger, because the trigger is full-height and the pill is not.
@@ -22,34 +32,64 @@ export function MenubarTrigger(
 ) {
   const { className, ...rest } = props;
   return (
-    <Primitive.Trigger className={cn(TRIGGER_CLASS, className)} {...rest} />
+    <Primitive.Trigger
+      className={(state) =>
+        cn(
+          TRIGGER_CLASS,
+          typeof className === "function" ? className(state) : className,
+        )
+      }
+      {...rest}
+    />
   );
 }
 const CONTENT_CLASS =
-  "z-50 max-h-(--radix-menubar-content-available-height) max-w-safe-dvw min-w-48 overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 [-webkit-app-region:no-drag]";
+  "z-50 max-h-(--available-height) max-w-safe-dvw min-w-48 overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 [-webkit-app-region:no-drag]";
 const ITEM_CLASS =
   "relative flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-ui-sm outline-none select-none data-highlighted:bg-foreground/8 data-disabled:pointer-events-none data-disabled:opacity-40 pointer-coarse:min-h-11";
 
 export function MenubarContent(
-  props: ComponentProps<typeof Primitive.Content>,
+  props: ComponentProps<typeof Primitive.Popup> &
+    Pick<Primitive.Positioner.Props, "collisionPadding">,
 ) {
   const { className, collisionPadding, ...rest } = props;
   const insets = useSafeAreaCollisionPadding();
   return (
     <Primitive.Portal>
-      <Primitive.Content
+      <Primitive.Positioner
+        data-slot="menubar-positioner"
+        positionMethod="fixed"
+        className="z-50"
         align="start"
         sideOffset={0}
         collisionPadding={collisionPadding ?? insets}
-        className={cn(CONTENT_CLASS, className)}
-        {...rest}
-      />
+      >
+        <Primitive.Popup
+          className={(state) =>
+            cn(
+              CONTENT_CLASS,
+              typeof className === "function" ? className(state) : className,
+            )
+          }
+          {...rest}
+        />
+      </Primitive.Positioner>
     </Primitive.Portal>
   );
 }
 export function MenubarItem(props: ComponentProps<typeof Primitive.Item>) {
   const { className, ...rest } = props;
-  return <Primitive.Item className={cn(ITEM_CLASS, className)} {...rest} />;
+  return (
+    <Primitive.Item
+      className={(state) =>
+        cn(
+          ITEM_CLASS,
+          typeof className === "function" ? className(state) : className,
+        )
+      }
+      {...rest}
+    />
+  );
 }
 export function MenubarSeparator(
   props: ComponentProps<typeof Primitive.Separator>,
@@ -62,29 +102,64 @@ export function MenubarSeparator(
     />
   );
 }
-export function MenubarSub(props: ComponentProps<typeof Primitive.Sub>) {
-  return <Primitive.Sub {...props} />;
+export function MenubarSub({
+  onOpenChange,
+  ...props
+}: ComponentProps<typeof Primitive.SubmenuRoot>) {
+  return (
+    <Primitive.SubmenuRoot
+      {...props}
+      onOpenChange={(open, details) => {
+        if (!open && isToastEvent(details)) details.cancel();
+        else onOpenChange?.(open, details);
+      }}
+    />
+  );
 }
 export function MenubarSubTrigger(
-  props: ComponentProps<typeof Primitive.SubTrigger>,
+  props: ComponentProps<typeof Primitive.SubmenuTrigger>,
 ) {
   const { className, ...rest } = props;
   return (
-    <Primitive.SubTrigger className={cn(ITEM_CLASS, className)} {...rest} />
+    <Primitive.SubmenuTrigger
+      className={(state) =>
+        cn(
+          ITEM_CLASS,
+          typeof className === "function" ? className(state) : className,
+        )
+      }
+      {...rest}
+    />
   );
 }
 export function MenubarSubContent(
-  props: ComponentProps<typeof Primitive.SubContent>,
+  props: ComponentProps<typeof Primitive.Popup> &
+    Pick<Primitive.Positioner.Props, "collisionPadding">,
 ) {
   const { className, collisionPadding, ...rest } = props;
   const insets = useSafeAreaCollisionPadding();
   return (
     <Primitive.Portal>
-      <Primitive.SubContent
+      <Primitive.Positioner
+        data-slot="menubar-positioner"
+        positionMethod="fixed"
+        className="z-50"
+        side="right"
+        align="start"
+        alignOffset={0}
+        collisionAvoidance={{ fallbackAxisSide: "none" }}
         collisionPadding={collisionPadding ?? insets}
-        className={cn(CONTENT_CLASS, className)}
-        {...rest}
-      />
+      >
+        <Primitive.Popup
+          className={(state) =>
+            cn(
+              CONTENT_CLASS,
+              typeof className === "function" ? className(state) : className,
+            )
+          }
+          {...rest}
+        />
+      </Primitive.Positioner>
     </Primitive.Portal>
   );
 }

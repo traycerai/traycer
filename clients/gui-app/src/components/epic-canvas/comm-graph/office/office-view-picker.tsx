@@ -23,18 +23,20 @@ export function OfficeViewPicker(props: OfficeViewPickerProps) {
   const { choice, onChoose } = props;
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost"
-          aria-label="Office view"
-          data-testid="comm-graph-office-view-picker"
-        >
-          {OFFICE_VIEWS[choice].label}
-          <ChevronDown data-icon="inline-end" aria-hidden />
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            aria-label="Office view"
+            data-testid="comm-graph-office-view-picker"
+          >
+            {OFFICE_VIEWS[choice].label}
+            <ChevronDown data-icon="inline-end" aria-hidden />
+          </Button>
+        }
+      />
       {/* The shadcn base pins `w` to the trigger, so an explicit fluid `w`
           overrides it while `max-w-*` caps it: 90vw on a narrow screen, the
           tokenized ceiling on a wide one - fluid, no fixed rem layout width. */}

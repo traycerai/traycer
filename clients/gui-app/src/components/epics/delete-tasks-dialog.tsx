@@ -213,9 +213,7 @@ function WorktreeCleanupRow(props: {
       <label className="flex min-w-0 cursor-pointer items-start gap-3 rounded-md px-2.5 py-2 transition-colors hover:bg-accent/40">
         <Checkbox
           checked={checked}
-          onCheckedChange={(value) =>
-            onToggle(candidate.worktreePath, value === true)
-          }
+          onCheckedChange={(value) => onToggle(candidate.worktreePath, value)}
           className="mt-0.5"
           aria-label={`Remove worktree ${branch}`}
           data-testid="delete-tasks-worktree-checkbox"

@@ -218,30 +218,32 @@ function SweepHostChip(props: {
           if (!nextOpen) props.onCancelPending();
         }}
       >
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            disabled={props.onPick === null}
-            aria-haspopup="dialog"
-            data-testid="sweep-host-chip"
-            className={cn(
-              "inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border border-border/60 px-2 py-1",
-              "text-ui-xs text-muted-foreground transition-colors",
-              props.onPick === null
-                ? "cursor-not-allowed opacity-60"
-                : "hover:bg-foreground/5 hover:text-foreground",
-              "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-            )}
-          >
-            <Monitor className="size-3.5 shrink-0" aria-hidden />
-            <span className="min-w-0 truncate">{props.label}</span>
-            <ChevronDown className="size-3.5 shrink-0" aria-hidden />
-          </button>
-        </PopoverTrigger>
+        <PopoverTrigger
+          render={
+            <button
+              type="button"
+              disabled={props.onPick === null}
+              aria-haspopup="dialog"
+              data-testid="sweep-host-chip"
+              className={cn(
+                "inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border border-border/60 px-2 py-1",
+                "text-ui-xs text-muted-foreground transition-colors",
+                props.onPick === null
+                  ? "cursor-not-allowed opacity-60"
+                  : "hover:bg-foreground/5 hover:text-foreground",
+                "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+              )}
+            >
+              <Monitor className="size-3.5 shrink-0" aria-hidden />
+              <span className="min-w-0 truncate">{props.label}</span>
+              <ChevronDown className="size-3.5 shrink-0" aria-hidden />
+            </button>
+          }
+        />
         <PopoverContent
           align="start"
           side="bottom"
-          className="w-[min(88vw,24rem)] max-h-[min(var(--radix-popover-content-available-height),24rem)] overflow-y-auto"
+          className="w-[min(88vw,24rem)] max-h-[min(var(--available-height),24rem)] overflow-y-auto"
           data-testid="sweep-host-popover"
         >
           {pendingHost === null ? (

@@ -117,7 +117,7 @@ function RowTrailingCaret(props: { readonly rotateWhenOpen: boolean }) {
         "group-hover/row-trigger:translate-x-0 group-hover/row-trigger:text-foreground group-hover/row-trigger:opacity-100",
         "group-focus-visible/row-trigger:translate-x-0 group-focus-visible/row-trigger:text-foreground group-focus-visible/row-trigger:opacity-100",
         props.rotateWhenOpen &&
-          "group-data-[state=open]/row-trigger:translate-x-0 group-data-[state=open]/row-trigger:rotate-90 group-data-[state=open]/row-trigger:text-foreground group-data-[state=open]/row-trigger:opacity-100",
+          "group-data-panel-open/row-trigger:translate-x-0 group-data-panel-open/row-trigger:rotate-90 group-data-panel-open/row-trigger:text-foreground group-data-panel-open/row-trigger:opacity-100",
       )}
     />
   );

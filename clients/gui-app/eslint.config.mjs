@@ -87,60 +87,19 @@ const importRestrictionDimensions = {
   // in src/components/ui/**. Reaching past a wrapper to the raw primitive
   // skips focus/concealment/safe-area policy those wrappers own.
   //
-  // Scoped by `importNames`, not a whole-package ban: each package also
-  // exports plain utilities with no portal/overlay behavior of their own
-  // (`Slot`, `useComposedRefs`, `toast`, cmdk's item/group sub-components)
-  // that are legitimately imported outside `src/components/ui/**` today.
-  overlayPortal: [
+  basePrimitive: [
     {
-      group: ["radix-ui"],
-      importNames: [
-        "AlertDialog",
-        "ContextMenu",
-        "Dialog",
-        "DropdownMenu",
-        "HoverCard",
-        "Menubar",
-        "NavigationMenu",
-        "Popover",
-        "Portal",
-        "Select",
-        "Toast",
-        "Tooltip",
-      ],
+      regex: "^@base-ui/react(?:$|/(?!use-render$|merge-props$))",
       message:
-        "Overlay portal primitives are built only by the shadcn wrappers in src/components/ui/**. Use the wrapper - Dialog/Popover/Select/DropdownMenu/Tooltip/ContextMenu/HoverCard from @/components/ui/* - instead of importing the Radix primitive directly.",
+        "Base UI primitives belong in src/components/ui/**. Import the app wrapper; use-render and merge-props composition utilities are allowed everywhere.",
     },
+  ],
+  overlayPortal: [
     {
       group: ["@floating-ui/react"],
       importNames: ["FloatingPortal"],
       message:
         "Floating UI's portal is built only by the wrappers in src/components/ui/** (the hover card). Use HoverCard from @/components/ui/hover-card instead of portalling a Floating UI surface directly.",
-    },
-    {
-      group: ["radix-ui/internal"],
-      importNames: [
-        "DismissableLayer",
-        "FocusGuards",
-        "FocusScope",
-        "Menu",
-        "Popper",
-        "Presence",
-        "Primitive",
-        "RovingFocus",
-      ],
-      message:
-        "These radix-ui/internal exports hand-build overlay behavior (positioning, dismiss, focus) outside the registered wrappers. Use the shadcn wrapper in src/components/ui/** instead. `useComposedRefs` and the other ref/state utilities are unrestricted.",
-    },
-    {
-      group: ["vaul"],
-      message:
-        "vaul is wrapped by @/components/ui/sheet and @/components/ui/drawer, which register with the browser-tile occlusion coordinator. Use the wrapper instead of importing vaul directly.",
-    },
-    {
-      group: ["@radix-ui/*"],
-      message:
-        "Radix primitive packages (@radix-ui/react-dialog, @radix-ui/react-dismissable-layer, ...) are wrapped by the shadcn components in src/components/ui/**. Use the wrapper instead of importing a @radix-ui/* package directly.",
     },
     {
       // `regex`, not `group`: `group` matching is gitignore-style (the
@@ -152,12 +111,6 @@ const importRestrictionDimensions = {
       importNames: ["Toaster"],
       message:
         'The sonner <Toaster/> portal is mounted once by @/components/ui/sonner, which registers with the browser-tile occlusion coordinator. Import `toast` from "sonner" to trigger a toast; do not mount another <Toaster/>.',
-    },
-    {
-      group: ["cmdk"],
-      importNames: ["Command", "CommandDialog", "CommandRoot"],
-      message:
-        "The cmdk Command root is wrapped by @/components/ui/command, which registers with the browser-tile occlusion coordinator. Use the wrapper's exports instead of importing cmdk's Command directly.",
     },
   ],
 };
@@ -2131,6 +2084,7 @@ export default tseslint.config(
       // wrapper layer itself, and the reasoned pre-registration-seam raw
       // consumers - are narrow and explicit.
       "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "basePrimitive",
         "kernel",
         "overlayPortal",
       ),
@@ -2164,6 +2118,7 @@ export default tseslint.config(
     ignores: analyticsAdapterFiles,
     rules: {
       "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "basePrimitive",
         "posthog",
         "kernel",
         "overlayPortal",
@@ -2179,6 +2134,7 @@ export default tseslint.config(
     ignores: [...analyticsAdapterFiles, ...hostSelectionReadAllowlist],
     rules: {
       "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "basePrimitive",
         "posthog",
         "readPath",
         "kernel",
@@ -2197,6 +2153,7 @@ export default tseslint.config(
     ignores: [...testFileGlobs, ...hooksEpicAppWideByCallerExemptions],
     rules: {
       "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "basePrimitive",
         "posthog",
         "readPath",
         "kernel",
@@ -2211,6 +2168,7 @@ export default tseslint.config(
     ignores: [...testFileGlobs, ...hookWrapperAppWideReadExemptions],
     rules: {
       "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "basePrimitive",
         "posthog",
         "readPath",
         "kernel",
@@ -2229,6 +2187,7 @@ export default tseslint.config(
     ],
     rules: {
       "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "basePrimitive",
         "posthog",
         "kernel",
         "overlayPortal",
@@ -2247,6 +2206,7 @@ export default tseslint.config(
     ],
     rules: {
       "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "basePrimitive",
         "posthog",
         "kernel",
       ),
@@ -2266,7 +2226,10 @@ export default tseslint.config(
     // full-package lint - scoped runs never visit this file.)
     ignores: analyticsAdapterFiles,
     rules: {
-      "@typescript-eslint/no-restricted-imports": importRestrictions("posthog"),
+      "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "basePrimitive",
+        "posthog",
+      ),
     },
   },
   {
@@ -2276,6 +2239,7 @@ export default tseslint.config(
     files: selectionKernelOwner,
     rules: {
       "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "basePrimitive",
         "posthog",
         "overlayPortal",
       ),
@@ -2331,6 +2295,17 @@ export default tseslint.config(
     },
   },
   {
+    // Raw Base is the control in the permanent focus parity gate.
+    files: ["src/__tests__/browser/portal-lifecycle-gate.tsx"],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "posthog",
+        "readPath",
+        "kernel",
+      ),
+    },
+  },
+  {
     // Two more raw-primitive consumers, restated here minus `overlayPortal`
     // rather than folded into the block above so neither file inherits the
     // shadcn-only rule turn-offs by accident.
@@ -2340,6 +2315,7 @@ export default tseslint.config(
     ],
     rules: {
       "@typescript-eslint/no-restricted-imports": importRestrictions(
+        "basePrimitive",
         "posthog",
         "readPath",
         "kernel",
@@ -2834,18 +2810,6 @@ export default tseslint.config(
     settings: {
       shadcn: {
         note: "See the design rules in clients/gui-app/AGENTS.md before adding a class, a token or an exception.",
-        // `vaul` exports its drawer as `Drawer`, and the rules resolve
-        // `DrawerPrimitive.Content` back through that import to the name
-        // `DrawerContent` - which is OUR component. So `ui/drawer.tsx`, the
-        // file that DEFINES the drawer, was reported as if it were a call site
-        // restyling it: 33 findings for the fill, the shadow, the per-direction
-        // borders and every safe-area inset the wrapper exists to apply. Radix
-        // primitives do not do this (`ui/dialog.tsx` writes the same kind of
-        // thing and is clean), so the fix is to tell the rules that `vaul` is a
-        // primitive library rather than a component source. Call sites are
-        // unaffected: they import `DrawerContent` from
-        // `@/components/ui/drawer`, which is still recognized.
-        ignoreImports: ["^vaul$"],
       },
     },
     rules: {

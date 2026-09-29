@@ -65,7 +65,7 @@ export function TerminalQuoteControl(props: TerminalQuoteControlProps) {
               "bg-popover text-ui-xs font-medium text-popover-foreground shadow-lg transition-colors",
               "hover:bg-accent hover:text-accent-foreground",
               "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
-              "data-[state=open]:bg-accent data-[state=open]:text-accent-foreground",
+              "data-popup-open:bg-accent data-popup-open:text-accent-foreground",
             )}
           >
             <MessageSquareShare className="size-3.5 shrink-0" aria-hidden />

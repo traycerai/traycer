@@ -161,7 +161,7 @@ interface RenderGroupInput {
 
 function renderGroup(input: RenderGroupInput) {
   return render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <ResolvedThemeContext.Provider
         value={{ resolvedTheme: "dark", themePreset: "traycer-green" }}
       >

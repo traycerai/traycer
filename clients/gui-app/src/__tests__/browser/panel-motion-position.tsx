@@ -255,13 +255,13 @@ async function waitForFixture(): Promise<void> {
     if (
       bySlot("popover-content") !== null &&
       bySlot("quote-selection-popover") !== null &&
-      document.querySelector("[data-radix-popper-content-wrapper]") !== null
+      bySlot("popover-positioner") !== null
     ) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  throw new Error("Timed out mounting the Radix and quote popovers");
+  throw new Error("Timed out mounting the popover and quote popovers");
 }
 
 await waitForFixture();
@@ -307,11 +307,9 @@ window.__panelMotionProbe = {
       radixPopover: {
         content: surfaceSnapshot(popoverContent),
         wrapper:
-          document.querySelector("[data-radix-popper-content-wrapper]") === null
+          bySlot("popover-positioner") === null
             ? null
-            : surfaceSnapshot(
-                document.querySelector("[data-radix-popper-content-wrapper]"),
-              ),
+            : surfaceSnapshot(bySlot("popover-positioner")),
         anchor: {
           x: popoverAnchorRect.x,
           y: popoverAnchorRect.y,

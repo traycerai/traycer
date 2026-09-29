@@ -1,4 +1,4 @@
-import type { ComponentPropsWithRef, ReactNode } from "react";
+import { useRef, type ComponentPropsWithRef, type ReactNode } from "react";
 import { Bell, History, Plus } from "lucide-react";
 import { useRouterState } from "@tanstack/react-router";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
@@ -7,7 +7,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
-  PopoverAnchor,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
@@ -181,15 +180,16 @@ function InboxNavRow(props: {
   const placement = useColumnOverlayPlacement("top");
   const {
     open,
-    setOpen,
     bellState,
     chord,
     triggerRef,
     onTriggerPointerDown,
     onTriggerKeyDown,
+    onOpenChange,
     contentHandlers,
     popoverProps,
   } = useNotificationCenter();
+  const drawerAnchorRef = useRef<HTMLSpanElement>(null);
   const needsYouCount = useNeedsYouItems().length;
   const unreadCount = useMergedNotificationUnreadCount();
   // The bell's `unknown`: a summary is unavailable, so zero counts are not a
@@ -197,92 +197,88 @@ function InboxNavRow(props: {
   const unavailable = bellState.kind === "unknown";
   const tooltip = inboxTooltip(unavailable, chord);
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={onOpenChange}>
       <TooltipWrapper
         label={(collapsed || unavailable) && !open ? tooltip : null}
         side={placement?.side ?? "right"}
         sideOffset={6}
         align={placement?.align}
       >
-        <PopoverTrigger asChild>
-          <NavRowButton
-            ref={triggerRef}
-            variant={props.variant}
-            active={open}
-            aria-label={inboxAccessibleLabel(
-              needsYouCount,
-              unreadCount,
-              unavailable,
-            )}
-            data-testid="side-strip-inbox"
-            onPointerDown={onTriggerPointerDown}
-            onKeyDown={onTriggerKeyDown}
-          >
-            <Bell
-              className={cn(
-                SIDE_TAB_LEADING_CLASS,
-                collapsed && "me-0",
-                "shrink-0",
+        <PopoverTrigger
+          render={
+            <NavRowButton
+              ref={triggerRef}
+              variant={props.variant}
+              active={open}
+              aria-label={inboxAccessibleLabel(
+                needsYouCount,
+                unreadCount,
+                unavailable,
               )}
-            />
-            {collapsed ? (
-              <InboxTileMark
-                needsYouCount={needsYouCount}
-                unavailable={unavailable}
+              data-testid="side-strip-inbox"
+              onPointerDown={onTriggerPointerDown}
+              onKeyDown={onTriggerKeyDown}
+            >
+              <Bell
+                className={cn(
+                  SIDE_TAB_LEADING_CLASS,
+                  collapsed && "me-0",
+                  "shrink-0",
+                )}
               />
-            ) : (
-              <>
-                <span
-                  className={cn(
-                    SIDE_TAB_TITLE_CLASS,
-                    "min-w-0 flex-1 truncate text-left",
-                  )}
-                >
-                  Notifications
-                </span>
-                {/* One count, the unread total; a pending ask tints it
+              {collapsed ? (
+                <InboxTileMark
+                  needsYouCount={needsYouCount}
+                  unavailable={unavailable}
+                />
+              ) : (
+                <>
+                  <span
+                    className={cn(
+                      SIDE_TAB_TITLE_CLASS,
+                      "min-w-0 flex-1 truncate text-left",
+                    )}
+                  >
+                    Notifications
+                  </span>
+                  {/* One count, the unread total; a pending ask tints it
                     rather than adding a second number. An ask already read
                     is still pending, so with nothing unread it shows alone. */}
-                {unreadCount > 0 || needsYouCount > 0 ? (
-                  <Badge
-                    variant={needsYouCount > 0 ? "warning" : "muted"}
-                    size="sm"
-                    aria-hidden
-                    data-testid="side-strip-inbox-count"
-                    data-needs-you={needsYouCount > 0}
-                  >
-                    <span className="tabular-nums">
-                      {unreadCount > 0 ? unreadCount : needsYouCount}
-                    </span>
-                  </Badge>
-                ) : null}
-                {unavailable ? (
-                  <span
-                    aria-hidden
-                    data-testid="side-strip-inbox-unknown-indicator"
-                    className={cn(INBOX_UNKNOWN_DOT_CLASS, "shrink-0")}
-                  />
-                ) : null}
-              </>
-            )}
-          </NavRowButton>
-        </PopoverTrigger>
+                  {unreadCount > 0 || needsYouCount > 0 ? (
+                    <Badge
+                      variant={needsYouCount > 0 ? "warning" : "muted"}
+                      size="sm"
+                      aria-hidden
+                      data-testid="side-strip-inbox-count"
+                      data-needs-you={needsYouCount > 0}
+                    >
+                      <span className="tabular-nums">
+                        {unreadCount > 0 ? unreadCount : needsYouCount}
+                      </span>
+                    </Badge>
+                  ) : null}
+                  {unavailable ? (
+                    <span
+                      aria-hidden
+                      data-testid="side-strip-inbox-unknown-indicator"
+                      className={cn(INBOX_UNKNOWN_DOT_CLASS, "shrink-0")}
+                    />
+                  ) : null}
+                </>
+              )}
+            </NavRowButton>
+          }
+        />
       </TooltipWrapper>
       {/* The drawer hangs off the whole strip column, not off this row: the
           anchor fills the strip's `relative` nav, the nearest positioned
-          ancestor, so the drawer's top and height follow the strip's.
-          AFTER the trigger, not before it: Radix reports an anchor only when
-          it changes, so on the first commit the last one in tree order wins,
-          and the trigger's own is dropped (and its button remounted) on the
-          next. Placed first, the drawer measured that detached button: 0x0 at
-          the window's corner. */}
-      <PopoverAnchor asChild>
-        <span
-          aria-hidden
-          data-testid="inbox-drawer-anchor"
-          className="pointer-events-none absolute inset-0"
-        />
-      </PopoverAnchor>
+          ancestor, so the drawer's top and height follow the strip's. */}
+      <span
+        ref={drawerAnchorRef}
+        aria-hidden
+        data-testid="inbox-drawer-anchor"
+        className="pointer-events-none absolute inset-0"
+      />
       <PopoverContent
         layout="bare"
         side={placement?.side}
@@ -292,8 +288,9 @@ function InboxNavRow(props: {
         // with the frame's own top and bottom.
         sideOffset={0}
         alignOffset={0}
+        anchor={drawerAnchorRef}
         data-testid="side-strip-inbox-drawer"
-        className="h-[var(--radix-popover-trigger-height)] w-auto overflow-hidden"
+        className="h-[var(--anchor-height)] w-auto overflow-hidden"
         {...contentHandlers}
       >
         <NotificationsPopover

@@ -141,7 +141,7 @@ function PreFeatureComposerHarness() {
   });
   const visible = !reauthGate.signedOut && prompt.kind === "visible";
   return (
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <div>
         <div data-testid="profile-id">{profileId ?? "ambient"}</div>
         <div data-testid="send-blocked">{String(reauthGate.signedOut)}</div>

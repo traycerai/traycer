@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import {
   Check,
   ChevronDown,
@@ -183,7 +183,7 @@ export function FolderLocationControl(props: {
 function FolderLocationMenu(props: {
   readonly item: WorkspaceRunItem;
   readonly value: FolderLocationValue;
-  readonly trigger: ReactNode;
+  readonly trigger: ReactElement;
   readonly importRows: ReadonlyArray<UnifiedPickerWorktreeRow>;
   readonly uncommittedByPath: ReadonlyMap<string, number>;
   readonly boundaryEl: HTMLElement | null;
@@ -194,7 +194,7 @@ function FolderLocationMenu(props: {
     // that trap is what stole the search autofocus in the "Existing worktree"
     // submenu (its search input lives outside the roving menu-item focus).
     <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>{props.trigger}</DropdownMenuTrigger>
+      <DropdownMenuTrigger render={props.trigger} />
       <DropdownMenuContent
         align="start"
         data-testid="folder-location-menu"
@@ -203,7 +203,7 @@ function FolderLocationMenu(props: {
       >
         <DropdownMenuItem
           data-testid="folder-location-local"
-          onSelect={() => item.onSelectMode("local")}
+          onClick={() => item.onSelectMode("local")}
         >
           <Laptop className="size-4" aria-hidden />
           <span className="flex-1">Local</span>
@@ -213,7 +213,7 @@ function FolderLocationMenu(props: {
         </DropdownMenuItem>
         <DropdownMenuItem
           data-testid="folder-location-worktree"
-          onSelect={() => item.onSelectMode("worktree")}
+          onClick={() => item.onSelectMode("worktree")}
         >
           <Split className="size-4 rotate-90" aria-hidden />
           <span className="flex-1">New worktree</span>
@@ -397,7 +397,7 @@ export function ExistingWorktreeList(props: {
               <DropdownMenuItem
                 key={row.id}
                 data-testid={`folder-location-import-${row.worktreePath}`}
-                onSelect={() => props.onSelect(row.intent)}
+                onClick={() => props.onSelect(row.intent)}
               >
                 {row.isLocked ? (
                   <Lock className="size-4 shrink-0" aria-hidden />

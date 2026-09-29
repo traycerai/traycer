@@ -80,29 +80,26 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
   } = props;
 
   return (
-    <ContextMenuContent
-      className="w-56"
-      onCloseAutoFocus={(event) => event.preventDefault()}
-    >
-      <ContextMenuItem onSelect={() => onClose(groupId, tabId)}>
+    <ContextMenuContent className="w-56" finalFocus={false}>
+      <ContextMenuItem onClick={() => onClose(groupId, tabId)}>
         Close
       </ContextMenuItem>
-      <ContextMenuItem onSelect={() => onCloseOthers(groupId, tabId)}>
+      <ContextMenuItem onClick={() => onCloseOthers(groupId, tabId)}>
         Close Others
       </ContextMenuItem>
       <ContextMenuItem
         disabled={!canCloseRight}
-        onSelect={() => onCloseRight(groupId, tabId)}
+        onClick={() => onCloseRight(groupId, tabId)}
       >
         Close to the Right
       </ContextMenuItem>
-      <ContextMenuItem onSelect={() => onCloseAll(groupId)}>
+      <ContextMenuItem onClick={() => onCloseAll(groupId)}>
         Close All
       </ContextMenuItem>
       {canRename ? (
         <>
           <ContextMenuSeparator />
-          <ContextMenuItem onSelect={onEditTitle}>
+          <ContextMenuItem onClick={onEditTitle}>
             <Pencil className="size-4" />
             Edit Title
           </ContextMenuItem>
@@ -110,44 +107,44 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
       ) : null}
       <ContextMenuSeparator />
       <ContextMenuItem
-        onSelect={() => onSplit(groupId, tabId, "vertical", true)}
+        onClick={() => onSplit(groupId, tabId, "vertical", true)}
       >
         <ChevronUp className="size-4" />
         Split Up
       </ContextMenuItem>
       <ContextMenuItem
-        onSelect={() => onSplit(groupId, tabId, "vertical", false)}
+        onClick={() => onSplit(groupId, tabId, "vertical", false)}
       >
         <ChevronDown className="size-4" />
         Split Down
       </ContextMenuItem>
       <ContextMenuItem
-        onSelect={() => onSplit(groupId, tabId, "horizontal", true)}
+        onClick={() => onSplit(groupId, tabId, "horizontal", true)}
       >
         <ChevronLeft className="size-4" />
         Split Left
       </ContextMenuItem>
       <ContextMenuItem
-        onSelect={() => onSplit(groupId, tabId, "horizontal", false)}
+        onClick={() => onSplit(groupId, tabId, "horizontal", false)}
       >
         <ChevronRight className="size-4" />
         Split Right
       </ContextMenuItem>
       <ContextMenuSeparator />
       {onCopyFilePath === null ? null : (
-        <ContextMenuItem onSelect={onCopyFilePath}>
+        <ContextMenuItem onClick={onCopyFilePath}>
           <Copy className="size-4" />
           Copy File Path
         </ContextMenuItem>
       )}
-      <ContextMenuItem onSelect={() => onRevealInSidebar(tabId)}>
+      <ContextMenuItem onClick={() => onRevealInSidebar(tabId)}>
         <Eye className="size-4" />
         Reveal in Sidebar
       </ContextMenuItem>
       {onOpenUsage === null ? null : (
         <>
           <ContextMenuSeparator />
-          <ContextMenuItem onSelect={onOpenUsage}>
+          <ContextMenuItem onClick={onOpenUsage}>
             <LineChart className="size-4" />
             Usage
           </ContextMenuItem>
@@ -157,7 +154,7 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
       <ContextMenuItem
         disabled={!recovery.available}
         data-testid="canvas-tab-reopen-closed"
-        onSelect={() => {
+        onClick={() => {
           void recovery.reopen();
         }}
       >

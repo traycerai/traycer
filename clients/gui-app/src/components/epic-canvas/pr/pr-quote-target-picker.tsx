@@ -48,23 +48,25 @@ export function PrQuoteTargetPicker(props: {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          size="xs"
-          data-testid="pr-quote-target-trigger"
-          className={cn("min-w-0", props.variant === "card" && "w-full")}
-        >
-          <span className="min-w-0 flex-1 truncate text-left text-foreground">
-            {props.target?.title ?? "Choose a chat"}
-          </span>
-          <ChevronDown
-            className="size-3 shrink-0 text-muted-foreground"
-            aria-hidden
-          />
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            data-testid="pr-quote-target-trigger"
+            className={cn("min-w-0", props.variant === "card" && "w-full")}
+          >
+            <span className="min-w-0 flex-1 truncate text-left text-foreground">
+              {props.target?.title ?? "Choose a chat"}
+            </span>
+            <ChevronDown
+              className="size-3 shrink-0 text-muted-foreground"
+              aria-hidden
+            />
+          </Button>
+        }
+      />
       <DropdownMenuContent
         align="start"
         className="w-[min(90vw,17rem)]"

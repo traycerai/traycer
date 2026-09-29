@@ -212,7 +212,7 @@ describe("<FileTree /> nested focus navigation", () => {
     renderTree(tabId);
 
     const tree = screen.getByTestId("git-pierre-file-tree");
-    expect(tree.closest("[data-vaul-no-drag]")).not.toBeNull();
+    expect(tree.closest("[data-base-ui-swipe-ignore]")).not.toBeNull();
   });
 
   /**

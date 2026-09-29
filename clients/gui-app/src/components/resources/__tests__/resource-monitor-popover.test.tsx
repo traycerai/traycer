@@ -1023,11 +1023,7 @@ describe("ResourceMonitorPopover", () => {
     });
     expect(sortTrigger.textContent).toContain("Tab order");
 
-    fireEvent.pointerDown(sortTrigger, {
-      button: 0,
-      ctrlKey: false,
-      pointerType: "mouse",
-    });
+    fireEvent.click(sortTrigger);
     expect(
       screen
         .getByRole("menuitemradio", { name: "Tab order" })
@@ -1044,10 +1040,7 @@ describe("ResourceMonitorPopover", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Sort resource rows" }),
-      { button: 0, ctrlKey: false, pointerType: "mouse" },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Sort resource rows" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Memory" }));
 
     // Closing unmounts the panel - the pick has to survive that, not the panel.
@@ -1146,10 +1139,7 @@ describe("ResourceMonitorPopover", () => {
     );
     expect(await screen.findByText("Terminal Alpha")).not.toBeNull();
 
-    fireEvent.pointerDown(document.body, {
-      button: 0,
-      pointerType: "mouse",
-    });
+    fireEvent.click(document.body);
     fireEvent.mouseDown(document.body, { button: 0 });
     fireEvent.pointerUp(document.body, {
       button: 0,
@@ -2109,10 +2099,7 @@ describe("ResourceMonitorPopover", () => {
       "25",
     );
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Sort resource rows" }),
-      { button: 0, ctrlKey: false, pointerType: "mouse" },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Sort resource rows" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Memory" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Expand process tree" }),
@@ -2437,7 +2424,7 @@ describe("ResourceMonitorPopover", () => {
   it("swaps tree values for self values without double-counting visible rows", async () => {
     const stub = installStubFactory();
     render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <ResourcesStreamMount epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
@@ -2486,6 +2473,7 @@ describe("ResourceMonitorPopover", () => {
     if (metrics === null)
       throw new Error("Expected owner metric tooltip trigger");
     fireEvent.pointerMove(metrics);
+    fireEvent.mouseEnter(metrics);
     expect(
       await screen.findAllByText(/Self: 2\.0% CPU · 40\.0 MB memory/),
     ).not.toHaveLength(0);
@@ -3372,10 +3360,7 @@ describe("ResourceMonitorPopover", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Sort resource rows" }),
-      { button: 0, ctrlKey: false, pointerType: "mouse" },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Sort resource rows" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Memory" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Expand process tree" }),
@@ -3394,17 +3379,11 @@ describe("ResourceMonitorPopover", () => {
     expectBefore("beta (1 sub-process)", "alpha");
     expectBefore("alpha", "unavailable");
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Sort resource rows" }),
-      { button: 0, ctrlKey: false, pointerType: "mouse" },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Sort resource rows" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Name" }));
     expectBefore("alpha", "beta (1 sub-process)");
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Sort resource rows" }),
-      { button: 0, ctrlKey: false, pointerType: "mouse" },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Sort resource rows" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Tab order" }));
     // Tab order has no process meaning: fall back to the host's wire order.
     expectBefore("alpha", "beta (1 sub-process)");
@@ -3514,10 +3493,7 @@ describe("ResourceMonitorPopover", () => {
       screen.getByRole("searchbox", { name: "Search resources" }),
       { target: { value: "" } },
     );
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Sort resource rows" }),
-      { button: 0, ctrlKey: false, pointerType: "mouse" },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Sort resource rows" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Name" }));
     const sessions = screen.getByText("Browser sessions");
     const pages = screen.getAllByText(/Browser page/);
@@ -3604,10 +3580,7 @@ describe("ResourceMonitorPopover", () => {
       main.compareDocumentPosition(renderer) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Sort resource rows" }),
-      { button: 0, ctrlKey: false, pointerType: "mouse" },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Sort resource rows" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Memory" }));
     expect(
       screen
@@ -3616,10 +3589,7 @@ describe("ResourceMonitorPopover", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Sort resource rows" }),
-      { button: 0, ctrlKey: false, pointerType: "mouse" },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Sort resource rows" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Name" }));
     expect(
       screen
@@ -3792,20 +3762,10 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     expect(await screen.findByText("Traycer Host")).not.toBeNull();
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Sort resource rows" }),
-      {
-        button: 0,
-        ctrlKey: false,
-        pointerType: "mouse",
-      },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Sort resource rows" }));
     expect(screen.getByRole("menuitemradio", { name: "CPU" })).not.toBeNull();
 
-    fireEvent.pointerDown(screen.getByText("Traycer Host"), {
-      button: 0,
-      pointerType: "mouse",
-    });
+    fireEvent.click(screen.getByText("Traycer Host"));
     fireEvent.mouseDown(screen.getByText("Traycer Host"), { button: 0 });
     fireEvent.pointerUp(screen.getByText("Traycer Host"), {
       button: 0,
@@ -3817,20 +3777,10 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.getByRole("dialog", { name: "Resources" })).not.toBeNull();
     expect(screen.getByText("Traycer Host")).not.toBeNull();
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Sort resource rows" }),
-      {
-        button: 0,
-        ctrlKey: false,
-        pointerType: "mouse",
-      },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Sort resource rows" }));
     expect(screen.getByRole("menuitemradio", { name: "CPU" })).not.toBeNull();
 
-    fireEvent.pointerDown(document.body, {
-      button: 0,
-      pointerType: "mouse",
-    });
+    fireEvent.click(document.body);
     fireEvent.mouseDown(document.body, { button: 0 });
     fireEvent.pointerUp(document.body, {
       button: 0,
@@ -3867,10 +3817,7 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     expect(await screen.findByText("Traycer Host")).not.toBeNull();
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Sort resource rows" }),
-      { button: 0, ctrlKey: false, pointerType: "mouse" },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Sort resource rows" }));
     const cpuItem = screen.getByRole("menuitemradio", { name: "CPU" });
 
     // Choosing a sort option closes the menu but must leave the Resources

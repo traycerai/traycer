@@ -382,7 +382,7 @@ function ReasoningMaxSparkles() {
  * rather than an excluded one: here the POSITION is the control, so "no
  * thinking" has to be somewhere a thumb can land.
  *
- * The thumb is the RANGE control and the only tab stop (Radix gives it arrows,
+ * The thumb is the RANGE control and the only tab stop (Base gives it arrows,
  * Home/End and `role="slider"`; `aria-valuetext` says the level's name rather
  * than its index). The dots are direct selection alongside it: each is a real
  * labelled button, so a coarse pointer has something to hit, a hover has
@@ -439,7 +439,7 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
         data-max={atMax ? "true" : undefined}
         data-dragging={gesture.dragging ? "true" : undefined}
         data-pressed={gesture.pressed ? "true" : undefined}
-        value={[gesture.position]}
+        value={gesture.position}
         min={0}
         max={lastIndex}
         step={gesture.step}
@@ -464,11 +464,9 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
               muddies the boundary the thumb sits on. */}
           <SliderRange
             data-testid="model-reasoning-range"
-            // Radix insets the 1.5rem thumb at the endpoints, but leaves its
-            // range on raw percentages. Match that inset and keep the covered
-            // edge square so low interior stops have no unfilled crescent.
+            // Match the 1.5rem thumb's inset at both endpoints.
             style={{
-              marginInlineEnd: `${((2 * gesture.position) / lastIndex - 1) * 0.75}rem`,
+              width: `calc(${(gesture.position / lastIndex) * 100}% + ${(1 - (2 * gesture.position) / lastIndex) * 0.75}rem)`,
             }}
             className={cn(
               "reasoning-effort-range bg-primary",
@@ -480,8 +478,8 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
               the thumb, which are the slider's later siblings. */}
           {sparkling ? <ReasoningMaxSparkles /> : null}
         </SliderTrack>
-        {/* Inset by half the thumb, which is where Radix keeps the thumb's own
-            centre at the two ends (`getThumbInBoundsOffset`) - without it the
+        {/* Inset by half the thumb, which is where Base keeps the thumb's own
+            centre at the two ends (`thumbAlignment="edge"`) - without it the
             first and last dot sit half a thumb outside the thumb's reach. The
             pill thumb is 1.5rem, so this is `px-3`; `py-1` matches the slider's
             own padding. Interactive stops stay below the thumb. */}
@@ -512,7 +510,6 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
           size="pill"
           className="data-[size=pill]:size-6 data-[size=pill]:border"
           aria-label="Thinking effort"
-          aria-valuenow={thumbIndex}
           aria-valuetext={findReasoningLabel(value, options)}
         />
       </Slider>

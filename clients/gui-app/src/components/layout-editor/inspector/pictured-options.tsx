@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { RadioGroup as RadioGroupPrimitive } from "radix-ui";
+import { RadioGroup, RadioGroupButtonItem } from "@/components/ui/radio-group";
 import { cn } from "@/lib/utils";
 
 export interface PicturedOption {
@@ -12,7 +12,7 @@ export interface PicturedOption {
 /**
  * Pick one of a few values, each drawn as the real thing rather than named: a
  * radio group of pictures (Context usage's Style, Model's Reasoning control,
- * Side tab view). Radix supplies the radio semantics and the keyboard, as it
+ * Side tab view). The radio group supplies the semantics and the keyboard, as it
  * does for `SegmentedControl`: one Tab stop, arrows move and select.
  */
 export function PicturedOptions(props: {
@@ -39,32 +39,31 @@ export function PicturedOptions(props: {
       </span>
       {/* The radios need an owner, or a screen reader announces orphans with
         no group name and no position in a set (G1-16). */}
-      <RadioGroupPrimitive.Root
+      <RadioGroup
         aria-label={label}
         value={value ?? ""}
         onValueChange={onChange}
         disabled={disabled}
-        className={cn(
-          "gap-1.5",
-          above ? "flex flex-col" : "grid grid-cols-[auto_minmax(0,1fr)_auto]",
-        )}
+        variant="cards"
+        className={
+          above ? "flex flex-col" : "grid grid-cols-[auto_minmax(0,1fr)_auto]"
+        }
       >
         {options.map((option) => {
           const checked = option.id === value;
           return (
-            <RadioGroupPrimitive.Item
+            <RadioGroupButtonItem
               key={option.id}
               value={option.id}
               // The picture is `inert` below, so it is out of the a11y tree and
               // this radio has no name left to take from its content.
               aria-label={option.label}
-              className={cn(
-                "grid items-center gap-x-2.5 rounded-lg border border-border bg-card px-2.5 py-2 text-left transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 active:press-scrim disabled:opacity-50",
+              variant="card"
+              className={
                 above
-                  ? "grid-cols-[auto_minmax(0,1fr)] gap-y-2"
-                  : "col-span-3 grid-cols-subgrid",
-                checked && "border-foreground",
-              )}
+                  ? "grid-cols-[auto_minmax(0,1fr)]"
+                  : "col-span-3 grid-cols-subgrid"
+              }
             >
               <span
                 className={cn(
@@ -90,10 +89,10 @@ export function PicturedOptions(props: {
                 {option.picture}
               </span>
               {above ? null : optionLabel(option.label)}
-            </RadioGroupPrimitive.Item>
+            </RadioGroupButtonItem>
           );
         })}
-      </RadioGroupPrimitive.Root>
+      </RadioGroup>
     </>
   );
 }

@@ -1,17 +1,40 @@
 "use client";
 
 import * as React from "react";
-import { Popover as PopoverPrimitive } from "radix-ui";
+import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 
-import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
-import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
+import {
+  OverlayPresentationContext,
+  useOverlayPresentation,
+  useOverlayFocus,
+} from "@/components/ui/overlay-presentation-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 import { cn } from "@/lib/utils";
 
 function Popover({
+  open,
+  defaultOpen,
+  onOpenChange,
+  onOpenChangeComplete,
   ...props
-}: React.ComponentProps<typeof PopoverPrimitive.Root>) {
-  return <PopoverPrimitive.Root data-slot="popover" {...props} />;
+}: PopoverPrimitive.Root.Props) {
+  const overlay = useOverlayPresentation({
+    open,
+    defaultOpen,
+    onOpenChange,
+    onOpenChangeComplete,
+    paneAware: true,
+  });
+  return (
+    <OverlayPresentationContext.Provider value={overlay.presentation}>
+      <PopoverPrimitive.Root
+        {...props}
+        open={overlay.open}
+        onOpenChange={overlay.onOpenChange}
+        onOpenChangeComplete={overlay.onOpenChangeComplete}
+      />
+    </OverlayPresentationContext.Provider>
+  );
 }
 
 function PopoverTrigger({
@@ -43,16 +66,24 @@ const POPOVER_CONTENT_LAYOUTS = {
   panel: "gap-0 overflow-hidden rounded-xl p-0",
 } as const;
 
-type PopoverContentProps = React.ComponentProps<
-  typeof PopoverPrimitive.Content
-> & {
-  readonly container?: React.ComponentProps<
-    typeof PopoverPrimitive.Portal
-  >["container"];
-  readonly layout?: keyof typeof POPOVER_CONTENT_LAYOUTS;
-  /** Same theme tokens as label tooltips, for click-open path disclosures. */
-  readonly appearance?: "popover" | "tooltip";
-};
+type PopoverContentProps = React.ComponentProps<typeof PopoverPrimitive.Popup> &
+  Pick<
+    PopoverPrimitive.Positioner.Props,
+    | "anchor"
+    | "align"
+    | "alignOffset"
+    | "side"
+    | "sideOffset"
+    | "collisionBoundary"
+    | "collisionPadding"
+  > & {
+    readonly container?: React.ComponentProps<
+      typeof PopoverPrimitive.Portal
+    >["container"];
+    readonly layout?: keyof typeof POPOVER_CONTENT_LAYOUTS;
+    /** Same theme tokens as label tooltips, for click-open path disclosures. */
+    readonly appearance?: "popover" | "tooltip";
+  };
 
 function PopoverContent({
   ref,
@@ -60,56 +91,65 @@ function PopoverContent({
   align = "center",
   sideOffset = 4,
   collisionPadding,
+  collisionBoundary,
+  side,
+  alignOffset,
+  anchor,
   container,
   layout = "padded",
   appearance = "popover",
-  onCloseAutoFocus,
+  initialFocus,
+  onFocusCapture,
+  finalFocus,
   ...props
 }: PopoverContentProps) {
-  // Keep a pane's controlled root open state intact while its document portal is
-  // not allowed to present over the focused split partner: un-present by
-  // unmounting the portal (leaving the root open, so it re-presents on refocus).
-  // The close-autofocus half lives in `usePaneAwareContentGuard`.
-  const { paneFocused, handleCloseAutoFocus } =
-    usePaneAwareContentGuard(onCloseAutoFocus);
-  // Concealed region (see `portal-concealment-context`): the portal's DOM
-  // escapes the region's own concealment, so it un-presents here and
-  // re-presents intact when the region returns.
-  const concealed = usePortalConcealed();
-  // Read above the early returns so hook order does not depend on presentation.
-  // The insets are the DEFAULT collision padding and `max-w-safe-dvw` the
-  // default width cap; both are displaceable by a caller (see
-  // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`).
+  const { ref: popupRef, ...focus } = useOverlayFocus(
+    initialFocus,
+    finalFocus,
+    ref,
+    onFocusCapture,
+  );
   const safeAreaInsets = useSafeAreaCollisionPadding();
-  if (!paneFocused || concealed) return null;
   return (
-    <PopoverPrimitive.Portal container={container}>
-      <PopoverPrimitive.Content
-        ref={ref}
-        data-slot="popover-content"
-        data-appearance={appearance}
-        data-layout={layout}
+    <PopoverPrimitive.Portal container={container ?? undefined}>
+      <PopoverPrimitive.Positioner
+        data-slot="popover-positioner"
+        className="group/popover-positioner z-50"
+        positionMethod="fixed"
+        // Keep the requested edge of wide anchors when viewport padding collides.
+        collisionAvoidance={{ align: "shift" }}
+        data-overlay-concealed={focus.concealed || undefined}
+        anchor={anchor}
+        side={side}
         align={align}
+        alignOffset={alignOffset}
         sideOffset={sideOffset}
+        collisionBoundary={collisionBoundary}
         collisionPadding={collisionPadding ?? safeAreaInsets}
-        className={cn(
-          "z-50 flex w-72 max-w-safe-dvw origin-(--radix-popover-content-transform-origin) flex-col bg-popover text-ui-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-          POPOVER_CONTENT_LAYOUTS[layout],
-          appearance === "tooltip" &&
-            "rounded-md bg-foreground text-background shadow-sm ring-0",
-          className,
-        )}
-        onCloseAutoFocus={handleCloseAutoFocus}
-        {...props}
-      />
+      >
+        <PopoverPrimitive.Popup
+          ref={popupRef}
+          onFocusCapture={focus.onFocusCapture}
+          data-slot="popover-content"
+          data-appearance={appearance}
+          data-layout={layout}
+          className={(state) =>
+            cn(
+              "z-50 flex w-72 max-w-safe-dvw origin-(--transform-origin) flex-col bg-popover text-ui-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+              POPOVER_CONTENT_LAYOUTS[layout],
+              appearance === "tooltip" &&
+                "rounded-md bg-foreground text-background shadow-sm ring-0",
+              typeof className === "function" ? className(state) : className,
+            )
+          }
+          data-overlay-concealed={focus.concealed || undefined}
+          initialFocus={focus.initialFocus}
+          finalFocus={focus.finalFocus}
+          {...props}
+        />
+      </PopoverPrimitive.Positioner>
     </PopoverPrimitive.Portal>
   );
-}
-
-function PopoverAnchor({
-  ...props
-}: React.ComponentProps<typeof PopoverPrimitive.Anchor>) {
-  return <PopoverPrimitive.Anchor data-slot="popover-anchor" {...props} />;
 }
 
 function PopoverHeader({ className, ...props }: React.ComponentProps<"div">) {
@@ -147,7 +187,6 @@ function PopoverDescription({
 
 export {
   Popover,
-  PopoverAnchor,
   PopoverContent,
   PopoverDescription,
   PopoverHeader,

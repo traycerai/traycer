@@ -21,7 +21,7 @@ export function HostSettingsDisclosure(props: DisclosureProps) {
     >
       <CollapsibleTrigger className="group flex w-full items-center justify-between gap-3 px-5 py-3 text-left text-ui-sm font-medium text-foreground hover:bg-foreground/4">
         <span>{label}</span>
-        <ChevronRight className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
+        <ChevronRight className="size-4 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
       </CollapsibleTrigger>
       {/* muted-fill-ok: a /10 wash - losing it is imperceptible, and the
           disclosure is delimited by the card it sits in */}

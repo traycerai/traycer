@@ -314,10 +314,10 @@ function WorktreeScriptsDialogBody(props: {
       inUseNote={null}
       saveLabel="Save"
       onSave={handleSave}
-      onEscapeKeyDown={(event) => {
-        if (cancelBranchEditingRef.current === null) return;
-        event.preventDefault();
+      cancelEditing={() => {
+        if (cancelBranchEditingRef.current === null) return false;
         cancelBranchEditingRef.current();
+        return true;
       }}
       onOpenChange={props.onOpenChange}
     />

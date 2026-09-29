@@ -481,11 +481,7 @@ describe("<UserMessageBody /> agent messages", () => {
       />,
     );
 
-    // Radix's DropdownMenuTrigger opens on pointerdown, not the click event.
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Message actions" }),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
 
     screen.getByRole("menuitem", { name: "Copy" });
     const deleteItem = screen.getByRole("menuitem", { name: "Delete" });
@@ -495,10 +491,7 @@ describe("<UserMessageBody /> agent messages", () => {
     });
     expect(onEdit).toHaveBeenCalledTimes(1);
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Message actions" }),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
     fireEvent.keyDown(screen.getByRole("menuitem", { name: "Delete" }), {
       key: "Enter",
     });
@@ -513,10 +506,7 @@ describe("<UserMessageBody /> agent messages", () => {
       />,
     );
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Message actions" }),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
 
     screen.getByRole("menuitem", { name: "Copy" });
     expect(screen.queryByRole("menuitem", { name: "Edit" })).toBeNull();
@@ -531,10 +521,7 @@ describe("<UserMessageBody /> agent messages", () => {
       />,
     );
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Message actions" }),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
     screen.getByRole("menuitem", { name: "Copy" });
     expect(screen.queryByRole("menuitem", { name: "Edit" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
@@ -551,10 +538,7 @@ describe("<UserMessageBody /> agent messages", () => {
       />,
     );
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Message actions" }),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
     screen.getByRole("menuitem", { name: "Copy" });
     screen.getByRole("menuitem", { name: "Edit" });
     screen.getByRole("menuitem", { name: "Delete" });
@@ -596,10 +580,7 @@ describe("<UserMessageBody /> agent messages", () => {
         </TooltipProvider>,
       );
 
-      fireEvent.pointerDown(
-        screen.getByRole("button", { name: "Message actions" }),
-        { button: 0 },
-      );
+      fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
       fireEvent.keyDown(screen.getByRole("menuitem", { name: "Copy" }), {
         key: "Enter",
       });

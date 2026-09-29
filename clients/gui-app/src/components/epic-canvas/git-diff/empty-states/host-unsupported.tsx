@@ -1,5 +1,6 @@
+import { cn } from "@/lib/utils";
 import { AlertCircle } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 
@@ -18,9 +19,18 @@ export function HostUnsupported(props: { readonly reason: string }) {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" className="w-fit" asChild>
-            <a href="#update-host">Update Traycer Host</a>
-          </Button>
+          <a
+            href="#update-host"
+            data-slot="button"
+            data-variant="outline"
+            data-size="sm"
+            className={cn(
+              buttonVariants({ variant: "outline", size: "sm" }),
+              "w-fit",
+            )}
+          >
+            Update Traycer Host
+          </a>
           <ReportIssueAction
             context={createReportIssueContext({
               title: "Git panel unavailable",

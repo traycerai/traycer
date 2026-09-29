@@ -146,8 +146,8 @@ export function PermissionsSettingsPanel(): ReactNode {
     >
       <Tabs
         value={tab}
-        onValueChange={(next) => {
-          if (isPermissionsTab(next)) setTab(next);
+        onValueChange={(next: unknown) => {
+          if (typeof next === "string" && isPermissionsTab(next)) setTab(next);
         }}
         className="gap-0"
       >
@@ -183,11 +183,11 @@ export function PermissionsSettingsPanel(): ReactNode {
             answer re-seeds the editor - survives a look at another tab; the
             edit itself lives with Settings (`rules-edit-store.ts`). Never
             before the first visit, so opening on another tab starts no Rules
-            read. Radix leaves a force-mounted pane visible, hence the class. */}
+            read. Base hides the kept-mounted inactive pane. */}
         <TabsContent
           value="rules"
-          forceMount={rulesVisited ? true : undefined}
-          className="pt-5 data-[state=inactive]:hidden"
+          keepMounted={rulesVisited ? true : undefined}
+          className="pt-5 data-hidden:hidden"
           {...contentLabel("rules")}
         >
           {gated(
@@ -248,8 +248,13 @@ function PermissionsTabSelect(props: {
 }): ReactNode {
   return (
     <Select
+      items={PERMISSIONS_TABS.map((value) => ({
+        value,
+        label: PERMISSIONS_TAB_GROUPS[value].label,
+      }))}
       value={props.tab}
       onValueChange={(value) => {
+        if (value === null) return;
         if (isPermissionsTab(value)) props.onSelect(value);
       }}
     >

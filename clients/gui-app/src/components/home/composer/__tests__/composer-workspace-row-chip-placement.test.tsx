@@ -22,7 +22,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
  */
 function renderRow() {
   return render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <ChatDockCompactStripProvider
         value={{
           chips: [

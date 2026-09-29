@@ -97,18 +97,38 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   );
 
   return (
-    <Popover open={isOpen} onOpenChange={handleOpenChange}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="muted"
-          size="icon-sm"
-          aria-label="New terminal"
-          data-testid="epic-terminals-panel-add"
-        >
-          <Plus className="size-4" />
-        </Button>
-      </PopoverTrigger>
+    <Popover
+      open={isOpen}
+      onOpenChange={(next, details) => {
+        if (
+          !next &&
+          (details.reason === "outside-press" ||
+            details.reason === "focus-out") &&
+          isHostSwitcherListInteraction(
+            details.reason === "focus-out" &&
+              details.event instanceof FocusEvent
+              ? details.event.relatedTarget
+              : details.event.target,
+          )
+        )
+          details.cancel();
+        if (details.isCanceled) return;
+        handleOpenChange(next);
+      }}
+    >
+      <PopoverTrigger
+        render={
+          <Button
+            type="button"
+            variant="muted"
+            size="icon-sm"
+            aria-label="New terminal"
+            data-testid="epic-terminals-panel-add"
+          >
+            <Plus className="size-4" />
+          </Button>
+        }
+      />
       <PopoverContent
         layout="bare"
         side={placement?.side}
@@ -119,15 +139,11 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
         // this content, so every click in it arrives here as an interaction
         // from outside. Dismissing on those would close the panel the picker
         // exists to scope, and no host could ever be chosen from it.
-        onInteractOutside={(event) => {
-          if (isHostSwitcherListInteraction(event.target)) {
-            event.preventDefault();
-          }
-        }}
+
         // Keep Radix from focusing the first focusable element (a host row);
         // the workspace search input auto-focuses itself instead so the user
         // can immediately type/arrow through workspaces.
-        onOpenAutoFocus={(event) => event.preventDefault()}
+        initialFocus={false}
       >
         {isOpen ? (
           <NewTerminalPickerBody

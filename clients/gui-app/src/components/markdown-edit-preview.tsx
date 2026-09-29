@@ -122,7 +122,7 @@ export function MarkdownEditPreview({
   return (
     <Tabs
       value={view}
-      onValueChange={(next) => {
+      onValueChange={(next: unknown) => {
         if (next === "edit" || next === "preview") setView(next);
       }}
       className="h-full min-h-0"
@@ -133,8 +133,8 @@ export function MarkdownEditPreview({
       </TabsList>
       <TabsContent
         value="edit"
-        forceMount
-        className="min-h-0 overflow-hidden data-[state=inactive]:hidden"
+        keepMounted
+        className="min-h-0 overflow-hidden data-hidden:hidden"
       >
         {editor}
       </TabsContent>

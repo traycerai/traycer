@@ -26,7 +26,7 @@ export function CustomizeLayoutMenuItem(props: {
   return (
     <ContextMenuItem
       data-testid="customize-layout-menu-item"
-      onSelect={() => {
+      onClick={() => {
         openLayoutEditor({
           source: "direct_ui",
           entry: "pointer",

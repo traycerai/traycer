@@ -118,18 +118,20 @@ export function ReportIssueAction(props: ReportIssueActionProps): ReactNode {
 
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          size="icon-xs"
-          variant={props.variant ?? "muted"}
-          className={cn(props.className)}
-          aria-label="Report issue"
-          onClick={handleClick}
-        >
-          <Bug aria-hidden />
-        </Button>
-      </TooltipTrigger>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="icon-xs"
+            variant={props.variant ?? "muted"}
+            className={cn(props.className)}
+            aria-label="Report issue"
+            onClick={handleClick}
+          >
+            <Bug aria-hidden />
+          </Button>
+        }
+      />
       <TooltipContent>Report issue</TooltipContent>
     </Tooltip>
   );

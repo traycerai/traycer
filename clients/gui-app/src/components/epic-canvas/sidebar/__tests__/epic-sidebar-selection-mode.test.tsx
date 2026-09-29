@@ -9,7 +9,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { domMax, LazyMotion } from "motion/react";
-import { forwardRef, type ReactNode } from "react";
+import { forwardRef, type ReactElement, type ReactNode } from "react";
 import { userEvent } from "@testing-library/user-event";
 import type { Mock } from "vitest";
 import type { ChatSearchMessageHitsStatus } from "@/hooks/chats/use-chat-search-message-hits";
@@ -406,18 +406,18 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
 }));
 
 // Pass-through by default, so every entry is in the DOM without opening its
-// menu. The overflow-to-search focus tests switch to the real Radix menu: what
-// they pin is where focus lands once the menu closes, and only Radix's own
+// menu. The overflow-to-search focus tests switch to the real Base menu: what
+// they pin is where focus lands once the menu closes, and only Base's own
 // close handling can move it.
 const dropdownMenuMode = vi.hoisted(() => ({ real: false }));
 
 interface PassThroughMenuItemProps {
   readonly children: ReactNode;
-  readonly onSelect: () => void;
+  readonly onClick: (() => void) | undefined;
   readonly "data-testid": string;
   readonly disabled: boolean;
   // `undefined` is not padding: a HARD-disabled entry OMITS the key entirely
-  // so Radix's own derived `aria-disabled` survives, and only a soft-disabled
+  // so Base's own derived `aria-disabled` survives, and only a soft-disabled
   // one spreads `true`. Declaring it as a required boolean would describe a
   // shape the production component never emits.
   readonly "aria-disabled": boolean | undefined;
@@ -434,11 +434,14 @@ vi.mock("@/components/ui/dropdown-menu", async (importOriginal) => {
       ) : (
         props.children
       ),
-    DropdownMenuTrigger: (props: { readonly children: ReactNode }) =>
+    DropdownMenuTrigger: (props: {
+      readonly children?: ReactNode;
+      readonly render?: ReactElement;
+    }) =>
       dropdownMenuMode.real ? (
         <realMenu.DropdownMenuTrigger {...props} />
       ) : (
-        props.children
+        (props.render ?? props.children)
       ),
     DropdownMenuContent: (props: { readonly children: ReactNode }) =>
       dropdownMenuMode.real ? (
@@ -446,7 +449,7 @@ vi.mock("@/components/ui/dropdown-menu", async (importOriginal) => {
       ) : (
         <div>{props.children}</div>
       ),
-    // Forwards `aria-disabled` as well as `disabled`: real Radix renders a
+    // Forwards `aria-disabled` as well as `disabled`: real Base renders a
     // `<div role="menuitem" aria-disabled>`, and an entry that carries a
     // disabled-reason is soft-disabled through ARIA alone (so it stays
     // keyboard-reachable). A mock that dropped it would report every such entry
@@ -462,7 +465,7 @@ vi.mock("@/components/ui/dropdown-menu", async (importOriginal) => {
           disabled={props.disabled}
           aria-disabled={props["aria-disabled"]}
           aria-describedby={props["aria-describedby"]}
-          onClick={props.onSelect}
+          onClick={props.onClick}
         >
           {props.children}
         </button>
@@ -474,7 +477,15 @@ vi.mock("@/components/ui/dropdown-menu", async (importOriginal) => {
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: (props: { readonly children: ReactNode }) => props.children,
-  TooltipTrigger: (props: { readonly children: ReactNode }) => props.children,
+  // Real callers (e.g. `epic-sidebar-artifact-tree.tsx`'s unread/status-dot
+  // markers) pass `render={<span data-testid=... .../>}`, not `children` -
+  // a mock reading only `children` silently drops that entire element,
+  // which is how a marker's data-testid/aria-label went missing from the
+  // test DOM without any test appearing to fail loudly.
+  TooltipTrigger: (props: {
+    readonly children?: ReactNode;
+    readonly render?: ReactNode;
+  }) => props.render ?? props.children,
   // `role="tooltip"` so `tooltipTextIn` can find the label this mock renders
   // eagerly (the real content only exists while the tooltip is open).
   TooltipContent: (props: { readonly children: ReactNode }) => (
@@ -2323,18 +2334,13 @@ describe("epic sidebar selection mode", () => {
       dropdownMenuMode.real = false;
     });
 
-    // Selects the entry the way a click does, then lets Radix finish closing:
-    // it hands focus back on a timer after the menu content unmounts, so an
-    // assertion made before that timer would pass on a focus that is about to
-    // be taken away.
+    // Let the real menu finish closing before checking the search field's
+    // focus, including any deferred focus restoration.
     async function selectOverflowEntry(
       triggerLabel: string,
       entryLabel: string,
     ): Promise<void> {
-      fireEvent.pointerDown(
-        screen.getByRole("button", { name: triggerLabel }),
-        { button: 0, ctrlKey: false },
-      );
+      fireEvent.click(screen.getByRole("button", { name: triggerLabel }));
       fireEvent.click(
         await screen.findByRole("menuitem", { name: entryLabel }),
       );
@@ -4846,7 +4852,7 @@ describe("chat row archive", () => {
       "group-focus-within/tree-item:hidden",
     );
     expect(idleTimeSlot?.className).toContain(
-      "group-has-[[data-state=open]]/tree-item:hidden",
+      "group-has-data-popup-open/tree-item:hidden",
     );
     expect(idleTimeSlot?.className).not.toContain(
       "group-hover/tree-item:invisible",

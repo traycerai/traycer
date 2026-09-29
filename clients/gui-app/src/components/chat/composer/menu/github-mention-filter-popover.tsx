@@ -126,70 +126,76 @@ export function GithubMentionFilterPopover(
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen} modal={false}>
+    <Popover
+      open={open}
+      onOpenChange={(next, details) => {
+        if (
+          !next &&
+          (details.reason === "outside-press" || details.reason === "focus-out")
+        ) {
+          const target =
+            details.reason === "focus-out" &&
+            details.event instanceof FocusEvent
+              ? details.event.relatedTarget
+              : details.event.target;
+          if (!(target instanceof Node && triggerRef.current?.contains(target)))
+            closedByOutsideInteractionRef.current = true;
+        }
+        if (details.isCanceled) return;
+        setOpen(next);
+      }}
+      modal={false}
+    >
       <TooltipWrapper
         label={isDefault ? "Filter" : "Filter (active)"}
         side="top"
         sideOffset={undefined}
         align={undefined}
       >
-        <PopoverTrigger asChild>
-          <Button
-            ref={triggerRef}
-            type="button"
-            variant="muted"
-            size="icon-xs"
-            aria-label={isDefault ? "Filter" : "Filter (active)"}
-            className="relative -my-1 opacity-70"
-            onMouseDown={(event) => {
-              // The composer must not lose focus to the mousedown itself; the
-              // popover takes focus on open, deliberately and afterwards.
-              event.preventDefault();
-            }}
-          >
-            <FilterIcon className="size-3.5" />
-            {isDefault ? null : (
-              <span
-                data-testid="github-mention-filter-dot"
-                className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-warning"
-              />
-            )}
-          </Button>
-        </PopoverTrigger>
+        <PopoverTrigger
+          render={
+            <Button
+              ref={triggerRef}
+              type="button"
+              variant="muted"
+              size="icon-xs"
+              aria-label={isDefault ? "Filter" : "Filter (active)"}
+              className="relative -my-1 opacity-70"
+              onMouseDown={(event) => {
+                // The composer must not lose focus to the mousedown itself; the
+                // popover takes focus on open, deliberately and afterwards.
+                event.preventDefault();
+              }}
+            >
+              <FilterIcon className="size-3.5" />
+              {isDefault ? null : (
+                <span
+                  data-testid="github-mention-filter-dot"
+                  className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-warning"
+                />
+              )}
+            </Button>
+          }
+        />
       </TooltipWrapper>
       <PopoverContent
         layout="bare"
         align="end"
         side="bottom"
         className="w-[min(90vw,14rem)]"
-        onOpenAutoFocus={undefined}
-        onInteractOutside={(event) => {
-          // An outside interaction moves focus where the user POINTED, and
-          // returning the caret to the composer over it would steal focus
-          // from the control they just chose - the next keystrokes would land
-          // in the mention query instead of their target. The trigger is
-          // exempt: closing from the funnel button is a return-to-composer
-          // path, like Escape and the typing handoff.
-          const target = event.target;
-          if (target instanceof Node && triggerRef.current?.contains(target)) {
-            return;
-          }
-          closedByOutsideInteractionRef.current = true;
-        }}
-        onCloseAutoFocus={(event) => {
-          // Always prevented: Radix's default would focus the TRIGGER, which
-          // is right for neither path - a return-to-composer close wants the
-          // caret, and an outside click already focused its own target.
-          event.preventDefault();
+        initialFocus={undefined}
+
+        finalFocus={() => {
           const typed = resumeTypingRef.current;
           resumeTypingRef.current = null;
           if (closedByOutsideInteractionRef.current) {
             closedByOutsideInteractionRef.current = false;
-            return;
+            return false;
           }
           queueMicrotask(() => {
             onReturnFocus(typed);
           });
+          return false;
         }}
         onKeyDown={(event) => {
           // A printable character means the user has gone back to querying:

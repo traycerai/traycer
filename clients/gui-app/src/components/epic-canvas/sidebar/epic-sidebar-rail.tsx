@@ -429,76 +429,106 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
         the pointer through `contextPanelId` instead.
       */}
       <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div
-            ref={setRailRootRef}
-            onContextMenuCapture={handleRailContextMenuCapture}
-            role="toolbar"
-            aria-label="Epic left panels"
-            aria-orientation={orientation}
-            data-epic-sidebar-rail
-            data-testid="epic-sidebar-rail"
-            data-orientation={orientation}
-            {...{ [LAYOUT_CLUSTER_ATTRIBUTE]: "" }}
-            className={cn(
-              "relative flex items-center gap-1 bg-background",
-              orientation === "vertical" &&
-                "h-full w-12 shrink-0 flex-col justify-start overflow-y-auto py-2",
-              // Safe centring: a rail wider than the panel (a task with
-              // pull requests at the default width) starts at its first
-              // icon rather than clipping it out of scroll reach.
-              orientation === "horizontal" &&
-                "h-10 w-full min-w-0 flex-row justify-center-safe overflow-x-auto px-2",
-            )}
-          >
-            {items.map((item) => {
-              if (item.kind === "divider") {
+        <ContextMenuTrigger
+          render={
+            <div
+              ref={setRailRootRef}
+              onContextMenuCapture={handleRailContextMenuCapture}
+              role="toolbar"
+              aria-label="Epic left panels"
+              aria-orientation={orientation}
+              data-epic-sidebar-rail
+              data-testid="epic-sidebar-rail"
+              data-orientation={orientation}
+              {...{ [LAYOUT_CLUSTER_ATTRIBUTE]: "" }}
+              className={cn(
+                "relative flex items-center gap-1 bg-background",
+                orientation === "vertical" &&
+                  "h-full w-12 shrink-0 flex-col justify-start overflow-y-auto py-2",
+                // Safe centring: a rail wider than the panel (a task with
+                // pull requests at the default width) starts at its first
+                // icon rather than clipping it out of scroll reach.
+                orientation === "horizontal" &&
+                  "h-10 w-full min-w-0 flex-row justify-center-safe overflow-x-auto px-2",
+              )}
+            >
+              {items.map((item) => {
+                if (item.kind === "divider") {
+                  return (
+                    <LeftPanelRailDivider
+                      key={item.id}
+                      dividerId={item.id}
+                      orientation={orientation}
+                      editing={dividersEditing}
+                    />
+                  );
+                }
+                if (item.kind === "stack") {
+                  // One icon for the stack (G3, L-181): the top panel's, named
+                  // for every member, and the whole stack moves when it is
+                  // dragged. Previews and the join cue read off the top, which
+                  // is the drop target.
+                  const members = item.members.map((member) => member.id);
+                  const top = item.members[0];
+                  const previewPosition = previewPositionFor(top.id);
+                  return (
+                    <Fragment key={item.id}>
+                      {previewPosition === "before" ? (
+                        <RailBoundaryPreview
+                          definition={panelSectionDropDefinition}
+                          orientation={orientation}
+                        />
+                      ) : null}
+                      <LeftPanelRailStack
+                        stackId={item.id}
+                        memberCount={members.length}
+                        showCount={dividersEditing}
+                      >
+                        <RailPanelButton
+                          tabId={tabId}
+                          panel={top}
+                          label={railGroupLabel(
+                            item.members.map((member) => member.title),
+                          )}
+                          orientation={orientation}
+                          active={
+                            members.some((id) => id === displayedPanelId) &&
+                            !collapsed
+                          }
+                          dropCue={dropCueFor(top.id)}
+                          onClick={() => handleGroupClick(members)}
+                          onContextMenu={setContextPanelId}
+                        />
+                      </LeftPanelRailStack>
+                      {previewPosition === "after" ? (
+                        <RailBoundaryPreview
+                          definition={panelSectionDropDefinition}
+                          orientation={orientation}
+                        />
+                      ) : null}
+                    </Fragment>
+                  );
+                }
+                const panelId = item.panel.id;
+                const previewPosition = previewPositionFor(panelId);
                 return (
-                  <LeftPanelRailDivider
-                    key={item.id}
-                    dividerId={item.id}
-                    orientation={orientation}
-                    editing={dividersEditing}
-                  />
-                );
-              }
-              if (item.kind === "stack") {
-                // One icon for the stack (G3, L-181): the top panel's, named
-                // for every member, and the whole stack moves when it is
-                // dragged. Previews and the join cue read off the top, which
-                // is the drop target.
-                const members = item.members.map((member) => member.id);
-                const top = item.members[0];
-                const previewPosition = previewPositionFor(top.id);
-                return (
-                  <Fragment key={item.id}>
+                  <Fragment key={panelId}>
                     {previewPosition === "before" ? (
                       <RailBoundaryPreview
                         definition={panelSectionDropDefinition}
                         orientation={orientation}
                       />
                     ) : null}
-                    <LeftPanelRailStack
-                      stackId={item.id}
-                      memberCount={members.length}
-                      showCount={dividersEditing}
-                    >
-                      <RailPanelButton
-                        tabId={tabId}
-                        panel={top}
-                        label={railGroupLabel(
-                          item.members.map((member) => member.title),
-                        )}
-                        orientation={orientation}
-                        active={
-                          members.some((id) => id === displayedPanelId) &&
-                          !collapsed
-                        }
-                        dropCue={dropCueFor(top.id)}
-                        onClick={() => handleGroupClick(members)}
-                        onContextMenu={setContextPanelId}
-                      />
-                    </LeftPanelRailStack>
+                    <RailPanelButton
+                      tabId={tabId}
+                      panel={item.panel}
+                      label={item.panel.title}
+                      orientation={orientation}
+                      active={panelId === displayedPanelId && !collapsed}
+                      dropCue={dropCueFor(panelId)}
+                      onClick={() => handleClick(panelId)}
+                      onContextMenu={setContextPanelId}
+                    />
                     {previewPosition === "after" ? (
                       <RailBoundaryPreview
                         definition={panelSectionDropDefinition}
@@ -507,44 +537,16 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
                     ) : null}
                   </Fragment>
                 );
-              }
-              const panelId = item.panel.id;
-              const previewPosition = previewPositionFor(panelId);
-              return (
-                <Fragment key={panelId}>
-                  {previewPosition === "before" ? (
-                    <RailBoundaryPreview
-                      definition={panelSectionDropDefinition}
-                      orientation={orientation}
-                    />
-                  ) : null}
-                  <RailPanelButton
-                    tabId={tabId}
-                    panel={item.panel}
-                    label={item.panel.title}
-                    orientation={orientation}
-                    active={panelId === displayedPanelId && !collapsed}
-                    dropCue={dropCueFor(panelId)}
-                    onClick={() => handleClick(panelId)}
-                    onContextMenu={setContextPanelId}
-                  />
-                  {previewPosition === "after" ? (
-                    <RailBoundaryPreview
-                      definition={panelSectionDropDefinition}
-                      orientation={orientation}
-                    />
-                  ) : null}
-                </Fragment>
-              );
-            })}
-            {dropAtRailEnd ? (
-              <RailBoundaryPreview
-                definition={panelSectionDropDefinition}
-                orientation={orientation}
-              />
-            ) : null}
-          </div>
-        </ContextMenuTrigger>
+              })}
+              {dropAtRailEnd ? (
+                <RailBoundaryPreview
+                  definition={panelSectionDropDefinition}
+                  orientation={orientation}
+                />
+              ) : null}
+            </div>
+          }
+        />
         <RailContextMenuContent
           context={availabilityContext}
           contextPanelId={contextPanelId}

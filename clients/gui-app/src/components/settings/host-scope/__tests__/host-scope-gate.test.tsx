@@ -428,7 +428,12 @@ describe("<HostScopeGate /> concealment and preservation", () => {
 
     rerender(gateAt("unreachable", surface, "host-a"));
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
-    expect(screen.queryByTestId("portal-surface")).toBeNull();
+    // D13: presentation-only owner changes are suppressed, not unmounted - a
+    // concealed portaled surface now stays mounted but un-presented (`hidden`
+    // reaches its portal root the same way `isConcealed` already proves for
+    // the in-tree TypedProbe case above), rather than being removed from the
+    // DOM outright.
+    expectHiddenFromView(screen.queryByTestId("portal-surface"));
 
     rerender(gateAt("ready", surface, "host-a"));
     expect(screen.getByTestId("portal-surface")).not.toBeNull();

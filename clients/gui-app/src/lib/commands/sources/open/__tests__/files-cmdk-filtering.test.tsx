@@ -1,9 +1,9 @@
 /**
  * Drives the Files opener result rows through the REAL `<Command>` filtering
- * pipeline (`filter={paletteFilter}`) to prove the fixup: when cmdk filtering is
+ * pipeline (`scoreItem={paletteFilter}`) to prove the fixup: when scoring is
  * disabled for a Files host-result sub-page, a non-subsequence/typo live query
  * neither hides the host-ranked rows (host Fuse order is preserved) nor the
- * typed notice/truncation rows. The companion `shouldFilter` case shows cmdk
+ * typed notice/truncation rows. The companion `shouldFilter` case shows scoring
  * WOULD hide them, i.e. why the fix is needed. `isFilesResultSubpageId` (which
  * `pane-opener` uses to compute `shouldFilter`) is unit-checked alongside.
  */
@@ -83,12 +83,8 @@ function renderPipeline(args: {
     useItems: () => args.items,
   };
   return render(
-    <Command filter={paletteFilter} shouldFilter={args.shouldFilter}>
-      <CommandInput
-        value={args.query}
-        onValueChange={() => undefined}
-        placeholder="q"
-      />
+    <Command scoreItem={paletteFilter} shouldFilter={args.shouldFilter}>
+      <CommandInput value={args.query} placeholder="q" />
       <CommandList>
         <PaletteQueryProvider value={args.query}>
           <SubpageView subpage={subpage} ctx={CTX} onSelect={() => undefined} />
@@ -110,14 +106,14 @@ describe("isFilesResultSubpageId", () => {
     expect(
       isFilesResultSubpageId(filesCodeRootResultSubpageId("host-1", "C:\\r")),
     ).toBe(true);
-    // Step-1 source picker + unrelated pages keep cmdk filtering.
+    // Step-1 source picker + unrelated pages keep Command scoring.
     expect(isFilesResultSubpageId("open:category:files")).toBe(false);
     expect(isFilesResultSubpageId("open:category:diff")).toBe(false);
     expect(isFilesResultSubpageId("open:search:run:artifact")).toBe(false);
   });
 });
 
-describe("Files result rows through the real cmdk pipeline", () => {
+describe("Files result rows through the real Command scoring pipeline", () => {
   const TYPO_QUERY = "flie"; // not an in-order subsequence of "file.ts"
 
   it("with filtering disabled, a typo query keeps host rows visible AND in host order", () => {
@@ -132,7 +128,7 @@ describe("Files result rows through the real cmdk pipeline", () => {
     // Both survive the non-subsequence query...
     expect(screen.getByText("file.ts")).toBeTruthy();
     expect(screen.getByText("second.ts")).toBeTruthy();
-    // ...and render in the host-provided order (cmdk did not re-rank).
+    // ...and render in the host-provided order (Command did not re-rank).
     const rendered = screen.getAllByRole("option").map((el) => el.textContent);
     expect(rendered).toEqual(["file.ts", "second.ts"]);
   });
@@ -168,8 +164,13 @@ describe("Files result rows through the real cmdk pipeline", () => {
         ),
       ],
     });
-    expect(screen.queryByText("file.ts")).toBeNull();
-    expect(screen.queryByText("Artifacts are unavailable")).toBeNull();
+    // `queryByRole` respects the native `hidden` attribute a zero-scored row
+    // gets; `queryByText` would still find the (hidden) DOM node - Command
+    // keeps a filtered-out row mounted rather than removing it.
+    expect(screen.queryByRole("option", { name: "file.ts" })).toBeNull();
+    expect(
+      screen.queryByRole("option", { name: "Artifacts are unavailable" }),
+    ).toBeNull();
   });
 
   it("ready-empty stays distinct: an empty result list shows the sub-page empty copy, no notice", () => {

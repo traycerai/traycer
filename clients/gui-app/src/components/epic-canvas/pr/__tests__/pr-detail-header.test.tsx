@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type {
   PrDetailCore,
   PrSourceNotice,
@@ -132,6 +133,38 @@ describe("PrDetailHeader GitHub link", () => {
     // action depends on, which a test-id query would silently let regress.
     const link = screen.getByRole("link", { name: /GitHub/i });
     fireEvent.click(link);
+
+    expect(openLink).toHaveBeenCalledTimes(1);
+    expect(openLink).toHaveBeenCalledWith(
+      "https://github.com/acme/widgets/pull/7",
+      "github",
+      expect.anything(),
+    );
+    // A real <a>: no aria-role override.
+    expect(link.getAttribute("role")).toBeNull();
+  });
+
+  it("does not activate on Space - a real <a> only activates on Enter", async () => {
+    // Regression for the Base UI Button(nativeButton=false) mistake this
+    // reverted from - that primitive also activates on Space even when it
+    // renders an <a>, which a real link must not.
+    const user = userEvent.setup();
+    renderHeader(null, 1_000);
+    const link = screen.getByRole("link", { name: /GitHub/i });
+    link.focus();
+
+    await user.keyboard(" ");
+
+    expect(openLink).not.toHaveBeenCalled();
+  });
+
+  it("activates on Enter, the real <a> keyboard default action", async () => {
+    const user = userEvent.setup();
+    renderHeader(null, 1_000);
+    const link = screen.getByRole("link", { name: /GitHub/i });
+    link.focus();
+
+    await user.keyboard("{Enter}");
 
     expect(openLink).toHaveBeenCalledTimes(1);
     expect(openLink).toHaveBeenCalledWith(

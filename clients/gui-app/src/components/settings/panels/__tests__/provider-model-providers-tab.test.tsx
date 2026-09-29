@@ -303,9 +303,8 @@ describe("ProviderModelProvidersTab list states", () => {
  * `provider-rail-controls.test`'s helper.
  */
 function selectFilter(name: string): void {
-  fireEvent.pointerDown(
+  fireEvent.click(
     screen.getByRole("button", { name: /^Filter model providers/ }),
-    { button: 0, ctrlKey: false, pointerType: "mouse" },
   );
   fireEvent.click(screen.getByRole("menuitemradio", { name }));
 }

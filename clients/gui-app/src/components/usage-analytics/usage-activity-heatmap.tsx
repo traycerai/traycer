@@ -172,19 +172,21 @@ function DayTile(props: {
   const { cell, metric } = props;
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          data-testid="usage-activity-day"
-          data-day={cell.day}
-          data-level={cell.level}
-          className="size-2.5 rounded-xs bg-[var(--swatch)]"
-          style={
-            {
-              "--swatch": `var(--usage-heat-${String(cell.level)})`,
-            } as CSSProperties
-          }
-        />
-      </TooltipTrigger>
+      <TooltipTrigger
+        render={
+          <span
+            data-testid="usage-activity-day"
+            data-day={cell.day}
+            data-level={cell.level}
+            className="size-2.5 rounded-xs bg-[var(--swatch)]"
+            style={
+              {
+                "--swatch": `var(--usage-heat-${String(cell.level)})`,
+              } as CSSProperties
+            }
+          />
+        }
+      />
       <TooltipContent>
         <DayTooltipBody cell={cell} metric={metric} />
       </TooltipContent>

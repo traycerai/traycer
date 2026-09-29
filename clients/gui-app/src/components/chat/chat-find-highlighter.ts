@@ -25,7 +25,7 @@ const SKIPPED_HIGHLIGHT_ANCESTOR_SELECTOR = [
   "svg",
   "title",
   "[hidden]",
-  "[data-slot='collapsible-content'][data-state='closed']",
+  "[data-slot='collapsible-content'][data-closed]",
   ".sr-only",
   "[aria-hidden='true']",
 ].join(",");

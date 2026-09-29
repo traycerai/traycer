@@ -344,6 +344,32 @@ describe("NotificationsBell", () => {
     expect(useNotificationsPopoverStore.getState().open).toBe(false);
   });
 
+  // Anchor identity regression: the trigger button must not remount on open.
+  it("keeps the trigger as the same DOM node across the open transition (anchor identity)", async () => {
+    const runnerHost = createRunnerHost();
+    mountBell(runnerHost, undefined);
+
+    const triggerBeforeOpen = screen.getByTestId("notifications-bell");
+    fireEvent.click(triggerBeforeOpen);
+
+    expect(await screen.findByTestId("notifications-popover")).not.toBeNull();
+    expect(screen.getByTestId("notifications-bell")).toBe(triggerBeforeOpen);
+  });
+
+  // Same regression via the keybinding open path, not the click path.
+  it("keeps the trigger as the same DOM node when opened via the keybinding (anchor identity)", async () => {
+    const runnerHost = createRunnerHost();
+    mountBell(runnerHost, undefined);
+
+    const triggerBeforeOpen = screen.getByTestId("notifications-bell");
+    act(() => {
+      dispatchAction("app.notifications.open", DYNAMIC_ACTION_ROUTER);
+    });
+
+    expect(await screen.findByTestId("notifications-popover")).not.toBeNull();
+    expect(screen.getByTestId("notifications-bell")).toBe(triggerBeforeOpen);
+  });
+
   it("opens through the notifications keybinding action and focuses the heading", async () => {
     const runnerHost = createRunnerHost();
     mountBell(runnerHost, undefined);
@@ -357,9 +383,13 @@ describe("NotificationsBell", () => {
 
     expect(await screen.findByTestId("notifications-popover")).not.toBeNull();
     expect(useNotificationsPopoverStore.getState().open).toBe(true);
-    expect(document.activeElement).toBe(
-      screen.getByRole("heading", { name: "Notifications" }),
-    );
+    // Base's initialFocus move is async; the popover mounting doesn't imply
+    // focus has landed yet.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole("heading", { name: "Notifications" }),
+      );
+    });
   });
 
   it("toggles the open center closed on a second chord press and returns focus to the bell", async () => {
@@ -370,9 +400,11 @@ describe("NotificationsBell", () => {
       dispatchAction("app.notifications.open", DYNAMIC_ACTION_ROUTER);
     });
     expect(await screen.findByTestId("notifications-popover")).not.toBeNull();
-    expect(document.activeElement).toBe(
-      screen.getByRole("heading", { name: "Notifications" }),
-    );
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole("heading", { name: "Notifications" }),
+      );
+    });
 
     // Dispatch can't deliver the second press: an open Radix popover is a
     // `role="dialog"`, which the keybinding provider treats as a chord
@@ -385,7 +417,6 @@ describe("NotificationsBell", () => {
       expect(screen.queryByTestId("notifications-popover")).toBeNull();
     });
     expect(useNotificationsPopoverStore.getState().open).toBe(false);
-    // Identity by testid, not ref: the tooltip may remount the trigger node.
     await waitFor(() => {
       expect(document.activeElement?.getAttribute("data-testid")).toBe(
         "notifications-bell",

@@ -1,6 +1,7 @@
 import {
   act,
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -144,6 +145,21 @@ function openList(): void {
 
 function pressKey(key: string): void {
   fireEvent.keyDown(window, { key });
+}
+
+// `timeStamp` isn't a real `EventInit` field, so `fireEvent(el, {timeStamp})`
+// silently drops it. Override the (configurable) property on the built
+// event directly so the IME grace-window arithmetic is deterministic.
+function fireAtTime(
+  target: Document | Element | Node | Window,
+  event: Event,
+  timeStamp: number,
+): void {
+  Object.defineProperty(event, "timeStamp", {
+    value: timeStamp,
+    configurable: true,
+  });
+  fireEvent(target, event);
 }
 
 /** Whether the control consumed the press, rather than letting it through. */
@@ -369,11 +385,18 @@ describe("ComposerDraftsControl", () => {
   });
 
   it("ignores an Enter that confirms an IME composition", () => {
+    // The window-level capture guard now shares `isCommandCompositionKey`
+    // with Command itself (isComposing + a composition-ref grace window),
+    // never the deprecated `keyCode === 229` this test used to simulate.
+    // Explicit timestamps rather than same-tick defaults, same reasoning
+    // as `command-navigation.test.tsx`'s IME cases.
     renderLandingControl("landing-active");
     openList();
 
     fireEvent.keyDown(window, { key: "Enter", isComposing: true });
-    fireEvent.keyDown(window, { key: "Enter", keyCode: 229 });
+    fireAtTime(window, createEvent.compositionStart(window), 1_000);
+    fireAtTime(window, createEvent.compositionEnd(window), 1_000);
+    fireAtTime(window, createEvent.keyDown(window, { key: "Enter" }), 1_010);
 
     expect(actions.openRow).not.toHaveBeenCalled();
     expect(listedRowIds()).not.toEqual([]);

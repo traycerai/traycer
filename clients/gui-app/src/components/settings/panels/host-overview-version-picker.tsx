@@ -89,7 +89,7 @@ export function VersionPicker(props: VersionPickerProps): ReactNode {
               // restarting, shutting down, or mid-swap while the gate is up.
               disabled={props.checking || props.disabled}
               onCheckedChange={(value) =>
-                props.onIncludePreReleasesChange(value === true)
+                props.onIncludePreReleasesChange(value)
               }
             />
             <label

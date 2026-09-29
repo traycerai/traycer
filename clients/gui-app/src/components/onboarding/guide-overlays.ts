@@ -31,11 +31,11 @@ export const OVERLAY_SELECTOR = [
   `[${OVERLAY_SURFACE_ATTRIBUTE}]`,
 ].join(", ");
 export const OPEN_OVERLAY_SELECTOR = [
-  ...OVERLAY_SLOTS.map((slot) => `[data-slot="${slot}"][data-state="open"]`),
+  ...OVERLAY_SLOTS.map((slot) => `[data-slot="${slot}"][data-open]`),
   `[${OVERLAY_SURFACE_ATTRIBUTE}="open"]`,
 ].join(", ");
 export const CLOSING_OVERLAY_SELECTOR = [
-  ...OVERLAY_SLOTS.map((slot) => `[data-slot="${slot}"][data-state="closed"]`),
+  ...OVERLAY_SLOTS.map((slot) => `[data-slot="${slot}"][data-closed]`),
   `[${OVERLAY_SURFACE_ATTRIBUTE}="closed"]`,
 ].join(", ");
 
@@ -74,7 +74,7 @@ const ESCAPE_OWNER_SELECTOR = [
   '[data-slot="composer-menu"]',
   '[data-slot="mention-suggestion"]',
   '[data-slot="artifact-link-popover"]',
-  '[data-state="open"]:is([role="menu"], [role="listbox"], [role="dialog"])',
+  '[data-open]:is([role="menu"], [role="listbox"], [role="dialog"], [data-slot="select-content"])',
 ].join(", ");
 
 /**

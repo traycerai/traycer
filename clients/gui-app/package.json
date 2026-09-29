@@ -12,7 +12,7 @@
   "scripts": {
     "cn:build": "cn build --full --config cn.config.mjs -o src/lib/cn-tables.ts",
     "compile": "tsgo -p tsconfig.app.json --incremental --singleThreaded && tsgo -p tsconfig.node.json --incremental --singleThreaded",
-    "lint": "bun run lint:files .",
+    "lint": "node ../../scripts/check-ui-migration.mjs && bun run lint:files .",
     "lint:files": "bun scripts/lint-files.mjs",
     "react-doctor": "npx -y react-doctor@latest . --verbose --offline --blocking warning",
     "format": "oxfmt .",
@@ -25,6 +25,7 @@
     "test:watch": "vitest --config vitest.config.ts"
   },
   "dependencies": {
+    "@base-ui/react": "catalog:",
     "@codemirror/lang-markdown": "catalog:",
     "@codemirror/language": "catalog:",
     "@codemirror/state": "catalog:",
@@ -76,7 +77,6 @@
     "@xterm/xterm": "catalog:",
     "@xyflow/react": "catalog:",
     "class-variance-authority": "catalog:",
-    "cmdk": "catalog:",
     "cn": "catalog:",
     "culori": "catalog:",
     "date-fns": "catalog:",
@@ -101,7 +101,6 @@
     "pdfmake": "catalog:",
     "posthog-js": "catalog:",
     "qrcode": "catalog:",
-    "radix-ui": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-markdown": "catalog:",
@@ -121,7 +120,6 @@
     "unified": "catalog:",
     "unist-util-visit": "catalog:",
     "uuid": "catalog:",
-    "vaul": "catalog:",
     "wavesurfer.js": "^7.12.12",
     "y-protocols": "catalog:",
     "yjs": "catalog:",

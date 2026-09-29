@@ -62,15 +62,17 @@ export function WireframeFullscreenDialog(
               onClick={handleCopy}
               className="tc-editor-toolbar-button"
             />
-            <DialogClose asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Close fullscreen preview"
-              >
-                <X className="size-4" aria-hidden="true" />
-              </Button>
-            </DialogClose>
+            <DialogClose
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Close fullscreen preview"
+                >
+                  <X className="size-4" aria-hidden="true" />
+                </Button>
+              }
+            />
           </div>
         </DialogHeader>
         <div className="flex-1 min-h-0 bg-canvas">

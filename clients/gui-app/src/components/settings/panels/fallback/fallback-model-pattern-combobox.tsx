@@ -134,7 +134,7 @@ export function FallbackModelPatternCombobox(
   const [dialogContainer, setDialogContainer] = useState<HTMLElement | null>(
     null,
   );
-  const { contentRef, onOpenAutoFocus } = useCoarsePointerOpenAutoFocus();
+  const { contentRef, initialFocus } = useCoarsePointerOpenAutoFocus();
   const face = triggerFace(
     modelFamily,
     models,
@@ -157,65 +157,67 @@ export function FallbackModelPatternCombobox(
         setOpen(next);
       }}
     >
-      <PopoverTrigger asChild>
-        <Button
-          ref={triggerRef}
-          id={id}
-          type="button"
-          variant="outline"
-          role="combobox"
-          // What opens is the popover - a `role="dialog"` holding the list's
-          // own combobox input and listbox - so that is what this names.
-          aria-haspopup="dialog"
-          aria-expanded={open}
-          aria-controls={popoverId}
-          aria-label={face.accessibleName}
-          aria-describedby={describedBy}
-          aria-invalid={face.invalid ? true : undefined}
-          className="w-full min-w-0 justify-between font-normal"
-          data-testid="fallback-model-pattern-trigger"
-          {...{ [FALLBACK_CANDIDATE_MODEL_ATTRIBUTE]: rowKey }}
-        >
-          <span className="flex min-w-0 items-center gap-2">
-            {face.pattern ? (
-              <FallbackPatternGlyph
-                tone={
-                  face.pillTone === "destructive" ? "destructive" : "accent"
-                }
-              />
-            ) : null}
-            <span
-              className={cn(
-                "min-w-0 truncate",
-                face.pattern && "font-mono text-ui-xs",
-                face.value === null && "text-muted-foreground",
-              )}
-            >
-              {face.value ?? "Choose a model or pattern"}
-            </span>
-            {face.anyModel === null ? null : (
-              <span className="min-w-0 truncate">{face.anyModel}</span>
-            )}
-          </span>
-          <span className="flex shrink-0 items-center gap-1.5">
-            {face.pill === null ? null : (
-              <Badge
-                variant={
-                  face.pillTone === "destructive" ? "destructive" : "muted"
-                }
-                className="rounded-full tabular-nums"
-                data-testid="fallback-model-pattern-pill"
+      <PopoverTrigger
+        render={
+          <Button
+            ref={triggerRef}
+            id={id}
+            type="button"
+            variant="outline"
+            role="combobox"
+            // What opens is the popover - a `role="dialog"` holding the list's
+            // own combobox input and listbox - so that is what this names.
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            aria-controls={popoverId}
+            aria-label={face.accessibleName}
+            aria-describedby={describedBy}
+            aria-invalid={face.invalid ? true : undefined}
+            className="w-full min-w-0 justify-between font-normal"
+            data-testid="fallback-model-pattern-trigger"
+            {...{ [FALLBACK_CANDIDATE_MODEL_ATTRIBUTE]: rowKey }}
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              {face.pattern ? (
+                <FallbackPatternGlyph
+                  tone={
+                    face.pillTone === "destructive" ? "destructive" : "accent"
+                  }
+                />
+              ) : null}
+              <span
+                className={cn(
+                  "min-w-0 truncate",
+                  face.pattern && "font-mono text-ui-xs",
+                  face.value === null && "text-muted-foreground",
+                )}
               >
-                {face.pill}
-              </Badge>
-            )}
-            <ChevronsUpDown
-              className="size-3.5 text-muted-foreground"
-              aria-hidden
-            />
-          </span>
-        </Button>
-      </PopoverTrigger>
+                {face.value ?? "Choose a model or pattern"}
+              </span>
+              {face.anyModel === null ? null : (
+                <span className="min-w-0 truncate">{face.anyModel}</span>
+              )}
+            </span>
+            <span className="flex shrink-0 items-center gap-1.5">
+              {face.pill === null ? null : (
+                <Badge
+                  variant={
+                    face.pillTone === "destructive" ? "destructive" : "muted"
+                  }
+                  className="rounded-full tabular-nums"
+                  data-testid="fallback-model-pattern-pill"
+                >
+                  {face.pill}
+                </Badge>
+              )}
+              <ChevronsUpDown
+                className="size-3.5 text-muted-foreground"
+                aria-hidden
+              />
+            </span>
+          </Button>
+        }
+      />
       <PopoverContent
         id={popoverId}
         layout="bare"
@@ -225,7 +227,7 @@ export function FallbackModelPatternCombobox(
         collisionPadding={8}
         className="w-[min(90vw,28rem)] overflow-hidden"
         ref={contentRef}
-        onOpenAutoFocus={onOpenAutoFocus}
+        initialFocus={initialFocus}
       >
         {/* Mounted only while open, so every opening starts from the stored
             value rather than from the last query. */}
@@ -589,7 +591,9 @@ function PatternPickerBody(props: {
     const list = listRef.current;
     if (input === null || list === null) return;
     input.setAttribute("aria-controls", list.id);
-    const active = [...list.querySelectorAll<HTMLElement>("[cmdk-item]")].find(
+    const active = [
+      ...list.querySelectorAll<HTMLElement>('[data-slot="command-item"]'),
+    ].find(
       (item) => !item.hidden && item.getAttribute("data-value") === highlighted,
     );
     if (active === undefined || highlighted === "") {
@@ -627,8 +631,7 @@ function PatternPickerBody(props: {
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
-    // `stopPropagation` keeps each of these from ALSO reaching cmdk's root
-    // handler, which would move its own highlight past refused options.
+    // Keep Command's root handler from moving past refused options.
     switch (event.key) {
       case "ArrowDown":
       case "ArrowUp": {
@@ -663,14 +666,9 @@ function PatternPickerBody(props: {
   return (
     <Command
       shouldFilter={false}
-      value={highlighted}
-      // A pointer resting on an option. cmdk also proposes its first ENABLED
-      // item when it has no value, which can be a hidden one; only a visible
-      // option may take the highlight.
-      onValueChange={(next) => {
-        if (visible.some((entry) => entry.value === next)) setHighlighted(next);
-      }}
-      vimBindings={false}
+      label={`${providerLabel} models and patterns`}
+      highlightedValue={highlighted}
+      allowDisabledHighlight
       variant="embedded"
       selection="flat"
     >
@@ -679,11 +677,7 @@ function PatternPickerBody(props: {
           <InputGroupInput
             ref={inputRef}
             role="combobox"
-            // The popup this input controls from its first paint. cmdk mints
-            // the listbox's own id internally and writes it AFTER any props,
-            // so the layout effect above narrows this to that listbox once it
-            // exists; React leaves the attribute alone afterwards, since this
-            // prop never changes.
+            // The layout effect above narrows this to Command's listbox id.
             aria-controls={popupId}
             aria-expanded
             aria-autocomplete="list"
@@ -726,8 +720,18 @@ function PatternPickerBody(props: {
       </div>
       <CommandList
         ref={listRef}
-        label={`${providerLabel} models and patterns`}
         className="max-h-[min(50vh,22rem)] p-1"
+        onMouseMoveCapture={(event) => {
+          if (!(event.target instanceof Element)) return;
+          const value = event.target.closest<HTMLElement>(
+            '[data-slot="command-item"]',
+          )?.dataset.value;
+          if (
+            value !== undefined &&
+            visible.some((entry) => entry.value === value)
+          )
+            setHighlighted(value);
+        }}
       >
         {/* Every option is rendered on every keystroke and only `hidden`
             moves - see `buildPatternPicker` for why an unmount would move the
@@ -878,15 +882,14 @@ function PatternOption(props: {
   const blocked = entry.blockers.length > 0;
   return (
     <CommandItem
-      value={entry.value}
+      itemKey={entry.value}
       hidden={entry.hidden}
-      // cmdk's `disabled` is what writes `aria-disabled`; the keyboard still
-      // reaches it because this component drives the highlight.
+      // The keyboard path still sees refused options so it can announce why.
       disabled={blocked}
       aria-describedby={detailId}
       data-checked={checked ? "true" : "false"}
       data-testid="fallback-model-pattern-option"
-      onSelect={() => {
+      onAction={() => {
         onChoose(entry);
       }}
     >
@@ -931,13 +934,13 @@ function ModelOption(props: {
   const quiet = entry.patternOffered && !entry.matched && !entry.exact;
   return (
     <CommandItem
-      value={entry.value}
+      itemKey={entry.value}
       hidden={entry.hidden}
       disabled={owned}
       aria-describedby={owned ? detailId : undefined}
       data-checked={checked ? "true" : "false"}
       data-testid="fallback-model-option"
-      onSelect={() => {
+      onAction={() => {
         onChoose(entry);
       }}
     >

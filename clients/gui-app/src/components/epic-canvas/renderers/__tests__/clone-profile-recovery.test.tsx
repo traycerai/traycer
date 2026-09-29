@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -137,7 +138,7 @@ describe("<CloneProfileRecovery /> catalog recovery", () => {
     expect(props.onOpenProviderSettings).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps profile switches out of clone recovery and routes availability changes to Settings", () => {
+  it("keeps profile switches out of clone recovery and routes availability changes to Settings", async () => {
     const props = baseProps();
     render(
       <CloneProfileRecovery
@@ -155,20 +156,14 @@ describe("<CloneProfileRecovery /> catalog recovery", () => {
       />,
     );
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: /profile: Work/ }),
-      {
-        button: 0,
-        ctrlKey: false,
-        pointerType: "mouse",
-      },
-    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /profile: Work/ }));
     expect(screen.queryByRole("switch")).toBeNull();
     expect(
-      screen.getByRole("menuitem", { name: /Work.*Disabled/ }),
+      await screen.findByRole("menuitem", { name: /Work.*Disabled/ }),
     ).toBeDefined();
 
-    fireEvent.click(screen.getByRole("menuitem", { name: /Personal/ }));
+    await user.click(screen.getByRole("menuitem", { name: /Personal/ }));
     expect(props.onChooseProfile).toHaveBeenCalledWith("personal");
 
     fireEvent.click(

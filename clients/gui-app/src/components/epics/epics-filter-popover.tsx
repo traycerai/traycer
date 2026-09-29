@@ -95,14 +95,16 @@ export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
 
   return (
     <Popover>
-      <PopoverTrigger asChild>
-        <EpicsFilterTrigger
-          selectedCount={historyFilterActiveCount(props.search)}
-        />
-      </PopoverTrigger>
+      <PopoverTrigger
+        render={
+          <EpicsFilterTrigger
+            selectedCount={historyFilterActiveCount(props.search)}
+          />
+        }
+      />
       <PopoverContent
         align="end"
-        className="max-h-[min(var(--radix-popover-content-available-height,70vh),32rem)] w-[min(90vw,24rem)] overflow-y-auto"
+        className="max-h-[min(var(--available-height,70vh),32rem)] w-[min(90vw,24rem)] overflow-y-auto"
         data-testid="epics-filter-popover"
       >
         <FilterSection label="Ownership" trailing={null}>

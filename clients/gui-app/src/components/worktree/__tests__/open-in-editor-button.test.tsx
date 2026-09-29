@@ -270,10 +270,7 @@ describe("<OpenInEditorButton />", () => {
       />,
     );
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Choose editor" }),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Choose editor" }));
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
 
@@ -295,10 +292,7 @@ describe("<OpenInEditorButton />", () => {
       />,
     );
 
-    fireEvent.pointerDown(
-      screen.getByTestId("workspace-open-in-editor-chevron"),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByTestId("workspace-open-in-editor-chevron"));
 
     editorState.isPending = true;
     view.rerender(
@@ -332,10 +326,7 @@ describe("<OpenInEditorButton />", () => {
       />,
     );
 
-    fireEvent.pointerDown(
-      screen.getByTestId("workspace-open-in-editor-chevron"),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByTestId("workspace-open-in-editor-chevron"));
 
     expect(
       screen.queryByTestId("workspace-open-in-editor-vscode-spinner"),
@@ -354,10 +345,7 @@ describe("<OpenInEditorButton />", () => {
       />,
     );
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Choose editor" }),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Choose editor" }));
 
     expect(screen.queryByRole("menuitem", { name: "Finder" })).toBeNull();
     screen.getByRole("menuitem", { name: "VS Code" });
@@ -373,10 +361,7 @@ describe("<OpenInEditorButton />", () => {
       />,
     );
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Choose editor" }),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Choose editor" }));
 
     // The whole menu in order: Finder closes the open group, and Copy path
     // stays below it.
@@ -394,10 +379,7 @@ describe("<OpenInEditorButton />", () => {
       />,
     );
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Choose editor" }),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Choose editor" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Finder" }));
 
     expect(useSettingsStore.getState().defaultEditor).toBe("finder");
@@ -464,10 +446,7 @@ describe("<OpenInEditorButton />", () => {
       />,
     );
 
-    fireEvent.pointerDown(
-      screen.getByTestId("workspace-open-in-editor-chevron"),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByTestId("workspace-open-in-editor-chevron"));
 
     expect(
       screen.queryByTestId("workspace-open-in-editor-vscodium"),
@@ -496,10 +475,7 @@ describe("<OpenInEditorButton />", () => {
       />,
     );
 
-    fireEvent.pointerDown(
-      screen.getByTestId("workspace-open-in-editor-chevron"),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByTestId("workspace-open-in-editor-chevron"));
 
     screen.getByTestId("workspace-open-in-editor-vscodium");
   });

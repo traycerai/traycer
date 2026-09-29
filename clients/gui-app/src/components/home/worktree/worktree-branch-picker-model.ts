@@ -1,4 +1,4 @@
-import type { KeyboardEvent, ReactNode, RefObject } from "react";
+import type { KeyboardEvent, ReactElement, ReactNode, RefObject } from "react";
 import type { IndexLocationWithAlign, VirtuosoHandle } from "react-virtuoso";
 import type { WorktreeBranchSearchRow } from "@/components/home/data/worktree-branch-search";
 
@@ -40,7 +40,7 @@ export interface WorktreeBranchPickerAction {
 }
 
 export interface WorktreeBranchPickerProps {
-  readonly trigger: ReactNode;
+  readonly trigger: ReactElement;
   readonly rows: ReadonlyArray<WorktreeBranchPickerRow>;
   readonly pinnedRows: ReadonlyArray<WorktreeBranchPickerPinnedRow>;
   readonly actions: ReadonlyArray<WorktreeBranchPickerAction>;
@@ -101,7 +101,7 @@ export interface WorktreeBranchPickerContentProps {
   readonly query: string;
   readonly searchPlaceholder: string;
   readonly side: "top" | "right" | "bottom" | "left";
-  readonly handleCloseAutoFocus: (event: Event) => void;
+  readonly handleFinalFocus: () => boolean;
   readonly handleContentKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
   readonly resetQuery: () => void;
   readonly selectEntry: (entry: PickerEntry) => void;

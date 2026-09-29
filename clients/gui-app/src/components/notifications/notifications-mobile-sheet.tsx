@@ -39,7 +39,7 @@ export function NotificationsMobileSheet(): ReactNode {
   const handleFilterMenuOpenChange = useCallback(() => undefined, []);
   if (!isMobile) return null;
   return (
-    <Drawer direction="bottom" open={open} onOpenChange={setOpen}>
+    <Drawer swipeDirection="down" open={open} onOpenChange={setOpen}>
       <DrawerContent
         data-testid="notifications-mobile-sheet"
         data-mobile-shell-touch-scope=""

@@ -145,10 +145,10 @@ describe("<NotificationsSettingsPanel /> severity policy", () => {
         name: "In-app notifications",
       }),
     ).toBeTruthy();
-    expect(info.getAttribute("data-state")).toBe("checked");
-    expect(needsAction.getAttribute("data-state")).toBe("checked");
-    expect(failure.getAttribute("data-state")).toBe("checked");
-    expect(done.getAttribute("data-state")).toBe("checked");
+    expect(info.hasAttribute("data-checked")).toBe(true);
+    expect(needsAction.hasAttribute("data-checked")).toBe(true);
+    expect(failure.hasAttribute("data-checked")).toBe(true);
+    expect(done.hasAttribute("data-checked")).toBe(true);
     expect(
       within(policy).getByTestId("notifications-severity-info"),
     ).toBeTruthy();
@@ -219,7 +219,8 @@ describe("<NotificationsSettingsPanel /> severity policy", () => {
     const doneRenderer = await screen.findByRole("switch", {
       name: "Done In-app notifications",
     });
-    expect(doneRenderer.hasAttribute("disabled")).toBe(false);
+    expect(doneRenderer.hasAttribute("data-disabled")).toBe(false);
+    expect(doneRenderer.getAttribute("aria-disabled")).not.toBe("true");
 
     fireEvent.click(doneRenderer);
 
@@ -233,9 +234,24 @@ describe("<NotificationsSettingsPanel /> severity policy", () => {
     const failureRenderer = screen.getByRole("switch", {
       name: "Failure In-app notifications",
     });
-    expect(failureRenderer.hasAttribute("disabled")).toBe(true);
+    expect(failureRenderer.hasAttribute("data-disabled")).toBe(true);
+    // Base's Switch is a non-native <span role="switch">; the accessible
+    // disabled semantic (screen readers, a11y tree) lives in aria-disabled,
+    // not the data attribute alone - data-disabled is only how Base's own
+    // CSS finds the state.
+    expect(failureRenderer.getAttribute("aria-disabled")).toBe("true");
 
     fireEvent.click(failureRenderer);
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(fixture.setRequests).toHaveLength(1);
+
+    // Base's non-native button handles Enter on keydown and Space on keyup.
+    // Both activation paths must remain blocked during the refetch.
+    fireEvent.keyDown(failureRenderer, { key: "Enter" });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(fixture.setRequests).toHaveLength(1);
+
+    fireEvent.keyUp(failureRenderer, { key: " " });
     await new Promise((resolve) => window.setTimeout(resolve, 0));
     expect(fixture.setRequests).toHaveLength(1);
 
@@ -244,8 +260,9 @@ describe("<NotificationsSettingsPanel /> severity policy", () => {
       await fixture.refetchPromise;
     });
     await waitFor(() => {
-      expect(failureRenderer.hasAttribute("disabled")).toBe(false);
+      expect(failureRenderer.hasAttribute("data-disabled")).toBe(false);
     });
+    expect(failureRenderer.getAttribute("aria-disabled")).not.toBe("true");
   });
 });
 

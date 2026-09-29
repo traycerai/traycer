@@ -259,9 +259,9 @@ export type ResourceMonitorPopoverTrigger =
   | {
       readonly trigger: "custom";
       /**
-       * Rendered through `PopoverTrigger asChild`, so it must be a single
+       * Rendered through `PopoverTrigger render`, so it must be a single
        * element that forwards props and a ref to a real DOM node. `ReactElement`
-       * rather than `ReactNode` because that is the whole of Radix's Slot
+       * rather than `ReactNode` because that is the whole of the render prop's
        * contract: a fragment, a string, an array or a `null` all typecheck as a
        * node and all fail at render, where the type is the only place the
        * requirement can be stated once for every caller.
@@ -553,6 +553,7 @@ function ScopedResourceMonitorPopover(props: {
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const chord = useBindingForAction("app.resources.open");
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
   // See `ResourceMonitorPopoverOwnProps`: one slot, several possible mounts,
   // and an unregister that clears only its own handler. A mount that is not
   // the owner registers nothing rather than registering and hoping to lose the
@@ -592,7 +593,33 @@ function ScopedResourceMonitorPopover(props: {
       {props.streamBoundToScope ? (
         <GlobalResourcesStreamMount interactive={open} />
       ) : null}
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover
+        open={open}
+        onOpenChange={(next, details) => {
+          if (!next && details.reason === "focus-out") details.cancel();
+          if (
+            !next &&
+            details.reason === "escape-key" &&
+            document.activeElement instanceof Element &&
+            document.activeElement.closest(
+              `[${RESOURCE_CONFIRMATION_ATTRIBUTE}]`,
+            ) !== null
+          )
+            details.cancel();
+          if (!next && details.reason === "outside-press") {
+            const target = details.event.target;
+            if (
+              isHostSwitcherListInteraction(target) ||
+              (sortMenuOpen &&
+                target instanceof Element &&
+                target.closest(`[${RESOURCE_MONITOR_PANEL_ATTRIBUTE}]`) !==
+                  null)
+            )
+              details.cancel();
+          }
+          if (!details.isCanceled) setOpen(next);
+        }}
+      >
         {props.trigger.trigger === "header-button" ? (
           <TooltipWrapper
             // The host belongs in the label only when it is NOT the obvious one.
@@ -603,24 +630,28 @@ function ScopedResourceMonitorPopover(props: {
             sideOffset={6}
             align={placement?.align}
           >
-            <PopoverTrigger asChild>
-              <Button
-                type="button"
-                data-testid="resource-monitor-header-button"
-                {...readingButtonLook(props.trigger.form, views)}
-              />
-            </PopoverTrigger>
+            <PopoverTrigger
+              render={
+                <Button
+                  type="button"
+                  data-testid="resource-monitor-header-button"
+                  {...readingButtonLook(props.trigger.form, views)}
+                />
+              }
+            />
           </TooltipWrapper>
         ) : (
           // No tooltip wrapper: a custom trigger is a readout, not a glyph, so
           // it already says what the icon button needed a hover to say - and
           // the status bar's segment carries per-metric tooltips of its own
           // that a wrapper here would compete with.
-          <PopoverTrigger asChild>{props.trigger.triggerNode}</PopoverTrigger>
+          <PopoverTrigger render={props.trigger.triggerNode} />
         )}
 
         {open ? (
           <ResourceMonitorContent
+            sortMenuOpen={sortMenuOpen}
+            onSortMenuOpenChange={setSortMenuOpen}
             searchQuery={searchQuery}
             onSearchQueryChange={setSearchQuery}
             onClose={() => setOpen(false)}
@@ -826,6 +857,8 @@ function selectionActionCopy(
  * by DOM marker instead (`RESOURCE_MONITOR_PANEL_ATTRIBUTE`).
  */
 function ResourceMonitorContent(props: {
+  readonly sortMenuOpen: boolean;
+  readonly onSortMenuOpenChange: (open: boolean) => void;
   readonly searchQuery: string;
   readonly onSearchQueryChange: (value: string) => void;
   readonly onClose: () => void;
@@ -836,7 +869,6 @@ function ResourceMonitorContent(props: {
   readonly contentSide: "top" | "bottom";
 }) {
   const placement = useColumnOverlayPlacement("foot");
-  const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const scope = props.scope;
   // The picker earns its row once there is a choice to make. One host means one
   // possible answer, and a control whose only outcome is the state you are
@@ -887,45 +919,16 @@ function ResourceMonitorContent(props: {
       aria-label="Resources"
       layout="panel"
       className="w-[min(92vw,34rem)]"
-      onOpenAutoFocus={(event) => event.preventDefault()}
+      initialFocus={false}
       // Keep the panel open when focus moves elsewhere (switching tabs, a task
       // finishing load and autofocusing its content, a terminal grabbing
       // focus). Only a genuine outside pointer click or Escape should dismiss
       // it; those go through onPointerDownOutside / onEscapeKeyDown, not here.
-      onFocusOutside={(event) => event.preventDefault()}
+
       // Radix owns a document-level Escape listener, so the inline row
       // confirmation cannot protect the containing popover through React event
       // propagation alone. Keep the popover mounted while that confirmation
       // consumes Escape and restores focus to its row.
-      onEscapeKeyDown={(event) => {
-        const activeElement = document.activeElement;
-        if (
-          activeElement instanceof Element &&
-          activeElement.closest(`[${RESOURCE_CONFIRMATION_ATTRIBUTE}]`) !== null
-        ) {
-          event.preventDefault();
-        }
-      }}
-      onInteractOutside={(event) => {
-        const target = event.target;
-        // The host switcher's own list is a nested Radix popover, so it portals
-        // OUTSIDE this content and every click in it reads as an interaction
-        // outside. Without this, opening the picker closed the surface the
-        // picker exists to scope, and no host could ever be chosen. Shared with
-        // every other container that embeds it.
-        if (
-          target instanceof Element &&
-          isHostSwitcherListInteraction(target)
-        ) {
-          event.preventDefault();
-          return;
-        }
-        if (!sortMenuOpen) return;
-        if (!(target instanceof Element)) return;
-        if (target.closest(`[${RESOURCE_MONITOR_PANEL_ATTRIBUTE}]`) !== null) {
-          event.preventDefault();
-        }
-      }}
     >
       {showHostPicker ? (
         <ResourceMonitorHostPickerRow scope={scope} onClose={props.onClose} />
@@ -938,8 +941,8 @@ function ResourceMonitorContent(props: {
         hasExplicitPick={props.hasExplicitPick}
         scopeUnusable={scopeUnusable}
         streamIncompatible={streamIncompatible}
-        sortMenuOpen={sortMenuOpen}
-        onSortMenuOpenChange={setSortMenuOpen}
+        sortMenuOpen={props.sortMenuOpen}
+        onSortMenuOpenChange={props.onSortMenuOpenChange}
       />
     </PopoverContent>
   );
@@ -1585,17 +1588,19 @@ function ResourceMonitorPanel(props: {
                   open={sortMenuOpen}
                   onOpenChange={setSortMenuOpen}
                 >
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      ref={sortTriggerRef}
-                      type="button"
-                      className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground"
-                      aria-label="Sort resource rows"
-                    >
-                      <ArrowDownNarrowWide className="size-3.5" />
-                      <span>{SORT_LABELS[sortOption]}</span>
-                    </button>
-                  </DropdownMenuTrigger>
+                  <DropdownMenuTrigger
+                    render={
+                      <button
+                        ref={sortTriggerRef}
+                        type="button"
+                        className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground"
+                        aria-label="Sort resource rows"
+                      >
+                        <ArrowDownNarrowWide className="size-3.5" />
+                        <span>{SORT_LABELS[sortOption]}</span>
+                      </button>
+                    }
+                  />
                   <DropdownMenuContent align="end" className="w-40">
                     <DropdownMenuRadioGroup
                       value={sortOption}

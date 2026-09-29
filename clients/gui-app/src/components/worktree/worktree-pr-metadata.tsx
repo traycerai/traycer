@@ -1,4 +1,5 @@
-import type { MouseEvent, ReactNode } from "react";
+import { mergeProps } from "@base-ui/react/merge-props";
+import type { ComponentProps, MouseEvent, ReactNode } from "react";
 import type {
   WorktreeBinding,
   WorktreeHostEntryV12,
@@ -121,20 +122,20 @@ function WorktreePrPill(props: {
   // focusable `<a>` no longer duplicates into a Tooltip a11y clone).
   const pill = (
     <Badge
-      asChild
+      render={
+        <WorktreePrAnchor
+          reference={props.reference}
+          openPrInApp={props.openPrInApp}
+          className={cn("max-w-[min(60vw,16rem)]", props.flexible && "min-w-0")}
+        />
+      }
       variant="outline"
       className={cn(
         "group/pr-pill rounded-full",
         props.flexible && "min-w-0 shrink",
         PR_STATE_PILL_CLASS[props.reference.state],
       )}
-    >
-      <WorktreePrAnchor
-        reference={props.reference}
-        openPrInApp={props.openPrInApp}
-        className={cn("max-w-[min(60vw,16rem)]", props.flexible && "min-w-0")}
-      />
-    </Badge>
+    />
   );
   if (!props.detailOnHover) return pill;
   return (
@@ -157,17 +158,17 @@ function WorktreePrOverflow(props: {
   return (
     <Popover>
       <Badge
-        asChild
+        render={
+          <PopoverTrigger
+            aria-label={`Show ${count} more pull request${count === 1 ? "" : "s"}`}
+            data-testid="worktree-pr-overflow-trigger"
+          >
+            +{count}
+          </PopoverTrigger>
+        }
         variant="muted"
         className="cursor-pointer border-border bg-background hover:bg-foreground/5 hover:text-foreground"
-      >
-        <PopoverTrigger
-          aria-label={`Show ${count} more pull request${count === 1 ? "" : "s"}`}
-          data-testid="worktree-pr-overflow-trigger"
-        >
-          +{count}
-        </PopoverTrigger>
-      </Badge>
+      />
       <PopoverContent
         aria-label="More pull requests"
         align="end"
@@ -228,11 +229,13 @@ function WorktreePrPillContent(props: {
   );
 }
 
-function WorktreePrAnchor(props: {
-  readonly reference: WorktreePrReference;
-  readonly className: string | undefined;
-  readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
-}): ReactNode {
+function WorktreePrAnchor(
+  props: ComponentProps<"a"> & {
+    readonly reference: WorktreePrReference;
+    readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
+  },
+): ReactNode {
+  const { reference, openPrInApp, ref, ...anchorProps } = props;
   const openLink = useOpenLink();
   const openPr = (event: MouseEvent<HTMLAnchorElement>): void => {
     event.stopPropagation();
@@ -241,32 +244,32 @@ function WorktreePrAnchor(props: {
     const wantsExternal = event.metaKey || event.ctrlKey;
     if (
       !wantsExternal &&
-      props.openPrInApp !== null &&
-      hasNativePrCoordinates(props.reference)
+      openPrInApp !== null &&
+      hasNativePrCoordinates(reference)
     ) {
       event.preventDefault();
-      props.openPrInApp(props.reference);
+      openPrInApp(reference);
       return;
     }
     event.preventDefault();
-    void openLink(props.reference.url, "github", event);
+    void openLink(reference.url, "github", event);
   };
   return (
     <a
-      href={props.reference.url}
-      aria-label={props.reference.ariaLabel}
-      className={props.className}
-      data-testid="worktree-context-pr-pill"
-      data-pr-state={props.reference.state}
-      onClick={openPr}
-      onAuxClick={onMiddleClick(openPr)}
+      ref={ref}
+      {...mergeProps<"a">(anchorProps, {
+        href: reference.url,
+        "aria-label": reference.ariaLabel,
+        onClick: openPr,
+        onAuxClick: onMiddleClick(openPr),
+      })}
+      data-testid={"worktree-context-pr-pill"}
+      data-pr-state={reference.state}
     >
       <WorktreePrPillContent
-        label={props.reference.label}
-        state={props.reference.state}
-        opensInApp={
-          props.openPrInApp !== null && hasNativePrCoordinates(props.reference)
-        }
+        label={reference.label}
+        state={reference.state}
+        opensInApp={openPrInApp !== null && hasNativePrCoordinates(reference)}
       />
     </a>
   );

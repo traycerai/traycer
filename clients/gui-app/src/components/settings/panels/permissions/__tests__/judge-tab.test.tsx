@@ -248,7 +248,7 @@ afterEach(cleanup);
 function renderTab(): void {
   render(
     <SurfaceActivityProvider active>
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <JudgeTab />
       </TooltipProvider>
     </SurfaceActivityProvider>,
@@ -387,8 +387,8 @@ describe("JudgeTab", () => {
 
       expect(isChecked(automaticRadio())).toBe(false);
       expect(isChecked(pickRadio())).toBe(false);
-      expect(automaticRadio().hasAttribute("disabled")).toBe(true);
-      expect(pickRadio().hasAttribute("disabled")).toBe(true);
+      expect(automaticRadio().getAttribute("aria-disabled")).toBe("true");
+      expect(pickRadio().getAttribute("aria-disabled")).toBe("true");
       expect(screen.queryByTestId("auto-judge-model-face")).toBeNull();
 
       fireEvent.click(screen.getByTestId("auto-judge-tile-automatic"));
@@ -472,7 +472,7 @@ describe("JudgeTab", () => {
 
       expect(faceDimmed()).toBe(false);
       expect(faceInert()).toBe(true);
-      expect(automaticRadio().hasAttribute("disabled")).toBe(true);
+      expect(automaticRadio().getAttribute("aria-disabled")).toBe("true");
       fireEvent.click(screen.getByTestId("auto-judge-tile-pick"));
       fireEvent.click(face());
       expect(setJudgeMutate).not.toHaveBeenCalled();
@@ -1599,8 +1599,8 @@ describe("JudgeTab", () => {
 
     describe("R7: the card waits for the lists a last pick is judged from", () => {
       function expectLoadingAndInert(): void {
-        expect(automaticRadio().hasAttribute("disabled")).toBe(true);
-        expect(pickRadio().hasAttribute("disabled")).toBe(true);
+        expect(automaticRadio().getAttribute("aria-disabled")).toBe("true");
+        expect(pickRadio().getAttribute("aria-disabled")).toBe("true");
         expect(screen.queryByTestId("auto-judge-model-face")).toBeNull();
         fireEvent.click(screen.getByTestId("auto-judge-tile-automatic"));
         fireEvent.click(screen.getByTestId("auto-judge-tile-pick"));
@@ -1659,8 +1659,8 @@ describe("JudgeTab", () => {
         picked();
         renderTab();
 
-        expect(automaticRadio().hasAttribute("disabled")).toBe(false);
-        expect(pickRadio().hasAttribute("disabled")).toBe(false);
+        expect(automaticRadio().getAttribute("aria-disabled")).not.toBe("true");
+        expect(pickRadio().getAttribute("aria-disabled")).not.toBe("true");
       });
     });
   });
@@ -2004,8 +2004,8 @@ describe("JudgeTab", () => {
     expect(
       screen.getByText(/This machine's host can't change the judge/),
     ).not.toBeNull();
-    expect(automaticRadio().hasAttribute("disabled")).toBe(true);
-    expect(pickRadio().hasAttribute("disabled")).toBe(true);
+    expect(automaticRadio().getAttribute("aria-disabled")).toBe("true");
+    expect(pickRadio().getAttribute("aria-disabled")).toBe("true");
   });
 
   describe("harness catalog", () => {
@@ -2092,7 +2092,13 @@ describe("JudgeTab", () => {
     }
 
     function thinkingEffortSlider(): HTMLElement {
-      return screen.getByRole("slider", { name: "Thinking effort" });
+      // Base draws the slider as a visually-hidden range input, which the
+      // accessible-name query skips; the label sits on the input itself.
+      const input = screen
+        .getAllByRole("slider", { hidden: true })
+        .find((el) => el.getAttribute("aria-label") === "Thinking effort");
+      if (input === undefined) throw new Error("no Thinking effort slider");
+      return input;
     }
 
     // A4 seeds `legacy.effortByHarnessModel` directly; keep it from bleeding

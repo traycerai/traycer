@@ -74,33 +74,37 @@ function tooltipTexts(): readonly string[] {
   return screen.queryAllByRole("tooltip").map((element) => element.textContent);
 }
 
-// The lazy leaf mounts its Radix root in a 0 ms task after the pointer first
+// The lazy leaf mounts its Base root in a 0 ms task after the pointer first
 // enters, and React only commits that mount - and the layout effect that
-// replays the pointer onto the new node - once the `act` scope containing the
-// timer fires closes. Flushing a dedicated, empty `advanceTimersByTimeAsync(0)`
-// `act` right after every `user.hover()` forces that commit to land before any
-// further advance, so Radix's own delay timer (armed by the replayed
-// `pointermove`) starts counting from zero rather than from wherever the
-// mount happened to land inside a later, larger advance. For the eager leaf
-// this is a no-op: nothing is ever scheduled at 0 ms.
+// carries focus over to the new node - once the `act` scope containing the
+// timer fires closes. The pointer replay itself is a SECOND 0 ms task, fired
+// from a `useEffect` after that mount so Base's own hover machinery has
+// finished arming before it is handed an enter. Flushing two dedicated, empty
+// `advanceTimersByTimeAsync(0)` `act`s right after every `user.hover()` forces
+// both to land before any further advance, so the provider's own delay timer
+// (armed by the replayed `pointermove`) starts counting from zero rather than
+// from wherever the mount and replay happened to land inside a later, larger
+// advance. For the eager leaf this is a no-op: nothing is ever scheduled at
+// 0 ms.
 async function flushHoverMount(): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
 }
 
-// Radix's default `disableHoverableContent={false}` means leaving the
-// trigger does NOT call `onClose` by itself - `onTriggerLeave` only clears a
-// pending open timer. Instead, the trigger's native `pointerleave` arms a
-// "grace area" polygon toward the content, tracked by a document-level
-// `pointermove` listener that closes only once a move lands outside it. So
-// closing for real needs a `pointerleave` on the trigger to arm the grace
-// area, then a move that clearly lands outside it.
+// Leaving the trigger does NOT close the tooltip by itself: the trigger's
+// native `pointerleave` arms Base's own grace handling, closed for real only
+// once a subsequent move lands clearly outside both the trigger and the
+// content. So closing for real needs a `pointerleave` on the trigger, then a
+// move that clearly lands outside it.
 //
 // Two mechanisms have to be driven together here, because closing this
 // tooltip touches two independent pieces of state:
 //
-// - Radix's grace area is armed by whichever DOM node its native
+// - Base's own close handling is armed by whichever DOM node its native
 //   `addEventListener("pointerleave", ...)` is actually attached to. On the
 //   lazy leaf, that is the POST-mount trigger node - mounting replaces the
 //   DOM node under it (see the docblock on `LazySidebarHover` and the "keeps
@@ -116,12 +120,16 @@ async function flushHoverMount(): Promise<void> {
 //   for the eager leaf, which never remounts) sees no change of target and
 //   silently drops the enter/move that would restart the open timer.
 //
-// So both run: `fireEvent.pointerLeave` on the live node for Radix's real
-// listener, `user.unhover()` for user-event's own bookkeeping - neither
+// So both run: `fireEvent.pointerLeave` + `fireEvent.mouseLeave` on the live
+// node for Base's real listener (Base reads the native `mouseleave` pair the
+// same way its open path reads `mouseenter`, not the pointer event alone -
+// `pointerLeave` on its own left the lazy leaf's replayed hover open
+// indefinitely), `user.unhover()` for user-event's own bookkeeping - neither
 // alone closes and reopens correctly for both leaves.
 async function closeTrigger(user: UserEvent, testId: string): Promise<void> {
   const current = screen.getByTestId(testId);
   fireEvent.pointerLeave(current);
+  fireEvent.mouseLeave(current);
   const pendingUnhover = user.unhover(current);
   await act(async () => {
     await vi.advanceTimersByTimeAsync(1);
@@ -130,7 +138,7 @@ async function closeTrigger(user: UserEvent, testId: string): Promise<void> {
   fireEvent.pointerMove(document, { clientX: 9999, clientY: 9999 });
 }
 
-describe("LazySidebarTooltipWrapper opens through Radix", () => {
+describe("LazySidebarTooltipWrapper opens through Base", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -148,7 +156,7 @@ describe("LazySidebarTooltipWrapper opens through Radix", () => {
         advanceTimers: vi.advanceTimersByTimeAsync,
       });
       render(
-        <TooltipProvider delayDuration={150}>
+        <TooltipProvider delay={150}>
           {leaf(Leaf, "leaf-a", "Label A")}
           {leaf(Leaf, "leaf-b", "Label B")}
         </TooltipProvider>,
@@ -192,7 +200,7 @@ describe("LazySidebarTooltipWrapper opens through Radix", () => {
         advanceTimers: vi.advanceTimersByTimeAsync,
       });
       render(
-        <TooltipProvider delayDuration={150}>
+        <TooltipProvider delay={150}>
           {leaf(Leaf, "leaf-a", "Label A")}
           {leaf(TooltipWrapper, "leaf-c", "Label C")}
         </TooltipProvider>,
@@ -232,7 +240,7 @@ describe("LazySidebarTooltipWrapper opens through Radix", () => {
         advanceTimers: vi.advanceTimersByTimeAsync,
       });
       render(
-        <TooltipProvider delayDuration={150}>
+        <TooltipProvider delay={150}>
           {leaf(Leaf, "leaf-a", "Label A")}
           {leaf(TooltipWrapper, "leaf-c", "Label C")}
         </TooltipProvider>,
@@ -240,7 +248,7 @@ describe("LazySidebarTooltipWrapper opens through Radix", () => {
       const a = screen.getByTestId("leaf-a");
       const c = screen.getByTestId("leaf-c");
 
-      // Focus opens a Radix tooltip at once - no delay timer is armed, so
+      // Focus opens a Base tooltip at once - no delay timer is armed, so
       // this can stay a plain synchronous `act`.
       act(() => {
         c.focus();
@@ -261,48 +269,14 @@ describe("LazySidebarTooltipWrapper opens through Radix", () => {
   );
 
   it.each(LEAVES)(
-    "(c-mechanism) opening a %s leaf's tooltip dispatches exactly one tooltip.open",
+    "(d) the provider's delay is honoured by a %s leaf",
     async (_name, Leaf) => {
       const user = userEvent.setup({
         delay: null,
         advanceTimers: vi.advanceTimersByTimeAsync,
       });
       render(
-        <TooltipProvider delayDuration={150}>
-          {leaf(Leaf, "leaf-a", "Label A")}
-        </TooltipProvider>,
-      );
-      const a = screen.getByTestId("leaf-a");
-
-      const opens: string[] = [];
-      const onOpen = (): void => {
-        opens.push("open");
-      };
-      document.addEventListener("tooltip.open", onOpen);
-      try {
-        const hoveredA = user.hover(a);
-        await flushHoverMount();
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(155);
-        });
-        await hoveredA;
-        expect(tooltipTexts()).toContain("Label A");
-        expect(opens).toHaveLength(1);
-      } finally {
-        document.removeEventListener("tooltip.open", onOpen);
-      }
-    },
-  );
-
-  it.each(LEAVES)(
-    "(d) the provider's delayDuration is honoured by a %s leaf",
-    async (_name, Leaf) => {
-      const user = userEvent.setup({
-        delay: null,
-        advanceTimers: vi.advanceTimersByTimeAsync,
-      });
-      render(
-        <TooltipProvider delayDuration={500}>
+        <TooltipProvider delay={500}>
           {leaf(Leaf, "leaf-a", "Label A")}
         </TooltipProvider>,
       );
@@ -336,7 +310,7 @@ describe("LazySidebarTooltipWrapper opens through Radix", () => {
         advanceTimers: vi.advanceTimersByTimeAsync,
       });
       render(
-        <TooltipProvider delayDuration={150}>
+        <TooltipProvider delay={150}>
           {leaf(Leaf, "leaf-a", "Label A")}
         </TooltipProvider>,
       );
@@ -388,7 +362,7 @@ describe("LazySidebarTooltipWrapper opens through Radix", () => {
         advanceTimers: vi.advanceTimersByTimeAsync,
       });
       render(
-        <TooltipProvider delayDuration={150}>
+        <TooltipProvider delay={150}>
           {leaf(Leaf, "leaf-a", "Label A")}
         </TooltipProvider>,
       );
@@ -402,7 +376,7 @@ describe("LazySidebarTooltipWrapper opens through Radix", () => {
       // its events having landed). That reorders this into "press an
       // untouched trigger, then start hovering it" instead of the intended
       // "hover begins, then a press interrupts it" - on the eager leaf that
-      // makes the press a no-op (Radix's own pending-timer cancellation on
+      // makes the press a no-op (Base's own pending-timer cancellation on
       // click has nothing to cancel yet) and the tooltip opens anyway once
       // the delayed `pointermove` lands. A bare microtask flush - no fake
       // timer advance - is enough to let that deferred dispatch land, and
@@ -454,12 +428,12 @@ describe("LazySidebarTooltipWrapper opens through Radix", () => {
         advanceTimers: vi.advanceTimersByTimeAsync,
       });
       render(
-        <TooltipProvider delayDuration={150}>
+        <TooltipProvider delay={150}>
           {leaf(Leaf, "leaf-a", "Label A")}
         </TooltipProvider>,
       );
       // Deliberately not captured before `tab()`: on the lazy leaf, the
-      // first focus mounts the Radix root and replaces the trigger's DOM
+      // first focus mounts the Base root and replaces the trigger's DOM
       // node (see the "keeps keyboard focus on the trigger..." test above,
       // and the docblock on `LazySidebarHover`), so a reference taken
       // beforehand is stale by the time focus lands. Query fresh afterwards,

@@ -124,7 +124,7 @@ describe("<UsageActivityHeatmap />", () => {
     // under the Tokens metric so the cost line can only come from the
     // cell's own cost field, not from `value`.
     render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <UsageActivityHeatmap
           calendar={buildUsageActivityCalendar(
             DAYS,
@@ -139,7 +139,8 @@ describe("<UsageActivityHeatmap />", () => {
       .getAllByTestId("usage-activity-day")
       .find((entry) => entry.getAttribute("data-day") === "2026-08-03");
     if (tile === undefined) throw new Error("missing 2026-08-03 tile");
-    fireEvent.pointerMove(tile);
+    fireEvent.mouseEnter(tile);
+    fireEvent.mouseMove(tile);
     const tooltip = await screen.findByRole("tooltip");
     expect(tooltip.textContent).toContain("Aug 3, 2026");
     expect(tooltip.textContent).toContain("Cost");
@@ -152,7 +153,7 @@ describe("<UsageActivityHeatmap />", () => {
     // User ruling: a per-tile "not counted" on every mixed day is cognitive
     // overload; the headline footnote already carries the window-wide count.
     render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <UsageActivityHeatmap
           calendar={buildUsageActivityCalendar(
             DAYS,
@@ -175,7 +176,8 @@ describe("<UsageActivityHeatmap />", () => {
       .getAllByTestId("usage-activity-day")
       .find((entry) => entry.getAttribute("data-day") === "2026-08-03");
     if (tile === undefined) throw new Error("missing 2026-08-03 tile");
-    fireEvent.pointerMove(tile);
+    fireEvent.mouseEnter(tile);
+    fireEvent.mouseMove(tile);
     const tooltip = await screen.findByRole("tooltip");
     expect(tooltip.textContent).toContain("Cost$5.00");
     expect(tooltip.textContent).not.toContain("not counted");

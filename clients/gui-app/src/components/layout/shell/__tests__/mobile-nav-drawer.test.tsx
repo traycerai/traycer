@@ -325,7 +325,6 @@ describe("MobileNavDrawer", () => {
 
       expect(drawer.getAttribute("role")).toBe("dialog");
       expect(drawer.hasAttribute("data-slot")).toBe(false);
-      expect(drawer.hasAttribute("data-vaul-drawer")).toBe(false);
       // The layer sits directly under the body rather than inside the app
       // tree, which is the arrangement that lets the containment inert
       // everything beside it without inerting the drawer too.

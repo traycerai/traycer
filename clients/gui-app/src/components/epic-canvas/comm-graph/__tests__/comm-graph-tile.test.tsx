@@ -559,13 +559,8 @@ function TileFromStore() {
   return <CommGraphTile node={tile} viewTabId={AUTO_TAB_ID} />;
 }
 
-/** Radix opens on pointerdown, not click - a bare click leaves the menu shut. */
 function openPicker(): void {
-  fireEvent.pointerDown(screen.getByTestId("comm-graph-office-view-picker"), {
-    button: 0,
-    ctrlKey: false,
-    pointerType: "mouse",
-  });
+  fireEvent.click(screen.getByTestId("comm-graph-office-view-picker"));
 }
 
 /**

@@ -234,24 +234,26 @@ function SplitQuickActions(props: {
 }): ReactNode {
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          size="icon-sm"
-          variant={props.engaged ? "info-ghost" : "muted"}
-          aria-label={`Split view actions, ${props.focusedSide} view focused`}
-          data-testid={`split-quick-actions-${props.splitId}`}
-          className={cn(
-            SPLIT_TAB_CONTROL_CLASS,
-            "[-webkit-app-region:no-drag]",
-          )}
-        >
-          <SplitFocusIcon
-            splitId={props.splitId}
-            focusedSide={props.focusedSide}
-          />
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            size="icon-sm"
+            variant={props.engaged ? "info-ghost" : "muted"}
+            aria-label={`Split view actions, ${props.focusedSide} view focused`}
+            data-testid={`split-quick-actions-${props.splitId}`}
+            className={cn(
+              SPLIT_TAB_CONTROL_CLASS,
+              "[-webkit-app-region:no-drag]",
+            )}
+          >
+            <SplitFocusIcon
+              splitId={props.splitId}
+              focusedSide={props.focusedSide}
+            />
+          </Button>
+        }
+      />
       <SplitQuickActionsMenuContent
         tab={props.tab}
         onSplitCommand={props.onSplitCommand}
@@ -389,7 +391,7 @@ function SplitFillableMember(props: {
   }
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{control}</ContextMenuTrigger>
+      <ContextMenuTrigger render={control} />
       <SplitSlotMenuContent
         partner={props.partner}
         onSplitCommand={props.onSplitCommand}

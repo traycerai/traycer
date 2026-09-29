@@ -116,23 +116,25 @@ function FileAutosaveStatusChrome(props: {
   if (props.actionable) {
     return (
       <Popover>
-        <PopoverTrigger asChild>
-          <m.button
-            type="button"
-            layout="size"
-            transition={STATUS_PILL_LAYOUT_TRANSITION}
-            className={statusPillClassName(
-              presentation.tone,
-              true,
-              props.appearance,
-            )}
-            aria-label={presentation.label}
-            data-testid="file-autosave-pill"
-            data-appearance={props.appearance}
-          >
-            <StatusPillContents presentation={presentation} />
-          </m.button>
-        </PopoverTrigger>
+        <PopoverTrigger
+          render={
+            <m.button
+              type="button"
+              layout="size"
+              transition={STATUS_PILL_LAYOUT_TRANSITION}
+              className={statusPillClassName(
+                presentation.tone,
+                true,
+                props.appearance,
+              )}
+              aria-label={presentation.label}
+              data-testid="file-autosave-pill"
+              data-appearance={props.appearance}
+            >
+              <StatusPillContents presentation={presentation} />
+            </m.button>
+          }
+        />
         <PopoverContent align="end" className="w-[min(86vw,20rem)]">
           <PopoverHeader>
             <PopoverTitle>{presentation.label}</PopoverTitle>

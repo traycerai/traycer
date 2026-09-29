@@ -233,7 +233,7 @@ export const FOLDER_CONTROL_TRIGGER_CLASS =
   // A disabled control (active-run lock / non-git folder) keeps the same text
   // tone. Its affordance is the not-allowed cursor + no hover-brighten + the
   // rebind tooltip, rather than another layer of fading.
-  "inline-flex w-full max-w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-ui-sm text-[color:var(--fc-text,var(--color-muted-foreground))] transition-[background-color,color] hover:bg-accent/50 hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[color:var(--fc-text,var(--color-muted-foreground))] aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-[color:var(--fc-text,var(--color-muted-foreground))] data-[state=open]:bg-accent/50 data-[state=open]:text-foreground";
+  "inline-flex w-full max-w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-ui-sm text-[color:var(--fc-text,var(--color-muted-foreground))] transition-[background-color,color] hover:bg-accent/50 hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[color:var(--fc-text,var(--color-muted-foreground))] aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-[color:var(--fc-text,var(--color-muted-foreground))] data-popup-open:bg-accent/50 data-popup-open:text-foreground";
 
 // The ⚙ scripts button opens the modal in every mode with no per-folder
 // "configured" indicator, so no scripts-content derivation lives here.

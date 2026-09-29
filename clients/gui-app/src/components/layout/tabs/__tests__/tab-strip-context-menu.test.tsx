@@ -577,9 +577,9 @@ describe("the Tabs placement radio group", () => {
     render(
       <div data-testid="app-column">
         <ContextMenu>
-          <ContextMenuTrigger asChild>
-            <button type="button">Task tab</button>
-          </ContextMenuTrigger>
+          <ContextMenuTrigger
+            render={<button type="button">Task tab</button>}
+          />
           <TabContextMenuContent
             tab={EPIC_TAB}
             canCloseOtherTabs

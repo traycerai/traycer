@@ -23,7 +23,7 @@ import {
   MutedAgentSpinner,
 } from "@/components/ui/agent-spinning-dots";
 import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
-import { PopoverContent } from "@/components/ui/popover";
+import { Popover, PopoverContent } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
@@ -161,7 +161,7 @@ const NO_RATE_LIMIT_FETCH_ELIGIBILITY: RateLimitFetchEligibility = {
 const NO_PROFILE_IDS: ReadonlyArray<string | null> = [];
 
 const POPOVER_SURFACE_CLASS_NAME =
-  "relative w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] overflow-hidden";
+  "relative w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--available-width))] max-w-[var(--available-width)] max-h-[var(--available-height)] overflow-hidden";
 
 type RateLimitPopoverResizeDirection =
   | "n"
@@ -437,6 +437,40 @@ function rateLimitProfileId(profile: ProviderProfile): string | null {
  * runs its queries - while the popover is open. The selected tab is persisted
  * separately so reopening restores the provider the user last inspected.
  */
+export function RateLimitPopoverRoot({
+  onOpenChange,
+  ...props
+}: React.ComponentProps<typeof Popover>) {
+  return (
+    <Popover
+      {...props}
+      onOpenChange={(next, details) => {
+        if (
+          !next &&
+          (details.reason === "outside-press" || details.reason === "focus-out")
+        ) {
+          const target =
+            details.reason === "focus-out" &&
+            details.event instanceof FocusEvent
+              ? details.event.relatedTarget
+              : details.event.target;
+          if (
+            target instanceof Element &&
+            (target.closest(
+              '[data-testid="confirm-destructive-dialog"], [data-slot="dialog-overlay"]',
+            ) !== null ||
+              isHostSwitcherListInteraction(target))
+          ) {
+            details.cancel();
+            return;
+          }
+        }
+        onOpenChange?.(next, details);
+      }}
+    />
+  );
+}
+
 export function RateLimitPopover({
   onClose,
   profileSelection,
@@ -444,7 +478,9 @@ export function RateLimitPopover({
   hasExplicitPick,
   side,
   align,
+  anchor,
 }: {
+  readonly anchor?: React.ComponentProps<typeof PopoverContent>["anchor"];
   readonly onClose: () => void;
   readonly profileSelection: RateLimitProfileSelection;
   readonly scope: HostScope;
@@ -462,6 +498,7 @@ export function RateLimitPopover({
   const placement = useColumnOverlayPlacement("foot");
   return (
     <PopoverContent
+      anchor={anchor}
       side={placement?.side ?? side}
       align={placement?.align ?? align}
       sideOffset={8}
@@ -469,7 +506,7 @@ export function RateLimitPopover({
       role="dialog"
       aria-label="Usage limits"
       layout="panel"
-      className="w-fit max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)]"
+      className="w-fit max-w-[var(--available-width)] max-h-[var(--available-height)]"
       // Radix auto-focuses the first focusable child on open. Here that's the
       // Overview rail tab, whose `TooltipWrapper` opens the tooltip on focus
       // (keyboard a11y) - so it would pop open the instant the popover mounts
@@ -477,24 +514,7 @@ export function RateLimitPopover({
       // field to type into (unlike the composer's model picker, whose first
       // focusable is its search input, so it wants and keeps the auto-focus), so
       // opting out of the initial focus is harmless and stops the stuck tooltip.
-      onOpenAutoFocus={(event) => event.preventDefault()}
-      onInteractOutside={(event) => {
-        const target = event.target;
-        if (
-          target instanceof Element &&
-          (target.closest('[data-testid="confirm-destructive-dialog"]') !==
-            null ||
-            target.closest('[data-slot="dialog-overlay"]') !== null ||
-            // The host switcher's own list is a nested Radix popover, so it
-            // portals OUTSIDE this content and every click in it reads as an
-            // interaction outside. Without this, opening the picker closed the
-            // surface the picker exists to scope, and no host could ever be
-            // chosen. Shared with every other container that embeds it.
-            isHostSwitcherListInteraction(target))
-        ) {
-          event.preventDefault();
-        }
-      }}
+      initialFocus={false}
     >
       <RateLimitPopoverBody
         onClose={onClose}
@@ -538,7 +558,7 @@ function RateLimitPopoverResizeSurface({
 
     const surface = event.currentTarget;
     const positionWrapper = surface.closest<HTMLElement>(
-      "[data-radix-popper-content-wrapper]",
+      '[data-slot="popover-positioner"]',
     );
     if (positionWrapper === null) return;
     const rect = surface.getBoundingClientRect();
@@ -690,8 +710,8 @@ function RateLimitPopoverResizeSurface({
       className={cn(
         POPOVER_SURFACE_CLASS_NAME,
         variant === "content"
-          ? "flex h-[max(50vh,22rem)] min-h-[min(35vh,16rem,var(--radix-popover-content-available-height))] flex-col"
-          : "flex min-h-[min(20vh,8rem,var(--radix-popover-content-available-height))] flex-col items-start gap-3 p-4",
+          ? "flex h-[max(50vh,22rem)] min-h-[min(35vh,16rem,var(--available-height))] flex-col"
+          : "flex min-h-[min(20vh,8rem,var(--available-height))] flex-col items-start gap-3 p-4",
       )}
       style={
         size === null
@@ -2276,7 +2296,9 @@ function RateLimitProviderProfileActions({
               checked={profile.enabled}
               disabled={profileEnablementPending}
               aria-disabled={
-                profileEnablementDisabledReason !== null || undefined
+                profileEnablementPending ||
+                profileEnablementDisabledReason !== null ||
+                undefined
               }
               className="relative before:absolute before:inset-x-0 before:-inset-y-1 before:content-['']"
               onCheckedChange={(enabled) => {

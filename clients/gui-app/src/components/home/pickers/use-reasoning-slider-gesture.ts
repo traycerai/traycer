@@ -23,7 +23,7 @@ interface ReasoningSliderGesture {
   readonly finishPointer: () => void;
   readonly onPointerCancel: () => void;
   readonly onClick: () => void;
-  readonly onValueChange: (next: number[]) => void;
+  readonly onValueChange: (next: number) => void;
   readonly movedByGesture: () => boolean;
 }
 
@@ -121,8 +121,7 @@ export function useReasoningSliderGesture(
       gesture.current.active = false;
       gesture.current.moved = false;
     },
-    onValueChange: (next) => {
-      const position = next.at(0) ?? thumbIndex;
+    onValueChange: (position) => {
       if (gesture.current.down) {
         gesture.current.moved = true;
         setPointerValue(position);

@@ -324,9 +324,9 @@ function FillableSlotMenu(props: {
   useTitleBarDragSuppression(`split-slot-menu:${useId()}`, open);
   return (
     <ContextMenu onOpenChange={setOpen}>
-      <ContextMenuTrigger asChild>
-        <div className="contents">{props.children}</div>
-      </ContextMenuTrigger>
+      <ContextMenuTrigger
+        render={<div className="contents">{props.children}</div>}
+      />
       <SplitSlotMenuContent
         partner={props.partner}
         onSplitCommand={props.onSplitCommand}

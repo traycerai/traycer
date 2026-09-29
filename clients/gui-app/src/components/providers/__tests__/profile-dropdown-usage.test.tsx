@@ -15,8 +15,10 @@ import type {
 
 vi.mock("@/components/ui/dropdown-menu", async () => {
   const React = await import("react");
-  const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
-    props.children;
+  const passthrough = (props: {
+    readonly children?: ReactNode;
+    readonly render?: ReactNode;
+  }): ReactNode => props.render ?? props.children;
   const DropdownMenu = (props: {
     readonly children: ReactNode;
     readonly onOpenChange: ((open: boolean) => void) | undefined;
@@ -29,7 +31,10 @@ vi.mock("@/components/ui/dropdown-menu", async () => {
     HTMLButtonElement,
     {
       readonly children: ReactNode;
-      readonly onSelect: (() => void) | undefined;
+      // The real `DropdownMenuItem` is called with `onClick`, not `onSelect`
+      // (Base's own API, unlike Radix's) - a mock still reading `onSelect`
+      // receives `undefined` and never fires on click.
+      readonly onClick: (() => void) | undefined;
       readonly onFocus:
         | ((event: React.FocusEvent<HTMLButtonElement>) => void)
         | undefined;
@@ -56,7 +61,7 @@ vi.mock("@/components/ui/dropdown-menu", async () => {
       title={props.title}
       onFocus={props.onFocus}
       onPointerMove={props.onPointerMove}
-      onClick={props.onSelect}
+      onClick={props.onClick}
     >
       {props.children}
     </button>

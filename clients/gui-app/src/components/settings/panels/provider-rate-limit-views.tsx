@@ -760,14 +760,17 @@ function CodexResetCreditsRow({
                * `TooltipTrigger` opens on focus as well as hover - but only if
                * the trigger element can natively receive focus.
                */}
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  className="appearance-none bg-transparent p-0 font-mono text-ui-xs text-foreground cursor-help"
-                >
-                  {countText}
-                </button>
-              </TooltipTrigger>
+
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    className="appearance-none bg-transparent p-0 font-mono text-ui-xs text-foreground cursor-help"
+                  >
+                    {countText}
+                  </button>
+                }
+              />
               {/*
                * `max-w-sm`, not the shadcn default `max-w-xs`: a title plus a
                * mono full-date expiry ("Full reset - Expires Sat, Aug 1, 2026,

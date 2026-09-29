@@ -99,7 +99,7 @@ describe("composer toolbar chips (L-88)", () => {
       "hover:",
       "focus-visible:",
       "active:scale-",
-      "data-[state=open]:",
+      "data-popup-open:",
       "disabled:",
       "motion-reduce:",
     ]) {
@@ -120,7 +120,7 @@ describe("composer toolbar chips (L-88)", () => {
       "hover:",
       "focus-visible:",
       "active:scale-",
-      "data-[state=open]:",
+      "data-popup-open:",
       "disabled:",
       "motion-reduce:",
     ]) {

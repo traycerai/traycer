@@ -748,7 +748,16 @@ function MethodPicker(props: {
   return (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={fieldId}>Sign-in method</Label>
-      <Select value={props.selectedId} onValueChange={props.onChoiceChange}>
+      <Select
+        items={props.choices.map((option) => ({
+          value: option.id,
+          label: option.label,
+        }))}
+        value={props.selectedId}
+        onValueChange={(value) => {
+          if (value !== null) props.onChoiceChange(value);
+        }}
+      >
         <SelectTrigger id={fieldId} className="w-full">
           <SelectValue placeholder="Choose a method" />
         </SelectTrigger>
@@ -809,7 +818,19 @@ function PromptField(props: {
     return (
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={fieldId}>{prompt.message}</Label>
-        <Select value={props.value} onValueChange={props.onChange}>
+        <Select
+          items={prompt.options.map((option) => ({
+            value: option.value,
+            label:
+              option.hint === null
+                ? option.label
+                : `${option.label} — ${option.hint}`,
+          }))}
+          value={props.value}
+          onValueChange={(value) => {
+            if (value !== null) props.onChange(value);
+          }}
+        >
           <SelectTrigger id={fieldId} className="w-full">
             <SelectValue placeholder="Choose one" />
           </SelectTrigger>

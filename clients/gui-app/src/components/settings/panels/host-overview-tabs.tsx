@@ -77,7 +77,8 @@ export function HostOverviewTabs(props: {
     <Tabs
       value={tab}
       onValueChange={(next) => {
-        if (isHostOverviewTab(next)) props.onSelectTab(next);
+        if (typeof next === "string" && isHostOverviewTab(next))
+          props.onSelectTab(next);
       }}
       className="gap-0 md:min-h-0"
     >
@@ -118,9 +119,7 @@ export function HostOverviewTabs(props: {
           <TabsContent
             key={value}
             value={value}
-            // Radix leaves a force-mounted pane visible, hence the class.
-            forceMount={visited.has(value) ? true : undefined}
-            className="data-[state=inactive]:hidden"
+            keepMounted={visited.has(value)}
             data-testid={`host-overview-tab-panel-${value}`}
             {...contentLabel(value)}
           >
@@ -162,6 +161,10 @@ function HostOverviewTabSelect(props: {
 }): ReactNode {
   return (
     <Select
+      items={HOST_OVERVIEW_TABS.map((value) => ({
+        value,
+        label: HOST_OVERVIEW_TAB_GROUPS[value].label,
+      }))}
       value={props.tab}
       onValueChange={(value) => {
         if (isHostOverviewTab(value)) props.onSelect(value);
@@ -175,7 +178,16 @@ function HostOverviewTabSelect(props: {
         }
         data-testid="host-overview-tab-select"
       >
-        <SelectValue />
+        <SelectValue>
+          {(value: string | null) =>
+            isHostOverviewTab(value) ? (
+              <>
+                {HOST_OVERVIEW_TAB_GROUPS[value].label}
+                {props.badges[value]}
+              </>
+            ) : null
+          }
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
         {HOST_OVERVIEW_TABS.map((value) => (

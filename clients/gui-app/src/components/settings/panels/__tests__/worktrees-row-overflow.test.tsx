@@ -4,6 +4,7 @@
 // so row-utility menu mounting and keyboard access are tested against Radix.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -104,9 +105,8 @@ describe("WorktreesList row overflow (real DropdownMenu)", () => {
     ).toBeNull();
 
     // Radix's DropdownMenuTrigger opens on pointerdown, not the click event.
-    fireEvent.pointerDown(
+    fireEvent.click(
       screen.getByRole("button", { name: "Worktree actions for feat-alpha" }),
-      { button: 0 },
     );
 
     // Opened: utilities and destructive delete share the same compact menu.
@@ -118,7 +118,7 @@ describe("WorktreesList row overflow (real DropdownMenu)", () => {
     expect(deleteItem.getAttribute("data-variant")).toBe("destructive");
   });
 
-  it("opens and activates an item entirely from the keyboard", () => {
+  it("opens and activates an item entirely from the keyboard", async () => {
     renderSingleRow({ worktreePath: "/wt/alpha", branch: "feat-alpha" });
 
     const trigger = screen.getByRole("button", {
@@ -127,17 +127,16 @@ describe("WorktreesList row overflow (real DropdownMenu)", () => {
     trigger.focus();
     expect(document.activeElement).toBe(trigger);
 
-    // Enter opens the menu (Radix's own keydown handling, not a native
-    // browser button-activation shortcut) and moves focus into it.
-    fireEvent.keyDown(trigger, { key: "Enter" });
-    const scriptsItem = screen.getByRole("menuitem", {
-      name: "Manage script",
-    });
+    // Enter on the focused trigger opens the menu and moves focus into it.
+    const user = userEvent.setup();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("menuitem", { name: "Manage script" });
 
-    // Activate it from the keyboard, not by clicking.
-    fireEvent.keyDown(scriptsItem, { key: "Enter" });
+    // Arrow to it and activate from the keyboard, not by clicking.
+    await user.keyboard("{ArrowDown}");
+    await user.keyboard("{Enter}");
 
-    screen.getByTestId("worktree-script-review-dialog");
+    await screen.findByTestId("worktree-script-review-dialog");
   });
 
   it("keeps the delete item enabled for an in-use row", () => {
@@ -147,9 +146,8 @@ describe("WorktreesList row overflow (real DropdownMenu)", () => {
       inUse: true,
     });
 
-    fireEvent.pointerDown(
+    fireEvent.click(
       screen.getByRole("button", { name: "Worktree actions for feat-busy" }),
-      { button: 0 },
     );
 
     screen.getByRole("menuitem", { name: "Copy path" });

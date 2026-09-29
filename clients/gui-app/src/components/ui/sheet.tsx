@@ -1,13 +1,39 @@
 import * as React from "react";
-import { Dialog as SheetPrimitive } from "radix-ui";
+import { Dialog as SheetPrimitive } from "@base-ui/react/dialog";
 
 import { cn } from "@/lib/utils";
-import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
+import {
+  OverlayPresentationContext,
+  useOverlayPresentation,
+  useOverlayFocus,
+} from "@/components/ui/overlay-presentation-context";
 import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
 
-function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
-  return <SheetPrimitive.Root data-slot="sheet" {...props} />;
+function Sheet({
+  open,
+  defaultOpen,
+  onOpenChange,
+  onOpenChangeComplete,
+  ...props
+}: SheetPrimitive.Root.Props) {
+  const overlay = useOverlayPresentation({
+    open,
+    defaultOpen,
+    onOpenChange,
+    onOpenChangeComplete,
+    paneAware: false,
+  });
+  return (
+    <OverlayPresentationContext.Provider value={overlay.presentation}>
+      <SheetPrimitive.Root
+        {...props}
+        open={overlay.open}
+        onOpenChange={overlay.onOpenChange}
+        onOpenChangeComplete={overlay.onOpenChangeComplete}
+      />
+    </OverlayPresentationContext.Provider>
+  );
 }
 
 function SheetTrigger({
@@ -31,15 +57,18 @@ function SheetPortal({
 function SheetOverlay({
   className,
   ...props
-}: React.ComponentProps<typeof SheetPrimitive.Overlay>) {
+}: React.ComponentProps<typeof SheetPrimitive.Backdrop>) {
   return (
-    <SheetPrimitive.Overlay
+    <SheetPrimitive.Backdrop
       data-slot="sheet-overlay"
-      className={cn(
-        "fixed inset-0 z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
-        className,
-      )}
+      className={(state) =>
+        cn(
+          "fixed inset-0 z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+          typeof className === "function" ? className(state) : className,
+        )
+      }
       {...props}
+      forceRender
     />
   );
 }
@@ -50,65 +79,79 @@ function SheetContent({
   children,
   side = "right",
   showCloseButton = true,
+  initialFocus,
+  onFocusCapture,
+  finalFocus,
   ...props
-}: React.ComponentProps<typeof SheetPrimitive.Content> & {
+}: React.ComponentProps<typeof SheetPrimitive.Popup> & {
   side?: "top" | "right" | "bottom" | "left";
   showCloseButton?: boolean;
 }) {
-  // Concealed region (see `portal-concealment-context`): un-present the
-  // portal; the root keeps its open state and it re-presents on return.
-  const concealed = usePortalConcealed();
-  if (concealed) return null;
+  const { ref: popupRef, ...focus } = useOverlayFocus(
+    initialFocus,
+    finalFocus,
+    ref,
+    onFocusCapture,
+  );
   return (
     <SheetPortal>
-      <SheetOverlay />
-      <SheetPrimitive.Content
-        ref={ref}
+      <SheetOverlay data-overlay-concealed={focus.concealed || undefined} />
+      <SheetPrimitive.Popup
+        ref={popupRef}
+        onFocusCapture={focus.onFocusCapture}
         data-slot="sheet-content"
+        data-overlay-concealed={focus.concealed || undefined}
+        initialFocus={focus.initialFocus}
+        finalFocus={focus.finalFocus}
         data-side={side}
         data-close-button={showCloseButton}
-        className={cn(
-          "group/sheet-content fixed z-50 flex flex-col gap-4 bg-popover bg-clip-padding text-ui-sm text-popover-foreground shadow-lg transition duration-200 ease-in-out data-[side=bottom]:inset-x-0 data-[side=bottom]:bottom-0 data-[side=bottom]:h-auto data-[side=bottom]:border-t data-[side=left]:inset-y-0 data-[side=left]:left-0 data-[side=left]:h-full data-[side=left]:w-3/4 data-[side=left]:border-r data-[side=right]:inset-y-0 data-[side=right]:right-0 data-[side=right]:h-full data-[side=right]:w-3/4 data-[side=right]:border-l data-[side=top]:inset-x-0 data-[side=top]:top-0 data-[side=top]:h-auto data-[side=top]:border-b data-[side=left]:sm:max-w-sm data-[side=right]:sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-[side=bottom]:data-open:slide-in-from-bottom-10 data-[side=left]:data-open:slide-in-from-left-10 data-[side=right]:data-open:slide-in-from-right-10 data-[side=top]:data-open:slide-in-from-top-10 data-closed:animate-out data-closed:fade-out-0 data-[side=bottom]:data-closed:slide-out-to-bottom-10 data-[side=left]:data-closed:slide-out-to-left-10 data-[side=right]:data-closed:slide-out-to-right-10 data-[side=top]:data-closed:slide-out-to-top-10",
-          // Safe-area inset, per side, and AFTER the side rules above so it
-          // displaces the height they set rather than losing to it. A sheet is
-          // portalled and `fixed`, so it resolves against the viewport and
-          // never sees `#root`'s padding; insetting it here is what keeps every
-          // sheet in the app clear of the status bar and of the landscape
-          // sensor housing without each one remembering.
-          //
-          // Margin, not a `top`/`inset-y` override: those rules are variant-
-          // prefixed, and `cn` only displaces a class whose modifiers match,
-          // so a bare `top-safe-top` would tie rather than win. Margin
-          // is a different property and cannot tie.
-          //
-          // The bottom edge is left alone deliberately - a sheet anchored there
-          // is meant to meet the screen edge, and pads its own contents.
-          //
-          // A side sheet also takes a width cap. Its width is the caller's, and
-          // a caller asking for `w-full` gets 100% of a FIXED element's
-          // containing block - the whole viewport - so the horizontal margin
-          // alone would push that width off the opposite edge instead of
-          // shrinking it. The cap carries no modifier, so a caller's
-          // `sm:max-w-*` still wins at width.
-          "data-[side=left]:mt-safe-top data-[side=left]:ml-safe-left data-[side=left]:h-safe-dvh data-[side=left]:max-w-safe-dvw data-[side=right]:mt-safe-top data-[side=right]:mr-safe-right data-[side=right]:h-safe-dvh data-[side=right]:max-w-safe-dvw data-[side=top]:mt-safe-top data-[side=top]:ml-safe-left data-[side=top]:mr-safe-right data-[side=bottom]:ml-safe-left data-[side=bottom]:mr-safe-right",
-          className,
-        )}
+        className={(state) =>
+          cn(
+            "group/sheet-content fixed z-50 flex flex-col gap-4 bg-popover bg-clip-padding text-ui-sm text-popover-foreground shadow-lg transition duration-200 ease-in-out data-[side=bottom]:inset-x-0 data-[side=bottom]:bottom-0 data-[side=bottom]:h-auto data-[side=bottom]:border-t data-[side=left]:inset-y-0 data-[side=left]:left-0 data-[side=left]:h-full data-[side=left]:w-3/4 data-[side=left]:border-r data-[side=right]:inset-y-0 data-[side=right]:right-0 data-[side=right]:h-full data-[side=right]:w-3/4 data-[side=right]:border-l data-[side=top]:inset-x-0 data-[side=top]:top-0 data-[side=top]:h-auto data-[side=top]:border-b data-[side=left]:sm:max-w-sm data-[side=right]:sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-[side=bottom]:data-open:slide-in-from-bottom-10 data-[side=left]:data-open:slide-in-from-left-10 data-[side=right]:data-open:slide-in-from-right-10 data-[side=top]:data-open:slide-in-from-top-10 data-closed:animate-out data-closed:fade-out-0 data-[side=bottom]:data-closed:slide-out-to-bottom-10 data-[side=left]:data-closed:slide-out-to-left-10 data-[side=right]:data-closed:slide-out-to-right-10 data-[side=top]:data-closed:slide-out-to-top-10",
+            // Safe-area inset, per side, and AFTER the side rules above so it
+            // displaces the height they set rather than losing to it. A sheet is
+            // portalled and `fixed`, so it resolves against the viewport and
+            // never sees `#root`'s padding; insetting it here is what keeps every
+            // sheet in the app clear of the status bar and of the landscape
+            // sensor housing without each one remembering.
+            //
+            // Margin, not a `top`/`inset-y` override: those rules are variant-
+            // prefixed, and `cn` only displaces a class whose modifiers match,
+            // so a bare `top-safe-top` would tie rather than win. Margin
+            // is a different property and cannot tie.
+            //
+            // The bottom edge is left alone deliberately - a sheet anchored there
+            // is meant to meet the screen edge, and pads its own contents.
+            //
+            // A side sheet also takes a width cap. Its width is the caller's, and
+            // a caller asking for `w-full` gets 100% of a FIXED element's
+            // containing block - the whole viewport - so the horizontal margin
+            // alone would push that width off the opposite edge instead of
+            // shrinking it. The cap carries no modifier, so a caller's
+            // `sm:max-w-*` still wins at width.
+            "data-[side=left]:mt-safe-top data-[side=left]:ml-safe-left data-[side=left]:h-safe-dvh data-[side=left]:max-w-safe-dvw data-[side=right]:mt-safe-top data-[side=right]:mr-safe-right data-[side=right]:h-safe-dvh data-[side=right]:max-w-safe-dvw data-[side=top]:mt-safe-top data-[side=top]:ml-safe-left data-[side=top]:mr-safe-right data-[side=bottom]:ml-safe-left data-[side=bottom]:mr-safe-right",
+            typeof className === "function" ? className(state) : className,
+          )
+        }
         {...props}
       >
         {children}
         {showCloseButton ? (
-          <SheetPrimitive.Close data-slot="sheet-close" asChild>
-            <Button
-              variant="ghost"
-              className="absolute top-3 right-3"
-              size="icon-sm"
-            >
-              <XIcon />
-              <span className="sr-only">Close</span>
-            </Button>
-          </SheetPrimitive.Close>
+          <SheetPrimitive.Close
+            data-slot="sheet-close"
+            render={
+              <Button
+                variant="ghost"
+                className="absolute top-3 right-3"
+                size="icon-sm"
+              >
+                <XIcon />
+                <span className="sr-only">Close</span>
+              </Button>
+            }
+          />
         ) : null}
-      </SheetPrimitive.Content>
+      </SheetPrimitive.Popup>
     </SheetPortal>
   );
 }
@@ -149,10 +192,12 @@ function SheetTitle({
   return (
     <SheetPrimitive.Title
       data-slot="sheet-title"
-      className={cn(
-        "font-heading text-ui font-medium text-foreground",
-        className,
-      )}
+      className={(state) =>
+        cn(
+          "font-heading text-ui font-medium text-foreground",
+          typeof className === "function" ? className(state) : className,
+        )
+      }
       {...props}
     />
   );

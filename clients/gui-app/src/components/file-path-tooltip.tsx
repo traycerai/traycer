@@ -3,10 +3,11 @@ import {
   useCallback,
   useContext,
   useState,
+  type MouseEvent,
   type ReactElement,
   type ReactNode,
 } from "react";
-import { Slot } from "radix-ui";
+import { useRender } from "@base-ui/react/use-render";
 
 import {
   Tooltip,
@@ -18,7 +19,7 @@ import { useLongPress } from "@/hooks/ui/use-long-press";
 
 interface FilePathTooltipProps {
   /** The trigger element (typically a truncated path span). Must accept a
-   * forwarded ref since `TooltipTrigger asChild` clones the child. */
+   * forwarded ref since `TooltipTrigger render` clones the child. */
   readonly children: ReactElement;
   /** Full text to display in the tooltip - usually the un-truncated path,
    * but any string works (e.g., `"Open <path> in editor"`). */
@@ -29,7 +30,7 @@ interface FilePathTooltipProps {
 
 /**
  * Hover-tooltip for a (potentially truncated) file path. Renders content
- * via Radix's portal so the trigger's `direction: rtl` (used for left-
+ * via the tooltip portal so the trigger's `direction: rtl` (used for left-
  * side ellipsis truncation) doesn't leak into the tooltip's bidi context
  * - Unicode neutrals like `/` would otherwise be reordered into the
  * wrong position.
@@ -43,7 +44,7 @@ interface FilePathTooltipProps {
 export function FilePathTooltip(props: FilePathTooltipProps) {
   return (
     <Tooltip>
-      <TooltipTrigger asChild>{props.children}</TooltipTrigger>
+      <TooltipTrigger render={props.children} />
       <TooltipContent
         side={props.side}
         align="start"
@@ -121,24 +122,21 @@ export function FilePathReveal(props: FilePathTooltipProps): ReactNode {
     },
     disabled: false,
   });
+  const trigger = useRender({
+    render: props.children,
+    props: {
+      ...longPress.handlers,
+      onClick: (event: MouseEvent<HTMLElement>) => {
+        // The click after a consumed hold must not activate the enclosing row.
+        if (!longPress.consumedTap()) return;
+        event.preventDefault();
+        event.stopPropagation();
+      },
+    },
+  });
   return (
     <FilePathTooltip content={props.content} side={props.side}>
-      {/* `Slot.Root` nested inside `TooltipTrigger asChild` composes these
-          handlers with the child's own instead of replacing them. */}
-      <Slot.Root
-        {...longPress.handlers}
-        onClick={(event) => {
-          // The browser still delivers a click after a long press. Here that
-          // click reaches the enclosing menu or command item and picks the
-          // row - moving the user off the path the press just revealed - so
-          // the press that already answered the gesture swallows it.
-          if (!longPress.consumedTap()) return;
-          event.preventDefault();
-          event.stopPropagation();
-        }}
-      >
-        {props.children}
-      </Slot.Root>
+      {trigger}
     </FilePathTooltip>
   );
 }

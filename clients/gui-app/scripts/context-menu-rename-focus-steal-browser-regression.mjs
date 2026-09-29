@@ -131,7 +131,9 @@ try {
       const content = item.closest('[data-slot="context-menu-content"]');
       const rect = item.getBoundingClientRect();
       return {
-        dataState: content instanceof HTMLElement ? content.getAttribute("data-state") : null,
+        // Base UI's Menu.Popup marks its exit state with the boolean
+        // data-closed attribute, not Radix's data-state=closed string.
+        isClosing: content instanceof HTMLElement && content.hasAttribute("data-closed"),
         x: rect.left + rect.width / 2,
         y: rect.top + rect.height / 2,
       };
@@ -144,9 +146,9 @@ try {
     );
   }
   assert.equal(
-    closingItem.dataState,
-    "closed",
-    "the menu content was not mid-exit ('data-state=closed') at the probe point - " +
+    closingItem.isClosing,
+    true,
+    "the menu content was not mid-exit ('data-closed') at the probe point - " +
       "the pointer-move race this test targets did not set up",
   );
   await moveMouse(client, closingItem.x + 2, closingItem.y + 2);

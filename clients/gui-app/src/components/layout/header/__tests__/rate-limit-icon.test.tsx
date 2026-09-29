@@ -136,11 +136,12 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
 
 // The popover's contents are another suite's subject, but WHETHER it is
 // presented is this one's: the stand-in keeps the real `PopoverContent`, which
-// Radix mounts only while the root is open. So the testid below is a readout of
-// the open state itself, not of a component that renders either way.
+// Base UI mounts only while the root is open. So the testid below reads
+// the open state itself, not a component that renders either way.
 vi.mock("@/components/layout/header/rate-limit-popover", async () => {
-  const { PopoverContent } = await import("@/components/ui/popover");
+  const { Popover, PopoverContent } = await import("@/components/ui/popover");
   return {
+    RateLimitPopoverRoot: Popover,
     RateLimitPopover: (_props: { readonly onClose: () => void }) => (
       <PopoverContent data-testid="rate-limit-popover" />
     ),

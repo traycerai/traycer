@@ -497,7 +497,7 @@ function renderPanel(selected: GitPanelSelectedRepo): QueryClient {
 
   render(
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <GitDiffPanelBodyLive epicId={EPIC_ID} tabId={TAB_ID} />
       </TooltipProvider>
     </QueryClientProvider>,
@@ -538,7 +538,7 @@ function renderPanelWithControls(selected: GitPanelSelectedRepo): {
   function makeElement(): ReactNode {
     return (
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider delayDuration={0}>
+        <TooltipProvider delay={0}>
           <GitDiffPanelBodyLive epicId={EPIC_ID} tabId={TAB_ID} />
         </TooltipProvider>
       </QueryClientProvider>

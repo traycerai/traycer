@@ -149,7 +149,7 @@ export function ResolvedInterviewCard(props: ResolvedInterviewCardProps) {
               </span>
             </span>
             <ChevronRight
-              className="size-3.5 shrink-0 text-muted-foreground/65 transition-transform group-data-[state=open]/interview:rotate-90"
+              className="size-3.5 shrink-0 text-muted-foreground/65 transition-transform group-data-panel-open/interview:rotate-90"
               aria-hidden
             />
           </CollapsibleTrigger>

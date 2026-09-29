@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
-import { DismissableLayer } from "radix-ui/internal";
 import {
   CircleCheckIcon,
   InfoIcon,
@@ -148,7 +147,8 @@ const Toaster = ({ ...props }: ToasterProps) => {
   useEffect(() => subscribeTileRects(recomputeAnchor), [recomputeAnchor]);
 
   return (
-    <DismissableLayer.Branch
+    <div
+      role="presentation"
       data-slot="toaster-branch"
       onClick={activateNotificationToastSurface}
     >
@@ -191,7 +191,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           (mobileApp ? MOBILE_APP_TOASTER_OFFSET : undefined)
         }
       />
-    </DismissableLayer.Branch>
+    </div>
   );
 };
 

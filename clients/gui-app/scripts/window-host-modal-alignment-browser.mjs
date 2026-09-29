@@ -9,8 +9,7 @@
 //
 // Every figure printed and compared is in CSS pixels at deviceScaleFactor 1.
 //
-// Structure copied from `toast-over-modal-hittest.mjs` (vite + headless Chrome
-// over CDP).
+// Runs Vite and headless Chrome over CDP.
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdtemp, rm } from "node:fs/promises";

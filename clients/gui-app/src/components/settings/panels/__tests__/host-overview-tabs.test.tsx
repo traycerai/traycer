@@ -293,11 +293,11 @@ function HostUpdateLink(): ReactNode {
   );
 }
 
-/** The test id of whichever desktop tab trigger currently reads `data-state="active"`. */
+/** The test id of whichever desktop tab trigger is currently selected. */
 function activeTabTestId(): string | null {
   const active = screen
     .getAllByRole("tab")
-    .find((tab) => tab.getAttribute("data-state") === "active");
+    .find((tab) => tab.getAttribute("aria-selected") === "true");
   return active?.getAttribute("data-testid") ?? null;
 }
 

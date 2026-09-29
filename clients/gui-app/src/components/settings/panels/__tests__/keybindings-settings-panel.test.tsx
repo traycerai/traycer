@@ -219,10 +219,12 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
       expect(set).toHaveBeenCalledTimes(1);
     });
     expect(
-      screen.getByRole<HTMLButtonElement>("switch", {
-        name: "Enable summon shortcut",
-      }).disabled,
-    ).toBe(true);
+      screen
+        .getByRole("switch", {
+          name: "Enable summon shortcut",
+        })
+        .getAttribute("data-disabled"),
+    ).not.toBeNull();
     expect(
       screen.getByRole<HTMLButtonElement>("button", {
         name: "Rebind the summon shortcut",
@@ -246,10 +248,12 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByRole<HTMLButtonElement>("switch", {
-          name: "Enable summon shortcut",
-        }).disabled,
-      ).toBe(false);
+        screen
+          .getByRole("switch", {
+            name: "Enable summon shortcut",
+          })
+          .getAttribute("data-disabled"),
+      ).toBeNull();
       expect(
         screen.getByRole<HTMLButtonElement>("button", {
           name: "Reset all to defaults",

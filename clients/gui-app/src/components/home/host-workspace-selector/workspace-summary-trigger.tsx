@@ -1,6 +1,6 @@
 import { useState, type ButtonHTMLAttributes, type Ref } from "react";
 import { ChevronDown, TriangleAlert } from "lucide-react";
-import { Slot } from "radix-ui";
+import { useRender } from "@base-ui/react/use-render";
 import {
   Popover,
   PopoverContent,
@@ -120,7 +120,10 @@ export function WorkspaceSummaryTrigger(
   // The interactive (non-read-only) summary is wrapped by the parent's hover
   // card (`WorkspaceFolderSummaryControl`), which is shut while the click-open
   // picker is; the read-only branch below owns its own hover+popover pair.
-  const trigger = triggerButton;
+  const trigger = useRender({
+    render: triggerButton,
+    props: readOnly ? { ...preview.triggerProps } : {},
+  });
 
   // Read-only (terminal-agent): hover keeps the compact preview; click expands
   // the normal folder rows with every binding control suppressed.
@@ -134,12 +137,9 @@ export function WorkspaceSummaryTrigger(
         >
           <HoverCard
             trigger={
-              <PopoverTrigger asChild>
-                {/* Innermost, so the press guard runs BEFORE the popover's own
-                    open handler and can prevent it - `Slot` composes a child's
-                    handler ahead of the slot's. */}
-                <Slot.Root {...preview.triggerProps}>{trigger}</Slot.Root>
-              </PopoverTrigger>
+              // `trigger` already carries the press guard innermost, so it
+              // runs BEFORE the popover's own open handler and can cancel it.
+              <PopoverTrigger render={trigger} />
             }
             content={<WorkspaceFolderHoverList items={items} />}
             appearance="preview"
@@ -159,9 +159,9 @@ export function WorkspaceSummaryTrigger(
             collisionPadding={12}
             // Same desktop-scrolls-here / phone-scrolls-the-list split as the
             // editable panel in `WorkspaceFolderSummaryControl` - see the note there.
-            className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] overflow-y-auto max-md:overflow-hidden"
+            className="w-[min(92vw,42rem)] max-w-[var(--available-width)] max-h-[min(var(--available-height),32rem)] overflow-y-auto max-md:overflow-hidden"
             data-testid="workspace-readonly-folders-popover"
-            onOpenAutoFocus={(event) => event.preventDefault()}
+            initialFocus={false}
           >
             <WorkspaceFolderRows
               items={items}

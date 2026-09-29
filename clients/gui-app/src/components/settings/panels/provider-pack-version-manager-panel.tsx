@@ -831,7 +831,6 @@ function VersionManagerFooter(props: {
             checked={props.autoDownload}
             onCheckedChange={props.onToggleAutoDownload}
             disabled={props.policyPending}
-            aria-label="Auto-download updates"
           />
         </label>
       </div>

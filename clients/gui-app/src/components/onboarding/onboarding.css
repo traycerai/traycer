@@ -142,7 +142,7 @@
   background: color-mix(in srgb, var(--foreground) 15%, transparent);
   transition: background-color 220ms ease;
 }
-.onboarding-progress-segment[data-state="done"] {
+.onboarding-progress-segment[data-progress-state="done"] {
   background: color-mix(in srgb, var(--foreground) 45%, transparent);
 }
 /* The active segment fills by wiping its clip open, and a completed one keeps
@@ -154,10 +154,12 @@
   clip-path: inset(0 100% 0 0);
   transition: clip-path 400ms var(--onboarding-ease-in-out);
 }
-.onboarding-progress-segment[data-state="active"] .onboarding-progress-fill {
+.onboarding-progress-segment[data-progress-state="active"]
+  .onboarding-progress-fill {
   clip-path: inset(0 0 0 0);
 }
-.onboarding-progress-segment[data-state="done"] .onboarding-progress-fill {
+.onboarding-progress-segment[data-progress-state="done"]
+  .onboarding-progress-fill {
   clip-path: inset(0 0 0 100%);
 }
 .onboarding-progress-label {

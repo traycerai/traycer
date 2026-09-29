@@ -70,8 +70,10 @@ export function NotificationHookEditorDialog(props: {
             <div className="space-y-2">
               <Label htmlFor="hook-type">Action</Label>
               <Select
+                items={{ command: "Run a script", http: "POST to a URL" }}
                 value={draft.actionType}
                 onValueChange={(value) => {
+                  if (value === null) return;
                   setDraft((previous) => ({
                     ...previous,
                     actionType: value === "http" ? "http" : "command",

@@ -83,8 +83,10 @@ vi.mock("@/components/chat/chat-progress-icon", () => ({
 
 vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: (props: { readonly children: ReactNode }) => props.children,
-  DropdownMenuTrigger: (props: { readonly children: ReactNode }) =>
-    props.children,
+  DropdownMenuTrigger: (props: {
+    readonly children?: ReactNode;
+    readonly render?: ReactNode;
+  }) => props.render ?? props.children,
   DropdownMenuContent: (props: { readonly children: ReactNode }) => (
     <div>{props.children}</div>
   ),

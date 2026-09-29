@@ -111,21 +111,23 @@ export function AddImageToArtifactButton(props: {
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="secondary"
-          size="icon-sm"
-          className={cn(
-            "pointer-events-none opacity-0 shadow-sm transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
-            props.className,
-          )}
-          aria-label="Add image to artifact"
-          onClick={stopImageClick}
-        >
-          <FilePlus2 className="size-4" aria-hidden />
-        </Button>
-      </PopoverTrigger>
+      <PopoverTrigger
+        render={
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon-sm"
+            className={cn(
+              "pointer-events-none opacity-0 shadow-sm transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+              props.className,
+            )}
+            aria-label="Add image to artifact"
+            onClick={stopImageClick}
+          >
+            <FilePlus2 className="size-4" aria-hidden />
+          </Button>
+        }
+      />
       <PopoverContent
         align="end"
         className="w-[min(85vw,20rem)]"

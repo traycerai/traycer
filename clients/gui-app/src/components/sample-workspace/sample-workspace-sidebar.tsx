@@ -146,54 +146,54 @@ export function SampleWorkspaceSidebar(): ReactNode {
       <SidebarProvider defaultOpen className="h-full min-h-0 w-full flex-col">
         <ContextMenu>
           <ContextMenuTrigger
-            asChild
             onContextMenu={(event: MouseEvent<HTMLElement>) => {
               setContextPanelId(pointedPanelId(event.target));
             }}
-          >
-            <div
-              role="toolbar"
-              aria-label="Sample sidebar panels"
-              aria-orientation="horizontal"
-              {...{ [LAYOUT_CLUSTER_ATTRIBUTE]: "" }}
-              className="relative flex h-10 w-full min-w-0 shrink-0 flex-row items-center justify-center-safe gap-1 overflow-x-auto bg-background px-2"
-            >
-              {entries.map((entry) => {
-                if (entry.kind === "panel")
+            render={
+              <div
+                role="toolbar"
+                aria-label="Sample sidebar panels"
+                aria-orientation="horizontal"
+                {...{ [LAYOUT_CLUSTER_ATTRIBUTE]: "" }}
+                className="relative flex h-10 w-full min-w-0 shrink-0 flex-row items-center justify-center-safe gap-1 overflow-x-auto bg-background px-2"
+              >
+                {entries.map((entry) => {
+                  if (entry.kind === "panel")
+                    return (
+                      <SampleRailTile
+                        key={entry.id}
+                        regionId={entry.id}
+                        label={panelTitle(entry.id)}
+                        active={isActive(entry.id)}
+                      />
+                    );
+                  if (entry.kind === "stack")
+                    return (
+                      <LeftPanelRailStack
+                        key={entry.id}
+                        stackId={entry.id}
+                        memberCount={entry.members.length}
+                        showCount={dividersEditing}
+                      >
+                        <SampleRailTile
+                          regionId={entry.members[0]}
+                          label={railGroupLabel(entry.members.map(panelTitle))}
+                          active={isActive(entry.members[0])}
+                        />
+                      </LeftPanelRailStack>
+                    );
                   return (
-                    <SampleRailTile
+                    <LeftPanelRailDivider
                       key={entry.id}
-                      regionId={entry.id}
-                      label={panelTitle(entry.id)}
-                      active={isActive(entry.id)}
+                      dividerId={entry.id}
+                      orientation="horizontal"
+                      editing={dividersEditing}
                     />
                   );
-                if (entry.kind === "stack")
-                  return (
-                    <LeftPanelRailStack
-                      key={entry.id}
-                      stackId={entry.id}
-                      memberCount={entry.members.length}
-                      showCount={dividersEditing}
-                    >
-                      <SampleRailTile
-                        regionId={entry.members[0]}
-                        label={railGroupLabel(entry.members.map(panelTitle))}
-                        active={isActive(entry.members[0])}
-                      />
-                    </LeftPanelRailStack>
-                  );
-                return (
-                  <LeftPanelRailDivider
-                    key={entry.id}
-                    dividerId={entry.id}
-                    orientation="horizontal"
-                    editing={dividersEditing}
-                  />
-                );
-              })}
-            </div>
-          </ContextMenuTrigger>
+                })}
+              </div>
+            }
+          />
           <RailContextMenuContent
             context={context}
             contextPanelId={contextPanelId}

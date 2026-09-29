@@ -284,7 +284,7 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
   const touchShieldRef = useShadowScrollerTouchShield();
 
   return (
-    // `data-vaul-no-drag` for the same reason as the workspace file tree: this
+    // `data-base-ui-swipe-ignore` for the same reason as the workspace file tree: this
     // tree's scroller is inside a shadow root, so vaul's parentElement climb
     // from the retargeted touch target cannot find it and would claim the
     // gesture as a drawer dismiss. `touchShieldRef` for the same reason as
@@ -294,7 +294,7 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
     <div
       {...bridge.wrapperProps}
       ref={touchShieldRef}
-      data-vaul-no-drag=""
+      data-base-ui-swipe-ignore=""
       className="flex h-full min-h-0 flex-col"
     >
       <PierreFileTree

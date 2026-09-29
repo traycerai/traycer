@@ -28,19 +28,11 @@ export interface NotificationCenterGeometryResult {
   readonly style: CSSProperties;
 }
 
-/** Radix Popper renders its floating wrapper at this exact inline transform
- * until `isPositioned` flips true (see `@radix-ui/react-popper`'s Content):
- * off-screen during the measuring phase, restored to the real computed
- * `floatingStyles.transform` once placed. `onPlaced` mirrors this same
- * signal but its type is deliberately omitted from Popover's public
- * `Content` props (`Omit<PopperContentProps, 'onPlaced'>`), so this module
- * watches the wrapper's own `style` mutations instead of fighting that
- * type - both approaches gate on the identical internal state. */
-const POPPER_NOT_PLACED_TRANSFORM = "translate(0, -200%)";
-const POPPER_WRAPPER_SELECTOR = "[data-radix-popper-content-wrapper]";
+/** Base keeps its Positioner transparent until the first placement commits. */
+const POSITIONER_SELECTOR = '[data-slot="popover-positioner"]';
 
-function isPopperWrapperPlaced(wrapper: HTMLElement): boolean {
-  return wrapper.style.transform !== POPPER_NOT_PLACED_TRANSFORM;
+function isPositionerPlaced(wrapper: HTMLElement): boolean {
+  return wrapper.style.opacity !== "0";
 }
 
 export const NOTIFICATION_CENTER_WIDTH_CAP_REM = 34;
@@ -55,27 +47,27 @@ export interface NotificationCenterGeometryCaps {
   readonly heightCapPx: number;
 }
 
-/** Pure viewport-driven cap computation - `min(90vw, 34rem, radix-available-
- * width)` for width and `min(70dvh, 38rem, radix-available-height)` for
+/** Pure viewport-driven cap computation - `min(90vw, 34rem, available-
+ * width)` for width and `min(70dvh, 38rem, available-height)` for
  * height. Exported so tests can exercise the cap/floor arithmetic without a
  * real browser layout. */
 export function computeNotificationCenterGeometryCaps(input: {
   readonly viewportWidthPx: number;
   readonly viewportHeightPx: number;
-  readonly radixAvailableWidthPx: number;
-  readonly radixAvailableHeightPx: number;
+  readonly availableWidthPx: number;
+  readonly availableHeightPx: number;
   readonly rootFontSizePx: number;
 }): NotificationCenterGeometryCaps {
   return {
     widthCapPx: Math.min(
       input.viewportWidthPx * WIDTH_CAP_VIEWPORT_FRACTION,
       input.rootFontSizePx * NOTIFICATION_CENTER_WIDTH_CAP_REM,
-      input.radixAvailableWidthPx,
+      input.availableWidthPx,
     ),
     heightCapPx: Math.min(
       input.viewportHeightPx * HEIGHT_CAP_VIEWPORT_FRACTION,
       input.rootFontSizePx * NOTIFICATION_CENTER_HEIGHT_CAP_REM,
-      input.radixAvailableHeightPx,
+      input.availableHeightPx,
     ),
   };
 }
@@ -122,17 +114,15 @@ function readRootFontSizePx(): number {
   return Number.isFinite(parsed) ? parsed : DEFAULT_ROOT_FONT_SIZE_PX;
 }
 
-function readRadixAvailableWidthPx(el: HTMLElement): number {
-  const raw = getComputedStyle(el)
-    .getPropertyValue("--radix-popover-content-available-width")
-    .trim();
+function readAvailableWidthPx(el: HTMLElement): number {
+  const raw = getComputedStyle(el).getPropertyValue("--available-width").trim();
   const parsed = parseFloat(raw);
   return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
-function readRadixAvailableHeightPx(el: HTMLElement): number {
+function readAvailableHeightPx(el: HTMLElement): number {
   const raw = getComputedStyle(el)
-    .getPropertyValue("--radix-popover-content-available-height")
+    .getPropertyValue("--available-height")
     .trim();
   const parsed = parseFloat(raw);
   return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
@@ -144,10 +134,10 @@ function readCurrentCaps(
   return computeNotificationCenterGeometryCaps({
     viewportWidthPx: window.innerWidth,
     viewportHeightPx: window.innerHeight,
-    radixAvailableWidthPx:
-      el === null ? Number.POSITIVE_INFINITY : readRadixAvailableWidthPx(el),
-    radixAvailableHeightPx:
-      el === null ? Number.POSITIVE_INFINITY : readRadixAvailableHeightPx(el),
+    availableWidthPx:
+      el === null ? Number.POSITIVE_INFINITY : readAvailableWidthPx(el),
+    availableHeightPx:
+      el === null ? Number.POSITIVE_INFINITY : readAvailableHeightPx(el),
     rootFontSizePx: readRootFontSizePx(),
   });
 }
@@ -194,7 +184,7 @@ export function useNotificationCenterGeometry(
     if (!input.open) return;
     const shell = shellRef.current;
     if (shell === null) return;
-    const wrapper = shell.closest<HTMLElement>(POPPER_WRAPPER_SELECTOR);
+    const wrapper = shell.closest<HTMLElement>(POSITIONER_SELECTOR);
     if (wrapper === null) return;
 
     function nextLock(
@@ -214,12 +204,12 @@ export function useNotificationCenterGeometry(
     }
 
     function attemptLock(): void {
-      if (wrapper === null || !isPopperWrapperPlaced(wrapper)) return;
+      if (wrapper === null || !isPositionerPlaced(wrapper)) return;
       setLock(nextLock);
     }
 
     function handlePlacementMutation(): void {
-      if (wrapper === null || !isPopperWrapperPlaced(wrapper)) return;
+      if (wrapper === null || !isPositionerPlaced(wrapper)) return;
       // MutationObserver runs as a microtask outside React's commit call
       // stack. Force this later placement update into the same pre-paint
       // window; the synchronous layout-effect attempt above uses plain state
@@ -262,8 +252,7 @@ export function useNotificationCenterGeometry(
       return { width: lock.width, height: lock.height };
     }
     return {
-      maxHeight:
-        "min(70dvh, 38rem, var(--radix-popover-content-available-height, 100vh))",
+      maxHeight: "min(70dvh, 38rem, var(--available-height, 100vh))",
     };
   }, [lock]);
 

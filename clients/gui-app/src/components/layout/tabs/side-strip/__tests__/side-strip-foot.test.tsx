@@ -352,7 +352,7 @@ describe("SideStripFoot", () => {
     await screen.findByTestId("side-tab-strip");
 
     const trigger = screen.getByTestId("user-menu-trigger");
-    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(trigger);
     const identity = await screen.findByTestId("user-menu-identity");
     expect(identity.textContent).toContain("Ada Lovelace");
   });

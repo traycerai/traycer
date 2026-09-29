@@ -3,7 +3,8 @@ import { cn } from "@/lib/utils";
 /**
  * One rail row: the selected row filled, the rest receding until hovered.
  * A class rather than a component because the row element differs - a plain
- * button in the provider list, a tab trigger on the layout page.
+ * button in the provider list; the layout page's tab triggers draw the same
+ * row through `TabsTrigger variant="rail"`.
  */
 export function settingsRailRowClassName(active: boolean): string {
   return cn(

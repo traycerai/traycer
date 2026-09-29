@@ -290,7 +290,7 @@ function renderCard(input: {
   readonly canAct: boolean;
 }) {
   return render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <RoutingCard
         state={input.state}
         client={null}
@@ -1030,7 +1030,7 @@ describe("RoutingCard", () => {
 
     function countdownTree(pending: PendingFallback) {
       return (
-        <TooltipProvider delayDuration={0}>
+        <TooltipProvider delay={0}>
           <RoutingCard
             state={{ kind: "countdown", pending }}
             client={null}

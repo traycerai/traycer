@@ -42,7 +42,7 @@ export function ExpandedImageDialogContent(props: {
   readonly alt: string;
   readonly image: ExpandedImageState;
   readonly suggestedName: string | null;
-  readonly onCloseAutoFocus: ((event: Event) => void) | undefined;
+  readonly finalFocus: React.ComponentProps<typeof DialogContent>["finalFocus"];
 }): ReactNode {
   const image = props.image;
   const contentRef = useRef<HTMLDivElement>(null);
@@ -91,11 +91,8 @@ export function ExpandedImageDialogContent(props: {
       // pops open on that focus. Radix skips its own focus move once this is
       // prevented, so the dialog has to take focus explicitly or it would be
       // left outside the modal, on the trigger Radix hides from screen readers.
-      onOpenAutoFocus={(event) => {
-        event.preventDefault();
-        contentRef.current?.focus();
-      }}
-      onCloseAutoFocus={props.onCloseAutoFocus}
+      initialFocus={() => contentRef.current ?? true}
+      finalFocus={props.finalFocus}
     >
       <DialogTitle className="sr-only">{props.title}</DialogTitle>
       {body}

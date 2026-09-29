@@ -339,7 +339,7 @@ function renderTabStripForTab(
         <NotificationConsumptionContext.Provider
           value={consumeNotificationEntity}
         >
-          <TooltipProvider delayDuration={0}>
+          <TooltipProvider delay={0}>
             <TabStrip
               epicId="epic-1"
               tabId={VIEW_TAB_ID}

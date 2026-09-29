@@ -676,7 +676,7 @@ describe("sidebar file tree source selection", () => {
     renderPanel(new MockWsStreamClient("unknown"));
 
     const tree = screen.getByTestId("pierre-file-tree-stub");
-    expect(tree.closest("[data-vaul-no-drag]")).not.toBeNull();
+    expect(tree.closest("[data-base-ui-swipe-ignore]")).not.toBeNull();
   });
 
   /**

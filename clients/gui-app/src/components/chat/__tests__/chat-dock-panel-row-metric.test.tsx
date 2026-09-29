@@ -358,7 +358,7 @@ function renderAttached(section: ChatDockSection) {
   return render(
     <QueryClientProvider client={queryClient}>
       <TabHostProvider hostId="host-1">
-        <TooltipProvider delayDuration={0}>
+        <TooltipProvider delay={0}>
           <ChatDockCompactStripProvider
             value={{
               chips: DOCK_ORDER.map(chip),
@@ -572,7 +572,7 @@ describe("the five attached dock panels share one row metric", () => {
   it("draws the TUI agent popover's rows from the same recipe", () => {
     render(
       <TabHostProvider hostId="host-1">
-        <TooltipProvider delayDuration={0}>
+        <TooltipProvider delay={0}>
           <AgentStopList
             epicId="epic-1"
             viewTabId="tab-1"

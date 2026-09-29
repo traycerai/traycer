@@ -40,9 +40,11 @@ export function LogLevelRow(props: LogLevelRowProps) {
       row={control.row}
       control={
         <Select
+          items={LOG_LEVEL_LABEL}
           value={control.level}
           disabled={disabled || control.busy}
           onValueChange={(next) => {
+            if (next === null) return;
             if (isLogLevel(next)) {
               void control.set(next).catch(() => {
                 // The control's own transport toasts; a rejection here is the

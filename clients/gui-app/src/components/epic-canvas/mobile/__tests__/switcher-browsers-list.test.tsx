@@ -185,7 +185,7 @@ const testQueryClient = new QueryClient({
 function renderList(onClose: () => void) {
   return render(
     <QueryClientProvider client={testQueryClient}>
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <SwitcherBrowsersList
           epicId="epic-1"
           tabId={TAB_ID}

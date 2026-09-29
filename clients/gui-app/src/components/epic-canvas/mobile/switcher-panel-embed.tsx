@@ -59,7 +59,7 @@ const SWITCHER_EMBED_SURFACE_STYLE = {
  * inside a shadow root retargets to the host, so the walk starts outside the
  * shadow tree and can never reach the scroller. It falls through to "nothing
  * scrollable found" and the drawer takes the gesture. Both tree wrappers carry
- * `data-vaul-no-drag`, which short-circuits that decision.
+ * `data-base-ui-swipe-ignore`, which short-circuits that decision.
  *
  * This is the DOWNWARD-finger path specifically. An upward finger is
  * `isDraggingInDirection` for a bottom drawer and returns early, before the

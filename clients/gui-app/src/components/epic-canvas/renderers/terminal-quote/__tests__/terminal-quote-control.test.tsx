@@ -62,6 +62,7 @@ function renderControl(targets: ReadonlyArray<TerminalQuoteChatTarget>) {
 
 async function openPanel(): Promise<void> {
   await userEvent.click(screen.getByRole("button", { name: "Send to chat" }));
+  await screen.findByRole("menu");
 }
 
 describe("TerminalQuoteControl", () => {
@@ -183,8 +184,8 @@ describe("TerminalQuoteControl", () => {
     expect(onSendToNewChat).not.toHaveBeenCalled();
   });
 
-  it("skips a different-host row when arrowing through the panel", async () => {
-    renderControl([
+  it("reaches a different-host row by keyboard but cannot activate it", async () => {
+    const { onSendToChat } = renderControl([
       {
         ...target({
           chatId: "chat-elsewhere",
@@ -205,11 +206,20 @@ describe("TerminalQuoteControl", () => {
     await openPanel();
     await userEvent.keyboard("{ArrowDown}");
 
-    // Radix's own `disabled` owns the skip, so the keyboard cannot reach what
-    // the pointer cannot either.
-    expect(screen.getByRole("menuitem", { name: "Kickoff" })).toBe(
-      document.activeElement,
-    );
+    // Base keeps a disabled row in the arrow order (so a screen-reader user
+    // can hear why it is unavailable) but it can never be activated.
+    const elsewhere = screen.getByRole("menuitem", { name: /Refactor/ });
+    expect(elsewhere).toBe(document.activeElement);
+    await userEvent.keyboard("{Enter}");
+    await userEvent.keyboard(" ");
+    expect(onSendToChat).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    await userEvent.keyboard("{ArrowDown}");
+    const kickoff = screen.getByRole("menuitem", { name: "Kickoff" });
+    expect(kickoff).toBe(document.activeElement);
+    await userEvent.keyboard("{Enter}");
+    expect(onSendToChat).toHaveBeenCalledWith("chat-here");
   });
 
   it("pins New chat below the scrolling roster", async () => {

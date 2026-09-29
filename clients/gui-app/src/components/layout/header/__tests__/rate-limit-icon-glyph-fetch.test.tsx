@@ -87,8 +87,9 @@ vi.mock(
 );
 
 vi.mock("@/components/layout/header/rate-limit-popover", async () => {
-  const { PopoverContent } = await import("@/components/ui/popover");
+  const { Popover, PopoverContent } = await import("@/components/ui/popover");
   return {
+    RateLimitPopoverRoot: Popover,
     RateLimitPopover: (_props: { readonly onClose: () => void }) => (
       <PopoverContent data-testid="rate-limit-popover" />
     ),

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>Primitive migration gate</title>
+    <style>
+      html,
+      body,
+      #root {
+        margin: 0;
+        min-height: 100%;
+      }
+      *,
+      *::before,
+      *::after {
+        caret-color: transparent !important;
+      }
+      [data-gate-stage] {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 75svh;
+        padding: 1rem;
+      }
+      [data-gate-stage="edge"] {
+        align-items: end;
+        justify-content: end;
+        min-height: 85svh;
+      }
+      [data-gate-stage] > [data-gate-inline] {
+        width: min(100%, 32rem);
+      }
+      [data-gate-state] {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./primitive-gate.tsx"></script>
+  </body>
+</html>

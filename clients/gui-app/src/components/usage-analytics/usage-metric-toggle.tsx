@@ -12,7 +12,7 @@ export function UsageMetricToggle(props: UsageMetricToggleProps): ReactNode {
   return (
     <Tabs
       value={props.metric}
-      onValueChange={(value) => {
+      onValueChange={(value: unknown) => {
         if (value === "cost" || value === "tokens") props.onChange(value);
       }}
     >

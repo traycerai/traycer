@@ -32,9 +32,10 @@ export function renderWithFallbackQueryClient(ui: ReactElement): RenderResult {
  * DOM until this fires. Call it right before the first query that targets a
  * control the target tab holds.
  *
- * `fireEvent.mouseDown`, not `.click`: Radix's `Tabs.Trigger` activates on
- * pointer-down, so a plain click event never fires `onValueChange` here -
- * see the same note on `selectTab` in `providers-settings-panel.test.tsx`.
+ * `fireEvent.click`: Base's `Tabs.Tab` wires both `onClick` and
+ * `onPointerDown` (`TabsTab.js`), unlike Radix which activated only on
+ * pointer-down - `fireEvent.mouseDown` fires neither of Base's handlers and
+ * silently does nothing.
  *
  * `FallbackPolicyEditor` is keyed on `scope.hostId`, so a host switch remounts
  * it and resets `activeTab` back to the default "plan" - a caller driving that
@@ -42,5 +43,5 @@ export function renderWithFallbackQueryClient(ui: ReactElement): RenderResult {
  * still needs.
  */
 export function openFallbackTab(tab: FallbackTabKey): void {
-  fireEvent.mouseDown(screen.getByTestId(`settings-fallback-tab-${tab}`));
+  fireEvent.click(screen.getByTestId(`settings-fallback-tab-${tab}`));
 }

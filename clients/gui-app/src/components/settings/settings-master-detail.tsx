@@ -92,10 +92,23 @@ export interface SettingsMasterOption<Value extends string> {
   readonly trailing: ReactNode;
 }
 
+/** One option's row content: in the list, and in the closed trigger alike. */
+function SettingsMasterOptionContent<Value extends string>(props: {
+  readonly option: SettingsMasterOption<Value>;
+}): ReactNode {
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      {props.option.icon}
+      <span className="min-w-0 truncate">{props.option.label}</span>
+      {props.option.trailing}
+    </span>
+  );
+}
+
 /**
  * The rail's phone presentation: one select over the same options. The icon
- * rides the closed trigger too, because `SelectItem` portals the selected
- * item's text - icon included - into it.
+ * rides the closed trigger too: `items` hands the trigger's `SelectValue` the
+ * same row content the list draws.
  */
 export function SettingsMasterSelect<Value extends string>(props: {
   readonly label: string;
@@ -105,6 +118,10 @@ export function SettingsMasterSelect<Value extends string>(props: {
 }): ReactNode {
   return (
     <Select
+      items={props.options.map((option) => ({
+        value: option.value,
+        label: <SettingsMasterOptionContent option={option} />,
+      }))}
       value={props.value}
       onValueChange={(value) => {
         // Resolved through the options rather than asserting the select's
@@ -119,11 +136,7 @@ export function SettingsMasterSelect<Value extends string>(props: {
       <SelectContent>
         {props.options.map((option) => (
           <SelectItem key={option.value} value={option.value}>
-            <span className="flex min-w-0 items-center gap-2">
-              {option.icon}
-              <span className="min-w-0 truncate">{option.label}</span>
-              {option.trailing}
-            </span>
+            <SettingsMasterOptionContent option={option} />
           </SelectItem>
         ))}
       </SelectContent>

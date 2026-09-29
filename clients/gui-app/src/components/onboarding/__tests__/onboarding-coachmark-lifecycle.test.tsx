@@ -87,7 +87,7 @@ async function advance(ms: number): Promise<void> {
 function openPicker(): HTMLDivElement {
   const popover = document.createElement("div");
   popover.setAttribute("data-slot", "popover-content");
-  popover.setAttribute("data-state", "open");
+  popover.setAttribute("data-open", "");
   document.body.append(popover);
   return popover;
 }
@@ -176,7 +176,8 @@ describe("OnboardingCoachmark lifecycle", () => {
     expect(screen.queryByTestId("guide-coachmark")).toBeNull();
 
     positioned.mockClear();
-    popover.setAttribute("data-state", "closed");
+    popover.removeAttribute("data-open");
+    popover.setAttribute("data-closed", "");
     await advance(0);
     expect(screen.queryByTestId("guide-coachmark")).toBeNull();
 
@@ -185,6 +186,36 @@ describe("OnboardingCoachmark lifecycle", () => {
 
     // The picker's own transition is the authoritative "it has landed", so the
     // card comes back without waiting out the settle timer.
+    expect(screen.getByTestId("guide-coachmark")).toBeTruthy();
+    expect(anchors()).toContain(target);
+  });
+
+  // A `keepMounted` Base popup never leaves the DOM: closing flips
+  // `data-open` -> `data-closed` on the SAME node instead of an add/remove
+  // pair, and with no `transitionend` if the popup carries no exit
+  // animation. The picker-obscured tests above only exercise childList
+  // mutations (append/remove), which the observer's `childList: true`
+  // always sees regardless of `attributeFilter`; this is the one path that
+  // depends on the filter actually naming `data-open`/`data-closed`.
+  it("re-measures when a kept-mounted picker flips data-open to data-closed in place, with no transition at all", async () => {
+    vi.useFakeTimers();
+    render(<CoachmarkHarness />);
+    const root = screen.getByTestId("guide-root");
+    const target = createVisibleTarget();
+    root.append(target);
+    await advance(0);
+
+    const popover = openPicker();
+    await advance(300);
+    expect(screen.queryByTestId("guide-coachmark")).toBeNull();
+
+    positioned.mockClear();
+    popover.removeAttribute("data-open");
+    popover.setAttribute("data-closed", "");
+    // No transitionend follows - the observer's own attribute watch is the
+    // only thing that can notice this and remeasure.
+    await advance(300);
+
     expect(screen.getByTestId("guide-coachmark")).toBeTruthy();
     expect(anchors()).toContain(target);
   });

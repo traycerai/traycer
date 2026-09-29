@@ -13,8 +13,22 @@ export function WorktreeBranchPicker(props: WorktreeBranchPickerProps) {
   const { trigger } = props;
   const controller = useWorktreeBranchPickerController(props);
   return (
-    <Popover open={controller.open} onOpenChange={controller.handleOpenChange}>
-      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+    <Popover
+      open={controller.open}
+      onOpenChange={(next, details) => {
+        if (
+          !next &&
+          details.reason === "escape-key" &&
+          controller.contentProps.hasQuery
+        ) {
+          details.cancel();
+          controller.contentProps.resetQuery();
+          return;
+        }
+        controller.handleOpenChange(next);
+      }}
+    >
+      <PopoverTrigger render={trigger} />
       <WorktreeBranchPickerContent {...controller.contentProps} />
     </Popover>
   );

@@ -3,9 +3,12 @@ import { useSampleScene } from "@/components/sample-workspace/sample-scene-conte
 import { useEffect, useState, type ReactNode } from "react";
 import { Gauge } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverTrigger } from "@/components/ui/popover";
+import { PopoverTrigger } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
+import {
+  RateLimitPopover,
+  RateLimitPopoverRoot,
+} from "@/components/layout/header/rate-limit-popover";
 import {
   useStatusBarRateLimitSegments,
   useStatusBarWindowedProviders,
@@ -163,47 +166,46 @@ function ScopedRateLimitIconButton({
   // tooltips, so only the icon forms get the button's tooltip.
   const readings = form === "inline" || form === "readout";
   const trigger = (
-    <PopoverTrigger asChild>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        aria-label={readings ? undefined : "Usage limits"}
-        data-testid="rate-limit-header-button"
-        className={cn(
-          "shadow-xs",
-          (form === "tile" || form === "readout") && "w-full",
-          // A bounded share of the header, which gives way before the tabs
-          // and the header's own controls do (G6 review A).
-          form === "inline" && "min-w-0 shrink",
-        )}
-      >
-        {scopedToOwnHost ? (
-          <LiveRateLimitGlyph profileSelection={profileSelection} form={form} />
-        ) : (
-          <RateLimitTriggerContent cluster={NO_CLUSTER} form={form} />
-        )}
-      </Button>
-    </PopoverTrigger>
+    <PopoverTrigger
+      render={
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          aria-label={readings ? undefined : "Usage limits"}
+          data-testid="rate-limit-header-button"
+          className={cn(
+            "shadow-xs",
+            (form === "tile" || form === "readout") && "w-full",
+            // A bounded share of the header, which gives way before the tabs
+            // and the header's own controls do (G6 review A).
+            form === "inline" && "min-w-0 shrink",
+          )}
+        >
+          {scopedToOwnHost ? (
+            <LiveRateLimitGlyph
+              profileSelection={profileSelection}
+              form={form}
+            />
+          ) : (
+            <RateLimitTriggerContent cluster={NO_CLUSTER} form={form} />
+          )}
+        </Button>
+      }
+    />
   );
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      {readings ? (
-        trigger
-      ) : (
-        <TooltipWrapper
-          // The host belongs in the label only when it is NOT the obvious one.
-          // Naming the active host on every hover would train people to ignore
-          // the one case the words exist for.
-          label={tooltip}
-          side={placement?.side ?? "top"}
-          sideOffset={6}
-          align={placement?.align}
-        >
-          {trigger}
-        </TooltipWrapper>
-      )}
+    <RateLimitPopoverRoot open={open} onOpenChange={setOpen}>
+      <TooltipWrapper
+        // Keep the trigger mounted when the layout changes its reading form.
+        label={readings ? null : tooltip}
+        side={placement?.side ?? "top"}
+        sideOffset={6}
+        align={placement?.align}
+      >
+        {trigger}
+      </TooltipWrapper>
       <RateLimitPopover
         side="bottom"
         align="end"
@@ -212,7 +214,7 @@ function ScopedRateLimitIconButton({
         scope={scope}
         hasExplicitPick={hasExplicitPick}
       />
-    </Popover>
+    </RateLimitPopoverRoot>
   );
 }
 

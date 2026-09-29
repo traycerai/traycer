@@ -197,14 +197,20 @@ vi.mock("@/hooks/terminal/use-plain-terminal-mutations", () => ({
 
 vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: (props: { readonly children: ReactNode }) => props.children,
-  DropdownMenuTrigger: (props: { readonly children: ReactNode }) =>
-    props.children,
+  DropdownMenuTrigger: (props: {
+    readonly children?: ReactNode;
+    readonly render?: ReactNode;
+  }) => props.render ?? props.children,
   DropdownMenuContent: (props: { readonly children: ReactNode }) => (
     <div>{props.children}</div>
   ),
   DropdownMenuItem: (props: {
     readonly children: ReactNode;
-    readonly onSelect: () => void;
+    // `SidebarDropdownMenuItems` calls the real `DropdownMenuItem` with
+    // `onClick`, not `onSelect` (Base's own API, unlike Radix's) - a mock
+    // still reading `onSelect` receives `undefined` and never fires on
+    // click.
+    readonly onClick: (() => void) | undefined;
     readonly "data-testid": string;
     readonly disabled: boolean | undefined;
   }) => (
@@ -212,7 +218,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       type="button"
       data-testid={props["data-testid"]}
       disabled={props.disabled}
-      onClick={props.onSelect}
+      onClick={props.onClick}
     >
       {props.children}
     </button>

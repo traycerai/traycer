@@ -47,42 +47,44 @@ function HiddenTabsPopover(props: HiddenTabsMenuProps) {
   const align = props.side === "left" ? "start" : "end";
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <TooltipWrapper
-          label={label}
-          side="bottom"
-          sideOffset={4}
-          align={align}
-        >
-          <Button
-            ref={triggerRef}
-            type="button"
-            variant="muted"
-            size="icon-sm"
-            aria-label={label}
-            className="[-webkit-app-region:no-drag]"
+      <PopoverTrigger
+        render={
+          <TooltipWrapper
+            label={label}
+            side="bottom"
+            sideOffset={4}
+            align={align}
           >
-            <ChevronDown className="size-3.5" aria-hidden />
-          </Button>
-        </TooltipWrapper>
-      </PopoverTrigger>
+            <Button
+              ref={triggerRef}
+              type="button"
+              variant="muted"
+              size="icon-sm"
+              aria-label={label}
+              className="[-webkit-app-region:no-drag]"
+            >
+              <ChevronDown className="size-3.5" aria-hidden />
+            </Button>
+          </TooltipWrapper>
+        }
+      />
       <PopoverContent
         align={align}
         layout="panel"
         className="w-[min(90vw,20rem)]"
-        onCloseAutoFocus={(event) => {
-          if (activatedTab.current) {
-            event.preventDefault();
-          } else if (triggerRef.current === null) {
-            // Scrolling or resizing can remove this edge's trigger while its
-            // search field has focus. Keep focus in the strip without undoing
-            // the scroll or stealing focus from an outside interaction.
-            event.preventDefault();
+        finalFocus={() => {
+          const activated = activatedTab.current;
+          activatedTab.current = false;
+          if (activated) return false;
+          if (triggerRef.current === null) {
+            // Keep focus in the strip when scrolling removes the trigger,
+            // without stealing focus from an outside interaction.
             if (document.activeElement === document.body) {
               props.fallbackFocusRef.current?.focus({ preventScroll: true });
             }
+            return false;
           }
-          activatedTab.current = false;
+          return true;
         }}
       >
         <Command variant="embedded" selection="flat" label="Search hidden tabs">
@@ -124,9 +126,9 @@ function HiddenTabMenuItem(props: {
   if (customIcon) icon = <span className="shrink-0">{customIcon}</span>;
   return (
     <CommandItem
-      value={tabRefKey(props.tab)}
+      itemKey={tabRefKey(props.tab)}
       keywords={[displayName]}
-      onSelect={props.onActivate}
+      onAction={props.onActivate}
     >
       <span
         aria-hidden

@@ -13,7 +13,7 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
 
 function renderBody(ui: ReactNode) {
   return render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <TabHostProvider hostId="tab-host-b">
         <ChatExpansionTestProviders tileInstanceId="fallback-body-tile">
           {ui}

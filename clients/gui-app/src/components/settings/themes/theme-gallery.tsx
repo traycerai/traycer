@@ -302,7 +302,7 @@ function ThemePicker({
     null,
   );
   const trigger = useRef<HTMLButtonElement>(null);
-  const { contentRef, onOpenAutoFocus } = useCoarsePointerOpenAutoFocus();
+  const { contentRef, initialFocus } = useCoarsePointerOpenAutoFocus();
   const themes = useThemeLibraryStore((state) => state.themes);
   const selectTheme = useThemeLibraryStore((state) => state.selectTheme);
   const error = useThemeLibraryStore((state) => state.error);
@@ -323,43 +323,45 @@ function ThemePicker({
         setOpen(next);
       }}
     >
-      <PopoverTrigger asChild>
-        <button
-          ref={trigger}
-          type="button"
-          aria-describedby={`${pickerId}-value`}
-          aria-label={appearance === "light" ? "Light theme" : "Dark theme"}
-          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md border border-border/70 bg-foreground/3 px-2.5 py-2 text-ui-sm outline-none transition-colors hover:bg-foreground/5 focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <PaletteSwatch colors={colors} />
-          {/* One line, ellipsed - a name is user input and can be a single
+      <PopoverTrigger
+        render={
+          <button
+            ref={trigger}
+            type="button"
+            aria-describedby={`${pickerId}-value`}
+            aria-label={appearance === "light" ? "Light theme" : "Dark theme"}
+            className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md border border-border/70 bg-foreground/3 px-2.5 py-2 text-ui-sm outline-none transition-colors hover:bg-foreground/5 focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <PaletteSwatch colors={colors} />
+            {/* One line, ellipsed - a name is user input and can be a single
               unbroken word, which wrapping would split letter by letter. What
               is ellipsed is still THERE: the whole name stays in the DOM, so
               the `aria-describedby` above reads it out in full, and the list
               this trigger opens shows every name on its own row. */}
-          <span
-            id={`${pickerId}-value`}
-            className="min-w-0 flex-1 truncate text-start"
-          >
-            {name}
-          </span>
-          <ChevronsUpDown
-            className="size-3.5 shrink-0 text-muted-foreground"
-            aria-hidden
-          />
-        </button>
-      </PopoverTrigger>
+            <span
+              id={`${pickerId}-value`}
+              className="min-w-0 flex-1 truncate text-start"
+            >
+              {name}
+            </span>
+            <ChevronsUpDown
+              className="size-3.5 shrink-0 text-muted-foreground"
+              aria-hidden
+            />
+          </button>
+        }
+      />
       <PopoverContent
         layout="bare"
         ref={contentRef}
         align="end"
         collisionBoundary={dialogContainer ?? undefined}
-        onOpenAutoFocus={onOpenAutoFocus}
-        className="w-[min(85vw,var(--container-sm))] max-h-(--radix-popover-content-available-height) overflow-hidden"
+        initialFocus={initialFocus}
+        className="w-[min(85vw,var(--container-sm))] max-h-(--available-height) overflow-hidden"
       >
         <Command
           label={`Search ${appearance} themes`}
-          defaultValue={
+          defaultHighlightedValue={
             saved.some((theme) => theme.id === id)
               ? `saved:${id}`
               : `builtin:${id}`
@@ -378,11 +380,11 @@ function ThemePicker({
                 {saved.map((theme) => (
                   <CommandItem
                     key={theme.id}
-                    value={`saved:${theme.id}`}
+                    itemKey={`saved:${theme.id}`}
                     keywords={[theme.name, theme.collection?.name ?? ""]}
                     aria-label={`Use ${theme.name} ${appearance}`}
                     data-checked={theme.id === id}
-                    onSelect={() => choose(theme.id)}
+                    onAction={() => choose(theme.id)}
                   >
                     <PaletteSwatch
                       colors={{
@@ -401,11 +403,11 @@ function ThemePicker({
               {THEME_PRESETS.map((preset) => (
                 <CommandItem
                   key={preset.id}
-                  value={`builtin:${preset.id}`}
+                  itemKey={`builtin:${preset.id}`}
                   keywords={[preset.label]}
                   aria-label={`Use ${preset.label} ${appearance}`}
                   data-checked={preset.id === id}
-                  onSelect={() => choose(preset.id)}
+                  onAction={() => choose(preset.id)}
                 >
                   <PaletteSwatch
                     colors={getBuiltinThemeColors(preset.id, appearance)}
@@ -480,9 +482,9 @@ function ThemeManager({
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent
         className="flex max-h-[min(80svh,var(--spacing-safe-svh))] flex-col sm:max-w-xl"
-        onCloseAutoFocus={(event) => {
-          event.preventDefault();
+        finalFocus={() => {
           if (!editing.current) onReturnFocus();
+          return false;
         }}
       >
         <DialogHeader>
@@ -619,35 +621,37 @@ function ThemeActions({
   return (
     <>
       <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            ref={trigger}
-            size="icon-sm"
-            variant="ghost"
-            aria-label={`Manage ${theme.name}`}
-          >
-            <Ellipsis />
-          </Button>
-        </DropdownMenuTrigger>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              ref={trigger}
+              size="icon-sm"
+              variant="ghost"
+              aria-label={`Manage ${theme.name}`}
+            >
+              <Ellipsis />
+            </Button>
+          }
+        />
         <DropdownMenuContent
           align="end"
-          onCloseAutoFocus={(event) => {
+          finalFocus={() => {
             if (confirmDelete) {
-              event.preventDefault();
-              cancel.current?.focus();
+              return cancel.current;
             }
+            return true;
           }}
         >
           <DropdownMenuItem
             disabled={draft !== null}
-            onSelect={() => onEdit(theme)}
+            onClick={() => onEdit(theme)}
           >
             <Pencil />
             Edit theme
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={draft !== null}
-            onSelect={() =>
+            onClick={() =>
               onEdit({
                 ...theme,
                 id: crypto.randomUUID(),
@@ -659,11 +663,11 @@ function ThemeActions({
             <Copy />
             Duplicate theme
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => exportThemes([theme])}>
+          <DropdownMenuItem onClick={() => exportThemes([theme])}>
             <Download />
             Export theme
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setConfirmDelete(true)}>
+          <DropdownMenuItem onClick={() => setConfirmDelete(true)}>
             <Trash2 />
             Delete theme
           </DropdownMenuItem>

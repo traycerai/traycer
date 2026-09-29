@@ -14,10 +14,10 @@ import {
 } from "@/components/ui/command";
 
 /**
- * The selected-state utilities every cmdk row in the app relies on. All four
- * of a row's channels - fill, border, shadow and icon tint - are driven by
- * this one variant, which is why getting it wrong looked like a theme rather
- * than a bug.
+ * The selected-state utilities every Command row in the app relies on. All
+ * four of a row's channels - fill, border, shadow and icon tint - are driven
+ * by this one variant, which is why getting it wrong looked like a theme
+ * rather than a bug.
  */
 const SELECTED_UTILITIES = [
   "data-[selected=true]:bg-[color-mix(in_srgb,var(--primary)_14%,var(--popover))]",
@@ -99,11 +99,11 @@ function renderRows(): ReadonlyArray<Element> {
   const { container } = render(
     <Command>
       <CommandList>
-        <CommandItem value="alpha">
+        <CommandItem itemKey="alpha">
           Alpha
           <CommandShortcut>A</CommandShortcut>
         </CommandItem>
-        <CommandItem value="beta">
+        <CommandItem itemKey="beta">
           Beta
           <CommandShortcut>B</CommandShortcut>
         </CommandItem>
@@ -113,7 +113,7 @@ function renderRows(): ReadonlyArray<Element> {
   return [...container.querySelectorAll('[data-slot="command-item"]')];
 }
 
-describe("cmdk selected-state styling", () => {
+describe("Command row selected-state styling", () => {
   let emitted: ReadonlyMap<string, string> = new Map();
 
   beforeAll(async () => {
@@ -123,11 +123,11 @@ describe("cmdk selected-state styling", () => {
   afterEach(cleanup);
 
   it("marks unselected rows with the attribute rather than omitting it", () => {
-    // The premise of the whole file. cmdk renders `"data-selected": !!selected`
-    // and React stringifies `false`, so the attribute is PRESENT on every row -
-    // which is what makes a presence-matching selector useless here. If cmdk
-    // ever starts omitting it, the bare form would become correct and this
-    // guard should be revisited rather than worked around.
+    // The premise of the whole file. CommandItem renders `data-selected={selected}`
+    // and React stringifies the boolean, so the attribute is PRESENT on every
+    // row - which is what makes a presence-matching selector useless here. If
+    // it ever starts omitting the attribute, the bare form would become
+    // correct and this guard should be revisited rather than worked around.
     const rows = renderRows();
     expect(rows).toHaveLength(2);
     expect(rows[0].getAttribute("data-selected")).toBe("true");

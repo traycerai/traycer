@@ -359,7 +359,7 @@ function ApprovalInput(props: { readonly detail: ToolInputDetail }) {
         data-testid="approval-input-toggle"
       >
         <ChevronRight
-          className="size-3 shrink-0 transition-transform group-data-[state=open]/approval-input:rotate-90"
+          className="size-3 shrink-0 transition-transform group-data-[open]/approval-input:rotate-90"
           aria-hidden
         />
         {props.detail.kind === "command" ? "Full command" : "Full input"}

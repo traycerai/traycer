@@ -1,10 +1,10 @@
 import type { ComponentProps } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { Collapsible as CollapsiblePrimitive } from "radix-ui";
+import { Collapsible as CollapsiblePrimitive } from "@base-ui/react/collapsible";
 
 import { cn } from "@/lib/utils";
 
-// Radix ships this trigger unstyled, so until `shadcn/no-restyle` counted them
+// Base ships this trigger unstyled, so until `shadcn/no-restyle` counted them
 // all 17 call sites dressed it by hand - and 8 of them wrote the SAME focus
 // ring. A disclosure control has to show focus wherever it is, so that ring
 // and the transition it fades over are the base, not a variant.
@@ -38,10 +38,10 @@ function CollapsibleTrigger({
   className,
   variant,
   ...props
-}: ComponentProps<typeof CollapsiblePrimitive.CollapsibleTrigger> &
+}: ComponentProps<typeof CollapsiblePrimitive.Trigger> &
   VariantProps<typeof collapsibleTriggerVariants>) {
   return (
-    <CollapsiblePrimitive.CollapsibleTrigger
+    <CollapsiblePrimitive.Trigger
       data-slot="collapsible-trigger"
       className={cn(collapsibleTriggerVariants({ variant }), className)}
       {...props}

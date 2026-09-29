@@ -155,12 +155,14 @@ export function ProviderJudgeSwitch(props: {
     <div className="flex min-w-0 flex-col gap-1.5">
       <div className="flex min-w-0 items-center gap-2">
         <Select
+          items={{
+            traycer: "Traycer's judge",
+            provider: `${providerName}'s classifier`,
+          }}
           value={value}
           disabled={settling}
           onValueChange={(next) => {
-            // Radix hands back a plain string; only the two members this
-            // control renders may reach the wire.
-            if (next !== "traycer" && next !== "provider") return;
+            if (next === null) return;
             if (next === value) return;
             setEcho({
               chosen: next,

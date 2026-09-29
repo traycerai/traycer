@@ -1,11 +1,11 @@
 /**
  * Pin icon shown next to a palette row's title. Hidden via
  * `display: none` when the row is not pinned, not hovered, and not
- * cmdk-selected so it reserves zero layout width - `opacity-0`
+ * selected so it reserves zero layout width - `opacity-0`
  * would still leave a ~24px gap between the title and the trailing
  * shortcut.
  *
- * Keyboard users reach pin via cmdk's arrow-key selection, which
+ * Keyboard users reach pin via the palette's arrow-key selection, which
  * sets `data-selected` on the row; that's the second reveal
  * trigger below.
  *
@@ -14,6 +14,7 @@
  */
 import { Pin, PinOff } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useCommandContext } from "@/components/ui/command-context";
 
 export interface PinToggleProps {
   readonly itemId: string;
@@ -23,19 +24,28 @@ export interface PinToggleProps {
 
 export function PinToggle(props: PinToggleProps) {
   const { itemId, pinned, onToggle } = props;
+  const { highlight } = useCommandContext();
   return (
     <button
       type="button"
       aria-pressed={pinned}
       aria-label={pinned ? "Unpin command" : "Pin command"}
       data-testid={`command-palette-pin-${itemId}`}
-      onPointerDown={(event) => {
-        // cmdk intercepts clicks on rows to fire `onSelect`; run
-        // the toggle on pointerdown before that handler + stop
-        // propagation so pin actions don't also dispatch the
-        // command.
+      onPointerDown={(event) => event.preventDefault()}
+      onClick={(event) => {
         event.preventDefault();
         event.stopPropagation();
+        const button = event.currentTarget;
+        if (button.ownerDocument.activeElement === button) {
+          const row = button.closest('[data-slot="command-item"]');
+          const input = button
+            .closest('[data-slot="command"]')
+            ?.querySelector<HTMLInputElement>('[data-slot="command-input"]');
+          // Pinning remounts the row in another group. Keep its value while
+          // returning keyboard focus to the palette's persistent input.
+          if (row) highlight(row.id);
+          if (button.ownerDocument.activeElement === button) input?.focus();
+        }
         onToggle();
       }}
       className={cn(

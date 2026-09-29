@@ -674,31 +674,37 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     crossProfileSelected;
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next, details) => {
+        if (
+          !next &&
+          (details.reason === "outside-press" ||
+            details.reason === "focus-out") &&
+          isHostSwitcherListInteraction(
+            details.reason === "focus-out" &&
+              details.event instanceof FocusEvent
+              ? details.event.relatedTarget
+              : details.event.target,
+          )
+        )
+          details.cancel();
+        if (details.isCanceled) return;
+        handleOpenChange(next);
+      }}
+    >
       <DialogContent
         className="max-h-[92vh] w-[min(94vw,48rem)] sm:max-w-[min(94vw,48rem)]"
-        // Same portal rule as the worktree pickers: the host switcher's list
-        // mounts outside this dialog, so a click in it reads as an interaction
-        // from outside. Dismissing on that would throw away the form someone is
-        // in the middle of filling, for the crime of choosing a host in it.
-        onInteractOutside={(event) => {
-          if (isHostSwitcherListInteraction(event.target)) {
-            event.preventDefault();
-          }
-        }}
-        onOpenAutoFocus={(event) => {
-          // Continue mode starts on the real picker control, using that
-          // control's normal focus treatment instead of drawing a ring around
-          // the whole profile section. The section remains a safe fallback
-          // while the picker is still resolving.
-          if (intent !== "continue") return;
-          if (profileSectionRef.current === null) return;
-          event.preventDefault();
-          const pickerTrigger =
-            profileSectionRef.current.querySelector<HTMLButtonElement>(
+        initialFocus={() => {
+          if (intent !== "continue") return true;
+          const section = profileSectionRef.current;
+          return (
+            section?.querySelector<HTMLButtonElement>(
               "button:not(:disabled)",
-            );
-          (pickerTrigger ?? profileSectionRef.current).focus();
+            ) ??
+            section ??
+            true
+          );
         }}
       >
         <DialogHeader>

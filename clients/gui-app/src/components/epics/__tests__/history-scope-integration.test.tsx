@@ -66,7 +66,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PickerEpicsListPanel } from "@/components/epics/epics-list-panel";
 import { ScopedEpicsListPanel } from "./scoped-panel-harness";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Dialog as DialogPrimitive } from "radix-ui";
+import { Dialog } from "@/components/ui/dialog";
 import { SystemTabModalSurface } from "@/components/layout/dialogs/system-tab-modal-host";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -373,7 +373,7 @@ function renderScoped(initialScope: HistoryScope): {
 /**
  * The History MODAL as the app builds it: the real system-modal surface (frame,
  * `onEscapeKeyDown` -> `overlayConsumesEscape`, `HistoryModalContent`) inside a
- * real Radix Dialog root, so Radix's capture-phase Escape listener is in play.
+ * real Dialog root, so Base's capture-phase Escape listener is in play.
  */
 function renderInModal(onClose: () => void): void {
   const rootRoute = createRootRoute({ component: () => <RootOutlet /> });
@@ -381,7 +381,8 @@ function renderInModal(onClose: () => void): void {
     getParentRoute: () => rootRoute,
     path: "/",
     component: () => (
-      <DialogPrimitive.Root
+      <Dialog
+        paneAware={false}
         open
         onOpenChange={(next) => {
           if (!next) onClose();
@@ -393,7 +394,7 @@ function renderInModal(onClose: () => void): void {
           onClose={onClose}
           onPromote={() => undefined}
         />
-      </DialogPrimitive.Root>
+      </Dialog>
     ),
   });
   const router = createRouter({

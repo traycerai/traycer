@@ -696,8 +696,11 @@ describe("<SharingPanel /> My agents", () => {
 
     renderSharingPanel();
 
+    // Base's Switch root is a non-native <span>: `disabled` shows up as
+    // `aria-disabled` and a dropped tab stop, not a `disabled` attribute.
     const toggle = screen.getByTestId("epic-sharing-my-agents-switch");
-    expect(toggle.hasAttribute("disabled")).toBe(true);
+    expect(toggle.getAttribute("aria-disabled")).toBe("true");
+    expect(toggle.tabIndex).toBe(-1);
     fireEvent.click(toggle);
     expect(screen.queryByTestId("epic-sharing-my-agents-confirm")).toBeNull();
   });
@@ -715,7 +718,8 @@ describe("<SharingPanel /> My agents", () => {
     renderSharingPanel();
 
     const toggle = screen.getByTestId("epic-sharing-my-agents-switch");
-    expect(toggle.hasAttribute("disabled")).toBe(true);
+    expect(toggle.getAttribute("aria-disabled")).toBe("true");
+    expect(toggle.tabIndex).toBe(-1);
     fireEvent.click(toggle);
     expect(screen.queryByTestId("epic-sharing-my-agents-confirm")).toBeNull();
     expect(testState.setSharingDefault.mutate).not.toHaveBeenCalled();
@@ -755,8 +759,8 @@ describe("<SharingPanel /> My agents", () => {
     expect(
       screen
         .getByTestId("epic-sharing-my-agents-switch")
-        .getAttribute("data-state"),
-    ).toBe("checked");
+        .hasAttribute("data-checked"),
+    ).toBe(true);
   });
 
   it("confirms the share direction with the count of chats about to become visible", () => {
@@ -812,12 +816,10 @@ describe("<SharingPanel /> My agents", () => {
 
     renderSharingPanel();
 
-    expect(
-      screen
-        .getByTestId("epic-sharing-my-agents-switch")
-        .hasAttribute("disabled"),
-    ).toBe(true);
-    fireEvent.click(screen.getByTestId("epic-sharing-my-agents-switch"));
+    const toggle = screen.getByTestId("epic-sharing-my-agents-switch");
+    expect(toggle.getAttribute("aria-disabled")).toBe("true");
+    expect(toggle.tabIndex).toBe(-1);
+    fireEvent.click(toggle);
     expect(screen.queryByTestId("epic-sharing-my-agents-confirm")).toBeNull();
   });
 });

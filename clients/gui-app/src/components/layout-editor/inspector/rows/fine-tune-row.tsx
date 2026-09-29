@@ -224,7 +224,7 @@ function FineTuneRowView(props: {
                     checked={checked}
                     disabled={unavailable}
                     onCheckedChange={(next) => {
-                      writeControlValue(regionId, option.key, next === true);
+                      writeControlValue(regionId, option.key, next);
                     }}
                   />
                   {option.label}
@@ -281,7 +281,7 @@ function FineTuneRowView(props: {
                       .map((entry) => entry.value)
                       .filter((value) =>
                         value === option.value
-                          ? next === true
+                          ? next
                           : selected.includes(value),
                       );
                     if (nextList.length === 0) return;

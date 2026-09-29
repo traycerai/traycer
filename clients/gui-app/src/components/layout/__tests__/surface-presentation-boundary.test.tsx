@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   act,
   cleanup,
@@ -11,7 +11,6 @@ import { createPortal } from "react-dom";
 import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
 import {
   isPresentationLossBlur,
-  usePaneCloseAutoFocusGuard,
   usePanePortalContainer,
 } from "@/components/epic-tabs/pane-visibility-context";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -268,52 +267,5 @@ describe("surface presentation boundary — presentation-loss blur signal (HIGH2
     expect(seen).toEqual([true]);
     // The flag is scoped to the synchronous blur and is cleared afterwards.
     expect(isPresentationLossBlur()).toBe(false);
-  });
-});
-
-function CloseGuardButton(props: {
-  readonly caller: (event: Event) => void;
-  readonly event: Event;
-}) {
-  const guard = usePaneCloseAutoFocusGuard(props.caller);
-  return (
-    <button
-      type="button"
-      data-testid="fire-guard"
-      onClick={() => guard(props.event)}
-    />
-  );
-}
-
-describe("surface presentation boundary — close-autofocus guard (HIGH1)", () => {
-  // The guard reads the boundary's live `data-pane-focused` (via the focus probe)
-  // at close-autofocus time and preventDefaults Radix's restore only while the
-  // pane is unfocused. Killing the restore at the source is what stops the
-  // background pane from being reactivated. The full end-to-end bounce is proven
-  // in a REAL browser (jsdom neither fires Radix's onUnmountAutoFocus on an
-  // external unmount nor models Chrome's trusted `.focus()`); this covers the
-  // guard's contract against the real boundary + probe.
-  it("preventDefaults the restore for an unfocused pane, and passes it through for a focused pane", () => {
-    const caller = vi.fn();
-    const blocked = new Event("radix", { cancelable: true });
-    render(
-      <SurfacePresentationBoundary visible focused={false}>
-        <CloseGuardButton caller={caller} event={blocked} />
-      </SurfacePresentationBoundary>,
-    );
-    fireEvent.click(screen.getByTestId("fire-guard"));
-    expect(blocked.defaultPrevented).toBe(true);
-    expect(caller).not.toHaveBeenCalled();
-
-    cleanup();
-    const passed = new Event("radix", { cancelable: true });
-    render(
-      <SurfacePresentationBoundary visible focused>
-        <CloseGuardButton caller={caller} event={passed} />
-      </SurfacePresentationBoundary>,
-    );
-    fireEvent.click(screen.getByTestId("fire-guard"));
-    expect(passed.defaultPrevented).toBe(false);
-    expect(caller).toHaveBeenCalledWith(passed);
   });
 });

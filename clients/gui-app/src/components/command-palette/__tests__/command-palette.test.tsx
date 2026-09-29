@@ -129,7 +129,9 @@ describe("<CommandPalette />", () => {
       expect(firstRows[1].getAttribute("data-selected")).toBe("true");
     });
 
-    fireEvent.pointerMove(firstRows[0]);
+    // CommandItem highlights on `mousemove`, not `pointermove` (D04's
+    // app-owned Command; cmdk listened on pointer events).
+    fireEvent.mouseMove(firstRows[0]);
     await waitFor(() => {
       expect(firstRows[0].getAttribute("data-selected")).toBe("true");
     });
@@ -161,28 +163,15 @@ describe("<CommandPalette />", () => {
     });
   });
 
-  it("skips hidden rows when moving the selected row by a viewport", async () => {
-    render(wrap(<div>app</div>));
-    act(() => {
-      useCommandPaletteStore.getState().setOpen(true);
-    });
-    const list = await screen.findByTestId("command-palette-list");
-
-    const rows = getVisibleCommandRows(document.body);
-    expect(rows.length).toBeGreaterThan(4);
-    installPaletteListLayout(list, rows);
-    rows[1].hidden = true;
-    await waitFor(() => {
-      expect(rows[0].getAttribute("data-selected")).toBe("true");
-    });
-
-    fireEvent.keyDown(getCommandSearchInput(), {
-      key: "PageDown",
-    });
-    await waitFor(() => {
-      expect(rows[4].getAttribute("data-selected")).toBe("true");
-    });
-  });
+  // "skips hidden rows when moving the selected row by a viewport" deleted:
+  // it simulated a skipped row by mutating the DOM `hidden` property directly
+  // on a rendered node, which was cmdk's own skip signal. The app-owned
+  // Command derives paging's skip set from each row's registered `disabled`
+  // state, not the live DOM `hidden` attribute, so that mutation is now
+  // invisible to it and the test no longer exercises anything real. The same
+  // promise - PageUp/PageDown skip unavailable rows - is guarded precisely,
+  // with a genuinely disabled row and real page-size math, in
+  // `ui/__tests__/command-navigation.test.tsx`.
 
   it("closes when the store flips to closed", async () => {
     render(wrap(<div>app</div>));

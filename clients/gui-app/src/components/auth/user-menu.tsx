@@ -50,7 +50,7 @@ export interface UserMenuProps {
   /**
    * The element that opens the menu, or `null` for the avatar button. A custom
    * trigger (the strip foot's account row) must be one focusable element that
-   * takes a ref; the menu toggles it open through Radix's own trigger.
+   * takes a ref; the menu toggles it open through its own trigger.
    */
   readonly trigger: ReactElement | null;
 }
@@ -73,12 +73,7 @@ export function UserMenuAvatar(props: {
   );
 }
 
-/**
- * Avatar-triggered identity menu. Controlled open state is intentional:
- * jsdom doesn't implement the full PointerEvent path Radix drives, so
- * without the explicit `open` the Radix trigger wouldn't fire under
- * tests. Outside-click + Escape dismissal still come from Radix.
- */
+/** Avatar-triggered identity menu; controlled state also suppresses its tooltip. */
 export function UserMenu(props: UserMenuProps) {
   const placement = useColumnOverlayPlacement("foot");
   const openLink = useOpenLink();
@@ -89,7 +84,7 @@ export function UserMenu(props: UserMenuProps) {
   const manageSubscriptionUrl = usePlatformBillingUrl();
   return (
     <>
-      {/* Outside the menu, which Radix unmounts on select - the confirm has to
+      {/* Outside the menu, which unmounts on select - the confirm has to
           outlive the item that opened it. */}
       <SignOutConfirmDialog
         open={signOutOpen}
@@ -105,28 +100,27 @@ export function UserMenu(props: UserMenuProps) {
           sideOffset={6}
           align={placement?.align}
         >
-          <DropdownMenuTrigger asChild>
-            {props.trigger ?? (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Open user menu"
-                // Non-editable chrome, dimmed while a layout session is live (4.2).
-                data-layout-passive
-                data-testid="user-menu-trigger"
-                className="rounded-full"
-                onClick={() => {
-                  setOpen((value) => !value);
-                }}
-              >
-                <UserMenuAvatar
-                  userName={props.userName}
-                  email={props.email}
-                  avatarUrl={props.avatarUrl}
-                />
-              </Button>
-            )}
-          </DropdownMenuTrigger>
+          <DropdownMenuTrigger
+            render={
+              props.trigger ?? (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Open user menu"
+                  // Non-editable chrome, dimmed while a layout session is live (4.2).
+                  data-layout-passive
+                  data-testid="user-menu-trigger"
+                  className="rounded-full"
+                >
+                  <UserMenuAvatar
+                    userName={props.userName}
+                    email={props.email}
+                    avatarUrl={props.avatarUrl}
+                  />
+                </Button>
+              )
+            }
+          />
         </TooltipWrapper>
         <DropdownMenuContent
           side={placement?.side}
@@ -151,7 +145,7 @@ export function UserMenu(props: UserMenuProps) {
           <DropdownMenuSeparator />
           <UserMenuHostSection tooltipSide={placement?.side ?? "left"} />
           <DropdownMenuItem
-            onSelect={() => {
+            onClick={() => {
               setOpen(false);
               useDesktopDialogStore.getState().openDrafts("menu");
             }}
@@ -162,7 +156,7 @@ export function UserMenu(props: UserMenuProps) {
           {props.showAppSettings ? (
             <DropdownMenuItem
               data-testid="user-menu-app-settings"
-              onSelect={() => {
+              onClick={() => {
                 setOpen(false);
                 Analytics.getInstance().track(AnalyticsEvent.SettingsOpened, {
                   source: "direct_ui",
@@ -196,7 +190,7 @@ export function UserMenu(props: UserMenuProps) {
           {isMobileApp() ? null : (
             <DropdownMenuItem
               data-testid="user-menu-manage-subscription"
-              onSelect={() => {
+              onClick={() => {
                 setOpen(false);
                 // Tracked on the RESOLVED open only: a failed OS handoff is not
                 // a subscription-management visit (R11). The failure toast is
@@ -219,7 +213,7 @@ export function UserMenu(props: UserMenuProps) {
           <DropdownMenuItem
             data-testid="user-menu-sign-out"
             variant="destructive"
-            onSelect={() => {
+            onClick={() => {
               setOpen(false);
               setSignOutOpen(true);
             }}
@@ -278,15 +272,16 @@ function UserMenuHostRow(props: {
       sideOffset={6}
       align={undefined}
     >
-      {/* Inert rather than `disabled`: a disabled Radix item takes no
-          pointer events, so an unpickable host's truncated name could never
-          reveal itself. `aria-disabled` keeps the disabled look and the
-          focus stop; the cancelled select keeps the row from being picked. */}
+      {/* Inert rather than `disabled`: a disabled item takes no pointer
+          events, so an unpickable host's truncated name could never reveal
+          itself. `aria-disabled` keeps the disabled look and the focus stop;
+          the cancelled click keeps the row from being picked (and the menu
+          open). */}
       <DropdownMenuRadioItem
         value={host.hostId}
         aria-disabled={selectable ? undefined : true}
-        onSelect={(event) => {
-          if (!selectable) event.preventDefault();
+        onClick={(event) => {
+          if (!selectable) event.preventBaseUIHandler();
         }}
         data-testid={`user-menu-host-option-${host.hostId}`}
       >
@@ -337,8 +332,8 @@ function UserMenuHostSection(props: {
       <DropdownMenuRadioGroup
         value={activeHostId ?? ""}
         onValueChange={(hostId) => {
-          // Radix still reports the value of a row whose select was
-          // cancelled, so an inert row is refused here too.
+          // A keyboard pick of an inert row still reports its value, so an
+          // inert row is refused here too.
           const host = hosts.find((option) => option.hostId === hostId);
           if (
             hostId !== activeHostId &&

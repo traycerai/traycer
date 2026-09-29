@@ -727,13 +727,24 @@ const APP_ACTED_PROBE = `(() => {
       .filter(appOwn)
       .map((node) => node.getAttribute("aria-expanded"))
       .join(","),
-    states: [...column.querySelectorAll("[data-state]")]
+    // Base spells "toggled" across several boolean-style presence attributes
+    // rather than Radix's single data-state string, so a disclosure's state
+    // reads as which of them are present, not what one of them says.
+    states: [
+      ...column.querySelectorAll(
+        "[data-open],[data-closed],[data-checked],[data-unchecked],[data-pressed],[data-popup-open]",
+      ),
+    ]
       .filter(appOwn)
-      .map((node) => node.getAttribute("data-state"))
+      .map((node) =>
+        ["open", "closed", "checked", "unchecked", "pressed", "popup-open"]
+          .filter((name) => node.hasAttribute("data-" + name))
+          .join("+"),
+      )
       .join(","),
     layers: [
       ...document.querySelectorAll(
-        '[role="menu"],[role="dialog"],[role="listbox"],[data-radix-popper-content-wrapper]',
+        '[role="menu"],[role="dialog"],[role="listbox"],[data-slot="context-menu-positioner"],[data-slot="dropdown-menu-positioner"],[data-slot="menubar-positioner"],[data-slot="popover-positioner"],[data-slot="select-positioner"],[data-slot="tooltip-positioner"]',
       ),
     ].filter(appOwn).length,
   };
@@ -1886,6 +1897,10 @@ async function runLiveSwitchPhase(client, pageUrl, pageLoads) {
       if (group === null) return null;
       const left = [...group.querySelectorAll('[role="radio"]')].find((node) => (node.textContent ?? "").trim() === "Left") ?? null;
       if (left === null) return null;
+      // Tagged for the measurement below: Base renders a hidden form input
+      // beside each radio, so the radio's position among its siblings is no
+      // longer its position in the control.
+      left.setAttribute("data-gate-placement-left", "");
       left.scrollIntoView({ block: "center" });
       return true;
     })()`,
@@ -1902,7 +1917,7 @@ async function runLiveSwitchPhase(client, pageUrl, pageLoads) {
     await flush(client);
     const left = await rectOf(
       client,
-      '[data-layout-inspector] [role="radiogroup"][aria-label="Tab placement"] [role="radio"]:nth-child(2)',
+      "[data-layout-inspector] [data-gate-placement-left]",
     );
     const depthBefore = await evaluate(
       client,

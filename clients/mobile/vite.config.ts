@@ -8,6 +8,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig, type Connect, type Plugin, type UserConfig } from "vite";
+import { uiModuleGraph } from "../gui-app/vite/ui-module-graph";
 import { asciiOnlyOutput } from "../gui-app/vite/ascii-only-output";
 import { pdfjsAssets } from "../gui-app/vite/pdfjs-assets";
 import { sanitizeDevDesktopSlot } from "../shared/platform/dev-desktop-slot";
@@ -423,6 +424,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
       react(),
       tailwindcss(),
       pdfjsAssets(),
+      uiModuleGraph(),
       // Emitted JS as pure ASCII: one character above U+00FF makes the engine
       // keep a whole chunk's source as UTF-16 (see the plugin).
       asciiOnlyOutput(),

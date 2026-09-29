@@ -64,7 +64,7 @@ function part(chip: HTMLElement, marker: string): Element {
 
 function renderChip(props: ChipProps) {
   return render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <ChatDockCompactChip {...props} />
     </TooltipProvider>,
   );
@@ -75,7 +75,7 @@ function rerenderChip(
   props: ChipProps,
 ): void {
   rerender(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <ChatDockCompactChip {...props} />
     </TooltipProvider>,
   );
@@ -261,12 +261,12 @@ describe("<ChatDockCompactChip />", () => {
       expect(chip, `dock chip lost ${material}`).toContain(material);
     }
     // The states, minus the two families a dock chip has no state for: it
-    // opens no menu (`data-[state=open]:`) and is never disabled, being the
+    // opens no menu (`data-popup-open:`) and is never disabled, being the
     // only door back to the row it folded away (`disabled:`).
     const states = square.filter(
       (candidate) =>
         candidate.includes(":") &&
-        !candidate.startsWith("data-[state=open]:") &&
+        !candidate.startsWith("data-popup-open:") &&
         !candidate.startsWith("disabled:"),
     );
     expect(states.length).toBeGreaterThan(0);
@@ -407,7 +407,7 @@ describe("<ChatDockCompactChip />", () => {
     it("still pulses when the token changes afterwards", () => {
       const props = { ...baseProps(), pulseToken: "3" };
       const { rerender } = render(
-        <TooltipProvider delayDuration={0}>
+        <TooltipProvider delay={0}>
           <ChatDockChipArrival suppressed>
             <ChatDockCompactChip {...props} />
           </ChatDockChipArrival>
@@ -415,7 +415,7 @@ describe("<ChatDockCompactChip />", () => {
       );
 
       rerender(
-        <TooltipProvider delayDuration={0}>
+        <TooltipProvider delay={0}>
           <ChatDockChipArrival suppressed={false}>
             <ChatDockCompactChip {...props} pulseToken="4" />
           </ChatDockChipArrival>

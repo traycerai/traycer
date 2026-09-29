@@ -1,5 +1,9 @@
 import { useEffect, useMemo, type ReactNode } from "react";
-import { Dialog as DialogPrimitive } from "radix-ui";
+import { Dialog } from "@/components/ui/dialog";
+import {
+  OverlayFrameContext,
+  useOverlayFrame,
+} from "@/components/ui/overlay-frame-context";
 import { PromotableModalFrame } from "@/components/layout/dialogs/promotable-modal-frame";
 import "@/components/home/home-touch-targets.css";
 import {
@@ -36,12 +40,10 @@ import { useRulesEditLifetime } from "@/components/settings/panels/permissions/r
 export function SystemTabModalHost(): ReactNode {
   const modal = useSystemTabModalController();
   useSystemTabModalRefreshGuard();
-  const open = modal.active !== null;
   const editingTheme = useThemeLibraryStore((state) => state.draft !== null);
   // The one observer of this window's Settings opening and closing, which is
   // what ends Settings ▸ Rules' unsaved edit: always mounted, so it sees the
-  // modal and the Settings tab alike, and outlives the modal's content, which
-  // Radix remounts when `modal` flips below.
+  // modal and the Settings tab alike, and outlives the modal's content.
   const settingsTabOpen = useTabsStore(
     (state) => state.systemTabs.settings !== null,
   );
@@ -59,25 +61,13 @@ export function SystemTabModalHost(): ReactNode {
     };
   }, [modal]);
 
-  return (
-    <DialogPrimitive.Root
-      open={open}
-      // The theme editor lives outside this portal so it can inspect the app.
-      // Keep Settings visible while releasing its focus, pointer, and scroll locks.
-      modal={!editingTheme}
-      onOpenChange={(next) => {
-        if (!next && !editingTheme) modal.close();
-      }}
-    >
-      {modal.active === null ? null : (
-        <SystemTabModalSurface
-          active={modal.active}
-          editingTheme={editingTheme}
-          onClose={modal.close}
-          onPromote={modal.promoteToTab}
-        />
-      )}
-    </DialogPrimitive.Root>
+  return modal.active === null ? null : (
+    <SystemTabModalSurface
+      active={modal.active}
+      editingTheme={editingTheme}
+      onClose={modal.close}
+      onPromote={modal.promoteToTab}
+    />
   );
 }
 
@@ -95,45 +85,58 @@ export function SystemTabModalSurface(
   const { active, editingTheme, onClose, onPromote } = props;
   const meta = useMemo(() => overlayMeta(active), [active]);
   const Icon = meta.Icon;
+  const frame = useOverlayFrame();
   return (
-    <PromotableModalFrame
-      icon={<Icon className="size-4 text-muted-foreground" />}
-      title={meta.label}
-      // Full-screen sheet below md: the centered 80% box leaves the History
-      // list unusably narrow on phones. Pure CSS (not a JS viewport check) so
-      // an open modal reflows correctly when the window crosses 768px.
-      contentClassName="h-[80vh] w-[80vw] max-w-[min(95vw,80rem)] max-md:h-safe-dvh max-md:w-safe-dvw max-md:max-w-none max-md:rounded-none"
-      // The touch-target scope re-applies the coarse-pointer hit-slop rules
-      // (home-touch-targets.css) inside this portal - the modal body renders
-      // the same list chrome as the home page but portals outside the
-      // `[data-home-touch-scope]` subtree HomePage sets.
-      dataAttributes={{
-        "data-leader-scope": LEADER_SCOPE_SETTINGS,
-        "data-home-touch-scope": "",
-      }}
-      promoteAriaLabel={`Open ${meta.label} as a tab`}
-      promoteTestId={`system-tab-modal-promote-${active.kind}`}
-      closeTestId={`system-tab-modal-close-${active.kind}`}
-      // The body gets its say while it is still mounted: promotion unmounts
-      // it, and the tab's body mounts only afterwards. A refused promotion
-      // leaves the modal open with no tab to take what was handed over, so the
-      // body takes it back.
-      onPromote={() => {
-        prepareOverlayForPromotion(active);
-        onPromote(() => abandonOverlayPromotion(active));
-      }}
-      onClose={onClose}
-      onEscapeKeyDown={(event) => {
-        if (overlayConsumesEscape(active)) event.preventDefault();
-      }}
-      onOpenAutoFocus={(event) => {
-        // Radix remounts its content when modality changes. Let the editor's
-        // own autofocus finish instead of taking focus back into Settings.
-        if (editingTheme) event.preventDefault();
+    <Dialog
+      paneAware={false}
+      open
+      modal={!editingTheme}
+      onOpenChange={(next, details) => {
+        if (next) return;
+        if (
+          (editingTheme && details.reason !== "close-press") ||
+          (details.reason === "escape-key" && overlayConsumesEscape(active))
+        )
+          details.cancel();
+        frame.guard(details);
+        if (!details.isCanceled) onClose();
       }}
     >
-      <SystemTabModalBody active={active} onClose={onClose} />
-    </PromotableModalFrame>
+      <OverlayFrameContext.Provider value={frame.registry}>
+        <PromotableModalFrame
+          backdropRef={frame.backdrop}
+          icon={<Icon className="size-4 text-muted-foreground" />}
+          title={meta.label}
+          // Full-screen sheet below md: the centered 80% box leaves the History
+          // list unusably narrow on phones. Pure CSS (not a JS viewport check) so
+          // an open modal reflows correctly when the window crosses 768px.
+          contentClassName="h-[80vh] w-[80vw] max-w-[min(95vw,80rem)] max-md:h-safe-dvh max-md:w-safe-dvw max-md:max-w-none max-md:rounded-none"
+          // The touch-target scope re-applies the coarse-pointer hit-slop rules
+          // (home-touch-targets.css) inside this portal - the modal body renders
+          // the same list chrome as the home page but portals outside the
+          // `[data-home-touch-scope]` subtree HomePage sets.
+          dataAttributes={{
+            "data-leader-scope": LEADER_SCOPE_SETTINGS,
+            "data-home-touch-scope": "",
+          }}
+          promoteAriaLabel={`Open ${meta.label} as a tab`}
+          promoteTestId={`system-tab-modal-promote-${active.kind}`}
+          closeTestId={`system-tab-modal-close-${active.kind}`}
+          // The body gets its say while it is still mounted: promotion unmounts
+          // it, and the tab's body mounts only afterwards. A refused promotion
+          // leaves the modal open with no tab to take what was handed over, so the
+          // body takes it back.
+          onPromote={() => {
+            prepareOverlayForPromotion(active);
+            onPromote(() => abandonOverlayPromotion(active));
+          }}
+          onClose={onClose}
+          initialFocus={editingTheme ? false : undefined}
+        >
+          <SystemTabModalBody active={active} onClose={onClose} />
+        </PromotableModalFrame>
+      </OverlayFrameContext.Provider>
+    </Dialog>
   );
 }
 

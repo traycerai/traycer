@@ -44,7 +44,7 @@ describe("<ChatAccumulatedChangesPanel /> with no open epic session", () => {
 
 function renderPanel(changes: ReadonlyArray<AccumulatedChangeRow>) {
   return render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <ChatDiffTargetContext.Provider value={null}>
         <ChatAccumulatedChangesPanel
           restore={baseRestore(changes)}

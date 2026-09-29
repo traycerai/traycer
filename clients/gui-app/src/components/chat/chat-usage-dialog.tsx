@@ -187,24 +187,26 @@ function ChatUsageDialogContent(props: {
       />
       {hasTurnRows ? (
         <Collapsible open={drilldownOpen} onOpenChange={onDrilldownOpenChange}>
-          <CollapsibleTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="w-fit"
-              data-testid="chat-usage-drilldown-toggle"
-            >
-              <ChevronDown
-                className={cn(
-                  "size-3.5 transition-transform",
-                  drilldownOpen && "rotate-180",
-                )}
-              />
-              {drilldownOpen ? "Hide" : "Show"} {turnRows.length} turn
-              {turnRows.length === 1 ? "" : "s"}
-            </Button>
-          </CollapsibleTrigger>
+          <CollapsibleTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="w-fit"
+                data-testid="chat-usage-drilldown-toggle"
+              >
+                <ChevronDown
+                  className={cn(
+                    "size-3.5 transition-transform",
+                    drilldownOpen && "rotate-180",
+                  )}
+                />
+                {drilldownOpen ? "Hide" : "Show"} {turnRows.length} turn
+                {turnRows.length === 1 ? "" : "s"}
+              </Button>
+            }
+          />
           <CollapsibleContent className="pt-2">
             <UsageTurnDrilldown
               rows={turnRows}

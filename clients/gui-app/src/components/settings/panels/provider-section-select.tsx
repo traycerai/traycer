@@ -80,8 +80,21 @@ export function ProviderSectionSelect({
 }): ReactNode {
   return (
     <Select
+      items={tabs.map((value) => {
+        const Icon = PROVIDER_SECTION_ICONS[value];
+        return {
+          value,
+          label: (
+            <span className="flex min-w-0 items-center gap-2">
+              <Icon className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 truncate">{labelFor(value)}</span>
+            </span>
+          ),
+        };
+      })}
       value={activeTab}
       onValueChange={(value) => {
+        if (value === null) return;
         // Resolve through the supported list instead of asserting the select's
         // string value back into the `ProviderTabKey` union.
         const next = tabs.find((tab) => tab === value);

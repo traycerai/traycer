@@ -254,7 +254,7 @@ const testQueryClient = new QueryClient({
 function wrapper(node: ReactNode): ReactNode {
   return (
     <QueryClientProvider client={testQueryClient}>
-      <TooltipProvider delayDuration={0}>{node}</TooltipProvider>
+      <TooltipProvider delay={0}>{node}</TooltipProvider>
     </QueryClientProvider>
   );
 }
@@ -1650,10 +1650,14 @@ describe("BrowsersPanelActions", () => {
       screen.getByRole("button", { name: "Filter browsers by host" }),
     );
 
-    const filterMenu = screen.getByTestId("epic-browsers-panel-filter-menu");
+    const filterMenu = await screen.findByTestId(
+      "epic-browsers-panel-filter-menu",
+    );
     expect(filterMenu.getAttribute("data-side")).toBe("right");
-    await user.click(screen.getByRole("menuitem", { name: "Host, Home Mac" }));
-    const hostMenu = screen.getByTestId("epic-browsers-panel-host-menu");
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Host, Home Mac" }),
+    );
+    const hostMenu = await screen.findByTestId("epic-browsers-panel-host-menu");
     expect(hostMenu.getAttribute("data-side")).toBe("right");
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Work Mac" }));
     expect(browserHostPinState.setSelection).toHaveBeenCalledWith("host-2");
@@ -1671,7 +1675,9 @@ describe("BrowsersPanelActions", () => {
         name: "Filter browsers by host, 1 filter active",
       }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Host, Work Mac" }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Host, Work Mac" }),
+    );
     fireEvent.click(
       screen.getByRole("menuitemradio", { name: /Follow task host/ }),
     );
@@ -1690,7 +1696,9 @@ describe("BrowsersPanelActions", () => {
     await user.click(
       screen.getByRole("button", { name: "Filter browsers by host" }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Host, Home Mac" }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Host, Home Mac" }),
+    );
 
     expect(screen.getByText("Loading hosts…")).toBeTruthy();
   });

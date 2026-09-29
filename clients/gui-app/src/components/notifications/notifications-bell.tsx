@@ -44,12 +44,12 @@ export function NotificationsBell() {
   const placement = useColumnOverlayPlacement("foot");
   const {
     open,
-    setOpen,
     bellState,
     chord,
     triggerRef,
     onTriggerPointerDown,
     onTriggerKeyDown,
+    onOpenChange,
     contentHandlers,
     popoverProps,
   } = useNotificationCenter();
@@ -79,61 +79,62 @@ export function NotificationsBell() {
       : `Notifications (${formatChordForDisplay(chord)})`;
   };
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={onOpenChange}>
       <TooltipWrapper
         label={open ? null : bellTooltip(bellState)}
         side={placement?.side ?? "top"}
         sideOffset={6}
         align={placement?.align}
       >
-        <PopoverTrigger asChild>
-          <Button
-            ref={triggerRef}
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            // Non-editable chrome, dimmed while a layout session is live (4.2).
-            data-layout-passive
-            data-testid="notifications-bell"
-            aria-label={ariaLabel}
-            onPointerDown={onTriggerPointerDown}
-            onKeyDown={onTriggerKeyDown}
-            // The open surface is `ghost`'s own `aria-expanded:` styling, which
-            // the PopoverTrigger sets for us.
-            className="relative"
-          >
-            <Bell
-              className="size-4 text-muted-foreground group-hover/button:text-foreground"
-              aria-hidden
-            />
-            <AnimatePresence initial={false}>
-              {bellState.kind === "attention" ? (
-                <m.span
-                  key="attention-badge"
-                  data-testid="notifications-attention-badge"
-                  aria-hidden
-                  initial={badgeInitial}
-                  animate={BADGE_PRESENT}
-                  exit={badgeExit}
-                  transition={BADGE_TRANSITION}
-                  className="absolute -right-1 -top-1 flex h-4 min-w-4 origin-bottom-left items-center justify-center rounded-md bg-destructive px-1 text-overline font-semibold leading-none text-destructive-foreground tabular-nums shadow-sm ring-2 ring-background"
-                >
-                  <RollingNumber
-                    value={bellState.count}
-                    className={undefined}
-                    testId="notifications-attention-count"
-                  />
-                </m.span>
-              ) : null}
-            </AnimatePresence>
-            {bellState.kind === "quietDot" && (
-              <span
-                data-testid="notifications-quiet-dot"
+        <PopoverTrigger
+          render={
+            <Button
+              ref={triggerRef}
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              // Non-editable chrome, dimmed while a layout session is live (4.2).
+              data-layout-passive
+              data-testid="notifications-bell"
+              aria-label={ariaLabel}
+              onPointerDown={onTriggerPointerDown}
+              onKeyDown={onTriggerKeyDown}
+              // The open surface is `ghost`'s own `aria-expanded:` styling, which
+              // the PopoverTrigger sets for us.
+              className="relative"
+            >
+              <Bell
+                className="size-4 text-muted-foreground group-hover/button:text-foreground"
                 aria-hidden
-                className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-background"
               />
-            )}
-            {/*
+              <AnimatePresence initial={false}>
+                {bellState.kind === "attention" ? (
+                  <m.span
+                    key="attention-badge"
+                    data-testid="notifications-attention-badge"
+                    aria-hidden
+                    initial={badgeInitial}
+                    animate={BADGE_PRESENT}
+                    exit={badgeExit}
+                    transition={BADGE_TRANSITION}
+                    className="absolute -right-1 -top-1 flex h-4 min-w-4 origin-bottom-left items-center justify-center rounded-md bg-destructive px-1 text-overline font-semibold leading-none text-destructive-foreground tabular-nums shadow-sm ring-2 ring-background"
+                  >
+                    <RollingNumber
+                      value={bellState.count}
+                      className={undefined}
+                      testId="notifications-attention-count"
+                    />
+                  </m.span>
+                ) : null}
+              </AnimatePresence>
+              {bellState.kind === "quietDot" && (
+                <span
+                  data-testid="notifications-quiet-dot"
+                  aria-hidden
+                  className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-background"
+                />
+              )}
+              {/*
               `s5-parity-gaps` gap 3. `unknown` used to fall through to the
               bare bell, which is a positive claim that nothing is waiting -
               made by a UI that does not know. On the modern free tier the
@@ -147,15 +148,16 @@ export function NotificationsBell() {
               above carries the reason so the state is not a bare gray
               dot with no path forward - the objection that kept it hidden.
             */}
-            {bellState.kind === "unknown" && (
-              <span
-                data-testid="notifications-unknown-indicator"
-                aria-hidden
-                className="absolute -right-0.5 -top-0.5 size-2 rounded-full border border-muted-foreground/70 bg-background ring-2 ring-background"
-              />
-            )}
-          </Button>
-        </PopoverTrigger>
+              {bellState.kind === "unknown" && (
+                <span
+                  data-testid="notifications-unknown-indicator"
+                  aria-hidden
+                  className="absolute -right-0.5 -top-0.5 size-2 rounded-full border border-muted-foreground/70 bg-background ring-2 ring-background"
+                />
+              )}
+            </Button>
+          }
+        />
       </TooltipWrapper>
       <PopoverContent
         layout="bare"

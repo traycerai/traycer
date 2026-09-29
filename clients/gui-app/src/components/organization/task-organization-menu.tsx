@@ -1,4 +1,5 @@
 import { TaskAppearancePicker } from "./task-appearance-picker";
+import { useRef } from "react";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import {
   DropdownMenu,
@@ -48,6 +49,7 @@ export function TaskOrganizationMenu(props: {
   const MenuSubTrigger = props.dropdown
     ? DropdownMenuSubTrigger
     : ContextMenuSubTrigger;
+  const appearancePanel = useRef<HTMLDivElement | null>(null);
   const organization = useOrganization();
   if (!organization?.supported) return null;
   const view = organization.view;
@@ -57,7 +59,7 @@ export function TaskOrganizationMenu(props: {
   return (
     <>
       <MenuItem
-        onSelect={() =>
+        onClick={() =>
           organization.openDialog({
             kind: "labels",
             taskId: props.taskId,
@@ -68,26 +70,21 @@ export function TaskOrganizationMenu(props: {
         <Tag />
         Labels
       </MenuItem>
-      <MenuSub>
-        <MenuSubTrigger
-          onPointerLeave={(event) => {
-            // A form keeps focus while the pointer crosses from its launcher.
-            // Radix's normal row-leave behavior focuses the parent menu and
-            // can dismiss the submenu before the field receives the click.
-            if (event.currentTarget.getAttribute("aria-expanded") === "true")
-              event.preventDefault();
-          }}
-        >
+      <MenuSub
+        closeParentOnEsc
+        onOpenChangeComplete={(open) => {
+          if (open) appearancePanel.current?.querySelector("input")?.focus();
+        }}
+      >
+        {/* A form stays open while the pointer moves between its fields. */}
+        <MenuSubTrigger openOnHover={false}>
           <Palette />
           Task appearance
         </MenuSubTrigger>
         <MenuSubContent
+          ref={appearancePanel}
           layout="panel"
-          className="w-[var(--radix-popper-available-width)] min-w-0 max-w-xs max-h-[var(--radix-popper-available-height)] overflow-y-auto"
-          onFocus={(event) => {
-            if (event.target === event.currentTarget)
-              event.currentTarget.querySelector("input")?.focus();
-          }}
+          className="w-[var(--available-width)] min-w-0 max-w-xs max-h-[var(--available-height)] overflow-y-auto"
         >
           <TaskAppearancePicker taskId={props.taskId} />
         </MenuSubContent>
@@ -99,7 +96,7 @@ export function TaskOrganizationMenu(props: {
         </MenuSubTrigger>
         <MenuSubContent>
           <MenuItem
-            onSelect={() =>
+            onClick={() =>
               organization.openDialog({
                 kind: "new-group",
                 taskId: props.taskId,
@@ -116,7 +113,7 @@ export function TaskOrganizationMenu(props: {
               disabled={
                 !view.appearances.some((a) => a.taskId === props.taskId)
               }
-              onSelect={() => {
+              onClick={() => {
                 const canvas = useEpicCanvasStore.getState();
                 const openTasks = new Set(
                   canvas.openTabOrder.flatMap((id) => {
@@ -166,7 +163,7 @@ export function TaskOrganizationMenu(props: {
       </MenuSub>
       {groupId ? (
         <MenuItem
-          onSelect={() => {
+          onClick={() => {
             void organization
               .command({
                 kind: "groups",
@@ -193,17 +190,19 @@ export function TaskOrganizationDropdown(props: {
   if (!organization?.supported) return null;
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label={`Organize ${props.title}`}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <MoreHorizontal />
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Organize ${props.title}`}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <MoreHorizontal />
+          </Button>
+        }
+      />
       <DropdownMenuContent align="end">
         <TaskOrganizationMenu {...props} dropdown />
       </DropdownMenuContent>

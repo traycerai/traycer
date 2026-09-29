@@ -1,5 +1,5 @@
 /**
- * Shared cmdk list views used by BOTH the modal command palette
+ * Shared command list views used by BOTH the modal command palette
  * (`command-palette-shell.tsx`) and the inline in-pane opener
  * (`components/epic-canvas/canvas/pane-opener.tsx`): the sub-page view and the
  * opener root view. Non-component helpers (filter, row value, controller hook)
@@ -13,7 +13,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import { useCommandState } from "cmdk";
+import { useCommandContext } from "@/components/ui/command-context";
 import { Bot, Folder, FolderOpen, MessageSquare } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -181,8 +181,8 @@ function AgentSubpageRows(props: {
   const [userCollapsedIds, setUserCollapsedIds] = useState<ReadonlySet<string>>(
     () => new Set<string>(),
   );
-  const search = useCommandState((state) => state.search);
-  const selectedValue = useCommandState((state) => state.value);
+  const search = useCommandContext().query;
+  const selectedValue = useCommandContext().highlightedValue;
   const ownerMarkerRef = useRef<HTMLSpanElement>(null);
   const isExpanded = (row: NonNullable<CommandItemShape["agentTreeRow"]>) =>
     !userCollapsedIds.has(row.nodeId) &&
@@ -213,12 +213,14 @@ function AgentSubpageRows(props: {
   );
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      const ownerRoot = ownerMarkerRef.current?.closest("[cmdk-root]");
+      const ownerRoot = ownerMarkerRef.current?.closest(
+        '[data-slot="command"]',
+      );
       if (
         !(event.target instanceof Element) ||
         ownerRoot === null ||
         ownerRoot === undefined ||
-        event.target.closest("[cmdk-root]") !== ownerRoot
+        event.target.closest('[data-slot="command"]') !== ownerRoot
       ) {
         return;
       }
@@ -262,13 +264,13 @@ function AgentSubpageRows(props: {
     return (
       <PaletteItemRow
         key={item.id}
-        value={buildCmdkValue(item)}
+        itemKey={buildCmdkValue(item)}
         keywords={[
           ...item.keywords,
           ...(descendantKeywords.get(row?.nodeId ?? "") ?? []),
         ]}
         disabled={item.disabled === true}
-        onSelect={() => props.onSelect(item)}
+        onAction={() => props.onSelect(item)}
       >
         <AgentTreeItemLabel
           item={item}
@@ -350,8 +352,8 @@ function ArtifactSubpageRows(props: {
   const [userCollapsedIds, setUserCollapsedIds] = useState<ReadonlySet<string>>(
     () => new Set<string>(),
   );
-  const search = useCommandState((state) => state.search);
-  const selectedValue = useCommandState((state) => state.value);
+  const search = useCommandContext().query;
+  const selectedValue = useCommandContext().highlightedValue;
   const ownerMarkerRef = useRef<HTMLSpanElement>(null);
   const isExpanded = (row: NonNullable<CommandItemShape["artifactTreeRow"]>) =>
     !userCollapsedIds.has(row.nodeId) &&
@@ -382,12 +384,14 @@ function ArtifactSubpageRows(props: {
   );
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      const ownerRoot = ownerMarkerRef.current?.closest("[cmdk-root]");
+      const ownerRoot = ownerMarkerRef.current?.closest(
+        '[data-slot="command"]',
+      );
       if (
         !(event.target instanceof Element) ||
         ownerRoot === null ||
         ownerRoot === undefined ||
-        event.target.closest("[cmdk-root]") !== ownerRoot
+        event.target.closest('[data-slot="command"]') !== ownerRoot
       ) {
         return;
       }
@@ -431,13 +435,13 @@ function ArtifactSubpageRows(props: {
     return (
       <PaletteItemRow
         key={item.id}
-        value={buildCmdkValue(item)}
+        itemKey={buildCmdkValue(item)}
         keywords={[
           ...item.keywords,
           ...(descendantKeywords.get(row?.nodeId ?? "") ?? []),
         ]}
         disabled={item.disabled === true}
-        onSelect={() => props.onSelect(item)}
+        onAction={() => props.onSelect(item)}
       >
         <ArtifactTreeItemLabel
           item={item}
@@ -516,8 +520,8 @@ function PathSubpageRows(props: {
       ?.treeId ?? "";
   const expandedPaths = useOpenerFileTreeExpandedPaths(treeId);
   const togglePath = useOpenerFileTreeStore((state) => state.toggle);
-  const search = useCommandState((state) => state.search);
-  const selectedValue = useCommandState((state) => state.value);
+  const search = useCommandContext().query;
+  const selectedValue = useCommandContext().highlightedValue;
   const ownerMarkerRef = useRef<HTMLSpanElement>(null);
   const isExpanded = (row: NonNullable<CommandItemShape["pathTreeRow"]>) =>
     expandedPaths.includes(`${row.path}/`);
@@ -533,12 +537,14 @@ function PathSubpageRows(props: {
   };
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      const ownerRoot = ownerMarkerRef.current?.closest("[cmdk-root]");
+      const ownerRoot = ownerMarkerRef.current?.closest(
+        '[data-slot="command"]',
+      );
       if (
         !(event.target instanceof Element) ||
         ownerRoot === null ||
         ownerRoot === undefined ||
-        event.target.closest("[cmdk-root]") !== ownerRoot
+        event.target.closest('[data-slot="command"]') !== ownerRoot
       ) {
         return;
       }
@@ -577,10 +583,10 @@ function PathSubpageRows(props: {
     return (
       <PaletteItemRow
         key={item.id}
-        value={buildCmdkValue(item)}
+        itemKey={buildCmdkValue(item)}
         keywords={[...item.keywords]}
         disabled={item.disabled === true}
-        onSelect={() => {
+        onAction={() => {
           if (row?.kind === "directory") toggle(row);
           else props.onSelect(item);
         }}
@@ -627,10 +633,10 @@ function FlatSubpageRows(props: {
   return props.items.map((item) => (
     <PaletteItemRow
       key={item.id}
-      value={buildCmdkValue(item)}
+      itemKey={buildCmdkValue(item)}
       keywords={[...item.keywords]}
       disabled={item.disabled === true}
-      onSelect={() => props.onSelect(item)}
+      onAction={() => props.onSelect(item)}
     >
       <SubpageItemLabel label={item.label} />
       {item.hostBadge !== undefined ? (
@@ -786,14 +792,14 @@ function OpenerDeepRows(props: OpenerDeepRowsProps) {
           return (
             <Fragment key={rowIdentity}>
               <PaletteItemRow
-                value={`${rowIdentity} ${buildCmdkValue(item)}`}
+                itemKey={`${rowIdentity} ${buildCmdkValue(item)}`}
                 keywords={[
                   ...item.keywords,
                   ...path.map((segment) => segment.toLowerCase()),
                 ]}
                 aria-label={deepRowName(path, item.label, item.statusBadge)}
                 disabled={item.disabled === true}
-                onSelect={() => onSelect(item)}
+                onAction={() => onSelect(item)}
               >
                 <DeepPathLabel
                   path={path}
@@ -829,7 +835,7 @@ interface OpenerDeepViewProps {
  * of levels down, rendered with its full category path so a root query like
  * "create" surfaces "Agents → New agent (Chat)" without drilling in. Mounted
  * only while a query is typed (the empty-query root shows categories alone);
- * cmdk's filter owns which rows actually show.
+ * Command's filter owns which rows actually show.
  */
 export function OpenerDeepView(props: OpenerDeepViewProps) {
   const { items, ctx, onSelect } = props;
@@ -867,9 +873,9 @@ export function OpenerRootView(props: OpenerRootViewProps) {
         {items.map((item) => (
           <PaletteItemRow
             key={item.id}
-            value={buildCmdkValue(item)}
+            itemKey={buildCmdkValue(item)}
             keywords={[...item.keywords]}
-            onSelect={() => onSelect(item)}
+            onAction={() => onSelect(item)}
           >
             <span className="truncate">{item.label}</span>
           </PaletteItemRow>

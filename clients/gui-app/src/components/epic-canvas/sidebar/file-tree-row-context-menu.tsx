@@ -5,13 +5,11 @@
  * to hang a menu on: the whole tree container is the trigger and the row is
  * recovered from the event's composed path.
  *
- * Radix opens the menu from two events - `contextMenu` for a mouse, and a
- * 700ms long-press timer armed on a touch or pen `pointerDown` - so the row
+ * Base UI opens the menu from two events - `contextMenu` for a mouse, and a
+ * 500ms long-press timer armed on `touchStart` - so the row
  * has to be captured on both or a long-press opens the root with no content
- * mounted. Both handlers are composed with Radix's own through
- * `composeEventHandlers`, which skips a default-prevented event: calling
- * `preventDefault()` when the press hit no row is what keeps an empty menu
- * from opening over the tree's blank space.
+ * mounted. Cancel Base UI's composed handler when the press hit no row so an
+ * empty menu cannot open over the tree's blank space.
  *
  * The items live in a child mounted only while a row is captured, keeping the
  * menu's host-scoped data hooks off the panel's render path.
@@ -20,7 +18,7 @@ import {
   useCallback,
   useState,
   type MouseEvent,
-  type PointerEvent,
+  type TouchEvent,
   type ReactElement,
 } from "react";
 import { Copy } from "lucide-react";
@@ -34,10 +32,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import {
-  extractPierreItemPathFromEvent,
-  type PierreActivationEvent,
-} from "@/components/epic-canvas/pierre-tree-adapter";
+import { extractPierreItemPathFromEvent } from "@/components/epic-canvas/pierre-tree-adapter";
 import {
   OPEN_TARGET_ICONS,
   resolveOpenMenuState,
@@ -66,8 +61,7 @@ export interface FileTreeRowContextMenuProps {
   readonly workspacePath: string;
   /**
    * The tree container, which becomes the menu's trigger. Exactly ONE element:
-   * `ContextMenuTrigger asChild` merges its props onto this node through
-   * Radix's `Slot`, which throws on text, `null`, or an array.
+   * `ContextMenuTrigger render` merges its props onto this node.
    */
   readonly children: ReactElement;
 }
@@ -85,10 +79,15 @@ export function FileTreeRowContextMenu(props: FileTreeRowContextMenuProps) {
   const [row, setRow] = useState<FileTreeContextMenuRow | null>(null);
 
   const captureRow = useCallback(
-    (event: PierreActivationEvent & { preventDefault: () => void }) => {
+    (
+      event: (MouseEvent<HTMLElement> | TouchEvent<HTMLElement>) & {
+        preventBaseUIHandler: () => void;
+      },
+    ) => {
       const treePath = extractPierreItemPathFromEvent(event);
       if (treePath === null) {
         event.preventDefault();
+        event.preventBaseUIHandler();
         setRow(null);
         return;
       }
@@ -97,32 +96,13 @@ export function FileTreeRowContextMenu(props: FileTreeRowContextMenuProps) {
     [],
   );
 
-  const handleContextMenu = useCallback(
-    (event: MouseEvent<HTMLElement>) => {
-      captureRow(event);
-    },
-    [captureRow],
-  );
-
-  const handlePointerDown = useCallback(
-    (event: PointerEvent<HTMLElement>) => {
-      // Mouse presses reach the menu through `contextMenu`; only the
-      // touch/pen long-press arm needs the row captured here.
-      if (event.pointerType === "mouse") return;
-      captureRow(event);
-    },
-    [captureRow],
-  );
-
   return (
     <ContextMenu>
       <ContextMenuTrigger
-        asChild
-        onContextMenu={handleContextMenu}
-        onPointerDown={handlePointerDown}
-      >
-        {props.children}
-      </ContextMenuTrigger>
+        render={props.children}
+        onContextMenu={captureRow}
+        onTouchStart={captureRow}
+      />
       {row === null ? null : (
         <FileTreeRowContextMenuContent
           row={row}
@@ -211,7 +191,7 @@ function FileTreeRowContextMenuContent(
             key={target.id}
             data-testid={`epic-file-tree-row-open-${target.id}`}
             disabled={opening}
-            onSelect={() => openPath(target.id)}
+            onClick={() => openPath(target.id)}
           >
             {opening ? (
               <AgentSpinningDots
@@ -229,14 +209,14 @@ function FileTreeRowContextMenuContent(
       {openTargets.length > 0 ? <ContextMenuSeparator /> : null}
       <ContextMenuItem
         data-testid="epic-file-tree-row-copy-path"
-        onSelect={() => copyAbsolutePath(absolutePath)}
+        onClick={() => copyAbsolutePath(absolutePath)}
       >
         <Copy className="size-3.5" aria-hidden />
         <span>Copy Path</span>
       </ContextMenuItem>
       <ContextMenuItem
         data-testid="epic-file-tree-row-copy-relative-path"
-        onSelect={() => copyRelativePath(relativePath)}
+        onClick={() => copyRelativePath(relativePath)}
       >
         <Copy className="size-3.5" aria-hidden />
         <span>Copy Relative Path</span>

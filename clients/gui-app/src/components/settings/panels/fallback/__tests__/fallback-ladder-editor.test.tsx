@@ -113,7 +113,7 @@ describe("FallbackLadderEditor", () => {
     expect(
       profileRow.querySelector('[aria-roledescription="sortable"]'),
     ).toBeNull();
-    expect(profileRow.querySelector('[tabindex="0"]')).toBeNull();
+    expect(profileRow.querySelector('.cursor-grab[tabindex="0"]')).toBeNull();
 
     // The replacement affordance: every movable row exposes "Move <label> up"
     // / "Move <label> down" buttons (pinned individually elsewhere in this

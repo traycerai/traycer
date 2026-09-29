@@ -302,10 +302,19 @@ describe("<FileTreeRowContextMenu />", () => {
     screen.getByRole("menuitem", { name: "Copy Relative Path" });
   });
 
-  // Radix arms a 700ms long-press timer on a touch/pen pointerdown and opens
-  // WITHOUT ever firing `contextMenu`, so the row has to be captured there too
-  // or the menu opens with no content mounted.
+  // Base UI arms a 500ms long-press timer on `touchstart` and opens WITHOUT
+  // ever firing `contextMenu`, so the row has to be captured on that
+  // `touchstart` or the menu opens with no content mounted.
   describe("touch long-press", () => {
+    function longPress(target: HTMLElement): void {
+      fireEvent.touchStart(target, {
+        touches: [{ clientX: 10, clientY: 10 }],
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+    }
+
     beforeEach(() => {
       vi.useFakeTimers();
     });
@@ -318,12 +327,7 @@ describe("<FileTreeRowContextMenu />", () => {
     it("opens with the pressed row after the long-press delay", () => {
       renderTree("host-1");
 
-      fireEvent.pointerDown(screen.getByTestId("row-file"), {
-        pointerType: "touch",
-      });
-      act(() => {
-        vi.advanceTimersByTime(700);
-      });
+      longPress(screen.getByTestId("row-file"));
 
       // `toContain`, not `toBe`: the spinner glyph shares the item's
       // textContent. A label swapped to "Opening…" still fails this.
@@ -333,12 +337,7 @@ describe("<FileTreeRowContextMenu />", () => {
     it("labels a directory row correctly through the same path", () => {
       renderTree("host-1");
 
-      fireEvent.pointerDown(screen.getByTestId("row-dir-trailing"), {
-        pointerType: "touch",
-      });
-      act(() => {
-        vi.advanceTimersByTime(700);
-      });
+      longPress(screen.getByTestId("row-dir-trailing"));
 
       screen.getByRole("menuitem", { name: "Finder" });
     });
@@ -346,28 +345,14 @@ describe("<FileTreeRowContextMenu />", () => {
     it("opens nothing when the long-press hits no row", () => {
       renderTree("host-1");
 
-      const notPrevented = fireEvent.pointerDown(screen.getByTestId("tree"), {
-        pointerType: "touch",
-      });
-      act(() => {
-        vi.advanceTimersByTime(700);
-      });
-
-      expect(notPrevented).toBe(false);
-      expect(screen.queryByRole("menu")).toBeNull();
-    });
-
-    it("ignores a mouse pointerdown, leaving that path to contextMenu", () => {
-      renderTree("host-1");
-
-      fireEvent.pointerDown(screen.getByTestId("row-file"), {
-        pointerType: "mouse",
-      });
-      act(() => {
-        vi.advanceTimersByTime(700);
-      });
+      longPress(screen.getByTestId("tree"));
 
       expect(screen.queryByRole("menu")).toBeNull();
+
+      // A blank press must not leave an invisible menu root open: a real row
+      // pressed afterwards still opens its own menu.
+      longPress(screen.getByTestId("row-file"));
+      screen.getByRole("menuitem", { name: "Finder" });
     });
   });
 

@@ -243,8 +243,9 @@ function renderProvidersSettingsPanel() {
     </QueryClientProvider>,
   );
   // Profiles render on the `usage` tab - labelled "Profiles & Limits" - not on the CLI
-  // tab. Radix Tabs activate on mouseDown, not click.
-  fireEvent.mouseDown(screen.getByRole("tab", { name: "Profiles & Limits" }));
+  // tab. Base's Tab wires onClick too (TabsTab.js), unlike Radix which needed
+  // mouseDown.
+  fireEvent.click(screen.getByRole("tab", { name: "Profiles & Limits" }));
   return view;
 }
 

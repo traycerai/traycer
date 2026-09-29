@@ -1,4 +1,10 @@
-import { useId, useState, type MouseEvent, type ReactNode } from "react";
+import {
+  useId,
+  useState,
+  type MouseEvent,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { Eye, EyeOff, Layers, PanelTop } from "lucide-react";
 import { toast } from "sonner";
@@ -236,7 +242,7 @@ export function LayoutRegionVerbItems(props: {
           <ContextMenuItem
             key={verb}
             data-testid={`layout-quick-verb-${regionId}-${verb}`}
-            onSelect={() => {
+            onClick={() => {
               run(verb);
             }}
           >
@@ -288,14 +294,15 @@ export function LayoutRegionContextMenuWithItems(props: {
     <ContextMenu onOpenChange={setOpen}>
       {/* `display: contents` generates no box, so the chrome this wraps keeps
           its own place in its parent's flex or grid row; the span is only
-          somewhere for Radix to hang the trigger's handlers, which the real
+          somewhere for the menu to hang the trigger's handlers, which the real
           control's own contextmenu event bubbles up to. Wrapping here rather
           than at each call site means a site can hand this a COMPONENT - the
           Home item, a toolbar picker - without that component having to
           forward the trigger's props to a DOM node. */}
-      <ContextMenuTrigger asChild ref={REGION_TRIGGER_REF}>
-        <span className="contents">{props.children}</span>
-      </ContextMenuTrigger>
+      <ContextMenuTrigger
+        ref={REGION_TRIGGER_REF}
+        render={<span className="contents">{props.children}</span>}
+      />
       <ContextMenuContent>
         <LayoutRegionMenuItems
           regionId={props.regionId}
@@ -312,13 +319,13 @@ export function LayoutRegionContextMenuWithItems(props: {
  *
  * A root per ITEM is what this replaces: the composer's two clusters draw
  * seven controls between them and every open chat tile draws both, so a
- * four-tile canvas was carrying twenty-eight Radix roots and twenty-eight
+ * four-tile canvas was carrying twenty-eight menu roots and twenty-eight
  * trigger spans for a gesture used a handful of times a session. The region is
  * resolved from the event the same way the canvas resolves a hover, so the
  * verbs are still per item.
  *
- * The child is the cluster's own box, taken `asChild`, so this adds no element
- * of its own.
+ * The child is the cluster's own box, taken as the trigger's `render`, so this
+ * adds no element of its own.
  *
  * It is the right shape for any container of regions, not only a strip of
  * small controls: the dock's pill row and the joined frame of full rows each
@@ -335,31 +342,28 @@ export function LayoutRegionContextMenuWithItems(props: {
  * as well.
  *
  * A container MAY also hold a control with a menu of its own, and the
- * innermost one wins with nothing written here: Radix's trigger composes the
- * caller's handler ahead of its own opener and SKIPS that opener once the
- * event is default-prevented, which the inner trigger has already done by the
- * time the event reaches this one. Nothing in the dock nests one today, so
+ * innermost one wins with nothing written here: the inner trigger stops the
+ * `contextmenu` event's propagation as it opens, so it never reaches this
+ * one. Nothing in the dock nests one today, so
  * that half is a property of the primitive rather than a defence the product
  * exercises; `region-quick-verbs.test.tsx` measures it so it cannot quietly
  * stop being true.
  */
 export function LayoutClusterContextMenu(props: {
-  readonly children: ReactNode;
+  readonly children: ReactElement;
 }): ReactNode {
   const [regionId, setRegionId] = useState<RegionId | null>(null);
   return (
     <ContextMenu>
       <ContextMenuTrigger
-        asChild
+        render={props.children}
         ref={CLUSTER_TRIGGER_REF}
         onContextMenu={(event: MouseEvent<HTMLElement>) => {
           // Only ever reached with a region under the pointer: the refusal
           // above has already taken the event out of React's reach otherwise.
           setRegionId(regionUnder(event.target));
         }}
-      >
-        {props.children}
-      </ContextMenuTrigger>
+      />
       {regionId === null ? null : (
         <ContextMenuContent>
           <LayoutRegionMenuItems regionId={regionId} extraItems={null} />
@@ -404,15 +408,15 @@ const OS_MENU_CONTENT_SELECTOR =
   'input, textarea, [contenteditable=""], [contenteditable="true"], a[href]';
 
 /**
- * A press this menu stands down from, refused AT the trigger before Radix can
- * take it.
+ * A press this menu stands down from, refused AT the trigger before the menu
+ * can take it.
  *
- * There is no way to stand down from inside a handler passed to the trigger.
- * Radix composes the caller's `onContextMenu` ahead of its own opener and
- * skips that opener only when the event is already default-prevented - and
- * default-prevented is exactly the state that removes the native menu. So the
- * refusal has to stop the event from reaching React's dispatch at all, which
- * leaves `defaultPrevented` false for Chromium to act on.
+ * There is no way to stand down from inside a handler passed to the trigger:
+ * the trigger's own opener default-prevents the event, and default-prevented
+ * is exactly the state that removes the native menu. So the refusal has to
+ * stop the event from reaching React's dispatch at all - and the trigger's
+ * document listener with it - which leaves `defaultPrevented` false for
+ * Chromium to act on.
  *
  * A native capture listener rather than `onContextMenuCapture`, and the
  * ordering is the whole reason: React dispatches its capture phase from the

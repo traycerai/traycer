@@ -6,7 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 function renderPreview(content: JsonContent) {
   return render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <ComposerContentPreview
         content={content}
         emptyLabel="Queued message"

@@ -655,8 +655,10 @@ describe("Sweep host chip", () => {
 
     // The other cause of the same gap: the census under the question starts
     // being re-proved while it waits for an answer.
+    // Driven by the bare R shortcut rather than the Refresh button: Base
+    // treats a click outside the open confirmation as a dismissal.
     state.refreshing = true;
-    fireEvent.click(screen.getByTestId("sweep-worktrees-refresh"));
+    fireEvent.keyDown(document.body, { key: "r" });
 
     const confirm = screen.getByTestId("sweep-host-switch-confirm-action");
     expect(confirm.hasAttribute("disabled")).toBe(true);

@@ -36,16 +36,15 @@ function setup() {
   });
   const wrapper = ({ children }: { readonly children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider delayDuration={0}>{children}</TooltipProvider>
+      <TooltipProvider delay={0}>{children}</TooltipProvider>
     </QueryClientProvider>
   );
   return { wrapper };
 }
 
 function openMoreMenu(): void {
-  fireEvent.pointerDown(
+  fireEvent.click(
     screen.getByRole("button", { name: "More Git Diff actions" }),
-    { button: 0 },
   );
 }
 

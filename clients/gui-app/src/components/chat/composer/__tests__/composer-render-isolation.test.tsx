@@ -498,7 +498,7 @@ describe("ComposerPromptEditor render isolation", () => {
 
   it("uses shared sizing classes for slash, image, and mention chips", async () => {
     render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <Harness
           profileRender={NOOP_PROFILE}
           handleRef={{ current: null }}

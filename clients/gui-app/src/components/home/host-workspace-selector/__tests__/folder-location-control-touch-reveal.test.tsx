@@ -77,10 +77,7 @@ function workspaceRunItem(
 
 /** Opens the Location menu and its "Existing worktree" submenu. */
 async function openWorktreeSubmenu(): Promise<void> {
-  fireEvent.pointerDown(screen.getByLabelText("Choose run location"), {
-    button: 0,
-    ctrlKey: false,
-  });
+  fireEvent.click(screen.getByLabelText("Choose run location"));
   const existing = await screen.findByTestId("folder-location-existing");
   existing.focus();
   fireEvent.keyDown(existing, { key: "ArrowRight" });

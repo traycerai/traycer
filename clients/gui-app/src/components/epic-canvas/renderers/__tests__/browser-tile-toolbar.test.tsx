@@ -123,9 +123,8 @@ const ADVANCED_MENU_ITEMS = [
 ] as const;
 
 function openMoreMenu(): void {
-  fireEvent.pointerDown(
+  fireEvent.click(
     screen.getByRole("button", { name: "More browser controls" }),
-    { button: 0 },
   );
 }
 

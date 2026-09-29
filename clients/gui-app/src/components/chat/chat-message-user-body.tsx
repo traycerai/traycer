@@ -1277,32 +1277,34 @@ function UserMessageTouchMenu({
     // this same corner region while this trigger is unmounted.
     <div className="absolute right-1 top-full z-10 hidden -translate-y-1/2 pointer-coarse:flex">
       <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="muted"
-            size="icon-xs"
-            aria-label="Message actions"
-            // Resting bg-muted matches ghost's aria-expanded open surface,
-            // so the glyph reads as a button before it is tapped. The
-            // invisible ::after slop widens the 24px visual control to the
-            // 44px touch-target guideline without painting anything (Button
-            // renders no ::after of its own, so nothing merges with it).
-            // muted-fill-ok: transcript row renders on bg-background/canvas
-            className="relative bg-muted after:absolute after:-inset-2.5 after:content-[''] opacity-70"
-          >
-            <MoreHorizontal className="size-3.5" aria-hidden />
-          </Button>
-        </DropdownMenuTrigger>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="muted"
+              size="icon-xs"
+              aria-label="Message actions"
+              // Resting bg-muted matches ghost's aria-expanded open surface,
+              // so the glyph reads as a button before it is tapped. The
+              // invisible ::after slop widens the 24px visual control to the
+              // 44px touch-target guideline without painting anything (Button
+              // renders no ::after of its own, so nothing merges with it).
+              // muted-fill-ok: transcript row renders on bg-background/canvas
+              className="relative bg-muted after:absolute after:-inset-2.5 after:content-[''] opacity-70"
+            >
+              <MoreHorizontal className="size-3.5" aria-hidden />
+            </Button>
+          }
+        />
         <DropdownMenuContent align="end">
           {canModify ? (
-            <DropdownMenuItem onSelect={actions.onEdit}>
+            <DropdownMenuItem onClick={actions.onEdit}>
               <Pencil className="size-3.5" />
               Edit
             </DropdownMenuItem>
           ) : null}
           {canCopy ? (
-            <DropdownMenuItem onSelect={onCopy}>
+            <DropdownMenuItem onClick={onCopy}>
               <Copy className="size-3.5" />
               Copy
             </DropdownMenuItem>
@@ -1312,7 +1314,7 @@ function UserMessageTouchMenu({
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant="destructive"
-                onSelect={actions.onDeleteRequest}
+                onClick={actions.onDeleteRequest}
               >
                 <Trash2 className="size-3.5" />
                 Delete

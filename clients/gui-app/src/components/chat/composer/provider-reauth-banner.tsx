@@ -1030,7 +1030,13 @@ function TokenReauthForm({
       </label>
       <div className="flex flex-wrap items-center gap-2">
         {envVars.length > 1 ? (
-          <Select value={activeVar} onValueChange={setPickedVar}>
+          <Select
+            items={envVars.map((value) => ({ value, label: value }))}
+            value={activeVar}
+            onValueChange={(value) => {
+              if (value !== null) setPickedVar(value);
+            }}
+          >
             <SelectTrigger
               size="xs"
               aria-label="Credential type"

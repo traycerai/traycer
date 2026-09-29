@@ -1,5 +1,11 @@
 import { type ReactNode } from "react";
-import { Dialog as DialogPrimitive } from "radix-ui";
+import {
+  Dialog,
+  DialogPopup,
+  DialogBackdrop,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { HostBootCard } from "@/components/centered-card";
@@ -122,14 +128,19 @@ export interface WindowHostModalProps {
 export function WindowHostModal(props: WindowHostModalProps): ReactNode {
   const copy = modalCopy(props.variant, props.cause);
   return (
-    <DialogPrimitive.Root open modal>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay
+    <Dialog
+      paneAware={false}
+      open
+      modal
+      onOpenChange={(_open, details) => details.cancel()}
+    >
+      <DialogPortal>
+        <DialogBackdrop
           data-slot="dialog-overlay"
           data-testid="window-host-modal-overlay"
-          className="fixed inset-0 isolate z-60 bg-black/40 transition-opacity duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0"
+          variant="blocking"
         />
-        <DialogPrimitive.Content
+        <DialogPopup
           data-slot="dialog-content"
           data-testid="window-host-modal"
           data-variant={props.variant.kind}
@@ -138,29 +149,22 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
           // Every dismissal path is suppressed: see the component doc. The app
           // behind this modal has no host, so "let me close it" is an offer to
           // click on surfaces that cannot answer.
-          onEscapeKeyDown={(event) => {
-            event.preventDefault();
-          }}
-          onPointerDownOutside={(event) => {
-            event.preventDefault();
-          }}
-          onInteractOutside={(event) => {
-            event.preventDefault();
-          }}
           // `top-safe-center-y` / `left-safe-center-x`, not the halfway
           // marks: a fixed surface escapes `#root`'s safe-area reservation,
           // and the raw centre lines run through the reserved strips (the
           // same rule `dialog.tsx` and the migration modal follow). The width
           // clamp carries `--safe-area-width` for the same reason.
-          className="fixed top-safe-center-y left-safe-center-x z-60 flex max-h-[85svh] w-[min(92vw,32rem,var(--safe-area-width))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-xl bg-background p-6 text-foreground ring-1 ring-foreground/10 shadow-2xl outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95"
+          variant="blocking"
+          className="max-h-[85svh] w-[min(92vw,32rem,var(--safe-area-width))] overflow-y-auto"
         >
-          <DialogPrimitive.Title
+          <DialogTitle
             data-slot="dialog-title"
             data-testid="window-host-modal-title"
-            className="font-heading text-lg leading-none font-medium"
+            appearance="host"
+            size="blocking"
           >
             {copy.title}
-          </DialogPrimitive.Title>
+          </DialogTitle>
           <p
             className="text-ui-sm text-muted-foreground"
             data-testid="window-host-modal-description"
@@ -173,9 +177,9 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
             bootBody={props.bootBody}
           />
           <NarrationActions {...props} copy={copy} align="end" />
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </DialogPopup>
+      </DialogPortal>
+    </Dialog>
   );
 }
 

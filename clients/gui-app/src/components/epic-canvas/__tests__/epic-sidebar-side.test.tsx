@@ -551,20 +551,16 @@ describe("<EpicLeftPanelStaticRail /> indicator mirror (S-06)", () => {
 });
 
 describe("a real sidebar popover under a right sidebar (D7)", () => {
-  it("opens ChatFilterMenu's content on data-side=left, not the hard-coded right", () => {
+  it("opens ChatFilterMenu's content on data-side=left, not the hard-coded right", async () => {
     render(
       <ColumnEdgeContext.Provider value="right">
         <ChatFilterMenu epicId={EPIC_ID} tabId={TAB_ID} canArchive={false} />
       </ColumnEdgeContext.Provider>,
     );
 
-    // Radix's DropdownMenuTrigger opens on pointerdown, not the click event.
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Filter agents" }),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Filter agents" }));
 
-    const menu = screen.getByTestId("epic-sidebar-agent-view-menu");
+    const menu = await screen.findByTestId("epic-sidebar-agent-view-menu");
     expect(menu.getAttribute("data-side")).toBe("left");
     expect(menu.getAttribute("data-align")).toBe("start");
   });

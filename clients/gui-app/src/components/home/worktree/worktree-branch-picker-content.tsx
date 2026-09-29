@@ -35,7 +35,7 @@ export function WorktreeBranchPickerContent(
     effectiveActiveEntryId,
     emptyLabel,
     filteredRows,
-    handleCloseAutoFocus,
+    handleFinalFocus,
     handleContentKeyDown,
     hasQuery,
     idPrefix,
@@ -49,7 +49,6 @@ export function WorktreeBranchPickerContent(
     pinnedRows,
     portalContainer,
     query,
-    resetQuery,
     searchPlaceholder,
     selectEntry,
     setActiveEntryId,
@@ -62,7 +61,7 @@ export function WorktreeBranchPickerContent(
   // list the popover exists to show, so the search stands down and the popover
   // opens on its rows.
   const coarsePointer = useCoarsePointer();
-  const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
+  const { contentRef, initialFocus: coarseInitialFocus } =
     useCoarsePointerOpenAutoFocus();
 
   useEffect(() => {
@@ -120,21 +119,16 @@ export function WorktreeBranchPickerContent(
       aria-label={listboxLabel}
       layout="panel"
       className={cn(
-        "h-[min(var(--radix-popover-content-available-height),22rem)] w-[min(90vw,26rem)] min-w-(--radix-popover-trigger-width) data-[side=bottom]:rounded-t-none data-[side=top]:rounded-b-none",
+        "h-[min(var(--available-height),22rem)] w-[min(90vw,26rem)] min-w-(--anchor-width) data-[side=bottom]:rounded-t-none data-[side=top]:rounded-b-none",
         contentClassName,
       )}
       ref={contentRef}
       // The search field is the first tabbable descendant, so Radix's own
       // open-autofocus takes it whether or not the effect above runs. Both
       // halves have to move together or the gate is a no-op.
-      onOpenAutoFocus={coarseOpenAutoFocus}
+      initialFocus={coarseInitialFocus}
       onKeyDown={handleContentKeyDown}
-      onEscapeKeyDown={(event) => {
-        if (!hasQuery) return;
-        event.preventDefault();
-        resetQuery();
-      }}
-      onCloseAutoFocus={handleCloseAutoFocus}
+      finalFocus={handleFinalFocus}
     >
       <div className="shrink-0 border-b p-2">
         <InputGroup className="h-8!" variant="search">

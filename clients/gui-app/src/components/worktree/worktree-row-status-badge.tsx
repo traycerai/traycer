@@ -38,7 +38,7 @@ export function WorktreeRowStatusBadge(props: {
   );
   return (
     <Tooltip>
-      <TooltipTrigger asChild>{badge}</TooltipTrigger>
+      <TooltipTrigger render={badge} />
       <TooltipContent side="bottom" className="max-w-80 whitespace-normal">
         {props.detail}
       </TooltipContent>

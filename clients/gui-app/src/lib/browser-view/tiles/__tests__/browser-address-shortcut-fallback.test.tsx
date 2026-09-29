@@ -72,7 +72,7 @@ function InlineDialogAddressProbe(): ReactElement {
         value={addressValue}
         onChange={(event) => onAddressChange(event.currentTarget.value)}
       />
-      <div role="dialog" data-state="open" data-leader-scope="">
+      <div role="dialog" data-open="" data-leader-scope="">
         <button type="button" data-testid="inline-dialog-button">
           Open
         </button>
@@ -313,7 +313,7 @@ describe("focusBrowserAddressForShortcut fallback through the real KeybindingPro
     );
     const dialog = document.createElement("div");
     dialog.setAttribute("role", "dialog");
-    dialog.setAttribute("data-state", "open");
+    dialog.setAttribute("data-open", "");
     document.body.appendChild(dialog);
     document.body.focus();
 
@@ -406,7 +406,7 @@ describe("focusBrowserAddressForShortcut defers to an open leader-scope dialog",
 
     const dialog = document.createElement("div");
     dialog.setAttribute("role", "dialog");
-    dialog.setAttribute("data-state", "open");
+    dialog.setAttribute("data-open", "");
     dialog.setAttribute("data-leader-scope", "");
     const dialogButton = document.createElement("button");
     dialogButton.type = "button";

@@ -18,7 +18,7 @@ import {
   workspaceRunBranchSourceLabel,
   type WorkspaceRunItem,
 } from "./workspace-run-item";
-import { preserveWhenNestedOverlay } from "./preserve-when-nested-overlay";
+import { isNestedOverlayTarget } from "./preserve-when-nested-overlay";
 import { WorkspaceBranchLabel } from "./workspace-branch-label";
 
 /**
@@ -71,7 +71,7 @@ export function FolderBranchControl(props: {
     setChipTooltipOpen(next);
   };
 
-  const handleCloseAutoFocus = (): void => {
+  const handleFinalFocus = (): boolean => {
     // Fires immediately before Radix focuses the trigger. Do not preventDefault
     // — keyboard a11y needs focus-return on Escape.
     clearTooltipSuppressRef.current?.();
@@ -102,6 +102,7 @@ export function FolderBranchControl(props: {
     // Fallback if focus never restores (pointer close without focus move).
     timeoutId = window.setTimeout(clear, 150);
     clearTooltipSuppressRef.current = clear;
+    return true;
   };
 
   // Read-only branch label for every mode except an editable new worktree.
@@ -121,32 +122,56 @@ export function FolderBranchControl(props: {
       );
     }
     return (
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover
+        open={open}
+        onOpenChange={(next, details) => {
+          if (
+            !next &&
+            (details.reason === "outside-press" ||
+              details.reason === "focus-out") &&
+            isNestedOverlayTarget(
+              details.reason === "focus-out" &&
+                details.event instanceof FocusEvent
+                ? details.event.relatedTarget
+                : details.event.target,
+              contentRef.current,
+            )
+          )
+            details.cancel();
+          if (details.isCanceled) return;
+          setOpen(next);
+        }}
+      >
         <TooltipWrapper
           label={tooltipLabel}
           side="top"
           sideOffset={undefined}
           align={undefined}
         >
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              aria-label="View existing worktree branch"
-              data-testid="folder-branch-import-trigger"
-              className={cn(FOLDER_CONTROL_TRIGGER_CLASS, "text-foreground/75")}
-            >
-              <GitBranch
-                className="size-3.5 shrink-0 text-muted-foreground/65"
-                aria-hidden
-              />
-              <WorkspaceBranchLabel
-                target={item.branchLabel}
-                source={null}
-                className={undefined}
-              />
-              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground/60" />
-            </button>
-          </PopoverTrigger>
+          <PopoverTrigger
+            render={
+              <button
+                type="button"
+                aria-label="View existing worktree branch"
+                data-testid="folder-branch-import-trigger"
+                className={cn(
+                  FOLDER_CONTROL_TRIGGER_CLASS,
+                  "text-foreground/75",
+                )}
+              >
+                <GitBranch
+                  className="size-3.5 shrink-0 text-muted-foreground/65"
+                  aria-hidden
+                />
+                <WorkspaceBranchLabel
+                  target={item.branchLabel}
+                  source={null}
+                  className={undefined}
+                />
+                <ChevronDown className="size-3.5 shrink-0 text-muted-foreground/60" />
+              </button>
+            }
+          />
         </TooltipWrapper>
         <PopoverContent
           ref={contentRef}
@@ -156,9 +181,6 @@ export function FolderBranchControl(props: {
           container={props.boundaryEl ?? undefined}
           className="w-[min(92vw,22rem)]"
           data-testid="folder-branch-popover"
-          onInteractOutside={(event) =>
-            preserveWhenNestedOverlay(event, contentRef.current)
-          }
         >
           <ImportedWorktreeBranchForm
             sourceBranch={details.sourceBranch}
@@ -228,7 +250,26 @@ export function FolderBranchControl(props: {
   }
 
   return (
-    <Popover open={open} onOpenChange={handlePopoverOpenChange}>
+    <Popover
+      open={open}
+      onOpenChange={(next, details) => {
+        if (
+          !next &&
+          (details.reason === "outside-press" ||
+            details.reason === "focus-out") &&
+          isNestedOverlayTarget(
+            details.reason === "focus-out" &&
+              details.event instanceof FocusEvent
+              ? details.event.relatedTarget
+              : details.event.target,
+            contentRef.current,
+          )
+        )
+          details.cancel();
+        if (details.isCanceled) return;
+        handlePopoverOpenChange(next);
+      }}
+    >
       <TooltipWrapper
         label={tooltipLabel}
         side="top"
@@ -237,7 +278,7 @@ export function FolderBranchControl(props: {
         open={chipTooltipOpen}
         onOpenChange={handleChipTooltipOpenChange}
       >
-        <PopoverTrigger asChild>{chip}</PopoverTrigger>
+        <PopoverTrigger render={chip} />
       </TooltipWrapper>
       <PopoverContent
         ref={contentRef}
@@ -247,10 +288,8 @@ export function FolderBranchControl(props: {
         container={props.boundaryEl ?? undefined}
         className="w-[min(92vw,22rem)]"
         data-testid="folder-branch-popover"
-        onInteractOutside={(event) =>
-          preserveWhenNestedOverlay(event, contentRef.current)
-        }
-        onCloseAutoFocus={handleCloseAutoFocus}
+
+        finalFocus={handleFinalFocus}
       >
         <NewWorktreeForm
           key={item.displayPath}

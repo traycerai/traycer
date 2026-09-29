@@ -408,35 +408,37 @@ function SplitGroupButton(props: SplitGroupButtonProps) {
 
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          onPointerEnter={(event) => {
-            setHovered(true);
-            reportShiftKeyHeld(event.shiftKey);
-          }}
-          onPointerLeave={() => setHovered(false)}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          onClick={(event) =>
-            props.onSplit(
-              props.groupId,
-              event.shiftKey ? "vertical" : "horizontal",
-            )
-          }
-          aria-label={actionLabel}
-          data-testid="tab-strip-split"
-          data-split-direction={direction}
-        >
-          {splitsDown ? (
-            <SplitSquareVertical className="size-4" />
-          ) : (
-            <SplitSquareHorizontal className="size-4" />
-          )}
-        </Button>
-      </TooltipTrigger>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onPointerEnter={(event) => {
+              setHovered(true);
+              reportShiftKeyHeld(event.shiftKey);
+            }}
+            onPointerLeave={() => setHovered(false)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            onClick={(event) =>
+              props.onSplit(
+                props.groupId,
+                event.shiftKey ? "vertical" : "horizontal",
+              )
+            }
+            aria-label={actionLabel}
+            data-testid="tab-strip-split"
+            data-split-direction={direction}
+          >
+            {splitsDown ? (
+              <SplitSquareVertical className="size-4" />
+            ) : (
+              <SplitSquareHorizontal className="size-4" />
+            )}
+          </Button>
+        }
+      />
       <TooltipContent
         side="bottom"
         sideOffset={4}
@@ -847,78 +849,69 @@ function TabItemBody(
   );
 
   return (
-    // `modal={false}` is load-bearing for Edit Title. A modal menu keeps a
-    // TRAPPED focus scope while it closes: the rename input mounts and focuses
-    // inside the trigger (outside that scope), the scope pulls focus back, the
-    // input blurs, and `useInlineRename` blur-commits and unmounts it before a
-    // keystroke lands. Un-trapped, the input keeps the focus it takes on mount.
-    <ContextMenu modal={false}>
+    <ContextMenu>
       <TabItemMotionFrame
         isDragging={isDragging}
         tileItemId={tab.instanceId}
         offsetX={props.offsetX}
       >
-        <ContextMenuTrigger asChild>
-          <div
-            ref={setRef}
-            {...listeners}
-            role="tab"
-            aria-selected={isActive}
-            tabIndex={isActive ? 0 : -1}
-            data-testid={`tab-item-${tab.instanceId}`}
-            data-tab-id={tab.instanceId}
-            data-active={isActive ? "true" : "false"}
-            data-preview={isPreview ? "true" : "false"}
-            data-globally-active={isGloballyActive ? "true" : "false"}
-            onClick={selectTab}
-            onDoubleClick={handleDoubleClick}
-            onKeyDown={handleKeyDown}
-            onAuxClick={handleAuxClick}
-            // No fixed height: the tab stretches to the scroller's row, which
-            // is 35px (the strip's h-9 less its border-b). A fixed h-9 here
-            // overflowed that row by 1px, and because an overflow-x scroller
-            // computes overflow-y to auto, the wheel scrolled the whole strip
-            // up and down by that pixel. `pt-px` keeps the icon and title on
-            // the strip's full 36px centre line, where the clipped h-9 tab
-            // drew them.
-            className={cn(
-              "group relative flex shrink-0 cursor-pointer items-center gap-1.5 border-r border-canvas-border/70 px-3 pt-px text-ui-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              "transition-[background-color,color] duration-300 ease-spring",
-              "hover:bg-card/60 active:scale-97",
-              isActive && "bg-(--app-background) text-canvas-foreground",
-              !isActive && "text-muted-foreground hover:text-foreground/90",
-            )}
-          >
-            <TabStripDropIndicator visible={showDropIndicatorBefore} />
-            {isGloballyActive ? (
-              <DropLine
-                orientation="horizontal"
-                glow={false}
-                className="absolute inset-x-0 top-0 origin-left animate-in fade-in slide-in-from-left-2 duration-300 ease-spring"
-                testId="tab-active-accent"
+        <ContextMenuTrigger
+          render={
+            <div
+              ref={setRef}
+              {...listeners}
+              role="tab"
+              aria-selected={isActive}
+              tabIndex={isActive ? 0 : -1}
+              data-testid={`tab-item-${tab.instanceId}`}
+              data-tab-id={tab.instanceId}
+              data-active={isActive ? "true" : "false"}
+              data-preview={isPreview ? "true" : "false"}
+              data-globally-active={isGloballyActive ? "true" : "false"}
+              onClick={selectTab}
+              onDoubleClick={handleDoubleClick}
+              onKeyDown={handleKeyDown}
+              onAuxClick={handleAuxClick}
+              className={cn(
+                // Fill the scroller row without the 1px vertical overflow fixed on main.
+                "group relative flex shrink-0 cursor-pointer items-center gap-1.5 border-r border-canvas-border/70 px-3 pt-px text-ui-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "transition-[background-color,color] duration-300 ease-spring",
+                "hover:bg-card/60 active:scale-97",
+                isActive && "bg-(--app-background) text-canvas-foreground",
+                !isActive && "text-muted-foreground hover:text-foreground/90",
+              )}
+            >
+              <TabStripDropIndicator visible={showDropIndicatorBefore} />
+              {isGloballyActive ? (
+                <DropLine
+                  orientation="horizontal"
+                  glow={false}
+                  className="absolute inset-x-0 top-0 origin-left animate-in fade-in slide-in-from-left-2 duration-300 ease-spring"
+                  testId="tab-active-accent"
+                />
+              ) : null}
+              <TabIcon
+                epicId={epicId}
+                tab={tab}
+                titleGenerationPending={titleGenerationPending}
+                browserPresentation={browserPresentation}
               />
-            ) : null}
-            <TabIcon
-              epicId={epicId}
-              tab={tab}
-              titleGenerationPending={titleGenerationPending}
-              browserPresentation={browserPresentation}
-            />
-            <TabItemLabelSlot
-              displayTitle={displayTitle}
-              isArchived={isArchived}
-              tooltipContent={tooltipContent}
-              inputProps={rename.inputProps}
-              isActive={isActive}
-              isEditing={rename.isEditing}
-              isPreview={isPreview}
-              leaderBadge={leaderBadge}
-              onClose={handleClose}
-              tabInstanceId={tab.instanceId}
-              tabIndex={index}
-            />
-          </div>
-        </ContextMenuTrigger>
+              <TabItemLabelSlot
+                displayTitle={displayTitle}
+                isArchived={isArchived}
+                tooltipContent={tooltipContent}
+                inputProps={rename.inputProps}
+                isActive={isActive}
+                isEditing={rename.isEditing}
+                isPreview={isPreview}
+                leaderBadge={leaderBadge}
+                onClose={handleClose}
+                tabInstanceId={tab.instanceId}
+                tabIndex={index}
+              />
+            </div>
+          }
+        />
       </TabItemMotionFrame>
       <TabStripContextMenu
         {...menuProps}
@@ -982,22 +975,24 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
           On release, restore the title and close control together without an exit fade. */}
       <span className="relative min-w-[7ch] max-w-40">
         <Tooltip>
-          <TooltipTrigger asChild>
-            <span
-              data-testid={`tab-title-${tabInstanceId}`}
-              className={cn(
-                "inline-flex max-w-full min-w-0 items-center gap-1 pr-1 align-bottom group-focus-within:opacity-0 group-hover:opacity-0",
-                leaderBadge !== null && "opacity-0",
-                isPreview && "italic",
-                isActive ? "font-medium" : "font-normal",
-              )}
-            >
-              <TabDisplayTitle
-                displayTitle={displayTitle}
-                isArchived={isArchived}
-              />
-            </span>
-          </TooltipTrigger>
+          <TooltipTrigger
+            render={
+              <span
+                data-testid={`tab-title-${tabInstanceId}`}
+                className={cn(
+                  "inline-flex max-w-full min-w-0 items-center gap-1 pr-1 align-bottom group-focus-within:opacity-0 group-hover:opacity-0",
+                  leaderBadge !== null && "opacity-0",
+                  isPreview && "italic",
+                  isActive ? "font-medium" : "font-normal",
+                )}
+              >
+                <TabDisplayTitle
+                  displayTitle={displayTitle}
+                  isArchived={isArchived}
+                />
+              </span>
+            }
+          />
           <TooltipContent>{tooltipContent}</TooltipContent>
         </Tooltip>
         <span
@@ -1229,9 +1224,6 @@ function TabStripDropIndicator(props: { readonly visible: boolean }) {
   // for the length of the exit (~110ms measured). A drop indicator states one
   // destination, so it unmounts immediately and only its entry animates.
   if (!props.visible) return null;
-  // `bottom-0.75`, not `bottom-1`: the tab is 35px (it fills the strip's row),
-  // and the 3px inset keeps the line at 4px-32px, where it sat when the tab
-  // was a fixed 36px.
   return (
     <m.span
       aria-hidden

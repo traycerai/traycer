@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactElement } from "react";
 
 import {
   DropdownMenu,
@@ -21,9 +21,9 @@ interface ChatTargetMenuProps {
   /**
    * The element the menu anchors to and opens from. The terminal pill and the
    * artifact popover's anchor both go here; the roster does not care what it
-   * looks like, only that Radix has a trigger to position against.
+   * looks like, only that the menu has a trigger to position against.
    */
-  readonly trigger: ReactNode;
+  readonly trigger: ReactElement;
 }
 
 /**
@@ -33,12 +33,12 @@ interface ChatTargetMenuProps {
  * last one reachable - the roster shrinks when the pane is short, rather than
  * pushing the action out of view.
  *
- * A complete Radix menu rather than bare rows: `DropdownMenuItem` needs the
+ * A complete menu rather than bare rows: `DropdownMenuItem` needs the
  * menu context for its keyboard navigation and `disabled` semantics, so the
  * shared unit has to be the root + content, with the caller supplying only the
  * trigger.
  *
- * Non-modal: a modal Radix menu writes overflow/padding onto <body> for its
+ * Non-modal: a modal menu writes overflow/padding onto <body> for its
  * scroll lock, and a layout change that reaches a terminal pane refits the
  * terminal - which makes xterm drop the very selection the menu was opened
  * to act on. Nothing here needs the modal behaviour.
@@ -56,7 +56,7 @@ export function ChatTargetMenu(props: ChatTargetMenuProps) {
       open={props.open}
       onOpenChange={props.onOpenChange}
     >
-      <DropdownMenuTrigger asChild>{props.trigger}</DropdownMenuTrigger>
+      <DropdownMenuTrigger render={props.trigger} />
       <DropdownMenuContent
         align="start"
         className="flex w-max min-w-[min(90vw,14rem)] max-w-[min(90vw,20rem)] flex-col overflow-y-hidden"
@@ -86,7 +86,7 @@ export function ChatTargetMenu(props: ChatTargetMenuProps) {
             <DropdownMenuSeparator className="shrink-0" />
           </>
         ) : null}
-        <DropdownMenuItem className="shrink-0" onSelect={props.onSelectNewChat}>
+        <DropdownMenuItem className="shrink-0" onClick={props.onSelectNewChat}>
           New chat
         </DropdownMenuItem>
       </DropdownMenuContent>
@@ -99,10 +99,9 @@ export function ChatTargetMenu(props: ChatTargetMenuProps) {
  *
  * A chat on another host is shown disabled rather than hidden, because the
  * user can see it in the sidebar and would otherwise be left wondering where
- * it went. Radix's own `disabled` does the dimming, the pointer block AND the
- * keyboard skip, so the row is unreachable by every route at once. The reason
- * replaces "Last used" on such a row: why it cannot be picked is the only
- * thing worth the space.
+ * it went. Base UI leaves disabled menu items keyboard-focusable so the reason
+ * can be read, while preventing activation. The reason replaces "Last used"
+ * on such a row: why it cannot be picked is the only thing worth the space.
  */
 function ChatTargetItem(props: {
   readonly target: QuoteChatTarget;
@@ -112,7 +111,7 @@ function ChatTargetItem(props: {
   return (
     <DropdownMenuItem
       disabled={props.target.isOnOtherHost}
-      onSelect={() => props.onSelect(props.target.chatId)}
+      onClick={() => props.onSelect(props.target.chatId)}
     >
       <span className="min-w-0 flex-1 truncate">{props.target.title}</span>
       {meta === null ? null : (

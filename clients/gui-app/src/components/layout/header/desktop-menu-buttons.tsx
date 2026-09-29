@@ -98,10 +98,8 @@ export function DesktopMenuButtons(props: {
       className="relative z-10 flex h-full shrink-0 items-center [-webkit-app-region:no-drag]"
     >
       <Menubar
-        value={openMenu}
-        onValueChange={changeMenu}
         className="flex h-full items-center"
-        loop
+        loopFocus
         aria-label="Application menu"
       >
         {DESKTOP_MENU_ITEMS.map((item) => {
@@ -117,7 +115,6 @@ export function DesktopMenuButtons(props: {
                   const revision = snapshot.data.revision;
                   changeMenu("");
                   restoreFocus();
-                  restoreOnClose.current = false;
                   execute.mutate({ revision, itemId });
                 }}
               />
@@ -125,41 +122,56 @@ export function DesktopMenuButtons(props: {
           if (snapshot.isError)
             content = (
               <MenubarItem
-                onSelect={(event) => {
-                  event.preventDefault();
+                onClick={() => {
                   void refetch();
                 }}
+                closeOnClick={false}
               >
                 Couldn't load menu. Retry
               </MenubarItem>
             );
           return (
-            <MenubarMenu key={item.id} value={item.id}>
+            <MenubarMenu
+              key={item.id}
+              open={openMenu === item.id}
+              onOpenChange={(open, details) => {
+                if (
+                  !open &&
+                  (details.reason === "outside-press" ||
+                    details.reason === "focus-out")
+                ) {
+                  const target =
+                    details.event instanceof FocusEvent
+                      ? details.event.relatedTarget
+                      : details.event.target;
+                  if (
+                    !(
+                      target instanceof Element &&
+                      target.closest('[role="menubar"]')
+                    )
+                  )
+                    restoreOnClose.current = false;
+                }
+                if (open) changeMenu(item.id);
+                else if (openMenuRef.current === item.id) changeMenu("");
+              }}
+            >
               <MenubarTrigger
                 aria-keyshortcuts={`Alt+${item.mnemonic}`}
                 onMouseDown={(event) => event.preventDefault()}
               >
-                <span className="rounded-md px-2 py-1 transition-colors duration-100 ease-out group-hover:bg-canvas-foreground/5 group-hover:text-canvas-foreground/90 group-data-[state=open]:bg-canvas-foreground/8 group-data-[state=open]:text-canvas-foreground group-focus-visible:ring-2 group-focus-visible:ring-ring group-focus-visible:ring-inset motion-reduce:transition-none">
+                <span className="rounded-md px-2 py-1 transition-colors duration-100 ease-out group-hover:bg-canvas-foreground/5 group-hover:text-canvas-foreground/90 group-data-popup-open:bg-canvas-foreground/8 group-data-popup-open:text-canvas-foreground group-focus-visible:ring-2 group-focus-visible:ring-ring group-focus-visible:ring-inset motion-reduce:transition-none">
                   {renderMenuLabel(item.label, item.mnemonic, mnemonicsVisible)}
                 </span>
               </MenubarTrigger>
               <MenubarContent
                 aria-label={item.label}
-                onInteractOutside={(event) => {
-                  // Moving between triggers belongs to the same session. An
-                  // outside interaction owns its focus; don't pull it back on close.
-                  if (
-                    !(
-                      event.target instanceof Element &&
-                      event.target.closest('[role="menubar"]')
-                    )
-                  )
-                    restoreOnClose.current = false;
-                }}
-                onCloseAutoFocus={(event) => {
-                  event.preventDefault();
+                finalFocus={() => {
                   if (openMenuRef.current === "" && restoreOnClose.current)
-                    restoreFocus();
+                    return previousFocus.current?.isConnected
+                      ? previousFocus.current
+                      : false;
+                  return false;
                 }}
               >
                 {content}

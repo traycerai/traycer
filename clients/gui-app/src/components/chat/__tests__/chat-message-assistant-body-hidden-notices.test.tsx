@@ -137,7 +137,7 @@ function renderBody(
     body
   );
   const wrapped = (
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <TabHostProvider hostId={TRANSCRIPT_HOST_ID}>
         <ChatExpansionTestProviders tileInstanceId="hidden-notices-tile">
           {ui}
@@ -147,7 +147,7 @@ function renderBody(
   );
   if (transcript === null) return render(wrapped);
   return render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <TabHostProvider hostId={TRANSCRIPT_HOST_ID}>
         <ChatTranscriptProvider value={transcript}>
           <ChatExpansionTestProviders tileInstanceId="hidden-notices-tile">
@@ -471,7 +471,7 @@ describe("elapsed footer", () => {
       parentId: null,
     };
     render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <TabHostProvider hostId={TRANSCRIPT_HOST_ID}>
           <ChatTranscriptProvider
             value={{ chatId: TRANSCRIPT_CHAT_ID, hostId: TRANSCRIPT_HOST_ID }}

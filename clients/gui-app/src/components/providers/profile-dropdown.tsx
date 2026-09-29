@@ -190,7 +190,21 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     <DropdownMenu
       modal={false}
       open={open}
-      onOpenChange={(nextOpen) => {
+      onOpenChange={(nextOpen, details) => {
+        if (
+          !nextOpen &&
+          details.reason !== "presentation-loss" &&
+          (details.reason === "outside-press" || details.reason === "focus-out")
+        ) {
+          const target =
+            details.event instanceof FocusEvent
+              ? details.event.relatedTarget
+              : details.event.target;
+          if (isProfileUsageSidecarTarget(target)) {
+            details.cancel();
+            return;
+          }
+        }
         setOpen(nextOpen);
         if (!nextOpen) {
           setPreviewAnchor(null);
@@ -200,43 +214,47 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
       }}
     >
       <div className="relative w-full">
-        <DropdownMenuTrigger asChild>
-          <button
-            id={triggerId}
-            type="button"
-            aria-label={`${providerLabel} profile: ${profileDisplayLabel(activeProfile)}${terminalBadgeSuffix(activeProfile)}${activeProfile.enabled ? "" : ", Disabled"}`}
-            className="flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-transparent px-2.5 text-ui-sm text-foreground outline-none transition-colors hover:bg-input/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-open:bg-input/30 dark:bg-input/30 dark:hover:bg-input/50"
-          >
-            <AccentDot
-              profileId={activeProfile.profileId}
-              accentColor={activeProfile.accentColor}
-              label={null}
-              variant="inline"
-              size="default"
-              className={undefined}
-            />
-            <span
-              className={cn(
-                "flex min-w-0 flex-1 items-center gap-2",
-                eligibilityControls !== null && "pe-12",
-              )}
+        <DropdownMenuTrigger
+          render={
+            <button
+              id={triggerId}
+              type="button"
+              aria-label={`${providerLabel} profile: ${profileDisplayLabel(activeProfile)}${terminalBadgeSuffix(activeProfile)}${activeProfile.enabled ? "" : ", Disabled"}`}
+              className="flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-transparent px-2.5 text-ui-sm text-foreground outline-none transition-colors hover:bg-input/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-popup-open:bg-input/30 dark:bg-input/30 dark:hover:bg-input/50"
             >
-              <span className="min-w-0 flex-1 truncate text-left font-medium">
-                {profileDisplayLabel(activeProfile)}
+              <AccentDot
+                profileId={activeProfile.profileId}
+                accentColor={activeProfile.accentColor}
+                label={null}
+                variant="inline"
+                size="default"
+                className={undefined}
+              />
+              <span
+                className={cn(
+                  "flex min-w-0 flex-1 items-center gap-2",
+                  eligibilityControls !== null && "pe-12",
+                )}
+              >
+                <span className="min-w-0 flex-1 truncate text-left font-medium">
+                  {profileDisplayLabel(activeProfile)}
+                </span>
+                {activeProfile.kind === "ambient" ? (
+                  <TerminalProfileBadge />
+                ) : null}
+                {!activeProfile.enabled ? (
+                  <span className="shrink-0 text-muted-foreground">
+                    Disabled
+                  </span>
+                ) : null}
               </span>
-              {activeProfile.kind === "ambient" ? (
-                <TerminalProfileBadge />
-              ) : null}
-              {!activeProfile.enabled ? (
-                <span className="shrink-0 text-muted-foreground">Disabled</span>
-              ) : null}
-            </span>
-            <ChevronDown
-              data-slot="profile-dropdown-chevron"
-              className="size-4 shrink-0 text-muted-foreground"
-            />
-          </button>
-        </DropdownMenuTrigger>
+              <ChevronDown
+                data-slot="profile-dropdown-chevron"
+                className="size-4 shrink-0 text-muted-foreground"
+              />
+            </button>
+          }
+        />
         <ProfileEnablementSwitch
           controls={eligibilityControls}
           profile={activeProfile}
@@ -254,14 +272,11 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
         align="start"
         sideOffset={4}
         container={contentContainer}
-        className="min-w-[var(--radix-dropdown-menu-trigger-width)]"
-        onCloseAutoFocus={(event) => {
-          if (onCloseAutoFocus === null) return;
-          event.preventDefault();
+        className="min-w-[var(--anchor-width)]"
+        finalFocus={() => {
+          if (onCloseAutoFocus === null) return true;
           onCloseAutoFocus();
-        }}
-        onInteractOutside={(event) => {
-          if (isProfileUsageSidecarTarget(event.target)) event.preventDefault();
+          return false;
         }}
         onKeyDown={(event) => {
           // Item-level navigation/selection runs before the event bubbles to
@@ -321,7 +336,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
               <span className="flex w-full">
                 <DropdownMenuItem
                   disabled={createProfileDisabled}
-                  onSelect={onCreateProfile}
+                  onClick={onCreateProfile}
                 >
                   <Plus className="size-3.5" />
                   Create new profile
@@ -436,6 +451,11 @@ function ProfileSelectionControl(props: {
 }): ReactNode {
   const { profile, state, context } = props;
   const visibleDisabledReason = visibleProfileDisabledReason(state);
+  const selectionBlocked = profileSelectionBlocked(
+    profile,
+    context.eligibilityControls,
+    props.enablementPending,
+  );
   return (
     <DropdownMenuItem
       id={props.selectionId}
@@ -445,15 +465,7 @@ function ProfileSelectionControl(props: {
         }
       }}
       disabled={state.rowDisabled}
-      aria-disabled={
-        state.rowDisabled ||
-        profileSelectionBlocked(
-          profile,
-          context.eligibilityControls,
-          props.enablementPending,
-        ) ||
-        undefined
-      }
+      aria-disabled={state.rowDisabled || selectionBlocked || undefined}
       aria-label={
         props.enablementPending
           ? `${state.accessibleLabel}, Updating`
@@ -472,19 +484,10 @@ function ProfileSelectionControl(props: {
         context.onPreview(state.commitId, event.currentTarget)
       }
       onKeyDown={focusSiblingProfileSwitch}
-      onSelect={(event) => {
-        if (
-          profileSelectionBlocked(
-            profile,
-            context.eligibilityControls,
-            props.enablementPending,
-          )
-        ) {
-          event.preventDefault();
-          return;
-        }
-        context.onSelectProfile(state.commitId);
+      onClick={() => {
+        if (!selectionBlocked) context.onSelectProfile(state.commitId);
       }}
+      closeOnClick={!selectionBlocked}
     >
       <ProfileSelectionContents
         profile={profile}
@@ -617,7 +620,9 @@ function ProfileEnablementSwitch(props: {
           aria-label={`Allow agents to use ${props.label}`}
           checked={props.profile.enabled}
           disabled={props.pending}
-          aria-disabled={props.disabledReason !== null || undefined}
+          aria-disabled={
+            props.pending || props.disabledReason !== null || undefined
+          }
           className="relative before:absolute before:inset-x-0 before:-inset-y-1 before:content-['']"
           onKeyDown={(event) => {
             if (event.key !== "ArrowLeft") return;

@@ -19,12 +19,6 @@ vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "dark" }),
 }));
 
-async function waitForDismissableLayerListener(): Promise<void> {
-  await act(async () => {
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
-  });
-}
-
 describe("<Toaster /> dialog interactions", () => {
   afterEach(() => {
     toast.dismiss();
@@ -46,8 +40,6 @@ describe("<Toaster /> dialog interactions", () => {
       </>,
     );
 
-    await waitForDismissableLayerListener();
-
     act(() => {
       toast.info("Settings saved");
     });
@@ -62,7 +54,10 @@ describe("<Toaster /> dialog interactions", () => {
     });
     fireEvent.click(closeToastButton);
 
-    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    // The wrapper's `onOpenChange` forwards Base's `(open, details)` shape -
+    // asserting against the bare boolean would vacuously pass no matter what
+    // happened, since a real close call never matches a one-argument list.
+    expect(onOpenChange).not.toHaveBeenCalledWith(false, expect.anything());
   });
 
   it("renders progress with the shared close button", async () => {

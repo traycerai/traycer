@@ -185,41 +185,42 @@ function DiscoveryPopover(props: {
   );
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          onPointerDown={() => setPointerMotion(true)}
-          onKeyDown={() => setPointerMotion(false)}
-          className="onboarding-discovery-trigger -mx-1.5 flex min-h-7 items-center gap-2 rounded-md px-1.5 text-left text-ui-xs tabular-nums text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          aria-label={`Discoveries for ${providerName}`}
-          aria-describedby={descriptionId}
-        >
-          {/* One trailing slot, never two. While either list is still in
+      <PopoverTrigger
+        render={
+          <button
+            type="button"
+            onPointerDown={() => setPointerMotion(true)}
+            onKeyDown={() => setPointerMotion(false)}
+            className="onboarding-discovery-trigger -mx-1.5 flex min-h-7 items-center gap-2 rounded-md px-1.5 text-left text-ui-xs tabular-nums text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            aria-label={`Discoveries for ${providerName}`}
+            aria-describedby={descriptionId}
+          >
+            {/* One trailing slot, never two. While either list is still in
               flight the summary would read a HALF answer ("1 skill", with the
               plugins query unresolved) and the spinner sat straight after it,
               which renders as a stray glyph tacked onto the count. Pending
               says so and nothing else; settled shows the counts and the
               chevron. */}
-          <span
-            id={descriptionId}
-            className="min-w-0 flex-1 truncate tabular-nums"
-          >
-            {pending ? "Finding your setup…" : summary}
-          </span>
-          <span className="flex size-3.5 shrink-0 items-center justify-center">
-            {pending ? (
-              <MutedAgentSpinner />
-            ) : (
-              <ChevronRight aria-hidden="true" className="size-3.5" />
-            )}
-          </span>
-        </button>
-      </PopoverTrigger>
+            <span
+              id={descriptionId}
+              className="min-w-0 flex-1 truncate tabular-nums"
+            >
+              {pending ? "Finding your setup…" : summary}
+            </span>
+            <span className="flex size-3.5 shrink-0 items-center justify-center">
+              {pending ? (
+                <MutedAgentSpinner />
+              ) : (
+                <ChevronRight aria-hidden="true" className="size-3.5" />
+              )}
+            </span>
+          </button>
+        }
+      />
       <PopoverContent
         side="right"
         align="center"
         sideOffset={10}
-        hideWhenDetached
         collisionPadding={{
           top: Math.max(insets.top, 16),
           right: Math.max(insets.right, 16),
@@ -230,7 +231,7 @@ function DiscoveryPopover(props: {
         data-visible={open}
         onKeyDownCapture={() => setPointerMotion(false)}
         layout="panel"
-        className="onboarding-discovery-popover w-[min(20rem,var(--radix-popover-content-available-width))] max-h-[var(--radix-popover-content-available-height)] ring-0"
+        className="onboarding-discovery-popover group-data-anchor-hidden/popover-positioner:invisible group-data-anchor-hidden/popover-positioner:pointer-events-none w-[min(20rem,var(--available-width))] max-h-[var(--available-height)] ring-0"
         aria-label={`${providerName} skills and plugins`}
       >
         <div className="flex shrink-0 items-center gap-2.5 px-4 pb-2 pt-3">

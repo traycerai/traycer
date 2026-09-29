@@ -75,11 +75,7 @@ function renderToolbar(
 }
 
 function openMoreActionsMenu(): void {
-  // Radix's DropdownMenuTrigger opens on pointerdown, not the click event -
-  // same pattern as `epic-sidebar-filter-menu.test.tsx`.
-  fireEvent.pointerDown(screen.getByRole("button", { name: "More actions" }), {
-    button: 0,
-  });
+  fireEvent.click(screen.getByRole("button", { name: "More actions" }));
 }
 
 describe("<DocumentPreviewToolbar />", () => {

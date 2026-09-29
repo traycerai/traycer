@@ -86,7 +86,7 @@ function SharedCoachmarkHarness() {
     <section
       role="dialog"
       data-slot="dialog-content"
-      data-state="open"
+      data-open=""
       data-testid="settings-dialog"
     >
       <div ref={rootRef} data-testid="shared-guide-root">
@@ -138,7 +138,7 @@ function PopoverCoachmarkHarness() {
   const rootRef = useRef<HTMLDivElement>(null);
   return (
     <div ref={rootRef} data-testid="popover-guide-root">
-      <div data-slot="popover-content" data-state="open">
+      <div data-slot="popover-content" data-open="">
         <button type="button" data-testid="popover-target">
           Pick
         </button>
@@ -411,7 +411,7 @@ describe("FirstTaskCoachmark", () => {
 
     const dialog = document.createElement("div");
     dialog.setAttribute("data-slot", "dialog-content");
-    dialog.setAttribute("data-state", "open");
+    dialog.setAttribute("data-open", "");
     document.body.append(dialog);
     await waitFor(() =>
       expect(screen.queryByTestId("guide-coachmark")).toBeNull(),
@@ -430,7 +430,7 @@ describe("FirstTaskCoachmark", () => {
     const target = await renderReadyGuide();
     const popover = document.createElement("div");
     popover.setAttribute("data-slot", "popover-content");
-    popover.setAttribute("data-state", "open");
+    popover.setAttribute("data-open", "");
     document.body.append(popover);
     await waitFor(() =>
       expect(screen.queryByTestId("guide-coachmark")).toBeNull(),
@@ -457,7 +457,7 @@ describe("FirstTaskCoachmark", () => {
     const target = await renderReadyGuide();
     const popover = document.createElement("div");
     popover.setAttribute("data-slot", "popover-content");
-    popover.setAttribute("data-state", "open");
+    popover.setAttribute("data-open", "");
     document.body.append(popover);
     await waitFor(() =>
       expect(screen.queryByTestId("guide-coachmark")).toBeNull(),
@@ -519,7 +519,7 @@ describe("FirstTaskCoachmark", () => {
 
     const popover = document.createElement("div");
     popover.setAttribute("data-slot", "popover-content");
-    popover.setAttribute("data-state", "open");
+    popover.setAttribute("data-open", "");
     dialog.append(popover);
     await waitFor(() =>
       expect(screen.queryByTestId("guide-coachmark")).toBeNull(),

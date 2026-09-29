@@ -868,18 +868,20 @@ function ManagedCommandOutputDetails(props: {
         sideOffset={undefined}
         align={undefined}
       >
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="muted"
-            size="icon"
-            aria-label="Shell details"
-            data-testid="managed-command-output-details"
-            className="size-6"
-          >
-            <Info aria-hidden className="size-3.5" />
-          </Button>
-        </PopoverTrigger>
+        <PopoverTrigger
+          render={
+            <Button
+              type="button"
+              variant="muted"
+              size="icon"
+              aria-label="Shell details"
+              data-testid="managed-command-output-details"
+              className="size-6"
+            >
+              <Info aria-hidden className="size-3.5" />
+            </Button>
+          }
+        />
       </TooltipWrapper>
       <PopoverContent align="end" side="bottom" className="w-[min(90vw,26rem)]">
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-ui-xs">

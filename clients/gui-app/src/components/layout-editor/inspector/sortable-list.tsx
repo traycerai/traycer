@@ -818,8 +818,12 @@ function SortableStackMembers(props: {
  * the row. The row's own grab is a `<button>` too, and it IS the row: the grip,
  * the name and a divider's line are all inside it, so a test for any button
  * refused every drag that started where a hand would take hold.
+ *
+ * `input` too: a Base radio or checkbox forwards its click to a hidden form
+ * input beside its button, and that second click bubbles through the row -
+ * without this, picking a row's Shown/Hidden segment toggled its disclosure.
  */
-const ROW_CONTROL_SELECTOR = "button:not([data-row-grab])";
+const ROW_CONTROL_SELECTOR = "button:not([data-row-grab]), input";
 
 /** Everything the row's disclosure opened, which the row itself must not claim. */
 const DETAIL_SELECTOR = "[data-sortable-detail]";

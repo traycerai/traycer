@@ -86,7 +86,7 @@ function shimmerGlyph(section: string): HTMLElement | SVGElement | null {
  */
 function stripUi(value: ChatDockCompactStripValue, snapshotLoaded: boolean) {
   return (
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <ChatDockCompactStripProvider value={value}>
         <ChatDockCompactStrip
           actionsRef={() => undefined}
@@ -134,7 +134,7 @@ describe("<ChatDockCompactStrip />", () => {
 
   it("renders nothing outside a provider", () => {
     const { container } = render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <ChatDockCompactStrip
           actionsRef={() => undefined}
           snapshotLoaded

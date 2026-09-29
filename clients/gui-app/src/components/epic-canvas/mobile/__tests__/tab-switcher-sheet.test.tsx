@@ -123,7 +123,7 @@ describe("<TabSwitcherSheet />", () => {
   it("labels the chats category 'Chats' and renders the active tab as an underline, not a box", () => {
     renderSheet(true, () => {});
     const active = screen.getByRole("tab", { name: "Chats" });
-    expect(active.getAttribute("data-state")).toBe("active");
+    expect(active.hasAttribute("data-active")).toBe(true);
     // The visible active indicator is a collision-free `::before` underline. The
     // trigger's single `::after` is claimed by the mobile touch hit-slop, so
     // ui/tabs' `after:bg-foreground` indicator legitimately stays in the class
@@ -232,8 +232,8 @@ describe("<TabSwitcherSheet />", () => {
     });
     renderSheet(true, () => {});
     expect(
-      screen.getByRole("tab", { name: "Browsers" }).getAttribute("data-state"),
-    ).toBe("active");
+      screen.getByRole("tab", { name: "Browsers" }).hasAttribute("data-active"),
+    ).toBe(true);
     expect(
       screen.getByRole("note", { name: "browsers category body" }),
     ).toBeTruthy();
@@ -258,8 +258,8 @@ describe("<TabSwitcherSheet />", () => {
     });
     renderSheet(true, () => {});
     expect(
-      screen.getByRole("tab", { name: "Comments" }).getAttribute("data-state"),
-    ).toBe("active");
+      screen.getByRole("tab", { name: "Comments" }).hasAttribute("data-active"),
+    ).toBe(true);
     expect(screen.getByTestId("mock-comments-list")).toBeTruthy();
   });
 
@@ -285,8 +285,8 @@ describe("<TabSwitcherSheet />", () => {
     });
     renderSheet(true, () => {});
     expect(
-      screen.getByRole("tab", { name: "Sharing" }).getAttribute("data-state"),
-    ).toBe("active");
+      screen.getByRole("tab", { name: "Sharing" }).hasAttribute("data-active"),
+    ).toBe(true);
     expect(screen.queryByTestId("mock-agents-list")).toBeNull();
     const embed = await screen.findByTestId("mock-panel-embed");
     expect(embed.dataset.category).toBe("sharing");
@@ -312,8 +312,8 @@ describe("<TabSwitcherSheet />", () => {
     expect(
       screen
         .getByRole("tab", { name: "Pull Requests" })
-        .getAttribute("data-state"),
-    ).toBe("active");
+        .hasAttribute("data-active"),
+    ).toBe(true);
   });
 
   it("keeps a persisted pull-requests selection when stream support is unknown", () => {

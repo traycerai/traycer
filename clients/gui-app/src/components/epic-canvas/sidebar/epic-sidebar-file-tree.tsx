@@ -780,7 +780,7 @@ function FileTreeBodyForResolvedHost(
           className="h-7"
         />
       </div>
-      {/* `data-vaul-no-drag`: inside the mobile switcher sheet this tree is a
+      {/* `data-base-ui-swipe-ignore`: inside the mobile switcher sheet this tree is a
           vaul drawer descendant, and vaul's `shouldDrag` walks up from the
           touch target looking for a scroller. Pierre's scroller lives in a
           SHADOW ROOT and a touch inside one retargets to the host, so that walk
@@ -804,7 +804,7 @@ function FileTreeBodyForResolvedHost(
         <div
           {...bridge.wrapperProps}
           ref={touchShieldRef}
-          data-vaul-no-drag=""
+          data-base-ui-swipe-ignore=""
           className="relative min-h-0 flex-1"
         >
           {/* `invisible`, not unmount: the model keeps its DOM/state for the

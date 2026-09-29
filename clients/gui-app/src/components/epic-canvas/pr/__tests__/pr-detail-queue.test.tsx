@@ -66,11 +66,12 @@ describe("PrDetailQueue", () => {
     renderQueue(queue({ isWindowTruncated: true }), () => undefined);
 
     const note = screen.getByTestId("pr-detail-queue-truncated");
-    expect(tooltipTextFor(note)).toMatch(/older feedback may exist/u);
-    // The sentence is not rendered as visible body text anywhere.
+    // The sentence is not rendered as visible body text anywhere. Checked
+    // before the tooltip opens, since the open tooltip carries it.
     expect(
       screen.queryByText(/Derived from the last 20 activity items/u),
     ).toBeNull();
+    expect(tooltipTextFor(note)).toMatch(/older feedback may exist/u);
   });
 
   it("shows the caveat in the header, not below the rows", () => {

@@ -97,7 +97,10 @@ function settleGroupHandoff(): void {
  * `DropdownMenuContent`, which is not the mechanism this pins.
  */
 function openDropdownByKeyboard(trigger: HTMLElement): void {
-  fireEvent.keyDown(trigger, { key: "Enter" });
+  // Base's own trigger opens on the native button-activation Enter/Space
+  // keyup, which jsdom does not synthesize for a bare `fireEvent.keyDown` -
+  // a real click is the reliable stand-in for "opened, not by pointer".
+  fireEvent.click(trigger);
 }
 
 interface TestCardProps {
@@ -429,11 +432,13 @@ describe("HoverCard", () => {
         <div>
           <TestCard />
           <ContextMenu>
-            <ContextMenuTrigger asChild>
-              <button type="button" data-testid="menu-trigger">
-                Menu row
-              </button>
-            </ContextMenuTrigger>
+            <ContextMenuTrigger
+              render={
+                <button type="button" data-testid="menu-trigger">
+                  Menu row
+                </button>
+              }
+            />
             <ContextMenuContent>
               <ContextMenuItem>Item</ContextMenuItem>
             </ContextMenuContent>
@@ -482,11 +487,13 @@ describe("HoverCard", () => {
         <div>
           <TestCard open={false} onOpenChange={onOpenChange} />
           <ContextMenu>
-            <ContextMenuTrigger asChild>
-              <button type="button" data-testid="menu-trigger">
-                Menu row
-              </button>
-            </ContextMenuTrigger>
+            <ContextMenuTrigger
+              render={
+                <button type="button" data-testid="menu-trigger">
+                  Menu row
+                </button>
+              }
+            />
             <ContextMenuContent>
               <ContextMenuItem>Item</ContextMenuItem>
             </ContextMenuContent>
@@ -507,11 +514,13 @@ describe("HoverCard", () => {
         <div>
           <TestCard />
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button type="button" data-testid="dropdown-trigger">
-                Dropdown
-              </button>
-            </DropdownMenuTrigger>
+            <DropdownMenuTrigger
+              render={
+                <button type="button" data-testid="dropdown-trigger">
+                  Dropdown
+                </button>
+              }
+            />
             <DropdownMenuContent>
               <DropdownMenuItem>Item</DropdownMenuItem>
             </DropdownMenuContent>
@@ -572,11 +581,13 @@ describe("HoverCard", () => {
       <ContextMenu>
         <HoverCard
           trigger={
-            <ContextMenuTrigger asChild>
-              <button type="button" data-testid="row">
-                Row
-              </button>
-            </ContextMenuTrigger>
+            <ContextMenuTrigger
+              render={
+                <button type="button" data-testid="row">
+                  Row
+                </button>
+              }
+            />
           }
           content={<span>Body</span>}
           appearance="preview"

@@ -2202,23 +2202,35 @@ describe("<EpicsListPanel />", () => {
 
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      // Radix's tooltip trigger opens on `pointermove` (not `pointerenter`),
-      // behind the provider's 500ms open delay. This open is driven purely
-      // by the pointer, so - unlike a focus-opened tooltip - it survives an
-      // unrelated focus move elsewhere in the row.
-      fireEvent.pointerMove(pin, { pointerType: "mouse" });
+      // The tooltip trigger opens on hover behind the provider's 500ms open
+      // delay. This open is driven purely by the pointer, so - unlike a
+      // focus-opened tooltip - it survives an unrelated focus move elsewhere
+      // in the row. The hover hook opens on the REST timer, which only starts
+      // once a native `mousemove` is seen after `mouseenter` - a bare
+      // `pointerEnter`/`pointerMove` dispatches only `PointerEvent`s, so the
+      // full native sequence has to be fired: pointerEnter (pointer-type
+      // tracking) → mouseEnter → mouseMove (starts the rest timer).
+      fireEvent.pointerEnter(pin, { pointerType: "mouse" });
+      fireEvent.mouseEnter(pin);
+      fireEvent.mouseMove(pin);
       act(() => {
         vi.advanceTimersByTime(1000);
       });
 
-      const hoveredTooltips = screen.getAllByRole("tooltip");
-      expect(
-        hoveredTooltips.some(
-          (tooltip) =>
-            tooltip.textContent ===
-            "Pinning this task needs a newer Traycer host version. Update the host that serves it.",
-        ),
-      ).toBe(true);
+      // `getAllByRole` alone can run one tick before the tooltip's floating
+      // position finishes computing and the node actually presents - retry
+      // rather than assume the advanced timer already committed it (this is
+      // exactly what `shouldAdvanceTime` above keeps working for).
+      await waitFor(() => {
+        const hoveredTooltips = screen.getAllByRole("tooltip");
+        expect(
+          hoveredTooltips.some(
+            (tooltip) =>
+              tooltip.textContent ===
+              "Pinning this task needs a newer Traycer host version. Update the host that serves it.",
+          ),
+        ).toBe(true);
+      });
 
       // Keyboard-focus the row's activation target - no pointer event -
       // which starts the row's own hold over the status glyph's tooltip.
@@ -2230,9 +2242,9 @@ describe("<EpicsListPanel />", () => {
       const distinctTexts = new Set(
         tooltipsAfterHold.map((tooltip) => tooltip.textContent),
       );
-      // The hover-opened pin tooltip closed: the hold sends Radix's own
-      // exclusivity signal (`closeOpenTooltips`) before it opens, so only
-      // the status glyph's sentence remains.
+      // The hover-opened pin tooltip closed: opening a sibling tooltip
+      // signals the shared Provider group to close whatever else is open
+      // first, so only the status glyph's sentence remains.
       expect(distinctTexts.size).toBe(1);
       expect(
         tooltipsAfterHold.every(
@@ -2315,9 +2327,9 @@ describe("<EpicsListPanel />", () => {
     expect(
       tooltips.some((tooltip) => tooltip.textContent === importedTooltip),
     ).toBe(false);
-    // Radix can render a visually-hidden duplicate of the same open tooltip's
-    // content alongside the positioned one - dedupe by text so that harmless
-    // duplication cannot be misread as a second, distinct tooltip being open.
+    // Dedupe by text so that any harmless duplicate render of the same open
+    // tooltip's content cannot be misread as a second, distinct tooltip being
+    // open.
     const distinctTooltipTexts = new Set(
       tooltips.map((tooltip) => tooltip.textContent),
     );

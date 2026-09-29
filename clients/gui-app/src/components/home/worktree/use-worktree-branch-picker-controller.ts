@@ -225,10 +225,10 @@ export function useWorktreeBranchPickerController(
     ],
   );
 
-  const handleCloseAutoFocus = useCallback((event: Event): void => {
-    if (!suppressTriggerFocusRef.current) return;
+  const handleFinalFocus = useCallback((): boolean => {
+    const restore = !suppressTriggerFocusRef.current;
     suppressTriggerFocusRef.current = false;
-    event.preventDefault();
+    return restore;
   }, []);
 
   const setQuery = useCallback((nextQuery: string): void => {
@@ -245,7 +245,7 @@ export function useWorktreeBranchPickerController(
       effectiveActiveEntryId,
       emptyLabel,
       filteredRows,
-      handleCloseAutoFocus,
+      handleFinalFocus,
       handleContentKeyDown,
       hasQuery,
       idPrefix,

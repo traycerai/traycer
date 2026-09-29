@@ -275,23 +275,25 @@ function AutoCleanupPolicyChip(props: {
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-haspopup="dialog"
-          aria-label="Automatic cleanup settings"
-          data-testid="worktree-auto-cleanup-chip"
-          className={cn(
-            AUTO_CLEANUP_CHIP_CLASS,
-            "hover:bg-foreground/5 hover:text-foreground",
-          )}
-        >
-          <AutoCleanupChipFace
-            tone={autoCleanupChipTone(policy)}
-            label={autoCleanupChipLabel(policy)}
-          />
-        </button>
-      </PopoverTrigger>
+      <PopoverTrigger
+        render={
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            aria-label="Automatic cleanup settings"
+            data-testid="worktree-auto-cleanup-chip"
+            className={cn(
+              AUTO_CLEANUP_CHIP_CLASS,
+              "hover:bg-foreground/5 hover:text-foreground",
+            )}
+          >
+            <AutoCleanupChipFace
+              tone={autoCleanupChipTone(policy)}
+              label={autoCleanupChipLabel(policy)}
+            />
+          </button>
+        }
+      />
       <AutoCleanupPopoverPanel
         policy={policy}
         busy={setPolicy.isPending}
@@ -366,11 +368,9 @@ function AutoCleanupPopoverPanel(props: {
       side="bottom"
       className="w-[min(88vw,20rem)]"
       data-testid="worktree-auto-cleanup-popover"
-      onOpenAutoFocus={(event) => {
+      initialFocus={() => {
         const node = switchRef.current;
-        if (node === null || node.hasAttribute("disabled")) return;
-        event.preventDefault();
-        node.focus();
+        return node && !node.hasAttribute("disabled") ? node : true;
       }}
     >
       <div className="flex items-center justify-between gap-2">

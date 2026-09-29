@@ -26,15 +26,20 @@ const TAB_CLOSE_TIMEOUT_MS = 2_000;
  *
  * `send` rejects - never hangs - when Chrome answers with an error, when the
  * socket errors or closes (every outstanding command fails with the reason),
- * when the socket is no longer open, or when no answer arrives within
- * `COMMAND_TIMEOUT_MS`.
+ * when the socket is no longer open, or when no answer arrives within the
+ * command timeout (`COMMAND_TIMEOUT_MS` by default). Gates can observe every
+ * protocol message and set a longer timeout through the optional second
+ * argument.
  *
  * `on` calls `handler(params)` for every CDP event named `method` (a message
  * with no `id`, e.g. `Runtime.exceptionThrown`) and returns the function that
  * unsubscribes it. It adds no wait of its own: a driver that waits on an event
  * does so in its own bounded polling loop, like every other page-side wait.
  */
-export function connectCdp(webSocketDebuggerUrl) {
+export function connectCdp(
+  webSocketDebuggerUrl,
+  { onEvent, commandTimeoutMs = COMMAND_TIMEOUT_MS } = {},
+) {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(webSocketDebuggerUrl);
     const pending = new Map();
@@ -62,6 +67,7 @@ export function connectCdp(webSocketDebuggerUrl) {
     });
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(String(event.data));
+      onEvent?.(message);
       if (typeof message.id !== "number") {
         for (const handler of eventHandlers.get(message.method) ?? []) {
           handler(message.params);
@@ -88,12 +94,8 @@ export function connectCdp(webSocketDebuggerUrl) {
             const id = ++nextId;
             const timer = setTimeout(() => {
               pending.delete(id);
-              requestReject(
-                new Error(
-                  `CDP ${method} got no answer within ${COMMAND_TIMEOUT_MS}ms`,
-                ),
-              );
-            }, COMMAND_TIMEOUT_MS);
+              requestReject(new Error(`CDP timeout: ${method}`));
+            }, commandTimeoutMs);
             const request = {
               resolve: (result) => {
                 clearTimeout(timer);

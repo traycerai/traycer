@@ -482,6 +482,18 @@ async function rightClickAt(
   });
 }
 
+/** False while a capture-phase listener above the body stops clicks. */
+function clickReachesBody(): boolean {
+  let reached = false;
+  const onClick = (): void => {
+    reached = true;
+  };
+  document.body.addEventListener("click", onClick, true);
+  document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  document.body.removeEventListener("click", onClick, true);
+  return reached;
+}
+
 /**
  * jsdom may construct pointer events without `pointerType`. The long-press
  * path keys off that field, so stamp it (and the press point) onto whatever
@@ -613,7 +625,7 @@ function renderArtifactTree(): HTMLElement {
   render(
     <QueryClientProvider client={new QueryClient()}>
       <EpicSessionContext.Provider value={handle}>
-        <TooltipProvider delayDuration={150}>
+        <TooltipProvider delay={150}>
           <DndContext>
             <ArtifactTreePanelBody epicId={EPIC_ID} tabId={TAB_ID} />
           </DndContext>
@@ -630,7 +642,7 @@ function renderCloudRow(): HTMLElement {
   render(
     <QueryClientProvider client={new QueryClient()}>
       <EpicSessionContext.Provider value={handle}>
-        <TooltipProvider delayDuration={150}>
+        <TooltipProvider delay={150}>
           <EpicSidebarCloudChatRow
             chat={CLOUD_CHAT}
             tabId={TAB_ID}
@@ -669,6 +681,19 @@ afterEach(() => {
   dndRegistrations.droppableIds = [];
   resetOverlayMounted();
   useNewConversationModalOpenStore.getState().close();
+  // A held mouse pointerdown (see "does not open the context menu on a mouse
+  // pointerdown held for 1000ms") activates dnd-kit's delay-activated
+  // PointerSensor; on drag end dnd-kit installs a one-shot capture-phase
+  // click listener that stopPropagation()s the next click and removes itself
+  // on its own timer. Switching back to real timers before that timer fires
+  // leaves the suppressor attached, silently eating the next test's click -
+  // flush every pending fake timer first so it always removes itself here.
+  // Only tests that opted into fake timers have any to flush.
+  if (vi.isFakeTimers()) {
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+  }
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -851,6 +876,18 @@ describe("sidebar row first-use overlays", () => {
       screen.queryByTestId(`epic-sidebar-context-rename-${ROW_A}`),
     ).toBeNull();
     expect(overlayMounted.contextMenu).toBe(0);
+
+    // A held mouse pointerdown this long activates dnd-kit's delay-activated
+    // PointerSensor. Ending the gesture and flushing here - rather than
+    // leaving it to the ambient `cleanup()`/unmount - is what lets dnd-kit's
+    // own drag-end teardown (including the one-shot capture-phase click
+    // suppressor it installs and removes on its own timer) run and remove
+    // itself before real timers come back, so it never leaks into a later
+    // test's click.
+    firePointer(row, "pointerup", "mouse");
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
   });
 
   it("keeps a touch press on a never-touched More button from also arming the row's long-press context menu", () => {
@@ -861,17 +898,21 @@ describe("sidebar row first-use overlays", () => {
       const more = screen.getByTestId(`epic-sidebar-more-${ROW_A}`);
       // The row wrapper's own long-press timer arms on the SAME pointerdown,
       // via bubbling from the More button - it must see that the trigger
-      // already consumed this event (`preventDefault`) and skip arming.
+      // already consumed this event (`preventDefault`) and skip arming. Under
+      // Base a tap opens the dropdown on the CLICK that follows, never the
+      // pointerdown alone, so a bare pointerdown proves only the guard here.
       firePointer(more, "pointerdown", "touch");
-      expect(screen.getAllByRole("menu")).toHaveLength(1);
       act(() => {
         vi.advanceTimersByTime(700);
       });
-      expect(screen.getAllByRole("menu")).toHaveLength(1);
+      expect(screen.queryAllByRole("menu")).toHaveLength(0);
       expect(
         screen.queryByTestId(`epic-sidebar-context-rename-${ROW_A}`),
       ).toBeNull();
       expect(overlayMounted.contextMenu).toBe(0);
+
+      fireEvent.click(more);
+      expect(screen.getAllByRole("menu")).toHaveLength(1);
       expect(overlayMounted.dropdownMenu).toBe(1);
     } finally {
       vi.useRealTimers();
@@ -885,15 +926,17 @@ describe("sidebar row first-use overlays", () => {
       expectNoOverlayRoots();
       const more = screen.getByTestId(`epic-sidebar-more-${ROW_A}`);
       firePointer(more, "pointerdown", "pen");
-      expect(screen.getAllByRole("menu")).toHaveLength(1);
       act(() => {
         vi.advanceTimersByTime(700);
       });
-      expect(screen.getAllByRole("menu")).toHaveLength(1);
+      expect(screen.queryAllByRole("menu")).toHaveLength(0);
       expect(
         screen.queryByTestId(`epic-sidebar-context-rename-${ROW_A}`),
       ).toBeNull();
       expect(overlayMounted.contextMenu).toBe(0);
+
+      fireEvent.click(more);
+      expect(screen.getAllByRole("menu")).toHaveLength(1);
       expect(overlayMounted.dropdownMenu).toBe(1);
     } finally {
       vi.useRealTimers();
@@ -920,17 +963,19 @@ describe("sidebar row first-use overlays", () => {
   it("keeps never-touched row text, roles, and more-button aria equal to a closed Radix trigger", () => {
     const closed = render(
       <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label={`Agent actions for ${TITLE_A}`}
-            data-testid={`epic-sidebar-more-${ROW_A}`}
-          >
-            more
-          </Button>
-        </DropdownMenuTrigger>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={`Agent actions for ${TITLE_A}`}
+              data-testid={`epic-sidebar-more-${ROW_A}`}
+            >
+              more
+            </Button>
+          }
+        />
       </DropdownMenu>,
     );
     const closedSnapshot = moreTriggerSnapshot(
@@ -1097,6 +1142,13 @@ describe("sidebar row first-use overlays", () => {
     // gesture's own end - a later test's real keyboard activation of an
     // unrelated Radix menu item silently no-ops with those still attached.
     await user.pointer([{ keys: "[/MouseLeft]", target: row }]);
+    // The drag's end leaves dnd-kit's click suppressor (see afterEach) on the
+    // document until 50ms after its sensor detaches, and real timers flush
+    // nothing. Two tests on, the artifact more menu's first click landed
+    // inside that window on CI and was eaten, so the menu never opened.
+    await waitFor(() => {
+      expect(clickReachesBody()).toBe(true);
+    });
   });
 
   it("mounts no overlay roots on a never-touched artifact row", () => {
@@ -1220,15 +1272,17 @@ describe("sidebar row first-use overlays", () => {
       expectNoOverlayRoots();
       const add = screen.getByTestId(`epic-sidebar-add-${ART_A}`);
       firePointer(add, "pointerdown", "touch");
-      expect(screen.getAllByRole("menu")).toHaveLength(1);
       act(() => {
         vi.advanceTimersByTime(700);
       });
-      expect(screen.getAllByRole("menu")).toHaveLength(1);
+      expect(screen.queryAllByRole("menu")).toHaveLength(0);
       expect(
         screen.queryByTestId(`epic-sidebar-context-rename-${ART_A}`),
       ).toBeNull();
       expect(overlayMounted.contextMenu).toBe(0);
+
+      fireEvent.click(add);
+      expect(screen.getAllByRole("menu")).toHaveLength(1);
       expect(overlayMounted.dropdownMenu).toBe(1);
     } finally {
       vi.useRealTimers();

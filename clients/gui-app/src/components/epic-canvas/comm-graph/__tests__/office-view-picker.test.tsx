@@ -22,13 +22,10 @@ import { OFFICE_VIEW_CHOICES } from "@/lib/comm-graph/office/office-view-vocabul
 import type { OfficeViewChoice } from "@/stores/epics/canvas/types";
 
 function openPicker(): void {
-  // Radix opens on pointerdown, not click - a bare click leaves the menu shut
-  // and every following query passes vacuously.
-  fireEvent.pointerDown(screen.getByTestId("comm-graph-office-view-picker"), {
-    button: 0,
-    ctrlKey: false,
-    pointerType: "mouse",
-  });
+  // Base's menu trigger is a native toggle button - it opens on click, not
+  // (Radix's) pointerdown. A bare pointerdown leaves the menu shut and every
+  // following query passes vacuously.
+  fireEvent.click(screen.getByTestId("comm-graph-office-view-picker"));
 }
 
 function renderPicker(props: {
@@ -95,6 +92,6 @@ describe("OfficeViewPicker", () => {
     const classes = screen.getByRole("menu").className.split(/\s+/);
     expect(classes).toContain("w-[90vw]");
     expect(classes).toContain("max-w-sm");
-    expect(classes).not.toContain("w-(--radix-dropdown-menu-trigger-width)");
+    expect(classes).not.toContain("w-(--anchor-width)");
   });
 });

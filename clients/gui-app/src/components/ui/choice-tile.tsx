@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
  * pinned to its top-right corner, and every state it draws is read off that
  * radio, so the tile can never say "chosen" while the radio says otherwise:
  *
- * - **Chosen** (`data-state=checked` on the radio): the accent border and a
+ * - **Chosen** (`data-checked` on the radio): the accent border and a
  *   primary tint. `bg-primary/5` is an alpha of the accent, not `bg-muted`,
  *   so it survives every preset's raised surface.
  * - **Focused** (the radio is `:focus-visible`): the radio's own ring,
@@ -29,7 +29,7 @@ function ChoiceTile({ className, ...props }: React.ComponentProps<"div">) {
       className={cn(
         "relative flex min-w-0 cursor-pointer flex-col gap-1.5 rounded-lg border border-border/60 p-3.5 transition-colors",
         "*:data-[slot=radio-group-item]:absolute *:data-[slot=radio-group-item]:top-3.5 *:data-[slot=radio-group-item]:right-3.5",
-        "has-data-[state=checked]:border-primary has-data-[state=checked]:bg-primary/5",
+        "has-data-checked:border-primary has-data-checked:bg-primary/5",
         "has-[[data-slot=radio-group-item]:focus-visible]:ring-3 has-[[data-slot=radio-group-item]:focus-visible]:ring-ring/50",
         "has-[[data-slot=radio-group-item]:disabled]:cursor-default",
         className,

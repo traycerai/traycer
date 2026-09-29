@@ -34,13 +34,26 @@ interface UncheckedBorder {
   readonly alpha: number;
 }
 
-/** The `border border-<token>[/<alpha>]` pair on the unchecked box. */
-function uncheckedBorder(componentFile: string): UncheckedBorder {
-  const source = readFileSync(path.join(uiDir, componentFile), "utf8");
+/**
+ * The `border border-<token>[/<alpha>]` pair on the unchecked box, read from
+ * `fromFunction` onward: `radio-group.tsx` carries a SECOND "border
+ * border-<token>" pair on its group wrapper (the segmented/row variants),
+ * so matching the whole file risks picking that one up instead of the dot.
+ */
+function uncheckedBorder(
+  componentFile: string,
+  fromFunction: string,
+): UncheckedBorder {
+  const whole = readFileSync(path.join(uiDir, componentFile), "utf8");
+  const start = whole.indexOf(`function ${fromFunction}(`);
+  if (start === -1) {
+    throw new Error(`${componentFile}: expected a function ${fromFunction}`);
+  }
+  const source = whole.slice(start);
   const match = /\bborder border-([a-z-]+)(?:\/(\d+))?\s/.exec(source);
   if (match === null) {
     throw new Error(
-      `${componentFile}: expected a "border border-<token>" pair`,
+      `${componentFile}: expected a "border border-<token>" pair in ${fromFunction}`,
     );
   }
   // `.at` types the optional alpha group as possibly absent, as it is.
@@ -52,7 +65,7 @@ function uncheckedBorder(componentFile: string): UncheckedBorder {
 }
 
 /**
- * The off Switch's track border and thumb: `data-[state=unchecked]:<utility>-<token>`
+ * The off Switch's track border and thumb: `data-unchecked:<utility>-<token>`
  * in switch.tsx, the first for the track and the second for the thumb.
  */
 function switchOffTokens(): {
@@ -60,10 +73,8 @@ function switchOffTokens(): {
   readonly thumb: string;
 } {
   const source = readFileSync(path.join(uiDir, "switch.tsx"), "utf8");
-  const border = /data-\[state=unchecked\]:border-([a-z-]+)\s/.exec(source);
-  const thumbs = [
-    ...source.matchAll(/data-\[state=unchecked\]:bg-([a-z-]+)(?=[\s"])/g),
-  ];
+  const border = /data-unchecked:border-([a-z-]+)\s/.exec(source);
+  const thumbs = [...source.matchAll(/data-unchecked:bg-([a-z-]+)(?=[\s"])/g)];
   const thumb = thumbs.at(-1);
   if (border === null || thumb === undefined) {
     throw new Error("switch.tsx: expected an unchecked border and thumb token");
@@ -73,8 +84,8 @@ function switchOffTokens(): {
 
 const SWITCH_OFF = switchOffTokens();
 const UNCHECKED_OUTLINES: ReadonlyArray<readonly [string, UncheckedBorder]> = [
-  ["checkbox", uncheckedBorder("checkbox.tsx")],
-  ["radio", uncheckedBorder("radio-group.tsx")],
+  ["checkbox", uncheckedBorder("checkbox.tsx", "Checkbox")],
+  ["radio", uncheckedBorder("radio-group.tsx", "RadioGroupItem")],
 ];
 const MIN_CONTRAST = 3;
 

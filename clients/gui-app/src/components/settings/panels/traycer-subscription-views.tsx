@@ -79,7 +79,19 @@ export function TraycerAccountSelect({
 }): ReactNode {
   if (teams.length === 0) return null;
   return (
-    <Select value={value} onValueChange={onValueChange}>
+    <Select
+      items={[
+        { value: PERSONAL_VALUE, label: "Personal" },
+        ...teams.map((team) => ({
+          value: `${TEAM_VALUE_PREFIX}${team.team.id}`,
+          label: team.team.slug,
+        })),
+      ]}
+      value={value}
+      onValueChange={(value) => {
+        if (value !== null) onValueChange(value);
+      }}
+    >
       <SelectTrigger size="sm" aria-label="Account" className="w-full">
         <SelectValue />
       </SelectTrigger>

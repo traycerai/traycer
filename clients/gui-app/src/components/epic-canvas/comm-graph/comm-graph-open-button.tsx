@@ -57,7 +57,7 @@ export function CommGraphOpenMenuItem(props: {
   return (
     <DropdownMenuItem
       disabled={props.disabled}
-      onSelect={openGraph}
+      onClick={openGraph}
       data-testid="epic-sidebar-more-open-comm-graph"
     >
       <Building2 className="size-4" />

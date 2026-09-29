@@ -101,10 +101,10 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
                 return (
                   <CommandItem
                     key={worktreeRowKey(row)}
-                    value={`${label} ${secondary} ${row.runningDir}`}
+                    itemKey={`${label} ${secondary} ${row.runningDir}`}
                     disabled={disabled}
                     data-checked={selected ? "true" : undefined}
-                    onSelect={() => {
+                    onAction={() => {
                       if (disabled) return;
                       props.onSelect(row);
                     }}

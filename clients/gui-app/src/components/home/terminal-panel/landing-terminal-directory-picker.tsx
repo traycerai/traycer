@@ -85,8 +85,8 @@ export function LandingTerminalDirectoryPicker(
     >
       <FilePathRevealProvider>
         <Command
-          value={selectedPath}
-          onValueChange={(nextPath) => {
+          highlightedValue={selectedPath}
+          onHighlightChange={(nextPath) => {
             setSelection({
               primaryPath: props.primaryWorkspacePath,
               selectedPath: nextPath,
@@ -94,7 +94,7 @@ export function LandingTerminalDirectoryPicker(
           }}
           label="Create terminal in workspace"
           aria-busy={props.isPending}
-          loop
+          loopNavigation
           onKeyDown={handleKeyDown}
           variant="embedded"
           className="h-full min-h-0"
@@ -135,8 +135,8 @@ export function LandingTerminalDirectoryPicker(
               {props.workspacePaths.map((workspacePath) => (
                 <CommandItem
                   key={workspacePath}
-                  value={workspacePath}
-                  onSelect={() => props.onSelect(workspacePath)}
+                  itemKey={workspacePath}
+                  onAction={() => props.onSelect(workspacePath)}
                   disabled={props.isPending}
                   className="items-start"
                 >

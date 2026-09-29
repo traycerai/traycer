@@ -179,7 +179,7 @@ function renderWithProviders(node: React.ReactNode): void {
   });
   render(
     <QueryClientProvider client={client}>
-      <TooltipProvider delayDuration={0}>{node}</TooltipProvider>
+      <TooltipProvider delay={0}>{node}</TooltipProvider>
     </QueryClientProvider>,
   );
 }

@@ -102,8 +102,9 @@ interface PopoverStubProps {
 let lastPopoverProps: PopoverStubProps | null = null;
 
 vi.mock("@/components/layout/header/rate-limit-popover", async () => {
-  const { PopoverContent } = await import("@/components/ui/popover");
+  const { Popover, PopoverContent } = await import("@/components/ui/popover");
   return {
+    RateLimitPopoverRoot: Popover,
     RateLimitPopover: (props: PopoverStubProps) => {
       lastPopoverProps = { side: props.side, align: props.align };
       return (
@@ -172,7 +173,7 @@ vi.mock("@/components/resources/resource-monitor-popover", async () => {
         data-claims-open-action={String(props.claimsOpenAction)}
       >
         <Popover>
-          <PopoverTrigger asChild>{props.triggerNode}</PopoverTrigger>
+          <PopoverTrigger render={props.triggerNode} />
           <PopoverContent data-testid="resource-monitor-panel" />
         </Popover>
       </div>

@@ -613,7 +613,7 @@ function CommGraphSectionedRow(props: {
         >
           <ChevronDown
             aria-hidden
-            className="size-3.5 shrink-0 transition-transform group-data-[state=open]/comm-row:rotate-180"
+            className="size-3.5 shrink-0 transition-transform group-data-panel-open/comm-row:rotate-180"
           />
         </CollapsibleTrigger>
       </div>

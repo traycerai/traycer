@@ -233,22 +233,24 @@ export function ShellProgramCombobox(props: {
         }
       }}
     >
-      <PopoverTrigger asChild>
-        <button
-          ref={triggerRef}
-          type="button"
-          disabled={disabled}
-          className="inline-flex w-[min(60vw,22rem)] items-center gap-2 rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-left text-ui-sm transition-colors hover:bg-foreground/5 disabled:opacity-50"
-        >
-          <TriggerLabel
-            synthesised={synthesised}
-            value={value}
-            matched={matched}
-            defaultEntry={defaultEntry}
-          />
-          <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
-        </button>
-      </PopoverTrigger>
+      <PopoverTrigger
+        render={
+          <button
+            ref={triggerRef}
+            type="button"
+            disabled={disabled}
+            className="inline-flex w-[min(60vw,22rem)] items-center gap-2 rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-left text-ui-sm transition-colors hover:bg-foreground/5 disabled:opacity-50"
+          >
+            <TriggerLabel
+              synthesised={synthesised}
+              value={value}
+              matched={matched}
+              defaultEntry={defaultEntry}
+            />
+            <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
+          </button>
+        }
+      />
       <PopoverContent
         layout="bare"
         align="end"

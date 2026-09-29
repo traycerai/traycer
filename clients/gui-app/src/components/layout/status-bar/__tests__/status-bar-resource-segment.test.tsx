@@ -73,7 +73,7 @@ function liveProjection(hostId: string | null): GlobalResourceProjection {
 
 function renderSegment(props: { readonly hasExplicitPick: boolean }): void {
   render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <StatusBarResourceSegment
         hostId="host-b"
         hostLabel="Office Linux"

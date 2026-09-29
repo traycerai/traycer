@@ -1469,8 +1469,8 @@ describe("the bound activation offer's auto-open reaches a person who has moved 
     expect(
       screen
         .getByTestId("host-overview-tab-panel-ports")
-        .getAttribute("data-state"),
-    ).toBe("active");
+        .hasAttribute("data-hidden"),
+    ).toBe(false);
 
     phase = "parked";
     await vi.advanceTimersByTimeAsync(11_000);
@@ -1482,8 +1482,8 @@ describe("the bound activation offer's auto-open reaches a person who has moved 
     expect(
       screen
         .getByTestId("host-overview-tab-panel-ports")
-        .getAttribute("data-state"),
-    ).toBe("active");
+        .hasAttribute("data-hidden"),
+    ).toBe(false);
     // The activation offer's Force is "Restart host" and stays the ordinary
     // default button, unlike the force-restart/force-update dialogs beside it
     // — Restart does not end the work it names, the update itself does.

@@ -484,20 +484,20 @@
    a small attraction to catalog stops; the brief follow gives it weight
    without coasting past the chosen level. */
 .reasoning-effort-slider .reasoning-effort-range,
-.reasoning-effort-slider > span:has(> [data-slot="slider-thumb"]) {
+.reasoning-effort-slider [data-slot="slider-thumb-positioner"] {
   transition:
     left 240ms cubic-bezier(0.22, 1, 0.36, 1),
     right 240ms cubic-bezier(0.22, 1, 0.36, 1),
-    margin-inline-end 240ms cubic-bezier(0.22, 1, 0.36, 1);
+    width 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .reasoning-effort-slider[data-dragging="true"] .reasoning-effort-range,
 .reasoning-effort-slider[data-dragging="true"]
-  > span:has(> [data-slot="slider-thumb"]) {
+  [data-slot="slider-thumb-positioner"] {
   transition-duration: 80ms;
 }
 
-/* Scale the disc, not Radix's positioning wrapper: pickup must not change
+/* Scale the disc, not Base's positioning wrapper: pickup must not change
    the measured track geometry or the location of the thumb's centre. */
 .reasoning-effort-slider [data-slot="slider-thumb"] {
   scale: 1;
@@ -598,10 +598,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .reasoning-effort-slider .reasoning-effort-range,
-  .reasoning-effort-slider > span:has(> [data-slot="slider-thumb"]),
+  .reasoning-effort-slider [data-slot="slider-thumb-positioner"],
   .reasoning-effort-slider[data-dragging] .reasoning-effort-range,
-  .reasoning-effort-slider[data-dragging]
-    > span:has(> [data-slot="slider-thumb"]),
+  .reasoning-effort-slider[data-dragging] [data-slot="slider-thumb-positioner"],
   .reasoning-effort-slider [data-slot="slider-thumb"],
   .reasoning-effort-slider[data-pressed] [data-slot="slider-thumb"],
   .reasoning-effort-range::after {
@@ -625,20 +624,9 @@
   }
 }
 
-/* A label-only tooltip must never win hit-testing from what it covers.
-   `TooltipContent`'s own `pointer-events-none` is NOT enough: Radix Popper
-   renders the content inside a positioning wrapper of exactly the same size,
-   and that wrapper keeps `pointer-events: auto` (Popper only sets `none` on it
-   for `hideWhenDetached`). So the wrapper still swallowed every click that
-   landed on the tooltip's rect - measured in a real browser against the
-   workspace folder picker, where rows are 28px apart and a `side="top"`
-   tooltip lands squarely on the row above: the covered row's controls never
-   received the click, and the cursor read as a text caret over the tooltip's
-   text (traycerai/traycer#466, #446).
-
-   Scoped by the direct child so only tooltip wrappers opt out - popovers,
-   dropdowns and hover cards hold real controls and must stay hit-testable. */
-[data-radix-popper-content-wrapper]:has(> [data-slot="tooltip-content"]) {
+/* Label-only tooltips must not intercept clicks on covered controls (#466).
+   Preview cards and popovers remain interactive. */
+[data-slot="tooltip-positioner"] {
   pointer-events: none;
 }
 
@@ -1231,6 +1219,8 @@
   --font-pixel: var(--traycer-font-pixel);
   --font-mono: var(--traycer-font-mono);
   --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --animate-drawer-enter: drawer-enter var(--panel-motion-duration)
+    var(--ease-spring);
 
   --text-micro: 0.625rem;
   --text-micro--line-height: 0.875rem;
@@ -1724,4 +1714,10 @@
 .react-flow__edge:focus-visible .react-flow__edge-path {
   stroke: var(--ring);
   stroke-width: 2;
+}
+
+/* Portals escape a concealed Activity; hide paint immediately during its close commit. */
+[data-overlay-concealed] {
+  display: none !important;
+  pointer-events: none !important;
 }

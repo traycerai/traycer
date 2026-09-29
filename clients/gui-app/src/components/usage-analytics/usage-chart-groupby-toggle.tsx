@@ -26,7 +26,7 @@ export function UsageChartGroupByToggle(
   return (
     <Tabs
       value={props.groupBy}
-      onValueChange={(value) => {
+      onValueChange={(value: unknown) => {
         if (value === "harness" || value === "model") props.onChange(value);
       }}
     >

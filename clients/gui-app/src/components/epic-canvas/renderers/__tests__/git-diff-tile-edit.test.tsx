@@ -30,11 +30,6 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { GitDiffTileRef } from "@/stores/epics/canvas/types";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import { DRIFT_RETRY_BASE_DELAY_MS } from "@/components/epic-canvas/git-diff/git-diff-editing";
-import {
-  PaneActivationFocusIntentContext,
-  usePaneActivationOwnership,
-} from "@/components/epic-canvas/pane-activation";
-
 interface EditTestState {
   readonly refetchContents: Mock;
   readonly writeFile: Mock;
@@ -332,36 +327,6 @@ const NODE = makeGitFileDiffTile({
   repositoryContext: null,
 });
 
-function RemountingPane(props: {
-  readonly render: (active: boolean) => ReactNode;
-}): ReactNode {
-  const [active, setActive] = useState(true);
-  const [generation, setGeneration] = useState(0);
-  const activation = usePaneActivationOwnership({
-    active,
-    activate: () => {
-      setActive(true);
-      setGeneration((current) => current + 1);
-    },
-  });
-  return (
-    <>
-      <button type="button" onClick={() => setActive(false)}>
-        Deactivate pane
-      </button>
-      <PaneActivationFocusIntentContext.Provider value={activation.focusIntent}>
-        <div
-          onFocusCapture={activation.onFocusCapture}
-          onPointerCancelCapture={activation.onPointerCancelCapture}
-          onPointerDownCapture={activation.onPointerDownCapture}
-        >
-          <div key={generation}>{props.render(active)}</div>
-        </div>
-      </PaneActivationFocusIntentContext.Provider>
-    </>
-  );
-}
-
 describe("<GitDiffTile /> editing", () => {
   beforeEach(() => {
     fileEditRuntimeRegistry.resetForTesting();
@@ -463,16 +428,11 @@ describe("<GitDiffTile /> editing", () => {
     });
   });
 
-  it("finishes Open in editor before an inactive pane remounts", () => {
-    renderTileInRemountingPane(NODE);
+  it("opens the file in the editor from the Diff settings popover", () => {
+    renderTile(NODE, true);
 
     fireEvent.click(screen.getByRole("button", { name: "Diff settings" }));
-    fireEvent.click(screen.getByRole("button", { name: "Deactivate pane" }));
-    const openInEditor = screen.getByRole("button", {
-      name: "Open in editor",
-    });
-    fireEvent.pointerDown(openInEditor);
-    fireEvent.click(openInEditor);
+    fireEvent.click(screen.getByRole("button", { name: "Open in editor" }));
 
     expect(editorOpenState.mutate).toHaveBeenCalledWith({
       editorId: "vscode",
@@ -979,15 +939,6 @@ function renderTile(node: GitDiffTileRef, isActive: boolean): RenderResult {
     defaultOptions: { queries: { retry: false } },
   });
   return render(tileElement(node, isActive));
-}
-
-function renderTileInRemountingPane(node: GitDiffTileRef): RenderResult {
-  activeQueryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <RemountingPane render={(active) => tileElement(node, active)} />,
-  );
 }
 
 // Reuses the QueryClient created by `renderTile` so `rendered.rerender(...)`

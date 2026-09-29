@@ -26,14 +26,12 @@ import {
   useInteractions,
   useRole,
   useTransitionStyles,
-  type FloatingContext,
   type OpenChangeReason,
   type Placement,
   type Side,
   type UseTransitionStylesProps,
 } from "@floating-ui/react";
-import { Slot } from "radix-ui";
-import { DismissableLayer } from "radix-ui/internal";
+import { useRender } from "@base-ui/react/use-render";
 
 import { HOVER_PREVIEW_SURFACE_CLASS } from "@/components/ui/hover-preview-surface";
 import { useAnyMenuOpen } from "@/components/ui/open-menus";
@@ -55,11 +53,11 @@ import { cn } from "@/lib/utils";
  *
  * Shut while any menu is open anywhere.
  *
- * A Radix dismissable layer, like every other overlay: above a modal dialog
- * it takes the pointer (the dialog disables the page's), and it is the top
- * layer for Escape, so the first Escape closes the card and the next one the
- * dialog. The layer owns Escape and a press outside; Floating UI owns
- * positioning, hover, focus, a press on the trigger and ancestor scroll.
+ * The top layer for Escape: the card listens on the document's CAPTURE phase
+ * and stops the event, so the first Escape closes the card and never reaches
+ * a Base dialog's (bubble-phase) dismissal - the next one closes the dialog.
+ * Floating UI owns positioning, hover, focus, a press on the trigger or
+ * outside, and ancestor scroll.
  *
  * Dismissed by a press on its trigger (a click - a keyboard Enter or Space
  * included - a right-click, the pointerdown that starts a drag), Escape, a
@@ -98,7 +96,7 @@ export type HoverCardSemantics =
   | { readonly role: "dialog"; readonly label: string };
 
 export interface HoverCardProps {
-  /** One element; it receives the ref and the interaction props (composed with its own, like `asChild`). */
+  /** One element; it receives the ref and the interaction props, composed with its own (Base `useRender`). */
   readonly trigger: ReactElement;
   /** Mounted only while the card is open. */
   readonly content: ReactNode;
@@ -209,35 +207,26 @@ function labelOf(semantics: HoverCardSemantics): string | undefined {
 }
 
 /**
- * The layer's half of dismissal: Escape (it is the top layer, so it comes
- * before a dialog's) and a press outside. A press on the trigger is
- * `useDismiss`'s reference press, and focus leaving the trigger is
- * `useFocus`'s - a hover-opened card outlives focus moving elsewhere.
+ * Escape, as the top layer: a capture-phase listener on the document runs
+ * before a Base dialog's bubble-phase one, and stopping the event there keeps
+ * that dialog open until the next Escape. Composition Escape (IME) is left to
+ * the input method.
  */
-function layerDismissal(
-  context: FloatingContext,
-): Pick<
-  DismissableLayer.DismissableLayerProps,
-  "onEscapeKeyDown" | "onPointerDownOutside" | "onFocusOutside"
-> {
-  return {
-    onEscapeKeyDown: (event) => {
+function useEscapeAsTopLayer(
+  open: boolean,
+  close: (event: KeyboardEvent) => void,
+): void {
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.isComposing) return;
       event.preventDefault();
-      context.onOpenChange(false, event, "escape-key");
-    },
-    onPointerDownOutside: (event) => {
-      event.preventDefault();
-      const target = event.target;
-      if (
-        target instanceof Node &&
-        context.elements.domReference?.contains(target) === true
-      ) {
-        return;
-      }
-      context.onOpenChange(false, event.detail.originalEvent, "outside-press");
-    },
-    onFocusOutside: (event) => event.preventDefault(),
-  };
+      event.stopPropagation();
+      close(event);
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [open, close]);
 }
 
 /**
@@ -367,47 +356,62 @@ export function HoverCard(props: HoverCardProps): ReactNode {
   const focus = useFocus(context, {
     visibleOnly: true,
   });
-  // Escape and a press outside are the layer's (below).
+  // Escape is the top-layer listener's (below). A press on the trigger is the
+  // reference press, and focus leaving the trigger is `useFocus`'s - a
+  // hover-opened card outlives focus moving elsewhere.
   const dismiss = useDismiss(context, {
     escapeKey: false,
-    outsidePress: false,
+    outsidePress: true,
+    outsidePressEvent: "pointerdown",
     referencePress: true,
     ancestorScroll: true,
   });
-  const role = useRole(context, { role: props.semantics.role });
+  const closeOnEscape = useCallback(
+    (event: KeyboardEvent) => context.onOpenChange(false, event, "escape-key"),
+    [context],
+  );
+  useEscapeAsTopLayer(open, closeOnEscape);
+  // A suppressed preview must not overwrite a click-open popup's ARIA.
+  const role = useRole(context, {
+    role: props.semantics.role,
+    enabled: !suppressed,
+  });
   const { getReferenceProps, getFloatingProps } = useInteractions([
     hover,
     focus,
     dismiss,
     role,
   ]);
+  // Composes the trigger's own handlers and ref with these, so a trigger that
+  // is also a popover, menu or drag handle keeps every one of its behaviours.
+  const trigger = useRender({
+    render: props.trigger,
+    ref: setReference,
+    props: getReferenceProps(),
+  });
   const { isMounted, styles } = useTransitionStyles(
     context,
     transitionOf(motionEnabled, enteredByHandoff, siblingCurrent),
   );
   return (
     <>
-      {/* `Slot` composes the trigger's own handlers and ref with these, as
-          `asChild` did, so a trigger that is also a popover, menu or drag
-          handle keeps every one of its own behaviours. */}
-      <Slot.Root ref={setReference} {...getReferenceProps()}>
-        {props.trigger}
-      </Slot.Root>
+      {trigger}
       {isMounted && !concealed ? (
         <FloatingPortal>
-          <DismissableLayer.Root
+          <div
             ref={setFloating}
+            data-slot="hover-card-positioner"
             style={floatingStyles}
             className="z-50"
             aria-label={labelOf(props.semantics)}
             {...getFloatingProps()}
-            {...layerDismissal(context)}
           >
             <div
               ref={keepOutOfTabOrder}
               data-slot="hover-card-content"
               data-appearance={props.appearance}
-              data-state={open ? "open" : "closed"}
+              data-open={open ? "" : undefined}
+              data-closed={open ? undefined : ""}
               data-side={context.placement.split("-")[0]}
               data-align={context.placement.split("-")[1] ?? "center"}
               data-testid={props.testId ?? undefined}
@@ -426,7 +430,7 @@ export function HoverCard(props: HoverCardProps): ReactNode {
             >
               {props.content}
             </div>
-          </DismissableLayer.Root>
+          </div>
         </FloatingPortal>
       ) : null}
     </>

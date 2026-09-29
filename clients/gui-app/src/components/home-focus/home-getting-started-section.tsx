@@ -60,21 +60,23 @@ export function HomeGettingStartedSection(): ReactNode {
       ) : (
         <Collapsible open={open} onOpenChange={setOpen}>
           <h2 id={headingId}>
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className="group mt-3 flex w-full items-center justify-between gap-3 rounded-sm px-3 py-1 text-ui-xs text-muted-foreground transition-colors hover:bg-foreground/6 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
-              >
-                <span className="flex items-center gap-1.5">
-                  <ChevronRight
-                    className="size-3.5 text-muted-foreground transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
-                    aria-hidden="true"
-                  />
-                  <span className={HEADING_CLASS_NAME}>Getting started</span>
-                </span>
-                {count}
-              </button>
-            </CollapsibleTrigger>
+            <CollapsibleTrigger
+              render={
+                <button
+                  type="button"
+                  className="group mt-3 flex w-full items-center justify-between gap-3 rounded-sm px-3 py-1 text-ui-xs text-muted-foreground transition-colors hover:bg-foreground/6 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <ChevronRight
+                      className="size-3.5 text-muted-foreground transition-transform group-data-[open]:rotate-90 motion-reduce:transition-none"
+                      aria-hidden="true"
+                    />
+                    <span className={HEADING_CLASS_NAME}>Getting started</span>
+                  </span>
+                  {count}
+                </button>
+              }
+            />
           </h2>
           <CollapsibleContent className="pt-2">{cards}</CollapsibleContent>
         </Collapsible>

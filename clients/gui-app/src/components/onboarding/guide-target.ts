@@ -27,19 +27,28 @@ function firstReachable(controls: NodeListOf<HTMLElement>): HTMLElement | null {
     ) {
       continue;
     }
-    // A tab list takes focus only to pass it to its selected tab (the ARIA
-    // tabs pattern). Radix's own hand-off is skipped after a press that moved
-    // no focus - a second press on the focused tab - and leaves focus on the
-    // list, which draws no ring.
-    if (control.getAttribute("role") === "tablist") {
+    // A tab list is reached through its SELECTED tab (the ARIA tabs pattern),
+    // never the first one: the list itself carries no tab stop, so the first
+    // match is its first tab, and a list that activates on focus would switch
+    // to that tab the moment it was focused.
+    const tabList = owningTabList(control);
+    if (tabList !== null) {
       return (
-        control.querySelector<HTMLElement>(
+        tabList.querySelector<HTMLElement>(
           '[role="tab"][aria-selected="true"]',
         ) ?? control
       );
     }
     return control;
   }
+  return null;
+}
+
+/** The tab list `control` is, or is a tab of; `null` for anything else. */
+function owningTabList(control: HTMLElement): HTMLElement | null {
+  const role = control.getAttribute("role");
+  if (role === "tablist") return control;
+  if (role === "tab") return control.closest<HTMLElement>('[role="tablist"]');
   return null;
 }
 

@@ -673,7 +673,7 @@ function renderDock(input: DockInput) {
     // The dock's background panel reads the tile's bound host to open a
     // managed command's output window, the same as it does inside a real tile.
     <TabHostProvider hostId="host-1">
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <ChatDockCompactStripProvider
           value={{
             chips: input.chips ?? [],

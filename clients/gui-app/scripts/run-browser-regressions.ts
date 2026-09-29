@@ -154,12 +154,28 @@ const GROUPS: readonly BrowserRegressionGroup[] = [
     ],
   },
   {
+    name: "base-ui-primitives",
+    regressions: [
+      // The Base UI migration's primitive behaviour (toast, concealment,
+      // nested dismissal). Settled pixel baselines live in the migration
+      // artifact and run manually.
+      driver("scripts/primitive-gate-behavior.mjs"),
+      // Dialog/Popover lifecycle through the real PortalConcealmentBoundary:
+      // its own driver, not folded into the behaviour gate, so it keeps its
+      // own failure surface; behaviour only, no pixel baseline of its own.
+      driver("scripts/portal-lifecycle-gate.mjs"),
+      // Real header/composer triggers must keep their anchors when a tooltip
+      // label changes.
+      driver("scripts/real-app-anchor-gate.mjs"),
+    ],
+  },
+  {
     name: "layout-settings",
     regressions: [
       // Settings ▸ Layout beside the live app column (G6, G7). An area's body
       // scrolls under a pinned rail and header, the page fits a desktop and a
       // phone width with the rail or the select the breakpoint draws, a short
-      // pane's rail scrolls under a real wheel, the Radix select and a row's ↺
+      // pane's rail scrolls under a real wheel, the select and a row's ↺
       // work by real pointer and key, the header's readings leave the tabs
       // room, and every setting visibly changes the app column. Layout, media
       // queries, hit testing and real input: none of it is jsdom's.

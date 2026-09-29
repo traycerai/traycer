@@ -55,25 +55,32 @@ function Harness(): ReactNode {
 }
 
 /**
- * Opens the dialog from `opener` and closes it via the fake session link's
- * navigation, then flushes Radix's deferred `onCloseAutoFocus` macrotask for
- * real (`setTimeout(..., 0)`) before returning.
+ * Opens the dialog from `opener`, waits for Base UI's initial focus to land
+ * INSIDE the dialog (it is applied in a queued animation frame, so closing
+ * before it runs would leave the opener focused and nothing to suppress), then
+ * closes it via the fake session link's navigation and lets the unmount and
+ * its final-focus frame settle before returning.
  *
- * The flush is not optional here: the assertion this sets up for
+ * The settle is not optional here: the assertion this sets up for
  * (`document.activeElement === document.body`) is also the state BEFORE the
- * macrotask ever runs, so a `waitFor` wrapped around it would resolve on its
- * first synchronous check and could pass even if the deferred handler later
- * (wrongly) refocused the opener. Flushing first, then asserting
- * synchronously, is the only way to observe the settled state. Mirrors
- * `fallback-danger-zone.test.tsx`'s `await act(async () => { await new
- * Promise((resolve) => setTimeout(resolve, 0)); });` convention.
+ * final-focus task ever runs, so a `waitFor` wrapped around it would resolve on
+ * its first synchronous check and could pass even if the handler later
+ * (wrongly) refocused the opener. Settling first, then asserting
+ * synchronously, is the only way to observe the settled state.
  */
 async function closeViaNavigationAndFlush(opener: HTMLElement): Promise<void> {
   opener.focus();
   fireEvent.click(opener);
+  const dialog = await screen.findByRole("dialog");
+  await waitFor(() => {
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
   fireEvent.click(screen.getByRole("button", { name: "Fake session link" }));
+  await waitFor(() => {
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 50));
   });
 }
 

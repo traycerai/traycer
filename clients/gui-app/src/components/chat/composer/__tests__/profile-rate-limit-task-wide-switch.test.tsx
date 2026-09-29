@@ -139,7 +139,7 @@ function renderBanner(input: {
       ? (destinations.find((entry) => entry.selectable) ?? null)
       : input.primaryTarget;
   return render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <ProfileRateLimitSwitchBanner
         harnessId="claude"
         providerId="claude-code"
@@ -213,7 +213,7 @@ describe("rate-limit banner task-wide switch", () => {
       "Rate-limit profile switch",
     );
 
-    fireEvent.pointerDown(menuTrigger);
+    fireEvent.click(menuTrigger);
 
     expect(screen.getByRole("menu").getAttribute("data-side")).toBe("top");
   });
@@ -274,13 +274,13 @@ describe("rate-limit banner task-wide switch", () => {
       screen.getByRole("button", { name: "Switch to Fresh profile" }),
     ).toBeDefined();
 
-    fireEvent.pointerDown(
+    fireEvent.click(
       screen.getByRole("button", { name: "Choose another profile" }),
     );
     expect(screen.getByRole("checkbox").getAttribute("aria-checked")).toBe(
       "true",
     );
-    fireEvent.pointerDown(
+    fireEvent.click(
       screen.getByRole("button", { name: "Choose another profile" }),
     );
     expect(screen.getByRole("checkbox").getAttribute("aria-checked")).toBe(
@@ -305,7 +305,7 @@ describe("rate-limit banner task-wide switch", () => {
       onSwitchProfile,
       onSwitchProfileForTask,
     });
-    fireEvent.pointerDown(
+    fireEvent.click(
       screen.getByRole("button", { name: "Choose another profile" }),
     );
     fireEvent.click(screen.getByRole("menuitem", { name: /Second profile/ }));
@@ -329,9 +329,7 @@ describe("rate-limit banner task-wide switch", () => {
       screen.getByRole("button", { name: "Choose a profile" }),
     ).toBeDefined();
     fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Choose a profile" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Choose a profile" }));
     const personal = screen.getByRole("menuitem", {
       name: /Personal profile, Not checked, Available to switch/,
     });
@@ -352,7 +350,7 @@ describe("rate-limit banner task-wide switch", () => {
       onSwitchProfile,
       onSwitchProfileForTask: () => undefined,
     });
-    fireEvent.pointerDown(
+    fireEvent.click(
       screen.getByRole("button", { name: "Choose another profile" }),
     );
     const row = screen.getByRole("menuitem", { name: /Second profile/ });
@@ -381,7 +379,7 @@ describe("rate-limit banner task-wide switch", () => {
       screen.getByRole("button", { name: "View profile limits" }),
     ).toBeDefined();
     expect(screen.queryByRole("checkbox")).toBeNull();
-    fireEvent.pointerDown(
+    fireEvent.click(
       screen.getByRole("button", { name: "View profile limits" }),
     );
     expect(
@@ -463,7 +461,7 @@ describe("rate-limit banner task-wide switch", () => {
       screen.getByRole("button", { name: "Switch to Terminal account" }),
     ).toBeDefined();
 
-    fireEvent.pointerDown(
+    fireEvent.click(
       screen.getByRole("button", { name: "Choose another profile" }),
     );
 
@@ -520,7 +518,7 @@ describe("rate-limit banner task-wide switch", () => {
       onSwitchProfileForTask: () => undefined,
     });
 
-    fireEvent.pointerDown(
+    fireEvent.click(
       screen.getByRole("button", { name: "Choose another profile" }),
     );
     const row = screen.getByRole("menuitem", { name: /Fresh profile/ });

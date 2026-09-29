@@ -1750,7 +1750,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     selectionCheckbox
   ) : (
     <Tooltip>
-      <TooltipTrigger asChild>{selectionCheckbox}</TooltipTrigger>
+      <TooltipTrigger render={selectionCheckbox} />
       <TooltipContent>{deleteDisabledTooltip}</TooltipContent>
     </Tooltip>
   );
@@ -1769,7 +1769,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   // available - it goes through the route.
   const backgroundMenuItem = isPhase ? null : (
     <ContextMenuItem
-      onSelect={openInBackground}
+      onClick={openInBackground}
       disabled={isOpen}
       data-testid="epics-list-row-open-background"
     >
@@ -1784,7 +1784,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   );
   const newWindowMenuItem = openInNewWindowAvailable ? (
     <ContextMenuItem
-      onSelect={openInNewWindow}
+      onClick={openInNewWindow}
       data-testid="epics-list-row-open-new-window"
     >
       <ExternalLink />
@@ -2020,20 +2020,22 @@ function HistoryRowSweepControl(props: {
   if (props.sweep.canSweep) {
     return (
       <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`Sweep worktrees for ${props.displayTitle}`}
-            aria-haspopup="dialog"
-            data-testid="epics-list-row-sweep"
-            className="absolute right-11 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
-            onClick={props.sweep.requestSweep}
-          >
-            <Paintbrush />
-          </Button>
-        </TooltipTrigger>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Sweep worktrees for ${props.displayTitle}`}
+              aria-haspopup="dialog"
+              data-testid="epics-list-row-sweep"
+              className="absolute right-11 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+              onClick={props.sweep.requestSweep}
+            >
+              <Paintbrush />
+            </Button>
+          }
+        />
         <TooltipContent>Sweep this task's worktrees</TooltipContent>
       </Tooltip>
     );
@@ -2043,21 +2045,23 @@ function HistoryRowSweepControl(props: {
   // place the reason is stated.
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-disabled="true"
-          aria-label={`No worktrees to sweep for ${props.displayTitle}`}
-          data-testid="epics-list-row-sweep-disabled"
-          className="absolute right-11 top-1/2 inline-flex size-8 -translate-y-1/2 cursor-not-allowed items-center justify-center rounded-md text-muted-foreground/50 opacity-0 transition-opacity outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 group-hover:opacity-100"
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          }}
-        >
-          <Paintbrush className="size-4" />
-        </button>
-      </TooltipTrigger>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-disabled="true"
+            aria-label={`No worktrees to sweep for ${props.displayTitle}`}
+            data-testid="epics-list-row-sweep-disabled"
+            className="absolute right-11 top-1/2 inline-flex size-8 -translate-y-1/2 cursor-not-allowed items-center justify-center rounded-md text-muted-foreground/50 opacity-0 transition-opacity outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 group-hover:opacity-100"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+          >
+            <Paintbrush className="size-4" />
+          </button>
+        }
+      />
       <TooltipContent>This task has no worktrees on this host</TooltipContent>
     </Tooltip>
   );
@@ -2069,7 +2073,7 @@ function HistorySweepMenuItem(props: {
   if (!props.sweep.canSweep) return null;
   return (
     <ContextMenuItem
-      onSelect={props.sweep.requestSweep}
+      onClick={props.sweep.requestSweep}
       data-testid="epics-list-row-sweep-menu"
     >
       <Paintbrush />
@@ -2111,19 +2115,21 @@ function HistoryTitleEditControl(props: {
   if (props.item.permissionRole !== "viewer") return null;
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-disabled="true"
-          aria-label={`Viewers can't edit title for ${historyItemDisplayTitle(props.item)}`}
-          data-testid="epics-list-row-edit-title-disabled"
-          className="pointer-events-auto inline-flex size-5 cursor-not-allowed items-center justify-center rounded-sm text-muted-foreground/60 opacity-0 transition-opacity outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 group-hover:opacity-100"
-          onClick={props.onBlockDisabledEditTitleClick}
-          onKeyDown={props.onBlockDisabledEditTitleKeyDown}
-        >
-          <Pencil className="size-3.5" />
-        </button>
-      </TooltipTrigger>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-disabled="true"
+            aria-label={`Viewers can't edit title for ${historyItemDisplayTitle(props.item)}`}
+            data-testid="epics-list-row-edit-title-disabled"
+            className="pointer-events-auto inline-flex size-5 cursor-not-allowed items-center justify-center rounded-sm text-muted-foreground/60 opacity-0 transition-opacity outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 group-hover:opacity-100"
+            onClick={props.onBlockDisabledEditTitleClick}
+            onKeyDown={props.onBlockDisabledEditTitleKeyDown}
+          >
+            <Pencil className="size-3.5" />
+          </button>
+        }
+      />
       <TooltipContent>Viewers cannot edit epic titles.</TooltipContent>
     </Tooltip>
   );
@@ -2171,19 +2177,21 @@ function HistorySelectionOverlay(props: {
   }
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-disabled="true"
-          aria-label={`Cannot select ${historyItemDisplayTitle(props.item)}`}
-          aria-describedby={props.describedById}
-          data-history-row-target=""
-          {...{ [ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE]: "" }}
-          className="absolute inset-0 cursor-not-allowed rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-          onClick={props.onBlockUnavailableDelete}
-          onKeyDown={props.onRowKeyDown}
-        />
-      </TooltipTrigger>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-disabled="true"
+            aria-label={`Cannot select ${historyItemDisplayTitle(props.item)}`}
+            aria-describedby={props.describedById}
+            data-history-row-target=""
+            {...{ [ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE]: "" }}
+            className="absolute inset-0 cursor-not-allowed rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            onClick={props.onBlockUnavailableDelete}
+            onKeyDown={props.onRowKeyDown}
+          />
+        }
+      />
       <TooltipContent>{props.deleteDisabledTooltip}</TooltipContent>
     </Tooltip>
   );
@@ -2218,18 +2226,20 @@ function HistoryRowDeleteControl(props: {
   }
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-disabled="true"
-          aria-label={`Cannot delete ${historyItemDisplayTitle(props.item)}`}
-          data-testid="epics-list-row-delete-disabled"
-          className="absolute right-2 top-1/2 inline-flex size-8 -translate-y-1/2 cursor-not-allowed items-center justify-center rounded-md text-muted-foreground/50 opacity-0 transition-opacity outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 group-hover:opacity-100"
-          onClick={props.onBlockUnavailableDelete}
-        >
-          <Trash2 className="size-4" />
-        </button>
-      </TooltipTrigger>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-disabled="true"
+            aria-label={`Cannot delete ${historyItemDisplayTitle(props.item)}`}
+            data-testid="epics-list-row-delete-disabled"
+            className="absolute right-2 top-1/2 inline-flex size-8 -translate-y-1/2 cursor-not-allowed items-center justify-center rounded-md text-muted-foreground/50 opacity-0 transition-opacity outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 group-hover:opacity-100"
+            onClick={props.onBlockUnavailableDelete}
+          >
+            <Trash2 className="size-4" />
+          </button>
+        }
+      />
       <TooltipContent>{props.deleteDisabledTooltip}</TooltipContent>
     </Tooltip>
   );

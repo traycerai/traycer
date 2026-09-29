@@ -1,71 +1,64 @@
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { useRef, type ReactElement } from "react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Dialog as DialogPrimitive } from "radix-ui";
+import { Dialog } from "@/components/ui/dialog";
 import { PromotableModalFrame } from "@/components/layout/dialogs/promotable-modal-frame";
 
-// The guard's pure decision functions (`interactionStartedOnOverlay` +
-// `dialogContentInertToPointer`) are unit-tested in `dialog-outside-guard.test.ts`.
-// jsdom does not drive Radix's `DismissableLayer` pointer-down-outside path (no
-// pointer-events hit-testing, no deferred dismissable-surface click sequencing),
-// so the real "click out of the open dropdown closes the whole modal" flow can't
-// be reproduced here by dispatching a `pointerdown` - a bare unguarded dialog
-// does NOT dismiss on `fireEvent.pointerDown` in jsdom either. This file only
-// exercises the wiring via Escape, which jsdom DOES drive end-to-end.
+// Escape dismissal now runs through the Root's own `onOpenChange` reason
+// ("escape-key"), which jsdom drives end-to-end - unlike an outside-press
+// gesture, which needs real hit-testing (covered instead by the frame-
+// ownership behaviour gate, `nestedChecks()` in
+// `scripts/primitive-gate-browser.mjs`, against a real browser). The Root
+// is the app's own `Dialog` wrapper (`@/components/ui/dialog`), matching
+// every real caller (`SystemTabModalHost` et al.) - `PromotableModalFrame`
+// itself owns no Root.
+function Harness(props: {
+  readonly onOpenChange: (open: boolean, details: { reason: string }) => void;
+}): ReactElement {
+  const backdropRef = useRef<HTMLDivElement>(null);
+  return (
+    <Dialog open onOpenChange={props.onOpenChange}>
+      <PromotableModalFrame
+        icon={<span data-testid="icon" />}
+        title="Settings"
+        contentClassName="h-[80vh] w-[80vw]"
+        dataAttributes={{}}
+        promoteAriaLabel="Open Settings as a tab"
+        promoteTestId="promote"
+        closeTestId="close"
+        onPromote={() => {}}
+        onClose={() => {}}
+        backdropRef={backdropRef}
+        initialFocus
+      >
+        <div data-testid="modal-body">body</div>
+      </PromotableModalFrame>
+    </Dialog>
+  );
+}
 
 describe("PromotableModalFrame", () => {
   afterEach(() => {
     cleanup();
   });
 
-  async function waitForDismissableLayerListener(): Promise<void> {
-    await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 0));
-    });
-  }
-
-  function renderFrame(onOpenChange: (open: boolean) => void): void {
-    render(
-      <DialogPrimitive.Root open onOpenChange={onOpenChange}>
-        <PromotableModalFrame
-          icon={<span data-testid="icon" />}
-          title="Settings"
-          contentClassName="h-[80vh] w-[80vw]"
-          dataAttributes={{}}
-          promoteAriaLabel="Open Settings as a tab"
-          promoteTestId="promote"
-          closeTestId="close"
-          onPromote={() => {}}
-          onClose={() => {}}
-          onEscapeKeyDown={() => {}}
-          onOpenAutoFocus={undefined}
-        >
-          <div data-testid="modal-body">body</div>
-        </PromotableModalFrame>
-      </DialogPrimitive.Root>,
-    );
-  }
-
   it("renders the framed chrome (title + promote/close) around its body", () => {
-    renderFrame(vi.fn());
+    render(<Harness onOpenChange={vi.fn()} />);
     screen.getByText("Settings");
     screen.getByTestId("promote");
     screen.getByTestId("close");
     screen.getByTestId("modal-body");
   });
 
-  it("still closes on Escape (Escape is deliberately NOT guarded)", async () => {
+  it("still closes on Escape", () => {
     const onOpenChange = vi.fn();
-    renderFrame(onOpenChange);
-    await waitForDismissableLayerListener();
+    render(<Harness onOpenChange={onOpenChange} />);
 
     fireEvent.keyDown(document.body, { key: "Escape" });
 
-    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onOpenChange).toHaveBeenCalledWith(
+      false,
+      expect.objectContaining({ reason: "escape-key" }),
+    );
   });
 });

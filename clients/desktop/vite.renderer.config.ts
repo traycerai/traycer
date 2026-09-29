@@ -5,6 +5,7 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { resolve } from "path";
 import { defineConfig, type HtmlTagDescriptor, type UserConfig } from "vite";
+import { uiModuleGraph } from "../gui-app/vite/ui-module-graph";
 import { asciiOnlyOutput } from "../gui-app/vite/ascii-only-output";
 import { pdfjsAssets } from "../gui-app/vite/pdfjs-assets";
 import { CONTENT_SECURITY_POLICY } from "./src/shared/content-security-policy";
@@ -73,6 +74,7 @@ export default defineConfig((): UserConfig => {
       react(),
       tailwindcss(),
       pdfjsAssets(),
+      uiModuleGraph(),
       // Emitted JS as pure ASCII: one character above U+00FF makes the engine
       // keep a whole chunk's source as UTF-16 (see the plugin).
       asciiOnlyOutput(),

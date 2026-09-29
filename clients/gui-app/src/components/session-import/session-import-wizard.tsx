@@ -737,24 +737,26 @@ function SessionImportFilterSheet(
   const dirty = sessionImportFiltersDirty(props);
   return (
     <Sheet>
-      <SheetTrigger asChild>
-        <button
-          type="button"
-          aria-label="Filters"
-          data-testid="session-import-filters"
-          data-filtered={dirty}
-          className="onboarding-import-bar-button"
-        >
-          <SlidersHorizontal aria-hidden className="size-4" />
-          {dirty ? (
-            <span
-              aria-hidden
-              data-testid="session-import-filters-dot"
-              className="onboarding-import-filter-dot"
-            />
-          ) : null}
-        </button>
-      </SheetTrigger>
+      <SheetTrigger
+        render={
+          <button
+            type="button"
+            aria-label="Filters"
+            data-testid="session-import-filters"
+            data-filtered={dirty}
+            className="onboarding-import-bar-button"
+          >
+            <SlidersHorizontal aria-hidden className="size-4" />
+            {dirty ? (
+              <span
+                aria-hidden
+                data-testid="session-import-filters-dot"
+                className="onboarding-import-filter-dot"
+              />
+            ) : null}
+          </button>
+        }
+      />
       <SheetContent
         side="bottom"
         className="onboarding-import-filter-sheet max-h-[85svh] overflow-y-auto"
@@ -943,8 +945,13 @@ function ScanWindowSelect(props: {
   const { tone, scanWindow, onChange } = props;
   return (
     <Select
+      items={SESSION_IMPORT_SCAN_WINDOW_OPTIONS.map((option) => ({
+        value: option.window === null ? "all" : String(option.window),
+        label: option.label,
+      }))}
       value={scanWindow === null ? "all" : String(scanWindow)}
       onValueChange={(value) => {
+        if (value === null) return;
         const option = SESSION_IMPORT_SCAN_WINDOW_OPTIONS.find(
           (candidate) =>
             (candidate.window === null ? "all" : String(candidate.window)) ===

@@ -1,4 +1,5 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { vi, type Mock } from "vitest";
 import type { LogLevel } from "@traycer/protocol/config/log-level";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -325,17 +326,11 @@ export async function openLogLevelSelect(
     }
     return element;
   });
-  fireEvent.pointerDown(trigger, {
-    button: 0,
-    ctrlKey: false,
-    pointerType: "mouse",
-  });
-  fireEvent.click(trigger);
+  await userEvent.click(trigger);
   return trigger;
 }
 
 export async function chooseLogLevelOption(label: string): Promise<void> {
   const option = await screen.findByRole("option", { name: label });
-  fireEvent.pointerUp(option);
-  fireEvent.click(option);
+  await userEvent.click(option);
 }

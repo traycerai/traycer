@@ -291,17 +291,14 @@ function HostOverviewMenuAction(props: {
     <DropdownMenuItem
       disabled={props.busy || props.pending}
       aria-disabled={degraded || props.busy || props.pending ? true : undefined}
-      onSelect={(event) => {
-        if (degraded) {
-          event.preventDefault();
-          return;
-        }
-        props.onSelect();
+      onClick={() => {
+        if (!degraded) props.onSelect();
       }}
       data-testid={props.testId}
       data-degraded={degrade ?? undefined}
       className="flex-col items-start gap-0.5"
       variant={degraded ? "muted" : "default"}
+      closeOnClick={!degraded}
     >
       <span className="flex items-center gap-2">
         {/* The spinner takes the icon's place rather than sitting beside it, so
@@ -414,12 +411,9 @@ function HostOverviewMenuActivate(props: {
       aria-disabled={
         !props.connectable || props.activateBusy ? true : undefined
       }
-      onSelect={(event) => {
-        if (!props.connectable) {
-          event.preventDefault();
-          return;
-        }
-        props.onMakeActive();
+      closeOnClick={props.connectable}
+      onClick={() => {
+        if (props.connectable) props.onMakeActive();
       }}
       data-testid="host-make-active"
       className="flex-col items-start gap-0.5"
@@ -520,18 +514,20 @@ export function HostOverviewHeaderActions(props: {
         />
       )}
       <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="muted"
-            size="inline"
-            className="size-7 shrink-0"
-            aria-label={`More actions for ${hostName}`}
-            data-testid="host-overview-menu"
-          >
-            <MoreHorizontal className="size-4" />
-          </Button>
-        </DropdownMenuTrigger>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="muted"
+              size="inline"
+              className="size-7 shrink-0"
+              aria-label={`More actions for ${hostName}`}
+              data-testid="host-overview-menu"
+            >
+              <MoreHorizontal className="size-4" />
+            </Button>
+          }
+        />
         <DropdownMenuContent align="end" className="min-w-56">
           {props.activateInMenu ? (
             <>
@@ -587,7 +583,7 @@ export function HostOverviewHeaderActions(props: {
               in exactly one situation — pasting it into a support report — so
               it lives where you go looking when you already know you want it. */}
           <DropdownMenuItem
-            onSelect={props.onCopyHostId}
+            onClick={props.onCopyHostId}
             data-testid="host-overview-copy-host-id"
           >
             <Copy className="size-3.5" aria-hidden />

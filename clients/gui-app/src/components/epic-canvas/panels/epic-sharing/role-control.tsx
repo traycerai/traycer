@@ -55,31 +55,33 @@ export function RoleDropdown({ className, ...props }: RoleDropdownProps) {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant={variant}
-          size={size}
-          disabled={disabled}
-          className={cn("justify-between", className)}
-          aria-label={ariaLabel}
-          data-testid={testId}
-        >
-          <span className="truncate">
-            {EPIC_COLLABORATOR_ROLE_LABELS[value]}
-          </span>
-          {isPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={`${testId}-spinner`}
-              variant={undefined}
-              tone="muted"
-            />
-          ) : (
-            <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-          )}
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant={variant}
+            size={size}
+            disabled={disabled}
+            className={cn("justify-between", className)}
+            aria-label={ariaLabel}
+            data-testid={testId}
+          >
+            <span className="truncate">
+              {EPIC_COLLABORATOR_ROLE_LABELS[value]}
+            </span>
+            {isPending ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId={`${testId}-spinner`}
+                variant={undefined}
+                tone="muted"
+              />
+            ) : (
+              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+            )}
+          </Button>
+        }
+      />
       <DropdownMenuContent align="start">
         <DropdownMenuRadioGroup
           value={value}

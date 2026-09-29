@@ -406,7 +406,7 @@ describe("PrOwnerBadges overflow hierarchy", () => {
     expect(content?.className).toContain("overflow-hidden");
     const heightCap = /max-h-\[[^\]]*\]/.exec(content?.className ?? "")?.[0];
     expect(heightCap).toBeDefined();
-    expect(heightCap).toContain("--radix-popover-content-available-height");
+    expect(heightCap).toContain("--available-height");
     // A fixed rem would hold a long list to the same few rows on a display with
     // room for twice as many - layout surfaces here size fluidly.
     expect(heightCap).toContain("vh");
@@ -433,12 +433,10 @@ describe("PrOwnerBadges overflow hierarchy", () => {
 
     const widthCap = /max-w-\[[^\]]*\]/.exec(className)?.[0];
     expect(widthCap).toBeDefined();
-    // Never wider than the space Radix measured, nor than the viewport - and
+    // Never wider than the space Base measured, nor than the viewport - and
     // each var needs a fallback, since an unmeasured one invalidates `min()`
     // and drops the cap entirely.
-    expect(widthCap).toContain(
-      "var(--radix-popover-content-available-width,100vw)",
-    );
+    expect(widthCap).toContain("var(--available-width,100vw)");
     expect(widthCap).toContain("vw");
   });
 

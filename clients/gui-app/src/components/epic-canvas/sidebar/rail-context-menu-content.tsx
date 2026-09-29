@@ -84,7 +84,7 @@ export function RailContextMenuContent(props: {
       {pointedEntry !== null && visibleCount > 1 ? (
         <>
           <ContextMenuItem
-            onSelect={() =>
+            onClick={() =>
               setRailVisibilityOverride(pointedEntry.definition.id, false)
             }
             data-testid="epic-rail-hide-pointed-panel"
@@ -99,7 +99,7 @@ export function RailContextMenuContent(props: {
             return (
               <ContextMenuItem
                 key={member}
-                onSelect={() => unstackRailMember(panelId)}
+                onClick={() => unstackRailMember(panelId)}
                 data-testid={`epic-rail-unstack-${panelId}`}
               >
                 {`Unstack '${title}'`}
@@ -139,7 +139,7 @@ export function RailContextMenuContent(props: {
           through the same recordGesture-wrapped path as every item above it,
           so a move made while customizing is an Undo step. */}
       <ContextMenuItem
-        onSelect={() =>
+        onClick={() =>
           setSidebarSide(sidebarSide === "left" ? "right" : "left")
         }
         data-testid="epic-rail-move-sidebar"

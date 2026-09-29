@@ -459,7 +459,7 @@ function PromotedSubagentTrigger(props: PromotedSubagentTriggerProps) {
               aria-hidden
               className={cn(
                 "size-3.5 shrink-0 text-muted-foreground/70 transition-transform",
-                "group-data-[state=open]/subagent:rotate-180",
+                "group-data-panel-open/subagent:rotate-180",
               )}
             />
           </span>

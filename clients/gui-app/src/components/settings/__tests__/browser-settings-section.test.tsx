@@ -172,7 +172,7 @@ describe("<BrowserSettingsSection /> website sessions", () => {
   it("reflects the computer's saving decision", () => {
     renderSection(controller({ enabled: true }), null);
 
-    expect(toggle().getAttribute("data-state")).toBe("checked");
+    expect(toggle().hasAttribute("data-checked")).toBe(true);
   });
 
   it("renders nothing until the browser bridge has answered", () => {

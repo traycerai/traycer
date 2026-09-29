@@ -210,23 +210,25 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
       ) : null}
 
       <Popover>
-        <PopoverTrigger asChild>
-          <TooltipWrapper
-            label="Diff settings"
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="muted"
-              size="icon-sm"
-              aria-label="Diff settings"
+        <PopoverTrigger
+          render={
+            <TooltipWrapper
+              label="Diff settings"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              <Settings2 className="size-4" />
-            </Button>
-          </TooltipWrapper>
-        </PopoverTrigger>
+              <Button
+                type="button"
+                variant="muted"
+                size="icon-sm"
+                aria-label="Diff settings"
+              >
+                <Settings2 className="size-4" />
+              </Button>
+            </TooltipWrapper>
+          }
+        />
         <PopoverContent
           layout="bare"
           {...paneActivationDeferProps}

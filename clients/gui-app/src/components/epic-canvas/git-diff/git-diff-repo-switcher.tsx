@@ -73,33 +73,53 @@ export function GitDiffRepoSwitcher(
   };
 
   return (
-    <Popover open={props.open} onOpenChange={props.onOpenChange}>
+    <Popover
+      open={props.open}
+      onOpenChange={(next, details) => {
+        if (
+          !next &&
+          (details.reason === "outside-press" ||
+            details.reason === "focus-out") &&
+          isHostSwitcherListInteraction(
+            details.reason === "focus-out" &&
+              details.event instanceof FocusEvent
+              ? details.event.relatedTarget
+              : details.event.target,
+          )
+        )
+          details.cancel();
+        if (details.isCanceled) return;
+        props.onOpenChange(next);
+      }}
+    >
       <TooltipWrapper
         label={triggerTooltip(model)}
         side="top"
         sideOffset={undefined}
         align={undefined}
       >
-        <PopoverTrigger asChild>
-          <WorktreePickerTrigger
-            worktreeLabel={model.trigger.label}
-            secondaryLabel={model.trigger.secondaryLabel}
-            changeCount={null}
-            trailingStatus={
-              <GitDiffCountBadges
-                fileChangeCount={model.trigger.fileChangeCount}
-                moduleChangeCount={model.trigger.moduleChangeCount}
-              />
-            }
-            testId={props.triggerTestId}
-            className={props.triggerClassName}
-            aria-label={triggerAccessibleName(model)}
-            aria-haspopup="dialog"
-            aria-expanded={props.open}
-            aria-controls={props.open ? contentId : undefined}
-            data-unavailable={model.trigger.unavailable ? "true" : undefined}
-          />
-        </PopoverTrigger>
+        <PopoverTrigger
+          render={
+            <WorktreePickerTrigger
+              worktreeLabel={model.trigger.label}
+              secondaryLabel={model.trigger.secondaryLabel}
+              changeCount={null}
+              trailingStatus={
+                <GitDiffCountBadges
+                  fileChangeCount={model.trigger.fileChangeCount}
+                  moduleChangeCount={model.trigger.moduleChangeCount}
+                />
+              }
+              testId={props.triggerTestId}
+              className={props.triggerClassName}
+              aria-label={triggerAccessibleName(model)}
+              aria-haspopup="dialog"
+              aria-expanded={props.open}
+              aria-controls={props.open ? contentId : undefined}
+              data-unavailable={model.trigger.unavailable ? "true" : undefined}
+            />
+          }
+        />
       </TooltipWrapper>
       <PopoverContent
         id={contentId}
@@ -113,11 +133,6 @@ export function GitDiffRepoSwitcher(
         // this content, so every click in it arrives here as an interaction
         // from outside. Dismissing on those would close the panel the picker
         // exists to scope, and no host could ever be chosen from it.
-        onInteractOutside={(event) => {
-          if (isHostSwitcherListInteraction(event.target)) {
-            event.preventDefault();
-          }
-        }}
       >
         {props.hostSection === null ? null : props.hostSection}
         <GitDiffRepoSwitcherDropdown

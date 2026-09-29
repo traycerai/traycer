@@ -60,7 +60,7 @@ export function DesktopMenuEntries(props: {
             ? item.checked
             : undefined
         }
-        onSelect={() => props.onSelect(item.id)}
+        onClick={() => props.onSelect(item.id)}
       >
         {label}
       </MenubarItem>

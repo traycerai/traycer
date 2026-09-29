@@ -80,19 +80,22 @@ function NestedPickerSurface() {
   };
 
   return (
-    <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
-      <PopoverTrigger asChild>
-        <button type="button">Open picker</button>
-      </PopoverTrigger>
+    <Popover
+      open={pickerOpen}
+      onOpenChange={(next, details) => {
+        if (!next && details.reason === "escape-key" && query.length > 0) {
+          details.cancel();
+          setQuery("");
+          return;
+        }
+        setPickerOpen(next);
+      }}
+    >
+      <PopoverTrigger render={<button type="button">Open picker</button>} />
       <PopoverContent
         role="dialog"
         aria-label="Select model"
         onKeyDown={handlePickerKeyDown}
-        onEscapeKeyDown={(event) => {
-          if (query.length === 0) return;
-          event.preventDefault();
-          setQuery("");
-        }}
       >
         <input
           aria-label="Search models"
@@ -134,12 +137,19 @@ describe("nested picker profile-dropdown keyboard ownership", () => {
     if (!(input instanceof HTMLInputElement)) {
       throw new Error("Expected the model search to render as an input.");
     }
+    // Base's FloatingFocusManager resolves `initialFocus` via a queued
+    // microtask + RAF, not an immediate mount (unlike Radix). Opening the
+    // nested Radix menu before that settles races a still-pending focus
+    // move onto this popover's own content, which can steal focus back
+    // after the menu-item focus below. A real user cannot act before first
+    // paint either, so waiting for the popover's genuine initial focus
+    // first is the correct fix, not a relaxed expectation.
+    await waitFor(() => expect(document.activeElement).toBe(input));
 
-    fireEvent.pointerDown(
+    fireEvent.click(
       screen.getByRole("button", {
         name: "Claude profile: Terminal account, Terminal",
       }),
-      { button: 0, ctrlKey: false },
     );
     const menu = await screen.findByRole("menu");
     const terminalProfile = screen.getByRole("menuitem", {
@@ -246,9 +256,7 @@ function OpenProfileDropdownSurface() {
 
   return (
     <Popover open onOpenChange={() => undefined}>
-      <PopoverTrigger asChild>
-        <button type="button">Open picker</button>
-      </PopoverTrigger>
+      <PopoverTrigger render={<button type="button">Open picker</button>} />
       <PopoverContent role="dialog" aria-label="Select profile">
         <div ref={setContentContainer}>
           {contentContainer === null ? null : (
@@ -282,18 +290,21 @@ function OpenProfileDropdownSurface() {
  * Radix's own roving-tabindex/focus-skip behavior for a disabled item. This
  * drives the real, unmocked primitive (mirrors the suite above).
  */
-describe("real Radix DropdownMenu: disabled-row roving focus and dismissal", () => {
+describe("real Base DropdownMenu: disabled-row roving focus and dismissal", () => {
   afterEach(() => cleanup());
 
-  it("ArrowDown roving focus skips a disabled row, and Escape still dismisses the menu", async () => {
+  it("ArrowDown roving focus reaches a disabled row without activating it, and Escape still dismisses the menu", async () => {
     render(<OpenProfileDropdownSurface />);
+    const trigger = screen.getByRole("button", {
+      name: "Claude profile: Terminal account, Terminal",
+    });
+    // Same reasoning as the nested-picker test above: wait for the Popover's
+    // own deferred initial focus (Base's FloatingFocusManager, queued via a
+    // microtask + RAF) to land on its first focusable descendant before
+    // opening the nested Radix menu on top of it.
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", {
-        name: "Claude profile: Terminal account, Terminal",
-      }),
-      { button: 0, ctrlKey: false },
-    );
+    fireEvent.click(trigger);
     const menu = await screen.findByRole("menu");
     const terminalProfile = screen.getByRole("menuitem", {
       name: "Terminal account, Terminal",
@@ -314,15 +325,20 @@ describe("real Radix DropdownMenu: disabled-row roving focus and dismissal", () 
     terminalProfile.focus();
     expect(document.activeElement).toBe(terminalProfile);
 
-    // Radix's own roving-tabindex skips a disabled item entirely - focus
-    // lands on Personal (the next ENABLED row), never on Work.
+    // Base keeps an aria-disabled row in the roving order so its reason can be
+    // heard, but it can never be activated: focus lands on Work, Enter on it
+    // leaves the menu open, and the next ArrowDown reaches Personal.
     fireEvent.keyDown(terminalProfile, { key: "ArrowDown" });
-    await waitFor(() => expect(document.activeElement).toBe(personalProfile));
-    expect(document.activeElement).not.toBe(workProfile);
+    await waitFor(() => expect(document.activeElement).toBe(workProfile));
+    fireEvent.keyDown(workProfile, { key: "Enter" });
+    expect(screen.getByRole("menu")).toBe(menu);
 
-    // Reverse direction: ArrowUp from Personal must skip back over Work too.
+    fireEvent.keyDown(workProfile, { key: "ArrowDown" });
+    await waitFor(() => expect(document.activeElement).toBe(personalProfile));
+
+    // Reverse direction: ArrowUp from Personal walks back through Work.
     fireEvent.keyDown(personalProfile, { key: "ArrowUp" });
-    await waitFor(() => expect(document.activeElement).toBe(terminalProfile));
+    await waitFor(() => expect(document.activeElement).toBe(workProfile));
 
     fireEvent.keyDown(menu, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());

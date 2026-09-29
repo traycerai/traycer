@@ -205,8 +205,10 @@ describe("organization Revision 2", () => {
 
     const launcher = screen.getByRole("button", { name: "Organize Task" });
     await user.click(launcher);
-    await user.click(screen.getByRole("menuitem", { name: "Task appearance" }));
-    const icon = screen.getByLabelText("Icon");
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Task appearance" }),
+    );
+    const icon = await screen.findByLabelText("Icon");
     expect(icon).toBeTruthy();
 
     await user.clear(icon);
@@ -265,8 +267,12 @@ describe("organization Revision 2", () => {
     await user.click(
       screen.getByRole("button", { name: "Organize Closed task" }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Add to group" }));
-    const firstProjectItem = screen.getByRole("menuitem", { name: "Project" });
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Add to group" }),
+    );
+    const firstProjectItem = await screen.findByRole("menuitem", {
+      name: "Project",
+    });
     firstProjectItem.focus();
     await user.keyboard("{Enter}");
     await waitFor(() => expect(state.command).toHaveBeenCalledOnce());
@@ -309,8 +315,10 @@ describe("organization Revision 2", () => {
     await user.click(
       screen.getByRole("button", { name: "Organize Closed again" }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Add to group" }));
-    const secondProjectItem = screen.getByRole("menuitem", {
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Add to group" }),
+    );
+    const secondProjectItem = await screen.findByRole("menuitem", {
       name: "Project",
     });
     secondProjectItem.focus();
@@ -331,10 +339,16 @@ describe("organization Revision 2", () => {
     const launcher = screen.getByRole("button", { name: "Organize Task" });
     launcher.focus();
     await user.keyboard("{Enter}");
+    const labels = await screen.findByRole("menuitem", { name: "Labels" });
+    await waitFor(() => expect(document.activeElement).toBe(labels));
     await user.keyboard("{ArrowDown}");
+    const appearance = screen.getByRole("menuitem", {
+      name: "Task appearance",
+    });
+    await waitFor(() => expect(document.activeElement).toBe(appearance));
     await user.keyboard("{ArrowRight}");
 
-    const icon = screen.getByLabelText("Icon");
+    const icon = await screen.findByLabelText("Icon");
     await waitFor(() => expect(document.activeElement).toBe(icon));
     await user.clear(icon);
     await user.type(icon, "K");
@@ -358,8 +372,8 @@ describe("organization Revision 2", () => {
     });
     render(
       <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <button type="button">Task row</button>
+        <ContextMenuTrigger render={<button type="button" />}>
+          Task row
         </ContextMenuTrigger>
         <ContextMenuContent>
           <TaskOrganizationMenu taskId="task-1" canEdit title="Task" />
@@ -369,8 +383,10 @@ describe("organization Revision 2", () => {
 
     const taskRow = screen.getByRole("button", { name: "Task row" });
     fireEvent.contextMenu(taskRow);
-    await user.click(screen.getByRole("menuitem", { name: "Task appearance" }));
-    const icon = screen.getByLabelText("Icon");
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Task appearance" }),
+    );
+    const icon = await screen.findByLabelText("Icon");
     await user.clear(icon);
     await user.type(icon, "UI");
     await user.keyboard("{Enter}");
@@ -399,7 +415,7 @@ describe("organization Revision 2", () => {
       expect(icon.disabled).toBe(false);
     });
     expect(icon.isConnected).toBe(true);
-    expect(document.activeElement).toBe(icon);
+    await waitFor(() => expect(document.activeElement).toBe(icon));
     await user.clear(icon);
     await user.type(icon, "NEXT");
     expect(document.activeElement).toBe(icon);
@@ -429,6 +445,9 @@ describe("organization Revision 2", () => {
     const dialog = { kind: "labels" as const, taskId: "task-1", canEdit: true };
     const rendered = renderDialog(dialog);
 
+    // Let the dialog's deferred initial focus settle before moving to the row.
+    const search = screen.getByRole("searchbox", { name: /labels/i });
+    await waitFor(() => expect(document.activeElement).toBe(search));
     const checkbox = screen.getByRole("checkbox", { name: "Owned" });
     checkbox.focus();
     await user.keyboard(" ");
@@ -478,7 +497,7 @@ describe("organization Revision 2", () => {
     });
 
     expect(checkbox.isConnected).toBe(true);
-    expect(document.activeElement).toBe(checkbox);
+    await waitFor(() => expect(document.activeElement).toBe(checkbox));
     await user.keyboard(" ");
     await waitFor(() => expect(resolves).toHaveLength(2));
     expect(state.command.mock.calls[1]?.[0]).toMatchObject({
@@ -685,8 +704,12 @@ describe("organization Revision 2", () => {
     expect(screen.queryByRole("button", { name: "Manage Labels" })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Options for Owned" }));
-    expect(screen.getByRole("menuitem", { name: "Edit label" })).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: "Delete label" })).toBeTruthy();
+    expect(
+      await screen.findByRole("menuitem", { name: "Edit label" }),
+    ).toBeTruthy();
+    expect(
+      await screen.findByRole("menuitem", { name: "Delete label" }),
+    ).toBeTruthy();
     await user.keyboard("{Escape}");
 
     const ownedCheckbox = screen.getByRole("checkbox", { name: "Owned" });
@@ -751,7 +774,9 @@ describe("organization Revision 2", () => {
     await user.type(search, "own");
     labelsSection.scrollTop = 120;
     await user.click(opener);
-    await user.click(screen.getByRole("menuitem", { name: "Edit label" }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Edit label" }),
+    );
     expect(
       screen.getByRole("heading", { name: "Edit label everywhere" }),
     ).toBeTruthy();
@@ -768,7 +793,7 @@ describe("organization Revision 2", () => {
     expect(screen.getByRole("searchbox", { name: /labels/i })).toBe(search);
     expect(screen.getByDisplayValue("own")).toBe(search);
     expect(labelsSection.scrollTop).toBe(120);
-    expect(document.activeElement).toBe(opener);
+    await waitFor(() => expect(document.activeElement).toBe(opener));
   });
 
   it("uses a separate delete confirmation with a child Cancel control", async () => {
@@ -782,7 +807,9 @@ describe("organization Revision 2", () => {
     renderDialog({ kind: "manage-labels" });
 
     await user.click(screen.getByRole("button", { name: "Options for Owned" }));
-    await user.click(screen.getByRole("menuitem", { name: "Delete label" }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Delete label" }),
+    );
     expect(screen.getByRole("heading", { name: "Delete label" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 

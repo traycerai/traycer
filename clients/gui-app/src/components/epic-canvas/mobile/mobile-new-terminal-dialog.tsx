@@ -81,9 +81,7 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
         // would land on the first host row instead and take it away. With the
         // search input standing down, Radix has to run: preventing it would
         // strand focus on the trigger, outside the focus scope.
-        onOpenAutoFocus={
-          coarsePointer ? undefined : (event) => event.preventDefault()
-        }
+        initialFocus={coarsePointer}
       >
         <DialogHeader>
           <DialogTitle>New terminal</DialogTitle>

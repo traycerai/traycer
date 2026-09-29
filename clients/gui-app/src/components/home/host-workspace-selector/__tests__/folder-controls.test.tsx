@@ -32,15 +32,24 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: () => ({ data: undefined, isLoading: false }),
 }));
 
-// Render the Radix dropdown menu (and its submenu) inline + always-open so the
+// Render the Base dropdown menu (and its submenu) inline + always-open so the
 // test can assert the menu items without fighting pointer-open semantics in
 // jsdom. This mirrors the established mock in epic-sidebar-selection-mode.test.
 vi.mock("@/components/ui/dropdown-menu", () => {
   const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
     props.children;
+  const trigger = (props: {
+    readonly children?: ReactNode;
+    readonly render?: ReactNode;
+  }): ReactNode => props.render ?? props.children;
+  // Shared by `DropdownMenuItem` and `DropdownMenuSubTrigger`. The real
+  // `DropdownMenuItem` is called with `onClick`, not `onSelect` (Base's own
+  // API, unlike Radix's) - a mock still reading `onSelect` receives
+  // `undefined` and never fires on click. `DropdownMenuSubTrigger`'s real
+  // callers pass no click handler at all, so this is a no-op button for it.
   const item = (props: {
     readonly children: ReactNode;
-    readonly onSelect?: () => void;
+    readonly onClick?: () => void;
     readonly disabled?: boolean;
     readonly "data-testid"?: string;
   }): ReactNode => (
@@ -48,14 +57,14 @@ vi.mock("@/components/ui/dropdown-menu", () => {
       type="button"
       data-testid={props["data-testid"]}
       disabled={props.disabled ?? false}
-      onClick={props.onSelect}
+      onClick={props.onClick}
     >
       {props.children}
     </button>
   );
   return {
     DropdownMenu: passthrough,
-    DropdownMenuTrigger: passthrough,
+    DropdownMenuTrigger: trigger,
     DropdownMenuContent: (props: {
       readonly children: ReactNode;
       readonly "data-testid"?: string;
@@ -1390,7 +1399,7 @@ describe("WorkspaceSummaryTrigger", () => {
 
   it("hides the read-only hover preview while its inspect popover is open", async () => {
     render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <WorkspaceSummaryTrigger
           items={[item({ mode: "local", displayPath: "/repo" })]}
           readOnly
@@ -1433,7 +1442,7 @@ describe("FolderBranchControl — Escape close", () => {
   it("commits the pending autosave draft when Escape closes the popover", async () => {
     const onEmit = vi.fn<(intent: WorktreeFolderIntent) => void>();
     render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <FolderBranchControl
           item={item({
             mode: "worktree",
@@ -1480,7 +1489,7 @@ describe("FolderBranchControl — Escape close", () => {
 
   it("returns focus to the chip on Escape without opening the chip tooltip from focus restore", async () => {
     render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <FolderBranchControl
           item={item({
             mode: "worktree",
@@ -1513,7 +1522,7 @@ describe("FolderBranchControl — Escape close", () => {
     expect(document.activeElement).toBe(chip);
 
     // Drain focusin microtask + 150ms suppress fallback so any delayed open
-    // would surface. With delayDuration={0}, a suppress miss would show a
+    // would surface. With delay={0}, a suppress miss would show a
     // tooltip role for the chip label.
     await act(async () => {
       await Promise.resolve();
@@ -1523,15 +1532,10 @@ describe("FolderBranchControl — Escape close", () => {
 
     expect(document.activeElement).toBe(chip);
     expect(screen.queryByRole("tooltip")).toBeNull();
+    // Base's tooltip content carries `data-open` only while open - there is
+    // no Radix-style intermediate "delayed-open" value to check for.
     expect(
-      document.querySelector(
-        '[data-slot="tooltip-content"][data-state="open"]',
-      ),
-    ).toBeNull();
-    expect(
-      document.querySelector(
-        '[data-slot="tooltip-content"][data-state="delayed-open"]',
-      ),
+      document.querySelector('[data-slot="tooltip-content"][data-open]'),
     ).toBeNull();
   });
 });
@@ -1635,7 +1639,7 @@ describe("WorkspaceFolderSummaryControl", () => {
 
   it("renders the rich hover preview as a single HoverCard card carrying a reachable copy-path action", async () => {
     render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <WorkspaceFolderSummaryControl
           recentWorkspaces={null}
           recentWorkspaceCount={0}
@@ -1703,7 +1707,7 @@ describe("WorkspaceFolderSummaryControl", () => {
 
   it("shows full landing-page folder and branch provenance in the hover preview", async () => {
     render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <WorkspaceFolderSummaryControl
           recentWorkspaces={null}
           recentWorkspaceCount={0}
@@ -1799,7 +1803,7 @@ describe("WorkspaceFolderSummaryControl", () => {
 
   it("hides the hover preview while the click-open picker is open", async () => {
     render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <WorkspaceFolderSummaryControl
           recentWorkspaces={null}
           recentWorkspaceCount={0}

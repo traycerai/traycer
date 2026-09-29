@@ -84,10 +84,7 @@ describe("FolderLocationControl keyboard navigation", () => {
       />,
     );
 
-    fireEvent.pointerDown(screen.getByLabelText("Choose run location"), {
-      button: 0,
-      ctrlKey: false,
-    });
+    fireEvent.click(screen.getByLabelText("Choose run location"));
     const existingWorktree = await screen.findByTestId(
       "folder-location-existing",
     );

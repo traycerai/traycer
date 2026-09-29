@@ -76,7 +76,7 @@ function renderOpenDialog(image: ExpandedImageState): void {
           alt="a misty pier"
           image={image}
           suggestedName="pier.png"
-          onCloseAutoFocus={undefined}
+          finalFocus={undefined}
         />
       </Dialog>
     </QueryClientProvider>,

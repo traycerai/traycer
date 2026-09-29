@@ -614,7 +614,14 @@ function useGuideTarget(
       subtree: true,
       childList: true,
       attributes: true,
-      attributeFilter: ["data-state", "aria-hidden", "inert", "hidden"],
+      attributeFilter: [
+        "data-open",
+        "data-closed",
+        "data-overlay-surface",
+        "aria-hidden",
+        "inert",
+        "hidden",
+      ],
     });
     window.addEventListener("resize", remeasure);
     document.addEventListener("transitionend", onTransitionEnd, true);

@@ -158,7 +158,7 @@ function DockHarness(props: { readonly chatId: string }) {
   const toggleSection = useChatDockOpenStore((state) => state.toggleSection);
   return (
     <TabHostProvider hostId="host-1">
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <ChatDockCompactStripProvider
           value={{
             chips: PILL_SECTIONS.map(chip),

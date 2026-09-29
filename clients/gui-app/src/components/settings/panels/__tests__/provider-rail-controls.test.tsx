@@ -1,5 +1,5 @@
 /**
- * The rail's search + status control, driven against the REAL Radix dropdown.
+ * The rail's search + status control, driven against the REAL dropdown.
  *
  * Deliberately not folded into providers-settings-panel.test: that suite
  * replaces the dropdown module with an always-open passthrough, so a status
@@ -7,7 +7,6 @@
  * component owns is host-free, so it renders on its own with no provider hooks.
  */
 import { useState } from "react";
-import { Dialog as DialogPrimitive } from "radix-ui";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ProviderRailControls } from "@/components/settings/panels/provider-rail-controls";
@@ -17,6 +16,7 @@ import {
   type ProviderRailView,
 } from "@/components/settings/panels/provider-rail-filter";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
 afterEach(() => cleanup());
 
@@ -59,12 +59,15 @@ function renderControls(input: {
 }
 
 function openFilterMenu(): void {
-  // Radix opens on pointerdown, not click - firing only `click` leaves the
-  // menu shut and every following query passing vacuously.
-  fireEvent.pointerDown(
-    screen.getByRole("button", { name: /^Filter providers/ }),
-    { button: 0, ctrlKey: false, pointerType: "mouse" },
-  );
+  // floating-ui's `useClick` (which Base's Menu.Trigger uses) tracks pointer
+  // type across its own pointerdown/mousedown/click handlers; firing a
+  // synthetic pointerdown or mousedown first leaves that tracking in a state
+  // where the following `click` no-ops instead of opening the menu. A bare
+  // `click` is what a real mouse click reduces to here and is the only
+  // sequence that reliably opens it under jsdom.
+  fireEvent.click(screen.getByRole("button", { name: /^Filter providers/ }), {
+    button: 0,
+  });
 }
 
 describe("<ProviderRailControls />", () => {
@@ -128,7 +131,7 @@ describe("<ProviderRailControls />", () => {
   });
 
   it("leaves Escape alone inside a real Settings dialog", () => {
-    // Against a REAL Radix Dialog, not a hand-rolled document listener. Radix
+    // Against a REAL Dialog, not a hand-rolled document listener. Base
     // registers its Escape hook on the document with `capture: true`, so it
     // runs BEFORE anything this component could do from a React bubble
     // handler - a `stopPropagation()` here would still let the dialog close
@@ -136,18 +139,16 @@ describe("<ProviderRailControls />", () => {
     const onOpenChange = vi.fn();
     const onViewChange = vi.fn();
     render(
-      <DialogPrimitive.Root open onOpenChange={onOpenChange}>
-        <DialogPrimitive.Portal>
-          <DialogPrimitive.Content aria-describedby={undefined}>
-            <DialogPrimitive.Title>Settings</DialogPrimitive.Title>
-            <Harness
-              initial={{ query: "kimi", status: PROVIDER_RAIL_STATUS.All }}
-              onViewChange={onViewChange}
-              resultCount={1}
-            />
-          </DialogPrimitive.Content>
-        </DialogPrimitive.Portal>
-      </DialogPrimitive.Root>,
+      <Dialog open onOpenChange={onOpenChange}>
+        <DialogContent aria-describedby={undefined}>
+          <DialogTitle>Settings</DialogTitle>
+          <Harness
+            initial={{ query: "kimi", status: PROVIDER_RAIL_STATUS.All }}
+            onViewChange={onViewChange}
+            resultCount={1}
+          />
+        </DialogContent>
+      </Dialog>,
     );
 
     fireEvent.keyDown(
@@ -155,7 +156,9 @@ describe("<ProviderRailControls />", () => {
       { key: "Escape" },
     );
 
-    expect(onOpenChange).toHaveBeenCalledWith(false);
+    // The wrapper's `onOpenChange` forwards Base's `(open, details)` shape,
+    // not the raw primitive's single-argument call.
+    expect(onOpenChange).toHaveBeenCalledWith(false, expect.anything());
     expect(onViewChange).not.toHaveBeenCalled();
   });
 

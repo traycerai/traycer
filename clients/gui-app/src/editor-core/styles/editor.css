@@ -138,7 +138,7 @@
 }
 
 .tc-editor-toolbar-action:hover:not([disabled]),
-.tc-editor-toolbar-action[data-state="open"] {
+.tc-editor-toolbar-action[data-popup-open] {
   background: var(--color-accent, hsl(0 0% 96%));
 }
 

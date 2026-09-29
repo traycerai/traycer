@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -459,6 +462,36 @@ describe("OnboardingPage", () => {
     });
   });
 
+  // R5 (T09 review): the earlier data-state -> data-progress-state rename had
+  // no coverage that a real advance actually produces the previous/current/next
+  // triple the CSS keys off. Checks both halves - the DOM attribute (JSX) and
+  // the source CSS rule (onboarding.css) - since vitest does not apply CSS in
+  // jsdom runs (see vitest.config.ts), so a computed-style read here would be
+  // vacuous; matching the real file's text still fails if either fill
+  // selector is broken or removed.
+  it("marks previous/current/next progress segments done/active/todo, matching the CSS fill rules that read them", async () => {
+    const { container } = renderPage(false);
+    await advanceToStep("providers");
+
+    const segments = container.querySelectorAll(".onboarding-progress-segment");
+    expect(segments).toHaveLength(3);
+    expect(segments[0].getAttribute("data-progress-state")).toBe("done");
+    expect(segments[1].getAttribute("data-progress-state")).toBe("active");
+    expect(segments[2].getAttribute("data-progress-state")).toBe("todo");
+    for (const segment of segments) {
+      expect(segment.querySelector(".onboarding-progress-fill")).toBeTruthy();
+    }
+
+    const here = dirname(fileURLToPath(import.meta.url));
+    const css = readFileSync(join(here, "../onboarding.css"), "utf8");
+    expect(css).toMatch(
+      /\.onboarding-progress-segment\[data-progress-state="active"\]\s*\.onboarding-progress-fill\s*\{\s*clip-path:\s*inset\(0 0 0 0\);\s*\}/,
+    );
+    expect(css).toMatch(
+      /\.onboarding-progress-segment\[data-progress-state="done"\]\s*\.onboarding-progress-fill\s*\{\s*clip-path:\s*inset\(0 0 0 100%\);\s*\}/,
+    );
+  });
+
   // The desktop shell is not what the phone rework changed, and this is the
   // guard that says so: the eyebrow, the wordmark and a footer Back are all
   // things the phone branch removes, and all three still belong here.
@@ -762,7 +795,7 @@ describe("OnboardingPage", () => {
 
     const picker = document.createElement("div");
     picker.setAttribute("data-slot", "popover-content");
-    picker.setAttribute("data-state", "open");
+    picker.setAttribute("data-open", "");
     document.body.append(picker);
     fireEvent.keyDown(window, { key: "Escape" });
     expect(useOnboardingStore.getState().completedAt).toBeNull();

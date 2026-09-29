@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { Collapsible as CollapsiblePrimitive } from "radix-ui";
+import { Collapsible as CollapsiblePrimitive } from "@base-ui/react/collapsible";
 
 import { cn } from "@/lib/utils";
 

@@ -316,9 +316,11 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
           </Button>
         </ButtonGroup>
         <Select
+          items={ROLE_OPTIONS}
           value={roleFilter}
           disabled={unsupported}
           onValueChange={(value) => {
+            if (value === null) return;
             const option = ROLE_OPTIONS.find((entry) => entry.value === value);
             if (option !== undefined) setRoleFilter(option.value);
           }}
@@ -339,9 +341,11 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
           </SelectContent>
         </Select>
         <Select
+          items={DATE_OPTIONS}
           value={datePreset}
           disabled={unsupported}
           onValueChange={(value) => {
+            if (value === null) return;
             const option = DATE_OPTIONS.find((entry) => entry.value === value);
             if (option !== undefined) setDatePreset(option.value, Date.now());
           }}

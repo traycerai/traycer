@@ -1,13 +1,21 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent } from "@testing-library/react";
 
 /**
  * Read the hover hint attached to `trigger`.
  *
  * Tooltips replaced the app's native `title` attributes, and a `title` could be
- * asserted straight off the DOM node. A Radix tooltip cannot: its content is
+ * asserted straight off the DOM node. A tooltip cannot: its content is
  * portalled and exists only while open. This opens it the cheap way - FOCUS,
- * which Radix honours immediately, where pointer-enter sits behind the 500ms
- * open delay and would force every caller onto fake timers.
+ * which our Tooltip honours immediately (no open delay is applied on focus),
+ * where pointer-enter sits behind the Provider's own delay and would force
+ * every caller onto fake timers.
+ *
+ * Looks the content up via `trigger`'s own `aria-describedby` rather than a
+ * document-wide `role="tooltip"` search: closing is NOT synchronous with the
+ * blur below (our Tooltip defers it, matching the underlying primitive), so a
+ * global search could still find an earlier probe's not-yet-closed tooltip.
+ * Scoping to this trigger's own description sidesteps that regardless of
+ * what else is mid-close elsewhere in the document.
  *
  * Returns `null` when the trigger carries no tooltip, so "there is no hint
  * here" reads the same way it did against `getAttribute("title")`.
@@ -17,16 +25,17 @@ export function tooltipTextFor(trigger: Element): string | null {
   // `focusin` alongside it (and `focusout` alongside `blur`), which is what
   // React actually delegates `onFocus` from. Firing `focusIn` explicitly as
   // well just delivers React's handler twice.
-  //
-  // TRAP: Radix's `TooltipTrigger.onFocus` early-returns while its
-  // `isPointerDownRef` is set - which stays set until a document `pointerup`.
-  // Probing straight after a bare `fireEvent.pointerDown` therefore reports
-  // "no tooltip" no matter what is wired up.
   fireEvent.focus(trigger);
-  const tip = screen.queryByRole("tooltip");
+  const describedBy = trigger.getAttribute("aria-describedby");
+  const ids =
+    describedBy === null ? [] : describedBy.split(/\s+/).filter(Boolean);
+  const tip =
+    ids
+      .map((id) => document.getElementById(id))
+      .find((el) => el?.getAttribute("role") === "tooltip") ?? null;
   const text = tip === null ? null : tip.textContent;
-  // Leave the DOM as we found it: an open tooltip is a live `role="tooltip"`
-  // node, and a later query in the same test would otherwise find this one too.
+  // Not synchronous (see above), but still worth firing: it starts the real
+  // close instead of leaving the trigger stuck focused for whatever runs next.
   fireEvent.blur(trigger);
   return text;
 }
@@ -34,7 +43,7 @@ export function tooltipTextFor(trigger: Element): string | null {
 /**
  * The hint on `el` or on the nearest ancestor that is a tooltip trigger.
  *
- * `TooltipWrapper` forwards to its child via `asChild`, so the trigger is
+ * `TooltipWrapper` forwards to its child via `render`, so the trigger is
  * usually the element a test already has a handle on - but where the wrapper
  * guards a disabled control it sits on an intermediate span instead, and the
  * caller should not have to know which.

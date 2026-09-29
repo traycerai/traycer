@@ -424,17 +424,19 @@ function BrowserPrivateSessionShield() {
         sideOffset={6}
         align="center"
       >
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="muted"
-            size="icon-sm"
-            aria-label={`Saved logins: ${copy.headline}`}
-            className="shrink-0"
-          >
-            <VenetianMask aria-hidden />
-          </Button>
-        </PopoverTrigger>
+        <PopoverTrigger
+          render={
+            <Button
+              type="button"
+              variant="muted"
+              size="icon-sm"
+              aria-label={`Saved logins: ${copy.headline}`}
+              className="shrink-0"
+            >
+              <VenetianMask aria-hidden />
+            </Button>
+          }
+        />
       </TooltipWrapper>
       <PopoverContent align="end" className="w-[min(80vw,20rem)] min-w-0">
         <PopoverHeader>
@@ -462,21 +464,23 @@ function BrowserMoreMenu(props: {
         sideOffset={6}
         align="center"
       >
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="muted"
-            size="icon-sm"
-            aria-label="More browser controls"
-            className="shrink-0"
-          >
-            <EllipsisVertical aria-hidden />
-          </Button>
-        </DropdownMenuTrigger>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="muted"
+              size="icon-sm"
+              aria-label="More browser controls"
+              className="shrink-0"
+            >
+              <EllipsisVertical aria-hidden />
+            </Button>
+          }
+        />
       </TooltipWrapper>
       <DropdownMenuContent
         align="end"
-        className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-64 overflow-y-auto"
+        className="w-[var(--available-width)] min-w-0 max-w-64 overflow-y-auto"
       >
         {capabilities.zoom ? (
           <BrowserZoomControls controller={controller} />
@@ -488,7 +492,7 @@ function BrowserMoreMenu(props: {
           <DropdownMenuItem
             aria-label={browserClearSiteLabel(clearSite.site)}
             disabled={controller.disabled || clearSite.site === null}
-            onSelect={props.onRequestClearSite}
+            onClick={props.onRequestClearSite}
           >
             <Cookie aria-hidden />
             {browserClearSiteLabel(clearSite.site)}
@@ -500,7 +504,7 @@ function BrowserMoreMenu(props: {
             <DropdownMenuItem
               aria-label="Open browser DevTools"
               disabled={controller.disabled}
-              onSelect={controller.onOpenDevTools}
+              onClick={controller.onOpenDevTools}
             >
               <Bug aria-hidden />
               Open DevTools
@@ -531,10 +535,10 @@ function BrowserZoomControls(props: { readonly controller: TileController }) {
         aria-label="Zoom out"
         className="size-7 shrink-0 justify-center border border-border p-0"
         disabled={disabled}
-        onSelect={(event) => {
-          event.preventDefault();
+        onClick={() => {
           controller.onZoomOut();
         }}
+        closeOnClick={false}
       >
         <Minus aria-hidden />
       </DropdownMenuItem>
@@ -549,10 +553,10 @@ function BrowserZoomControls(props: { readonly controller: TileController }) {
         aria-label="Zoom in"
         className="size-7 shrink-0 justify-center border border-border p-0"
         disabled={disabled}
-        onSelect={(event) => {
-          event.preventDefault();
+        onClick={() => {
           controller.onZoomIn();
         }}
+        closeOnClick={false}
       >
         <Plus aria-hidden />
       </DropdownMenuItem>
@@ -561,10 +565,10 @@ function BrowserZoomControls(props: { readonly controller: TileController }) {
         variant="muted"
         className="size-7 shrink-0 justify-center p-0"
         disabled={disabled}
-        onSelect={(event) => {
-          event.preventDefault();
+        onClick={() => {
           controller.onResetZoom();
         }}
+        closeOnClick={false}
       >
         <RotateCcw aria-hidden />
       </DropdownMenuItem>
@@ -601,6 +605,7 @@ function BrowserAnnotateToggle(props: {
   readonly controller: BrowserAnnotationSessionController;
 }) {
   const controller = props.controller;
+  const disabled = !controller.canStart && !controller.isActive;
   return (
     <TooltipWrapper
       label={controller.isActive ? "Stop annotating" : "Annotate page"}
@@ -614,7 +619,7 @@ function BrowserAnnotateToggle(props: {
         size="icon-sm"
         aria-label="Annotate page"
         aria-pressed={controller.isActive}
-        disabled={!controller.canStart && !controller.isActive}
+        disabled={disabled}
         onClick={controller.toggle}
       >
         <SquareMousePointer aria-hidden />
@@ -638,7 +643,7 @@ function BrowserSiteInfoMenu(props: { readonly url: string }) {
         onClick={() => setOpen(true)}
       >
         <span className="min-w-0 truncate">Site information</span>
-        <span className="min-w-0 truncate text-end text-ui-xs text-muted-foreground group-data-open:text-accent-foreground">
+        <span className="min-w-0 truncate text-end text-ui-xs text-muted-foreground group-data-popup-open:text-accent-foreground">
           {originTitle}
         </span>
       </DropdownMenuSubTrigger>

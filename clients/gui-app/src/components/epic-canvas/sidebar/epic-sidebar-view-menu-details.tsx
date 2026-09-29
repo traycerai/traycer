@@ -96,11 +96,7 @@ export function OrderingDetail(props: {
         }}
       >
         {props.fields.map((field) => (
-          <DropdownMenuRadioItem
-            key={field}
-            value={field}
-            onSelect={(event) => event.preventDefault()}
-          >
+          <DropdownMenuRadioItem key={field} value={field} closeOnClick={false}>
             {SORT_FIELD_LABELS[field]}
           </DropdownMenuRadioItem>
         ))}
@@ -109,24 +105,24 @@ export function OrderingDetail(props: {
       <DropdownMenuRadioGroup value={props.sort.direction}>
         <DropdownMenuRadioItem
           value={SORT_DIRECTION.Desc}
-          onSelect={(event) => {
-            event.preventDefault();
+          onClick={() => {
             if (props.sort.direction !== SORT_DIRECTION.Desc) {
               props.onToggleDirection();
             }
           }}
+          closeOnClick={false}
         >
           <ArrowDownWideNarrow className="size-4" />
           Descending
         </DropdownMenuRadioItem>
         <DropdownMenuRadioItem
           value={SORT_DIRECTION.Asc}
-          onSelect={(event) => {
-            event.preventDefault();
+          onClick={() => {
             if (props.sort.direction !== SORT_DIRECTION.Asc) {
               props.onToggleDirection();
             }
           }}
+          closeOnClick={false}
         >
           <ArrowUpNarrowWide className="size-4" />
           Ascending
@@ -136,10 +132,10 @@ export function OrderingDetail(props: {
         <>
           <DropdownMenuSeparator />
           <DropdownMenuItem
-            onSelect={(event) => {
-              event.preventDefault();
+            onClick={() => {
               resetOrdering();
             }}
+            closeOnClick={false}
           >
             <RotateCcw className="size-4" />
             Reset ordering
@@ -192,8 +188,9 @@ export function ChatShowDetail(props: {
         <DropdownMenuRadioItem
           key={option.value}
           value={option.value}
-          onSelect={(event) => event.preventDefault()}
+
           data-testid={`epic-sidebar-archive-visibility-${option.value}`}
+          closeOnClick={false}
         >
           {option.label}
         </DropdownMenuRadioItem>
@@ -221,7 +218,7 @@ export function ChatInterfaceDetail(props: {
         <DropdownMenuRadioItem
           key={option.value}
           value={option.value}
-          onSelect={(event) => event.preventDefault()}
+          closeOnClick={false}
         >
           {option.label}
         </DropdownMenuRadioItem>
@@ -249,7 +246,7 @@ export function ChatOwnershipDetail(props: {
         <DropdownMenuRadioItem
           key={option.value}
           value={option.value}
-          onSelect={(event) => event.preventDefault()}
+          closeOnClick={false}
         >
           {option.label}
         </DropdownMenuRadioItem>
@@ -341,7 +338,7 @@ export function ArtifactDetailContent(props: {
               key={status}
               checked={props.filterStatuses.includes(status)}
               onCheckedChange={() => props.toggleStatus(status)}
-              onSelect={(event) => event.preventDefault()}
+              closeOnClick={false}
             >
               <span
                 className={cn(
@@ -376,7 +373,7 @@ export function ArtifactDetailContent(props: {
             <DropdownMenuRadioItem
               key={option.value}
               value={option.value}
-              onSelect={(event) => event.preventDefault()}
+              closeOnClick={false}
             >
               {option.label}
             </DropdownMenuRadioItem>
@@ -413,7 +410,7 @@ function ArtifactTypeDetail(props: {
         key={kind}
         checked={props.filterKinds.includes(kind)}
         onCheckedChange={() => props.toggleKind(kind)}
-        onSelect={(event) => event.preventDefault()}
+        closeOnClick={false}
       >
         <TypeIcon
           className={cn(

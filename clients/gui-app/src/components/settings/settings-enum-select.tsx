@@ -31,8 +31,10 @@ export function EnumSelect<T extends string>(props: {
   const describedById = useSettingsRowDescriptionId();
   return (
     <Select
+      items={props.labels}
       value={props.value}
       onValueChange={(value) => {
+        if (value === null) return;
         if (props.isValue(value)) props.onValueChange(value);
       }}
     >

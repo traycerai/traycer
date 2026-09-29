@@ -5,7 +5,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -165,6 +165,19 @@ function renderPanel(input: {
   return { requests };
 }
 
+/**
+ * Base mounts a Select's options, hidden and inert, as soon as its trigger is
+ * focused - before the list opens - so finding an option does not prove the
+ * list is open. Wait for the trigger to report it.
+ */
+async function openHostFilter(user: UserEvent): Promise<void> {
+  const trigger = await screen.findByTestId("usage-host-filter");
+  await user.click(trigger);
+  await waitFor(() => {
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  });
+}
+
 describe("<UsageSummaryPanel /> activity section", () => {
   it("falls back to a shorter calendar when the host is too old for the year window", async () => {
     // Hosts update independently of the app: one released before this
@@ -243,7 +256,7 @@ describe("<UsageSummaryPanel /> activity section", () => {
     });
 
     await screen.findByTestId("usage-activity-heatmap");
-    await user.click(await screen.findByTestId("usage-host-filter"));
+    await openHostFilter(user);
     expect(
       await screen.findByTestId("usage-host-filter-option-host-sixty-days"),
     ).toBeTruthy();
@@ -389,7 +402,7 @@ describe("<UsageSummaryPanel /> host scope", () => {
     });
 
     await screen.findByTestId("usage-cost-figure");
-    await user.click(await screen.findByTestId("usage-host-filter"));
+    await openHostFilter(user);
     expect(
       await screen.findByTestId("usage-host-filter-option-host-dormant"),
     ).toBeTruthy();
@@ -415,7 +428,7 @@ describe("<UsageSummaryPanel /> host scope", () => {
     });
 
     await screen.findByTestId("usage-cost-figure");
-    await user.click(screen.getByTestId("usage-host-filter"));
+    await openHostFilter(user);
     await user.click(
       await screen.findByTestId("usage-host-filter-option-host-a"),
     );
@@ -429,7 +442,7 @@ describe("<UsageSummaryPanel /> host scope", () => {
       expect(requests.at(-1)).toMatchObject({ hostId: "host-a" });
     });
 
-    await user.click(screen.getByTestId("usage-host-filter"));
+    await openHostFilter(user);
     // host-b is absent from THIS response's buckets and from the directory -
     // it survives only because the unfiltered response was remembered.
     expect(

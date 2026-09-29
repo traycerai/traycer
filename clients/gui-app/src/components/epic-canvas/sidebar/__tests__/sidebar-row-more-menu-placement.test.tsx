@@ -54,10 +54,10 @@ function renderMoreMenu(edge: "left" | "right" | null): void {
 }
 
 function openMoreMenu(): void {
-  fireEvent.pointerDown(screen.getByTestId(`epic-sidebar-more-${ROW_ID}`), {
-    button: 0,
-    pointerType: "mouse",
-  });
+  // Base's trigger toggles on click, not pointerdown - the first open of a
+  // never-touched trigger happens on the click that follows the mount, per
+  // `use-sidebar-row-dropdown-mount.ts`.
+  fireEvent.click(screen.getByTestId(`epic-sidebar-more-${ROW_ID}`));
 }
 
 describe("<SidebarRowMoreMenu /> placement (D7)", () => {

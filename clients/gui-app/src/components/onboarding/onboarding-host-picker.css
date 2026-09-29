@@ -38,7 +38,7 @@
   font-size: 0.8125rem;
 }
 .onboarding-host-control
-  [data-testid="settings-host-switcher"][data-state="open"] {
+  [data-testid="settings-host-switcher"][data-popup-open] {
   background: color-mix(in srgb, var(--foreground) 6%, transparent);
 }
 @media (hover: hover) and (pointer: fine) {

@@ -2,7 +2,7 @@
  * Shared `@/components/ui/dropdown-menu` stand-in for the suites that mount the
  * Providers settings panel.
  *
- * Radix's DropdownMenu opens on pointerdown rather than click, which jsdom
+ * Base UI's DropdownMenu opens through its own pointer handling, which jsdom
  * tests fight; this renders every menu inline and always-open so a row can be
  * selected directly. It lives here rather than being hand-copied into each
  * suite because it is an EXPORT LIST: a component adding one more dropdown
@@ -23,7 +23,7 @@
  * file's OTHER `vi.mock` factories stop taking effect - which surfaces as
  * unrelated assertions failing deep in the suite, never as a mocking error.
  */
-import type { ReactNode } from "react";
+import { cloneElement, isValidElement, type ReactNode } from "react";
 
 // Declarations rather than `const x = passthrough` aliases: the react-refresh
 // lint rule can only recognize a function declaration as a component, and an
@@ -34,10 +34,21 @@ export function DropdownMenu(props: {
   return props.children;
 }
 
+// Base UI's trigger renders the `render` element with the trigger's own
+// children inside it; a bare passthrough would drop the element entirely.
 export function DropdownMenuTrigger(props: {
   readonly children: ReactNode;
+  readonly render: ReactNode | undefined;
 }): ReactNode {
-  return props.children;
+  const { render, children } = props;
+  if (!isValidElement<{ readonly children?: ReactNode }>(render)) {
+    return children;
+  }
+  return cloneElement(
+    render,
+    undefined,
+    children === undefined ? render.props.children : children,
+  );
 }
 
 export function DropdownMenuContent(props: {
@@ -48,7 +59,7 @@ export function DropdownMenuContent(props: {
 
 export function DropdownMenuItem(props: {
   readonly children: ReactNode;
-  readonly onSelect: (() => void) | undefined;
+  readonly onClick: (() => void) | undefined;
   readonly "aria-label": string | undefined;
   readonly "aria-current": "true" | undefined;
   readonly className: string | undefined;
@@ -64,7 +75,7 @@ export function DropdownMenuItem(props: {
       className={props.className}
       disabled={props.disabled}
       title={props.title}
-      onClick={props.onSelect}
+      onClick={props.onClick}
     >
       {props.children}
     </button>

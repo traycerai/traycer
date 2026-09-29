@@ -468,7 +468,9 @@ describe("useMobileHistorySwipes", () => {
       const forwardSpy = vi.spyOn(history, "forward");
       renderUnderSheet(history, true);
       await waitFor(() => {
-        expect(document.body.style.pointerEvents).toBe("none");
+        expect(
+          document.documentElement.hasAttribute("data-base-ui-scroll-locked"),
+        ).toBe(true);
       });
 
       swipeFromEdge("leading");
@@ -485,14 +487,18 @@ describe("useMobileHistorySwipes", () => {
       const backSpy = vi.spyOn(history, "back");
       const view = renderUnderSheet(history, true);
       await waitFor(() => {
-        expect(document.body.style.pointerEvents).toBe("none");
+        expect(
+          document.documentElement.hasAttribute("data-base-ui-scroll-locked"),
+        ).toBe(true);
       });
 
       act(() => {
         view.rerender(false);
       });
       await waitFor(() => {
-        expect(document.body.style.pointerEvents).not.toBe("none");
+        expect(
+          document.documentElement.hasAttribute("data-base-ui-scroll-locked"),
+        ).toBe(false);
       });
       swipeFromEdge("leading");
 

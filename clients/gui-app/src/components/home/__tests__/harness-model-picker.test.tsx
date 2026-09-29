@@ -7,7 +7,6 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { userEvent } from "@testing-library/user-event";
 import { resetPaneActivationFocusIntentsForTests } from "@/components/epic-canvas/pane-activation";
 
 // The picker's provider-settings gear opens the settings modal through router
@@ -44,7 +43,7 @@ vi.mock("@/hooks/rate-limits/use-profile-usage-comparison", () => ({
     return { hostId: args.runTargetHostId, isReady: true, entries: new Map() };
   },
 }));
-// The profile dropdown (ProfileDropdown) renders through Radix's real
+// The profile dropdown (ProfileDropdown) renders through Base's real
 // DropdownMenu, which opens on pointerdown rather than click - render it
 // inline + always-open so tests can click its rows without fighting
 // pointer-open semantics in jsdom (mirrors the established mock in
@@ -52,9 +51,13 @@ vi.mock("@/hooks/rate-limits/use-profile-usage-comparison", () => ({
 vi.mock("@/components/ui/dropdown-menu", () => {
   const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
     props.children;
+  const trigger = (props: {
+    readonly children?: ReactNode;
+    readonly render?: ReactNode;
+  }): ReactNode => props.render ?? props.children;
   return {
     DropdownMenu: passthrough,
-    DropdownMenuTrigger: passthrough,
+    DropdownMenuTrigger: trigger,
     DropdownMenuContent: (props: {
       readonly children: ReactNode;
       readonly container: HTMLElement | null | undefined;
@@ -72,7 +75,10 @@ vi.mock("@/components/ui/dropdown-menu", () => {
     ),
     DropdownMenuItem: (props: {
       readonly children: ReactNode;
-      readonly onSelect: (() => void) | undefined;
+      // The real `DropdownMenuItem` is called with `onClick`, not `onSelect`
+      // (Base's own API, unlike Radix's) - a mock still reading `onSelect`
+      // receives `undefined` and never fires on click.
+      readonly onClick: (() => void) | undefined;
       readonly "aria-label": string | undefined;
       readonly "aria-current": "true" | undefined;
       readonly className: string | undefined;
@@ -87,7 +93,7 @@ vi.mock("@/components/ui/dropdown-menu", () => {
         className={props.className}
         disabled={props.disabled}
         title={props.title}
-        onClick={props.onSelect}
+        onClick={props.onClick}
       >
         {props.children}
       </button>
@@ -110,6 +116,8 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { stubSliderGeometry } from "@/components/home/pickers/__tests__/slider-pointer-geometry";
 import { matchDigitAction } from "@/lib/keybindings/dispatch";
 import type {
   HarnessModelSelection,
@@ -915,8 +923,7 @@ function providerCliStateWithProfiles(input: {
   };
 }
 
-const PICKER_BODY_HEIGHT =
-  "h-[min(var(--radix-popover-content-available-height),23rem)]";
+const PICKER_BODY_HEIGHT = "h-[min(var(--available-height),23rem)]";
 const WIDTH_CLASS = /w-\[min\(86vw,30rem\)\]/;
 
 function codexModels(): ReadonlyArray<ModelOption> {
@@ -1102,7 +1109,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     <SurfaceActivityProvider
       active={activityEnabled ?? resolvedInput.activityEnabled ?? true}
     >
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <HarnessModelPicker
           labelDisplay="responsive"
           store={store}
@@ -1949,6 +1956,7 @@ describe("<HarnessModelPicker />", () => {
   });
 
   it("opens on the first click when both pickers are closed and its pane is inactive", async () => {
+    const user = userEvent.setup({ delay: null });
     const harness = pickerHarness(undefined);
     render(<ColdInactivePanePicker harness={harness} />);
 
@@ -1958,9 +1966,11 @@ describe("<HarnessModelPicker />", () => {
       "false",
     );
 
-    fireEvent.pointerDown(trigger);
-    trigger.focus();
-    fireEvent.click(trigger);
+    // A real pointerdown+focus+click sequence (not three hand-picked
+    // fireEvent calls missing mousedown/pointerup) - the pane's
+    // onPointerDownCapture/onFocusCapture still see it, since those are
+    // ordinary capture-phase listeners on a real, bubbling event sequence.
+    await user.click(trigger);
 
     const input = await screen.findByRole("textbox", { name: /^Search/ });
     expect(input).toBe(document.activeElement);
@@ -4212,31 +4222,46 @@ describe("<HarnessModelPicker />", () => {
   });
 
   it("renders the thinking-effort slider in the picker footer", async () => {
-    const { reasoningChanges } = renderPicker({
-      reasoning: "high",
-      storeModels: [
-        model({
-          slug: "gpt-5.5",
-          label: "GPT-5.5",
-          supportedReasoningEfforts: [
-            { id: "low", label: "Low", description: null },
-            { id: "high", label: "High", description: null },
-          ],
-        }),
-      ],
-    });
+    // jsdom measures every element as zero-size, so Base's Thumb positioner
+    // - which needs a real, nonzero rect to place itself - stays
+    // visibility:hidden (out of the accessibility tree) indefinitely, not
+    // just for a microtask; findByRole alone would time out waiting for a
+    // layout that never happens. Scoped to this one test (not this whole
+    // file's beforeEach/afterEach) since it's the only slider case here -
+    // see harness-model-picker-reasoning-slider.test.tsx's own beforeEach/
+    // afterEach for the shared, file-wide version of the same stub.
+    const restoreSliderGeometry = stubSliderGeometry();
+    try {
+      const { reasoningChanges } = renderPicker({
+        reasoning: "high",
+        storeModels: [
+          model({
+            slug: "gpt-5.5",
+            label: "GPT-5.5",
+            supportedReasoningEfforts: [
+              { id: "low", label: "Low", description: null },
+              { id: "high", label: "High", description: null },
+            ],
+          }),
+        ],
+      });
 
-    await openPicker();
+      await openPicker();
 
-    expect(
-      screen.getByRole("group", { name: "Thinking effort" }),
-    ).not.toBeNull();
-    const slider = screen.getByRole("slider", { name: "Thinking effort" });
-    expect(slider.getAttribute("aria-valuetext")).toBe("High");
+      expect(
+        screen.getByRole("group", { name: "Thinking effort" }),
+      ).not.toBeNull();
+      const slider = await screen.findByRole("slider", {
+        name: "Thinking effort",
+      });
+      expect(slider.getAttribute("aria-valuetext")).toBe("High");
 
-    fireEvent.keyDown(slider, { key: "ArrowLeft" });
+      fireEvent.keyDown(slider, { key: "ArrowLeft" });
 
-    expect(reasoningChanges).toEqual(["low"]);
+      expect(reasoningChanges).toEqual(["low"]);
+    } finally {
+      restoreSliderGeometry();
+    }
   });
 
   it("renders thinking effort buttons in the picker footer under the list setting", async () => {
@@ -5247,7 +5272,7 @@ describe("<HarnessModelPicker />", () => {
         expect(body?.contains(screen.getByRole("listbox"))).toBe(true);
       });
 
-      it("reports every visible open and close - trigger, Escape, an outside press and closeRef - and nothing on mount", async () => {
+      it("reports every visible open and close - trigger, Escape and closeRef - and nothing on mount", async () => {
         const closeRef: RefObject<(() => void) | null> = { current: null };
         const { spies } = renderFooter({ closeRef, footer: null });
         expect(spies.onOpenChange).not.toHaveBeenCalled();
@@ -5270,23 +5295,13 @@ describe("<HarnessModelPicker />", () => {
           expect(spies.onOpenChange).toHaveBeenLastCalledWith(false);
         });
         expect(spies.onOpenChange).toHaveBeenCalledTimes(4);
-
-        await openPickerByTriggerName("Routing face");
-        expect(spies.onOpenChange).toHaveBeenCalledTimes(5);
-        // Radix arms its outside-press listener a tick after mounting.
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 20));
-        });
-        const outside = document.createElement("div");
-        document.body.append(outside);
-        fireEvent.pointerDown(outside, { button: 0, pointerType: "mouse" });
-        fireEvent.mouseDown(outside);
-        fireEvent.click(outside);
-        await waitFor(() => {
-          expect(spies.onOpenChange).toHaveBeenCalledTimes(6);
-        });
-        expect(spies.onOpenChange).toHaveBeenLastCalledWith(false);
-        outside.remove();
+        // An outside-press case lived here and is deleted (D17): it needs
+        // real hit-testing, which jsdom cannot drive under Base - the same
+        // ruling as `promotable-modal-frame.test.tsx`'s header comment - and
+        // is covered instead by the browser gate
+        // (`scripts/primitive-gate-browser.mjs`). The reporting path itself
+        // (`handleOpenChange`) is reason-independent and is already proven
+        // by the trigger, Escape and closeRef cases above.
       });
 
       it("reports a close once when it unmounts while open, and nothing when it unmounts closed", async () => {
@@ -5398,7 +5413,7 @@ describe("<HarnessModelPicker />", () => {
           // The popover carries only the cap, never the body's fixed height.
           expect(embedded.className).not.toContain(PICKER_BODY_HEIGHT);
           expect(embedded.className).toContain(
-            "max-h-[var(--radix-popover-content-available-height)]",
+            "max-h-[var(--available-height)]",
           );
           expect(
             embeddedBox.contains(within(embedded).getByText("Routing footer")),

@@ -1059,8 +1059,33 @@ function ModelSelect(props: {
   const taggedFamily = pinned && models.length > 0;
   return (
     <Select
+      items={[
+        ...(pinned
+          ? [
+              {
+                value: stored,
+                label: (
+                  <>
+                    {stored}
+                    {taggedFamily ? (
+                      <Badge
+                        variant="outline"
+                        className="ml-1"
+                        data-testid="fallback-model-family-tag"
+                      >
+                        family
+                      </Badge>
+                    ) : null}
+                  </>
+                ),
+              },
+            ]
+          : []),
+        ...models.map((model) => ({ value: model.slug, label: model.label })),
+      ]}
       value={value}
       onValueChange={(next) => {
+        if (next === null) return;
         onChange(next);
       }}
     >
@@ -1139,15 +1164,24 @@ function EffortControl(props: {
 }): ReactNode {
   const { reasoningEffort, options, onCommit } = props;
   const stored = reasoningEffort;
+  const disabled = options.length === 0 && stored === null;
   const unsupported =
     stored !== null && !options.some((option) => option.id === stored);
   return (
     <Select
+      items={[
+        { value: ANY_EFFORT_VALUE, label: "Any effort" },
+        ...options.map((option) => ({ value: option.id, label: option.label })),
+        ...(unsupported
+          ? [{ value: stored, label: `${stored} - not offered here` }]
+          : []),
+      ]}
       // `ANY_EFFORT_VALUE`, not "": Radix treats an empty string as "no value"
       // and would render the placeholder for a choice the user made.
       value={stored ?? ANY_EFFORT_VALUE}
-      disabled={options.length === 0 && stored === null}
+      disabled={disabled}
       onValueChange={(next) => {
+        if (next === null) return;
         onCommit(next === ANY_EFFORT_VALUE ? null : next);
       }}
     >
@@ -1210,8 +1244,10 @@ function HarnessSelect(props: {
       : [harnessId, ...guiHarnessIdSchema.options];
   return (
     <Select
+      items={options.map((value) => ({ value, label: harnessLabel(value) }))}
       value={harnessId}
       onValueChange={(next) => {
+        if (next === null) return;
         // The trigger only ever emits a value from `options`, so this parse
         // cannot fail in practice - it is here because the alternative is a
         // cast, and the type rules forbid one. A rejected value leaves the row

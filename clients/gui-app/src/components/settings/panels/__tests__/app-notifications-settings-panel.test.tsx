@@ -115,12 +115,13 @@ describe("<AppNotificationsSettingsPanel />", () => {
     const selectedOption = screen.getByRole("option", { name: "Rift" });
     fireEvent.pointerDown(selectedOption, { pointerType: "mouse" });
     fireEvent.pointerUp(selectedOption, { pointerType: "mouse" });
+    fireEvent.click(selectedOption, { detail: 1 });
 
     expect(playNotificationChimeSoundMock).toHaveBeenCalledWith("rift");
     expect(persistSelection).not.toHaveBeenCalled();
   });
 
-  it("previews a chime activated by a synthesized click", () => {
+  it("previews and persists a chime activated by an assistive-tech virtual click", () => {
     const persistSelection = vi.fn();
     useSettingsStore.setState({
       setNotificationChimeSoundForEvent: persistSelection,
@@ -130,9 +131,12 @@ describe("<AppNotificationsSettingsPanel />", () => {
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Failure sound" }), {
       key: "ArrowDown",
     });
-    fireEvent.click(screen.getByRole("option", { name: "Classic" }), {
-      detail: 0,
-    });
+    const classic = screen.getByRole("option", { name: "Classic" });
+    // A screen reader's activation is a click with no pointer sequence: zero
+    // detail, and a pointerType of "" that Base reads as a virtual click.
+    const click = new MouseEvent("click", { bubbles: true, detail: 0 });
+    Object.defineProperty(click, "pointerType", { value: "" });
+    fireEvent(classic, click);
 
     expect(playNotificationChimeSoundMock).toHaveBeenCalledWith("classic");
     expect(persistSelection).toHaveBeenCalledWith("failure", "classic");

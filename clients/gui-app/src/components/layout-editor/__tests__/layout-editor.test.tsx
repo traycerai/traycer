@@ -439,18 +439,11 @@ describe("the mounted editor root", () => {
 
 describe("the inspector chrome", () => {
   function openInspectorMenu(): void {
-    // Radix's DropdownMenuTrigger opens on pointerdown, not the click event.
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Inspector options" }),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Inspector options" }));
   }
 
   function openMoreWaysOut(): void {
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "More ways out" }),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByRole("button", { name: "More ways out" }));
   }
 
   it("writes the dock mode from the ⋯ menu, and the checked radio reflects the store", () => {

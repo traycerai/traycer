@@ -1061,16 +1061,18 @@ function VersionMenuTrigger({
         );
       }}
     >
-      <PopoverTrigger asChild>
-        <button
-          ref={triggerRef}
-          type="button"
-          aria-label={`${data.packDisplayName} version`}
-          className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-        >
-          <ChevronDown className="size-3.5" aria-hidden="true" />
-        </button>
-      </PopoverTrigger>
+      <PopoverTrigger
+        render={
+          <button
+            ref={triggerRef}
+            type="button"
+            aria-label={`${data.packDisplayName} version`}
+            className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            <ChevronDown className="size-3.5" aria-hidden="true" />
+          </button>
+        }
+      />
       <PopoverContent
         layout="bare"
         align="end"

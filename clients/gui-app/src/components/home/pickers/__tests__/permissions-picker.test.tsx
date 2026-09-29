@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
+import { ComposerNarrowContext } from "@/components/home/composer/composer-narrow-context-internal";
 import {
   AUTO_MID_TURN_UNRESOLVED_LOCK,
   type AutoJudgeBilling,
@@ -21,8 +22,8 @@ afterEach(() => {
 });
 
 function openMenu() {
-  // Radix's DropdownMenuTrigger opens on pointerdown, not the click event.
-  fireEvent.pointerDown(screen.getByRole("button"), { button: 0 });
+  // Base's DropdownMenuTrigger opens on click, not pointerdown (Radix's own behavior).
+  fireEvent.click(screen.getByRole("button"));
 }
 
 interface RenderPickerOptions {
@@ -537,5 +538,55 @@ describe("<PermissionsPicker /> - trailing 'Permission settings…' item", () =>
     expect(
       screen.queryByRole("menuitem", { name: "Permission settings…" }),
     ).toBeNull();
+  });
+});
+
+describe("<PermissionsPicker /> - anchor identity across a composer-width toggle", () => {
+  // The trigger is wrapped in NarrowOnlyTooltip, whose `label` flips between
+  // null and text on `useIsComposerNarrow()` - a composer resize, which can
+  // happen while this menu is already open, not only at open/close time.
+  it("keeps the trigger as the same DOM node when the composer narrows while the menu is open", () => {
+    const view = render(
+      <ComposerNarrowContext.Provider value={false}>
+        <PermissionsPicker
+          value="full_access"
+          disabled={false}
+          onChange={vi.fn()}
+          supportedPermissionModes={null}
+          harnessLabel="Claude Code"
+          catalogSupportedModes={null}
+          hostKnowsAutoMode
+          turnActive={false}
+          judgeBilling={null}
+          closeFocus="trigger"
+          onOpenPermissionSettings={null}
+          interactive
+        />
+      </ComposerNarrowContext.Provider>,
+    );
+    const trigger = screen.getByRole("button");
+    openMenu();
+
+    view.rerender(
+      <ComposerNarrowContext.Provider value>
+        <PermissionsPicker
+          value="full_access"
+          disabled={false}
+          onChange={vi.fn()}
+          supportedPermissionModes={null}
+          harnessLabel="Claude Code"
+          catalogSupportedModes={null}
+          hostKnowsAutoMode
+          turnActive={false}
+          judgeBilling={null}
+          closeFocus="trigger"
+          onOpenPermissionSettings={null}
+          interactive
+        />
+      </ComposerNarrowContext.Provider>,
+    );
+
+    expect(screen.getByRole("button", { hidden: true })).toBe(trigger);
+    expect(screen.getByRole("menu")).toBeTruthy();
   });
 });

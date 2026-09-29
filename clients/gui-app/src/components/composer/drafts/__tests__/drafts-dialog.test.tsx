@@ -1,4 +1,11 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -135,6 +142,21 @@ function searchBox(): HTMLElement {
   return screen.getByPlaceholderText("Search drafts");
 }
 
+// `timeStamp` isn't a real `EventInit` field, so `fireEvent(el, {timeStamp})`
+// silently drops it. Override the (configurable) property on the built
+// event directly so the IME grace-window arithmetic is deterministic.
+function fireAtTime(
+  target: Document | Element | Node | Window,
+  event: Event,
+  timeStamp: number,
+): void {
+  Object.defineProperty(event, "timeStamp", {
+    value: timeStamp,
+    configurable: true,
+  });
+  fireEvent(target, event);
+}
+
 function openFilter(): void {
   fireEvent.click(screen.getByRole("button", { name: "Filter drafts" }));
 }
@@ -192,11 +214,13 @@ describe("<DraftsDialog />", () => {
     expect(actionsMock.calls.at(-1)).toEqual({ hostId: "host-effective" });
   });
 
-  it("puts focus in the search box on open", () => {
+  it("puts focus in the search box on open", async () => {
     inventoryMock.rows = [landingRow({ id: "d-1" })];
     renderDialog({ activeEpicId: null, onClose: noop });
 
-    expect(document.activeElement).toBe(searchBox());
+    await waitFor(() => {
+      expect(document.activeElement).toBe(searchBox());
+    });
   });
 
   it("lists every kind, each carrying its own source chip", () => {
@@ -231,12 +255,25 @@ describe("<DraftsDialog />", () => {
   });
 
   it("ignores an Enter that confirms an IME composition", () => {
+    // The app-owned Command guards IME Enter with `isComposing` plus a
+    // composition-ref grace window (shared `isCommandCompositionKey`,
+    // used by DraftsDialog's own `onKeyDown` on CommandInput too, ahead of
+    // Command's root handler), never the deprecated `keyCode === 229` this
+    // test used to simulate against cmdk. Rewritten to the real mechanism
+    // (compositionstart/compositionend, then Enter inside the 50ms grace
+    // window), with explicit timestamps rather than same-tick defaults.
     inventoryMock.rows = [landingRow({ id: "d-1" })];
     const onClose = vi.fn();
     renderDialog({ activeEpicId: null, onClose });
 
     fireEvent.keyDown(searchBox(), { key: "Enter", isComposing: true });
-    fireEvent.keyDown(searchBox(), { key: "Enter", keyCode: 229 });
+    fireAtTime(searchBox(), createEvent.compositionStart(searchBox()), 1_000);
+    fireAtTime(searchBox(), createEvent.compositionEnd(searchBox()), 1_000);
+    fireAtTime(
+      searchBox(),
+      createEvent.keyDown(searchBox(), { key: "Enter" }),
+      1_010,
+    );
 
     expect(actionsMock.openRow).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
@@ -266,6 +303,12 @@ describe("<DraftsDialog />", () => {
     renderDialog({ activeEpicId: null, onClose });
     const user = userEvent.setup();
 
+    // Base's initial-focus lands asynchronously (see "puts focus in the
+    // search box on open" above) - start the Tab sequence from a settled,
+    // known position, the same way a real user's Tab presses would.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(searchBox());
+    });
     await user.tab();
     await user.tab();
     expect(document.activeElement).toBe(

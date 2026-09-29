@@ -6,6 +6,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { CommandPaletteRoot } from "@/providers/command-palette-provider";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
@@ -63,7 +64,7 @@ describe("pinning in palette shell", () => {
     const pinButton = await screen.findByTestId(
       "command-palette-pin-nav:epics",
     );
-    fireEvent.pointerDown(pinButton);
+    fireEvent.click(pinButton);
     expect(useCommandPaletteStore.getState().pinnedIds).toContain("nav:epics");
   });
 
@@ -76,10 +77,26 @@ describe("pinning in palette shell", () => {
     const pinButton = await screen.findByTestId(
       "command-palette-pin-nav:epics",
     );
-    fireEvent.pointerDown(pinButton);
+    fireEvent.click(pinButton);
     expect(useCommandPaletteStore.getState().pinnedIds).not.toContain(
       "nav:epics",
     );
+  });
+
+  it("toggles the pin from the keyboard without dispatching the row", async () => {
+    const user = userEvent.setup();
+    render(wrap(<div>app</div>));
+    act(() => {
+      useCommandPaletteStore.getState().setOpen(true);
+    });
+    const pinButton = await screen.findByTestId(
+      "command-palette-pin-nav:epics",
+    );
+    pinButton.focus();
+    await user.keyboard("{Enter}");
+    expect(useCommandPaletteStore.getState().pinnedIds).toContain("nav:epics");
+    // Dispatch closes the palette on success; pin alone must not.
+    expect(useCommandPaletteStore.getState().open).toBe(true);
   });
 
   it("pin action does not dispatch the underlying command", async () => {
@@ -90,7 +107,9 @@ describe("pinning in palette shell", () => {
     const pinButton = await screen.findByTestId(
       "command-palette-pin-nav:epics",
     );
-    fireEvent.pointerDown(pinButton);
+    // Real click event, propagation stopped by PinToggle itself
+    // (`onPointerDown` alone no longer toggles the pin or runs the row).
+    fireEvent.click(pinButton);
     // Palette stays open - dispatch closes on success. Pin alone
     // must not close.
     expect(useCommandPaletteStore.getState().open).toBe(true);

@@ -90,7 +90,7 @@ export function ScriptsReviewDialog(props: {
   // nested editor inside `repositoryDefaultsSlot` wants to consume Escape as
   // its own "cancel" instead). A no-op (`() => {}`) preserves plain
   // Escape-closes-the-dialog behavior.
-  readonly onEscapeKeyDown: (event: KeyboardEvent) => void;
+  readonly cancelEditing: () => boolean;
   readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
   const [scripts, setScripts] = useState<RepoScriptsValue>(() =>
@@ -106,13 +106,20 @@ export function ScriptsReviewDialog(props: {
     });
 
   return (
-    <Dialog open onOpenChange={handleOpenChange}>
+    <Dialog
+      open
+      onOpenChange={(next, details) => {
+        if (!next && details.reason === "escape-key" && props.cancelEditing())
+          details.cancel();
+        if (details.isCanceled) return;
+        handleOpenChange(next);
+      }}
+    >
       <DialogContent
         layout="banded"
         className="flex max-h-[calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem)] w-full flex-col overflow-hidden sm:max-w-[min(52rem,var(--safe-area-width),calc(100%-2rem))]"
         data-testid={props.testId}
         showCloseButton={!saveBusy}
-        onEscapeKeyDown={props.onEscapeKeyDown}
       >
         <DialogHeader className="shrink-0 gap-1.5">
           <DialogTitle size="lg">{props.title}</DialogTitle>

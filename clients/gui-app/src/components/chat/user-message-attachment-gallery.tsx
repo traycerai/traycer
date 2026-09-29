@@ -157,35 +157,37 @@ function ImageAttachmentThumb({
 
   return (
     <Dialog>
-      <DialogTrigger asChild>
-        <TooltipWrapper
-          label={label.title}
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <button
-            type="button"
-            aria-label={triggerAriaLabel}
-            // muted-fill-ok: thumb trigger sits on the chat canvas backdrop / user bubble, not a raised surface
-            className="group relative size-12 overflow-hidden rounded-md border border-border/70 bg-muted/40 outline-none transition-colors hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
+      <DialogTrigger
+        render={
+          <TooltipWrapper
+            label={label.title}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            <span
-              className="pointer-events-none absolute left-0.5 top-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-sm border border-border/70 bg-background/90 px-1 text-[0.625rem] font-semibold leading-none text-foreground shadow-sm"
-              data-user-message-image-badge={label.badgeLabel}
+            <button
+              type="button"
+              aria-label={triggerAriaLabel}
+              // muted-fill-ok: thumb trigger sits on the chat canvas backdrop / user bubble, not a raised surface
+              className="group relative size-12 overflow-hidden rounded-md border border-border/70 bg-muted/40 outline-none transition-colors hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
             >
-              {label.badgeLabel}
-            </span>
-            {thumbnail}
-          </button>
-        </TooltipWrapper>
-      </DialogTrigger>
+              <span
+                className="pointer-events-none absolute left-0.5 top-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-sm border border-border/70 bg-background/90 px-1 text-[0.625rem] font-semibold leading-none text-foreground shadow-sm"
+                data-user-message-image-badge={label.badgeLabel}
+              >
+                {label.badgeLabel}
+              </span>
+              {thumbnail}
+            </button>
+          </TooltipWrapper>
+        }
+      />
       <ExpandedImageDialogContent
         title={alt}
         alt={alt}
         image={image}
         suggestedName={attachment.name ?? null}
-        onCloseAutoFocus={undefined}
+        finalFocus={undefined}
       />
     </Dialog>
   );

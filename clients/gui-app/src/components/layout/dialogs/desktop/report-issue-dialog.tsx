@@ -1068,12 +1068,20 @@ function CaptureScreenBody({
         {showLocationSelector ? (
           <Field htmlFor="report-issue-location" label="Where did this happen?">
             <Select
+              items={[
+                {
+                  value: CURRENT_LOCATION_VALUE,
+                  label: `${currentLocationLabel(routeTemplateField)} (current)`,
+                },
+                ...LOCATION_OPTIONS.map((value) => ({ value, label: value })),
+              ]}
               value={
                 form.locationChanged
                   ? form.locationValue
                   : CURRENT_LOCATION_VALUE
               }
               onValueChange={(next) => {
+                if (next === null) return;
                 setForm((prev) =>
                   next === CURRENT_LOCATION_VALUE
                     ? {

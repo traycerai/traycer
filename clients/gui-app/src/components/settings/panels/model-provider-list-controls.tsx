@@ -71,27 +71,29 @@ function ModelProviderFilterMenu(props: {
         sideOffset={undefined}
         align={undefined}
       >
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="muted"
-            size="icon-sm"
-            aria-label={label}
-            className="relative shrink-0"
-            data-testid="model-provider-filter-trigger"
-          >
-            <ListFilter className="size-4" />
-            {/* A dot, not a count: this list has ONE filter axis, so a number
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="muted"
+              size="icon-sm"
+              aria-label={label}
+              className="relative shrink-0"
+              data-testid="model-provider-filter-trigger"
+            >
+              <ListFilter className="size-4" />
+              {/* A dot, not a count: this list has ONE filter axis, so a number
                 could only ever read "1" and would invite the question of what
                 the one is. Same reasoning as the provider rail's. */}
-            {active ? (
-              <span
-                aria-hidden
-                className="pointer-events-none absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-foreground ring-1 ring-background"
-              />
-            ) : null}
-          </Button>
-        </DropdownMenuTrigger>
+              {active ? (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-foreground ring-1 ring-background"
+                />
+              ) : null}
+            </Button>
+          }
+        />
       </TooltipWrapper>
       <DropdownMenuContent align="end" className="min-w-44">
         <DropdownMenuLabel>Sign-in method</DropdownMenuLabel>

@@ -495,11 +495,15 @@ describe("reasoning slider max treatment", () => {
       expect(decoration.getAttribute("tabindex")).toBeNull();
       expect(decoration.getAttribute("role")).toBeNull();
     }
-    expect(screen.getAllByRole("slider")).toHaveLength(1);
+    // Base draws the slider as a visually-hidden range input inside the thumb;
+    // the visible ring belongs to the thumb that wraps it.
+    const sliders = screen.getAllByRole("slider", { hidden: true });
+    expect(sliders).toHaveLength(1);
+    expect(sliders[0]?.getAttribute("aria-label")).toBe("Thinking effort");
     expect(
-      screen
-        .getByRole("slider", { name: "Thinking effort" })
-        .className.includes("focus-visible:ring-2"),
+      sliders[0]
+        ?.closest('[data-slot="slider-thumb"]')
+        ?.className.includes("has-[:focus-visible]:ring-2"),
     ).toBe(true);
   });
 

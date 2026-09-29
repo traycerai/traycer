@@ -353,7 +353,7 @@ function renderTab(fixture: JudgeFixture): void {
   render(
     <QueryClientProvider client={fixture.queryClient}>
       <SurfaceActivityProvider active>
-        <TooltipProvider delayDuration={0}>
+        <TooltipProvider delay={0}>
           <JudgeTab />
         </TooltipProvider>
       </SurfaceActivityProvider>

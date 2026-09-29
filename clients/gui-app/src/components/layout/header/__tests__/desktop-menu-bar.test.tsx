@@ -326,8 +326,10 @@ for (const platform of ["win32", "linux"] as const) {
       renderMenuBar(fixture.host);
       const user = userEvent.setup();
       await openMenu(user, "File");
-      fireEvent.pointerDown(document.body);
-      expect(screen.queryByRole("menu")).toBeNull();
+      await user.click(document.body);
+      await waitFor(() => {
+        expect(screen.queryByRole("menu")).toBeNull();
+      });
 
       await openMenu(user, "File");
       act(() => {

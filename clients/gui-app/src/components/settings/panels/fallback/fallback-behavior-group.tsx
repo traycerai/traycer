@@ -277,8 +277,13 @@ function NumberSelect(props: {
   const describedById = useSettingsRowDescriptionId();
   return (
     <Select
+      items={props.options.map((option) => ({
+        value: String(option),
+        label: props.format(option),
+      }))}
       value={String(props.value)}
       onValueChange={(next) => {
+        if (next === null) return;
         const parsed = Number(next);
         if (!Number.isInteger(parsed)) return;
         props.onValueChange(parsed);

@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import type { EdgeSide } from "@/lib/layout/layout-arrangement";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
   useCallback,
@@ -6,7 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode,
+  type ReactElement,
 } from "react";
 import { useStore } from "zustand";
 import { TUI_HARNESS_ID_TO_PROVIDER_ID } from "@traycer/protocol/host/provider-schemas";
@@ -45,7 +46,7 @@ import {
   ACTIVE_HOST_WORKSPACE_CONTROLS_SCOPE,
   type HostWorkspaceControlsHostScope,
 } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
-import { preserveWhenNestedOverlay } from "@/components/home/host-workspace-selector/preserve-when-nested-overlay";
+import { isNestedOverlayTarget } from "@/components/home/host-workspace-selector/preserve-when-nested-overlay";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
@@ -56,7 +57,7 @@ import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-worksp
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 
 export interface AddArtifactDropdownProps {
-  children: ReactNode;
+  children: ReactElement;
   open: boolean | undefined;
   onOpenChange: ((open: boolean) => void) | undefined;
   menuPlacement: "header" | "row";
@@ -115,6 +116,29 @@ export interface AddArtifactDropdownProps {
    * Optional set of kinds to omit from the dropdown.
    */
   excludeTypes: ReadonlyArray<EpicNodeKind> | undefined;
+}
+
+/**
+ * Where the menu opens: beside the sidebar header's "+", below a row's, and
+ * off the column's edge wherever the column says which one that is.
+ */
+function addNodeMenuPosition(
+  menuPlacement: AddArtifactDropdownProps["menuPlacement"],
+  placement: {
+    readonly side: EdgeSide;
+    readonly align: "start" | "end";
+  } | null,
+) {
+  const header = menuPlacement === "header";
+  return {
+    side:
+      placement?.side ?? (header ? ("right" as const) : ("bottom" as const)),
+    align: placement?.align ?? (header ? ("start" as const) : ("end" as const)),
+    sideOffset: header ? 8 : 4,
+    collisionAvoidance: header
+      ? { side: "none" as const, align: "none" as const }
+      : undefined,
+  };
 }
 
 /**
@@ -185,16 +209,9 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
 
   return (
     <DropdownMenu open={open} onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
+      <DropdownMenuTrigger render={children} />
       <DropdownMenuContent
-        side={
-          placement?.side ?? (menuPlacement === "header" ? "right" : "bottom")
-        }
-        align={
-          placement?.align ?? (menuPlacement === "header" ? "start" : "end")
-        }
-        sideOffset={menuPlacement === "header" ? 8 : 4}
-        avoidCollisions={menuPlacement !== "header"}
+        {...addNodeMenuPosition(menuPlacement, placement)}
         className="w-[min(90vw,11rem)]"
         data-testid={menuTestId}
       >
@@ -210,7 +227,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
             <DropdownMenuItem
               key={type}
               data-testid={itemTestId(type)}
-              onSelect={() => {
+              onClick={() => {
                 onAdd(type);
               }}
               disabled={itemDisabled}
@@ -228,7 +245,22 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
           );
         })}
         {onAddTerminalAgent === undefined ? null : (
-          <DropdownMenuSub>
+          <DropdownMenuSub
+            onOpenChange={(next, details) => {
+              if (details.reason === "presentation-loss") return;
+              const target =
+                details.event instanceof FocusEvent
+                  ? details.event.relatedTarget
+                  : details.event.target;
+              if (
+                !next &&
+                (details.reason === "outside-press" ||
+                  details.reason === "focus-out") &&
+                isNestedOverlayTarget(target, terminalAgentSubRef.current)
+              )
+                details.cancel();
+            }}
+          >
             <DropdownMenuSubTrigger
               disabled={tuiAgentPending}
               data-testid={`${menuTestId}-terminal-agent`}
@@ -251,9 +283,6 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
               // The host Select + folder picker open portaled overlays; treat
               // clicks inside them (stacked above this submenu) as inside it so
               // picking a host / branch doesn't dismiss the launcher.
-              onInteractOutside={(event) =>
-                preserveWhenNestedOverlay(event, terminalAgentSubRef.current)
-              }
             >
               <TerminalAgentSubMenuContent
                 epicId={epicId}

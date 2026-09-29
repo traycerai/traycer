@@ -1224,7 +1224,7 @@ describe("useBrowserViewport", () => {
     fireEvent.pointerDown(scroll, { button: 0 });
     const scaleTrigger = screen.getByRole("button", { name: "Preview scale" });
     fireEvent.focus(scaleTrigger);
-    fireEvent.pointerDown(scaleTrigger, { button: 0 });
+    fireEvent.click(scaleTrigger);
     await waitFor(() => {
       expect(screen.getByRole("menuitemradio", { name: "200%" })).toBeTruthy();
     });

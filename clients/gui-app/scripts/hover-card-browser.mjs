@@ -97,7 +97,7 @@ const ROW_SELECTOR =
   '[data-side-tab],[data-testid^="epic-sidebar-item-"],[data-testid="epic-sidebar-rail"] button[aria-label]';
 
 /**
- * A timeline in the page: every card that mounts, changes `data-state` or
+ * A timeline in the page: every card that mounts, gains or loses `data-open`/`data-closed`, or
  * unmounts, and every row the pointer enters. A card is "open" from its mount
  * (or a state other than `closed`) until `closed` or its unmount.
  * `maxPainted` is the most cards ever PAINTED in one frame: mounted with a
@@ -114,13 +114,14 @@ const INSTALL_TIMELINE = `(() => {
   const now = () => Math.round(performance.now());
   const idOf = (n) => { let id = hc.ids.get(n); if (id === undefined) { id = ++hc.next; hc.ids.set(n, id); } return id; };
   const text = (n) => (n.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 48);
-  const isOpen = (n) => n.isConnected && (n.dataset.state ?? "open") !== "closed";
+  const isOpen = (n) => n.isConnected && !n.hasAttribute("data-closed");
   const sync = (n, kind) => {
     const id = idOf(n);
     const wasOpen = hc.open.has(id);
     const nowOpen = kind !== "unmount" && isOpen(n);
     const style = kind === "mount" ? getComputedStyle(n) : null;
-    hc.events.push({ t: now(), kind, id, text: text(n), state: n.dataset.state ?? null,
+    hc.events.push({ t: now(), kind, id, text: text(n),
+      state: n.hasAttribute("data-closed") ? "closed" : n.hasAttribute("data-open") ? "open" : null,
       opacity: style === null ? null : style.opacity });
     if (kind === "mount") requestAnimationFrame(() => {
       hc.events.push({ t: now(), kind: "frame", id, text: text(n), opacity: n.isConnected ? getComputedStyle(n).opacity : null });
@@ -142,7 +143,7 @@ const INSTALL_TIMELINE = `(() => {
       for (const n of r.addedNodes) for (const c of cardsIn(n)) sync(c, "mount");
       for (const n of r.removedNodes) for (const c of cardsIn(n)) sync(c, "unmount");
     }
-  }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-state"] });
+  }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-open", "data-closed"] });
   // Sampled once a frame, just before it paints: what is actually on screen.
   const paintedNow = () => [...document.querySelectorAll(${JSON.stringify(CARD_SELECTOR)})]
     .filter((n) => Number(getComputedStyle(n).opacity) > 0).length;
@@ -1314,7 +1315,7 @@ async function agentScenarios(client, origin, theme) {
     // the claim is only about THIS card.
     const stillOpen = await evaluate(
       client,
-      `document.querySelector('[data-testid="actions-card"]')?.dataset.state === "open"`,
+      `document.querySelector('[data-testid="actions-card"]')?.hasAttribute("data-open") === true`,
     );
     const { events } = await takeEvents(client);
     record(

@@ -81,27 +81,29 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
           sideOffset={undefined}
           align={undefined}
         >
-          <DialogTrigger asChild>
-            <button
-              type="button"
-              aria-label={`Open ${label.ariaLabel}`}
-              className="block size-full cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {src === null ? (
-                <div
-                  className="size-full animate-pulse bg-foreground/10"
-                  aria-hidden
-                />
-              ) : (
-                <img
-                  src={src}
-                  alt={alt}
-                  className="size-full object-cover"
-                  draggable={false}
-                />
-              )}
-            </button>
-          </DialogTrigger>
+          <DialogTrigger
+            render={
+              <button
+                type="button"
+                aria-label={`Open ${label.ariaLabel}`}
+                className="block size-full cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {src === null ? (
+                  <div
+                    className="size-full animate-pulse bg-foreground/10"
+                    aria-hidden
+                  />
+                ) : (
+                  <img
+                    src={src}
+                    alt={alt}
+                    className="size-full object-cover"
+                    draggable={false}
+                  />
+                )}
+              </button>
+            }
+          />
         </TooltipWrapper>
         <Button
           type="button"
@@ -129,16 +131,11 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
         alt={alt}
         image={expandedImage}
         suggestedName={atom.fileName.length > 0 ? atom.fileName : null}
-        onCloseAutoFocus={(event) => {
-          event.preventDefault();
-          const shell = wrapperRef.current?.closest<HTMLElement>(
-            "[data-composer-shell]",
-          );
-          const editor = shell?.querySelector<HTMLElement>(
-            "[data-composer-editor]",
-          );
-          editor?.focus();
-        }}
+        finalFocus={() =>
+          wrapperRef.current
+            ?.closest<HTMLElement>("[data-composer-shell]")
+            ?.querySelector<HTMLElement>("[data-composer-editor]") ?? false
+        }
       />
     </Dialog>
   );

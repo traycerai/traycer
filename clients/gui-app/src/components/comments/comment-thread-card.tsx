@@ -345,20 +345,22 @@ function CommentEntry(props: CommentEntryProps) {
         ) : null}
         {isCommentAuthor ? (
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="ml-auto size-6"
-                aria-label="Comment actions"
-              >
-                <MoreHorizontal className="size-4" />
-              </Button>
-            </DropdownMenuTrigger>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="ml-auto size-6"
+                  aria-label="Comment actions"
+                >
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              }
+            />
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={onStartEdit}>Edit</DropdownMenuItem>
+              <DropdownMenuItem onClick={onStartEdit}>Edit</DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+              <DropdownMenuItem variant="destructive" onClick={onDelete}>
                 Delete
               </DropdownMenuItem>
             </DropdownMenuContent>

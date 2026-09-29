@@ -1565,7 +1565,7 @@ interface PanelInput {
 
 function renderPanel(input: PanelInput) {
   return render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <QueuedMessagePanel
         queue={input.queue}
         activeTurnStatus="running"

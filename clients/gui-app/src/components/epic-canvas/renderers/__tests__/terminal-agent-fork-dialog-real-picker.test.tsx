@@ -6,15 +6,19 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import type { ForkableTuiAgent } from "../terminal-agent-fork-dialog";
 
-// Real Radix DropdownMenu opens on pointerdown; swap only the low-level
+// Real Base DropdownMenu opens on pointerdown; swap only the low-level
 // primitive so the REAL ProfileDropdown / HarnessModelPicker admission wiring
 // still runs. Mirrors harness-model-picker.test.tsx.
 vi.mock("@/components/ui/dropdown-menu", () => {
   const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
     props.children;
+  const trigger = (props: {
+    readonly children?: ReactNode;
+    readonly render?: ReactNode;
+  }): ReactNode => props.render ?? props.children;
   return {
     DropdownMenu: passthrough,
-    DropdownMenuTrigger: passthrough,
+    DropdownMenuTrigger: trigger,
     DropdownMenuContent: (props: {
       readonly children: ReactNode;
       readonly container: HTMLElement | null | undefined;
@@ -32,7 +36,10 @@ vi.mock("@/components/ui/dropdown-menu", () => {
     ),
     DropdownMenuItem: (props: {
       readonly children: ReactNode;
-      readonly onSelect: (() => void) | undefined;
+      // The real `DropdownMenuItem` is called with `onClick`, not `onSelect`
+      // (Base's own API, unlike Radix's) - a mock still reading `onSelect`
+      // receives `undefined` and never fires on click.
+      readonly onClick: (() => void) | undefined;
       readonly "aria-label": string | undefined;
       readonly "aria-current": "true" | undefined;
       readonly className: string | undefined;
@@ -47,7 +54,7 @@ vi.mock("@/components/ui/dropdown-menu", () => {
         className={props.className}
         disabled={props.disabled}
         title={props.title}
-        onClick={props.disabled === true ? undefined : props.onSelect}
+        onClick={props.disabled === true ? undefined : props.onClick}
       >
         {props.children}
       </button>
@@ -585,7 +592,7 @@ function renderDialog(input: {
   readonly sourceAgent: ForkableTuiAgent;
 }): void {
   render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <TerminalAgentForkDialog
         open
         target={{

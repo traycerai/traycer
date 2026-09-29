@@ -117,7 +117,6 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": 8,
   "gui-app/src/components/comments/comment-composer.tsx": 2,
   "gui-app/src/components/diff/use-diff-click-to-edit.ts": 1,
-  "gui-app/src/components/epic-canvas/canvas/pane-opener.tsx": 1,
   "gui-app/src/components/epic-canvas/canvas/tab-strip.tsx": 2,
   "gui-app/src/components/epic-canvas/comm-graph/office/comm-graph-office-canvas.tsx": 1,
   "gui-app/src/components/epic-canvas/document-preview/document-search-bar.tsx": 2,
@@ -129,10 +128,6 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-artifact-search.tsx": 9,
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-chat-tree.tsx": 3,
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-filter.ts": 2,
-  // First-use dropdown mounting: Enter/Space/ArrowDown open a row dropdown on
-  // its first press, and that key is replayed once the menu root mounts.
-  // These are platform navigation keys, not registered shortcut identity.
-  "gui-app/src/components/epic-canvas/sidebar/use-sidebar-row-dropdown-mount.ts": 2,
   "gui-app/src/components/epic-canvas/tile-find/tile-find-bar.tsx": 3,
   "gui-app/src/components/epic-canvas/tile-select-all-bridge.tsx": 2,
   "gui-app/src/components/epic-canvas/zoom-controls/zoom-controls.tsx": 7,
@@ -165,6 +160,9 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/remote-folder-picker-dialog.tsx": 4,
   "gui-app/src/components/resources/resource-monitor-popover.tsx": 9,
   "gui-app/src/components/settings/controls/chord-capture-core.tsx": 2,
+  "gui-app/src/components/ui/command-context.ts": 1,
+  "gui-app/src/components/ui/command.tsx": 2,
+  "gui-app/src/components/ui/hover-card.tsx": 1,
   "gui-app/src/components/worktree/worktree-pr-state-icons.tsx": 2,
   "gui-app/src/editor-core/links/artifact-link-popover.tsx": 3,
   "gui-app/src/hooks/use-primary-action-shortcut.ts": 1,

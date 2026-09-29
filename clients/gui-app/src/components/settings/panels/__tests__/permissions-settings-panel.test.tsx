@@ -150,7 +150,7 @@ function isConcealed(element: HTMLElement): boolean {
   ) {
     if (
       node.hidden ||
-      node.getAttribute("data-state") === "inactive" ||
+      node.hasAttribute("data-hidden") ||
       getComputedStyle(node).display === "none"
     ) {
       return true;
@@ -169,7 +169,7 @@ function shownConnectingNotices(): ReadonlyArray<HTMLElement> {
 function activeTabTestId(): string | null {
   const active = screen
     .getAllByRole("tab")
-    .find((tab) => tab.getAttribute("data-state") === "active");
+    .find((tab) => tab.hasAttribute("data-active"));
   return active?.getAttribute("data-testid") ?? null;
 }
 

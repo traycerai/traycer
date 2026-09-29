@@ -180,10 +180,10 @@ export function nodePadRightClass(
   if (!canEdit) return "pr-2";
   if (showAdd) {
     if (revealed) return "pr-14";
-    return "pr-2 group-hover/tree-item:pr-14 group-focus-within/tree-item:pr-14 group-has-[[data-state=open]]/tree-item:pr-14";
+    return "pr-2 group-hover/tree-item:pr-14 group-focus-within/tree-item:pr-14 group-has-data-popup-open/tree-item:pr-14";
   }
   if (revealed) return "pr-8";
-  return "pr-2 group-hover/tree-item:pr-8 group-focus-within/tree-item:pr-8 group-has-[[data-state=open]]/tree-item:pr-8";
+  return "pr-2 group-hover/tree-item:pr-8 group-focus-within/tree-item:pr-8 group-has-data-popup-open/tree-item:pr-8";
 }
 
 /**

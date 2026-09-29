@@ -72,19 +72,21 @@ function SwitcherViewMenuShell(props: {
 }) {
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="muted"
-          size="icon-sm"
-          aria-label={props.label}
-          data-testid={props.testId}
-          className="relative"
-        >
-          <ListFilter className="size-4" />
-          <ViewMenuBadge filterCount={props.filterCount} />
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="muted"
+            size="icon-sm"
+            aria-label={props.label}
+            data-testid={props.testId}
+            className="relative"
+          >
+            <ListFilter className="size-4" />
+            <ViewMenuBadge filterCount={props.filterCount} />
+          </Button>
+        }
+      />
       <DropdownMenuContent
         align="end"
         className="max-w-64 min-w-52 overflow-y-auto"
@@ -186,10 +188,10 @@ export function SwitcherAgentsViewMenu(props: { readonly epicId: string }) {
           <DropdownMenuSeparator />
           <DropdownMenuItem
             data-testid="switcher-agents-reset-view"
-            onSelect={(event) => {
-              event.preventDefault();
+            onClick={() => {
               resetChatView(epicId);
             }}
+            closeOnClick={false}
           >
             <RotateCcw className="size-4" />
             Reset view
@@ -269,7 +271,7 @@ export function SwitcherArtifactsViewMenu(props: { readonly epicId: string }) {
       <DropdownMenuItem
         disabled={unreadArtifacts.length === 0}
         data-testid="switcher-artifacts-mark-all-read"
-        onSelect={() => {
+        onClick={() => {
           unreadArtifacts.forEach((artifact) => {
             markRead(epicId, artifact.id, artifact.updatedAt);
           });
@@ -282,10 +284,10 @@ export function SwitcherArtifactsViewMenu(props: { readonly epicId: string }) {
           <DropdownMenuSeparator />
           <DropdownMenuItem
             data-testid="switcher-artifacts-reset-view"
-            onSelect={(event) => {
-              event.preventDefault();
+            onClick={() => {
               resetArtifactView(epicId);
             }}
+            closeOnClick={false}
           >
             <RotateCcw className="size-4" />
             Reset view

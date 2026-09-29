@@ -15,13 +15,13 @@ function resolveLauncher(element: HTMLElement): HTMLElement | null {
   const triggerId = menu.getAttribute("aria-labelledby");
   const trigger =
     triggerId === null ? null : element.ownerDocument.getElementById(triggerId);
-  // Radix dropdowns and submenus name their trigger; follow nested menus out
+  // Dropdowns and submenus name their trigger; follow nested menus out
   // to the persistent control rather than retaining a disappearing menu item.
   if (trigger !== null && trigger !== element) return resolveLauncher(trigger);
   // Context menus are pointer-anchored, so their root has no labelled-by link.
   // Our ContextMenuTrigger exposes the currently open source through data-slot.
   const contextTrigger = element.ownerDocument.querySelector<HTMLElement>(
-    '[data-slot="context-menu-trigger"][data-state="open"]',
+    '[data-slot="context-menu-trigger"][data-popup-open]',
   );
   if (contextTrigger === null) return null;
   return contextTrigger.matches(FOCUSABLE_CONTROL)

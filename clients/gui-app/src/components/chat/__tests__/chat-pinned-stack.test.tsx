@@ -108,7 +108,7 @@ function renderStack(todo: PinnedTodoSnapshot) {
 
 function stackUi(todo: PinnedTodoSnapshot) {
   return (
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <PinnedTodoPanel
         todo={todo}
         scrollRegionMaxHeightClass="max-h-[min(40dvh,24rem)]"

@@ -209,8 +209,7 @@ function lastStore(): ComposerToolbarStore {
   return entry.store;
 }
 
-const PICKER_BODY_HEIGHT =
-  "h-[min(var(--radix-popover-content-available-height),23rem)]";
+const PICKER_BODY_HEIGHT = "h-[min(var(--available-height),23rem)]";
 
 /** A listing naming `profileTargets` and `modelTargets` for the failed tuple. */
 function listingOf(input: {
@@ -899,9 +898,7 @@ describe("RoutingDestinationPicker", () => {
       expect(body?.contains(footer)).toBe(false);
       expect(body?.contains(within(dialog).getByRole("listbox"))).toBe(true);
       expect(dialog.className).not.toContain(PICKER_BODY_HEIGHT);
-      expect(dialog.className).toContain(
-        "max-h-[var(--radix-popover-content-available-height)]",
-      );
+      expect(dialog.className).toContain("max-h-[var(--available-height)]");
     });
   });
 

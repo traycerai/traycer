@@ -170,16 +170,18 @@ function InspectorMenu(props: {
         sideOffset={undefined}
         align={undefined}
       >
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Inspector options"
-          >
-            <Ellipsis />
-          </Button>
-        </DropdownMenuTrigger>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Inspector options"
+            >
+              <Ellipsis />
+            </Button>
+          }
+        />
       </TooltipWrapper>
       <DropdownMenuContent align="end" className="w-[min(90vw,13rem)]">
         <DropdownMenuLabel>Inspector</DropdownMenuLabel>
@@ -199,7 +201,7 @@ function InspectorMenu(props: {
           ))}
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={props.onOpenSettings}>
+        <DropdownMenuItem onClick={props.onOpenSettings}>
           <Settings2 />
           Open Layout settings
         </DropdownMenuItem>
@@ -237,14 +239,16 @@ function DoneButton(props: {
         </Button>
         <ButtonGroupSeparator />
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button type="button" size="icon-sm" aria-label="More ways out">
-              <ChevronDown />
-            </Button>
-          </DropdownMenuTrigger>
+          <DropdownMenuTrigger
+            render={
+              <Button type="button" size="icon-sm" aria-label="More ways out">
+                <ChevronDown />
+              </Button>
+            }
+          />
           <DropdownMenuContent align="end" className="w-[min(90vw,15rem)]">
             <DropdownMenuItem
-              onSelect={() => {
+              onClick={() => {
                 onExit("done");
               }}
             >
@@ -262,7 +266,7 @@ function DoneButton(props: {
             <DropdownMenuItem
               variant="destructive"
               disabled={!canDiscard}
-              onSelect={() => {
+              onClick={() => {
                 setConfirming(true);
               }}
             >

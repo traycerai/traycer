@@ -21,7 +21,7 @@ import { useSidebarReparentTargetActive } from "@/components/epic-canvas/dnd/dnd
 import type { RootCreatePanelId } from "@/stores/epics/left-panel-store";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 
-/** Radix `ContextMenuTrigger`'s touch and pen long-press delay. */
+/** The row's own touch and pen long-press delay. */
 const LONG_PRESS_MS = 700;
 
 /**
@@ -32,12 +32,12 @@ const LONG_PRESS_MS = 700;
  *
  * The row's context menu mounts on first use, WITHOUT touching the row: the
  * row element is never wrapped, so it is never re-created, and everything that
- * holds it - focus, drag-and-drop, hover state, ids - is unaffected. Radix
- * places a context menu at the pointer, not at its trigger, so its trigger is
- * a hidden proxy in a portal. The row forwards every `contextmenu` it gets (a
+ * holds it - focus, drag-and-drop, hover state, ids - is unaffected. A
+ * context menu opens at the pointer, not at its trigger, so its trigger is a
+ * hidden proxy in a portal. The row forwards every `contextmenu` it gets (a
  * right-click, the menu key, Shift+F10, a synthesized long-press) to the
- * proxy, and times a touch or pen long-press itself, the way Radix's trigger
- * does, since iOS fires no `contextmenu` for one.
+ * proxy, and times a touch or pen long-press itself, since iOS fires no
+ * `contextmenu` for one.
  */
 export function SidebarReparentRowDropWrapper(props: {
   readonly epicId: string;
@@ -51,7 +51,7 @@ export function SidebarReparentRowDropWrapper(props: {
   const [menuMounted, setMenuMounted] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   // Losing the menu unmounts the root, open or not; nothing else would close
-  // the row's `data-state`.
+  // the row's `data-popup-open`.
   if (contextMenu === null && menuOpen) setMenuOpen(false);
   const proxyRef = useRef<HTMLSpanElement | null>(null);
   const pendingPointRef = useRef<{
@@ -112,16 +112,16 @@ export function SidebarReparentRowDropWrapper(props: {
     longPressRef.current = null;
   };
   // Events from the menu's portal content bubble through the row in React's
-  // tree; only events from the row's own DOM are the row's. And, as Radix's
-  // trigger composes its handlers, an event a control inside the row has
-  // already consumed - the more button's own pointerdown - is not the row's.
+  // tree; only events from the row's own DOM are the row's. And an event a
+  // control inside the row has already consumed - the more button's own
+  // pointerdown - is not the row's.
   const fromRow = (event: SyntheticEvent<HTMLDivElement>): boolean =>
     !event.defaultPrevented &&
     event.target instanceof Node &&
     event.currentTarget.contains(event.target);
   const handleContextMenu = (event: MouseEvent<HTMLDivElement>): void => {
     if (event.target === proxyRef.current) {
-      // The forwarded event: Radix has handled it on the proxy.
+      // The forwarded event: the menu has handled it on the proxy.
       event.stopPropagation();
       return;
     }
@@ -153,7 +153,7 @@ export function SidebarReparentRowDropWrapper(props: {
     <div
       ref={setNodeRef}
       data-slot="context-menu-trigger"
-      data-state={menuOpen ? "open" : "closed"}
+      data-popup-open={menuOpen ? "" : undefined}
       {...(contextMenu === null ? { "data-disabled": "" } : {})}
       onContextMenu={handleContextMenu}
       onPointerDown={handlePointerDown}
@@ -169,9 +169,7 @@ export function SidebarReparentRowDropWrapper(props: {
       {menuMounted && contextMenu !== null
         ? createPortal(
             <ContextMenu onOpenChange={setMenuOpen}>
-              <ContextMenuTrigger asChild>
-                <span ref={proxyRef} hidden />
-              </ContextMenuTrigger>
+              <ContextMenuTrigger render={<span ref={proxyRef} hidden />} />
               {contextMenu}
             </ContextMenu>,
             document.body,

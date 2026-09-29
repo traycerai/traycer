@@ -55,7 +55,7 @@ export function ThemePresetPicker(props: ThemePresetPickerProps) {
   const { value, onChange } = props;
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
+  const { contentRef, initialFocus: coarseInitialFocus } =
     useCoarsePointerOpenAutoFocus();
   const [dialogContainer, setDialogContainer] = useState<HTMLElement | null>(
     null,
@@ -80,19 +80,21 @@ export function ThemePresetPicker(props: ThemePresetPickerProps) {
         setOpen(next);
       }}
     >
-      <PopoverTrigger asChild>
-        <button
-          ref={triggerRef}
-          type="button"
-          className="inline-flex min-w-44 items-center justify-between gap-3 rounded-md border border-border bg-card px-2.5 py-1.5 text-ui-sm text-foreground transition-colors hover:bg-accent/50"
-        >
-          <span className="flex min-w-0 items-center gap-2">
-            <PresetSwatch preset={active} />
-            <span className="truncate">{active.label}</span>
-          </span>
-          <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
-        </button>
-      </PopoverTrigger>
+      <PopoverTrigger
+        render={
+          <button
+            ref={triggerRef}
+            type="button"
+            className="inline-flex min-w-44 items-center justify-between gap-3 rounded-md border border-border bg-card px-2.5 py-1.5 text-ui-sm text-foreground transition-colors hover:bg-accent/50"
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              <PresetSwatch preset={active} />
+              <span className="truncate">{active.label}</span>
+            </span>
+            <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
+          </button>
+        }
+      />
       <PopoverContent
         layout="bare"
         align="end"
@@ -101,11 +103,11 @@ export function ThemePresetPicker(props: ThemePresetPickerProps) {
         collisionPadding={8}
         className="w-[min(85vw,17rem)] overflow-hidden"
         ref={contentRef}
-        onOpenAutoFocus={coarseOpenAutoFocus}
+        initialFocus={coarseInitialFocus}
       >
         <Command
-          value={commandValue}
-          onValueChange={setCommandValue}
+          highlightedValue={commandValue}
+          onHighlightChange={setCommandValue}
           variant="embedded"
           selection="flat"
         >
@@ -119,9 +121,9 @@ export function ThemePresetPicker(props: ThemePresetPickerProps) {
             {THEME_PRESETS.map((preset) => (
               <CommandItem
                 key={preset.id}
-                value={preset.label}
+                itemKey={preset.label}
                 data-checked={preset.id === value ? "true" : "false"}
-                onSelect={() => {
+                onAction={() => {
                   onChange(preset.id);
                   setOpen(false);
                 }}

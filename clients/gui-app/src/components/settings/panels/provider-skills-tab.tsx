@@ -641,24 +641,26 @@ function SkillSourceFilterMenu({
   return (
     <DropdownMenu>
       <TooltipWrapper label={label} side="top" sideOffset={4} align="center">
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="muted"
-            size="icon-sm"
-            aria-label={label}
-            className="relative shrink-0"
-          >
-            <ListFilter className="size-3.5" aria-hidden />
-            {/* A dot, not a count: it only has to say "the list is narrowed". */}
-            {active ? (
-              <span
-                aria-hidden
-                className="pointer-events-none absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-background"
-              />
-            ) : null}
-          </Button>
-        </DropdownMenuTrigger>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="muted"
+              size="icon-sm"
+              aria-label={label}
+              className="relative shrink-0"
+            >
+              <ListFilter className="size-3.5" aria-hidden />
+              {/* A dot, not a count: it only has to say "the list is narrowed". */}
+              {active ? (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-background"
+                />
+              ) : null}
+            </Button>
+          }
+        />
       </TooltipWrapper>
       <DropdownMenuContent
         align="end"
@@ -672,15 +674,13 @@ function SkillSourceFilterMenu({
             // Keep the menu open across toggles - narrowing to one type means
             // unchecking two, and a menu that closes per click makes that three
             // openings.
-            onSelect={(event) => {
-              event.preventDefault();
-            }}
             onCheckedChange={(checked) => {
               const next = new Set(hiddenSources);
               if (checked) next.delete(source);
               else next.add(source);
               onHiddenSourcesChange(next);
             }}
+            closeOnClick={false}
           >
             {SKILL_SOURCE_LABEL[source]}
           </DropdownMenuCheckboxItem>

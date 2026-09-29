@@ -22,7 +22,7 @@ describe("<CommandShortcut />", () => {
       <Command>
         <CommandList>
           <CommandGroup>
-            <CommandItem value="open-palette">
+            <CommandItem itemKey="open-palette">
               Open Palette
               <CommandShortcut>⌘K</CommandShortcut>
             </CommandItem>

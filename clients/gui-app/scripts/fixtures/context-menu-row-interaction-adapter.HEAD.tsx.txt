@@ -1,0 +1,63 @@
+import type { ReactElement, ReactNode } from "react";
+import {
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+
+/**
+ * HEAD (Radix) counterpart of
+ * `src/__tests__/browser/context-menu-row-interaction-adapter.tsx`. Lives
+ * under `scripts/fixtures/` with a `.tsx.txt` extension deliberately - this
+ * repo's tsconfig `include` picks up any `.tsx` under `src/`, and a Radix
+ * import here would not resolve on the current (Base) tree.
+ *
+ * To run the row-interaction fixture against a HEAD checkout: copy this
+ * file's contents to
+ * `src/__tests__/browser/context-menu-row-interaction-adapter.tsx`,
+ * replacing that file there (same exported names, same call sites in
+ * `context-menu-row-interaction-parity.tsx` - nothing else changes). Radix's
+ * ContextMenuTrigger takes `asChild` + a single child instead of `render`;
+ * ContextMenuItem takes `onSelect` instead of `onClick`; ContextMenuContent
+ * has no `finalFocus` - the equivalent is `onCloseAutoFocus={(e) =>
+ * e.preventDefault()}`, which is what `finalFocus={false}` was standing in
+ * for in the current adapter.
+ */
+export function AdaptiveTrigger(props: {
+  readonly render: ReactElement;
+  readonly onContextMenu?: (event: React.MouseEvent<HTMLElement>) => void;
+  readonly onPointerDown?: (event: React.PointerEvent<HTMLElement>) => void;
+}): ReactNode {
+  return (
+    <ContextMenuTrigger asChild onContextMenu={props.onContextMenu} onPointerDown={props.onPointerDown}>
+      {props.render}
+    </ContextMenuTrigger>
+  );
+}
+
+export function AdaptiveContent(props: {
+  readonly children: ReactNode;
+  readonly finalFocus: boolean;
+}): ReactNode {
+  return (
+    <ContextMenuContent
+      onCloseAutoFocus={
+        props.finalFocus ? undefined : (event) => event.preventDefault()
+      }
+    >
+      {props.children}
+    </ContextMenuContent>
+  );
+}
+
+export function AdaptiveItem(props: {
+  readonly onActivate: () => void;
+  readonly testId: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <ContextMenuItem data-testid={props.testId} onSelect={props.onActivate}>
+      {props.children}
+    </ContextMenuItem>
+  );
+}

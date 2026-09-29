@@ -1,68 +1,50 @@
 "use client";
 
 import * as React from "react";
-import { Select as SelectPrimitive } from "radix-ui";
+import { Select as SelectPrimitive } from "@base-ui/react/select";
 
 import { cn } from "@/lib/utils";
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react";
 import {
-  usePaneAwareContentGuard,
-  usePaneFocused,
-} from "@/components/epic-tabs/pane-visibility-context";
-import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
+  ClosingOverlayContext,
+  useClosingOverlay,
+  useClosingOverlayFocus,
+  type PresentationLossDetails,
+} from "@/components/ui/closing-overlay-presentation";
+import { mergeRefs } from "@/lib/merge-refs";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 
-/**
- * Un-presents in a background split pane by forcing the root CLOSED, not by
- * unmounting `SelectContent` the way the other modal-family wrappers do.
- *
- * Select is the one primitive whose content does work while closed. Radix
- * renders closed content into a detached DocumentFragment
- * (`SelectContentFragment`), and `SelectItemText` portals the SELECTED item's
- * text out of it into the trigger's value node. Unmounting the content
- * therefore blanks the trigger's label - and the placeholder cannot cover for
- * it, because Radix suppresses the placeholder whenever `value` is set. That
- * shipped as a background pane losing its host name from the composer.
- *
- * Closing instead drops exactly what the guard is for: the focus trap,
- * `hideOthers` and scroll lock all live in `SelectContentImpl`, which Radix
- * only mounts while open. The closed fragment has no document-wide reach.
- */
-function Select({
+function Select<Value>({
   open,
-  defaultOpen = false,
+  defaultOpen,
+  onOpenChange,
+  onOpenChangeComplete,
   ...props
-}: React.ComponentProps<typeof SelectPrimitive.Root>) {
-  const paneFocused = usePaneFocused();
-  const controlled = open !== undefined;
-  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen);
-  const [wasPaneFocused, setWasPaneFocused] = React.useState(paneFocused);
-
-  // Adjust during render rather than in an effect (the pattern `useMountedSurfaceKeys`
-  // uses): settling the remembered state on blur makes backgrounding a real close, so
-  // the menu does not spring back open when the pane is refocused. An effect here would
-  // be a cascading render, and Radix does not call `onOpenChange` for a controlled
-  // close, so nothing else would clear it.
-  if (wasPaneFocused !== paneFocused) {
-    setWasPaneFocused(paneFocused);
-    if (!paneFocused && uncontrolledOpen) setUncontrolledOpen(false);
-  }
-
-  const requestedOpen = open ?? uncontrolledOpen;
-
+}: Omit<SelectPrimitive.Root.Props<Value>, "onOpenChange" | "actionsRef"> & {
+  onOpenChange?: (
+    open: boolean,
+    details: SelectPrimitive.Root.ChangeEventDetails | PresentationLossDetails,
+  ) => void;
+}) {
+  const actions = React.useRef<SelectPrimitive.Root.Actions>(null);
+  const overlay = useClosingOverlay({
+    open,
+    defaultOpen,
+    onOpenChange,
+    onOpenChangeComplete,
+    actions,
+    select: true,
+  });
   return (
-    <SelectPrimitive.Root
-      data-slot="select"
-      {...props}
-      // Explicit ternary, not `paneFocused && requestedOpen`:
-      // `react/jsx-no-leaked-render` autofixes that `&&` to `... : null`, which
-      // would hand Radix a null `open` and silently make the root uncontrolled.
-      open={paneFocused ? requestedOpen : false}
-      onOpenChange={(next) => {
-        if (!controlled) setUncontrolledOpen(next);
-        props.onOpenChange?.(next);
-      }}
-    />
+    <ClosingOverlayContext.Provider value={overlay.presentation}>
+      <SelectPrimitive.Root
+        {...props}
+        actionsRef={overlay.concealed ? actions : undefined}
+        open={overlay.open}
+        onOpenChange={overlay.onOpenChange}
+        onOpenChangeComplete={overlay.onOpenChangeComplete}
+      />
+    </ClosingOverlayContext.Provider>
   );
 }
 
@@ -99,83 +81,133 @@ function SelectTrigger({
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
       data-size={size}
-      className={cn(
-        "flex w-fit items-center justify-between gap-1.5 rounded-md border border-input bg-transparent py-2 pr-2 pl-2.5 text-ui-sm whitespace-nowrap transition-colors outline-none select-none active:press-scrim focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 data-placeholder:text-muted-foreground data-[size=default]:h-8 data-[size=sm]:h-7 data-[size=sm]:rounded-sm data-[size=xs]:h-7 data-[size=xs]:rounded-sm data-[size=xs]:text-ui-xs *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-1.5 dark:bg-input/30 dark:hover:bg-input/50 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
+      className={(state) =>
+        cn(
+          "flex w-fit items-center justify-between gap-1.5 rounded-md border border-input bg-transparent py-2 pr-2 pl-2.5 text-ui-sm whitespace-nowrap transition-colors outline-none select-none active:press-scrim focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 data-placeholder:text-muted-foreground data-[size=default]:h-8 data-[size=sm]:h-7 data-[size=sm]:rounded-sm data-[size=xs]:h-7 data-[size=xs]:rounded-sm data-[size=xs]:text-ui-xs *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-1.5 dark:bg-input/30 dark:hover:bg-input/50 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+          typeof className === "function" ? className(state) : className,
+        )
+      }
       {...props}
     >
       {children}
-      <SelectPrimitive.Icon asChild>
-        <ChevronDownIcon className="pointer-events-none size-4 text-muted-foreground" />
-      </SelectPrimitive.Icon>
+      <SelectPrimitive.Icon
+        children={null}
+        render={
+          <ChevronDownIcon className="pointer-events-none size-4 text-muted-foreground" />
+        }
+      />
     </SelectPrimitive.Trigger>
   );
 }
 
+type SelectContentProps = React.ComponentProps<typeof SelectPrimitive.Popup> &
+  Pick<
+    SelectPrimitive.Positioner.Props,
+    | "side"
+    | "sideOffset"
+    | "align"
+    | "alignOffset"
+    | "collisionBoundary"
+    | "collisionPadding"
+    | "collisionAvoidance"
+  >;
 function SelectContent({
   ref,
   className,
   children,
-  position = "popper",
   align = "start",
+  side,
   sideOffset = 4,
+  alignOffset,
   collisionPadding,
-  onCloseAutoFocus,
+  collisionBoundary,
+  collisionAvoidance,
+  finalFocus,
+  onFocus,
   ...props
-}: React.ComponentProps<typeof SelectPrimitive.Content>) {
-  // Deliberately NOT `if (!paneFocused) return null` like the sibling wrappers:
-  // the closed content is what feeds the trigger's label (see `Select` above).
-  // The root forces itself closed in a background pane, which is what actually
-  // drops the focus trap / `hideOthers` / scroll lock.
-  const { handleCloseAutoFocus } = usePaneAwareContentGuard(onCloseAutoFocus);
-  // Concealment DOES unmount, unlike the pane decision above: an unfocused
-  // pane stays visible, so the closed content must keep feeding the trigger's
-  // label — but a concealed region is display:none in its entirety, nothing
-  // reads the label, and remount on return restores it atomically (see
-  // `portal-concealment-context`).
-  const concealed = usePortalConcealed();
-  // Read above the early return so hook order does not depend on concealment.
-  // The insets are the DEFAULT collision padding and `max-w-safe-dvw` the
-  // default width cap; both are displaceable by a caller (see
-  // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`). Popper-only on
-  // Radix's side - an `item-aligned` list positions itself over the trigger and
-  // ignores collision geometry - so the width cap is what carries that case.
+}: SelectContentProps) {
+  const focus = useClosingOverlayFocus(finalFocus);
+  const initiallyFocused = React.useRef<HTMLDivElement | null>(null);
+  // Base retains the SAME Popup DOM node across a close/reopen cycle (kept
+  // hidden for typeahead), so `initiallyFocused.current` never naturally
+  // goes stale on its own - left unreset, it would permanently suppress the
+  // "select the first enabled option" behavior below after the FIRST open
+  // ever, since every later reopen refocuses that identical node. Clear it
+  // whenever the popup isn't presentable (idempotent - a genuine close, not
+  // a render-time ref read), so the next open's first real focus event runs
+  // the guarded block again. The rAF re-check inside that block still
+  // re-verifies ownership live before actually moving focus - unchanged.
+  React.useLayoutEffect(() => {
+    if (!focus.initialAllowed()) initiallyFocused.current = null;
+  });
   const safeAreaInsets = useSafeAreaCollisionPadding();
-  // Read above the early return, like the hooks above it: hook order must
-  // not depend on concealment.
-  if (concealed) return null;
   return (
-    <SelectPrimitive.Portal>
-      <SelectPrimitive.Content
-        ref={ref}
-        data-slot="select-content"
-        data-align-trigger={position === "item-aligned"}
-        collisionPadding={collisionPadding ?? safeAreaInsets}
-        className={cn(
-          "relative z-50 max-h-(--radix-select-content-available-height) max-w-safe-dvw min-w-[var(--radix-select-trigger-width)] origin-(--radix-select-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[align-trigger=true]:animate-none data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-          position === "popper" &&
-            "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
-          className,
-        )}
-        position={position}
+    <SelectPrimitive.Portal
+      data-overlay-concealed={focus.concealed || undefined}
+    >
+      <SelectPrimitive.Positioner
+        data-slot="select-positioner"
+        positionMethod="fixed"
+        // Keep popup and shadow in the positioning layer without forcing desktop
+        // text into a separate grayscale raster layer. Nested in a dialog's
+        // portal, that portal already provides the compositing context, so
+        // flatten there instead of stacking a second one.
+        className="z-50 transform-3d in-data-[slot=dialog-portal]:transform-flat"
+        alignItemWithTrigger={false}
+        data-overlay-concealed={focus.concealed || undefined}
+        side={side}
         align={align}
         sideOffset={sideOffset}
-        onCloseAutoFocus={handleCloseAutoFocus}
-        {...props}
+        alignOffset={alignOffset}
+        collisionBoundary={collisionBoundary}
+        collisionAvoidance={collisionAvoidance}
+        collisionPadding={collisionPadding ?? safeAreaInsets}
       >
-        <SelectScrollUpButton />
-        <SelectPrimitive.Viewport
-          data-position={position}
-          className={cn(
-            "data-[position=popper]:h-(--radix-select-trigger-height) data-[position=popper]:w-full data-[position=popper]:min-w-(--radix-select-trigger-width)",
-            position === "popper" && "",
-          )}
+        <SelectPrimitive.Popup
+          ref={mergeRefs(ref, focus.popup)}
+          data-slot="select-content"
+          data-overlay-concealed={focus.concealed || undefined}
+          finalFocus={focus.finalFocus}
+          onFocus={(event) => {
+            onFocus?.(event);
+            if (
+              event.defaultPrevented ||
+              event.target !== event.currentTarget ||
+              initiallyFocused.current === event.currentTarget ||
+              !focus.initialAllowed()
+            )
+              return;
+            initiallyFocused.current = event.currentTarget;
+            // With no selection, Base focuses the popup. Radix focused the first
+            // enabled option; retain that keyboard starting point.
+            const first = event.currentTarget.querySelector<HTMLElement>(
+              '[role="option"]:not([aria-disabled="true"])',
+            );
+            const popup = event.currentTarget;
+            requestAnimationFrame(() => {
+              if (
+                first?.isConnected &&
+                popup.ownerDocument.activeElement === popup &&
+                focus.initialAllowed()
+              )
+                first.focus({ preventScroll: true });
+            });
+          }}
+          className={(state) =>
+            cn(
+              "relative z-50 flex max-h-(--available-height) max-w-safe-dvw min-w-(--anchor-width) origin-(--transform-origin) flex-col overflow-x-hidden overflow-y-auto rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+              typeof className === "function" ? className(state) : className,
+            )
+          }
+          {...props}
         >
-          {children}
-        </SelectPrimitive.Viewport>
-        <SelectScrollDownButton />
-      </SelectPrimitive.Content>
+          <SelectScrollUpButton />
+          <SelectPrimitive.List className="relative flex-1 overflow-x-hidden overflow-y-auto">
+            {children}
+          </SelectPrimitive.List>
+          <SelectScrollDownButton />
+        </SelectPrimitive.Popup>
+      </SelectPrimitive.Positioner>
     </SelectPrimitive.Portal>
   );
 }
@@ -183,9 +215,9 @@ function SelectContent({
 function SelectLabel({
   className,
   ...props
-}: React.ComponentProps<typeof SelectPrimitive.Label>) {
+}: React.ComponentProps<typeof SelectPrimitive.GroupLabel>) {
   return (
-    <SelectPrimitive.Label
+    <SelectPrimitive.GroupLabel
       data-slot="select-label"
       className={cn("px-1.5 py-1 text-ui-xs text-muted-foreground", className)}
       {...props}
@@ -219,10 +251,12 @@ function SelectItem({
   return (
     <SelectPrimitive.Item
       data-slot="select-item"
-      className={cn(
-        "relative flex w-full cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 pointer-coarse:min-h-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
-        className,
-      )}
+      className={(state) =>
+        cn(
+          "relative flex w-full cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 pointer-coarse:min-h-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
+          typeof className === "function" ? className(state) : className,
+        )
+      }
       {...props}
     >
       <span className="pointer-events-none absolute right-2 flex size-4 items-center justify-center">
@@ -230,7 +264,9 @@ function SelectItem({
           <CheckIcon className="pointer-events-none" />
         </SelectPrimitive.ItemIndicator>
       </span>
-      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      <SelectPrimitive.ItemText render={<span />}>
+        {children}
+      </SelectPrimitive.ItemText>
     </SelectPrimitive.Item>
   );
 }
@@ -251,36 +287,40 @@ function SelectSeparator({
 function SelectScrollUpButton({
   className,
   ...props
-}: React.ComponentProps<typeof SelectPrimitive.ScrollUpButton>) {
+}: React.ComponentProps<typeof SelectPrimitive.ScrollUpArrow>) {
   return (
-    <SelectPrimitive.ScrollUpButton
+    <SelectPrimitive.ScrollUpArrow
       data-slot="select-scroll-up-button"
-      className={cn(
-        "z-10 flex cursor-default items-center justify-center bg-transparent py-1 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
+      className={(state) =>
+        cn(
+          "z-10 flex cursor-default items-center justify-center bg-transparent py-1 [&_svg:not([class*='size-'])]:size-4",
+          typeof className === "function" ? className(state) : className,
+        )
+      }
       {...props}
     >
       <ChevronUpIcon />
-    </SelectPrimitive.ScrollUpButton>
+    </SelectPrimitive.ScrollUpArrow>
   );
 }
 
 function SelectScrollDownButton({
   className,
   ...props
-}: React.ComponentProps<typeof SelectPrimitive.ScrollDownButton>) {
+}: React.ComponentProps<typeof SelectPrimitive.ScrollDownArrow>) {
   return (
-    <SelectPrimitive.ScrollDownButton
+    <SelectPrimitive.ScrollDownArrow
       data-slot="select-scroll-down-button"
-      className={cn(
-        "z-10 flex cursor-default items-center justify-center bg-transparent py-1 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
+      className={(state) =>
+        cn(
+          "z-10 flex cursor-default items-center justify-center bg-transparent py-1 [&_svg:not([class*='size-'])]:size-4",
+          typeof className === "function" ? className(state) : className,
+        )
+      }
       {...props}
     >
       <ChevronDownIcon />
-    </SelectPrimitive.ScrollDownButton>
+    </SelectPrimitive.ScrollDownArrow>
   );
 }
 

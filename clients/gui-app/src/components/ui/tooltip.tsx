@@ -1,128 +1,167 @@
 "use client";
 
 import * as React from "react";
-import { Tooltip as TooltipPrimitive } from "radix-ui";
+import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip";
 
 import { cn } from "@/lib/utils";
-import {
-  readSafeAreaInsets,
-  readSafeAreaInsetsServerSnapshot,
-  subscribeToSafeAreaInsets,
-} from "@/lib/safe-area-insets";
+import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 
-/**
- * Whether a `TooltipProvider` is already above us. Radix owns the provider's
- * real state but exposes no way to ask "is one mounted?", and `Tooltip` THROWS
- * without one - so presence is tracked alongside it here.
- */
+const OPEN_POPUP_TRIGGER =
+  '[aria-haspopup]:not([aria-haspopup="false"]):is([data-popup-open], [aria-expanded="true"])';
+
 const TooltipProviderPresence = React.createContext(false);
+// Base 1.8 supplies hover behavior but no tooltip role or description link.
+const TooltipDescription = React.createContext({ id: "", open: false });
 
 function TooltipProvider({
-  delayDuration,
+  delay = 500,
+  timeout = 300,
   ...props
-}: React.ComponentProps<typeof TooltipPrimitive.Provider>) {
-  const effectiveDelay = delayDuration ?? 500;
+}: TooltipPrimitive.Provider.Props) {
   return (
     <TooltipProviderPresence.Provider value>
-      <TooltipPrimitive.Provider
-        data-slot="tooltip-provider"
-        delayDuration={effectiveDelay}
-        {...props}
-      />
+      <TooltipPrimitive.Provider delay={delay} timeout={timeout} {...props} />
     </TooltipProviderPresence.Provider>
   );
 }
 
-/**
- * Self-provides ONLY when nothing above it does. A missing provider is a
- * crash, not a degradation - and with tooltips now the app's single hover-hint
- * mechanism (they replaced ~118 native `title` attributes), any component
- * rendered outside the app shell would take one down. That includes every
- * isolated component test, which is where this actually bites.
- *
- * The nesting is deliberate rather than unconditional: `TooltipProvider` also
- * carries `delayDuration`, and several surfaces tune it for their own subtree
- * (the sidebar rail's 150ms, the notifications popover's 300ms). Always
- * wrapping would silently reset those to the default and break the shared
- * skip-delay grouping that makes a second tooltip appear instantly.
- */
+// Isolated surfaces self-provide; a mounted provider keeps its subtree's
+// timing and shared skip window instead of being shadowed by a local one.
 function Tooltip({
+  open,
+  defaultOpen = false,
+  onOpenChange,
   ...props
-}: React.ComponentProps<typeof TooltipPrimitive.Root>) {
+}: TooltipPrimitive.Root.Props) {
   const provided = React.useContext(TooltipProviderPresence);
-  const root = <TooltipPrimitive.Root data-slot="tooltip" {...props} />;
-  if (provided) return root;
-  return <TooltipProvider>{root}</TooltipProvider>;
+  const id = React.useId();
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen);
+  const presented = (open ?? uncontrolledOpen) && !props.disabled;
+  const description = React.useMemo(
+    () => ({ id, open: presented }),
+    [id, presented],
+  );
+  const root = (
+    <TooltipDescription.Provider value={description}>
+      <TooltipPrimitive.Root
+        {...props}
+        open={open}
+        defaultOpen={defaultOpen}
+        onOpenChange={(nextOpen, details) => {
+          // Tooltip and popup triggers may share a node, wrap one another,
+          // or regain a label when a composer narrows. Suppress help only
+          // within that open popup's trigger composition.
+          if (
+            nextOpen &&
+            (details.trigger?.closest(OPEN_POPUP_TRIGGER) ||
+              details.trigger?.querySelector(OPEN_POPUP_TRIGGER))
+          ) {
+            details.cancel();
+            return;
+          }
+          onOpenChange?.(nextOpen, details);
+          if (!details.isCanceled) setUncontrolledOpen(nextOpen);
+        }}
+      />
+    </TooltipDescription.Provider>
+  );
+  return provided ? root : <TooltipProvider>{root}</TooltipProvider>;
 }
 
 function TooltipTrigger({
+  render,
+  "aria-describedby": describedBy,
   ...props
-}: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
-  return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />;
+}: TooltipPrimitive.Trigger.Props) {
+  const description = React.useContext(TooltipDescription);
+  const concealed = usePortalConcealed();
+  const tooltipId = description.open && !concealed ? description.id : undefined;
+  const mergedDescription =
+    [describedBy, tooltipId].filter(Boolean).join(" ") || undefined;
+  // Base's render element wins ordinary prop collisions. Include its existing
+  // description in that element too, so neither help text nor our label is lost.
+  const trigger = React.isValidElement<React.AriaAttributes>(render)
+    ? React.cloneElement(render, {
+        "aria-describedby":
+          [render.props["aria-describedby"], mergedDescription]
+            .filter(Boolean)
+            .join(" ") || undefined,
+      })
+    : render;
+  return (
+    <TooltipPrimitive.Trigger
+      data-slot="tooltip-trigger"
+      {...props}
+      aria-describedby={mergedDescription}
+      render={trigger}
+    />
+  );
 }
 
+type TooltipContentProps = TooltipPrimitive.Popup.Props &
+  Pick<
+    TooltipPrimitive.Positioner.Props,
+    "align" | "alignOffset" | "side" | "collisionBoundary" | "collisionPadding"
+  > & { sideOffset?: number };
+
 function TooltipContent({
-  ref,
   className,
+  side = "top",
   sideOffset = 0,
+  align = "center",
+  alignOffset = 0,
+  collisionBoundary,
   collisionPadding,
   children,
   ...props
-}: React.ComponentProps<typeof TooltipPrimitive.Content>) {
-  // Concealed region (see `portal-concealment-context`): the label's anchor
-  // is display:none and can never receive the pointerleave that would close
-  // this, so un-present the portal with the region.
+}: TooltipContentProps) {
+  const description = React.useContext(TooltipDescription);
   const concealed = usePortalConcealed();
-  // Subscribed rather than read, and read above the early return so the hook
-  // order does not depend on concealment. Radix takes the padding as a plain
-  // value, so a tooltip mounted in portrait would hold portrait geometry
-  // through a rotation until something else happened to re-render it.
-  const safeAreaInsets = React.useSyncExternalStore(
-    subscribeToSafeAreaInsets,
-    readSafeAreaInsets,
-    readSafeAreaInsetsServerSnapshot,
-  );
+  const safeAreaInsets = useSafeAreaCollisionPadding();
   if (concealed) return null;
   return (
     <TooltipPrimitive.Portal>
-      <TooltipPrimitive.Content
-        ref={ref}
-        data-slot="tooltip-content"
-        sideOffset={sideOffset}
-        // The safe-area insets are the DEFAULT collision padding, because the
-        // guarantee has to hold for tooltips nobody thought about. Radix
-        // collides against the viewport, which on a phone includes the strip
-        // the app never paints into - so a `side="top"` label on a control in
-        // the app header finds "space" inside the status bar and renders into
-        // it instead of flipping below the trigger. Padding the collision box
-        // by the insets makes that space stop existing, which is the same
-        // thing `#root`'s padding does for everything not portalled.
-        //
-        // A caller may still pass its own, and one does: a tooltip inside a
-        // dialog pads against the dialog's edge, where the device inset is not
-        // the boundary that matters.
+      <TooltipPrimitive.Positioner
+        data-slot="tooltip-positioner"
+        className="isolate z-50"
+        positionMethod="fixed"
+        side={side}
+        // The previous arrow reserved its 10px height outside the popup.
+        sideOffset={sideOffset + 10}
+        align={align}
+        alignOffset={alignOffset}
+        collisionBoundary={collisionBoundary}
         collisionPadding={collisionPadding ?? safeAreaInsets}
-        className={cn(
-          // Tooltip content is label-only (see hover-card.tsx for the
-          // interactive-content surface); `pointer-events-none` stops the
-          // portalled content from ever winning hit-testing away from its
-          // trigger, which otherwise can drive a hover/reposition loop when
-          // the trigger sits directly under the content (e.g. a top-pinned
-          // strip flipping the tooltip to `side="bottom"`).
-          //
-          // This class covers the content ONLY. Radix Popper's same-size
-          // positioning wrapper around it stays `pointer-events: auto` and
-          // swallowed clicks on its own until `index.css` opted it out too -
-          // keep both, neither is sufficient alone (traycerai/traycer#466).
-          "pointer-events-none z-50 inline-flex w-fit max-w-xs origin-(--radix-tooltip-content-transform-origin) items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-ui-xs text-background [overflow-wrap:anywhere] has-data-[slot=kbd]:pr-1.5 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 **:data-[slot=kbd]:relative **:data-[slot=kbd]:isolate **:data-[slot=kbd]:z-50 **:data-[slot=kbd]:rounded-sm data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-[state=delayed-open]:zoom-in-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-          className,
-        )}
-        {...props}
       >
-        {children}
-        <TooltipPrimitive.Arrow className="z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-xs bg-foreground fill-foreground" />
-      </TooltipPrimitive.Content>
+        <TooltipPrimitive.Popup
+          data-slot="tooltip-content"
+          className={(state) =>
+            cn(
+              // Both the label and Positioner must be transparent to clicks
+              // (index.css); interactive previews use HoverCard instead.
+              "pointer-events-none z-50 inline-flex w-fit max-w-xs origin-(--transform-origin) items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-ui-xs text-background [overflow-wrap:anywhere] has-data-[slot=kbd]:pr-1.5 **:data-[slot=kbd]:relative **:data-[slot=kbd]:isolate **:data-[slot=kbd]:z-50 **:data-[slot=kbd]:rounded-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-[instant]:animate-none",
+              typeof className === "function" ? className(state) : className,
+            )
+          }
+          {...props}
+          id={description.id}
+          role="tooltip"
+        >
+          {children}
+          <TooltipPrimitive.Arrow className="z-50 data-uncentered:invisible data-[side=top]:bottom-0 data-[side=top]:[transform:translateY(100%)] data-[side=bottom]:top-0 data-[side=bottom]:origin-top data-[side=bottom]:rotate-180 data-[side=left]:right-0 data-[side=left]:origin-top-right data-[side=left]:[transform:translateY(50%)_rotate(-90deg)_translateX(50%)] data-[side=right]:left-0 data-[side=right]:origin-top-left data-[side=right]:[transform:translateY(50%)_rotate(90deg)_translateX(-50%)]">
+            <svg
+              width="10"
+              height="5"
+              viewBox="0 0 30 10"
+              preserveAspectRatio="none"
+              className="block size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-xs bg-foreground fill-foreground"
+            >
+              <polygon points="0,0 30,0 15,10" />
+            </svg>
+          </TooltipPrimitive.Arrow>
+        </TooltipPrimitive.Popup>
+      </TooltipPrimitive.Positioner>
     </TooltipPrimitive.Portal>
   );
 }

@@ -1336,24 +1336,26 @@ function TerminalAgentPreLaunchToolbar(
                 </Button>
               </span>
             </TooltipWrapper>
-            <DropdownMenuTrigger asChild>
-              <TooltipWrapper
-                label="More fork options"
-                side="top"
-                sideOffset={6}
-                align="end"
-              >
-                <Button
-                  type="button"
-                  variant="muted-outline"
-                  size="icon-sm"
-                  disabled={forkDisabled}
-                  aria-label="More fork options"
+            <DropdownMenuTrigger
+              render={
+                <TooltipWrapper
+                  label="More fork options"
+                  side="top"
+                  sideOffset={6}
+                  align="end"
                 >
-                  <ChevronDown aria-hidden className="size-3" />
-                </Button>
-              </TooltipWrapper>
-            </DropdownMenuTrigger>
+                  <Button
+                    type="button"
+                    variant="muted-outline"
+                    size="icon-sm"
+                    disabled={forkDisabled}
+                    aria-label="More fork options"
+                  >
+                    <ChevronDown aria-hidden className="size-3" />
+                  </Button>
+                </TooltipWrapper>
+              }
+            />
           </ButtonGroup>
           <DropdownMenuContent align="start" className="w-max max-w-[90vw]">
             <TooltipWrapper
@@ -1374,7 +1376,7 @@ function TerminalAgentPreLaunchToolbar(
                     continueUnderProfileDisabledReason !== undefined &&
                       "flex-col items-start gap-0.5",
                   )}
-                  onSelect={() => openForkDialog("continue")}
+                  onClick={() => openForkDialog("continue")}
                 >
                   <span className="w-full whitespace-nowrap">
                     Continue under another profile…
@@ -1561,24 +1563,26 @@ function TerminalAgentHeaderControls(props: {
   return (
     <div className="flex shrink-0 items-center gap-1">
       <Popover>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="muted-outline"
-            size="xs"
-            className="h-7"
-            data-testid="tui-agent-subagents-trigger"
-          >
-            <Users aria-hidden className="size-3.5" />
-            Agents
-            {/* muted-fill-ok: chip on TerminalAgentTileShell bg-canvas;
+        <PopoverTrigger
+          render={
+            <Button
+              type="button"
+              variant="muted-outline"
+              size="xs"
+              className="h-7"
+              data-testid="tui-agent-subagents-trigger"
+            >
+              <Users aria-hidden className="size-3.5" />
+              Agents
+              {/* muted-fill-ok: chip on TerminalAgentTileShell bg-canvas;
                 --canvas never equals --muted */}
-            <span className="rounded bg-muted px-1 text-ui-xs">
-              {runningCount}
-            </span>
-            <ChevronDown aria-hidden className="size-3" />
-          </Button>
-        </PopoverTrigger>
+              <span className="rounded bg-muted px-1 text-ui-xs">
+                {runningCount}
+              </span>
+              <ChevronDown aria-hidden className="size-3" />
+            </Button>
+          }
+        />
         <PopoverContent
           layout="bare"
           align="end"

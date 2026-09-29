@@ -125,11 +125,13 @@ function renderScene(): {
         side="right"
       />
       <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <button type="button" data-testid="menu-trigger">
-            Menu row
-          </button>
-        </ContextMenuTrigger>
+        <ContextMenuTrigger
+          render={
+            <button type="button" data-testid="menu-trigger">
+              Menu row
+            </button>
+          }
+        />
         <ContextMenuContent>
           <ContextMenuItem>Item</ContextMenuItem>
         </ContextMenuContent>

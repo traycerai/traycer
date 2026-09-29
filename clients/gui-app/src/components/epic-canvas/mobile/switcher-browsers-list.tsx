@@ -499,26 +499,28 @@ function SwitcherBrowserHostFilterMenu(props: {
     : "Filter browsers by host";
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="muted"
-          size="icon-sm"
-          aria-label={label}
-          data-testid={`switcher-${BROWSERS_PANEL_ID}-filter`}
-          className="relative"
-        >
-          <ListFilter className="size-4" />
-          {props.isPinned ? (
-            <span
-              aria-hidden
-              className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-foreground text-micro leading-none font-semibold text-background ring-1 ring-background"
-            >
-              1
-            </span>
-          ) : null}
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="muted"
+            size="icon-sm"
+            aria-label={label}
+            data-testid={`switcher-${BROWSERS_PANEL_ID}-filter`}
+            className="relative"
+          >
+            <ListFilter className="size-4" />
+            {props.isPinned ? (
+              <span
+                aria-hidden
+                className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-foreground text-micro leading-none font-semibold text-background ring-1 ring-background"
+              >
+                1
+              </span>
+            ) : null}
+          </Button>
+        }
+      />
       <DropdownMenuContent
         align="end"
         className="max-h-[min(50dvh,20rem)] max-w-64 min-w-52 overflow-y-auto"

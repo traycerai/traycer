@@ -759,9 +759,7 @@ function handleDigitKeyDown(
 
 function isAnyDialogOpen(): boolean {
   if (typeof document === "undefined") return false;
-  const dialogs = document.querySelectorAll(
-    '[role="dialog"][data-state="open"]',
-  );
+  const dialogs = document.querySelectorAll('[role="dialog"][data-open]');
   // A dialog that hosts a leader scope (the system-tab modal, the model picker
   // popover, …) opts out of the block via `data-leader-scope`: it's the
   // intended target of the leader shortcuts, so treat it as transparent to

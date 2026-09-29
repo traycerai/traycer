@@ -126,15 +126,17 @@ export function MermaidFullscreenDialog(props: MermaidFullscreenDialogProps) {
               sideOffset={undefined}
               align={undefined}
             >
-              <DialogClose asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Close fullscreen preview"
-                >
-                  <X className="size-4" aria-hidden="true" />
-                </Button>
-              </DialogClose>
+              <DialogClose
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Close fullscreen preview"
+                  >
+                    <X className="size-4" aria-hidden="true" />
+                  </Button>
+                }
+              />
             </TooltipWrapper>
           </div>
         </DialogHeader>

@@ -11,10 +11,9 @@ import {
 import { TaskOrganizationMenu } from "@/components/organization/task-organization-menu";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { isEditableRole } from "@/lib/epic-permissions";
-import { Label } from "@/components/ui/label";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { CSSProperties } from "react";
-import { useId } from "react";
+import { useId, useRef } from "react";
 import { Check, Group, Palette, Pipette } from "lucide-react";
 import {
   ContextMenuItem,
@@ -99,11 +98,10 @@ export function TabColorPicker(props: {
         return props.menu ? (
           <ContextMenuItem
             key={value}
-            asChild
-            onSelect={(event) => event.preventDefault()}
-          >
-            {button}
-          </ContextMenuItem>
+            render={button}
+            nativeButton
+            closeOnClick={false}
+          />
         ) : (
           button
         );
@@ -131,12 +129,10 @@ export function TabColorPicker(props: {
           <Pipette className="size-3 text-white drop-shadow-sm" aria-hidden />
           {props.menu ? (
             <ContextMenuItem
-              asChild
+              render={customInput}
               className="absolute inset-0 size-full p-0"
-              onSelect={(event) => event.preventDefault()}
-            >
-              {customInput}
-            </ContextMenuItem>
+              closeOnClick={false}
+            />
           ) : (
             customInput
           )}
@@ -197,7 +193,7 @@ function OrganizationContextRetryMenu(props: {
   return (
     <ContextMenuItem
       disabled={props.isFetching}
-      onSelect={() => {
+      onClick={() => {
         const auth = useAuthStore.getState();
         if (
           userId === null ||
@@ -229,6 +225,7 @@ function OrganizationContextRetryMenu(props: {
   );
 }
 function LocalTabAppearanceMenu(props: { readonly tab: HeaderTab }) {
+  const iconInput = useRef<HTMLInputElement | null>(null);
   const key = tabRefKey(props.tab);
   const customization = useTabsStore((state) => state.customizations?.[key]);
   const groups = useTabsStore((state) => state.groups);
@@ -249,8 +246,18 @@ function LocalTabAppearanceMenu(props: { readonly tab: HeaderTab }) {
               actions.setTabCustomization(props.tab, { color });
             }}
           />
-          <Label className="mt-3 mb-1.5">Icon</Label>
+          <ContextMenuItem
+            className="mt-2"
+            onClick={(event) => {
+              event.preventBaseUIHandler();
+              iconInput.current?.focus();
+            }}
+            closeOnClick={false}
+          >
+            Edit icon…
+          </ContextMenuItem>
           <Input
+            ref={iconInput}
             aria-label="Tab icon"
             placeholder="Emoji or initials"
             maxLength={32}
@@ -271,7 +278,7 @@ function LocalTabAppearanceMenu(props: { readonly tab: HeaderTab }) {
             <>
               <ContextMenuSeparator className="my-2" />
               <ContextMenuItem
-                onSelect={() =>
+                onClick={() =>
                   actions.setTabCustomization(props.tab, {
                     color: null,
                     icon: null,
@@ -290,7 +297,7 @@ function LocalTabAppearanceMenu(props: { readonly tab: HeaderTab }) {
           Add tab to group
         </ContextMenuSubTrigger>
         <ContextMenuSubContent>
-          <ContextMenuItem onSelect={() => actions.createGroup(props.tab)}>
+          <ContextMenuItem onClick={() => actions.createGroup(props.tab)}>
             New group
           </ContextMenuItem>
           {Object.entries(groups ?? {})
@@ -298,7 +305,7 @@ function LocalTabAppearanceMenu(props: { readonly tab: HeaderTab }) {
             .map(([id, entry]) => (
               <ContextMenuItem
                 key={id}
-                onSelect={() => actions.setTabGroup(props.tab, id)}
+                onClick={() => actions.setTabGroup(props.tab, id)}
               >
                 <span
                   className="size-3 rounded-full bg-[var(--swatch)]"
@@ -311,7 +318,7 @@ function LocalTabAppearanceMenu(props: { readonly tab: HeaderTab }) {
         </ContextMenuSubContent>
       </ContextMenuSub>
       {groupId !== null ? (
-        <ContextMenuItem onSelect={() => actions.setTabGroup(props.tab, null)}>
+        <ContextMenuItem onClick={() => actions.setTabGroup(props.tab, null)}>
           Remove from group
         </ContextMenuItem>
       ) : null}

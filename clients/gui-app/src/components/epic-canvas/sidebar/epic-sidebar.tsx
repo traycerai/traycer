@@ -2187,18 +2187,20 @@ function PanelHeaderMoreMenuTrigger(props: {
       sideOffset={undefined}
       align={undefined}
     >
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="muted"
-          size="icon-sm"
-          aria-label={props.label}
-          className="shrink-0"
-          data-testid={props.testId}
-        >
-          <MoreHorizontal className="size-4" />
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="muted"
+            size="icon-sm"
+            aria-label={props.label}
+            className="shrink-0"
+            data-testid={props.testId}
+          >
+            <MoreHorizontal className="size-4" />
+          </Button>
+        }
+      />
     </TooltipWrapper>
   );
 }
@@ -2254,12 +2256,12 @@ function ChatHeaderMoreMenu(props: {
         side={placement?.side ?? "right"}
         align={placement?.align ?? "start"}
         sideOffset={8}
-        avoidCollisions={false}
-        className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-56"
+        collisionAvoidance={{ side: "none", align: "none" }}
+        className="w-[var(--available-width)] min-w-0 max-w-56"
       >
         {props.searching ? null : (
           <DropdownMenuItem
-            onSelect={menu.openPanelSearch}
+            onClick={menu.openPanelSearch}
             data-testid="epic-sidebar-more-search-chats"
           >
             <Search className="size-4" />
@@ -2267,14 +2269,14 @@ function ChatHeaderMoreMenu(props: {
           </DropdownMenuItem>
         )}
         <CommGraphOpenMenuItem epicId={props.epicId} disabled={false} />
-        <DropdownMenuItem onSelect={props.onCollapseAll}>
+        <DropdownMenuItem onClick={props.onCollapseAll}>
           <CopyMinus className="size-4" />
           Collapse all
         </DropdownMenuItem>
         {isEditableRole(permissionRole) ? (
           <DropdownMenuItem
             disabled={!selectionEnabled}
-            onSelect={selection.enterSelectionMode}
+            onClick={selection.enterSelectionMode}
           >
             <ListChecks className="size-4" />
             Select agents
@@ -2306,15 +2308,15 @@ function ArtifactHeaderMoreMenu(props: {
         side={placement?.side ?? "right"}
         align={placement?.align ?? "start"}
         sideOffset={8}
-        avoidCollisions={false}
-        className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-52"
+        collisionAvoidance={{ side: "none", align: "none" }}
+        className="w-[var(--available-width)] min-w-0 max-w-52"
       >
         {/* Hidden when the Epic has NO artifacts or is open read-only - see
             `useArtifactSearchAvailable` for why emptiness and write access gate
             this and a size threshold does not. */}
         {searchAvailable && !props.searching ? (
           <DropdownMenuItem
-            onSelect={menu.openPanelSearch}
+            onClick={menu.openPanelSearch}
             data-testid="epic-sidebar-more-search-artifacts"
           >
             <Search className="size-4" />
@@ -2322,13 +2324,13 @@ function ArtifactHeaderMoreMenu(props: {
           </DropdownMenuItem>
         ) : null}
         <DeletedArtifactsOpenMenuItem epicId={props.epicId} />
-        <DropdownMenuItem onSelect={props.onCollapseAll}>
+        <DropdownMenuItem onClick={props.onCollapseAll}>
           <CopyMinus className="size-4" />
           Collapse all
         </DropdownMenuItem>
         <DropdownMenuItem
           disabled={!selection.canSelect}
-          onSelect={selection.enterSelectionMode}
+          onClick={selection.enterSelectionMode}
         >
           <ListChecks className="size-4" />
           Select artifacts
@@ -2505,30 +2507,32 @@ function SidebarBulkSelectionActions() {
       </TooltipWrapper>
       {selection.panelId === "artifacts" ? (
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Export selected artifacts"
-              disabled={!canExportSelected || exportArtifacts.isPending}
-            >
-              {exportArtifacts.isPending ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId={undefined}
-                  variant={undefined}
-                />
-              ) : (
-                <Download className="size-4" />
-              )}
-            </Button>
-          </DropdownMenuTrigger>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Export selected artifacts"
+                disabled={!canExportSelected || exportArtifacts.isPending}
+              >
+                {exportArtifacts.isPending ? (
+                  <AgentSpinningDots
+                    className={undefined}
+                    testId={undefined}
+                    variant={undefined}
+                  />
+                ) : (
+                  <Download className="size-4" />
+                )}
+              </Button>
+            }
+          />
           <DropdownMenuContent side={placement.side} align={placement.align}>
             <DropdownMenuItem
               data-testid="epic-sidebar-export-selected-markdown"
               disabled={!canExportSelected || exportArtifacts.isPending}
-              onSelect={() => {
+              onClick={() => {
                 exportSelected("markdown");
               }}
             >
@@ -2537,7 +2541,7 @@ function SidebarBulkSelectionActions() {
             <DropdownMenuItem
               data-testid="epic-sidebar-export-selected-pdf"
               disabled={!canExportSelected || exportArtifacts.isPending}
-              onSelect={() => {
+              onClick={() => {
                 exportSelected("pdf");
               }}
             >

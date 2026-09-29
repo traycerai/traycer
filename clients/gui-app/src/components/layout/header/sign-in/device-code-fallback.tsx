@@ -33,7 +33,7 @@ export function DeviceCodeFallback(props: {
       >
         <span>Use code instead</span>
         <ChevronRight
-          className="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90"
+          className="size-3.5 shrink-0 transition-transform group-data-panel-open:rotate-90"
           aria-hidden="true"
         />
       </CollapsibleTrigger>

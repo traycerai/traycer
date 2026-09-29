@@ -392,9 +392,9 @@ function SearchResultRow({
   const base = slash === -1 ? match.relPath : match.relPath.slice(slash + 1);
   return (
     <PaletteItemRow
-      value={`${target.kind}:${match.relPath}:${match.lineNumber}:${match.column}`}
+      itemKey={`${target.kind}:${match.relPath}:${match.lineNumber}:${match.column}`}
       keywords={[]}
-      onSelect={onOpen}
+      onAction={onOpen}
     >
       <div className="flex min-w-0 flex-col gap-0.5">
         {target.kind === "artifact" ? (

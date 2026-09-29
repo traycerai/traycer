@@ -1580,9 +1580,7 @@ function SweepWorktreeRowItem(props: {
         id={checkboxId}
         checked={checked}
         disabled={disabled}
-        onCheckedChange={(value) =>
-          onToggle(entry.worktreePath, value === true)
-        }
+        onCheckedChange={(value) => onToggle(entry.worktreePath, value)}
         className="mt-0.5"
         aria-label={`Sweep worktree ${branch}`}
         data-testid="sweep-worktrees-checkbox"
@@ -1656,17 +1654,19 @@ function SweepTierPill(props: { readonly row: EpicSweepWorktreeRow }) {
   const { row } = props;
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className={cn(
-            "shrink-0 rounded-full border px-1.5 text-ui-xs",
-            TIER_PILL_CLASS[row.tier],
-          )}
-          data-testid="sweep-worktrees-tier"
-        >
-          {WORKTREE_TIER_LABEL[row.tier]}
-        </span>
-      </TooltipTrigger>
+      <TooltipTrigger
+        render={
+          <span
+            className={cn(
+              "shrink-0 rounded-full border px-1.5 text-ui-xs",
+              TIER_PILL_CLASS[row.tier],
+            )}
+            data-testid="sweep-worktrees-tier"
+          >
+            {WORKTREE_TIER_LABEL[row.tier]}
+          </span>
+        }
+      />
       <TooltipContent className="max-w-[min(90vw,24rem)]">
         {WORKTREE_TIER_TOOLTIP[row.tier]}
       </TooltipContent>

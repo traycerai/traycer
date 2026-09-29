@@ -28,27 +28,27 @@ export function ContextMenuRenameFocusStealFixture(): React.ReactElement {
   return (
     <div className="p-12">
       <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div
-            data-testid="fixture-trigger"
-            className="w-full max-w-sm border border-border p-2"
-          >
-            {rename.isEditing ? (
-              <input
-                {...rename.inputProps}
-                data-testid="fixture-input"
-                aria-label="Edit title"
-              />
-            ) : (
-              <span data-testid="fixture-title">{title}</span>
-            )}
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent
-          onCloseAutoFocus={(event) => event.preventDefault()}
-        >
+        <ContextMenuTrigger
+          render={
+            <div
+              data-testid="fixture-trigger"
+              className="w-full max-w-sm border border-border p-2"
+            >
+              {rename.isEditing ? (
+                <input
+                  {...rename.inputProps}
+                  data-testid="fixture-input"
+                  aria-label="Edit title"
+                />
+              ) : (
+                <span data-testid="fixture-title">{title}</span>
+              )}
+            </div>
+          }
+        />
+        <ContextMenuContent finalFocus={false}>
           <ContextMenuItem
-            onSelect={rename.startEditing}
+            onClick={rename.startEditing}
             data-testid="fixture-edit-title"
           >
             Edit Title

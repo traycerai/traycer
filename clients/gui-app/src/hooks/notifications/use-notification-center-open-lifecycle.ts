@@ -10,9 +10,8 @@ export interface NotificationCenterOpenLifecycleInput {
 export interface NotificationCenterOpenLifecycle {
   readonly onTriggerPointerDown: () => void;
   readonly onTriggerKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
-  readonly onContentOpenAutoFocus: (event: Event) => void;
-  readonly onContentEscapeKeyDown: () => void;
-  readonly onContentCloseAutoFocus: (event: Event) => void;
+  readonly initialFocus: () => HTMLElement | false;
+  readonly finalFocus: () => HTMLElement | false;
   /**
    * Marks the close that is about to happen as keyboard-driven, so focus
    * returns to the trigger exactly as it does for Escape. Called by the
@@ -62,41 +61,27 @@ export function useNotificationCenterOpenLifecycle(
     [],
   );
 
-  const onContentOpenAutoFocus = useCallback(
-    (event: Event) => {
-      event.preventDefault();
-      const modality = modalityRef.current;
-      modalityRef.current = "programmatic";
-      if (modality !== "pointer") {
-        input.headingRef.current?.focus();
-      }
-    },
-    [input.headingRef],
-  );
+  const initialFocus = useCallback((): HTMLElement | false => {
+    const modality = modalityRef.current;
+    modalityRef.current = "programmatic";
+    return modality === "pointer" ? false : (input.headingRef.current ?? false);
+  }, [input.headingRef]);
 
   const markKeyboardDismiss = useCallback(() => {
     closeReasonRef.current = "escape";
   }, []);
 
-  const onContentEscapeKeyDown = markKeyboardDismiss;
-
-  const onContentCloseAutoFocus = useCallback(
-    (event: Event) => {
-      event.preventDefault();
-      if (closeReasonRef.current === "escape") {
-        input.triggerRef.current?.focus();
-      }
-      closeReasonRef.current = "other";
-    },
-    [input.triggerRef],
-  );
+  const finalFocus = useCallback((): HTMLElement | false => {
+    const restore = closeReasonRef.current === "escape";
+    closeReasonRef.current = "other";
+    return restore ? (input.triggerRef.current ?? false) : false;
+  }, [input.triggerRef]);
 
   return {
     onTriggerPointerDown,
     onTriggerKeyDown,
-    onContentOpenAutoFocus,
-    onContentEscapeKeyDown,
-    onContentCloseAutoFocus,
+    initialFocus,
+    finalFocus,
     markKeyboardDismiss,
   };
 }

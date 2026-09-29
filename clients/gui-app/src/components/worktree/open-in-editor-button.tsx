@@ -155,19 +155,21 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
         />
       </Button>
       <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            disabled={openingEditor || !hostMatches}
-            aria-label="Choose editor"
-            data-testid="workspace-open-in-editor-chevron"
-            className="size-5"
-          >
-            <ChevronDown className="size-3" aria-hidden />
-          </Button>
-        </DropdownMenuTrigger>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={openingEditor || !hostMatches}
+              aria-label="Choose editor"
+              data-testid="workspace-open-in-editor-chevron"
+              className="size-5"
+            >
+              <ChevronDown className="size-3" aria-hidden />
+            </Button>
+          }
+        />
         <DropdownMenuContent
           align="end"
           className="w-[min(90vw,11rem)]"
@@ -227,7 +229,7 @@ function EditorChooserMenuItems(props: EditorChooserMenuItemsProps) {
             key={target.id}
             data-testid={`workspace-open-in-editor-${target.id}`}
             disabled={openingEditor}
-            onSelect={() => props.onSelectTarget(target.id)}
+            onClick={() => props.onSelectTarget(target.id)}
           >
             {openingEditor ? (
               <AgentSpinningDots
@@ -245,7 +247,7 @@ function EditorChooserMenuItems(props: EditorChooserMenuItemsProps) {
       {targets.length > 0 ? <DropdownMenuSeparator /> : null}
       <DropdownMenuItem
         data-testid="workspace-open-in-editor-copy-path"
-        onSelect={props.onCopyPath}
+        onClick={props.onCopyPath}
       >
         <Copy className="size-3.5" aria-hidden />
         <span>Copy path</span>

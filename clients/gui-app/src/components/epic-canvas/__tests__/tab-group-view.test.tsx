@@ -96,7 +96,6 @@ interface TestState {
   readonly unmounts: Map<string, number>;
   readonly deferredClicks: Map<string, number>;
   readonly deferredRemovalClicks: Map<string, number>;
-  readonly closeAutoFocusGuards: Map<string, (event: Event) => void>;
   /**
    * When an artifact id is listed here, `useEpicArtifact` returns `null` so
    * `computeIsRemoteDeleted` can fire (snapshot loaded + no live projection).
@@ -142,7 +141,6 @@ const testState = vi.hoisted((): TestState => ({
   unmounts: new Map(),
   deferredClicks: new Map(),
   deferredRemovalClicks: new Map(),
-  closeAutoFocusGuards: new Map(),
   missingArtifactIds: new Set(),
   stableTileSurfaceHostEnabled: false,
   unreachableHostIds: new Set(),
@@ -358,21 +356,16 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", () => ({
 
 vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
   const React = await import("react");
-  const { usePaneCloseAutoFocusGuard } =
-    await import("@/components/epic-tabs/pane-visibility-context");
   function MockTile(props: { readonly id: string }) {
-    const closeAutoFocusGuard = usePaneCloseAutoFocusGuard(undefined);
     React.useEffect(() => {
       testState.mounts.set(props.id, (testState.mounts.get(props.id) ?? 0) + 1);
-      testState.closeAutoFocusGuards.set(props.id, closeAutoFocusGuard);
       return () => {
         testState.unmounts.set(
           props.id,
           (testState.unmounts.get(props.id) ?? 0) + 1,
         );
-        testState.closeAutoFocusGuards.delete(props.id);
       };
-    }, [closeAutoFocusGuard, props.id]);
+    }, [props.id]);
 
     return (
       <div data-testid={`tile-${props.id}`}>
@@ -643,7 +636,6 @@ describe("<TabGroupView />", () => {
     testState.unmounts.clear();
     testState.deferredClicks.clear();
     testState.deferredRemovalClicks.clear();
-    testState.closeAutoFocusGuards.clear();
     testState.missingArtifactIds.clear();
     testState.stableTileSurfaceHostEnabled = false;
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -756,28 +748,6 @@ describe("<TabGroupView />", () => {
       ).toBe("group-1");
     });
     expect(document.activeElement).toBe(button);
-  });
-
-  it("prevents close-autofocus from bouncing ownership to an inactive inner pane", async () => {
-    const tabs = [SPEC];
-    seedCanvas(tabs, SPEC.instanceId);
-    const view = render(groupView(tabs, SPEC.instanceId, true));
-
-    await waitFor(() => {
-      expect(testState.closeAutoFocusGuards.get(SPEC.id)).toBeDefined();
-    });
-    seedCanvasWithActivePane(tabs, SPEC.instanceId, "other-group");
-    view.rerender(groupView(tabs, SPEC.instanceId, true));
-    await waitFor(() => {
-      expect(view.getByTestId("tab-group").dataset.active).toBe("false");
-    });
-
-    const closeAutoFocusEvent = new Event("closeAutoFocus", {
-      cancelable: true,
-    });
-    testState.closeAutoFocusGuards.get(SPEC.id)?.(closeAutoFocusEvent);
-
-    expect(closeAutoFocusEvent.defaultPrevented).toBe(true);
   });
 
   it("keeps recently active tabs mounted under display:none and evicts past the LRU cap", async () => {

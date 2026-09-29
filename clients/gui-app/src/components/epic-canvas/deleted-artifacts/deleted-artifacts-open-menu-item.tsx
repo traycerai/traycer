@@ -17,7 +17,7 @@ export function DeletedArtifactsOpenMenuItem(props: {
   if (!available) return null;
   return (
     <DropdownMenuItem
-      onSelect={openDeletedArtifacts}
+      onClick={openDeletedArtifacts}
       data-testid="epic-sidebar-more-open-deleted-artifacts"
     >
       <Trash2 className="size-4" />

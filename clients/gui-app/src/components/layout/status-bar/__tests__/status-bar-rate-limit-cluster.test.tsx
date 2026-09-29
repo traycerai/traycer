@@ -8,7 +8,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Popover, PopoverAnchor } from "@/components/ui/popover";
+import { Popover } from "@/components/ui/popover";
 import type {
   StatusBarProviderSegmentModel,
   StatusBarRateLimitCluster as StatusBarRateLimitClusterModel,
@@ -158,11 +158,11 @@ describe("<StatusBarRateLimitCluster />", () => {
     renderCluster({});
 
     const trigger = screen.getByTestId("status-bar-rate-limit-trigger");
-    expect(trigger.getAttribute("data-state")).toBe("closed");
+    expect(trigger.hasAttribute("data-popup-open")).toBe(false);
 
     fireEvent.click(trigger);
 
-    expect(trigger.getAttribute("data-state")).toBe("open");
+    expect(trigger.hasAttribute("data-popup-open")).toBe(true);
   });
 
   // Pinned as its own structural check: the trigger has to be INSIDE the
@@ -241,7 +241,7 @@ describe("<StatusBarRateLimitCluster />", () => {
 
     const trigger = screen.getByTestId("status-bar-rate-limit-trigger");
     fireEvent.click(trigger);
-    expect(trigger.getAttribute("data-state")).toBe("open");
+    expect(trigger.hasAttribute("data-popup-open")).toBe(true);
   });
 
   it("renders 'Usage hidden' for the hidden cluster and still opens the panel on click", () => {
@@ -252,7 +252,7 @@ describe("<StatusBarRateLimitCluster />", () => {
 
     const trigger = screen.getByTestId("status-bar-rate-limit-trigger");
     fireEvent.click(trigger);
-    expect(trigger.getAttribute("data-state")).toBe("open");
+    expect(trigger.hasAttribute("data-popup-open")).toBe(true);
   });
 
   describe("trigger accessible name", () => {
@@ -370,7 +370,7 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
     // let the mocked segments hook be read again.
     const tree = (hostId: string | null) => (
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider delayDuration={0}>
+        <TooltipProvider delay={0}>
           <Popover>
             <StatusBarRateLimitCluster
               hostId={hostId}
@@ -728,51 +728,18 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
       });
       // And the click still reached the trigger, so the panel is opening.
       expect(
-        screen.getByTestId(TRIGGER_TESTID).getAttribute("data-state"),
-      ).toBe("open");
+        screen.getByTestId(TRIGGER_TESTID).hasAttribute("data-popup-open"),
+      ).toBe(true);
     });
   });
 
-  it("keeps the trigger scrollable inside a real popover anchor, where Radix re-wraps it after the first commit", () => {
-    // `AppStatusBar` anchors the popover on its own slot span via a real
-    // `PopoverAnchor`, not the trigger - which flips `PopoverTrigger`'s
-    // `hasCustomAnchor` context after mount and swaps its child out from
-    // under a Popper `Anchor` wrapper on the second commit. The scroller sits
-    // OUTSIDE the trigger, so the swap must leave the trigger inside the
-    // scroller and the scroller still the one that scrolls.
-    sixAccountCluster(null);
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-        mutations: { retry: false },
-      },
-    });
-    render(
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <Popover>
-            <PopoverAnchor asChild>
-              <span data-testid="anchor-slot" />
-            </PopoverAnchor>
-            <StatusBarRateLimitCluster
-              hostId="host-a"
-              providers={[]}
-              profileSelection={PROFILE_SELECTION}
-              editing={false}
-            />
-          </Popover>
-        </TooltipProvider>
-      </QueryClientProvider>,
-    );
-
-    const trigger = screen.getByTestId(TRIGGER_TESTID);
-    expect(scroller().contains(trigger)).toBe(true);
-    Object.defineProperties(scroller(), {
-      clientWidth: { configurable: true, value: 300 },
-      clientHeight: { configurable: true, value: 24 },
-      scrollWidth: { configurable: true, value: 900 },
-    });
-    fireEvent.wheel(trigger, { deltaY: 40, deltaMode: 0 });
-    expect(scroller().scrollLeft).toBe(40);
-  });
+  // D17: the "real popover anchor" case above this used to guard a Radix-only
+  // defect - `PopoverAnchor` wrapped its child in a Popper `Anchor` node on
+  // the second commit, which could displace the trigger from the scroller.
+  // Base's anchor is a plain `anchor` prop/ref on the Positioner (D11f); it
+  // never restructures its own children, so that failure mode cannot occur
+  // under Base and the `PopoverAnchor` export it tested is gone. Deleted
+  // rather than rewritten: no other test covers scroller/trigger nesting
+  // with a real anchor, but there is nothing left to point the anchor
+  // mechanism AT that could reproduce the original defect's shape.
 });

@@ -163,7 +163,7 @@ function renderChip(
   });
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider delayDuration={0}>{props.children}</TooltipProvider>
+      <TooltipProvider delay={0}>{props.children}</TooltipProvider>
     </QueryClientProvider>
   );
   return render(chipForHost(client, HOST_A, onOpenHistory), {
@@ -263,6 +263,7 @@ describe("WorktreeAutoCleanupChip", () => {
     expect(chip().getAttribute("data-gate")).toBe("unsupported");
     expect(chip().getAttribute("aria-disabled")).toBe("true");
     fireEvent.pointerMove(chip());
+    fireEvent.mouseEnter(chip());
     const tooltip = await screen.findByRole("tooltip");
     expect(tooltip.textContent).toContain("Update the host to turn it on");
 
@@ -280,6 +281,7 @@ describe("WorktreeAutoCleanupChip", () => {
 
     expect(chip().getAttribute("data-gate")).toBe("offline");
     fireEvent.pointerMove(chip());
+    fireEvent.mouseEnter(chip());
     const tooltip = await screen.findByRole("tooltip");
     expect(tooltip.textContent).toContain("Host A is offline");
     expect(tooltip.textContent).not.toContain("Update the host");
@@ -290,7 +292,7 @@ describe("WorktreeAutoCleanupChip", () => {
   it("renders nothing at all without a resolved host", () => {
     const { container } = render(
       <QueryClientProvider client={new QueryClient()}>
-        <TooltipProvider delayDuration={0}>
+        <TooltipProvider delay={0}>
           <WorktreeAutoCleanupChip
             scope={hostScopeFixture({ host: null, client: null })}
             onOpenHistory={noop}
@@ -551,8 +553,8 @@ describe("WorktreeAutoCleanupChip", () => {
     expect(
       screen
         .getByRole("switch", { name: "Automatic cleanup" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
   });
 
   it("explains a pause in plain English and offers no repair affordance", async () => {

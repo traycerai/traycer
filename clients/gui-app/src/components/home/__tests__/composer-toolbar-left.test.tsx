@@ -121,11 +121,7 @@ describe("<ComposerToolbarLeft />", () => {
       </TooltipProvider>,
     );
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Supervised" }), {
-      button: 0,
-      ctrlKey: false,
-      pointerType: "mouse",
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Supervised" }));
 
     // Auto is the only mode this row omits, so the "Not supported by" copy
     // appears exactly once - scoped through it rather than an accessible-name
@@ -148,9 +144,7 @@ describe("<ComposerToolbarLeft />", () => {
       onOpenPermissionSettings,
     );
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Supervised" }), {
-      button: 0,
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Supervised" }));
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Permission settings…" }),
     );

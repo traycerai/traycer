@@ -896,7 +896,7 @@ function ProgressRail(props: {
           >
             <span
               aria-hidden="true"
-              data-state={segmentState(index, props.activeIndex)}
+              data-progress-state={segmentState(index, props.activeIndex)}
               className="onboarding-progress-segment block"
             >
               <span className="onboarding-progress-fill block" />

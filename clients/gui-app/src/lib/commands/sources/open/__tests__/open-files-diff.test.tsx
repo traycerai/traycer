@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
+import type { ReactNode } from "react";
+import {
+  createOpenerFileTreeStore,
+  OpenerFileTreeContext,
+} from "@/stores/file-tree/opener-file-tree-store";
 import type {
   GitChangedFile,
   WorktreeBindingSelectorRowV12,
@@ -271,8 +276,20 @@ function renderItems(
 function renderSubpageItems(item: CommandItem): ReadonlyArray<CommandItem> {
   if (item.subpage === null) throw new Error(`${item.id} has no sub-page`);
   const subpage = item.subpage;
-  return renderHook<ReadonlyArray<CommandItem>, unknown>(() =>
-    subpage.useItems(CTX),
+  // The opener path-tree store is Command-provided Context now (was a
+  // global Zustand store): a code-root-step sub-page's `useItems` reaches
+  // `useOpenerFileTreeExpandedPaths` directly, so it needs a provider even
+  // when rendered outside a real `<Command>`.
+  const store = createOpenerFileTreeStore();
+  return renderHook<ReadonlyArray<CommandItem>, unknown>(
+    () => subpage.useItems(CTX),
+    {
+      wrapper: ({ children }: { readonly children: ReactNode }) => (
+        <OpenerFileTreeContext.Provider value={store}>
+          {children}
+        </OpenerFileTreeContext.Provider>
+      ),
+    },
   ).result.current;
 }
 

@@ -525,7 +525,9 @@ function tileClickHitControl(
   const { target } = event;
   if (!(target instanceof Element)) return true;
   if (!event.currentTarget.contains(target)) return true;
-  const control = target.closest("button, a, input, textarea, select");
+  const control = target.closest(
+    'button, a, input, textarea, select, [role="radio"]',
+  );
   if (control === null) return false;
   return !(faceInert && control.matches(JUDGE_MODEL_FACE_SELECTOR));
 }
@@ -614,8 +616,8 @@ function AutomaticFoot(props: JudgeTilesProps): ReactNode {
 function PickTileContent(
   props: JudgeTilesProps & {
     readonly picker: JudgePicker;
-    readonly onRadioClick: (event: MouseEvent<HTMLButtonElement>) => void;
-    readonly onRadioKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
+    readonly onRadioClick: (event: MouseEvent<HTMLSpanElement>) => void;
+    readonly onRadioKeyDown: (event: KeyboardEvent<HTMLSpanElement>) => void;
   },
 ): ReactNode {
   const { state, picker } = props;

@@ -32,11 +32,7 @@ describe("ModesTab", () => {
     renderTab();
 
     // Radix opens the dropdown on pointerdown, not click.
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Full access" }), {
-      button: 0,
-      ctrlKey: false,
-      pointerType: "mouse",
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Full access" }));
     // Matched on the option's own description: the label "Auto" is a substring
     // of the sibling "Auto-accept edits", and each radio item's accessible name
     // concatenates label and description. Spelled out, not imported: this is
@@ -55,11 +51,7 @@ describe("ModesTab", () => {
   it("renders no trailing 'Permission settings…' item on the default-mode row", () => {
     renderTab();
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Full access" }), {
-      button: 0,
-      ctrlKey: false,
-      pointerType: "mouse",
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Full access" }));
 
     expect(
       screen.queryByRole("menuitem", { name: "Permission settings…" }),

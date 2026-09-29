@@ -251,6 +251,52 @@ describe("ChatFindHighlighter", () => {
     highlighter.dispose();
   });
 
+  it("skips a collapsible panel's text while closed, and finds it once opened", () => {
+    // Base's Collapsible Panel (`data-slot="collapsible-content"`) carries
+    // `data-closed` while collapsed and drops it on open - the selector
+    // `chat-find-highlighter.ts` matches against, replacing Radix's old
+    // `data-[state=inactive]:hidden` reach via `[hidden]`.
+    const root = document.createElement("div");
+    document.body.append(root);
+    const panel = document.createElement("div");
+    panel.setAttribute("data-slot", "collapsible-content");
+    panel.setAttribute("data-closed", "");
+    const paragraph = document.createElement("p");
+    paragraph.textContent = "secret";
+    panel.append(paragraph);
+    root.append(panel);
+    const highlighter = new ChatFindHighlighter();
+
+    const closed = highlighter.paint({
+      root,
+      query: "secret",
+      matchCase: false,
+      activeMatchIndex: 0,
+      scrollActiveIntoView: false,
+    });
+
+    // The only occurrence lives inside the closed panel, so there is no
+    // range at index 0 at all - `paint` bails out rather than finding a
+    // match it then declines to draw.
+    expect(closed).toBe(false);
+    expect(activeRanges()).toHaveLength(0);
+    expect(matchRanges()).toHaveLength(0);
+
+    panel.removeAttribute("data-closed");
+    const open = highlighter.paint({
+      root,
+      query: "secret",
+      matchCase: false,
+      activeMatchIndex: 0,
+      scrollActiveIntoView: false,
+    });
+
+    expect(open).toBe(true);
+    expect(activeRanges()).toHaveLength(1);
+    expect(activeRanges()[0].startContainer).toBe(paragraph.firstChild);
+    highlighter.dispose();
+  });
+
   it("marks a source hit's block active and paints drawn labels as non-active ranges", () => {
     const { root, block, foSpan } = buildIntroAndMermaidWithVisibleSave();
     const highlighter = new ChatFindHighlighter();

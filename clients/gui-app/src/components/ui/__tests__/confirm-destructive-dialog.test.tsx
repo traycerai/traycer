@@ -70,9 +70,8 @@ function Harness(props: { readonly hideOpener: boolean }): ReactNode {
 }
 
 describe("ConfirmDestructiveDialog - focus returns to the opener", () => {
-  // Radix's FocusScope defers the whole close-time restore to a macrotask
-  // (`@radix-ui/react-focus-scope`'s unmount cleanup wraps it in
-  // `setTimeout(..., 0)`), so `document.activeElement` is NOT updated by the
+  // Base defers the close-time focus restore past the synchronous
+  // event-handler tick, so `document.activeElement` is NOT updated by the
   // time `fireEvent` returns - only `waitFor` (real timers) observes it.
 
   it("Escape returns focus to the button that opened the dialog", async () => {
@@ -81,11 +80,26 @@ describe("ConfirmDestructiveDialog - focus returns to the opener", () => {
     opener.focus();
     fireEvent.click(opener);
     const dialog = screen.getByRole("dialog");
-    // Falsification: delete the `onCloseAutoFocus` handler entirely (or its
-    // `event.preventDefault()` call) in `confirm-destructive-dialog.tsx` -
-    // Radix's own null-trigger focus restoration would then drop focus on
-    // `document.body` instead of the opener.
+    // Prove initial focus actually left the opener before closing - Base's
+    // initial focus is deferred, so an Escape fired too early would close a
+    // dialog that never took focus in the first place, and the final
+    // opener-focus assertion below would pass vacuously (see R3: a temporary
+    // negative control that always disables `finalFocus` still passed all
+    // three restoration tests here, because none of them proved focus had
+    // ever left the opener).
+    await waitFor(() => {
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    });
+    expect(document.activeElement).not.toBe(opener);
+    // Negative control: forcing finalFocus to return false makes each of
+    // the three restoration cases fail after focus has entered the dialog.
     fireEvent.keyDown(dialog, { key: "Escape" });
+    // Popup removal and the queued focus restore are both async and
+    // ordered - wait for the actual unmount before reading activeElement,
+    // rather than a bare activeElement poll that could pass on a stale DOM.
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
     await waitFor(() => {
       expect(document.activeElement).toBe(opener);
     });
@@ -96,7 +110,15 @@ describe("ConfirmDestructiveDialog - focus returns to the opener", () => {
     const opener = screen.getByRole("button", { name: "Open" });
     opener.focus();
     fireEvent.click(opener);
+    const dialog = screen.getByRole("dialog");
+    await waitFor(() => {
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    });
+    expect(document.activeElement).not.toBe(opener);
     fireEvent.click(screen.getByTestId("confirm-cancel"));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
     await waitFor(() => {
       expect(document.activeElement).toBe(opener);
     });
@@ -107,7 +129,15 @@ describe("ConfirmDestructiveDialog - focus returns to the opener", () => {
     const opener = screen.getByRole("button", { name: "Open" });
     opener.focus();
     fireEvent.click(opener);
+    const dialog = screen.getByRole("dialog");
+    await waitFor(() => {
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    });
+    expect(document.activeElement).not.toBe(opener);
     fireEvent.click(screen.getByTestId("confirm-action"));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
     await waitFor(() => {
       expect(document.activeElement).toBe(opener);
     });
@@ -115,14 +145,14 @@ describe("ConfirmDestructiveDialog - focus returns to the opener", () => {
 
   it("a detached opener: closing does not throw, and focus lands on document.body - not a pin on the isConnected guard itself", async () => {
     // This does NOT distinguish the `isConnected` guard from its absence:
-    // - WITH the guard, we skip `.focus()` and fall through to Radix's own
-    //   handler, which (default not prevented, since we returned early) then
-    //   focuses its null trigger -> document.body;
-    // - WITHOUT the guard, we call `.focus()` on a detached element, which is
-    //   a silent DOM no-op -> focus stays wherever it already was, which by
-    //   this point is also document.body (removing the focused opener from
-    //   the DOM resets activeElement to body immediately, before the dialog
-    //   even closes).
+    // - WITH the guard, `finalFocus` returns `false` for a detached opener,
+    //   so Base leaves focus where it already is - which by this point is
+    //   document.body (removing the focused opener from the DOM resets
+    //   activeElement to body immediately, before the dialog even closes);
+    // - WITHOUT the guard, `finalFocus` would return the detached element,
+    //   and Base's own `.focus()` call on a disconnected node is a silent
+    //   DOM no-op -> focus stays wherever it already was, which is also
+    //   document.body for the same reason above.
     // Both paths are observationally identical at this level, so this test
     // pins only "closing over a detached opener does not throw or hang".
     //
@@ -136,16 +166,17 @@ describe("ConfirmDestructiveDialog - focus returns to the opener", () => {
     // did, and the coverage walk had already recorded that half as open.
     render(<Harness hideOpener />);
     const opener = screen.getByRole("button", { name: "Open" });
-    // Both controls are resolved BEFORE the dialog opens: a modal Radix dialog
-    // marks the rest of the document `aria-hidden`, so a role query cannot
-    // reach anything outside it once it is up.
+    // Both controls are resolved BEFORE the dialog opens: a modal dialog
+    // marks the rest of the document inert, so a role query cannot reach
+    // anything outside it once it is up.
     const removeOpener = screen.getByRole("button", { name: "Remove opener" });
     opener.focus();
     fireEvent.click(opener);
     expect(screen.getByRole("dialog")).not.toBeNull();
     // Detach the opener NOW, while the dialog is open and has already
-    // captured it in `onOpenAutoFocus` - a separate click from the one that
-    // opened the dialog, so this is not batched into the same commit.
+    // captured it as the return-focus target - a separate click from the
+    // one that opened the dialog, so this is not batched into the same
+    // commit.
     fireEvent.click(removeOpener);
     // The precondition this case exists for, stated directly: the dialog
     // captured a CONNECTED opener and it is detached by the time the close

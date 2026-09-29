@@ -1,6 +1,11 @@
 import { useEffect, useRef, type ReactNode, type RefObject } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { Dialog as DialogPrimitive } from "radix-ui";
+import {
+  Dialog,
+  DialogPopup,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Check } from "lucide-react";
 import type { EpicMigrationPhase } from "@traycer/protocol/host/epic/subscribe";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -80,8 +85,6 @@ export function EpicMigrationModal(props: EpicMigrationModalProps): ReactNode {
     return null;
   }
 
-  const isRunning = migration.status === "running";
-
   const handleClose = (): void => {
     // Navigate FIRST, then hide the tab from the strip. If we closed the tab
     // before navigating, this route component and scoped modal could
@@ -102,7 +105,12 @@ export function EpicMigrationModal(props: EpicMigrationModalProps): ReactNode {
   }
 
   return (
-    <DialogPrimitive.Root open modal={false}>
+    <Dialog
+      paneAware={false}
+      open
+      modal={false}
+      onOpenChange={(_open, details) => details.cancel()}
+    >
       <div
         ref={modalRootRef}
         data-testid="epic-migration-layer"
@@ -113,25 +121,21 @@ export function EpicMigrationModal(props: EpicMigrationModalProps): ReactNode {
           data-testid="epic-migration-overlay"
           className="absolute inset-0 bg-black/40 transition-opacity duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0"
         />
-        <DialogPrimitive.Content
-          data-slot="dialog-content"
-          data-testid="epic-migration-modal"
-          aria-describedby={undefined}
-          onEscapeKeyDown={(event) => {
-            if (isRunning) event.preventDefault();
-          }}
-          onPointerDownOutside={(event) => {
-            if (isRunning) event.preventDefault();
-          }}
-          onInteractOutside={(event) => {
-            if (isRunning) event.preventDefault();
-          }}
-          className="absolute top-1/2 left-1/2 z-10 flex w-[min(90vw,28rem)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 rounded-xl bg-background p-6 text-foreground ring-1 ring-foreground/10 shadow-2xl outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95"
-        >
-          {body}
-        </DialogPrimitive.Content>
+        {/* Base Popup requires Portal context and has no in-place mode. Keep
+            its portal inside this pane-local root, beside the inert epic shell. */}
+        <DialogPortal container={modalRootRef}>
+          <DialogPopup
+            data-slot="dialog-content"
+            data-testid="epic-migration-modal"
+            aria-describedby={undefined}
+            variant="pane-blocking"
+            className="w-[min(90vw,28rem)]"
+          >
+            {body}
+          </DialogPopup>
+        </DialogPortal>
       </div>
-    </DialogPrimitive.Root>
+    </Dialog>
   );
 }
 
@@ -180,12 +184,9 @@ function RunningBody(props: RunningBodyProps): ReactNode {
   const activePhase = props.migration.phase;
   return (
     <>
-      <DialogPrimitive.Title
-        data-slot="dialog-title"
-        className="font-heading text-lg leading-none font-medium"
-      >
+      <DialogTitle data-slot="dialog-title" appearance="host" size="blocking">
         {TITLE_RUNNING}
-      </DialogPrimitive.Title>
+      </DialogTitle>
       <p className="text-sm text-muted-foreground">{BODY_RUNNING}</p>
       <ol className="flex flex-col gap-2 rounded-md border border-border/60 bg-muted/40 p-3">
         {STEP_ORDER.map((step) => (
@@ -226,12 +227,9 @@ interface ErrorBodyProps {
 function ErrorBody(props: ErrorBodyProps): ReactNode {
   return (
     <>
-      <DialogPrimitive.Title
-        data-slot="dialog-title"
-        className="font-heading text-lg leading-none font-medium"
-      >
+      <DialogTitle data-slot="dialog-title" appearance="host" size="blocking">
         {TITLE_ERROR}
-      </DialogPrimitive.Title>
+      </DialogTitle>
       <p className="text-sm text-muted-foreground">{BODY_ERROR}</p>
       <div className="flex flex-wrap justify-end gap-2">
         <Button type="button" variant="ghost" onClick={props.onClose}>
@@ -266,12 +264,9 @@ interface NotAllowedBodyProps {
 function NotAllowedBody(props: NotAllowedBodyProps): ReactNode {
   return (
     <>
-      <DialogPrimitive.Title
-        data-slot="dialog-title"
-        className="font-heading text-lg leading-none font-medium"
-      >
+      <DialogTitle data-slot="dialog-title" appearance="host" size="blocking">
         {TITLE_NOT_ALLOWED}
-      </DialogPrimitive.Title>
+      </DialogTitle>
       <p className="text-sm text-muted-foreground">{BODY_NOT_ALLOWED}</p>
       <div className="flex justify-end">
         <Button

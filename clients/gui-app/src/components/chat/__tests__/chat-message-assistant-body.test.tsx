@@ -24,7 +24,7 @@ import type {
 
 function render(ui: ReactNode) {
   return rtlRender(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <ChatExpansionTestProviders tileInstanceId="assistant-body-test-tile">
         {ui}
       </ChatExpansionTestProviders>
@@ -436,9 +436,9 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     await user.tab();
     expect(document.activeElement).toBe(footer);
 
-    // Radix renders the open tooltip's content twice - once positioned via
-    // the popper portal, once as a visually-hidden accessibility clone - so
-    // assert presence via `getAllByText` rather than the single-match query.
+    // A tooltip's content can render as more than one match (e.g. a portalled
+    // copy plus an accessibility node), so assert presence via `getAllByText`
+    // rather than the single-match query.
     await waitFor(() => {
       expect(
         screen.getAllByText("Stop requested by owner.").length,

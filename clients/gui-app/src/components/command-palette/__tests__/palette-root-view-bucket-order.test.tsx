@@ -111,10 +111,10 @@ const ITEMS: ReadonlyArray<CommandItem> = [
 function Harness(props: { readonly initialQuery: string }): ReactNode {
   const [query, setQuery] = useState(props.initialQuery);
   return (
-    <Command filter={paletteFilter} label="Search commands">
+    <Command scoreItem={paletteFilter} label="Search commands">
       <CommandInput
         value={query}
-        onValueChange={setQuery}
+        onChange={(event) => setQuery(event.target.value)}
         aria-label="Search commands"
       />
       <CommandList>
@@ -137,7 +137,9 @@ function Harness(props: { readonly initialQuery: string }): ReactNode {
 /** The group headings cmdk renders, top to bottom. */
 function groupHeadings(): ReadonlyArray<string | null> {
   return Array.from(
-    document.querySelectorAll<HTMLElement>("[cmdk-group-heading]"),
+    document.querySelectorAll<HTMLElement>(
+      '[data-slot="command-group-heading"]',
+    ),
   ).map((el) => el.textContent);
 }
 

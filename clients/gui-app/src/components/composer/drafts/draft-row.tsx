@@ -43,14 +43,14 @@ export function DraftRow(props: DraftRowProps) {
   const relative = useRelativeTimestamp(row.lastTouchedAt);
   return (
     <CommandItem
-      value={row.id}
+      itemKey={row.id}
       data-draft-row-id={row.id}
       className="group/draft-row flex cursor-pointer flex-col items-stretch gap-0.5 overflow-hidden [&>svg:last-child]:hidden"
       // Desktop keeps editor focus while the list is open; on a phone the tap
       // has to reach vaul's own pointer handling.
       onPointerDown={mobile ? undefined : (event) => event.preventDefault()}
       onMouseMove={onHighlight}
-      onSelect={() => onOpen("pointer")}
+      onAction={() => onOpen("pointer")}
     >
       <DraftRowBody
         row={row}

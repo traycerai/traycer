@@ -131,33 +131,35 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
           sideOffset={undefined}
           align={undefined}
         >
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="muted"
-              size="icon-sm"
-              aria-label={filterLabel}
-              data-testid="epic-browsers-panel-filter"
-              className="relative"
-            >
-              <ListFilter className="size-4" aria-hidden />
-              {hostPin.isPinned ? (
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-foreground text-micro leading-none font-semibold text-background ring-1 ring-background"
-                >
-                  1
-                </span>
-              ) : null}
-            </Button>
-          </DropdownMenuTrigger>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                type="button"
+                variant="muted"
+                size="icon-sm"
+                aria-label={filterLabel}
+                data-testid="epic-browsers-panel-filter"
+                className="relative"
+              >
+                <ListFilter className="size-4" aria-hidden />
+                {hostPin.isPinned ? (
+                  <span
+                    aria-hidden
+                    className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-foreground text-micro leading-none font-semibold text-background ring-1 ring-background"
+                  >
+                    1
+                  </span>
+                ) : null}
+              </Button>
+            }
+          />
         </TooltipWrapper>
         <DropdownMenuContent
           side={placement?.side ?? "right"}
           align={placement?.align ?? "start"}
           sideOffset={8}
-          avoidCollisions={false}
-          className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-64 overflow-y-auto"
+          collisionAvoidance={{ side: "none", align: "none" }}
+          className="w-[var(--available-width)] min-w-0 max-w-64 overflow-y-auto"
           data-testid="epic-browsers-panel-filter-menu"
         >
           <DropdownMenuLabel className="mt-1">Filters</DropdownMenuLabel>
@@ -168,14 +170,20 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
               onClick={() => setHostMenuOpen(true)}
             >
               <span className="min-w-0 truncate">Host</span>
-              <span className="min-w-0 truncate text-right text-ui-xs text-muted-foreground group-data-open:text-accent-foreground">
+              <span className="min-w-0 truncate text-right text-ui-xs text-muted-foreground group-data-popup-open:text-accent-foreground">
                 {hostSummary}
               </span>
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent
               sideOffset={8}
               alignOffset={-4}
-              avoidCollisions={placement?.side === "left"}
+              // Collisions are avoided only in a left-side column, where the
+              // submenu would otherwise run off the window's edge.
+              collisionAvoidance={
+                placement?.side === "left"
+                  ? undefined
+                  : { side: "none", align: "none" }
+              }
               className="w-[min(90vw,20rem)]"
               data-testid="epic-browsers-panel-host-menu"
             >
@@ -208,10 +216,10 @@ export function BrowserHostFilterChoices(props: {
       <DropdownMenuRadioGroup value={value}>
         <DropdownMenuRadioItem
           value={FOLLOW_TASK_HOST_VALUE}
-          onSelect={(event) => {
-            event.preventDefault();
+          onClick={() => {
             hostPin.setSelection(null);
           }}
+          closeOnClick={false}
         >
           <span className="min-w-0 flex-1 truncate">Follow task host</span>
           <DropdownMenuShortcut>{followingHostName}</DropdownMenuShortcut>
@@ -228,10 +236,10 @@ export function BrowserHostFilterChoices(props: {
                 AVAILABLE_HOST_ROW_SURFACE_STATE,
               )
             }
-            onSelect={(event) => {
-              event.preventDefault();
+            onClick={() => {
               hostPin.setSelection(host.hostId);
             }}
+            closeOnClick={false}
           >
             <HostOptionRow
               host={host}
@@ -267,10 +275,10 @@ export function BrowserHostFilterChoices(props: {
         <>
           <DropdownMenuSeparator />
           <DropdownMenuItem
-            onSelect={(event) => {
-              event.preventDefault();
+            onClick={() => {
               options.retryLists();
             }}
+            closeOnClick={false}
           >
             <RotateCcw className="size-4" aria-hidden />
             {options.hosts.length === 0

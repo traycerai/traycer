@@ -819,7 +819,25 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     failedForkSource.assistantMessageId === target.assistantMessageId;
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next, details) => {
+        if (
+          !next &&
+          (details.reason === "outside-press" ||
+            details.reason === "focus-out") &&
+          isHostSwitcherListInteraction(
+            details.reason === "focus-out" &&
+              details.event instanceof FocusEvent
+              ? details.event.relatedTarget
+              : details.event.target,
+          )
+        )
+          details.cancel();
+        if (details.isCanceled) return;
+        handleOpenChange(next);
+      }}
+    >
       <DialogContent
         layout="banded"
         // Capped and split into header / scroller / footer, the shape every
@@ -830,29 +848,13 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         // so `dvh` already resolves against what is left uncovered.
         className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(94vw,32rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-[min(94vw,34rem)]"
         ref={contentRef}
-        onOpenAutoFocus={(event) => {
-          // Focus moves to the dialog itself rather than being merely
-          // declined: Radix leaves focus wherever it was when this is
-          // prevented, which is the trigger - outside the focus scope, and
-          // often already unmounting with the menu it lived in. The content
-          // element carries `tabIndex={-1}` for exactly this, and taking it
-          // announces the dialog to a screen reader without asking for a
-          // keyboard. Fails safe: with no element to move to, Radix's own
-          // default runs instead of being cancelled with nowhere to go.
-          if (!coarsePointer) return;
-          if (contentRef.current === null) return;
-          event.preventDefault();
-          contentRef.current.focus();
-        }}
+        initialFocus={() =>
+          coarsePointer ? (contentRef.current ?? true) : true
+        }
         // Same portal rule as the worktree pickers: the host switcher's list
         // mounts outside this dialog, so a click in it reads as an interaction
         // from outside. Dismissing on that would throw away the form someone is
         // in the middle of filling, for the crime of choosing a host in it.
-        onInteractOutside={(event) => {
-          if (isHostSwitcherListInteraction(event.target)) {
-            event.preventDefault();
-          }
-        }}
       >
         {/*
           Mounted INSIDE `DialogContent` so the probes live exactly as long as

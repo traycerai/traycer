@@ -135,7 +135,7 @@ function renderBody(
   segments: ReadonlyArray<MessageSegment>,
 ) {
   return render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <TabHostProvider hostId={HOST_ID}>
         <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: HOST_ID }}>
           <ChatExpansionTestProviders tileInstanceId={TILE_INSTANCE_ID}>

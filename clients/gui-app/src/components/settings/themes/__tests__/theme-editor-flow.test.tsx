@@ -243,7 +243,9 @@ describe("theme editor flow", () => {
     await user.click(
       within(manager).getByRole("button", { name: "Manage Pack Dark" }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Edit theme" }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Edit theme" }),
+    );
     const editor = await screen.findByRole("dialog", { name: "Theme editor" });
     expect(screen.queryByRole("dialog", { name: "Manage themes" })).toBeNull();
     expect(document.activeElement).toBe(

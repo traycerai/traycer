@@ -72,7 +72,7 @@ import {
 
 const TWO_COLUMN_MENU_MIN_AVAILABLE_PX = 520;
 const VIEW_MENU_CONTENT_CLASS =
-  "w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-64 overflow-y-auto";
+  "w-[var(--available-width)] min-w-0 max-w-64 overflow-y-auto";
 const VIEW_MENU_MAX_HEIGHT = "min(70vh, 28rem)";
 
 interface ViewMenuState<TDetail extends string> {
@@ -139,19 +139,21 @@ function ViewMenuTrigger(props: {
       sideOffset={undefined}
       align={undefined}
     >
-      <DropdownMenuTrigger asChild>
-        <Button
-          ref={setTriggerElement}
-          type="button"
-          variant="muted"
-          size="icon-sm"
-          aria-label={label}
-          className="relative shrink-0"
-        >
-          <ListFilter className="size-4" />
-          <ViewMenuBadge filterCount={filterCount} />
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            ref={setTriggerElement}
+            type="button"
+            variant="muted"
+            size="icon-sm"
+            aria-label={label}
+            className="relative shrink-0"
+          >
+            <ListFilter className="size-4" />
+            <ViewMenuBadge filterCount={filterCount} />
+          </Button>
+        }
+      />
     </TooltipWrapper>
   );
 }
@@ -170,10 +172,10 @@ function ViewDetailEntry<TDetail extends string>(props: {
     return (
       <DropdownMenuItem
         className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center gap-1.5"
-        onSelect={(event) => {
-          event.preventDefault();
+        onClick={() => {
           props.onOpenDetail(props.detail);
         }}
+        closeOnClick={false}
       >
         <span className="min-w-0 truncate">{props.label}</span>
         <span className="min-w-0 truncate text-right text-ui-xs text-muted-foreground group-focus/dropdown-menu-item:text-accent-foreground">
@@ -191,14 +193,18 @@ function ViewDetailEntry<TDetail extends string>(props: {
         onClick={() => setSubOpen(true)}
       >
         <span className="min-w-0 truncate">{props.label}</span>
-        <span className="min-w-0 truncate text-right text-ui-xs text-muted-foreground group-data-open:text-accent-foreground">
+        <span className="min-w-0 truncate text-right text-ui-xs text-muted-foreground group-data-popup-open:text-accent-foreground">
           {props.summary}
         </span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent
         sideOffset={8}
         alignOffset={-4}
-        avoidCollisions={placement?.side === "left"}
+        collisionAvoidance={
+          placement?.side === "left"
+            ? undefined
+            : { side: "none", align: "none" }
+        }
         className="min-w-52"
       >
         {props.children}
@@ -214,10 +220,10 @@ function DrillInHeader(props: {
   return (
     <>
       <DropdownMenuItem
-        onSelect={(event) => {
-          event.preventDefault();
+        onClick={() => {
           props.onBack();
         }}
+        closeOnClick={false}
       >
         <ChevronLeft className="size-4" />
         Back
@@ -302,7 +308,7 @@ export function ChatFilterMenu(props: {
         side={placement.side}
         align={placement.align}
         sideOffset={8}
-        avoidCollisions={false}
+        collisionAvoidance={{ side: "none", align: "none" }}
         className={VIEW_MENU_CONTENT_CLASS}
         style={{ maxHeight: VIEW_MENU_MAX_HEIGHT }}
         data-testid="epic-sidebar-agent-view-menu"
@@ -360,10 +366,10 @@ export function ChatFilterMenu(props: {
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onSelect={(event) => {
-                    event.preventDefault();
+                  onClick={() => {
                     resetChatView(epicId);
                   }}
+                  closeOnClick={false}
                 >
                   <RotateCcw className="size-4" />
                   Reset view
@@ -451,7 +457,7 @@ export function ArtifactFilterMenu(props: {
         side={placement.side}
         align={placement.align}
         sideOffset={8}
-        avoidCollisions={false}
+        collisionAvoidance={{ side: "none", align: "none" }}
         className={VIEW_MENU_CONTENT_CLASS}
         style={{ maxHeight: VIEW_MENU_MAX_HEIGHT }}
         data-testid="epic-sidebar-artifact-view-menu"
@@ -506,16 +512,16 @@ export function ArtifactFilterMenu(props: {
             <DropdownMenuSeparator />
             <DropdownMenuItem
               disabled={props.markAllReadDisabled}
-              onSelect={props.onMarkAllRead}
+              onClick={props.onMarkAllRead}
             >
               Mark all as read
             </DropdownMenuItem>
             {active ? (
               <DropdownMenuItem
-                onSelect={(event) => {
-                  event.preventDefault();
+                onClick={() => {
                   resetArtifactView(epicId);
                 }}
+                closeOnClick={false}
               >
                 <RotateCcw className="size-4" />
                 Reset view

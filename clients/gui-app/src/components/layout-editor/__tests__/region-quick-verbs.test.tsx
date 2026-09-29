@@ -417,11 +417,13 @@ describe("<LayoutClusterContextMenu />", () => {
         <div data-testid="cluster">
           <span data-layout-region="changedFiles" data-testid="row">
             <ContextMenu>
-              <ContextMenuTrigger asChild>
-                <button type="button" data-testid="inner">
-                  a row with a menu
-                </button>
-              </ContextMenuTrigger>
+              <ContextMenuTrigger
+                render={
+                  <button type="button" data-testid="inner">
+                    a row with a menu
+                  </button>
+                }
+              />
               <ContextMenuContent>
                 <ContextMenuItem data-testid="inner-item">
                   Reveal in Finder

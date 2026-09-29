@@ -53,7 +53,7 @@ function renderDialog(overrides: {
       inUseNote={null}
       saveLabel="Save"
       onSave={overrides.onSave ?? (() => Promise.resolve())}
-      onEscapeKeyDown={() => {}}
+      cancelEditing={() => false}
       onOpenChange={() => {}}
     />,
   );
@@ -79,7 +79,7 @@ describe("<ScriptsReviewDialog />", () => {
         inUseNote={null}
         saveLabel="Save"
         onSave={() => Promise.resolve()}
-        onEscapeKeyDown={() => {}}
+        cancelEditing={() => false}
         onOpenChange={vi.fn()}
       />,
     );

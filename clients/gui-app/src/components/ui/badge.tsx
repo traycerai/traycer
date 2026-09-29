@@ -1,6 +1,6 @@
-import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { Slot } from "radix-ui";
+import { mergeProps } from "@base-ui/react/merge-props";
+import { useRender } from "@base-ui/react/use-render";
 
 import { cn } from "@/lib/utils";
 
@@ -80,22 +80,28 @@ function Badge({
   variant = "default",
   size = "default",
   wrap = false,
-  asChild = false,
+  render,
+  ref,
   ...props
-}: React.ComponentProps<"span"> &
-  VariantProps<typeof badgeVariants> & { asChild?: boolean }) {
-  const Comp = asChild ? Slot.Root : "span";
-
-  return (
-    <Comp
-      data-slot="badge"
-      data-variant={variant}
-      data-size={size}
-      data-wrap={wrap === true ? "" : undefined}
-      className={cn(badgeVariants({ variant, size, wrap }), className)}
-      {...props}
-    />
-  );
+}: useRender.ComponentProps<"span"> & VariantProps<typeof badgeVariants>) {
+  return useRender({
+    defaultTagName: "span",
+    render,
+    ref,
+    props: {
+      "data-slot": "badge",
+      "data-variant": variant,
+      "data-size": size,
+      "data-wrap": wrap === true ? "" : undefined,
+      ...mergeProps<"span">(
+        {
+          className: cn(badgeVariants({ variant, size, wrap }), className),
+        },
+        props,
+      ),
+    },
+    state: { slot: "badge", variant, size, wrap },
+  });
 }
 
 export { Badge };

@@ -1,4 +1,4 @@
-import type { MouseEvent, ReactNode } from "react";
+import type { ReactNode, ReactElement } from "react";
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -54,7 +54,7 @@ interface StatusBarVisibilityMenuProps {
    */
   readonly regions: ReadonlyArray<BarRegionId>;
   /** The bar itself - the region a right-click opens this menu over. */
-  readonly children: ReactNode;
+  readonly children: ReactElement;
 }
 
 /**
@@ -86,22 +86,19 @@ export function StatusBarVisibilityMenu(
   return (
     <ContextMenu>
       <ContextMenuTrigger
-        asChild
-        onContextMenu={(event: MouseEvent<HTMLElement>) => {
-          // Radix composes this ahead of its own opener and skips that opener
-          // once the event is defaulted-prevented, so an exempt subtree keeps
-          // whatever menu (or none) it owns.
+        render={props.children}
+        onContextMenu={(event) => {
+          // An exempt subtree keeps whatever menu (or none) it owns.
           if (
             event.target instanceof Element &&
             event.target.closest(`[${STATUS_BAR_MENU_EXEMPT_ATTRIBUTE}]`) !==
               null
           ) {
             event.preventDefault();
+            event.preventBaseUIHandler();
           }
         }}
-      >
-        {props.children}
-      </ContextMenuTrigger>
+      />
       <ContextMenuContent>
         {props.providers.map((provider) => (
           <ContextMenuCheckboxItem
@@ -136,7 +133,7 @@ export function StatusBarVisibilityMenu(
         ) : null}
         {narrowViewport ? null : (
           <ContextMenuItem
-            onSelect={() => {
+            onClick={() => {
               // Everything this strip is still holding, each keeping its own
               // side (L-156). The menu belongs to the STRIP, so it moves what
               // the strip has; a reading already in the header is left alone.

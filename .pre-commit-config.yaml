@@ -50,6 +50,13 @@ repos:
   # Tests run in their own workflow (.github/workflows/test.yml).
   - repo: local
     hooks:
+      # Repository-wide and uncached: CSS and other workspaces must not reuse GUI lint.
+      - id: ui-migration
+        name: UI migration source and dependency scan
+        entry: bun run check:ui-migration
+        language: system
+        pass_filenames: false
+        files: '(^|/)(src/.*|package\.json$)|\.css$|^scripts/check-ui-migration\.mjs$|^\.pre-commit-config\.yaml$'
       - id: workspace-checks
         name: lint · format · compile (nx affected; CI also builds)
         entry: scripts/pre_commit_workspace_checks.sh

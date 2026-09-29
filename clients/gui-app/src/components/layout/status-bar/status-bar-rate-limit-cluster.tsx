@@ -142,58 +142,60 @@ export function StatusBarUsageTrigger(props: {
 }): ReactNode {
   const { cluster, display } = props;
   return (
-    <PopoverTrigger asChild>
-      <button
-        type="button"
-        // The button's own name, not the segments' - `aria-label` overrides
-        // everything inside it, so the readings have to be IN the name or
-        // they are not reachable at all. Kept to one reading per segment:
-        // the whole window list is what the panel this opens is for, and
-        // a segment scrolled out of view is still in the name.
-        aria-label={
-          props.sampleLabel && cluster.kind === "no-providers"
-            ? `Sample usage · ${SAMPLE_USAGE_USED_PERCENT}% used, ${100 - SAMPLE_USAGE_USED_PERCENT}% remaining`
-            : `${props.sampleLabel ? "Sample readings · " : ""}${statusBarUsageTriggerName(cluster, display.percentMode)}`
-        }
-        data-testid="status-bar-rate-limit-trigger"
-        // The bar's own right-click menu stands down over a control that is
-        // itself a way into the surface the menu summarises.
-        {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}
-        // A click ON a segment is a deep link to that account's card; the
-        // panel still opens through the trigger's own toggle, this only
-        // arms which card it opens on. A click beside the segments, or
-        // the keyboard, opens the panel where it was.
-        onClick={(event) => {
-          const target = statusBarSegmentAtClick(event.target);
-          if (target !== null) props.onRevealProfile(target);
-        }}
-        // Natural width and no overflow rule of its own: the scroller
-        // around it is the box that clips, and a trigger that clipped or
-        // shrank would hide readings the scroller exists to reach. No
-        // padding either - the readings inside carry it, so the hover
-        // fill and focus ring end where the last reading does.
-        className="inline-flex h-6 shrink-0 items-center text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-      >
-        <span
-          data-testid="status-bar-rate-limit-content"
-          className={STATUS_BAR_USAGE_CONTENT_CLASS}
+    <PopoverTrigger
+      render={
+        <button
+          type="button"
+          // The button's own name, not the segments' - `aria-label` overrides
+          // everything inside it, so the readings have to be IN the name or
+          // they are not reachable at all. Kept to one reading per segment:
+          // the whole window list is what the panel this opens is for, and
+          // a segment scrolled out of view is still in the name.
+          aria-label={
+            props.sampleLabel && cluster.kind === "no-providers"
+              ? `Sample usage · ${SAMPLE_USAGE_USED_PERCENT}% used, ${100 - SAMPLE_USAGE_USED_PERCENT}% remaining`
+              : `${props.sampleLabel ? "Sample readings · " : ""}${statusBarUsageTriggerName(cluster, display.percentMode)}`
+          }
+          data-testid="status-bar-rate-limit-trigger"
+          // The bar's own right-click menu stands down over a control that is
+          // itself a way into the surface the menu summarises.
+          {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}
+          // A click ON a segment is a deep link to that account's card; the
+          // panel still opens through the trigger's own toggle, this only
+          // arms which card it opens on. A click beside the segments, or
+          // the keyboard, opens the panel where it was.
+          onClick={(event) => {
+            const target = statusBarSegmentAtClick(event.target);
+            if (target !== null) props.onRevealProfile(target);
+          }}
+          // Natural width and no overflow rule of its own: the scroller
+          // around it is the box that clips, and a trigger that clipped or
+          // shrank would hide readings the scroller exists to reach. No
+          // padding either - the readings inside carry it, so the hover
+          // fill and focus ring end where the last reading does.
+          className="inline-flex h-6 shrink-0 items-center text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
         >
-          {props.sampleLabel ? (
-            <span className="text-ui-xs">Sample</span>
-          ) : null}
-          {props.sampleLabel && cluster.kind === "no-providers" ? (
-            <span>
-              Usage ·{" "}
-              {display.percentMode === "remaining"
-                ? `${100 - SAMPLE_USAGE_USED_PERCENT}% left`
-                : `${SAMPLE_USAGE_USED_PERCENT}% used`}
-            </span>
-          ) : (
-            <StatusBarUsageReadings cluster={cluster} display={display} />
-          )}
-        </span>
-      </button>
-    </PopoverTrigger>
+          <span
+            data-testid="status-bar-rate-limit-content"
+            className={STATUS_BAR_USAGE_CONTENT_CLASS}
+          >
+            {props.sampleLabel ? (
+              <span className="text-ui-xs">Sample</span>
+            ) : null}
+            {props.sampleLabel && cluster.kind === "no-providers" ? (
+              <span>
+                Usage ·{" "}
+                {display.percentMode === "remaining"
+                  ? `${100 - SAMPLE_USAGE_USED_PERCENT}% left`
+                  : `${SAMPLE_USAGE_USED_PERCENT}% used`}
+              </span>
+            ) : (
+              <StatusBarUsageReadings cluster={cluster} display={display} />
+            )}
+          </span>
+        </button>
+      }
+    />
   );
 }
 

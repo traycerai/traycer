@@ -50,7 +50,7 @@ export function HistoryScopedResults(props: {
   return (
     <Tabs
       value={scope}
-      onValueChange={(next) => {
+      onValueChange={(next: unknown) => {
         if (next === "all" || next === "tasks" || next === "messages")
           onScopeChange(next);
       }}
@@ -77,41 +77,44 @@ export function HistoryScopedResults(props: {
           </TabsList>
         </div>
       </div>
-      <TabsContent value={scope} asChild>
-        <div
-          ref={rowsScopeRef}
-          data-history-scroll=""
-          className="min-h-0 flex-1 overflow-y-auto [--history-header-clearance:max(var(--history-tasks-header-height,3rem),var(--history-messages-header-height,3rem))] [&_[data-history-row-target]]:scroll-my-(--history-header-clearance) [&_[data-chat-search-nav]]:scroll-my-(--history-header-clearance)"
-        >
-          <p role="status" className="sr-only">
-            {scope !== "messages"
-              ? countStatus(props.taskCount, "tasks")
-              : null}
-            {scope === "all" &&
-            props.taskCount !== null &&
-            messageCount !== null
-              ? " · "
-              : null}
-            {scope !== "tasks"
-              ? countStatus(
-                  messageCount,
-                  `chats with message matches on ${hostLabel}`,
-                )
-              : null}
-          </p>
-          {scope === "messages" ? null : (
-            <TasksGroup controls={props.controls} taskList={props.taskList} />
-          )}
-          <HistoryMessageHits
-            {...props.messageHits}
-            display={scope === "tasks" ? "count-only" : "list"}
-            standalone={scope === "messages"}
-            onCountChange={setMessageCount}
-            onShowTasks={() => onScopeChange("tasks")}
-          />
-          <div className="h-10" aria-hidden="true" />
-        </div>
-      </TabsContent>
+      <TabsContent
+        value={scope}
+        render={
+          <div
+            ref={rowsScopeRef}
+            data-history-scroll=""
+            className="min-h-0 flex-1 overflow-y-auto [--history-header-clearance:max(var(--history-tasks-header-height,3rem),var(--history-messages-header-height,3rem))] [&_[data-history-row-target]]:scroll-my-(--history-header-clearance) [&_[data-chat-search-nav]]:scroll-my-(--history-header-clearance)"
+          >
+            <p role="status" className="sr-only">
+              {scope !== "messages"
+                ? countStatus(props.taskCount, "tasks")
+                : null}
+              {scope === "all" &&
+              props.taskCount !== null &&
+              messageCount !== null
+                ? " · "
+                : null}
+              {scope !== "tasks"
+                ? countStatus(
+                    messageCount,
+                    `chats with message matches on ${hostLabel}`,
+                  )
+                : null}
+            </p>
+            {scope === "messages" ? null : (
+              <TasksGroup controls={props.controls} taskList={props.taskList} />
+            )}
+            <HistoryMessageHits
+              {...props.messageHits}
+              display={scope === "tasks" ? "count-only" : "list"}
+              standalone={scope === "messages"}
+              onCountChange={setMessageCount}
+              onShowTasks={() => onScopeChange("tasks")}
+            />
+            <div className="h-10" aria-hidden="true" />
+          </div>
+        }
+      />
     </Tabs>
   );
 }

@@ -41,7 +41,7 @@ export function EpicsSortMenu(props: EpicsSortMenuProps) {
   );
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
+      <DropdownMenuTrigger render={trigger} />
       <DropdownMenuContent align="end" className="min-w-44">
         <DropdownMenuLabel>Sort by</DropdownMenuLabel>
         <DropdownMenuSeparator />

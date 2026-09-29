@@ -351,9 +351,9 @@ describe("<SideTabStrip /> real overlay placement, right edge (D7)", () => {
     expect(useNotificationsPopoverStore.getState().open).toBe(false);
 
     const userTrigger = screen.getByTestId("user-menu-trigger");
-    // The account row's trigger is a custom Radix trigger: it opens on Radix's
-    // own pointerdown, not a plain click (see `user-menu.test.tsx`).
-    fireEvent.pointerDown(userTrigger, { button: 0, ctrlKey: false });
+    // The account row's trigger is a custom Base trigger: it opens on Base's
+    // own click handling, not a bare pointerdown (see `user-menu.test.tsx`).
+    fireEvent.click(userTrigger);
     const menu = await screen.findByTestId("user-menu-content");
     expect(menu.getAttribute("data-side")).toBe("left");
     expect(menu.getAttribute("data-align")).toBe("end");

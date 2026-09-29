@@ -1,3 +1,4 @@
+import { mergeProps } from "@base-ui/react/merge-props";
 import {
   memo,
   useCallback,
@@ -9,6 +10,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ComponentProps,
   type MouseEvent,
   type ReactNode,
   type RefCallback,
@@ -478,39 +480,41 @@ function WorktreeFilterMenu(props: {
   );
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="min-w-0"
-          data-testid="worktrees-filter-trigger"
-          aria-label={`Filter: ${label}`}
-        >
-          <ListFilter className="size-4" />
-          <span className="grid min-w-0">
-            {/* Reserve every label's intrinsic width without fixed sizing. */}
-            {WORKTREE_TIER_ORDER.map((tier) => (
-              <span
-                key={tier}
-                aria-hidden
-                data-label={WORKTREE_TIER_LABEL[tier]}
-                className="invisible col-start-1 row-start-1 truncate after:content-[attr(data-label)]"
-              />
-            ))}
-            <span className="col-start-1 row-start-1 truncate">{label}</span>
-          </span>
-          <ChevronDown className="size-4 text-muted-foreground" />
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="min-w-0"
+            data-testid="worktrees-filter-trigger"
+            aria-label={`Filter: ${label}`}
+          >
+            <ListFilter className="size-4" />
+            <span className="grid min-w-0">
+              {/* Reserve every label's intrinsic width without fixed sizing. */}
+              {WORKTREE_TIER_ORDER.map((tier) => (
+                <span
+                  key={tier}
+                  aria-hidden
+                  data-label={WORKTREE_TIER_LABEL[tier]}
+                  className="invisible col-start-1 row-start-1 truncate after:content-[attr(data-label)]"
+                />
+              ))}
+              <span className="col-start-1 row-start-1 truncate">{label}</span>
+            </span>
+            <ChevronDown className="size-4 text-muted-foreground" />
+          </Button>
+        }
+      />
       <DropdownMenuContent align="end">
         <DropdownMenuCheckboxItem
           checked={noneSelected}
-          onSelect={(event) => {
-            event.preventDefault();
+          onClick={() => {
             props.onClearTierFilters();
           }}
           data-testid="worktrees-filter-all"
+          closeOnClick={false}
         >
           All
         </DropdownMenuCheckboxItem>
@@ -518,11 +522,11 @@ function WorktreeFilterMenu(props: {
           <DropdownMenuCheckboxItem
             key={tier}
             checked={props.tierFilters.has(tier)}
-            onSelect={(event) => {
-              event.preventDefault();
+            onClick={() => {
               props.onToggleTier(tier);
             }}
             data-testid={`worktrees-filter-${tier}`}
+            closeOnClick={false}
           >
             {WORKTREE_TIER_LABEL[tier]}
           </DropdownMenuCheckboxItem>
@@ -547,43 +551,45 @@ function WorktreeSortMenu(props: {
 }): ReactNode {
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="min-w-0"
-          data-testid="worktrees-sort-trigger"
-          aria-label={`Sort: ${WORKTREE_SORT_LABEL[props.sortMode]}`}
-        >
-          <ArrowDownWideNarrow className="size-4" />
-          <span className="grid min-w-0">
-            {Object.entries(WORKTREE_SORT_LABEL).map(([mode, label]) => (
-              <span
-                key={mode}
-                aria-hidden
-                data-label={label}
-                className="invisible col-start-1 row-start-1 truncate after:content-[attr(data-label)]"
-              />
-            ))}
-            <span className="col-start-1 row-start-1 truncate">
-              {WORKTREE_SORT_LABEL[props.sortMode]}
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="min-w-0"
+            data-testid="worktrees-sort-trigger"
+            aria-label={`Sort: ${WORKTREE_SORT_LABEL[props.sortMode]}`}
+          >
+            <ArrowDownWideNarrow className="size-4" />
+            <span className="grid min-w-0">
+              {Object.entries(WORKTREE_SORT_LABEL).map(([mode, label]) => (
+                <span
+                  key={mode}
+                  aria-hidden
+                  data-label={label}
+                  className="invisible col-start-1 row-start-1 truncate after:content-[attr(data-label)]"
+                />
+              ))}
+              <span className="col-start-1 row-start-1 truncate">
+                {WORKTREE_SORT_LABEL[props.sortMode]}
+              </span>
             </span>
-          </span>
-          <ChevronDown className="size-4 text-muted-foreground" />
-        </Button>
-      </DropdownMenuTrigger>
+            <ChevronDown className="size-4 text-muted-foreground" />
+          </Button>
+        }
+      />
       <DropdownMenuContent align="end">
         <DropdownMenuCheckboxItem
           checked={props.sortMode === "newest"}
-          onSelect={() => props.onSortModeChange("newest")}
+          onClick={() => props.onSortModeChange("newest")}
           data-testid="worktrees-sort-newest"
         >
           Newest
         </DropdownMenuCheckboxItem>
         <DropdownMenuCheckboxItem
           checked={props.sortMode === "oldest"}
-          onSelect={() => props.onSortModeChange("oldest")}
+          onClick={() => props.onSortModeChange("oldest")}
           data-testid="worktrees-sort-oldest"
         >
           Oldest
@@ -2939,18 +2945,22 @@ function WorktreePrChip(props: {
 }): ReactNode {
   const style = WORKTREE_PR_PILL_STYLE[props.chip.prState];
   return (
-    <Badge asChild variant="outline" className={cn(style.className)}>
-      <WorktreePrAnchor
-        href={props.chip.prUrl}
-        ariaLabel={props.chip.ariaLabel}
-        className="max-w-[min(60vw,16rem)]"
-        testId="worktree-pr-chip"
-        prState={props.chip.prState}
-      >
-        <span className="truncate">{props.chip.label}</span>
-        <ExternalLink className="size-3" aria-hidden />
-      </WorktreePrAnchor>
-    </Badge>
+    <Badge
+      render={
+        <WorktreePrAnchor
+          href={props.chip.prUrl}
+          ariaLabel={props.chip.ariaLabel}
+          className="max-w-[min(60vw,16rem)]"
+          testId="worktree-pr-chip"
+          prState={props.chip.prState}
+        >
+          <span className="truncate">{props.chip.label}</span>
+          <ExternalLink className="size-3" aria-hidden />
+        </WorktreePrAnchor>
+      }
+      variant="outline"
+      className={cn(style.className)}
+    />
   );
 }
 
@@ -3005,34 +3015,38 @@ function WorktreeMutedPrChip(props: {
   );
 }
 
-function WorktreePrAnchor(props: {
-  readonly href: string;
-  readonly ariaLabel: string;
-  readonly className: string | undefined;
-  readonly testId: string | undefined;
-  readonly prState: WorktreeDisplayedPrState | undefined;
-  readonly children: ReactNode;
-}): ReactNode {
+function WorktreePrAnchor(
+  props: ComponentProps<"a"> & {
+    readonly href: string;
+    readonly ariaLabel: string;
+    readonly testId: string | undefined;
+    readonly prState: WorktreeDisplayedPrState | undefined;
+  },
+): ReactNode {
+  const { href, ariaLabel, testId, prState, ref, children, ...anchorProps } =
+    props;
   const openLink = useOpenLink();
   const openExternal = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       event.stopPropagation();
       event.preventDefault();
-      void openLink(props.href, "github", event);
+      void openLink(href, "github", event);
     },
-    [openLink, props.href],
+    [openLink, href],
   );
   return (
     <a
-      href={props.href}
-      aria-label={props.ariaLabel}
-      className={props.className}
-      data-testid={props.testId}
-      data-pr-state={props.prState}
-      onClick={openExternal}
-      onAuxClick={onMiddleClick(openExternal)}
+      ref={ref}
+      {...mergeProps<"a">(anchorProps, {
+        href,
+        "aria-label": ariaLabel,
+        onClick: openExternal,
+        onAuxClick: onMiddleClick(openExternal),
+      })}
+      data-testid={testId}
+      data-pr-state={prState}
     >
-      {props.children}
+      {children}
     </a>
   );
 }
@@ -3073,28 +3087,28 @@ function WorktreeTaskAssociation(props: {
       {named.map((item) => (
         <span key={item.epicId} className="flex items-center gap-1">
           <Badge
-            asChild
+            render={
+              <TooltipWrapper
+                label={item.title}
+                side="top"
+                sideOffset={undefined}
+                align={undefined}
+              >
+                <button
+                  type="button"
+                  aria-label={`Open Task ${item.title}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    props.onOpenTask(item.epicId);
+                  }}
+                >
+                  <span className="truncate">{item.title}</span>
+                </button>
+              </TooltipWrapper>
+            }
             variant="outline"
             className="max-w-[min(60vw,16rem)] cursor-pointer hover:bg-foreground/5 hover:text-muted-foreground"
-          >
-            <TooltipWrapper
-              label={item.title}
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <button
-                type="button"
-                aria-label={`Open Task ${item.title}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  props.onOpenTask(item.epicId);
-                }}
-              >
-                <span className="truncate">{item.title}</span>
-              </button>
-            </TooltipWrapper>
-          </Badge>
+          />
           <TaskMergeRollupBadge
             rollup={props.taskRollupByEpicId.get(item.epicId) ?? null}
           />
@@ -3290,17 +3304,19 @@ function WorktreeRowActions(props: {
   return (
     <div className="absolute right-4 top-1/2 flex -translate-y-1/2 items-center gap-1">
       <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="muted"
-            size="icon-sm"
-            aria-label={props.triggerLabel}
-            data-testid="worktree-row-actions-trigger"
-          >
-            <MoreHorizontal className="size-4" />
-          </Button>
-        </DropdownMenuTrigger>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="muted"
+              size="icon-sm"
+              aria-label={props.triggerLabel}
+              data-testid="worktree-row-actions-trigger"
+            >
+              <MoreHorizontal className="size-4" />
+            </Button>
+          }
+        />
         <DropdownMenuContent
           align="end"
           className="w-max min-w-32 max-w-[min(80vw,14rem)]"
@@ -3308,7 +3324,7 @@ function WorktreeRowActions(props: {
         >
           <DropdownMenuItem
             data-testid="worktree-row-copy-path"
-            onSelect={props.onCopyPath}
+            onClick={props.onCopyPath}
             className="gap-2"
           >
             <Copy className="size-3.5" aria-hidden />
@@ -3317,7 +3333,7 @@ function WorktreeRowActions(props: {
           <DropdownMenuItem
             data-testid="worktree-row-manage-scripts"
             aria-haspopup="dialog"
-            onSelect={props.onManageScripts}
+            onClick={props.onManageScripts}
             className="items-start gap-2 whitespace-normal text-left"
           >
             <FileSliders className="size-3.5" aria-hidden />
@@ -3338,7 +3354,7 @@ function WorktreeRowActions(props: {
                 variant="destructive"
                 aria-label={deleteLabel}
                 disabled={deleteDisabled}
-                onSelect={props.onDelete}
+                onClick={props.onDelete}
                 className="gap-2"
               >
                 <Trash2 className="size-3.5" aria-hidden />
@@ -3389,7 +3405,7 @@ function WorktreeScriptReviewDialog(props: {
       onSave={(scripts) => Promise.resolve(onSave(target, scripts))}
       // No nested editor to protect here (no Branch naming section) - plain
       // Escape-closes-the-dialog behavior.
-      onEscapeKeyDown={() => {}}
+      cancelEditing={() => false}
       onOpenChange={props.onOpenChange}
     />
   );

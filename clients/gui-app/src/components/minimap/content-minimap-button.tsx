@@ -95,20 +95,22 @@ function ContentMinimapDrawer(props: {
   if (items.length === 0) return null;
 
   return (
-    <Drawer direction="bottom" open={open} onOpenChange={handleOpenChange}>
-      <DrawerTrigger asChild>
-        <Button
-          aria-expanded={open}
-          aria-label={MINIMAP_BUTTON_LABEL}
-          className="shrink-0"
-          data-testid="content-minimap-button"
-          size="icon-sm"
-          type="button"
-          variant="ghost"
-        >
-          <ListTree className="size-4" />
-        </Button>
-      </DrawerTrigger>
+    <Drawer swipeDirection="down" open={open} onOpenChange={handleOpenChange}>
+      <DrawerTrigger
+        render={
+          <Button
+            aria-expanded={open}
+            aria-label={MINIMAP_BUTTON_LABEL}
+            className="shrink-0"
+            data-testid="content-minimap-button"
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+          >
+            <ListTree className="size-4" />
+          </Button>
+        }
+      />
       <DrawerContent
         data-mobile-shell-touch-scope=""
         data-testid="content-minimap-drawer"

@@ -1,10 +1,4 @@
-import {
-  createContext,
-  use,
-  useCallback,
-  useEffect,
-  type EffectCallback,
-} from "react";
+import { createContext, use, useEffect, type EffectCallback } from "react";
 
 export interface PaneSurfaceActivity {
   readonly visible: boolean;
@@ -47,8 +41,7 @@ export function usePanePortalContainer(): HTMLElement | null {
 /**
  * A stable getter that reports whether the surrounding pane is focused RIGHT
  * NOW, read from a live DOM attribute rather than a captured render value. This
- * is the one thing `usePaneFocused()` cannot provide inside a Radix
- * `onCloseAutoFocus` handler: the handler fires when a modal's content unmounts,
+ * lets overlay final-focus handlers check ownership when content unmounts:
  * and the only closure available to it was created while the pane was still
  * focused. `SurfacePresentationBoundary` provides this (reading its own
  * `data-pane-focused` attribute, which React has already flipped to `false` by
@@ -59,31 +52,6 @@ export const PaneFocusProbeContext = createContext<() => boolean>(() => true);
 
 export function usePaneFocusProbe(): () => boolean {
   return use(PaneFocusProbeContext);
-}
-
-/**
- * Composes a Radix `onCloseAutoFocus` handler that KILLS the focus-restore at
- * its source when the content is unmounting because its pane lost focus: Radix
- * would otherwise `trigger.focus()` back into the (now-background) pane, which
- * `TopLevelTabHost`'s focus-capture reads as a real user focus (`.focus()` is
- * `isTrusted:true` in Chrome) and canonically REACTIVATES the pane — bouncing
- * activation off the focused partner. A genuine user close leaves the pane
- * focused, so the caller's handler runs and Radix restores focus normally.
- */
-export function usePaneCloseAutoFocusGuard(
-  onCloseAutoFocus: ((event: Event) => void) | undefined,
-): (event: Event) => void {
-  const isPaneFocused = usePaneFocusProbe();
-  return useCallback(
-    (event: Event) => {
-      if (!isPaneFocused()) {
-        event.preventDefault();
-        return;
-      }
-      onCloseAutoFocus?.(event);
-    },
-    [isPaneFocused, onCloseAutoFocus],
-  );
 }
 
 /**
@@ -129,32 +97,6 @@ export function usePaneFocused(): boolean {
   const focused = use(PaneSurfaceActivityContext).focused;
   const visible = usePaneVisible();
   return focused && visible;
-}
-
-/**
- * The pane guard every Radix content wrapper needs, in one place.
- *
- * A modal overlay drives `hideOthers` + scroll-lock while open, so a background
- * split pane un-presents it by unmounting. That unmount runs Radix FocusScope's
- * close-autofocus which — for a native/deep-link focus transfer, where Radix's
- * own handler does not `preventDefault` — restores focus into the now-background
- * pane, whose focus-capture then reactivates it. `paneFocused` decides whether
- * the content renders at all; `handleCloseAutoFocus` kills the focus-restore on
- * the way out. Outside a pane both default to the permissive answer, so an
- * ordinary app-global close behaves normally.
- *
- * Shared rather than restated per wrapper: five copies of the same three
- * statements is five chances for one to drift out of step with this reasoning.
- */
-export function usePaneAwareContentGuard(
-  onCloseAutoFocus: ((event: Event) => void) | undefined,
-): {
-  readonly paneFocused: boolean;
-  readonly handleCloseAutoFocus: (event: Event) => void;
-} {
-  const paneFocused = usePaneFocused();
-  const handleCloseAutoFocus = usePaneCloseAutoFocusGuard(onCloseAutoFocus);
-  return { paneFocused, handleCloseAutoFocus };
 }
 
 /**

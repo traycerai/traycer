@@ -164,7 +164,7 @@ function renderChanges(props: {
     readonly onRefresh?: () => void;
   }) => (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <SelectedRepoChanges
           epicId="epic-1"
           viewTabId="tab-1"

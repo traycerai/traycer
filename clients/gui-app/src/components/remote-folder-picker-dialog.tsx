@@ -593,23 +593,25 @@ function RemoteFolderPickerFooter(props: {
           </Button>
         </TooltipWrapper>
         <Popover>
-          <PopoverTrigger asChild>
-            <TooltipWrapper
-              label="Folder picker settings"
-              side="top"
-              sideOffset={4}
-              align="end"
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Folder picker settings"
+          <PopoverTrigger
+            render={
+              <TooltipWrapper
+                label="Folder picker settings"
+                side="top"
+                sideOffset={4}
+                align="end"
               >
-                <Settings2 aria-hidden />
-              </Button>
-            </TooltipWrapper>
-          </PopoverTrigger>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Folder picker settings"
+                >
+                  <Settings2 aria-hidden />
+                </Button>
+              </TooltipWrapper>
+            }
+          />
           <PopoverContent
             side="right"
             sideOffset={8}

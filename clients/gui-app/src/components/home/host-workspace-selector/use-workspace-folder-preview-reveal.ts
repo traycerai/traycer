@@ -9,9 +9,8 @@ export interface WorkspaceFolderPreviewReveal {
   readonly close: () => void;
   /**
    * Spread onto the summary trigger's INNERMOST slot - inside
-   * `PopoverTrigger asChild`, not around it. Radix's `Slot` runs a child's
-   * handler before the slot's own, so a wrapper placed outside the popover
-   * trigger would let the picker open before the guard below ever ran.
+   * `PopoverTrigger render`, not around it. Base UI merges the child's
+   * handler before its own, so the guard can prevent the picker opening.
    */
   readonly triggerProps: LongPressHandlers & {
     readonly onClick: (event: MouseEvent<HTMLElement>) => void;
@@ -46,11 +45,14 @@ export function useWorkspaceFolderPreviewReveal(): WorkspaceFolderPreviewReveal 
       onClick: (event) => {
         // The browser still delivers a click after the hold, and this trigger's
         // click opens the folder picker over the sheet that just answered the
-        // gesture. `preventDefault` rather than `stopPropagation`: the picker
-        // opens from a composed Radix handler on this same element, which
-        // defers to a prevented default and would ignore a stopped bubble.
+        // gesture. Cancel Base UI's composed trigger handler on this element.
         if (!longPress.consumedTap()) return;
         event.preventDefault();
+        (
+          event as MouseEvent<HTMLElement> & {
+            preventBaseUIHandler: () => void;
+          }
+        ).preventBaseUIHandler();
       },
     },
   };

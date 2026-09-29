@@ -3,6 +3,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -311,17 +312,22 @@ describe("PlanSegment", () => {
     ).toBeTruthy();
   });
 
-  it("supports keyboard dismissal and keeps focus inside the expanded modal", () => {
+  it("supports keyboard dismissal and keeps focus inside the expanded modal", async () => {
     renderPlan(planSegment({ fullContentRef: null }));
 
     fireEvent.click(screen.getByRole("button", { name: "Expand plan" }));
 
     const dialog = screen.getByRole("dialog");
-    expect(dialog.contains(document.activeElement)).toBe(true);
+    // Base UI applies initial focus in a queued frame.
+    await waitFor(() => {
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    });
 
     fireEvent.keyDown(dialog, { key: "Escape", code: "Escape" });
 
-    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
   });
 
   it("disables preview and modal Implement while an action is pending", () => {

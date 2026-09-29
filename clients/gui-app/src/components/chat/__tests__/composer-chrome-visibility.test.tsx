@@ -38,7 +38,7 @@ const RELIABLE_USAGE: TokenUsage = {
 
 function render(ui: ReactElement) {
   return testingRender(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <LazyMotion features={domAnimation}>{ui}</LazyMotion>
     </TooltipProvider>,
   );

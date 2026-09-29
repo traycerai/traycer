@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { RadioGroup as RadioGroupPrimitive } from "radix-ui";
+import { RadioGroup, RadioGroupButtonItem } from "@/components/ui/radio-group";
 import {
   PLACEMENT_EDGE_LABELS,
   SURFACE_PLACEMENT,
@@ -105,15 +105,15 @@ function PlacementBarBody(props: {
       aria-label={surface === "topBar" ? "Tabs placement" : "Sidebar placement"}
       className="pointer-events-none fixed top-0 left-0 flex items-center gap-1.5 rounded-lg border border-border bg-popover p-1 text-popover-foreground opacity-0 shadow-md data-placed:pointer-events-auto data-placed:opacity-100"
     >
-      {/* Radix's radio group: one Tab stop, arrows move and select. */}
-      <RadioGroupPrimitive.Root
+      {/* A radio group: one Tab stop, arrows move and select. */}
+      <RadioGroup
         aria-label={surface === "topBar" ? "Tabs position" : "Sidebar side"}
         value={current}
         onValueChange={(next) => {
           const edge = facts.edges.find((candidate) => candidate === next);
           if (edge !== undefined) facts.write(edge);
         }}
-        className="flex items-center gap-0.5"
+        variant="row"
       >
         {facts.edges.map((edge) => {
           const label = PLACEMENT_EDGE_LABELS[edge];
@@ -125,21 +125,24 @@ function PlacementBarBody(props: {
               sideOffset={undefined}
               align={undefined}
             >
-              <RadioGroupPrimitive.Item value={edge} asChild>
-                <Button
-                  type="button"
-                  aria-label={label}
-                  data-placement-edge={edge}
-                  variant="muted"
-                  size="icon-sm"
-                >
-                  <PlacementPictogram surface={surface} edge={edge} />
-                </Button>
-              </RadioGroupPrimitive.Item>
+              <RadioGroupButtonItem
+                value={edge}
+                render={
+                  <Button
+                    type="button"
+                    aria-label={label}
+                    data-placement-edge={edge}
+                    variant="muted"
+                    size="icon-sm"
+                  >
+                    <PlacementPictogram surface={surface} edge={edge} />
+                  </Button>
+                }
+              />
             </TooltipWrapper>
           );
         })}
-      </RadioGroupPrimitive.Root>
+      </RadioGroup>
       {view === null ? null : (
         // Pointing at the view previews what it changes, as its row does.
         <span

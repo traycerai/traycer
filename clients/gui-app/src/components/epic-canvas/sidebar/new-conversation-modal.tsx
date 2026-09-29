@@ -457,7 +457,31 @@ function NewConversationModalDialog(props: {
     [transientSession.pickerStore],
   );
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+    <Dialog
+      open={props.open}
+      onOpenChange={(next, details) => {
+        if (
+          !next &&
+          (details.reason === "outside-press" ||
+            details.reason === "focus-out") &&
+          isHostSwitcherListInteraction(
+            details.reason === "focus-out" &&
+              details.event instanceof FocusEvent
+              ? details.event.relatedTarget
+              : details.event.target,
+          )
+        )
+          details.cancel();
+        if (
+          !next &&
+          details.reason === "escape-key" &&
+          dismissPickerRef.current?.() === true
+        )
+          details.cancel();
+        if (details.isCanceled) return;
+        props.onOpenChange(next);
+      }}
+    >
       <DialogContent
         ref={setOverlayBoundaryEl}
         // Capped to the band `top-safe-center-y` centres it in - that token and
@@ -477,29 +501,22 @@ function NewConversationModalDialog(props: {
         // mounts outside this dialog, so a click in it reads as an interaction
         // from outside. Dismissing on that would throw away the form someone is
         // in the middle of filling, for the crime of choosing a host in it.
-        onInteractOutside={(event) => {
-          if (isHostSwitcherListInteraction(event.target)) {
-            event.preventDefault();
-          }
-        }}
+
         showCloseButton={false}
-        onEscapeKeyDown={(event) => {
-          if (dismissPickerRef.current?.() === true) {
-            event.preventDefault();
-          }
-        }}
       >
-        <DialogClose asChild>
-          <Button
-            type="button"
-            variant="muted"
-            size="icon-sm"
-            aria-label="Close"
-            className="absolute right-0 top-0 z-10 size-6 -translate-y-1/2 translate-x-1/2 rounded-full border-border/70 bg-popover opacity-70 shadow-sm transition-opacity hover:opacity-100 focus-visible:opacity-100"
-          >
-            <XIcon className="size-3.5" />
-          </Button>
-        </DialogClose>
+        <DialogClose
+          render={
+            <Button
+              type="button"
+              variant="muted"
+              size="icon-sm"
+              aria-label="Close"
+              className="absolute right-0 top-0 z-10 size-6 -translate-y-1/2 translate-x-1/2 rounded-full border-border/70 bg-popover opacity-70 shadow-sm transition-opacity hover:opacity-100 focus-visible:opacity-100"
+            >
+              <XIcon className="size-3.5" />
+            </Button>
+          }
+        />
         <DialogTitle className="sr-only">New agent</DialogTitle>
         {props.open ? (
           <div

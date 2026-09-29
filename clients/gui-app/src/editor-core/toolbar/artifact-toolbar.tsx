@@ -591,22 +591,24 @@ function FormattingControls(props: FormattingControlsProps) {
 
   return (
     <DropdownMenu modal={false} open={menuOpen} onOpenChange={setMenuOpen}>
-      <DropdownMenuTrigger asChild>
-        <ToolbarActionButton
-          icon={
-            <ChevronDown
-              className="order-last size-3.5 text-muted-foreground"
-              aria-hidden="true"
-            />
-          }
-          label="Aa"
-          tooltip="Formatting"
-          aria-label="Formatting"
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          className="tc-editor-toolbar-action"
-        />
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <ToolbarActionButton
+            icon={
+              <ChevronDown
+                className="order-last size-3.5 text-muted-foreground"
+                aria-hidden="true"
+              />
+            }
+            label="Aa"
+            tooltip="Formatting"
+            aria-label="Formatting"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            className="tc-editor-toolbar-action"
+          />
+        }
+      />
       <DropdownMenuContent
         align="start"
         container={editor.view.dom.parentElement}
@@ -666,7 +668,7 @@ function FormattingGroupItems(props: {
           key={command.id}
           disabled={command.disabled}
           data-active={command.active ? "true" : "false"}
-          onSelect={command.onSelect}
+          onClick={command.onSelect}
         >
           {command.icon}
           <span className="min-w-0 flex-1 truncate">{command.label}</span>

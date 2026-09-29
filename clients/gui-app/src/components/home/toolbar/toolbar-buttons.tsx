@@ -18,7 +18,7 @@ interface ToolbarButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
  * bordered one it reads as a chip that is lying about itself.
  */
 const TOOLBAR_CHIP_CLASS =
-  "inline-flex items-center rounded-md border border-border bg-background text-muted-foreground outline-none transition-[background-color,border-color,color,transform] duration-120 ease-out hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-97 data-[state=open]:bg-accent data-[state=open]:text-foreground disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-muted-foreground disabled:active:scale-100 motion-reduce:transition-none motion-reduce:active:scale-100";
+  "inline-flex items-center rounded-md border border-border bg-background text-muted-foreground outline-none transition-[background-color,border-color,color,transform] duration-120 ease-out hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-97 data-popup-open:bg-accent data-popup-open:text-foreground disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-muted-foreground disabled:active:scale-100 motion-reduce:transition-none motion-reduce:active:scale-100";
 
 export function ToolbarIconButton(props: ToolbarButtonProps) {
   const { className, children, type, onMouseDown, ...rest } = props;

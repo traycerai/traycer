@@ -1,5 +1,6 @@
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -60,10 +61,11 @@ describe("<HistoryButton />", () => {
   });
 
   it("shows the current History shortcut in its tooltip", async () => {
-    const button = await renderHistoryButton("/epics");
+    // Off the History route: while the History overlay is up the trigger is
+    // expanded and Base keeps its tooltip closed.
+    await renderHistoryButton("/epics/epic-1");
 
-    fireEvent.focus(button);
-
+    await userEvent.setup().tab();
     expect((await screen.findByRole("tooltip")).textContent).toBe(
       `History (${formatChordForDisplay("mod+y")})`,
     );

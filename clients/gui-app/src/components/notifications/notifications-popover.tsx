@@ -599,7 +599,7 @@ export function NotificationsPopover(
     : actions.hasHostLoadError;
 
   return (
-    <TooltipProvider delayDuration={300}>
+    <TooltipProvider delay={300}>
       {/* `data-notification-center` marks this surface for code that must ask
           "is focus inside the center right now?" without reaching for the
           shell ref (the keybinding chord's toggle-close, in

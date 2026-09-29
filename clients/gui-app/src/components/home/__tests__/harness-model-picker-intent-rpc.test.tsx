@@ -18,9 +18,13 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
 vi.mock("@/components/ui/dropdown-menu", () => {
   const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
     props.children;
+  const trigger = (props: {
+    readonly children?: ReactNode;
+    readonly render?: ReactNode;
+  }): ReactNode => props.render ?? props.children;
   return {
     DropdownMenu: passthrough,
-    DropdownMenuTrigger: passthrough,
+    DropdownMenuTrigger: trigger,
     DropdownMenuContent: (props: {
       readonly children: ReactNode;
       readonly container: HTMLElement | null | undefined;
@@ -34,7 +38,10 @@ vi.mock("@/components/ui/dropdown-menu", () => {
     ),
     DropdownMenuItem: (props: {
       readonly children: ReactNode;
-      readonly onSelect: (() => void) | undefined;
+      // The real `DropdownMenuItem` is called with `onClick`, not `onSelect`
+      // (Base's own API, unlike Radix's) - a mock still reading `onSelect`
+      // receives `undefined` and never fires on click.
+      readonly onClick: (() => void) | undefined;
       readonly "aria-label": string | undefined;
       readonly "aria-current": "true" | undefined;
       readonly className: string | undefined;
@@ -49,7 +56,7 @@ vi.mock("@/components/ui/dropdown-menu", () => {
         className={props.className}
         disabled={props.disabled}
         title={props.title}
-        onClick={props.onSelect}
+        onClick={props.onClick}
       >
         {props.children}
       </button>
@@ -417,7 +424,7 @@ function renderPickerWithFixture(
   render(
     <fixture.Wrapper>
       <SurfaceActivityProvider active>
-        <TooltipProvider delayDuration={0}>
+        <TooltipProvider delay={0}>
           <HarnessModelPicker
             labelDisplay="responsive"
             store={store}

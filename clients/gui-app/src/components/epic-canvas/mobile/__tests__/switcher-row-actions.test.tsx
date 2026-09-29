@@ -235,9 +235,7 @@ describe("SwitcherRowActions terminal-agent delete", () => {
     );
 
     // Radix's DropdownMenuTrigger opens on pointerdown, not click.
-    fireEvent.pointerDown(screen.getByTestId(`switcher-more-${NODE_ID}`), {
-      button: 0,
-    });
+    fireEvent.click(screen.getByTestId(`switcher-more-${NODE_ID}`));
     fireEvent.click(screen.getByTestId(`switcher-delete-${NODE_ID}`));
     fireEvent.click(screen.getByTestId("confirm-action"));
 
@@ -265,10 +263,7 @@ describe("artifact export", () => {
       { wrapper: Wrapper },
     );
 
-    fireEvent.pointerDown(
-      screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`));
 
     const markdownItem = screen.getByTestId(
       `switcher-export-markdown-${ARTIFACT_NODE_ID}`,
@@ -311,9 +306,7 @@ describe("artifact export", () => {
       { wrapper: Wrapper },
     );
 
-    fireEvent.pointerDown(screen.getByTestId(`switcher-more-${NODE_ID}`), {
-      button: 0,
-    });
+    fireEvent.click(screen.getByTestId(`switcher-more-${NODE_ID}`));
 
     expect(
       screen.queryByTestId(`switcher-export-markdown-${NODE_ID}`),
@@ -336,10 +329,7 @@ describe("artifact export", () => {
       { wrapper: Wrapper },
     );
 
-    fireEvent.pointerDown(
-      screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`),
-      { button: 0 },
-    );
+    fireEvent.click(screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`));
 
     const pdfItem = screen.getByTestId(
       `switcher-export-pdf-${ARTIFACT_NODE_ID}`,

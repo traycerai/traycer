@@ -1,4 +1,11 @@
-import { Fragment, use, useEffect, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  use,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { GhostRegion } from "@/components/layout-editor/ghost-region";
 import { LayoutRegionContextMenu } from "@/components/layout-editor/region-quick-verbs";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
@@ -6,8 +13,10 @@ import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-s
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
-import { Popover, PopoverAnchor } from "@/components/ui/popover";
-import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
+import {
+  RateLimitPopover,
+  RateLimitPopoverRoot,
+} from "@/components/layout/header/rate-limit-popover";
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
 import { StatusBarRateLimitCluster } from "@/components/layout/status-bar/status-bar-rate-limit-cluster";
 import { StatusBarResourceSegment } from "@/components/layout/status-bar/status-bar-resource-segment";
@@ -133,6 +142,7 @@ function ScopedAppStatusBar(props: {
   // the usage batches, the mount refresh - lives inside the gate, where the
   // binding is provably the watched host's.
   const windowedProviders = useStatusBarWindowedProviders();
+  const usageAnchorRef = useRef<HTMLSpanElement>(null);
   const [usageOpen, setUsageOpen] = useState(false);
   // One subscription bridge for the segments and the panel alike, resolved
   // where both can reach it - the same shape the header trigger uses - and
@@ -180,7 +190,7 @@ function ScopedAppStatusBar(props: {
   // The panel's open state reconciled with the cluster's placement, in the
   // render AND in the state.
   //
-  // The anchor and the content both unmount with the cluster, so Radix never
+  // The anchor and the content both unmount with the cluster, so the popover never
   // fires `onOpenChange` on the way out: without this, `usageOpen` stays true
   // for the life of the strip, `useTitleBarDragSuppression` below holds the
   // header's own slot under a value nothing can clear, and a reading that
@@ -220,7 +230,7 @@ function ScopedAppStatusBar(props: {
     // one piece of the strip that answered no right-click.
     //
     // Around the popover rather than inside its `triggerNode`: the popover
-    // hands that node straight to `PopoverTrigger asChild`, and a Radix root
+    // hands that node straight to `PopoverTrigger render`, and a popup root
     // in that slot would swallow the trigger's props instead of forwarding
     // them to the button, taking the left click with it. Wrapping out here
     // leaves the trigger seam untouched and gives the context menu the
@@ -248,28 +258,26 @@ function ScopedAppStatusBar(props: {
   // trigger - and it travels with the cluster, so the panel opens at the end
   // of the strip the cluster is actually on (L-156).
   const usage = (
-    <PopoverAnchor asChild>
-      {/* Reserved even when it holds nothing, so nothing beside it shifts
-        into place when the segments land - or when the preference that hides
-        them is flipped. The notice for an unresolved pick takes the same
-        slot. */}
-      <span
-        data-testid="status-bar-rate-limit-slot"
-        className="flex min-w-0 items-center gap-1"
-      >
-        <StatusBarUsageSlot
-          scopedToOwnHost={scopedToOwnHost}
-          rateLimitsEnabled={rateLimitsEnabled}
-          providers={windowedProviders}
-          profileSelection={profileSelection}
-          scope={scope}
-          editing={editing}
-        />
-        {/* Hidden and pointed at: the passive depiction takes the slot the
+    // Reserved even when it holds nothing, so nothing beside it shifts into
+    // place when the segments land - or when the preference that hides them
+    // is flipped. The notice for an unresolved pick takes the same slot.
+    <span
+      ref={usageAnchorRef}
+      data-testid="status-bar-rate-limit-slot"
+      className="flex min-w-0 items-center gap-1"
+    >
+      <StatusBarUsageSlot
+        scopedToOwnHost={scopedToOwnHost}
+        rateLimitsEnabled={rateLimitsEnabled}
+        providers={windowedProviders}
+        profileSelection={profileSelection}
+        scope={scope}
+        editing={editing}
+      />
+      {/* Hidden and pointed at: the passive depiction takes the slot the
           segments left empty (L-14, L-62). */}
-        {rateLimitsEnabled ? null : <GhostRegion regionId="usageLimits" />}
-      </span>
-    </PopoverAnchor>
+      {rateLimitsEnabled ? null : <GhostRegion regionId="usageLimits" />}
+    </span>
   );
 
   /**
@@ -329,7 +337,15 @@ function ScopedAppStatusBar(props: {
           when a user reaches for it - with usage switched off in Settings, or
           with a pick that cannot be reached.
         */}
-        <Popover open={usagePanelOpen} onOpenChange={setUsageOpen}>
+        {/* Keyed on the cluster's bar: the panel's content unmounts with the
+            cluster while this root stays, and a Base root closed with no
+            content left waits on an exit that never finishes. A fresh root
+            when the cluster comes back mounts closed outright. */}
+        <RateLimitPopoverRoot
+          key={usageInStrip ? "usage-in-strip" : "usage-elsewhere"}
+          open={usagePanelOpen}
+          onOpenChange={setUsageOpen}
+        >
           <div className="flex h-6 items-center gap-2 px-2 text-ui-xs tabular-nums">
             {cluster("left")}
             {/*
@@ -349,6 +365,7 @@ function ScopedAppStatusBar(props: {
             subscriptions and two owners for one chord. */}
           {usageInStrip ? (
             <RateLimitPopover
+              anchor={usageAnchorRef}
               side="top"
               align={drawn.usageLimits.side === "left" ? "start" : "end"}
               onClose={() => setUsageOpen(false)}
@@ -357,7 +374,7 @@ function ScopedAppStatusBar(props: {
               hasExplicitPick={props.hasExplicitPick}
             />
           ) : null}
-        </Popover>
+        </RateLimitPopoverRoot>
       </div>
     </StatusBarVisibilityMenu>
   );

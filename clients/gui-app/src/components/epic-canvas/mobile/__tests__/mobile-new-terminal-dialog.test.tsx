@@ -8,7 +8,13 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 
@@ -271,7 +277,7 @@ describe("<MobileNewTerminalDialog />", () => {
     );
   });
 
-  it("leaves the workspace search alone on a coarse pointer", () => {
+  it("leaves the workspace search alone on a coarse pointer", async () => {
     stubCoarsePointer(true);
     renderDialog();
 
@@ -279,11 +285,12 @@ describe("<MobileNewTerminalDialog />", () => {
     expect(document.activeElement).not.toBe(search);
     // Focus still has to land inside the dialog - declining the search's claim
     // is not a licence to strand it on a trigger outside the focus scope.
-    expect(
-      screen
-        .getByTestId("mobile-epic-new-terminal-dialog")
-        .contains(document.activeElement),
-    ).toBe(true);
+    // Base UI applies initial focus in a queued frame.
+    const dialog = screen.getByTestId("mobile-epic-new-terminal-dialog");
+    await waitFor(() => {
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    });
+    expect(document.activeElement).not.toBe(search);
   });
 
   /**

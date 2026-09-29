@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 
@@ -270,17 +270,22 @@ describe("<ChatForkDialog /> height cap and footer", () => {
     );
   });
 
-  it("focuses the title field when a fine pointer is driving", () => {
+  it("focuses the title field when a fine pointer is driving", async () => {
     renderDialog();
 
-    expect(document.activeElement).toBe(
-      screen.getByLabelText("Fork agent title"),
+    // Base UI applies initial focus in a queued frame.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Fork agent title"),
+      ),
     );
   });
 
-  it("leaves the title field unfocused on a coarse pointer", () => {
+  it("leaves the title field unfocused on a coarse pointer", async () => {
     stubCoarsePointer(true);
     renderDialog();
+    const dialog = screen.getByRole("dialog");
+    await waitFor(() => expect(document.activeElement).toBe(dialog));
 
     // The whole point: no focused text field means no software keyboard over a
     // form whose common path is "keep the seeded title and press Fork".
@@ -289,7 +294,6 @@ describe("<ChatForkDialog /> height cap and footer", () => {
     );
     // Declining the field is not a licence to strand focus on the trigger,
     // outside the focus scope - the dialog itself takes it.
-    const dialog = screen.getByRole("dialog");
     expect(document.activeElement).toBe(dialog);
   });
 });

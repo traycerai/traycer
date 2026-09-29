@@ -143,7 +143,7 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
   if (!isMobile) return null;
 
   return (
-    <Drawer direction="bottom" open={open} onOpenChange={onOpenChange}>
+    <Drawer swipeDirection="down" open={open} onOpenChange={onOpenChange}>
       <DrawerContent
         data-mobile-shell-touch-scope=""
         data-testid="mobile-tab-switcher-sheet"

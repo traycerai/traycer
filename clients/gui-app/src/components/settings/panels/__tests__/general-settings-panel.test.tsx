@@ -299,7 +299,9 @@ describe("GeneralSettingsPanel", () => {
 
     expect(screen.getByText("Experimental")).toBeTruthy();
     const toggle = screen.getByRole("switch", { name: "Agent roles" });
-    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    await waitFor(() =>
+      expect(toggle.getAttribute("aria-disabled")).not.toBe("true"),
+    );
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(toggle);
     await waitFor(() =>
@@ -330,8 +332,8 @@ describe("GeneralSettingsPanel", () => {
     expect(
       screen
         .getByRole("switch", { name: "Agent roles" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
     expect(bridge.setAgentRolesEnabled).not.toHaveBeenCalled();
   });
 
@@ -349,7 +351,9 @@ describe("GeneralSettingsPanel", () => {
     renderPanel();
 
     const toggle = screen.getByRole("switch", { name: "Agent roles" });
-    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    await waitFor(() =>
+      expect(toggle.getAttribute("aria-disabled")).not.toBe("true"),
+    );
     fireEvent.click(toggle);
     await waitFor(() =>
       expect(bridge.setAgentRolesEnabled).toHaveBeenCalledWith(true),

@@ -27,14 +27,16 @@ export function OrganizationHistoryOverflow() {
   if (!organization?.supported) return null;
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="History options">
-          <MoreHorizontal />
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger
+        render={
+          <Button variant="ghost" size="icon-sm" aria-label="History options">
+            <MoreHorizontal />
+          </Button>
+        }
+      />
       <DropdownMenuContent align="end">
         <DropdownMenuItem
-          onSelect={() => organization.openDialog({ kind: "manage-labels" })}
+          onClick={() => organization.openDialog({ kind: "manage-labels" })}
         >
           <Tag />
           Manage Labels

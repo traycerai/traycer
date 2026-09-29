@@ -72,18 +72,20 @@ export function SwitcherTerminalRowActions(props: {
   return (
     <>
       <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="muted"
-            size="icon-sm"
-            aria-label={`Actions for ${actions.label}`}
-            data-testid={`switcher-more-${session.sessionId}`}
-            className="shrink-0"
-          >
-            <MoreHorizontal className="size-4" />
-          </Button>
-        </DropdownMenuTrigger>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="muted"
+              size="icon-sm"
+              aria-label={`Actions for ${actions.label}`}
+              data-testid={`switcher-more-${session.sessionId}`}
+              className="shrink-0"
+            >
+              <MoreHorizontal className="size-4" />
+            </Button>
+          }
+        />
         <DropdownMenuContent align="end" className="w-max">
           <SidebarDropdownMenuItems entries={entries} />
         </DropdownMenuContent>

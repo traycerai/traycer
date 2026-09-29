@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { Tabs as TabsPrimitive } from "radix-ui";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { focusSortableRowGrab } from "@/components/layout-editor/inspector/first-row-focus";
 import {
   LAYOUT_AREAS,
@@ -31,7 +31,6 @@ import {
   SettingsMasterDetail,
   SettingsMasterSelect,
 } from "@/components/settings/settings-master-detail";
-import { settingsRailRowClassName } from "@/components/settings/settings-rail-row";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { scrollPaneToCenter } from "@/components/settings/use-settings-anchor-reveal";
@@ -61,11 +60,10 @@ import { useLayoutSnapshot } from "@/stores/layout/layout-store";
  * settings level with a back row.
  *
  * The areas are a vertical tab list, so the arrow keys walk them. Every area
- * stays mounted, hidden while another is picked (`forceMount` makes Radix drop
- * its own `hidden`, so it is passed here): Radix mounts a picked area's
- * children a commit AFTER the pick (Presence flips in a layout effect), so a
- * region landing or a search reveal that switches area would look for its row
- * in an empty pane and have nothing to re-run it. Settings search lands on
+ * stays mounted (`keepMounted`), hidden while another is picked: a picked
+ * area's rows are already in the document when the pick commits, so a region
+ * landing or a search reveal that switches area finds its row rather than an
+ * empty pane with nothing to re-run it. Settings search lands on
  * every row here, and picks its area first (`useLayoutAnchorArea`,
  * `useLayoutRegionLanding`).
  */
@@ -114,7 +112,7 @@ export function LayoutSettingsPanel(): ReactNode {
         list (P-4, L-89). */}
       <LayoutUsageProvider>
         <LayoutFormHostContext value="page">
-          <TabsPrimitive.Root
+          <Tabs
             ref={rootRef}
             value={area}
             onValueChange={(value) => {
@@ -143,39 +141,36 @@ export function LayoutSettingsPanel(): ReactNode {
                 />
               }
               rail={
-                <TabsPrimitive.List
+                <TabsList
+                  variant="rail"
                   aria-label="Layout areas"
                   // Shrinks and scrolls in a short pane, as Providers' list does,
                   // so the last areas are never clipped by the card.
-                  className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2"
+                  className="min-h-0 flex-1 overflow-y-auto"
                 >
                   {LAYOUT_AREAS.map((entry) => (
-                    <TabsPrimitive.Trigger
-                      key={entry.id}
-                      value={entry.id}
-                      className={settingsRailRowClassName(area === entry.id)}
-                    >
+                    <TabsTrigger key={entry.id} value={entry.id} variant="rail">
                       <entry.icon className="size-4 shrink-0" />
                       <span className="min-w-0 flex-1 truncate">
                         {entry.label}
                       </span>
                       {changed(entry.id) ? <ChangedDot /> : null}
-                    </TabsPrimitive.Trigger>
+                    </TabsTrigger>
                   ))}
-                </TabsPrimitive.List>
+                </TabsList>
               }
             >
               {LAYOUT_AREAS.map((entry) => (
-                <TabsPrimitive.Content
+                <TabsContent
                   key={entry.id}
                   value={entry.id}
-                  forceMount
-                  hidden={area !== entry.id}
+                  keepMounted
+                  data-layout-area-panel={entry.id}
                   // Named by its area rather than by the rail's trigger, which a
                   // phone does not draw.
                   aria-labelledby={undefined}
                   aria-label={entry.label}
-                  className="flex flex-1 flex-col outline-none md:min-h-0"
+                  className="flex flex-1 flex-col md:min-h-0"
                 >
                   <div className="border-b border-border/60 pb-4">
                     <SettingsDetailHeader
@@ -203,10 +198,10 @@ export function LayoutSettingsPanel(): ReactNode {
                       }}
                     />
                   </div>
-                </TabsPrimitive.Content>
+                </TabsContent>
               ))}
             </SettingsMasterDetail>
-          </TabsPrimitive.Root>
+          </Tabs>
         </LayoutFormHostContext>
       </LayoutUsageProvider>
     </SettingsPanelShell>
@@ -319,8 +314,11 @@ function useAreaStartsAtTop(
   area: LayoutAreaId,
 ): void {
   useLayoutEffect(() => {
+    // By id rather than by `:not([hidden])`: a Base panel takes `hidden` only
+    // once its close has finished, so in this commit the area just left still
+    // looks shown, and it comes first in document order.
     const body = root.current?.querySelector(
-      '[role="tabpanel"]:not([hidden]) [data-layout-area-body]',
+      `[data-layout-area-panel="${area}"] [data-layout-area-body]`,
     );
     if (body !== null && body !== undefined) body.scrollTop = 0;
   }, [root, area]);

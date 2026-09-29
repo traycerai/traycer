@@ -574,8 +574,21 @@ function DefaultGroupSelect(props: {
         For a model not in any tier
       </span>
       <Select
+        items={[
+          { value: NO_DEFAULT_GROUP_VALUE, label: "None - skip this step" },
+          ...names.map((value) => ({ value, label: value })),
+          ...(unlisted
+            ? [
+                {
+                  value: defaultTierGroupId,
+                  label: `${defaultTierGroupId} - no such group`,
+                },
+              ]
+            : []),
+        ]}
         value={defaultTierGroupId ?? NO_DEFAULT_GROUP_VALUE}
         onValueChange={(next) => {
+          if (next === null) return;
           // The one site that records a deliberate choice of default. A
           // pending deletion toast's Undo compares its stamp against this, so
           // that choosing "None - skip this step" after deleting the default

@@ -63,7 +63,7 @@ describe("F4: hostile profile labels in the rate-limit banner", () => {
         selectable: true,
       } as const;
       const { container } = render(
-        <TooltipProvider delayDuration={0}>
+        <TooltipProvider delay={0}>
           <ProfileRateLimitSwitchBanner
             harnessId="claude"
             providerId="claude-code"

@@ -129,7 +129,7 @@ function ComposerProfileSwitchHarness() {
   });
   const visible = prompt.kind === "visible";
   return (
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <div>
         <div data-testid="profile-id">{profileId ?? "ambient"}</div>
         <div data-testid="send-blocked">{String(reauthGate.signedOut)}</div>
@@ -185,7 +185,7 @@ function ComposerBannerPrecedenceHarness() {
     rateLimitVisible,
   });
   return (
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <div>
         <div data-testid="top-banner-kind">{topBannerKind}</div>
         {topBannerKind === "rate-limit" && prompt.kind === "visible" ? (

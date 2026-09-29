@@ -952,7 +952,12 @@ function ProviderEnableSwitch(props: {
         <Switch
           id={id}
           checked={enabled}
-          aria-disabled={disabledReason !== null || undefined}
+          aria-disabled={
+            isPending ||
+            props.profileEnablementPending ||
+            disabledReason !== null ||
+            undefined
+          }
           onCheckedChange={(next) => {
             if (
               isPending ||

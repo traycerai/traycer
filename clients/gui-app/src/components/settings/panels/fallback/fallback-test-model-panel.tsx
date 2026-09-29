@@ -783,10 +783,14 @@ function TestPickers(props: {
     <div className="flex min-w-0 flex-col gap-2">
       <div className="flex min-w-0 flex-wrap items-center gap-2 text-ui-sm">
         <span>If</span>
-        {/* `""` rather than `undefined` for "nothing to show": Radix reads it
+        {/* `""` rather than `undefined` for "nothing to show": Base UI reads it
             as no value and draws the placeholder, and the Select stays
             controlled across the catalog landing. */}
         <Select
+          items={(tuple.harnesses ?? []).map((harness) => ({
+            value: harness.id,
+            label: harnessLabel(harness.id),
+          }))}
           value={tuple.harnessId ?? ""}
           disabled={tuple.harnesses === null || tuple.harnesses.length === 0}
           onValueChange={(next) => {
@@ -821,6 +825,10 @@ function TestPickers(props: {
           </SelectContent>
         </Select>
         <Select
+          items={(tuple.models ?? []).map((model) => ({
+            value: model.slug,
+            label: model.label,
+          }))}
           value={tuple.model ?? ""}
           disabled={tuple.models === null || tuple.models.length === 0}
           onValueChange={(next) => {
@@ -844,6 +852,10 @@ function TestPickers(props: {
         </Select>
         <span>is blocked by</span>
         <Select
+          items={TEST_FAILURE_KINDS.map((entry) => ({
+            value: entry,
+            label: TEST_FAILURE_KIND_LABELS[entry],
+          }))}
           value={kind}
           onValueChange={(next) => {
             const chosen = TEST_FAILURE_KINDS.find((entry) => entry === next);
@@ -875,6 +887,10 @@ function TestPickers(props: {
           <span className="flex min-w-0 flex-wrap items-center gap-2">
             <span id={accountLabelId}>Account</span>
             <Select
+              items={tuple.accounts.map((account) => ({
+                value: account.profileId ?? TERMINAL_ACCOUNT_VALUE,
+                label: account.label,
+              }))}
               value={tuple.profileId ?? TERMINAL_ACCOUNT_VALUE}
               onValueChange={(next) => {
                 const profileId = next === TERMINAL_ACCOUNT_VALUE ? null : next;
@@ -908,6 +924,14 @@ function TestPickers(props: {
         <span className="flex min-w-0 flex-wrap items-center gap-2">
           <span id={permissionLabelId}>Permission mode</span>
           <Select
+            // The trigger draws the picked row as the list does, Experimental
+            // badge included.
+            items={PERMISSION_PICKER_OPTIONS.filter((option) =>
+              tuple.permissionModes.includes(option.id),
+            ).map((option) => ({
+              value: option.id,
+              label: <PermissionOptionLabel option={option} />,
+            }))}
             value={tuple.permissionMode}
             onValueChange={(next) => {
               const chosen = tuple.permissionModes.find(
@@ -932,16 +956,9 @@ function TestPickers(props: {
                 <SelectItem
                   key={option.id}
                   value={option.id}
-                  textValue={option.label}
+                  label={option.label}
                 >
-                  <span className="inline-flex items-center gap-2">
-                    {option.label}
-                    {option.id === "auto" ? (
-                      <Badge variant="muted" size="xs">
-                        Experimental
-                      </Badge>
-                    ) : null}
-                  </span>
+                  <PermissionOptionLabel option={option} />
                 </SelectItem>
               ))}
             </SelectContent>
@@ -949,6 +966,22 @@ function TestPickers(props: {
         </span>
       </div>
     </div>
+  );
+}
+
+/** A permission row's content, in the list and on the closed trigger alike. */
+function PermissionOptionLabel(props: {
+  readonly option: (typeof PERMISSION_PICKER_OPTIONS)[number];
+}) {
+  return (
+    <span className="inline-flex items-center gap-2">
+      {props.option.label}
+      {props.option.id === "auto" ? (
+        <Badge variant="muted" size="xs">
+          Experimental
+        </Badge>
+      ) : null}
+    </span>
   );
 }
 

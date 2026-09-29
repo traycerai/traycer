@@ -312,7 +312,7 @@ describe("<ProviderSkillComposerDialog />", () => {
     ).toBeDefined();
     expect(screen.getByText("installed")).toBeDefined();
     const showMe = screen.getByRole("checkbox", { name: "show-me" });
-    expect(showMe.getAttribute("data-state")).toBe("checked");
+    expect(showMe.hasAttribute("data-checked")).toBe(true);
     expect(
       screen.getByRole("button", { name: "Install 1 skill" }),
     ).toBeDefined();
@@ -420,9 +420,9 @@ describe("<ProviderSkillComposerDialog />", () => {
       name: "design-control-loop",
     });
     const improve = screen.getByRole("checkbox", { name: "improve-claude-md" });
-    expect(showMe.getAttribute("data-state")).toBe("checked");
-    expect(design.getAttribute("data-state")).toBe("checked");
-    expect(improve.getAttribute("data-state")).toBe("unchecked");
+    expect(showMe.hasAttribute("data-checked")).toBe(true);
+    expect(design.hasAttribute("data-checked")).toBe(true);
+    expect(improve.hasAttribute("data-unchecked")).toBe(true);
 
     const selectAll = screen.getByRole("checkbox", {
       name: "Select all skills",
@@ -431,21 +431,21 @@ describe("<ProviderSkillComposerDialog />", () => {
     await user.click(selectAll);
     expect(selectAll.getAttribute("aria-checked")).toBe("true");
     expect(screen.getByText("3 of 3 selected")).toBeDefined();
-    expect(improve.getAttribute("data-state")).toBe("checked");
+    expect(improve.hasAttribute("data-checked")).toBe(true);
 
     await user.click(selectAll);
     expect(selectAll.getAttribute("aria-checked")).toBe("false");
     expect(screen.getByText("0 of 3 selected")).toBeDefined();
-    expect(showMe.getAttribute("data-state")).toBe("unchecked");
-    expect(design.getAttribute("data-state")).toBe("unchecked");
-    expect(improve.getAttribute("data-state")).toBe("unchecked");
+    expect(showMe.hasAttribute("data-unchecked")).toBe(true);
+    expect(design.hasAttribute("data-unchecked")).toBe(true);
+    expect(improve.hasAttribute("data-unchecked")).toBe(true);
 
     await user.click(showMe);
     await user.click(design);
     expect(selectAll.getAttribute("aria-checked")).toBe("mixed");
 
     await user.click(improve);
-    expect(improve.getAttribute("data-state")).toBe("checked");
+    expect(improve.hasAttribute("data-checked")).toBe(true);
     expect(
       screen.getByRole("button", { name: "Install 3 skills" }),
     ).toBeDefined();

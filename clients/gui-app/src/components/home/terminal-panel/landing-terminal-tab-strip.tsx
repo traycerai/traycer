@@ -211,48 +211,60 @@ function LandingPlaceholderTab(props: {
     tabRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [active]);
   return (
-    <ContextMenu modal={false}>
-      <ContextMenuTrigger asChild>
-        <div
-          ref={tabRef}
-          role="tab"
-          aria-label="New tab"
-          aria-selected={active}
-          tabIndex={0}
-          data-testid={`landing-terminal-tab-${instanceId}`}
-          onClick={() => onActivate(instanceId)}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" && event.key !== " ") return;
-            event.preventDefault();
-            onActivate(instanceId);
-          }}
-          className={cn(
-            "group relative flex min-w-0 shrink-0 items-center gap-1.5 border-r border-canvas-border/70 px-3 text-ui-sm text-muted-foreground outline-hidden transition-colors hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring",
-            "max-w-[45vw]",
-            active &&
-              "bg-(--app-background) text-foreground shadow-[inset_0_-1px_0_var(--color-background)] before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-primary",
-          )}
-        >
-          <SquareDashed className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="truncate">New tab</span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Close New tab"
-            className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100"
-            onClick={(event) => {
-              event.stopPropagation();
-              props.onDismiss();
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <div
+            ref={tabRef}
+            role="tab"
+            aria-label="New tab"
+            aria-selected={active}
+            tabIndex={0}
+            data-testid={`landing-terminal-tab-${instanceId}`}
+            onClick={() => onActivate(instanceId)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              onActivate(instanceId);
             }}
+            className={cn(
+              "group relative flex min-w-0 shrink-0 items-center gap-1.5 border-r border-canvas-border/70 px-3 text-ui-sm text-muted-foreground outline-hidden transition-colors hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring",
+              "max-w-[45vw]",
+              active &&
+                "bg-(--app-background) text-foreground shadow-[inset_0_-1px_0_var(--color-background)] before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-primary",
+            )}
           >
-            <X className="size-3.5" />
-          </Button>
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent onCloseAutoFocus={(event) => event.preventDefault()}>
-        <ContextMenuItem onSelect={props.onDismiss}>Close</ContextMenuItem>
-        <ContextMenuItem onSelect={props.onCloseAll}>Close All</ContextMenuItem>
+            <SquareDashed className="size-3.5 shrink-0" aria-hidden="true" />
+            <span className="truncate">New tab</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Close New tab"
+              className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100"
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onDismiss();
+              }}
+            >
+              <X className="size-3.5" />
+            </Button>
+          </div>
+        }
+      />
+      {/* The strip was `modal={false}` under Radix; Base's ContextMenu has no
+          such opt-out, so its portal's own backdrop would otherwise block
+          scroll/hover/click on the rest of the strip while a row's menu is
+          open. `portalProps` turns pointer-events off on just this portal
+          (the Positioner keeps its own pointer-events-auto, so the popup
+          itself stays clickable) to restore that pass-through, scoped to
+          this strip only - not a modal shim, just the public portal prop. */}
+      <ContextMenuContent
+        finalFocus={false}
+        portalProps={{ style: { pointerEvents: "none" } }}
+      >
+        <ContextMenuItem onClick={props.onDismiss}>Close</ContextMenuItem>
+        <ContextMenuItem onClick={props.onCloseAll}>Close All</ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -385,77 +397,86 @@ function LandingPanelTab(props: {
   }, [isEditing, onActivate, tab.instanceId]);
 
   return (
-    // `modal={false}` is load-bearing for rename. A modal Radix menu keeps a
-    // TRAPPED focus scope while it closes: the rename input mounts and focuses
-    // inside the trigger (outside that scope), the scope yanks focus back, the
-    // input blurs, and `useInlineRename` blur-commits and unmounts it - so the
-    // edit box vanishes and you have to click the tab again. Un-trapped, the
-    // input keeps the focus it takes on mount.
-    <ContextMenu modal={false}>
-      <ContextMenuTrigger asChild>
-        <div
-          ref={tabRef}
-          role="tab"
-          aria-label={
-            displayCwd === null ? displayName : `${displayName}, ${displayCwd}`
-          }
-          aria-selected={active}
-          tabIndex={0}
-          data-testid={`landing-terminal-tab-${tab.instanceId}`}
-          onClick={activate}
-          onKeyDown={(event) => {
-            if (isEditing) return;
-            if (event.key !== "Enter" && event.key !== " ") return;
-            event.preventDefault();
-            activate();
-          }}
-          className={cn(
-            "group relative flex min-w-0 shrink-0 items-center gap-1.5 border-r border-canvas-border/70 px-3 text-ui-sm text-muted-foreground outline-hidden transition-colors hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring",
-            "max-w-[45vw]",
-            active &&
-              "bg-(--app-background) text-foreground shadow-[inset_0_-1px_0_var(--color-background)] before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-primary",
-          )}
-        >
-          {tab.kind === "browser" ? (
-            <Globe className="size-3.5 shrink-0" aria-hidden="true" />
-          ) : (
-            <TerminalSquare className="size-3.5 shrink-0" aria-hidden="true" />
-          )}
-          <LandingPanelTabLabel
-            instanceId={tab.instanceId}
-            displayName={displayName}
-            isEditing={isEditing}
-            inputProps={rename.inputProps}
-            row={props.row}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`Close ${displayName}`}
-            className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100"
-            onClick={(event) => {
-              event.stopPropagation();
-              props.onClose(tab);
+    // `finalFocus={false}` suppresses Base's own focus-restoration step on
+    // close, so it doesn't fight the rename input for focus once the input
+    // mounts and takes it. `portalProps` restores the old Radix
+    // `modal={false}` pointer pass-through - see the first ContextMenuContent
+    // in this file for the full reasoning.
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <div
+            ref={tabRef}
+            role="tab"
+            aria-label={
+              displayCwd === null
+                ? displayName
+                : `${displayName}, ${displayCwd}`
+            }
+            aria-selected={active}
+            tabIndex={0}
+            data-testid={`landing-terminal-tab-${tab.instanceId}`}
+            onClick={activate}
+            onKeyDown={(event) => {
+              if (isEditing) return;
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              activate();
             }}
+            className={cn(
+              "group relative flex min-w-0 shrink-0 items-center gap-1.5 border-r border-canvas-border/70 px-3 text-ui-sm text-muted-foreground outline-hidden transition-colors hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring",
+              "max-w-[45vw]",
+              active &&
+                "bg-(--app-background) text-foreground shadow-[inset_0_-1px_0_var(--color-background)] before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-primary",
+            )}
           >
-            <X className="size-3.5" />
-          </Button>
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent onCloseAutoFocus={(event) => event.preventDefault()}>
+            {tab.kind === "browser" ? (
+              <Globe className="size-3.5 shrink-0" aria-hidden="true" />
+            ) : (
+              <TerminalSquare
+                className="size-3.5 shrink-0"
+                aria-hidden="true"
+              />
+            )}
+            <LandingPanelTabLabel
+              instanceId={tab.instanceId}
+              displayName={displayName}
+              isEditing={isEditing}
+              inputProps={rename.inputProps}
+              row={props.row}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Close ${displayName}`}
+              className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100"
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onClose(tab);
+              }}
+            >
+              <X className="size-3.5" />
+            </Button>
+          </div>
+        }
+      />
+      <ContextMenuContent
+        finalFocus={false}
+        portalProps={{ style: { pointerEvents: "none" } }}
+      >
         <ContextMenuItem
           disabled={!props.canRename}
-          onSelect={rename.startEditing}
+          onClick={rename.startEditing}
         >
           <Pencil className="size-4" />
           Rename
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => props.onClose(tab)}>
+        <ContextMenuItem onClick={() => props.onClose(tab)}>
           Close
         </ContextMenuItem>
-        <ContextMenuItem onSelect={props.onCloseAll}>Close All</ContextMenuItem>
+        <ContextMenuItem onClick={props.onCloseAll}>Close All</ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );

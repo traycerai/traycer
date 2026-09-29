@@ -47,7 +47,7 @@ export function focusBrowserAddressForShortcut(event: KeyboardEvent): boolean {
       .some(
         (target) =>
           target instanceof Element &&
-          target.matches('[role="dialog"][data-state="open"]'),
+          target.matches('[role="dialog"][data-open]'),
       )
   ) {
     return false;

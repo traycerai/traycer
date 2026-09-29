@@ -131,19 +131,17 @@ export function DraftsDialog(props: {
       <DialogContent
         className="flex max-h-[80dvh] flex-col overflow-hidden sm:max-w-2xl"
         aria-describedby={undefined}
-        onCloseAutoFocus={(event) => {
-          if (openingRow.current) event.preventDefault();
-        }}
+        finalFocus={() => !openingRow.current}
       >
         <DialogHeader>
           <DialogTitle>Drafts</DialogTitle>
         </DialogHeader>
         <Command
           shouldFilter={false}
-          loop
+          loopNavigation
           variant="embedded"
-          value={selectedId ?? ""}
-          onValueChange={setHighlightedId}
+          highlightedValue={selectedId ?? ""}
+          onHighlightChange={setHighlightedId}
           className="min-h-0 flex-1"
         >
           <div className="flex items-start pr-1">
@@ -151,18 +149,10 @@ export function DraftsDialog(props: {
               <CommandInput
                 placeholder="Search drafts"
                 value={search}
-                onValueChange={setSearch}
+                onChange={(event) => setSearch(event.target.value)}
                 onKeyDown={(event) => {
-                  // Claimed before cmdk so the open is a keyboard one; cmdk
-                  // skips a prevented event. A composing Enter is the IME's.
-                  if (
-                    event.key !== "Enter" ||
-                    event.nativeEvent.isComposing ||
-                    // eslint-disable-next-line @typescript-eslint/no-deprecated -- Safari reports the IME-confirming Enter with isComposing already false; only keyCode 229 marks it, and there is no non-deprecated spelling
-                    event.keyCode === 229
-                  ) {
-                    return;
-                  }
+                  // Command's capture guard has already excluded IME confirmation.
+                  if (event.key !== "Enter") return;
                   event.preventDefault();
                   const highlighted = visibleRows.find(
                     (row) => row.id === selectedId,
@@ -174,19 +164,21 @@ export function DraftsDialog(props: {
               />
             </div>
             <Popover>
-              <PopoverTrigger asChild>
-                <Button
-                  type="button"
-                  variant={filtered ? "secondary" : "ghost"}
-                  size="icon-sm"
-                  aria-label="Filter drafts"
-                  className="mt-1.5"
-                  // cmdk would take the Enter for the highlighted row.
-                  onKeyDown={(event) => event.stopPropagation()}
-                >
-                  <ListFilter aria-hidden />
-                </Button>
-              </PopoverTrigger>
+              <PopoverTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant={filtered ? "secondary" : "ghost"}
+                    size="icon-sm"
+                    aria-label="Filter drafts"
+                    className="mt-1.5"
+                    // cmdk would take the Enter for the highlighted row.
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
+                    <ListFilter aria-hidden />
+                  </Button>
+                }
+              />
               <PopoverContent
                 align="end"
                 className="w-auto"
@@ -258,7 +250,7 @@ function FilterOption(props: {
     <label className="flex cursor-pointer items-center gap-2 text-ui-sm">
       <Checkbox
         checked={props.checked}
-        onCheckedChange={(value) => props.onChange(value === true)}
+        onCheckedChange={(value) => props.onChange(value)}
       />
       {props.label}
     </label>

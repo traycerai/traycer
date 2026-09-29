@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import type { Select as SelectPrimitive } from "@base-ui/react/select";
 import {
   Select,
   SelectContent,
@@ -7,13 +8,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import type { PresentationLossDetails } from "@/components/ui/closing-overlay-presentation";
 import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
 
 afterEach(cleanup);
 
+const HOST_ITEMS = {
+  "host-a": "Hardiks-MacBook-Pro",
+  "host-b": "Other-Host",
+};
+
 function HostSelect(): React.JSX.Element {
   return (
-    <Select value="host-a" onValueChange={() => undefined}>
+    <Select items={HOST_ITEMS} value="host-a" onValueChange={() => undefined}>
       <SelectTrigger aria-label="Host">
         <SelectValue placeholder="Local" />
       </SelectTrigger>
@@ -27,12 +34,13 @@ function HostSelect(): React.JSX.Element {
 
 describe("<Select /> inside a background split pane", () => {
   it("keeps the selected value's label on the trigger while the pane is unfocused", () => {
-    // Radix renders CLOSED content into a DocumentFragment and portals the
-    // selected `SelectItemText` out of it into the trigger's value node. A
-    // background pane that un-presents by unmounting the content therefore
-    // blanks the trigger - and the placeholder cannot cover it, because Radix
-    // suppresses the placeholder whenever `value` is set. That is how a split
-    // pane lost its host name while still showing the chevron.
+    // Base's `<Select.Value>` renders the label straight out of the `items`
+    // map by the selected `value`, independent of whether the popup's content
+    // is open, closed, or even mounted at all - unlike Radix, there is no
+    // portal-out-of-closed-content mechanism left to preserve. A background
+    // pane that un-presents the popup therefore can't blank the trigger; that
+    // is how a split pane used to lose its host name while still showing the
+    // chevron.
     render(
       <SurfacePresentationBoundary visible focused={false}>
         <HostSelect />
@@ -58,13 +66,20 @@ describe("<Select /> inside a background split pane", () => {
   });
 
   it("does not present an open menu from a background pane", () => {
-    // The reason the guard exists: an open Select drives a focus trap,
-    // `hideOthers` and a scroll lock document-wide, which must not survive the
-    // pane going to the background. Closing achieves that; the label above
-    // proves it does so without unmounting the closed content.
+    // D13: DropdownMenu, ContextMenu and Select genuinely close on
+    // presentation loss - `useClosingOverlay`'s `present = !concealed &&
+    // paneFocused` gate forces `open` false the instant the pane is
+    // unfocused, before this ever reaches Base's own open state. That is what
+    // must not survive the pane going to the background (an open Select
+    // otherwise drives a focus trap and a document-wide scroll lock).
     render(
       <SurfacePresentationBoundary visible focused={false}>
-        <Select defaultOpen value="host-a" onValueChange={() => undefined}>
+        <Select
+          items={HOST_ITEMS}
+          defaultOpen
+          value="host-a"
+          onValueChange={() => undefined}
+        >
           <SelectTrigger aria-label="Host">
             <SelectValue placeholder="Local" />
           </SelectTrigger>
@@ -81,13 +96,31 @@ describe("<Select /> inside a background split pane", () => {
   });
 
   it("does not spring back open when the pane regains focus", () => {
-    // The reason `wasPaneFocused` exists: settling the remembered open state
-    // to closed on blur makes backgrounding a real close, so a later refocus
-    // must not restore it - Radix never calls `onOpenChange` for this
-    // controlled close, so nothing else would clear the uncontrolled state.
+    // D13: unlike the old Radix-era guard (which relied on a component-local
+    // `wasPaneFocused` flag because Radix never called `onOpenChange` for
+    // this close), the wrapper now genuinely closes the uncontrolled state
+    // itself - `useClosingOverlay` calls `setInternalOpen(false)` the instant
+    // the pane un-presents - and separately fires exactly one mandatory,
+    // non-cancellable `reason: "presentation-loss"` notification. A later
+    // refocus only re-presents whatever is still logically open, which is
+    // now nothing, so there is no state left to "spring back".
+    const onOpenChange: Mock<
+      (
+        open: boolean,
+        details:
+          | PresentationLossDetails
+          | SelectPrimitive.Root.ChangeEventDetails,
+      ) => void
+    > = vi.fn();
     const { rerender } = render(
       <SurfacePresentationBoundary visible focused>
-        <Select defaultOpen value="host-a" onValueChange={() => undefined}>
+        <Select
+          items={HOST_ITEMS}
+          defaultOpen
+          value="host-a"
+          onValueChange={() => undefined}
+          onOpenChange={onOpenChange}
+        >
           <SelectTrigger aria-label="Host">
             <SelectValue placeholder="Local" />
           </SelectTrigger>
@@ -101,7 +134,13 @@ describe("<Select /> inside a background split pane", () => {
 
     rerender(
       <SurfacePresentationBoundary visible focused={false}>
-        <Select defaultOpen value="host-a" onValueChange={() => undefined}>
+        <Select
+          items={HOST_ITEMS}
+          defaultOpen
+          value="host-a"
+          onValueChange={() => undefined}
+          onOpenChange={onOpenChange}
+        >
           <SelectTrigger aria-label="Host">
             <SelectValue placeholder="Local" />
           </SelectTrigger>
@@ -113,9 +152,29 @@ describe("<Select /> inside a background split pane", () => {
       </SurfacePresentationBoundary>,
     );
 
+    // The genuine close is mandatory and non-cancellable: exactly one
+    // presentation-loss notification, with no `cancel()` on its details.
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(
+      false,
+      expect.objectContaining({
+        reason: "presentation-loss",
+        cause: "pane-blur",
+      }),
+    );
+    const details = onOpenChange.mock.calls[0]?.[1];
+    expect(details.event).toBeInstanceOf(Event);
+    expect(Reflect.has(details, "cancel")).toBe(false);
+
     rerender(
       <SurfacePresentationBoundary visible focused>
-        <Select defaultOpen value="host-a" onValueChange={() => undefined}>
+        <Select
+          items={HOST_ITEMS}
+          defaultOpen
+          value="host-a"
+          onValueChange={() => undefined}
+          onOpenChange={onOpenChange}
+        >
           <SelectTrigger aria-label="Host">
             <SelectValue placeholder="Local" />
           </SelectTrigger>
@@ -126,6 +185,10 @@ describe("<Select /> inside a background split pane", () => {
         </Select>
       </SurfacePresentationBoundary>,
     );
+
+    // Returning focus must not re-open and must not fire a second
+    // notification - the close is permanent for this cycle.
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
 
     expect(screen.queryByRole("listbox")).toBeNull();
   });

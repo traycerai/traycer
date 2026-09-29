@@ -3549,9 +3549,10 @@ describe("<HomeFocusView /> narrow host heading", () => {
     }
     // The whole name stays reachable on a pointer, since the visible one is
     // cut - a real `TooltipWrapper` rather than a native `title`, which this
-    // app bans outright. Radix marks its trigger, which is the only trace a
-    // closed tooltip leaves in the DOM.
-    expect(hosts[1].getAttribute("data-state")).toBe("closed");
+    // app bans outright. Base's trigger carries `data-popup-open` only while
+    // open, so a closed tooltip's trigger is this bare span with no trace of
+    // the open state at all.
+    expect(hosts[1].hasAttribute("data-popup-open")).toBe(false);
     // The count is the part that must not give way.
     expect(hosts[1].nextElementSibling?.className).toContain("shrink-0");
     expect(

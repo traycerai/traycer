@@ -1,32 +1,14 @@
-/**
- * Palette-specific row wrapper around cmdk's raw
- * `Command.Item`. The shadcn `CommandItem` primitive renders a
- * hidden `CheckIcon` with `ml-auto` that, even with `opacity-0`,
- * still takes layout width - visible as a ~16px gap at the right
- * edge of every palette row that has no `CommandShortcut`. The
- * palette never uses the check behavior, so we skip the primitive
- * and apply its className directly here.
- *
- * No `hover:` fill: cmdk already selects the row under a moving pointer,
- * so a hover fill only ever paints a SECOND highlight, on whatever row a
- * resting pointer sits over when the palette opens or the list reorders.
- */
 import * as React from "react";
-import { Command as CommandPrimitive } from "cmdk";
-import { cn } from "@/lib/utils";
+import { CommandItem } from "@/components/ui/command";
 
-const ROW_CLASSNAME =
-  "group/command-item relative flex cursor-default items-center gap-2 rounded-sm border border-transparent px-2 py-1.5 text-ui-sm outline-hidden select-none transition-[background-color,border-color,box-shadow,color] duration-150 in-data-[slot=dialog-content]:rounded-lg data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:border-primary/35 data-[selected=true]:bg-[color-mix(in_srgb,var(--primary)_14%,var(--popover))] data-[selected=true]:text-foreground data-[selected=true]:shadow-sm [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-[selected=true]:*:[svg]:text-primary";
-
-export function PaletteItemRow({
-  className,
-  ...props
-}: React.ComponentProps<typeof CommandPrimitive.Item>) {
-  return (
-    <CommandPrimitive.Item
-      data-slot="command-item"
-      className={cn(ROW_CLASSNAME, className)}
-      {...props}
-    />
-  );
+/**
+ * Action palettes have no chosen-value checkmark. No `hover:` fill either:
+ * Command already selects the row under a moving pointer, so a hover fill
+ * would only paint a SECOND highlight on whatever row a resting pointer sits
+ * over when the palette opens or the list reorders.
+ */
+export function PaletteItemRow(
+  props: React.ComponentProps<typeof CommandItem>,
+) {
+  return <CommandItem {...props} showCheck={false} />;
 }

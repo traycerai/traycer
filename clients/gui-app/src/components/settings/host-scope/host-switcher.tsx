@@ -267,7 +267,7 @@ export function HostSwitcher(props: {
   readonly updateViewForHost: ((hostId: string) => FleetUpdateView) | null;
 }): ReactNode {
   const [open, setOpen] = useState(false);
-  const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
+  const { contentRef, initialFocus: coarseInitialFocus } =
     useCoarsePointerOpenAutoFocus();
   const binding = useHostBinding();
   useRefreshHostDirectoryOnOpen(open, binding?.directory ?? null);
@@ -365,17 +365,17 @@ export function HostSwitcher(props: {
         // 20rem is a FLOOR for the narrow case (the rail, whose trigger is far
         // too narrow to read host names in), not a size.
         className={cn(
-          "w-[min(90vw,20rem)] min-w-[var(--radix-popover-trigger-width)] max-w-[var(--radix-popover-content-available-width)]",
+          "w-[min(90vw,20rem)] min-w-[var(--anchor-width)] max-w-[var(--available-width)]",
           surface.list,
         )}
         data-testid="settings-host-switcher-list"
         {...{ [HOST_SWITCHER_LIST_ATTRIBUTE]: "true" }}
         ref={contentRef}
         // Only the search input is worth declining for; below the threshold
-        // there is no input and Radix's default lands on a host row, which
+        // there is no input and Base's default lands on a host row, which
         // summons nothing.
-        onOpenAutoFocus={
-          hosts.length >= SEARCH_THRESHOLD ? coarseOpenAutoFocus : undefined
+        initialFocus={
+          hosts.length >= SEARCH_THRESHOLD ? coarseInitialFocus : undefined
         }
       >
         <Command>
@@ -410,9 +410,9 @@ export function HostSwitcher(props: {
             {trailingAction === null ? null : (
               <CommandGroup>
                 <CommandItem
-                  value={trailingAction.commandValue}
+                  itemKey={trailingAction.commandValue}
                   keywords={[...trailingAction.keywords]}
-                  onSelect={() => {
+                  onAction={() => {
                     setOpen(false);
                     trailingAction.onSelect();
                   }}
@@ -473,57 +473,58 @@ function HostSwitcherTrigger(props: {
     props.disabled && props.keepFocusableWhenDisabled === true;
 
   return (
-    <PopoverTrigger asChild>
-      <Button
-        type="button"
-        variant="ghost"
-        // The DESTINATION belongs in the accessible name, not just the role.
-        // A bare "Host" would tell a screen-reader user what the control is
-        // for while withholding the one thing it displays.
-        // Named for what choosing DOES here. "Settings host" is the viewing
-        // scope; a `bind` surface is choosing the host the window runs on, and
-        // a screen reader that hears "Settings host" in the composer is being
-        // told about a different control than the one it is on.
-        aria-label={hostSwitcherLabel(props.intent, selected, triggerStatus)}
-        aria-disabled={keepFocusableWhenDisabled ? true : undefined}
-        disabled={props.disabled ? !keepFocusableWhenDisabled : undefined}
-        onClick={
-          keepFocusableWhenDisabled
-            ? (event: React.MouseEvent<HTMLButtonElement>) =>
-                event.preventDefault()
-            : undefined
-        }
-        data-testid="settings-host-switcher"
-        className={cn(
-          "group/host-switcher h-auto w-full justify-start gap-3 px-3 py-2 text-start",
-          "aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:bg-transparent",
-          props.surface.trigger,
-        )}
-      >
-        {/* Healthy is the default and stays silent. Only an exception status
-          earns space in this compact trigger. */}
-        <span
+    <PopoverTrigger
+      onClick={
+        keepFocusableWhenDisabled
+          ? (event) => event.preventBaseUIHandler()
+          : undefined
+      }
+      render={
+        <Button
+          type="button"
+          variant="ghost"
+          // The DESTINATION belongs in the accessible name, not just the role.
+          // A bare "Host" would tell a screen-reader user what the control is
+          // for while withholding the one thing it displays.
+          // Named for what choosing DOES here. "Settings host" is the viewing
+          // scope; a `bind` surface is choosing the host the window runs on, and
+          // a screen reader that hears "Settings host" in the composer is being
+          // told about a different control than the one it is on.
+          aria-label={hostSwitcherLabel(props.intent, selected, triggerStatus)}
+          aria-disabled={keepFocusableWhenDisabled ? true : undefined}
+          disabled={props.disabled ? !keepFocusableWhenDisabled : undefined}
+          data-testid="settings-host-switcher"
           className={cn(
-            "min-w-0 flex-1 truncate text-ui-sm font-medium",
-            selected === null || props.surfaceKind === "inline"
-              ? "text-muted-foreground"
-              : "text-foreground",
-            !props.disabled && "group-hover/host-switcher:text-foreground",
+            "group/host-switcher h-auto w-full justify-start gap-3 px-3 py-2 text-start",
+            "aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:bg-transparent",
+            props.surface.trigger,
           )}
         >
-          {selected === null ? "Select a host" : selected.name}
-        </span>
-        {triggerStatus === null ? null : (
+          {/* Healthy is the default and stays silent. Only an exception status
+          earns space in this compact trigger. */}
           <span
-            className="shrink-0 text-ui-xs text-muted-foreground"
-            data-testid="settings-host-switcher-status"
+            className={cn(
+              "min-w-0 flex-1 truncate text-ui-sm font-medium",
+              selected === null || props.surfaceKind === "inline"
+                ? "text-muted-foreground"
+                : "text-foreground",
+              !props.disabled && "group-hover/host-switcher:text-foreground",
+            )}
           >
-            {triggerStatus}
+            {selected === null ? "Select a host" : selected.name}
           </span>
-        )}
-        <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-      </Button>
-    </PopoverTrigger>
+          {triggerStatus === null ? null : (
+            <span
+              className="shrink-0 text-ui-xs text-muted-foreground"
+              data-testid="settings-host-switcher-status"
+            >
+              {triggerStatus}
+            </span>
+          )}
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+        </Button>
+      }
+    />
   );
 }
 
@@ -555,7 +556,7 @@ function HostSwitcherRow(props: {
   });
   return (
     <CommandItem
-      value={host.hostId}
+      itemKey={host.hostId}
       // One predicate, asked here exactly as the button list asks it, so a row
       // that explains why it cannot be picked is also a row that cannot be
       // picked — on both kinds of container.
@@ -565,7 +566,7 @@ function HostSwitcherRow(props: {
         formatPlatform(host.platform) ?? "",
         formatHostVersion(host.version) ?? "",
       ]}
-      onSelect={props.onSelect}
+      onAction={props.onSelect}
       data-testid={`settings-host-switcher-option-${host.hostId}`}
       data-scoped={props.scoped ? "true" : "false"}
       data-checked={props.scoped ? "true" : undefined}

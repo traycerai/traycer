@@ -158,7 +158,9 @@ describe("useSystemBack", () => {
       </RunnerHostProvider>,
     );
     await waitFor(() => {
-      expect(document.body.style.pointerEvents).toBe("none");
+      expect(
+        document.documentElement.hasAttribute("data-base-ui-scroll-locked"),
+      ).toBe(true);
     });
 
     act(() => systemBack.press());

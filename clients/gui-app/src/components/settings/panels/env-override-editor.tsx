@@ -448,9 +448,11 @@ function EnvValueField(props: {
   return (
     <div className={cn("flex min-w-0 items-center gap-2", className)}>
       <Select
+        items={{ set: "Set", unset: "Unset" }}
         value={mode}
         disabled={disabled}
         onValueChange={(next) => {
+          if (next === null) return;
           if (isEnvMode(next)) onModeChange(next);
         }}
       >

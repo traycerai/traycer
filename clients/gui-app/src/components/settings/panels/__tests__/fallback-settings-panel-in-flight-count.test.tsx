@@ -417,8 +417,8 @@ describe("FallbackSettingsPanel - the policy read stays read-once while the coun
     expect(
       screen
         .getByRole("option", { name: "15 seconds" })
-        .getAttribute("data-state"),
-    ).toBe("checked");
+        .hasAttribute("data-selected"),
+    ).toBe(true);
   });
 });
 

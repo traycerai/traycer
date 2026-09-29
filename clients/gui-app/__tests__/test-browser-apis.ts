@@ -364,9 +364,9 @@ if (typeof globalThis.createImageBitmap === "undefined") {
   });
 }
 
-// Radix-ui's DropdownMenu / Popover triggers route through Pointer Events
-// that jsdom does not implement. Stub the pointer-capture methods and
-// `scrollIntoView` so opening a menu in tests does not throw.
+// jsdom lacks these DOM methods. Base UI's SliderControl uses pointer capture;
+// Command navigation calls scrollIntoView, and chat-message-user-body calls
+// scrollBy when bringing the edited message into view.
 if (typeof Element !== "undefined") {
   const elementProto = Element.prototype as Element & {
     hasPointerCapture?: (pointerId: number) => boolean;

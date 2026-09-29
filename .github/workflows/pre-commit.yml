@@ -70,6 +70,9 @@ jobs:
             ${{ runner.os }}-eslint-
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Scan all OSS UI sources and dependencies (uncached)
+        if: matrix.lane == 'static'
+        run: bun run check:ui-migration
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
         if: matrix.lane == 'static'
         env:

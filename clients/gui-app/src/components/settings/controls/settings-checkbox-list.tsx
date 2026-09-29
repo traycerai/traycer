@@ -96,8 +96,7 @@ export function SettingsCheckboxList<Value>(
           <Checkbox
             checked={item.checked}
             disabled={item.disabled}
-            onCheckedChange={(next) => {
-              if (next === "indeterminate") return;
+            onCheckedChange={() => {
               props.onToggle(item.value);
             }}
           />

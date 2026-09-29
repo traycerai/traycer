@@ -148,9 +148,8 @@ describe("BrowserViewportToolbar", () => {
 
     fireEvent.focus(width);
     fireEvent.change(width, { target: { value: "600" } });
-    fireEvent.pointerDown(
+    fireEvent.click(
       screen.getByRole("button", { name: "Viewport dimensions" }),
-      { button: 0 },
     );
     fireEvent.click(screen.getByRole("menuitem", { name: /Desktop/ }));
     await act(() => Promise.resolve());

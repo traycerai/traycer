@@ -66,7 +66,7 @@ function fadeClassForEdges(edges: ScrollEdges): string | null {
  * The category tab bar for the mobile "Switch tab" sheet: a `line`-variant
  * `TabsList` whose triggers take natural width and scroll horizontally when the
  * curated categories overflow phone width. Rendered inside the sheet's `Tabs`
- * root so selection flows through Radix. Identity comes from
+ * root so selection flows through Base. Identity comes from
  * {@link visibleSwitcherCategoryDefs} (the desktop left-panel registry).
  */
 export function SwitcherCategoryTabs() {
@@ -116,7 +116,7 @@ export function SwitcherCategoryTabs() {
             // so a rem-based `11` is 41.25px and would leave the 44px hit-slop
             // `::after` spilling out of the list's exact fit.
             //
-            // `data-[state=active]:bg-transparent`: force the active state
+            // `data-active:bg-transparent`: force the active state
             // fill-less, so it paints no box where the active `--background`
             // differs from the sheet surface - e.g. a white box in a light
             // portal. `ui/tabs`' line variant already answers this for a
@@ -139,7 +139,7 @@ export function SwitcherCategoryTabs() {
             // rule overrides the geometry - hangs 5px below the trigger and
             // reopens the spill; pinning it flush is the same "nothing exceeds
             // the list" rule as the height above.
-            className="min-h-[44px] flex-none data-[state=active]:bg-transparent dark:data-[state=active]:bg-transparent group-data-[orientation=horizontal]/tabs:after:bottom-0 before:pointer-events-none before:absolute before:inset-x-0 before:bottom-0 before:h-0.5 before:rounded-full before:bg-foreground before:opacity-0 before:transition-opacity data-[state=active]:before:opacity-100"
+            className="min-h-[44px] flex-none data-active:bg-transparent dark:data-active:bg-transparent group-data-[orientation=horizontal]/tabs:after:bottom-0 before:pointer-events-none before:absolute before:inset-x-0 before:bottom-0 before:h-0.5 before:rounded-full before:bg-foreground before:opacity-0 before:transition-opacity data-active:before:opacity-100"
             data-testid={`mobile-switcher-tab-${definition.id}`}
           >
             <Icon className="size-4" />

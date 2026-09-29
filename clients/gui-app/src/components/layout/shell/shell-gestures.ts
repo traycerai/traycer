@@ -291,29 +291,20 @@ export function withinTextEntry(target: EventTarget | null): boolean {
  * Whether a layer is covering the app - a dialog, a sheet, an alert, a modal
  * menu, or a surface that blocks the app by its own means.
  *
- * TWO SOURCES, because there are two ways to be blocking and only one of them
- * is visible in the DOM.
+ * Read the document barriers raised by modal primitives, plus the explicit
+ * claim held by app-owned blocking surfaces.
  *
- * The first is `body`'s inline `pointer-events`, which the dismissable-layer
- * primitive sets to `none` for as long as at least one layer has outside
- * pointer events disabled, and restores when the last one unmounts. That is not
- * a proxy for the question: it IS the question. "A modal layer is up" matters
- * here only because it means the surface underneath is not the user's to
- * interact with, and this is the app declaring exactly that. Every surface
- * using the primitive's modal machinery funnels through it, so nothing has to
- * be enumerated and nothing new has to be remembered when one is added.
+ * Base UI marks the document while a modal dialog or sheet locks scrolling;
+ * the pointer-events barrier covers any older modal owner still using it.
  *
- * The second is the explicit claim, for surfaces that block WITHOUT that
- * machinery - the ones that mount the primitive non-modally and inert a subtree
- * of their own instead, so the document never learns anything. They are no less
- * blocking for it; they are just silent, and a guard reading only the barrier
- * would wave a gesture straight through them.
+ * The explicit claim covers surfaces that block without either barrier.
  *
- * Cheap enough to ask per gesture: an inline style read on one element and a
- * counter, no query and no layout.
+ * Cheap enough to ask per gesture: two attributes and a counter, no layout.
  */
 export function modalLayerCoversApp(): boolean {
   if (document.body.style.pointerEvents === "none") return true;
+  if (document.documentElement.hasAttribute("data-base-ui-scroll-locked"))
+    return true;
   return blockingLayerClaimed();
 }
 

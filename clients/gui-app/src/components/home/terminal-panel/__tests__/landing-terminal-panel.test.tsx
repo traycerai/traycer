@@ -1753,11 +1753,16 @@ describe("<LandingTerminalPanel />", () => {
     expect(renameItem.getAttribute("data-disabled")).not.toBeNull();
 
     // `fireEvent.click` targets the node directly (no pointer hit-testing),
-    // and the strip's `ContextMenu` is `modal={false}` (see
-    // `landing-terminal-tab-strip.tsx`), so the still-open menu blocks
-    // nothing here - closing it first would only add noise.
+    // and the strip's `ContextMenu` restores Radix's old pointer pass-through
+    // via `portalProps` (see `landing-terminal-tab-strip.tsx`), so the still-
+    // open menu blocks nothing here - closing it first would only add noise.
+    // Base still marks the rest of the strip `aria-hidden`/inert while its
+    // menu is open, so the query needs `hidden: true` to see past that.
     fireEvent.click(
-      screen.getByRole("button", { name: "Close Reasonix sign-in" }),
+      screen.getByRole("button", {
+        name: "Close Reasonix sign-in",
+        hidden: true,
+      }),
     );
     await waitFor(() => {
       expect(mocks.killAsync).toHaveBeenCalledWith({
@@ -1768,6 +1773,53 @@ describe("<LandingTerminalPanel />", () => {
     // The capable arm's shared mutation never sees a provider-login close -
     // it has no plain-terminal row to require, and would reject.
     expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
+  });
+
+  // Migration owner's ruling: Base's row ContextMenu inerts the rest of the
+  // strip while open (unlike Radix's true `modal={false}`), and that is
+  // accepted behavior. Escape is the documented way back out of it, so this
+  // proves the inert state is not permanent - the moment the menu closes, an
+  // ordinary sighted-or-not query reaches the strip's other controls again.
+  it("closing a row's context menu with Escape restores the rest of the strip to the accessibility tree", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    const signInTab: LandingTerminalTabRef = {
+      kind: "terminal",
+      instanceId: "sign-in-instance",
+      sessionId: "term-sign-in",
+      hostId: "host-a",
+      cwd: "~",
+      name: "Reasonix sign-in",
+      titleSource: "manual",
+      origin: "provider-login",
+      originProviderId: "reasonix",
+    };
+    useLandingPanelStore.getState().addTab(signInTab);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const trigger = await screen.findByTestId(
+      "landing-terminal-tab-sign-in-instance",
+    );
+    fireEvent.contextMenu(trigger);
+    const menu = await screen.findByRole("menu");
+
+    // While the menu is open, the strip's other controls exist but are
+    // inert - not findable by an ordinary accessible query.
+    expect(screen.queryByRole("button", { name: "New tab" })).toBeNull();
+
+    fireEvent.keyDown(menu, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    // Closed: the rest of the strip is back in the accessibility tree.
+    expect(screen.getByRole("button", { name: "New tab" })).not.toBeNull();
   });
 
   it("reveals a host-created sign-in tab into a CLOSED panel without settling the open as a gesture", async () => {
@@ -2031,8 +2083,12 @@ describe("<LandingTerminalPanel />", () => {
     // removes the tab even though this host cannot be asked right now. The
     // fast-path RPC dispatch is skipped - the tombstone recovery bridge
     // drains it once the host's authority becomes ready.
+    // Rename was disabled, so the menu from the earlier `contextMenu` is
+    // still open; Base marks the rest of the strip inert while it is, so the
+    // query needs `hidden: true` to see the close button past that.
     const closeButton = screen.getByRole("button", {
       name: "Close Cached title",
+      hidden: true,
     });
     expect(
       closeButton instanceof HTMLButtonElement && closeButton.disabled,

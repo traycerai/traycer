@@ -140,7 +140,7 @@ function renderWithClient(children: ReactNode): void {
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider delayDuration={0}>{children}</TooltipProvider>
+      <TooltipProvider delay={0}>{children}</TooltipProvider>
     </QueryClientProvider>,
   );
 }

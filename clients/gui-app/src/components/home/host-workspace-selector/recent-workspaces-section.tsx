@@ -49,43 +49,47 @@ export function RecentWorkspacesSection(props: {
     });
   };
 
+  const visibleOpen = !empty && open;
+
   return (
     <Collapsible
       className="contents"
-      open={!empty && open}
+      open={visibleOpen}
       onOpenChange={(nextOpen) => {
         if (!empty) setOpen(nextOpen);
       }}
     >
-      <CollapsibleTrigger asChild>
-        <TooltipWrapper
-          label={empty ? "No recent folders" : null}
-          side="top"
-          sideOffset={4}
-          align="center"
-        >
-          <button
-            ref={triggerRef}
-            type="button"
-            aria-disabled={empty}
-            aria-label={`Recent folders, ${props.entries.length}`}
-            className="ms-auto inline-flex w-fit min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm text-muted-foreground outline-none transition-[background-color,color] hover:bg-foreground/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 aria-disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground [&[data-state=open]>svg]:rotate-90"
+      <CollapsibleTrigger
+        render={
+          <TooltipWrapper
+            label={empty ? "No recent folders" : null}
+            side="top"
+            sideOffset={4}
+            align="center"
           >
-            <ChevronRight
-              className="size-3.5 shrink-0 transition-transform duration-150 motion-reduce:transition-none"
-              aria-hidden
-            />
-            <span className="truncate">Recent</span>
-            <span
-              key={props.entries.length}
-              className="rounded-md bg-foreground/6 px-1.5 tabular-nums text-ui-xs text-muted-foreground motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95"
-              aria-hidden
+            <button
+              ref={triggerRef}
+              type="button"
+              aria-disabled={empty}
+              aria-label={`Recent folders, ${props.entries.length}`}
+              className="ms-auto inline-flex w-fit min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm text-muted-foreground outline-none transition-[background-color,color] hover:bg-foreground/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 aria-disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground [&[data-panel-open]>svg]:rotate-90"
             >
-              {props.entries.length}
-            </span>
-          </button>
-        </TooltipWrapper>
-      </CollapsibleTrigger>
+              <ChevronRight
+                className="size-3.5 shrink-0 transition-transform duration-150 motion-reduce:transition-none"
+                aria-hidden
+              />
+              <span className="truncate">Recent</span>
+              <span
+                key={props.entries.length}
+                className="rounded-md bg-foreground/6 px-1.5 tabular-nums text-ui-xs text-muted-foreground motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95"
+                aria-hidden
+              >
+                {props.entries.length}
+              </span>
+            </button>
+          </TooltipWrapper>
+        }
+      />
       <CollapsibleContent ref={sectionRef} className="min-w-0 basis-full">
         <div className="flex min-w-0 flex-col gap-1 pt-1">
           {props.entries.map((entry, index) => (

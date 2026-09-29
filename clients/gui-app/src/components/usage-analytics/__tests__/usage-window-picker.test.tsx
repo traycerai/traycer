@@ -7,9 +7,9 @@ afterEach(cleanup);
 
 describe("UsageWindowPicker", () => {
   it("calls onChange with the selected window length", async () => {
-    // Radix's `TabsTrigger` selects on `onMouseDown`, not `onClick` - a bare
-    // `fireEvent.click()` never fires it. `userEvent` synthesizes the full
-    // pointer sequence (mousedown included), matching real interaction.
+    // Tab selection also reacts to pointerdown, not just click - a bare
+    // `fireEvent.click()` skips it. `userEvent` synthesizes the full
+    // pointer sequence, matching real interaction.
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(
@@ -32,11 +32,11 @@ describe("UsageWindowPicker", () => {
       />,
     );
     expect(
-      screen.getByRole("tab", { name: "90 days" }).getAttribute("data-state"),
-    ).toBe("active");
+      screen.getByRole("tab", { name: "90 days" }).hasAttribute("data-active"),
+    ).toBe(true);
     expect(
-      screen.getByRole("tab", { name: "7 days" }).getAttribute("data-state"),
-    ).toBe("inactive");
+      screen.getByRole("tab", { name: "7 days" }).hasAttribute("data-active"),
+    ).toBe(false);
   });
 
   it("lets the window tabs wrap within a narrow container", () => {

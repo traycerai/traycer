@@ -899,7 +899,7 @@ function SegmentChip(props: {
   if (props.disabledReason === null) return button;
   return (
     <Tooltip>
-      <TooltipTrigger asChild>{button}</TooltipTrigger>
+      <TooltipTrigger render={button} />
       <TooltipContent>{props.disabledReason}</TooltipContent>
     </Tooltip>
   );

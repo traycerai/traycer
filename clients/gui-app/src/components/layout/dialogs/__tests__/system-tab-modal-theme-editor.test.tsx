@@ -166,8 +166,18 @@ describe("SystemTabModalHost theme editor integration", () => {
     });
 
     const settings = await screen.findByRole("dialog", { name: "Settings" });
+    const underlay = screen.getByTestId("underlay");
+    // D17: Radix's modal Dialog additionally forced
+    // `document.body.style.pointerEvents = "none"` while open; Base UI has no
+    // such internal, and nothing in production sets it in Base's place. The
+    // real guarantee this test cares about - background content can't be
+    // reached while a modal is up - is Base's own `aria-hidden` marking of
+    // everything outside the open dialog's floating tree (`markOthers` in
+    // `FloatingFocusManager`), which the CDP gate's `gatePresented`
+    // (`scripts/primitive-gate-browser.mjs`) already verifies against real
+    // hit-testing. Assert that marking directly instead.
     await waitFor(() => {
-      expect(document.body.style.pointerEvents).toBe("none");
+      expect(underlay.closest('[aria-hidden="true"]')).not.toBeNull();
     });
 
     const darkPicker = within(settings).getByRole("button", {
@@ -206,8 +216,14 @@ describe("SystemTabModalHost theme editor integration", () => {
     );
 
     const editor = await screen.findByRole("dialog", { name: "Theme editor" });
+    // Settings hands its `modal` lock off to the editor (`modal={!editingTheme}`
+    // in system-tab-modal-host.tsx) precisely because the editor is a plain
+    // `role="dialog" aria-modal={false}` panel portalled to `document.body`,
+    // not a Base primitive of its own - if Settings stayed modal, Base would
+    // mark the editor `aria-hidden` right along with the rest of the
+    // background, since the editor sits outside Settings' floating tree.
     await waitFor(() => {
-      expect(document.body.style.pointerEvents).not.toBe("none");
+      expect(editor.closest('[aria-hidden="true"]')).toBeNull();
     });
     expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
     expect(document.activeElement).toBe(
@@ -220,7 +236,7 @@ describe("SystemTabModalHost theme editor integration", () => {
     await waitFor(() => {
       expect(useThemeLibraryStore.getState().draft).toBeNull();
       expect(screen.queryByRole("dialog", { name: "Theme editor" })).toBeNull();
-      expect(document.body.style.pointerEvents).toBe("none");
+      expect(underlay.closest('[aria-hidden="true"]')).not.toBeNull();
     });
     expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
 
@@ -250,7 +266,7 @@ describe("SystemTabModalHost theme editor integration", () => {
     await waitFor(() => {
       expect(useThemeLibraryStore.getState().draft).toBeNull();
       expect(screen.queryByRole("dialog", { name: "Theme editor" })).toBeNull();
-      expect(document.body.style.pointerEvents).toBe("none");
+      expect(underlay.closest('[aria-hidden="true"]')).not.toBeNull();
     });
     expect(screen.getByRole("dialog", { name: "History" })).toBeTruthy();
   });

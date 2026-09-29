@@ -141,10 +141,58 @@ code,
   ) {
   transition-duration: var(--panel-motion-duration);
 }
-/* Vaul writes inline settle durations; preserve its transition-property: none while dragging. */
+/* Keep gesture settling and opening keyframes on the same panel clock. */
 :root :is([data-slot="drawer-content"], [data-slot="drawer-overlay"]) {
   animation-duration: var(--panel-motion-duration) !important;
   transition-duration: var(--panel-motion-duration) !important;
+}
+
+/* A 3D opening keyframe preserves the original drawer's compositing of its
+   scrollable descendants; its resting transform remains none. */
+@keyframes drawer-enter {
+  from {
+    transform: translate3d(
+      var(--drawer-enter-x, 0),
+      var(--drawer-enter-y, 0),
+      0
+    );
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/* Preserve the same background during rubber-band overscroll past the
+   anchored edge; the original drawer backs this with the same surface. */
+[data-slot="drawer-content"]::after {
+  content: "";
+  position: absolute;
+  background: inherit;
+  background-color: inherit;
+}
+[data-slot="drawer-content"][data-swipe-direction="down"]::after {
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 200%;
+}
+[data-slot="drawer-content"][data-swipe-direction="up"]::after {
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  height: 200%;
+}
+[data-slot="drawer-content"][data-swipe-direction="left"]::after {
+  right: 100%;
+  top: 0;
+  bottom: 0;
+  width: 200%;
+}
+[data-slot="drawer-content"][data-swipe-direction="right"]::after {
+  left: 100%;
+  top: 0;
+  bottom: 0;
+  width: 200%;
 }
 
 :root[data-theme-sidebar-artwork]

@@ -56,10 +56,7 @@ export function FileSections(props: FileSectionsProps): ReactNode {
   );
 
   return (
-    <TooltipProvider
-      delayDuration={FILE_ROW_TOOLTIP_DELAY_MS}
-      skipDelayDuration={0}
-    >
+    <TooltipProvider delay={FILE_ROW_TOOLTIP_DELAY_MS} timeout={0}>
       <GitFileSectionStack
         epicId={props.epicId}
         viewTabId={props.viewTabId}

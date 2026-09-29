@@ -7,21 +7,16 @@
  *   - `CommandPaletteTestShell` skips React-backed sources so palette tests
  *     don't need a full host + query provider stack.
  *
- * The cmdk view/sub-page machinery is shared with the inline in-pane opener via
+ * The command view/sub-page machinery is shared with the inline in-pane opener via
  * `palette-cmdk.tsx`; this file owns only the modal chrome + the global root
  * (pinned / recents / scope buckets). The opener lives inline in empty panes
  * (`pane-opener.tsx`), not in this modal.
  *
  * Scope narrowing comes from the leading prefix character of the query
  * (`>`, `#`, `@`, `?`). The input shows the raw query with the prefix visible;
- * a custom cmdk filter strips the prefix before substring matching.
+ * a custom command filter strips the prefix before substring matching.
  */
-import {
-  useCallback,
-  useMemo,
-  type ComponentType,
-  type KeyboardEvent,
-} from "react";
+import { useCallback, useMemo, type ComponentType, useRef } from "react";
 import {
   Command,
   CommandEmpty,
@@ -43,10 +38,8 @@ import { PinToggle } from "@/components/command-palette/pin-toggle";
 import { SubpageView } from "@/components/command-palette/palette-cmdk";
 import {
   buildCmdkValue,
-  handlePalettePageNavigation,
   paletteFilter,
   usePaletteController,
-  usePaletteScrollReset,
 } from "@/components/command-palette/palette-cmdk-controller";
 import {
   bucketItems,
@@ -87,7 +80,7 @@ export interface CommandPaletteShellProps {
   readonly ctx: CommandContext;
   /**
    * Root command list. The shell mounts it only inside the OPEN dialog content
-   * (Radix unmounts content while closed), so the command sources it subscribes
+   * (the dialog unmounts content while closed), so the command sources it subscribes
    * to - canvas tabs, keybindings, host, history - don't run and can't
    * re-render the app behind a closed palette. Prod and test inject different
    * source sets via this seam.
@@ -116,17 +109,7 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
   const { activeSubpage, runItem, popSubpage, resetStack } =
     usePaletteController({ ctx, resetQuery, recordUse, close });
 
-  // Typing re-filters the list; `handleQueryChange` snaps back to the top so the
-  // auto-selected first match stays in view instead of cmdk's scroll landing
-  // off-target.
-  const { listRef, handleQueryChange } = usePaletteScrollReset(setQuery);
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
-      handlePalettePageNavigation(event, listRef);
-    },
-    [listRef],
-  );
-
+  const listRef = useRef<HTMLDivElement>(null);
   const handleOpenChange = useCallback(
     (next: boolean) => {
       if (!next) resetStack();
@@ -141,34 +124,35 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
   );
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next, details) => {
+        if (
+          !next &&
+          details.reason === "escape-key" &&
+          activeSubpage !== null
+        ) {
+          details.cancel();
+          popSubpage();
+        }
+        if (details.isCanceled) return;
+        handleOpenChange(next);
+      }}
+    >
       <DialogContent
         layout="banded"
         className="top-[15vh] w-full max-w-[min(90vw,40rem)] translate-y-0 overflow-hidden"
         showCloseButton={false}
-        // Radix's document-level Esc listener can't be reached via React
-        // propagation; `onEscapeKeyDown` + `preventDefault` is the first-party
-        // hook for popping a sub-page instead of closing the dialog.
-        onEscapeKeyDown={(event) => {
-          if (activeSubpage !== null) {
-            event.preventDefault();
-            popSubpage();
-          }
-        }}
       >
         <DialogHeader className="sr-only">
           <DialogTitle>Command Palette</DialogTitle>
           <DialogDescription>Search for a command to run.</DialogDescription>
         </DialogHeader>
-        <Command
-          filter={paletteFilter}
-          label="Search commands"
-          onKeyDown={handleKeyDown}
-        >
+        <Command scoreItem={paletteFilter} label="Search commands">
           <PaletteQueryProvider value={query}>
             <CommandInput
               value={query}
-              onValueChange={handleQueryChange}
+              onChange={(event) => setQuery(event.target.value)}
               placeholder={
                 activeSubpage !== null ? activeSubpage.title : PLACEHOLDER_HINT
               }
@@ -324,9 +308,9 @@ function GroupBlock(props: GroupBlockProps) {
         {bucket.items.map((item) => (
           <PaletteItemRow
             key={item.id}
-            value={buildCmdkValue(item)}
+            itemKey={buildCmdkValue(item)}
             keywords={[...item.keywords]}
-            onSelect={() => onSelect(item)}
+            onAction={() => onSelect(item)}
           >
             <span className="truncate">{item.label}</span>
             <PinToggle

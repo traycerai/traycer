@@ -18,10 +18,10 @@ export function RestartHostConfirmDialog(props: RestartHostConfirmDialogProps) {
       blockedReason={null}
       open={props.open}
       onOpenChange={props.onOpenChange}
-      onCloseAutoFocus={(event) => {
-        if (!navigationCloseRef.current) return;
+      finalFocus={() => {
+        const restore = !navigationCloseRef.current;
         navigationCloseRef.current = false;
-        event.preventDefault();
+        return restore;
       }}
       title="Restart host?"
       description="Restarting will stop in-progress agents, end any running terminal sessions, and cancel in-flight requests against this host."

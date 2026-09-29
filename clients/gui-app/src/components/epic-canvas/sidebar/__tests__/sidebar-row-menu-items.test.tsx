@@ -1,16 +1,16 @@
 /**
- * Sidebar row menu entries, against REAL Radix - no mocks.
+ * Sidebar row menu entries, against the REAL menu primitives - no mocks.
  *
  * The sibling sidebar suites mock `@/components/ui/dropdown-menu` and
  * `@/components/ui/tooltip`, which is fine for wiring but structurally cannot
  * check the things this file exists for: the accessible NAME a browser would
- * compute, the `aria-disabled` Radix derives from `disabled`, and whether a
- * tooltip trigger placed on the menu item via `asChild` actually still fires.
- * A pass-through mock satisfies all three by construction.
+ * compute, the `aria-disabled` the menu item derives from `disabled`, and
+ * whether a tooltip trigger placed on the menu item via `render` actually
+ * still fires. A pass-through mock satisfies all three by construction.
  *
  * That last one is the reason this file was added. The disabled-reason tooltip
- * used to sit on an intermediate wrapper; moving it onto the item means Radix's
- * `Slot` has to merge the trigger's handlers into a Radix menu item that
+ * used to sit on an intermediate wrapper; moving it onto the item means Base's
+ * `render` prop has to merge the trigger's handlers into a menu item that
  * defines several of its own. If that merge silently dropped them the tooltip
  * would simply never open, and every mocked test would still pass.
  */
@@ -85,7 +85,7 @@ function renderMenu(): void {
   );
 }
 
-describe("SidebarDropdownMenuItems against real Radix", () => {
+describe("SidebarDropdownMenuItems against the real menu primitive", () => {
   // This project runs vitest with `globals: false`, so Testing Library's
   // auto-cleanup never registers - without this each test inherits the
   // previous one's DOM and every query matches twice.
@@ -158,10 +158,10 @@ describe("SidebarDropdownMenuItems against real Radix", () => {
   });
 
   it("still opens the tooltip from the item itself", () => {
-    // The regression removing the wrapper could have caused: Radix `Slot` has
-    // to merge `TooltipTrigger`'s handlers into a menu item that defines its
-    // own. If they were dropped, the tooltip would never open and only an
-    // unmocked test would notice.
+    // The regression removing the wrapper could have caused: Base's `render`
+    // prop has to merge `TooltipTrigger`'s handlers into a menu item that
+    // defines its own. If they were dropped, the tooltip would never open and
+    // only an unmocked test would notice.
     renderMenu();
     expect(screen.queryByRole("tooltip")).toBeNull();
 

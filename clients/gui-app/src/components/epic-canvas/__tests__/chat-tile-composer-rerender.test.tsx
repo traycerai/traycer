@@ -112,7 +112,7 @@ const useUsageProbeStore = create<UsageProbeState>()((set) => ({
 function render(ui: ReactElement) {
   const result = testingRender(
     <TabHostProvider hostId="host-1">
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <LazyMotion features={domAnimation}>{ui}</LazyMotion>
       </TooltipProvider>
     </TabHostProvider>,
@@ -122,7 +122,7 @@ function render(ui: ReactElement) {
     rerender: (nextUi: ReactElement) =>
       result.rerender(
         <TabHostProvider hostId="host-1">
-          <TooltipProvider delayDuration={0}>
+          <TooltipProvider delay={0}>
             <LazyMotion features={domAnimation}>{nextUi}</LazyMotion>
           </TooltipProvider>
         </TabHostProvider>,

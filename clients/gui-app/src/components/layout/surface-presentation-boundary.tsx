@@ -30,12 +30,9 @@ import {
  *     would otherwise still target it).
  * Portals keep their typed state (no unmount).
  *
- * Modal-family Radix primitives (Dialog/Popover/Select/Dropdown/Context) instead
- * un-present by unmounting their content when unfocused (the only way to drop
- * their document-wide `hideOthers`/scroll-lock reach). That unmount runs Radix's
- * close-autofocus, which would restore focus to the pane's trigger and bounce
- * activation back; `usePaneCloseAutoFocusGuard` reads `data-pane-focused` off
- * this boundary at unmount time and `preventDefault`s the restore.
+ * Overlay presentation hooks close Base popups before disconnecting them and
+ * consult this boundary's live focus probe before restoring focus, so a
+ * background pane cannot reclaim activation from its focused partner.
  *
  * App-global hosts (command palette, global confirms, toasts/banners) live
  * OUTSIDE any pane, read the default-`true` activity, and portal to
@@ -49,7 +46,9 @@ export function SurfacePresentationBoundary(props: {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const probeRef = useRef<HTMLDivElement | null>(null);
   const isPaneFocused = useCallback(
-    () => probeRef.current?.dataset.paneFocused === "true",
+    () =>
+      probeRef.current?.isConnected === true &&
+      probeRef.current.dataset.paneFocused === "true",
     [],
   );
   const activity = useMemo(

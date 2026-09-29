@@ -89,8 +89,8 @@ function LifecycleHarness(): ReactNode {
         onPointerDown={lifecycle.onTriggerPointerDown}
         onKeyDown={lifecycle.onTriggerKeyDown}
         onClick={() => {
-          const openEvent = new Event("focus", { cancelable: true });
-          lifecycle.onContentOpenAutoFocus(openEvent);
+          const target = lifecycle.initialFocus();
+          if (target !== false) target.focus();
         }}
       >
         Open
@@ -102,9 +102,9 @@ function LifecycleHarness(): ReactNode {
         type="button"
         data-testid="lifecycle-escape-close"
         onClick={() => {
-          lifecycle.onContentEscapeKeyDown();
-          const closeEvent = new Event("focus", { cancelable: true });
-          lifecycle.onContentCloseAutoFocus(closeEvent);
+          lifecycle.markKeyboardDismiss();
+          const target = lifecycle.finalFocus();
+          if (target !== false) target.focus();
         }}
       >
         Escape close
@@ -113,8 +113,8 @@ function LifecycleHarness(): ReactNode {
         type="button"
         data-testid="lifecycle-other-close"
         onClick={() => {
-          const closeEvent = new Event("focus", { cancelable: true });
-          lifecycle.onContentCloseAutoFocus(closeEvent);
+          const target = lifecycle.finalFocus();
+          if (target !== false) target.focus();
         }}
       >
         Other close
@@ -123,8 +123,8 @@ function LifecycleHarness(): ReactNode {
         type="button"
         data-testid="lifecycle-programmatic-open"
         onClick={() => {
-          const openEvent = new Event("focus", { cancelable: true });
-          lifecycle.onContentOpenAutoFocus(openEvent);
+          const target = lifecycle.initialFocus();
+          if (target !== false) target.focus();
         }}
       >
         Programmatic open

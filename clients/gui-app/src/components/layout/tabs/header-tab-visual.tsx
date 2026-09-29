@@ -97,18 +97,20 @@ export function HeaderTabVisual(props: HeaderTabVisualProps) {
             data-leader-visible={props.leaderVisible}
           >
             <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="block min-w-0 flex-1">
-                  <span
-                    data-testid={`tab-title-${props.tab.kind}-${props.tab.id}`}
-                    className="header-tab-title block"
-                  >
-                    <span className="header-tab-title-text">
-                      {props.displayName}
+              <TooltipTrigger
+                render={
+                  <span className="block min-w-0 flex-1">
+                    <span
+                      data-testid={`tab-title-${props.tab.kind}-${props.tab.id}`}
+                      className="header-tab-title block"
+                    >
+                      <span className="header-tab-title-text">
+                        {props.displayName}
+                      </span>
                     </span>
                   </span>
-                </span>
-              </TooltipTrigger>
+                }
+              />
               <TooltipContent>
                 <div className="space-y-2">
                   <p>{props.displayName}</p>

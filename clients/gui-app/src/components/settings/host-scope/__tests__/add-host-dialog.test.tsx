@@ -333,8 +333,7 @@ describe("<AddHostDialog /> setup instructions", () => {
     const npmTab = screen.getByRole("tab", { name: "npm" });
     const homebrewTab = screen.getByRole("tab", { name: "Homebrew" });
 
-    expect(npmTab.getAttribute("data-state")).toBe("active");
-    expect(npmTab.className).toContain("data-[state=active]:bg-background");
+    expect(npmTab.hasAttribute("data-active")).toBe(true);
     expect(screen.getByText("npm install -g @traycerai/cli")).not.toBeNull();
     expect(
       screen.queryByText("brew install traycerai/traycer/traycer"),
@@ -342,7 +341,7 @@ describe("<AddHostDialog /> setup instructions", () => {
 
     await user.click(homebrewTab);
 
-    expect(homebrewTab.getAttribute("data-state")).toBe("active");
+    expect(homebrewTab.hasAttribute("data-active")).toBe(true);
     expect(
       screen.getByText("brew install traycerai/traycer/traycer"),
     ).not.toBeNull();

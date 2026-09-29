@@ -122,10 +122,7 @@ async function openExistingWorktreeSearch(): Promise<HTMLElement> {
       readOnly={false}
     />,
   );
-  fireEvent.pointerDown(screen.getByLabelText("Choose run location"), {
-    button: 0,
-    ctrlKey: false,
-  });
+  fireEvent.click(screen.getByLabelText("Choose run location"));
   const existingWorktree = await screen.findByRole("menuitem", {
     name: "Existing worktree",
   });
@@ -149,17 +146,16 @@ describe("existing-worktree submenu search", () => {
     const search = await openExistingWorktreeSearch();
 
     expect(document.activeElement).not.toBe(search);
-    // Radix's own submenu focus lands on a worktree row and, with the
+    // Base's submenu focus lands on a worktree row and, with the
     // reclaim-on-blur loop standing down alongside the autofocus, stays there.
     // A row is a valid destination inside the submenu; the body is not.
-    expect(document.activeElement?.getAttribute("role")).toBe("menuitem");
     // The scroller holding the worktree rows is a plain layout div with no
     // accessible role of its own, so its test id is the only handle on it.
-    expect(
-      screen
-        .getByTestId("folder-location-existing-list")
-        .contains(document.activeElement),
-    ).toBe(true);
+    const list = screen.getByTestId("folder-location-existing-list");
+    await waitFor(() =>
+      expect(list.contains(document.activeElement)).toBe(true),
+    );
+    expect(document.activeElement?.getAttribute("role")).toBe("menuitem");
   });
 });
 
@@ -180,11 +176,13 @@ describe("settings theme preset picker", () => {
     return { trigger };
   }
 
-  it("focuses the preset search when a fine pointer is driving", () => {
+  it("focuses the preset search when a fine pointer is driving", async () => {
     openPicker(true);
 
-    expect(document.activeElement).toBe(
-      screen.getByLabelText("Search theme presets"),
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Search theme presets"),
+      ),
     );
   });
 
@@ -202,17 +200,19 @@ describe("settings theme preset picker", () => {
   // The WebKit arm. Declining alone would leave focus on `body`, standing the
   // popover up with focus outside it - no screen-reader announcement and
   // nothing for the focus scope to hold. Focus moves onto the content instead.
-  it("moves focus into the popover when the trigger never took it", () => {
+  it("moves focus into the popover when the trigger never took it", async () => {
     stubCoarsePointer(true);
     openPicker(false);
 
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        document.querySelector('[data-slot="popover-content"]'),
+      ),
+    );
     expect(document.activeElement).not.toBe(
       screen.getByLabelText("Search theme presets"),
     );
     expect(document.activeElement).not.toBe(document.body);
-    expect(document.activeElement).toBe(
-      document.querySelector('[data-slot="popover-content"]'),
-    );
   });
 });
 
@@ -236,11 +236,13 @@ describe("settings font picker", () => {
     return { trigger };
   }
 
-  it("focuses the font search when a fine pointer is driving", () => {
+  it("focuses the font search when a fine pointer is driving", async () => {
     openPicker(true);
 
-    expect(document.activeElement).toBe(
-      screen.getByLabelText("Search ui font"),
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Search ui font"),
+      ),
     );
   });
 

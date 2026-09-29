@@ -66,17 +66,14 @@ export interface OverviewHostFixture {
  * open. Two ways to get this wrong, both of which fail as "element not found"
  * and read like the control was DELETED rather than merely not yet mounted:
  *
- *  - Radix's trigger opens on POINTERDOWN, not click. `fireEvent.click` on it
- *    silently does nothing.
+ *  - Base's trigger responds to click; pointerdown alone does not open it.
  *  - The menu portals asynchronously, so the item lookup has to be awaited.
  *
  * Awaiting `host-overview-restart` here is what makes a caller's subsequent
  * `getByTestId` safe.
  */
 export async function openHostOverviewMenu(): Promise<void> {
-  fireEvent.pointerDown(await screen.findByTestId("host-overview-menu"), {
-    button: 0,
-  });
+  fireEvent.click(await screen.findByTestId("host-overview-menu"));
   await screen.findByTestId("host-overview-restart");
 }
 
@@ -108,30 +105,18 @@ export function ExternalHostRestartTrigger(props: {
 }
 
 /**
- * Select one of the Overview's tabs and wait for its pane to become active.
- *
- * The auto-update switch, the version picker and the OS service controls now
- * live directly on the Updates and Installation tabs, shown open, rather than
- * behind a collapsed "Advanced" disclosure. Radix's `TabsTrigger` activates on
- * MOUSEDOWN, not click — `fireEvent.click` alone does nothing — so this fires
- * a `mousedown` the way the `⋯` menu trigger above needs a `pointerdown`.
- *
- * Settled on the pane's own `data-state`, not on its presence: Radix wraps
- * `TabsContent` in a `Presence`, so the pane's element (and its `data-testid`)
- * exists for every tab as soon as the bar renders, active or not — only an
- * INACTIVE, never-visited pane's own children are unmounted. A caller that
- * waited on `findByTestId` alone would resolve before the switch actually
- * happened, the same "looks settled, isn't" trap the `⋯` menu helper's own
- * comment warns about for a menu item.
+ * Select one of the Overview's tabs and wait for its pane to become visible.
+ * Previously visited panes stay mounted, so presence alone does not establish
+ * that the selected pane is ready.
  */
 export async function selectHostOverviewTab(
   tab: HostOverviewTab,
 ): Promise<void> {
   const trigger = await screen.findByTestId(`host-overview-tab-${tab}`);
-  fireEvent.mouseDown(trigger, { button: 0 });
+  fireEvent.click(trigger);
   await waitFor(() => {
     const pane = screen.getByTestId(`host-overview-tab-panel-${tab}`);
-    if (pane.getAttribute("data-state") !== "active") {
+    if (pane.hidden) {
       throw new Error(`tab "${tab}" did not become active`);
     }
   });

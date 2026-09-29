@@ -310,11 +310,8 @@ describe("Host Overview ▸ Ports tab and count", () => {
       });
       // Still on Status: the Ports pane has not been selected.
       expect(mounted.listCalls()).toBe(1);
-      expect(
-        screen
-          .getByTestId("host-overview-tab-panel-ports")
-          .getAttribute("data-state"),
-      ).not.toBe("active");
+      // An unvisited pane is not mounted at all.
+      expect(screen.queryByTestId("host-overview-tab-panel-ports")).toBeNull();
     });
 
     it("is absent at zero", async () => {
@@ -443,7 +440,7 @@ describe("Host Overview ▸ Ports tab and count", () => {
 
       const select = await screen.findByTestId("host-overview-tab-select");
       expect(screen.queryAllByRole("tab")).toHaveLength(0);
-      fireEvent.pointerDown(select, { button: 0, ctrlKey: false });
+      fireEvent.click(select);
       fireEvent.keyDown(select, { key: "ArrowDown" });
 
       const option = await screen.findByRole("option", { name: /Ports/ });

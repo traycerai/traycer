@@ -7,7 +7,6 @@ import { HarnessModelPickerList } from "@/components/home/pickers/harness-model-
 import { ProviderRail } from "@/components/home/pickers/harness-model-picker-group";
 import { PickerProviderAuthLine } from "@/components/home/pickers/harness-model-picker-auth-line";
 import { PickerProfileDropdown } from "@/components/home/pickers/picker-profile-dropdown";
-import { isProfileUsageSidecarTarget } from "@/components/providers/profile-usage-sidecar-target";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 import { pickerProfileShortcutHintForIndex } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
 import type {
@@ -128,11 +127,10 @@ export interface HarnessModelPickerPanelBodyProps {
 }
 
 interface HarnessModelPickerPanelProps extends HarnessModelPickerPanelBodyProps {
-  readonly trimmedQuery: string;
   readonly onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
   /**
    * Hand focus to the active composer's editor on close. `false` for an
-   * embedded picker (`HarnessModelPickerEmbedding`): Radix's own restore
+   * embedded picker (`HarnessModelPickerEmbedding`): the popover's own restore
    * returns focus to the surface's face instead.
    */
   readonly closeFocusesComposer: boolean;
@@ -146,21 +144,14 @@ interface HarnessModelPickerPanelProps extends HarnessModelPickerPanelBodyProps 
  * it, so the popover grows by the footer and the list keeps the composer's
  * height. Written once so the two can never disagree.
  */
-const PICKER_BODY_HEIGHT =
-  "h-[min(var(--radix-popover-content-available-height),23rem)]";
+const PICKER_BODY_HEIGHT = "h-[min(var(--available-height),23rem)]";
 
-/** The picker's popover: the body in its Radix surface. */
+/** The picker's popover: the body in its popover surface. */
 export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
-  const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
+  const { contentRef, initialFocus: coarseInitialFocus } =
     useCoarsePointerOpenAutoFocus();
-  const {
-    trimmedQuery,
-    onQueryChange,
-    onKeyDown,
-    closeFocusesComposer,
-    footer,
-    ...body
-  } = props;
+  const { onQueryChange, onKeyDown, closeFocusesComposer, footer, ...body } =
+    props;
 
   return (
     <PopoverContent
@@ -178,35 +169,24 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
       className={cn(
         footer === null
           ? PICKER_BODY_HEIGHT
-          : "max-h-[var(--radix-popover-content-available-height)]",
+          : "max-h-[var(--available-height)]",
         "w-[min(86vw,30rem)]",
       )}
       // Return focus to the composer editor (not the trigger pill) on close so
       // the user can keep typing after picking a model. No-op on surfaces with
-      // no registered composer (e.g. the terminal launcher), where Radix's
-      // default focus restore stands. An embedded picker never asks: the
-      // registry falls back to ANY registered composer, which from outside
+      // no registered composer (e.g. the terminal launcher), where the
+      // popover's default focus restore stands. An embedded picker never asks:
+      // the registry falls back to ANY registered composer, which from outside
       // one would pull an unrelated chat to the front.
-      onCloseAutoFocus={(event) => {
-        if (!closeFocusesComposer) return;
-        if (focusActiveComposer()) event.preventDefault();
-      }}
+      finalFocus={() => !closeFocusesComposer || !focusActiveComposer()}
       ref={contentRef}
-      // The search field is the first tabbable descendant, so Radix's own
-      // open-autofocus takes it whether or not the panel's search effect runs.
-      // Both halves have to move together or the gate is a no-op.
-      onOpenAutoFocus={coarseOpenAutoFocus}
+      // The search field is the first tabbable descendant, so the popover's
+      // own initial focus takes it whether or not the panel's search effect
+      // runs. Both halves have to move together or the gate is a no-op.
+      initialFocus={coarseInitialFocus}
       onKeyDown={(event) => {
         if (isInsideEmbeddingFooter(event.target)) return;
         onKeyDown(event);
-      }}
-      onEscapeKeyDown={(event) => {
-        if (trimmedQuery.length === 0) return;
-        event.preventDefault();
-        onQueryChange("");
-      }}
-      onInteractOutside={(event) => {
-        if (isProfileUsageSidecarTarget(event.target)) event.preventDefault();
       }}
     >
       {footer === null ? (

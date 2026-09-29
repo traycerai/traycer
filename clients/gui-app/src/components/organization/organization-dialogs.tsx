@@ -77,17 +77,15 @@ export function OrganizationDialogHost(props: {
     >
       <DialogContent
         className="sm:max-w-md"
-        onOpenAutoFocus={() => {
+        initialFocus={() => {
           openerRef.current =
             props.returnFocusTo ?? captureOrganizationDialogOpener();
+          return true;
         }}
-        onCloseAutoFocus={(event) => {
+        finalFocus={() => {
           const opener = openerRef.current;
           openerRef.current = null;
-          if (!opener?.isConnected) return;
-          // This controlled dialog has no DialogTrigger for Radix to restore.
-          event.preventDefault();
-          opener.focus({ preventScroll: true });
+          return opener?.isConnected ? opener : true;
         }}
       >
         <OrganizationDialogBody dialog={dialog} onClose={onClose} />
@@ -779,27 +777,27 @@ function LabelCatalogRow(props: {
       ) : null}
       {props.owned ? (
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Options for ${props.label.name}`}
-            >
-              <MoreHorizontal />
-            </Button>
-          </DropdownMenuTrigger>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`Options for ${props.label.name}`}
+              >
+                <MoreHorizontal />
+              </Button>
+            }
+          />
           <DropdownMenuContent align="end">
             <DropdownMenuItem
-              onSelect={() =>
-                props.onEdit({ kind: "edit", label: props.label })
-              }
+              onClick={() => props.onEdit({ kind: "edit", label: props.label })}
             >
               <Pencil />
               Edit label
             </DropdownMenuItem>
             <DropdownMenuItem
               variant="destructive"
-              onSelect={() =>
+              onClick={() =>
                 props.onEdit({ kind: "delete", label: props.label })
               }
             >
@@ -849,13 +847,11 @@ function LabelDefinitionDialog(props: {
       }}
     >
       <DialogContent
-        onCloseAutoFocus={(event) => {
+        finalFocus={() => {
           const target = props.opener?.isConnected
             ? props.opener
             : props.fallbackFocusRef.current;
-          if (!target?.isConnected) return;
-          event.preventDefault();
-          target.focus({ preventScroll: true });
+          return target?.isConnected ? target : true;
         }}
       >
         {props.editor.kind === "delete" ? (

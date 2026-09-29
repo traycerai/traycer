@@ -226,7 +226,7 @@ const RESTORE: ChatRestoreContextValue = {
 
 function renderDock(): void {
   render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <ChatDockCompactStripProvider
         value={{
           chips: [CHIP],
@@ -287,7 +287,7 @@ function renderDock(): void {
 
 function renderToolbar(): void {
   render(
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <ComposerTileIdProvider tileId={TILE}>
         <ComposerToolbar
           presentation

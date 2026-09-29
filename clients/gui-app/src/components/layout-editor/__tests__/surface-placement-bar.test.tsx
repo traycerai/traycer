@@ -5,6 +5,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SurfacePlacementBar } from "@/components/layout-editor/surface-placement-bar";
 import { setMobileApp } from "@/lib/mobile-app";
@@ -229,19 +230,16 @@ describe("<SurfacePlacementBar />", () => {
   // Finding 3: the pictogram row is a real Radix radio group now, not a
   // set of separate Tab stops with no arrow behavior.
   describe("keyboard navigation on the pictogram row", () => {
-    it("is one Tab stop: entering the group focuses the checked pictogram, and the others are not tabbable", () => {
+    it("is one Tab stop: entering the group focuses the checked pictogram, and the others are not tabbable", async () => {
       beginSession();
       selectSurfaceWithNode("topBar");
       render(<SurfacePlacementBar />);
 
-      // Roving tabindex only picks a stop once the group has been entered
-      // (real keyboard use: Tab into the group), the same event the group's
-      // own `role="radiogroup"` wrapper listens for.
-      act(() => {
-        fireEvent.focus(
-          screen.getByRole("radiogroup", { name: "Tabs position" }),
-        );
-      });
+      // Base's roving tabindex marks only the checked pictogram a tab stop
+      // (asserted below); a real Tab press is what lands the browser there,
+      // so a real Tab press through user-event is what proves it, rather
+      // than firing `focus` at the (non-tabbable) group wrapper.
+      await userEvent.tab();
 
       expect(document.activeElement).toBe(pictogram("Top"));
       expect(pictogram("Top").getAttribute("tabindex")).toBe("0");

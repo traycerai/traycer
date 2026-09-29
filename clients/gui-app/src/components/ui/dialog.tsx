@@ -1,16 +1,40 @@
 import * as React from "react";
-import { Dialog as DialogPrimitive } from "radix-ui";
+import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
-import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
-import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
+import {
+  OverlayPresentationContext,
+  useOverlayPresentation,
+  useOverlayFocus,
+} from "@/components/ui/overlay-presentation-context";
 
 function Dialog({
+  open,
+  defaultOpen,
+  onOpenChange,
+  onOpenChangeComplete,
+  paneAware = true,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />;
+}: DialogPrimitive.Root.Props & { paneAware?: boolean }) {
+  const overlay = useOverlayPresentation({
+    open,
+    defaultOpen,
+    onOpenChange,
+    onOpenChangeComplete,
+    paneAware,
+  });
+  return (
+    <OverlayPresentationContext.Provider value={overlay.presentation}>
+      <DialogPrimitive.Root
+        {...props}
+        open={overlay.open}
+        onOpenChange={overlay.onOpenChange}
+        onOpenChangeComplete={overlay.onOpenChangeComplete}
+      />
+    </OverlayPresentationContext.Provider>
+  );
 }
 
 function DialogTrigger({
@@ -31,17 +55,97 @@ function DialogClose({
   return <DialogPrimitive.Close data-slot="dialog-close" {...props} />;
 }
 
+const DIALOG_BACKDROP_VARIANT = {
+  bare: "",
+  frame:
+    "fixed inset-0 isolate z-50 bg-black/30 transition-opacity duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+  blocking:
+    "fixed inset-0 isolate z-60 bg-black/40 transition-opacity duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0",
+} as const;
+
+function DialogBackdrop({
+  variant = "bare",
+  className,
+  ...props
+}: DialogPrimitive.Backdrop.Props & {
+  variant?: keyof typeof DIALOG_BACKDROP_VARIANT;
+}) {
+  const presentation = React.useContext(OverlayPresentationContext);
+  return (
+    <DialogPrimitive.Backdrop
+      {...props}
+      forceRender
+      data-overlay-concealed={presentation.concealed || undefined}
+      className={(state) =>
+        cn(
+          DIALOG_BACKDROP_VARIANT[variant],
+          typeof className === "function" ? className(state) : className,
+        )
+      }
+    />
+  );
+}
+
+// Raw hosts retain their existing chrome and enter/exit motion. Their callers
+// own sizing; these variants own the shared paint and safe-area positioning.
+const DIALOG_POPUP_VARIANT = {
+  bare: "",
+  frame:
+    "fixed top-safe-center-y left-safe-center-x z-50 flex max-w-safe-dvw -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl bg-background text-foreground ring-1 ring-foreground/10 shadow-2xl duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+  blocking:
+    "fixed top-safe-center-y left-safe-center-x z-60 flex -translate-x-1/2 -translate-y-1/2 flex-col gap-4 rounded-xl bg-background p-6 text-foreground ring-1 ring-foreground/10 shadow-2xl outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95",
+  "pane-blocking":
+    "absolute top-1/2 left-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col gap-4 rounded-xl bg-background p-6 text-foreground ring-1 ring-foreground/10 shadow-2xl outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95",
+} as const;
+
+function DialogPopup({
+  ref,
+  variant = "bare",
+  className,
+  initialFocus,
+  onFocusCapture,
+  finalFocus,
+  ...props
+}: DialogPrimitive.Popup.Props & {
+  variant?: keyof typeof DIALOG_POPUP_VARIANT;
+}) {
+  const { ref: popupRef, ...focus } = useOverlayFocus(
+    initialFocus,
+    finalFocus,
+    ref,
+    onFocusCapture,
+  );
+  return (
+    <DialogPrimitive.Popup
+      {...props}
+      ref={popupRef}
+      onFocusCapture={focus.onFocusCapture}
+      data-overlay-concealed={focus.concealed || undefined}
+      className={(state) =>
+        cn(
+          DIALOG_POPUP_VARIANT[variant],
+          typeof className === "function" ? className(state) : className,
+        )
+      }
+      initialFocus={focus.initialFocus}
+      finalFocus={focus.finalFocus}
+    />
+  );
+}
+
 function DialogOverlay({
   className,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Overlay>) {
+}: React.ComponentProps<typeof DialogPrimitive.Backdrop>) {
   return (
-    <DialogPrimitive.Overlay
+    <DialogBackdrop
       data-slot="dialog-overlay"
-      className={cn(
-        "fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
-        className,
-      )}
+      className={(state) =>
+        cn(
+          "fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+          typeof className === "function" ? className(state) : className,
+        )
+      }
       {...props}
     />
   );
@@ -53,9 +157,10 @@ function DialogContent({
   children,
   showCloseButton = true,
   layout = "padded",
-  onCloseAutoFocus,
+  initialFocus,
+  finalFocus,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content> & {
+}: React.ComponentProps<typeof DialogPrimitive.Popup> & {
   showCloseButton?: boolean;
   /**
    * `padded` is one padded box - the dialog's own `p-4 gap-4`, with the footer
@@ -71,70 +176,62 @@ function DialogContent({
    */
   layout?: "padded" | "banded";
 }) {
-  // Dialog roots retain their logical open state so operation/staging state
-  // survives split focus changes. A modal dialog kept mounted in the background
-  // would keep aria-hiding + scroll-locking the focused split partner, so an
-  // unfocused pane un-presents by unmounting only its document portal. That
-  // The close-autofocus half lives in `usePaneAwareContentGuard`.
-  const { paneFocused, handleCloseAutoFocus } =
-    usePaneAwareContentGuard(onCloseAutoFocus);
-  // A concealed region's dialog un-presents the same way an unfocused pane's
-  // does: a portal's DOM escapes the region's own concealment (see
-  // `portal-concealment-context`), so the portal unmounts while the root
-  // keeps its open state and the owner keeps any staged form state, ready to
-  // re-present when the region returns.
-  const concealed = usePortalConcealed();
-  if (!paneFocused || concealed) return null;
   return (
     <DialogPortal>
       <DialogOverlay />
-      <DialogPrimitive.Content
+      <DialogPopup
         ref={ref}
         data-slot="dialog-content"
         data-layout={layout}
-        className={cn(
-          // `top-safe-center-y` / `left-safe-center-x`, not `top-1/2` /
-          // `left-1/2`: a fixed element centres on the viewport, which on a
-          // phone includes the strips the app never paints into - the status
-          // bar above, and the sensor housing on one side in landscape. Both
-          // collapse to the halfway marks wherever the insets are zero.
-          //
-          // `max-w-safe-dvw` caps the width against the same region. It is
-          // unmodified so a caller's `sm:max-w-*` still wins at width; a caller
-          // that sets an UNMODIFIED `max-w-*` displaces it, which is what the
-          // contract test watches for.
-          //
-          // `grid-cols-1`, not the bare `grid` the shadcn source ships: a
-          // bare grid's one column is `auto`, which grows to the widest
-          // unbreakable line in the dialog - a launch command, a stack frame's
-          // bundle URL - and widens the whole box past its `w-*`. Any caller
-          // that also put `overflow-y-auto` on the box then got a horizontal
-          // scrollbar, and a trackpad swipe shifted every band and the close
-          // button with it (the profile edit dialog shipped that in desktop
-          // v1.3.0). `grid-cols-1` is `minmax(0, 1fr)`, which pins the column
-          // to the box and leaves overflow to whichever descendant scrolls.
-          "group/dialog-content fixed top-safe-center-y left-safe-center-x z-50 grid grid-cols-1 w-full max-w-[min(calc(100%-2rem),var(--safe-area-width))] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-ui-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-          // The bands carry the padding, so the box carries none.
-          layout === "banded" && "gap-0 p-0",
-          className,
-        )}
-        onCloseAutoFocus={handleCloseAutoFocus}
+        className={(state) =>
+          cn(
+            // `top-safe-center-y` / `left-safe-center-x`, not `top-1/2` /
+            // `left-1/2`: a fixed element centres on the viewport, which on a
+            // phone includes the strips the app never paints into - the status
+            // bar above, and the sensor housing on one side in landscape. Both
+            // collapse to the halfway marks wherever the insets are zero.
+            //
+            // `max-w-safe-dvw` caps the width against the same region. It is
+            // unmodified so a caller's `sm:max-w-*` still wins at width; a caller
+            // that sets an UNMODIFIED `max-w-*` displaces it, which is what the
+            // contract test watches for.
+            //
+            // `grid-cols-1`, not the bare `grid` the shadcn source ships: a
+            // bare grid's one column is `auto`, which grows to the widest
+            // unbreakable line in the dialog - a launch command, a stack frame's
+            // bundle URL - and widens the whole box past its `w-*`. Any caller
+            // that also put `overflow-y-auto` on the box then got a horizontal
+            // scrollbar, and a trackpad swipe shifted every band and the close
+            // button with it (the profile edit dialog shipped that in desktop
+            // v1.3.0). `grid-cols-1` is `minmax(0, 1fr)`, which pins the column
+            // to the box and leaves overflow to whichever descendant scrolls.
+            "group/dialog-content fixed top-safe-center-y left-safe-center-x z-50 grid grid-cols-1 w-full max-w-[min(calc(100%-2rem),var(--safe-area-width))] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-ui-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+            // The bands carry the padding, so the box carries none.
+            layout === "banded" && "gap-0 p-0",
+            typeof className === "function" ? className(state) : className,
+          )
+        }
+        initialFocus={initialFocus}
+        finalFocus={finalFocus}
         {...props}
       >
         {children}
         {showCloseButton ? (
-          <DialogPrimitive.Close data-slot="dialog-close" asChild>
-            <Button
-              variant="ghost"
-              className="absolute top-2 right-2"
-              size="icon-sm"
-            >
-              <XIcon />
-              <span className="sr-only">Close</span>
-            </Button>
-          </DialogPrimitive.Close>
+          <DialogPrimitive.Close
+            data-slot="dialog-close"
+            render={
+              <Button
+                variant="ghost"
+                className="absolute top-2 right-2"
+                size="icon-sm"
+              >
+                <XIcon />
+                <span className="sr-only">Close</span>
+              </Button>
+            }
+          />
         ) : null}
-      </DialogPrimitive.Content>
+      </DialogPopup>
     </DialogPortal>
   );
 }
@@ -182,9 +279,9 @@ function DialogFooter({
     >
       {children}
       {showCloseButton ? (
-        <DialogPrimitive.Close asChild>
-          <Button variant="outline">Close</Button>
-        </DialogPrimitive.Close>
+        <DialogPrimitive.Close
+          render={<Button variant="outline">Close</Button>}
+        />
       ) : null}
     </div>
   );
@@ -194,13 +291,16 @@ const DIALOG_TITLE_SIZE = {
   sm: "text-ui-sm",
   default: "text-ui",
   lg: "text-ui-lg",
+  blocking: "text-lg",
 } as const;
 
 function DialogTitle({
   className,
   size = "default",
+  appearance = "default",
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Title> & {
+  appearance?: "default" | "host";
   /**
    * Six sites wanted a title that was not the default rank - three smaller
    * (a fullscreen viewer's filename), three larger (a full-page composer) -
@@ -212,14 +312,18 @@ function DialogTitle({
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn(
-        // `font-semibold` and `leading-snug` are what 22 and 15 of the 60 title
-        // sites were adding back; `leading-none` is too tight for a title that
-        // wraps, which is most of them.
-        "font-heading leading-snug font-semibold",
-        DIALOG_TITLE_SIZE[size],
-        className,
-      )}
+      className={(state) =>
+        cn(
+          // `font-semibold` and `leading-snug` are what 22 and 15 of the 60 title
+          // sites were adding back; `leading-none` is too tight for a title that
+          // wraps, which is most of them.
+          "font-heading",
+          appearance === "default" && "leading-snug font-semibold",
+          DIALOG_TITLE_SIZE[size],
+          appearance === "host" && "leading-none font-medium",
+          typeof className === "function" ? className(state) : className,
+        )
+      }
       {...props}
     />
   );
@@ -232,16 +336,20 @@ function DialogDescription({
   return (
     <DialogPrimitive.Description
       data-slot="dialog-description"
-      className={cn(
-        "max-w-[72ch] text-ui-sm leading-relaxed text-muted-foreground *:[a]:underline *:[a]:underline-offset-3 *:[a]:hover:text-foreground",
-        className,
-      )}
+      className={(state) =>
+        cn(
+          "max-w-[72ch] text-ui-sm leading-relaxed text-muted-foreground *:[a]:underline *:[a]:underline-offset-3 *:[a]:hover:text-foreground",
+          typeof className === "function" ? className(state) : className,
+        )
+      }
       {...props}
     />
   );
 }
 
 export {
+  DialogPopup,
+  DialogBackdrop,
   Dialog,
   DialogClose,
   DialogContent,

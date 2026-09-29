@@ -6,8 +6,6 @@ import {
 } from "../profile-usage-sidecar-anchor-readiness";
 
 const ONSCREEN_RECT = new DOMRect(120, 160, 240, 32);
-const UNPOSITIONED_TRANSFORM = "translate(0, -200%)";
-const POSITIONED_TRANSFORM = "translate(100px, 200px)";
 
 interface FakeAnimation {
   readonly effect: {
@@ -165,13 +163,25 @@ describe("waitForAnchorEntranceAnimations", () => {
 });
 
 describe("waitForAnchorPlacement", () => {
+  function markUnplaced(wrapper: HTMLElement): void {
+    // Base's public Positioner paints at opacity 0, with a position already
+    // assigned, until its first placement lands (see
+    // `isPopperWrapperPlaced`).
+    wrapper.style.position = "fixed";
+    wrapper.style.opacity = "0";
+  }
+
+  function markPlaced(wrapper: HTMLElement): void {
+    wrapper.style.opacity = "1";
+  }
+
   function mountWrapperAndAnchor(): {
     wrapper: HTMLElement;
     anchor: HTMLElement;
   } {
     const wrapper = document.createElement("div");
-    wrapper.setAttribute("data-radix-popper-content-wrapper", "");
-    wrapper.style.transform = UNPOSITIONED_TRANSFORM;
+    wrapper.setAttribute("data-slot", "dropdown-menu-positioner");
+    markUnplaced(wrapper);
     const anchor = document.createElement("button");
     wrapper.append(anchor);
     document.body.append(wrapper);
@@ -183,7 +193,7 @@ describe("waitForAnchorPlacement", () => {
     document.body.replaceChildren();
   });
 
-  it("resolves immediately for a static anchor with no Radix popper wrapper", async () => {
+  it("resolves immediately for a static anchor with no Positioner wrapper", async () => {
     const anchor = document.createElement("button");
     document.body.append(anchor);
     await expect(
@@ -193,7 +203,7 @@ describe("waitForAnchorPlacement", () => {
 
   it("resolves immediately when every wrapper is already placed", async () => {
     const { wrapper, anchor } = mountWrapperAndAnchor();
-    wrapper.style.transform = POSITIONED_TRANSFORM;
+    markPlaced(wrapper);
     await expect(
       waitForAnchorPlacement(anchor, new AbortController().signal),
     ).resolves.toBeUndefined();
@@ -214,21 +224,67 @@ describe("waitForAnchorPlacement", () => {
     await Promise.resolve();
     expect(resolved).toBe(false);
 
-    wrapper.style.transform = POSITIONED_TRANSFORM;
+    markPlaced(wrapper);
 
     await wait;
     expect(resolved).toBe(true);
   });
 
+  it("keeps waiting while the Positioner still has position unset (pre-mount)", async () => {
+    const { wrapper, anchor } = mountWrapperAndAnchor();
+    wrapper.style.position = "";
+    wrapper.style.opacity = "1";
+
+    let resolved = false;
+    const wait = waitForAnchorPlacement(
+      anchor,
+      new AbortController().signal,
+    ).then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    wrapper.style.position = "fixed";
+    markPlaced(wrapper);
+    await wait;
+    expect(resolved).toBe(true);
+  });
+
+  it("ignores unrelated style mutations while the wrapper keeps the sentinel", async () => {
+    const { wrapper, anchor } = mountWrapperAndAnchor();
+
+    let resolved = false;
+    const wait = waitForAnchorPlacement(
+      anchor,
+      new AbortController().signal,
+    ).then(() => {
+      resolved = true;
+    });
+
+    wrapper.style.setProperty("--anchor-width", "640px");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    markPlaced(wrapper);
+    await wait;
+    expect(resolved).toBe(true);
+  });
+
   it.each([
-    "translate(0px, -200%)",
-    "translate(0,-200%)",
-    "  TrAnSlAtE(  0px ,  -200%  )  ",
+    "select-positioner",
+    "context-menu-positioner",
+    "menubar-positioner",
+    "hover-card-positioner",
+    "tooltip-positioner",
   ])(
-    "keeps waiting for the CSSOM-equivalent sentinel %s",
-    async (transform) => {
+    "waits for an unplaced %s wrapper, not only dropdown and popover",
+    async (slot) => {
       const { wrapper, anchor } = mountWrapperAndAnchor();
-      wrapper.style.transform = transform;
+      wrapper.setAttribute("data-slot", slot);
 
       let resolved = false;
       const wait = waitForAnchorPlacement(
@@ -242,37 +298,18 @@ describe("waitForAnchorPlacement", () => {
       await Promise.resolve();
       expect(resolved).toBe(false);
 
-      wrapper.style.transform = POSITIONED_TRANSFORM;
+      markPlaced(wrapper);
+
       await wait;
       expect(resolved).toBe(true);
     },
   );
 
-  it("ignores unrelated style mutations while the wrapper keeps the sentinel", async () => {
-    const { wrapper, anchor } = mountWrapperAndAnchor();
-
-    let resolved = false;
-    const wait = waitForAnchorPlacement(
-      anchor,
-      new AbortController().signal,
-    ).then(() => {
-      resolved = true;
-    });
-
-    wrapper.style.setProperty("--radix-popper-available-width", "640px");
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-
-    wrapper.style.transform = POSITIONED_TRANSFORM;
-    await wait;
-    expect(resolved).toBe(true);
-  });
-
   it("waits for an unplaced inner wrapper nested inside a placed outer wrapper", async () => {
     const outerWrapper = document.createElement("div");
-    outerWrapper.setAttribute("data-radix-popper-content-wrapper", "");
-    outerWrapper.style.transform = "translate(40px, 80px)";
+    outerWrapper.setAttribute("data-slot", "popover-positioner");
+    markUnplaced(outerWrapper);
+    markPlaced(outerWrapper);
     const { wrapper: innerWrapper, anchor } = mountWrapperAndAnchor();
     outerWrapper.append(innerWrapper);
     document.body.append(outerWrapper);
@@ -285,22 +322,22 @@ describe("waitForAnchorPlacement", () => {
       resolved = true;
     });
 
-    innerWrapper.style.setProperty("--radix-popper-available-height", "480px");
+    innerWrapper.style.setProperty("--available-height", "480px");
     await Promise.resolve();
     await Promise.resolve();
     expect(resolved).toBe(false);
 
-    innerWrapper.style.transform = POSITIONED_TRANSFORM;
+    markPlaced(innerWrapper);
     await wait;
     expect(resolved).toBe(true);
   });
 
   it("waits for an unplaced outer wrapper around a placed inner wrapper", async () => {
     const outerWrapper = document.createElement("div");
-    outerWrapper.setAttribute("data-radix-popper-content-wrapper", "");
-    outerWrapper.style.transform = UNPOSITIONED_TRANSFORM;
+    outerWrapper.setAttribute("data-slot", "popover-positioner");
+    markUnplaced(outerWrapper);
     const { wrapper: innerWrapper, anchor } = mountWrapperAndAnchor();
-    innerWrapper.style.transform = POSITIONED_TRANSFORM;
+    markPlaced(innerWrapper);
     outerWrapper.append(innerWrapper);
     document.body.append(outerWrapper);
 
@@ -312,12 +349,12 @@ describe("waitForAnchorPlacement", () => {
       resolved = true;
     });
 
-    innerWrapper.style.setProperty("--radix-popper-available-width", "640px");
+    innerWrapper.style.setProperty("--anchor-width", "640px");
     await Promise.resolve();
     await Promise.resolve();
     expect(resolved).toBe(false);
 
-    outerWrapper.style.transform = "translate(40px, 80px)";
+    markPlaced(outerWrapper);
     await wait;
     expect(resolved).toBe(true);
   });
@@ -337,7 +374,7 @@ describe("waitForAnchorPlacement", () => {
 
     // A later mutation must not throw or double-resolve after abort.
     expect(() => {
-      wrapper.style.transform = POSITIONED_TRANSFORM;
+      markPlaced(wrapper);
     }).not.toThrow();
   });
 
@@ -398,7 +435,7 @@ describe("waitForAnchorPlacement", () => {
 
       // A mutation arriving after unmount/abort must be inert.
       expect(() => {
-        wrapper.style.transform = POSITIONED_TRANSFORM;
+        markPlaced(wrapper);
       }).not.toThrow();
     });
   });

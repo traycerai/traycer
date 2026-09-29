@@ -102,7 +102,6 @@ vi.mock("@/components/ui/button", () => ({
   Button: ({
     variant: _variant,
     size: _size,
-    asChild: _asChild,
     className: _className,
     children,
     onClick,
@@ -110,7 +109,6 @@ vi.mock("@/components/ui/button", () => ({
   }: ComponentProps<"button"> & {
     readonly variant?: string | undefined;
     readonly size?: string | undefined;
-    readonly asChild?: boolean | undefined;
   }) => (
     <button
       {...props}

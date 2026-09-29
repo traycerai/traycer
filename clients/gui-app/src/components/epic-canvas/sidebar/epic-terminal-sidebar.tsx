@@ -410,106 +410,110 @@ function TerminalRow(props: TerminalRowProps) {
 
   return (
     <li>
-      <ContextMenu>
-        <ContextMenuTrigger asChild disabled={isRenaming}>
-          <div
-            data-sidebar-node-id={epicTerminalUiIdentityKey(
-              "session",
-              hostId,
-              session.sessionId,
-            )}
-            className={cn(
-              "group/term-row relative",
-              SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
-            )}
-          >
-            {isRenaming ? (
-              <div
-                className={cn(
-                  "flex h-7 w-full items-center gap-1.5 rounded-md pl-2 pr-2 text-ui-sm",
-                  "bg-accent text-accent-foreground",
-                )}
-              >
-                <TerminalIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
-                <Input
-                  ref={renameInputRef}
-                  data-testid={`epic-terminal-sidebar-rename-input-${session.sessionId}`}
-                  value={renameValue}
-                  onChange={(event) => setRenameValue(event.target.value)}
-                  onBlur={commitRename}
-                  onKeyDown={handleRenameKeyDown}
-                  className="h-7 flex-1 min-w-0 px-1"
-                  size="sm"
-                />
-              </div>
-            ) : (
-              <>
-                <button
-                  ref={dragRef}
-                  {...attributes}
-                  {...listeners}
-                  type="button"
-                  data-testid={`epic-terminal-sidebar-item-${session.sessionId}`}
-                  data-terminal-host-id={hostId}
-                  data-terminal-status={runtimeStatus}
+      <ContextMenu disabled={isRenaming}>
+        <ContextMenuTrigger
+          render={
+            <div
+              data-sidebar-node-id={epicTerminalUiIdentityKey(
+                "session",
+                hostId,
+                session.sessionId,
+              )}
+              className={cn(
+                "group/term-row relative",
+                SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
+              )}
+            >
+              {isRenaming ? (
+                <div
                   className={cn(
-                    "flex h-7 w-full items-center gap-1.5 rounded-md pl-2 pr-8 text-left text-ui-sm transition-colors",
-                    "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
-                    isDragging && "cursor-grabbing opacity-60",
-                    isActive
-                      ? "bg-accent font-medium text-accent-foreground"
-                      : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
+                    "flex h-7 w-full items-center gap-1.5 rounded-md pl-2 pr-2 text-ui-sm",
+                    "bg-accent text-accent-foreground",
                   )}
-                  onClick={onOpen}
-                  onDoubleClick={handleDoubleClick}
                 >
                   <TerminalIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
-                  <div className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate">{label}</span>
-                    {runtimeStatus === "unknown" ? (
-                      <span className="truncate text-ui-xs text-muted-foreground">
-                        Runtime status unavailable
-                      </span>
-                    ) : null}
-                  </div>
-                  <NavigatorResourceHotspotChip
-                    owner={{
-                      epicId,
-                      kind: "terminal",
-                      ownerId: session.sessionId,
-                      hostId,
-                    }}
-                    metrics={navigatorResourceMetrics}
-                    className={undefined}
+                  <Input
+                    ref={renameInputRef}
+                    data-testid={`epic-terminal-sidebar-rename-input-${session.sessionId}`}
+                    value={renameValue}
+                    onChange={(event) => setRenameValue(event.target.value)}
+                    onBlur={commitRename}
+                    onKeyDown={handleRenameKeyDown}
+                    className="h-7 flex-1 min-w-0 px-1"
+                    size="sm"
                   />
-                </button>
-                <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/term-row:opacity-100">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={`Terminal actions for ${label}`}
-                        data-testid={`epic-terminal-sidebar-more-${session.sessionId}`}
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        <MoreHorizontal className="size-3" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      side={placement?.side}
-                      align={placement?.align ?? "end"}
-                      className="w-max"
-                    >
-                      <SidebarDropdownMenuItems entries={rowMenuEntries} />
-                    </DropdownMenuContent>
-                  </DropdownMenu>
                 </div>
-              </>
-            )}
-          </div>
-        </ContextMenuTrigger>
+              ) : (
+                <>
+                  <button
+                    ref={dragRef}
+                    {...attributes}
+                    {...listeners}
+                    type="button"
+                    data-testid={`epic-terminal-sidebar-item-${session.sessionId}`}
+                    data-terminal-host-id={hostId}
+                    data-terminal-status={runtimeStatus}
+                    className={cn(
+                      "flex h-7 w-full items-center gap-1.5 rounded-md pl-2 pr-8 text-left text-ui-sm transition-colors",
+                      "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
+                      isDragging && "cursor-grabbing opacity-60",
+                      isActive
+                        ? "bg-accent font-medium text-accent-foreground"
+                        : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
+                    )}
+                    onClick={onOpen}
+                    onDoubleClick={handleDoubleClick}
+                  >
+                    <TerminalIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate">{label}</span>
+                      {runtimeStatus === "unknown" ? (
+                        <span className="truncate text-ui-xs text-muted-foreground">
+                          Runtime status unavailable
+                        </span>
+                      ) : null}
+                    </div>
+                    <NavigatorResourceHotspotChip
+                      owner={{
+                        epicId,
+                        kind: "terminal",
+                        ownerId: session.sessionId,
+                        hostId,
+                      }}
+                      metrics={navigatorResourceMetrics}
+                      className={undefined}
+                    />
+                  </button>
+                  <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/term-row:opacity-100">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label={`Terminal actions for ${label}`}
+                            data-testid={`epic-terminal-sidebar-more-${session.sessionId}`}
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <MoreHorizontal className="size-3" />
+                          </Button>
+                        }
+                      />
+                      <DropdownMenuContent
+                        side={placement?.side}
+                        align={placement?.align ?? "end"}
+                        className="w-max"
+                      >
+                        <SidebarDropdownMenuItems entries={rowMenuEntries} />
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </>
+              )}
+            </div>
+          }
+        />
         {isRenaming ? null : (
           <ContextMenuContent>
             <SidebarContextMenuItems entries={rowMenuEntries} />

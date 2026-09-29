@@ -103,15 +103,17 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
   return (
     <Dialog>
       <div className={cn("group relative", props.className)}>
-        <DialogTrigger asChild>
-          <button
-            type="button"
-            className="block max-h-full max-w-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label={`Open ${alt}`}
-          >
-            {props.children}
-          </button>
-        </DialogTrigger>
+        <DialogTrigger
+          render={
+            <button
+              type="button"
+              className="block max-h-full max-w-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={`Open ${alt}`}
+            >
+              {props.children}
+            </button>
+          }
+        />
         {/* Hover is the disclosure on a fine pointer; a coarse pointer has no
             hover state to reach it with, so the same bar is simply present
             there - the app's standing answer for hover-gated chrome. */}
@@ -134,10 +136,7 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
         // pops open on that focus. Radix skips its own focus move once this is
         // prevented, so the dialog has to take focus explicitly or it would be
         // left outside the modal, on the trigger Radix hides from screen readers.
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          contentRef.current?.focus();
-        }}
+        initialFocus={() => contentRef.current ?? false}
       >
         <DialogTitle className="sr-only">{alt}</DialogTitle>
         {props.mediaType === "image/svg+xml" ? (
