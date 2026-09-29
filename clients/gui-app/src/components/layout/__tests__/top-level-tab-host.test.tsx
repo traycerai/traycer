@@ -26,6 +26,7 @@ import {
   MAX_RETAINED_TOP_LEVEL_SURFACES,
   TopLevelTabHost,
 } from "@/components/layout/top-level-tab-host";
+import { ROUTE_PENDING_MS } from "@/components/loading/route-pending-screen";
 import {
   HostReadinessControllerContext,
   type HostReadinessController,
@@ -111,6 +112,27 @@ const hostedSurfaceBodyTestState = vi.hoisted(() => ({
 const epicSurfaceExtraTestState = vi.hoisted(() => ({
   render: null as ((tabId: string) => ReactNode) | null,
 }));
+const deferredTabBodyImports = vi.hoisted(() => ({
+  history: {
+    hold: false,
+    started: false,
+    onStarted: null as (() => void) | null,
+    release: null as (() => void) | null,
+  },
+  settings: {
+    hold: false,
+    started: false,
+    onStarted: null as (() => void) | null,
+    release: null as (() => void) | null,
+  },
+}));
+
+/** Read through a call so the test's own reset does not narrow it to null. */
+function releaseHeldTabBodyImport(load: {
+  readonly release: (() => void) | null;
+}): void {
+  load.release?.();
+}
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual =
@@ -246,13 +268,39 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
   },
 }));
 
-vi.mock("@/components/epics/history-surface", () => ({
-  HistorySurface: () => <div data-testid="history-surface-body" />,
-}));
+vi.mock("@/components/epics/history-surface", async () => {
+  const React = await import("react");
+  const load = deferredTabBodyImports.history;
+  if (load.hold) {
+    load.started = true;
+    load.onStarted?.();
+    await new Promise<void>((resolve) => {
+      load.release = resolve;
+    });
+    load.release = null;
+  }
+  return {
+    HistorySurface: () =>
+      React.createElement("div", { "data-testid": "history-surface-body" }),
+  };
+});
 
-vi.mock("@/components/settings/settings-surface", () => ({
-  SettingsSurface: () => <div data-testid="settings-surface-body" />,
-}));
+vi.mock("@/components/settings/settings-surface", async () => {
+  const React = await import("react");
+  const load = deferredTabBodyImports.settings;
+  if (load.hold) {
+    load.started = true;
+    load.onStarted?.();
+    await new Promise<void>((resolve) => {
+      load.release = resolve;
+    });
+    load.release = null;
+  }
+  return {
+    SettingsSurface: () =>
+      React.createElement("div", { "data-testid": "settings-surface-body" }),
+  };
+});
 
 // The host wraps the panel in the gesture provider (the single live-value
 // reader); project the draft the host resolved onto the provider so this test
@@ -479,6 +527,73 @@ describe("<TopLevelTabHost />", () => {
     resetTerminalFocusRegistryForTests();
     resetPrimaryFocusCoordinatorForTests();
   });
+
+  it.each([
+    {
+      label: "History",
+      kind: "history",
+      ref: HISTORY,
+      bodyTestId: "history-surface-body",
+    },
+    {
+      label: "Settings",
+      kind: "settings",
+      ref: SETTINGS,
+      bodyTestId: "settings-surface-body",
+    },
+  ] as const)(
+    "shows delayed loading feedback while the visible $label body import is pending",
+    async ({ label, kind, ref, bodyTestId }) => {
+      const load = deferredTabBodyImports[kind];
+      load.hold = true;
+      load.started = false;
+      load.release = null;
+      let signalStarted: (() => void) | null = null;
+      const importStarted = new Promise<void>((resolve) => {
+        signalStarted = resolve;
+      });
+      load.onStarted = () => signalStarted?.();
+      vi.useFakeTimers();
+
+      try {
+        seedSources([ref]);
+        setSingle(ref, [ref]);
+        render(<TopLevelTabHost />);
+
+        expect(surfaceRef(ref).dataset.visible).toBe("true");
+        await importStarted;
+        expect(load.started).toBe(true);
+        expect(screen.queryByTestId("route-pending-screen")).toBeNull();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(ROUTE_PENDING_MS - 1);
+        });
+        expect(screen.queryByTestId("route-pending-screen")).toBeNull();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1);
+        });
+        expect(screen.getByTestId("route-pending-screen")).toBeTruthy();
+
+        await act(async () => {
+          const release = load.release;
+          if (release === null) {
+            throw new Error(`expected the ${label} body import to be held`);
+          }
+          load.hold = false;
+          release();
+          await Promise.resolve();
+        });
+        expect(screen.getByTestId(bodyTestId)).toBeTruthy();
+        expect(screen.queryByTestId("route-pending-screen")).toBeNull();
+      } finally {
+        load.hold = false;
+        releaseHeldTabBodyImport(load);
+        load.onStarted = null;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([
     ["Epic/Epic", EPIC_A, EPIC_B],

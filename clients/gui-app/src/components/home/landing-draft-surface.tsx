@@ -26,6 +26,8 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { cn } from "@/lib/utils";
+import { LandingVisibleDraftImagePrefetch } from "./visible-draft-image-prefetch";
+import { MobileDrawerTaskPaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 
 /**
  * Route-independent landing body. Its exact draft runtime remains the T6
@@ -141,6 +143,11 @@ export function LandingDraftSurface() {
       data-primary-focus-scope="true"
       data-testid="landing-draft-surface"
     >
+      <MobileDrawerTaskPaintReporter ready={surfaceEffectivelyFocused} />
+      <LandingVisibleDraftImagePrefetch
+        draftId={draftId}
+        active={surfaceEffectivelyFocused}
+      />
       {/* The column track must be minmax(0,1fr), not the implicit `auto`: an
           auto track's minimum is its items' min-content, so the composer
           toolbar's intrinsic width would lock the whole column wider than a

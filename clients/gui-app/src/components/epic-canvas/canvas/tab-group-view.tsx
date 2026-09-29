@@ -56,6 +56,7 @@ import {
   type EpicTuiAgentProjection,
 } from "@/lib/epic-selectors";
 import { EpicNodeTile } from "@/components/epic-canvas/renderers/epic-node-tile";
+import { MobileDrawerVisibleTilePaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 import { PaneDropZone } from "@/components/epic-canvas/dnd/pane-drop-zone";
 import {
   concealsWithoutCollapsing,
@@ -1025,17 +1026,20 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
 
   if (isRemoteDeleted) {
     return (
-      <DeletedArtifactBody
-        onClose={() => {
-          navigateNested(epicId, tabId, () =>
-            prepareCloseCanvasTabFocusTarget(
-              tabId,
-              groupId,
-              activeTab.instanceId,
-            ),
-          );
-        }}
-      />
+      <>
+        <MobileDrawerVisibleTilePaintReporter ready />
+        <DeletedArtifactBody
+          onClose={() => {
+            navigateNested(epicId, tabId, () =>
+              prepareCloseCanvasTabFocusTarget(
+                tabId,
+                groupId,
+                activeTab.instanceId,
+              ),
+            );
+          }}
+        />
+      </>
     );
   }
 
@@ -1047,6 +1051,7 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
   if (isRetractedAsRevoked) {
     return (
       <div className="flex h-full min-h-0 flex-1 flex-col">
+        <MobileDrawerVisibleTilePaintReporter ready />
         <ChatDeadTileBanner
           hostLabel={ownerHostLabel}
           reason="chat-no-longer-shared"

@@ -78,6 +78,8 @@ export interface RelaySocketHandlers {
   readonly onAttachAck: (sid: number) => void;
   /** An opaque inbound DATA frame (Noise transport bytes for the layer above). */
   readonly onData: (ciphertext: Uint8Array) => void;
+  /** Optional diagnostic: exact UTF-8 payload size, never the control text. */
+  readonly onTextBytes?: (bytes: number) => void;
   /** The host's uplink dropped — pause; the same Noise session resumes on re-attach. */
   readonly onHostDetached: () => void;
   /** The host's uplink (re)attached — resume sends on the existing Noise session. */
@@ -327,6 +329,14 @@ export class RelaySocket {
     return this.probeUnanswered && this.probeImmediateRedialOnFailure;
   }
 
+  /**
+   * Whether this leg reached WebSocket open. Retained after close so drop
+   * accounting can distinguish a lost live leg from a failed dial.
+   */
+  hasOpened(): boolean {
+    return this.opened;
+  }
+
   close(code: number, reason: string): void {
     if (this.closed) {
       return;
@@ -388,6 +398,11 @@ export class RelaySocket {
       if (event.type === "binary") {
         this.handlers.onData(event.data);
         return;
+      }
+      if (this.handlers.onTextBytes !== undefined) {
+        this.handlers.onTextBytes(
+          new TextEncoder().encode(event.data).byteLength,
+        );
       }
       this.handleTextFrame(event.data);
     };
