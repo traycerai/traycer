@@ -23,9 +23,15 @@ describe("providerSupportsCustomCliPath", () => {
 });
 
 describe("providerCustomCliPathHeldReason", () => {
-  it("names antigravity's managed ACP server as the reason", () => {
+  it("names antigravity's own ACP server as the reason", () => {
     expect(providerCustomCliPathHeldReason("antigravity")).toBe(
-      "Antigravity runs its own ACP server from its managed download, so a custom CLI path isn't supported.",
+      "Antigravity runs only its own ACP server (`agy_acp_server`), not the `agy` CLI, so a custom CLI path isn't supported.",
+    );
+  });
+
+  it("holds on every platform: names no managed download, which an Intel Mac lacks", () => {
+    expect(providerCustomCliPathHeldReason("antigravity")).not.toMatch(
+      /download/iu,
     );
   });
 

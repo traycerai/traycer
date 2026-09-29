@@ -1459,7 +1459,7 @@ describe("ProviderCliCandidatesSection: custom CLI path held for antigravity", (
     // opens the reason.
     expect(button.getAttribute("data-slot")).toBe("tooltip-trigger");
     expect(tooltipTextNear(button)).toBe(
-      "Antigravity runs its own ACP server from its managed download, so a custom CLI path isn't supported.",
+      "Antigravity runs only its own ACP server (`agy_acp_server`), not the `agy` CLI, so a custom CLI path isn't supported.",
     );
 
     fireEvent.click(button);
