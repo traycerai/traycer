@@ -2002,6 +2002,7 @@ function ProfileRateLimitProviderBlock({
               )}
               profileEnablementDisabledReason={profileEligibilityToggleDisabledReason(
                 true,
+                providerDisplayName(providerId),
                 target.profile,
                 profiles,
               )}

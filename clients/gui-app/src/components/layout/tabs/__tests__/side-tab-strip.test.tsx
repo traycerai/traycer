@@ -30,6 +30,7 @@ import {
 } from "@tanstack/react-router";
 import { pointerEvent } from "@/components/epic-canvas/canvas/__tests__/test-pointer-events";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
+import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
 import {
   SIDE_STRIP_RAIL_WIDTH_PX,
   SIDE_STRIP_SNAP_TO_RAIL_BELOW_PX,
@@ -317,7 +318,12 @@ function buildRouter(
           <WindowsBridgeContext.Provider
             value={{ bridge: null, hasHydrated: strip.hydrated }}
           >
-            <SideTabStrip edge={strip.edge} ownsTitleBar={strip.ownsTitleBar} />
+            <SheetJoinScope>
+              <SideTabStrip
+                edge={strip.edge}
+                ownsTitleBar={strip.ownsTitleBar}
+              />
+            </SheetJoinScope>
           </WindowsBridgeContext.Provider>
         </TooltipProvider>
       </QueryClientProvider>
@@ -1178,9 +1184,14 @@ describe("<SideTabStrip />", () => {
       expect(
         screen.getByTestId("tab-epic-e-beta").getAttribute("data-sheet-joined"),
       ).toBeNull();
-      expect(
-        document.querySelector('[data-sheet-join-bridge="left"]'),
-      ).not.toBeNull();
+      // The bridge is styled from its own published state, not from a
+      // `:has()` over the joined row: it must be active and name the pane the
+      // row joined.
+      const bridge = document.querySelector('[data-sheet-join-bridge="left"]');
+      expect(bridge?.hasAttribute("data-join-active")).toBe(true);
+      expect(bridge?.getAttribute("data-join-pane")).toBe(
+        screen.getByTestId("tab-epic-e-alpha").getAttribute("data-join-pane"),
+      );
     });
 
     it("joins on the right edge when the strip is on the right, even with the sidebar on the left", async () => {
@@ -1232,6 +1243,27 @@ describe("<SideTabStrip />", () => {
       expect(
         screen.getByTestId("tab-epic-e-beta").getAttribute("data-sheet-joined"),
       ).toBeNull();
+      // The pair publishes for the strip's one bridge, not each member.
+      expect(
+        document
+          .querySelector('[data-sheet-join-bridge="left"]')
+          ?.hasAttribute("data-join-active"),
+      ).toBe(true);
+    });
+
+    it("clears the bridge when no tab is active (activeItemId null)", async () => {
+      setSidebarSide("right");
+      openEpicTabs(["Alpha"]);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+      const bridge = document.querySelector('[data-sheet-join-bridge="left"]');
+      expect(bridge?.hasAttribute("data-join-active")).toBe(true);
+
+      act(() => {
+        useTabsStore.setState({ activeItemId: null });
+      });
+
+      expect(bridge?.hasAttribute("data-join-active")).toBe(false);
+      expect(bridge?.hasAttribute("data-join-pane")).toBe(false);
     });
   });
 

@@ -3,7 +3,7 @@
 // header's active tab - onto its task's sheet) land at the bridge's true
 // inner edge, not 1px short of it.
 //
-// `src/index.css`'s `:has([data-sheet-joined=...]) > [data-sheet-join-bridge=...]`
+// `src/index.css`'s `[data-sheet-join-bridge=...][data-join-active]`
 // rules position each arc's `::before`/`::after` pseudo-element with a plain
 // percentage offset. The bridge itself carries a 1px border
 // (`border-block`/`border-inline`), and an absolutely positioned pseudo's

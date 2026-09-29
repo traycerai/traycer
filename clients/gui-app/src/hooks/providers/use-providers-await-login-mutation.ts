@@ -71,7 +71,9 @@ function withoutLoginCapability(
  *
  * On success the returned state is merged into the tab host's `providers.list`
  * cache, so the re-auth gate flips (and unmounts the banner) without a second
- * probe. A `null` state means nothing was in flight to await - left untouched.
+ * probe. A `null` state means nothing about the provider changed - nothing was
+ * in flight to await, or the host could not install an approved sign-in - and
+ * leaves the cache untouched.
  */
 export function useProvidersAwaitLogin(): UseMutationResult<
   AwaitLoginResponse,

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { usePublishSheetJoin } from "./sheet-join-context";
 import { cn } from "@/lib/utils";
 import { TabChromeBackground, TabColorMark } from "./tab-chrome-background";
 import { TAB_BOX_CLASS } from "./tab-chrome-tokens";
@@ -25,6 +26,7 @@ interface SplitTabLayoutProps {
 export function SplitTabLayout(props: SplitTabLayoutProps): ReactNode {
   const [node, setNode] = useState<HTMLSpanElement | null>(null);
   const inStrip = useWhollyInTabStrip(node, props.joined);
+  usePublishSheetJoin(props.joined && inStrip ? "canvas" : null);
   return (
     <div className="relative flex w-full min-w-0 items-end">
       <div

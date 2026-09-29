@@ -1063,6 +1063,7 @@ import {
   providersStartLoginResponseSchemaV10,
   providersStartLoginResponseSchemaV11,
   providersStartLoginResponseSchemaV12,
+  providersStartLoginResponseSchemaV13,
   providersSubmitLoginCodeRequestSchema,
   providersSubmitLoginCodeResponseSchema,
   providersTouchLoginRequestSchema,
@@ -3658,6 +3659,39 @@ export const providersStartLoginUpgradeV11ToV12 = defineUpgradePath<
     ...response,
     userCode: null,
     failure: null,
+  }),
+});
+
+// v1.3 adds `pending` and `pack` to the response. `pending`: `started: false`
+// because the host is still getting there (the managed pack is downloading,
+// or the login child is running and has not printed its sign-in URL yet), as
+// opposed to because the attempt is over. `pack`: the managed pack's state
+// when the pack is why nothing was spawned, a failed install included. New
+// KEYS rather than more members of `failure`, for two reasons. `failure` means
+// the attempt ended, and `pending` means it has not. And `@1.2` is a released
+// line: growing its enum would change a frozen schema, while a key a v1.2
+// caller has never heard of is dropped by that caller's own parse - so neither
+// needs `responseGrowthProjectionGated`.
+export const providersStartLoginV13 = defineRpcContract({
+  method: "providers.startLogin",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: providersStartLoginRequestSchemaV11,
+  responseSchema: providersStartLoginResponseSchemaV13,
+});
+
+export const providersStartLoginUpgradeV12ToV13 = defineUpgradePath<
+  typeof providersStartLoginV12,
+  typeof providersStartLoginV13
+>({
+  from: { major: 1, minor: 2 },
+  to: { major: 1, minor: 3 },
+  upgradeRequest: (request) => request,
+  // A v1.2 host never keeps a child alive past its own wait and never reports
+  // a pack, so nothing it answers is pending.
+  upgradeResponse: (response) => ({
+    ...response,
+    pending: null,
+    pack: null,
   }),
 });
 
@@ -10518,7 +10552,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   },
   "providers.startLogin": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: providersStartLoginV10,
@@ -10531,6 +10565,10 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         2: {
           contract: providersStartLoginV12,
           upgradeFromPreviousVersion: providersStartLoginUpgradeV11ToV12,
+        },
+        3: {
+          contract: providersStartLoginV13,
+          upgradeFromPreviousVersion: providersStartLoginUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},

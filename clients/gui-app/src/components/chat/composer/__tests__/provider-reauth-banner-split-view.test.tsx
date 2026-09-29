@@ -73,7 +73,18 @@ function copilotState() {
     enabled: true,
     disabledBy: null,
     selected: { kind: "bundled" as const },
-    candidates: [],
+    // A CLI the host can run: without one the terminal sign-in is held
+    // (`providerTerminalLoginHostBlock`), and this test is about which pane's
+    // tab the click opens in.
+    candidates: [
+      {
+        kind: "bundled" as const,
+        path: "/bundled/copilot",
+        version: "1.0.0",
+        available: true,
+        versionPending: false,
+      },
+    ],
     auth: {
       status: "unauthenticated" as const,
       badgeText: null,
