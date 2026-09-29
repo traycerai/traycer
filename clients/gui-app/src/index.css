@@ -516,6 +516,14 @@
   }
 }
 
+/* The glow is motion too: none when the person asks for less of it. */
+@media (prefers-reduced-motion: reduce) {
+  [data-join-glow] [data-sheet-joined="top"],
+  [data-sheet-join-bridge="top"][data-join-glow] {
+    animation: none;
+  }
+}
+
 /* Animated per element that wears the glow; the bridge's arcs inherit it. */
 @property --join-glow {
   syntax: "<number>";

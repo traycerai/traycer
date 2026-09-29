@@ -338,7 +338,14 @@ export function useSelectionTravel(input: {
       subscribeClosingTabs(() => {
         const scroller = scrollerRef.current;
         const active = previousActiveRef.current;
+        closedBoxRef.current = null;
         if (scroller === null || active === null) return;
+        // The layout editor's session tab closes when its session ends; it
+        // never drew a join, so nothing may slide out of it.
+        if (
+          !joinsSheet(layoutItemsRef.current.find((item) => item.id === active))
+        )
+          return;
         const frame = frameOf(scroller, active);
         if (frame === null) return;
         const box = boxOf(scroller, frame);
