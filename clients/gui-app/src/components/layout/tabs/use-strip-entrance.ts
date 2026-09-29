@@ -111,8 +111,13 @@ export function useOpenStripEntrances(onFrame: () => void): void {
       onFrame();
       frame = requestAnimationFrame(follow);
     });
+    // Every slot holds its measured width until the last one is open: a slot
+    // released early would take the space the later ones are still held out
+    // of, then give it back as they open. Cancelling a finished opening only
+    // lifts its hold.
     void Promise.allSettled(running.map((slot) => slot.finished)).then(() => {
       cancelAnimationFrame(frame);
+      for (const slot of running) slot.cancel();
       onFrame();
     });
   });
@@ -130,10 +135,10 @@ function measureSlot(node: HTMLElement): SlotSize {
 }
 
 /**
- * Holds the slot shut through its stagger delay (`fill: "backwards"`), then
- * opens it. Nothing is written inline: when the animation ends its effect
- * simply stops, and the member is back on the strip's own flex sizing, which
- * is the size it was measured at.
+ * Holds the slot shut through its stagger delay, opens it, and holds it open
+ * until the batch releases it (`fill: "both"`). Nothing is written inline:
+ * once the batch cancels the finished opening, the member is back on the
+ * strip's own flex sizing, which is the size it was measured at.
  */
 function openSlot(request: EntranceRequest, size: SlotSize): Animation {
   const { node, kind, delayMs } = request;
@@ -169,7 +174,7 @@ function openSlot(request: EntranceRequest, size: SlotSize): Animation {
       duration: SLOT_OPEN_MS,
       easing: SLOT_EASE,
       delay: delayMs,
-      fill: "backwards",
+      fill: "both",
     },
   );
   if (kind === "tab" && node.firstElementChild instanceof HTMLElement) {
