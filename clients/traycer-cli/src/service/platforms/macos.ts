@@ -763,6 +763,7 @@ async function probeLabelLoaded(
 // print` and asks about the agent label only when the CLI label is absent.
 async function refuseWhenNeitherLabelIsLoaded(
   label: ServiceLabel,
+  operation: "start" | "restart",
   run: ProcessRunner,
 ): Promise<void> {
   if ((await probeLabelLoaded(label.id, run)) !== "absent") return;
@@ -770,7 +771,7 @@ async function refuseWhenNeitherLabelIsLoaded(
   if ((await probeLabelLoaded(agentLabelId, run)) !== "absent") return;
   throw cliError({
     code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-    message: `Cannot start the host: launchd has no job loaded under either host label - neither '${agentLabelId}' (registered by the Traycer app) nor '${label.id}' (registered by 'traycer host service install') - so there is nothing to start. Quit and reopen the Traycer app, which registers its agent again, or run 'traycer host service install' to register the CLI's own.`,
+    message: `Cannot ${operation} the host: launchd has no job loaded under either host label - neither '${agentLabelId}' (registered by the Traycer app) nor '${label.id}' (registered by 'traycer host service install') - so there is nothing to ${operation}. Quit and reopen the Traycer app, which registers its agent again, or run 'traycer host service install' to register the CLI's own.`,
     details: { label: label.id, agentLabel: agentLabelId },
     exitCode: 1,
   });
@@ -2787,7 +2788,7 @@ async function startService(
     await kickstartJob(desktopAgent.agentLabelId, run);
     return;
   }
-  await refuseWhenNeitherLabelIsLoaded(label, run);
+  await refuseWhenNeitherLabelIsLoaded(label, "start", run);
   await kickstartJob(label.id, run);
 }
 
@@ -2848,7 +2849,7 @@ async function relaunchServiceAfterRestart(
     await kickstartDesktopAgent(desktopAgent, stop.forcedRecycle, run);
     return;
   }
-  await refuseWhenNeitherLabelIsLoaded(label, run);
+  await refuseWhenNeitherLabelIsLoaded(label, "restart", run);
   if (stop.forcedRecycle) {
     await recycleJob(label.id, run);
     return;
@@ -2865,7 +2866,7 @@ async function restartService(
     await restartDesktopManagedHost(label, desktopAgent, run);
     return;
   }
-  await refuseWhenNeitherLabelIsLoaded(label, run);
+  await refuseWhenNeitherLabelIsLoaded(label, "restart", run);
   await recycleJob(label.id, run);
 }
 

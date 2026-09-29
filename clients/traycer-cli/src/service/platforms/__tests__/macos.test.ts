@@ -4830,6 +4830,10 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(rejection).toMatchObject({
         message: expect.stringContaining(`'${label.id}'`),
       });
+      // The in-app Restart reaches this relaunch, so the refusal says restart.
+      expect(rejection).toMatchObject({
+        message: expect.stringContaining("Cannot restart the host:"),
+      });
       // Both labels were asked about, and nothing was kickstarted - the old
       // behaviour was `kickstart -k` of the CLI label, which is the failure
       // the field report shows.
@@ -4843,21 +4847,38 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         "relaunchAfterRestart (plain kickstart)",
         (controller: ServiceController) =>
           controller.relaunchAfterRestart(label, { forcedRecycle: false }),
+        "restart",
       ],
-      ["restart", (controller: ServiceController) => controller.restart(label)],
-      ["start", (controller: ServiceController) => controller.start(label)],
+      [
+        "restart",
+        (controller: ServiceController) => controller.restart(label),
+        "restart",
+      ],
+      [
+        "start",
+        (controller: ServiceController) => controller.start(label),
+        "start",
+      ],
     ] as const)(
       "refuses %s the same way, issuing no kickstart",
-      async (_entryPoint, run) => {
+      async (_entryPoint, run, operation) => {
         const { calls, controller } = stageLaunchd({
           cli: notFound,
           agent: notFound,
         });
 
-        await expect(run(controller)).rejects.toMatchObject({
+        const rejection: unknown = await run(controller)
+          .then(() => null)
+          .catch((error: unknown) => error);
+
+        expect(rejection).toMatchObject({
           code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
           message: expect.stringContaining(`'${agentLabelId}'`),
           details: { label: label.id, agentLabel: agentLabelId },
+        });
+        // Worded for the operation the person asked for.
+        expect(rejection).toMatchObject({
+          message: expect.stringContaining(`Cannot ${operation} the host:`),
         });
         expect(kickstartArgs(calls)).toEqual([]);
       },
