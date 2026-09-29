@@ -51,7 +51,7 @@ purges the entire origin, it also erases the debug flag; that first post-purge
 launch cannot be captured with this storage opt-in and requires a separately
 instrumented build. Once the new app page is running, the console reader is
 `globalThis.__traycerRemoteTraffic.snapshot()`. It returns one in-memory row
-per captured remote session (up to 32), with per-stream method, stream ID,
+per live captured remote session (up to 32), with per-stream method, stream ID,
 safe `epic`/`chat` UUIDs, first/last receive times, incoming ciphertext bytes,
 pre-decompression mux bytes, frame/compressed-frame counts, an incomplete
 marker and the number of connection drops the stream stayed open across. The
@@ -92,7 +92,11 @@ traffic, WebSocket/TLS/TCP framing, HTTP/authn, and JavaScript assets. The
 settled interval is a sampling window, not a claim that first paint took that
 long. Check `globalThis.__traycerRemoteTraffic.droppedSessions()` too. If it
 is nonzero, the 32-session reader cap dropped older sessions: mark the total
-incomplete and repeat in a clean app session.
+incomplete and repeat in a clean app session. A session that closes leaves the
+snapshot with its rows. `captureSession` IDs are assigned in order and never
+reused, so match sessions across the two snapshots by that ID; an ID missing
+from the settled snapshot, or a gap in the sequence, is a session whose bytes
+the snapshot no longer holds. Mark that total incomplete too.
 
 For an image-heavy submit check, use a visible draft with several images, an
 empty local byte store and an offline **owner** host while this device still

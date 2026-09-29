@@ -40,16 +40,38 @@ export const HOST_STATUS_LIVENESS_PROBE: SessionLivenessProbe = {
 /** Set to `1` in sessionStorage for reloads or localStorage for app relaunches. */
 export const REMOTE_TRAFFIC_DEBUG_STORAGE_KEY = "traycer:remote-traffic-debug";
 
-const debugReaders: Array<() => RemoteTrafficSnapshot | null> = [];
+/** Backstop for live sessions; a closed session leaves on its own. */
+const MAX_DEBUG_READERS = 32;
+
+/**
+ * Live sessions' readers by capture id, oldest first. An id is never reused,
+ * so two samples of one capture line up even after an earlier session leaves.
+ */
+const debugReaders = new Map<number, () => RemoteTrafficSnapshot>();
+let nextDebugCaptureSession = 0;
 let droppedDebugSessions = 0;
 
 export function readRemoteTrafficDebugSnapshots(): ReadonlyArray<
   RemoteTrafficSnapshot & { readonly captureSession: number }
 > {
-  return debugReaders.flatMap((read, captureSession) => {
-    const snapshot = read();
-    return snapshot === null ? [] : [{ ...snapshot, captureSession }];
-  });
+  return Array.from(debugReaders, ([captureSession, read]) => ({
+    ...read(),
+    captureSession,
+  }));
+}
+
+function registerRemoteTrafficDebugReader(
+  read: () => RemoteTrafficSnapshot,
+): number {
+  const captureSession = nextDebugCaptureSession;
+  nextDebugCaptureSession += 1;
+  debugReaders.set(captureSession, read);
+  if (debugReaders.size > MAX_DEBUG_READERS) {
+    const oldest = debugReaders.keys().next();
+    if (!oldest.done) debugReaders.delete(oldest.value);
+    droppedDebugSessions += 1;
+  }
+  return captureSession;
 }
 
 function remoteTrafficDebugEnabled(): boolean {
@@ -130,11 +152,13 @@ export class RemoteSession<
     if (remoteTrafficDebugEnabled() && this.enableTrafficAccounting()) {
       const reader = this.trafficSnapshotReader();
       if (reader !== null) {
-        debugReaders.push(reader);
-        if (debugReaders.length > 32) {
-          debugReaders.shift();
-          droppedDebugSessions += 1;
-        }
+        const captureSession = registerRemoteTrafficDebugReader(reader);
+        // Caller close and terminal fatal both end here. A closed session's
+        // accounting is final, so keeping its reader would only pin its rows
+        // and crowd live sessions out of the cap.
+        this.onClosed(() => {
+          debugReaders.delete(captureSession);
+        });
         installRemoteTrafficDebugSurface();
       }
     }

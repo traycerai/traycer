@@ -9514,6 +9514,10 @@ describe("RemoteSession opt-in traffic accounting", () => {
 
     try {
       const readerCountBefore = readRemoteTrafficDebugSnapshots().length;
+      const lastCaptureSessionBefore = Math.max(
+        -1,
+        ...readRemoteTrafficDebugSnapshots().map((row) => row.captureSession),
+      );
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("fixture-bearer", "fixture-owner");
       const makeSession = (): RemoteSession<
@@ -9543,10 +9547,56 @@ describe("RemoteSession opt-in traffic accounting", () => {
         expect(localOptInSession.readTrafficSnapshot()).not.toBeNull();
         const readers = readRemoteTrafficDebugSnapshots();
         expect(readers).toHaveLength(readerCountBefore + 1);
-        expect(readers.at(-1)?.captureSession).toBe(readerCountBefore);
+        expect(readers.at(-1)?.captureSession).toBeGreaterThan(
+          lastCaptureSessionBefore,
+        );
       } finally {
         localOptInSession.close();
       }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("releases a closed session's debug reader and keeps live capture ids stable", () => {
+    const sessionStore = createMemoryStorage();
+    const localStore = createMemoryStorage();
+    vi.stubGlobal("sessionStorage", sessionStore);
+    vi.stubGlobal("localStorage", localStore);
+
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("fixture-bearer", "fixture-owner");
+    const makeSession = (): RemoteSession<
+      VersionedRpcRegistry,
+      VersionedStreamRpcRegistry
+    > =>
+      new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+    const captureSessions = (): number[] =>
+      readRemoteTrafficDebugSnapshots().map((row) => row.captureSession);
+
+    try {
+      const before = captureSessions();
+      sessionStore.setItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY, "1");
+      const first = makeSession();
+      const second = makeSession();
+      try {
+        const [firstId, secondId] = captureSessions().slice(before.length);
+        expect(captureSessions()).toHaveLength(before.length + 2);
+
+        first.close();
+        // A closed session's accounting is final: its reader, and the rows it
+        // pins, leave the registry, and the live session keeps the id an
+        // earlier sample recorded it under.
+        expect(captureSessions()).not.toContain(firstId);
+        expect(captureSessions()).toEqual([...before, secondId]);
+      } finally {
+        first.close();
+        second.close();
+      }
+      expect(captureSessions()).toEqual(before);
     } finally {
       vi.unstubAllGlobals();
     }
