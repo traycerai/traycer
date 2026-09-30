@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { LazyMotion, domAnimation } from "motion/react";
 import type { ReactNode } from "react";
@@ -527,6 +528,70 @@ describe("SampleWorkspaceBody - a hidden dock member's ghost", () => {
 
     expect(screen.getByTestId("chat-dock-chip-filesChanged")).not.toBeNull();
     expect(screen.queryByTestId("accumulated-changes-panel")).toBeNull();
+  });
+
+  // The same claim asked the way the real editor asks it: the index row's
+  // HOVER (not a selection) is what requests the ghost, and the picture the
+  // user is shown is decided by where the region's own node lands. Resolved
+  // by the node's cluster, which is how the canvas itself tells the pill row
+  // from the dock's frame of full rows.
+  it("ghosts a Hidden + Chip member as a pill inside the compact strip, and draws no full row for it", () => {
+    useLayoutStore.setState({
+      ...DEFAULT_LAYOUT_SNAPSHOT,
+      overrides: { changedFiles: { shown: "hidden", size: "chip" } },
+    });
+    renderSession();
+
+    // At rest neither shape exists, so the node found below is the ghost's.
+    expect(
+      document.querySelectorAll('[data-layout-region="changedFiles"]'),
+    ).toHaveLength(0);
+
+    act(() => {
+      useLayoutEditorStore.getState().setHovered("changedFiles");
+    });
+
+    const nodes = document.querySelectorAll<HTMLElement>(
+      '[data-layout-region="changedFiles"]',
+    );
+    // One node: the pill. A full row would be a second, or the only, one.
+    expect(nodes).toHaveLength(1);
+    const ghost = regionNode("changedFiles");
+    expect(ghost.getAttribute("data-ghost")).toBe("1");
+    const cluster = ghost.closest("[data-layout-cluster]");
+    expect(cluster?.getAttribute("data-testid")).toBe(
+      "chat-dock-compact-strip",
+    );
+    expect(
+      within(screen.getByTestId("chat-dock-compact-strip")).getByTestId(
+        "chat-dock-chip-filesChanged",
+      ),
+    ).not.toBeNull();
+    // The row it never takes at rest: neither its panel nor a second node.
+    expect(screen.queryByTestId("accumulated-changes-panel")).toBeNull();
+  });
+
+  it("puts a Hidden + Full member's ghost in the dock's frame of full rows, not in the strip", () => {
+    // The control for the test above: the SAME hover on a member whose size is
+    // Full lands in the rows. Without it, "not a full row" could be true of a
+    // ghost that lands nowhere.
+    useLayoutStore.setState({
+      ...DEFAULT_LAYOUT_SNAPSHOT,
+      overrides: { changedFiles: { shown: "hidden", size: "full" } },
+    });
+    renderSession();
+
+    act(() => {
+      useLayoutEditorStore.getState().setHovered("changedFiles");
+    });
+
+    const ghost = regionNode("changedFiles");
+    expect(ghost.getAttribute("data-ghost")).toBe("1");
+    expect(
+      ghost.closest("[data-layout-cluster]")?.getAttribute("data-testid"),
+    ).not.toBe("chat-dock-compact-strip");
+    expect(screen.getByTestId("accumulated-changes-panel")).not.toBeNull();
+    expect(screen.queryByTestId("chat-dock-chip-filesChanged")).toBeNull();
   });
 });
 

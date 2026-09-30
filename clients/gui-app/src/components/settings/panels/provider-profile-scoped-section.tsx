@@ -93,9 +93,10 @@ interface ProviderProfileScopedSectionProps {
  *
  * `signInUnavailableHint` is why a sign-in (Add profile, Sign in, Switch
  * account, Retry) cannot start, or null. `cliSetupNeeded` says the reason is
- * a CLI that is missing, still being looked for, or still downloading, which
- * the CLI & Args tab is where to fix; a provider that is off is turned on by
- * the switch in the header instead, so that reason does not link.
+ * a CLI that is missing, not the selected one, still being looked for, or
+ * still downloading, which the CLI & Args tab is where to fix; a provider
+ * that is off is turned on by the switch in the header instead, so that
+ * reason does not link.
  *
  * `managementHeldReason` holds every profile control while the provider is
  * off, whether or not the host could run its CLI: the sign-in controls fold

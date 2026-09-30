@@ -86,7 +86,7 @@ vi.mock("../../cli/cli-discovery", () => ({
 
 // Mirrors exactly what production imports from this module across
 // `host-controller.ts` (`hasUnappliedPendingLoginItemRevision`,
-// `hostManagesHostLoginItem`, `readHostLoginItemStatus`) and, indirectly,
+// `hostManagesHostLoginItem`, `readHostLaunchdJobs`, `readHostLoginItemStatus`) and, indirectly,
 // `update-mutation.ts` (`registerHostLoginItem`,
 // `retireCompetingCliRegistrationAtLaunchGuarded`,
 // `unregisterHostLoginItemGuarded`) - the wrapped final actuators
@@ -102,6 +102,7 @@ vi.mock("../../app/host-login-item", () => ({
     async () => "not-applicable",
   ),
   hasUnappliedPendingLoginItemRevision: vi.fn(async () => false),
+  readHostLaunchdJobs: vi.fn(async () => "loaded"),
   readHostLoginItemStatus: vi.fn(() => "enabled"),
   readParkedRegistrationTakeover: vi.fn(async () => ({
     kind: "no-takeover",
@@ -284,6 +285,7 @@ import { prereleaseUpdatesEnabled } from "../../app/update-preferences";
 import {
   hasUnappliedPendingLoginItemRevision,
   hostManagesHostLoginItem,
+  readHostLaunchdJobs,
   readHostLoginItemStatus,
   readParkedRegistrationTakeover,
   registerHostLoginItem,
@@ -366,6 +368,9 @@ beforeEach(() => {
     reason: "ready",
   });
   vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(false);
+  // `loaded` keeps every restart on the CLI path it always took; the rows that
+  // pin the register-instead-of-restart route set `neither-loaded` themselves.
+  vi.mocked(readHostLaunchdJobs).mockResolvedValue("loaded");
   vi.mocked(readHostLoginItemStatus).mockReturnValue("enabled");
   vi.mocked(readParkedRegistrationTakeover).mockResolvedValue({
     kind: "no-takeover",
@@ -9440,6 +9445,447 @@ describe("freePortAndRestart (CLI-owned)", () => {
     expect(runBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.arrayContaining(["host", "stamp-runtime"]),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A restart on packaged macOS when launchd has NO host job to restart.
+//
+// Field report: the host runs as the launchd job `ai.traycer.host.agent`,
+// registered through SMAppService. After that job was booted out of launchd,
+// the app's Restart shelled `host restart --force --defer-if-parked`; the CLI
+// found no Desktop agent loaded and kickstarted its own label,
+// `ai.traycer.host`, which failed with `Could not find service
+// "ai.traycer.host" in domain for user gui: 501` - a label that machine never
+// had. The machine was left with no host and an error naming the wrong thing.
+//
+// The login item's status cannot see this: a `launchctl bootout` unloads the
+// job while the BTM record still reads `enabled`. So the controller asks
+// launchd itself (`readHostLaunchdJobs`), and only when packaged macOS, no host
+// serving, and BOTH labels absent does it register the login item again -
+// which loads the agent and starts a host - instead of the CLI restart.
+// Anything else, an unanswerable probe included, restarts through the CLI
+// exactly as before.
+// ---------------------------------------------------------------------------
+describe("restart with no launchd job to restart (packaged macOS, neither host label loaded)", () => {
+  const RESTART_FORCE_ARGV = [
+    "host",
+    "restart",
+    "--force",
+    "--defer-if-parked",
+  ];
+
+  // Every CLI command this controller spawned, through either wrapper. A
+  // restart that went through the CLI shows up here whichever one carried it.
+  function spawnedCliCommands(): readonly (readonly string[])[] {
+    return [
+      ...vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.map((call) => call[0].args),
+      ...vi.mocked(runBundledTraycerCliJson).mock.calls.map((call) => call[0]),
+    ];
+  }
+
+  function spawnedRestarts(): readonly (readonly string[])[] {
+    return spawnedCliCommands().filter((args) => args.includes("restart"));
+  }
+
+  // The world the field report describes: packaged macOS with an install on
+  // disk, no host serving (no pid.json, endpoint unreachable), and launchd
+  // answering not-found for both labels while the login item still reads
+  // `enabled`. Readiness is mocked ready, at the runtime the install record
+  // names, so a completed registration reads as an activation.
+  function stageNoLaunchdJobWorld(): {
+    readonly controller: HostController;
+    readonly lifecycle: HostControllerHostLifecycle;
+  } {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    vi.mocked(readHostLaunchdJobs).mockResolvedValue("neither-loaded");
+    vi.mocked(readHostLoginItemStatus).mockReturnValue("enabled");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: 4242,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+    const lifecycle = fakeHostLifecycle();
+    const controller = newControllerWithLifecycle(lifecycle, async () => false);
+    return { controller, lifecycle };
+  }
+
+  // Direct JSON write, the shape `F3` seeds for its fall-through rows: a
+  // record the restart's own continuation routing leaves alone.
+  function writeNonterminalAttemptRecord(fields: {
+    readonly phase: HostUpdateAttemptPhase;
+    readonly execution: HostUpdateAttemptExecution;
+    readonly continuation: "resume-apply" | "activate" | null;
+  }): void {
+    const layout = getHostFsLayout("production");
+    mkdirSync(layout.rootDir, { recursive: true });
+    writeFileSync(
+      updateAttemptRecordPath(layout.rootDir),
+      JSON.stringify({
+        schemaVersion: 2,
+        attemptId: "no-job-attempt-1",
+        generation: 1,
+        sequence: 1,
+        trigger: "manual",
+        targetVersion: "2.0.0",
+        phase: fields.phase,
+        execution: fields.execution,
+        continuation: fields.continuation,
+        progress: null,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: null,
+        error: null,
+      }),
+    );
+  }
+
+  describe("respawn", () => {
+    it("registers the login item again INSTEAD of the CLI restart, and reports the activation", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+
+      const outcome = await controller.respawn({ kind: "background" });
+
+      expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+      expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+      // The CLI's relaunch can only kickstart a label launchd has loaded; with
+      // neither loaded it can only fail, so it must not be asked.
+      expect(spawnedRestarts()).toEqual([]);
+      expect(waitForHostReady).toHaveBeenCalledTimes(1);
+    });
+
+    it("counts the registration as the completed restart: a respawn queued behind it reports it done and registers nothing more", async () => {
+      // `respawnGeneration` bumps on an ok+activated outcome whichever route
+      // produced it. The two intents are different lane jobs (the coalesce key
+      // is intent-discriminated), so the second is not joined to the first;
+      // only the generation stops it from registering - and so booting the
+      // host out of - a host the first job just brought up.
+      const { controller } = stageNoLaunchdJobWorld();
+      const registerGate = deferred<void>();
+      vi.mocked(registerHostLoginItem).mockImplementation(async () => {
+        await registerGate.promise;
+        return "enabled";
+      });
+
+      const watched = controller.respawn({
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: () => Promise.resolve({ kind: "proceed" }),
+      });
+      const background = controller.respawn({ kind: "background" });
+      registerGate.resolve();
+
+      await expect(watched).resolves.toEqual({
+        kind: "ok",
+        value: { activated: true },
+      });
+      await expect(background).resolves.toEqual({
+        kind: "ok",
+        value: { activated: true },
+      });
+      expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+      expect(spawnedRestarts()).toEqual([]);
+    });
+
+    it("does not register a login item the user switched off, and reports the approval guidance instead", async () => {
+      // A login item switched off in System Settings reads `requires-approval`
+      // and launchd unloads its agent, which is this same neither-loaded state.
+      // Turning it back on is the user's to do, so nothing is registered and
+      // no restart is attempted.
+      const { controller, lifecycle } = stageNoLaunchdJobWorld();
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("requires-approval");
+
+      const outcome = await controller.respawn({ kind: "background" });
+
+      expect(outcome).toEqual({
+        kind: "failed",
+        message: expect.stringContaining("disabled by macOS"),
+      });
+      if (outcome.kind === "failed") {
+        expect(outcome.message).toContain("Login Items");
+      }
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+      expect(spawnedRestarts()).toEqual([]);
+      // A failure heals the renderer snapshot the restart announcement cleared.
+      expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalled();
+    });
+
+    it.each(["loaded", "indeterminate"] as const)(
+      "restarts through the CLI exactly as before when launchd reads %s",
+      async (jobs) => {
+        const { controller } = stageNoLaunchdJobWorld();
+        vi.mocked(readHostLaunchdJobs).mockResolvedValue(jobs);
+        vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+          data: { restarted: false },
+        });
+
+        const outcome = await controller.respawn({ kind: "background" });
+
+        // Only `neither-loaded` is acted on: a job launchd has, or a probe that
+        // could not answer, is no evidence there is nothing to restart.
+        expect(outcome).toEqual({ kind: "ok", value: { activated: false } });
+        expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+          expect.objectContaining({ args: RESTART_FORCE_ARGV }),
+        );
+        expect(readHostLaunchdJobs).toHaveBeenCalledTimes(1);
+        expect(registerHostLoginItem).not.toHaveBeenCalled();
+      },
+    );
+
+    it("restarts through the CLI, without asking launchd, when a host is reachable", async () => {
+      // `neither-loaded` is staged so that a controller which asked launchd
+      // anyway would take the register route and redden the CLI assertion.
+      // A serving host has a job by definition, and the probe is a subprocess
+      // per restart: not spent where its answer cannot matter.
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      vi.mocked(readHostLaunchdJobs).mockResolvedValue("neither-loaded");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      const controller = newControllerWithLifecycle(
+        fakeHostLifecycle(),
+        async () => true,
+      );
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: false },
+      });
+
+      await controller.respawn({ kind: "background" });
+
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({ args: RESTART_FORCE_ARGV }),
+      );
+      expect(readHostLaunchdJobs).not.toHaveBeenCalled();
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+    });
+
+    it("restarts through the CLI, without asking launchd, when the host is not managed through the login item", async () => {
+      // Linux and Windows have no launchd, and a CLI-owned macOS host is not
+      // Desktop's to register: both restart through the CLI as they always did.
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
+      vi.mocked(readHostLaunchdJobs).mockResolvedValue("neither-loaded");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      const controller = newControllerWithLifecycle(
+        fakeHostLifecycle(),
+        async () => false,
+      );
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: false },
+      });
+
+      await controller.respawn({ kind: "background" });
+
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({ args: RESTART_FORCE_ARGV }),
+      );
+      expect(readHostLaunchdJobs).not.toHaveBeenCalled();
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+    });
+
+    // The register route must keep what `--defer-if-parked` protects: a parked
+    // or active update reserves its own activation, and re-registering would
+    // activate whichever bytes are on disk. The register cycle's
+    // `desktop-activation-maintenance` admission refuses while an attempt is
+    // non-terminal, under the lock the CLI's flag reads.
+    it.each([
+      ["a pre-apply park", "waiting-for-work", "parked", "resume-apply"],
+      ["a parked activation", "waiting-to-activate", "parked", "activate"],
+      ["an active apply", "applying", "active", null],
+    ] as const)(
+      "defers, naming the update attempt, and registers nothing over %s",
+      async (_name, phase, execution, continuation) => {
+        const { controller } = stageNoLaunchdJobWorld();
+        writeNonterminalAttemptRecord({ phase, execution, continuation });
+
+        const outcome = await controller.respawn({ kind: "background" });
+
+        expect(outcome).toEqual({
+          kind: "deferred",
+          message: expect.stringContaining("no-job-attempt-1"),
+        });
+        if (outcome.kind === "deferred") {
+          expect(outcome.message).toContain(phase);
+        }
+        expect(registerHostLoginItem).not.toHaveBeenCalled();
+        expect(spawnedRestarts()).toEqual([]);
+      },
+    );
+
+    it("still defers a parked update under desktop-activation-maintenance when the login-item status is not-found", async () => {
+      // A `not-found` leg now admits a real register cycle when activation is
+      // otherwise safe (covered in host-login-item.test.ts). It must not
+      // weaken the separate update-attempt admission: this parked update owns
+      // activation, so respawn cannot re-register whichever bytes happen to
+      // be on disk.
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("not-found");
+      writeNonterminalAttemptRecord({
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+      });
+
+      const outcome = await controller.respawn({ kind: "background" });
+
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: expect.stringContaining("no-job-attempt-1"),
+      });
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+      expect(spawnedRestarts()).toEqual([]);
+    });
+  });
+
+  describe("recoverIfDown", () => {
+    it("registers the login item again INSTEAD of the CLI restart", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+
+      const outcome = await controller.recoverIfDown();
+
+      expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+      expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+      expect(spawnedRestarts()).toEqual([]);
+    });
+
+    it("does not register a login item the user switched off", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("requires-approval");
+
+      const outcome = await controller.recoverIfDown();
+
+      expect(outcome).toEqual({
+        kind: "failed",
+        message: expect.stringContaining("disabled by macOS"),
+      });
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+      expect(spawnedRestarts()).toEqual([]);
+    });
+
+    it("restarts through the CLI as before when launchd has a job", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(readHostLaunchdJobs).mockResolvedValue("loaded");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: false },
+      });
+
+      await controller.recoverIfDown();
+
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: ["host", "restart", "--defer-if-parked"],
+        }),
+      );
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("freePortAndRestart", () => {
+    it("frees the port on its own, then registers the login item again, and never runs the combined command", async () => {
+      // `host free-port-and-restart` frees the port and then restarts, and with
+      // no job loaded its restart half has nothing to start.
+      const { controller } = stageNoLaunchdJobWorld();
+
+      const outcome = await controller.freePortAndRestart(1234, 5678, {
+        kind: "background",
+      });
+
+      expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+      expect(runBundledTraycerCliJson).toHaveBeenCalledWith([
+        "host",
+        "free-port",
+        "--pid",
+        "1234",
+        "--port",
+        "5678",
+      ]);
+      expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+      expect(
+        spawnedCliCommands().filter((args) =>
+          args.includes("free-port-and-restart"),
+        ),
+      ).toEqual([]);
+      // Registering first would boot the agent up beside the process still
+      // holding its port.
+      const freedAt = vi.mocked(runBundledTraycerCliJson).mock
+        .invocationCallOrder[0];
+      const registeredAt = vi.mocked(registerHostLoginItem).mock
+        .invocationCallOrder[0];
+      expect(freedAt).toBeLessThan(registeredAt);
+    });
+
+    it("registers without freeing anything when the port repair names no process to free", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+
+      const outcome = await controller.freePortAndRestart(null, null, {
+        kind: "background",
+      });
+
+      expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+      expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+      expect(spawnedCliCommands()).toEqual([]);
+    });
+
+    it("reports a failed port repair and registers nothing", async () => {
+      // Registering over a port that was not freed would start a host that
+      // cannot bind, and report the repair as done.
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(runBundledTraycerCliJson).mockRejectedValue(
+        new TraycerCliError("E_FREE_PORT_REFUSED", "refused to stop process"),
+      );
+
+      const outcome = await controller.freePortAndRestart(1234, 5678, {
+        kind: "background",
+      });
+
+      expect(outcome).toEqual({
+        kind: "failed",
+        message: "refused to stop process",
+      });
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+      expect(
+        spawnedCliCommands().filter((args) =>
+          args.includes("free-port-and-restart"),
+        ),
+      ).toEqual([]);
+    });
+
+    it("runs the combined command as before when launchd has a job", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(readHostLaunchdJobs).mockResolvedValue("loaded");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restartedLabel: null },
+      });
+
+      await controller.freePortAndRestart(1234, 5678, { kind: "background" });
+
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: [
+            "host",
+            "free-port-and-restart",
+            "--defer-if-parked",
+            "--pid",
+            "1234",
+            "--port",
+            "5678",
+          ],
+        }),
+      );
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+    });
   });
 });
 

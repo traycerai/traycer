@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LayoutFormHostContext } from "@/components/layout-editor/inspector/layout-form-host";
 import { SurfaceSection } from "@/components/layout-editor/inspector/surface-section";
 import { regionFacts } from "@/components/layout-editor/regions/region-facts";
-import type { SurfaceGroupId } from "@/components/layout-editor/regions/region-grammar";
+import {
+  SURFACE_GROUPS,
+  type SurfaceGroupId,
+} from "@/components/layout-editor/regions/region-grammar";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
@@ -155,4 +158,65 @@ describe("a hint alone is enough to disclose (G6)", () => {
       row("railPullRequests").querySelector("[data-sortable-detail]"),
     ).not.toBeNull();
   });
+});
+
+describe("every chevron opens something with content (G6, all five areas)", () => {
+  // The browser driver asked this of every row of every area, by opening each
+  // one and reading its detail text. The per-region cases above name three
+  // regions; this is the same claim over the whole registry, so a region whose
+  // detail draws nothing (a row kind that returns null, a hint-only region
+  // with an empty hint) is a failure here rather than a chevron that opens
+  // onto blank space.
+  // Task tabs is the one area with nothing to disclose (Home tab is its only
+  // row and has no detail), so it is asserted to draw none; the others draw at
+  // least one, which is what keeps a broken selector from passing vacuously.
+  const DISCLOSING_ROWS_AT_LEAST: Readonly<Record<SurfaceGroupId, number>> = {
+    topBar: 0,
+    sidebar: 1,
+    chat: 1,
+    composer: 1,
+    statusBar: 1,
+  };
+
+  it.each(SURFACE_GROUPS.map((group) => group.id))(
+    "%s: each row that draws a chevron discloses non-empty detail, and closes again",
+    (surface) => {
+      render(<Card surface={surface} />);
+
+      const disclosing = [
+        ...document.querySelectorAll("[data-sortable-id]"),
+      ].filter(
+        (node): node is HTMLElement =>
+          node instanceof HTMLElement &&
+          node.querySelector(":scope > [data-row-line] [aria-expanded]") !==
+            null,
+      );
+      expect(disclosing.length).toBeGreaterThanOrEqual(
+        DISCLOSING_ROWS_AT_LEAST[surface],
+      );
+      if (surface === "topBar") expect(disclosing).toHaveLength(0);
+
+      for (const node of disclosing) {
+        const id = node.getAttribute("data-sortable-id") ?? "";
+        const grab = node.querySelector(
+          ":scope > [data-row-line] [aria-expanded]",
+        );
+        if (!(grab instanceof HTMLElement)) throw new Error(`no grab: ${id}`);
+
+        fireEvent.click(grab);
+        const detail = row(id).querySelector(":scope > [data-sortable-detail]");
+        expect(detail, `${surface}: ${id} opened no detail`).not.toBeNull();
+        expect(
+          detail?.textContent.trim().length,
+          `${surface}: row ${id} has a chevron that opens nothing`,
+        ).toBeGreaterThan(0);
+
+        fireEvent.click(grab);
+        expect(
+          row(id).querySelector(":scope > [data-sortable-detail]"),
+          `${surface}: ${id} did not close`,
+        ).toBeNull();
+      }
+    },
+  );
 });

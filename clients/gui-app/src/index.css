@@ -483,6 +483,73 @@
       --arc-y: -1;
     }
   }
+
+  /* The reopen glow (`join-glow.ts`). It tints the join's own borders, on the
+     tab's box and on the bridge alike, so it follows the real silhouette with
+     its concave feet; the box also takes a faint wash from its top edge. The
+     tab box sits under the strip that carries the flag, and the bridge
+     carries its own. */
+  [data-join-glow] [data-sheet-joined="top"],
+  [data-sheet-join-bridge="top"][data-join-active][data-join-glow] {
+    --join-edge: color-mix(
+      in oklab,
+      var(--canvas-border),
+      var(--primary) calc(var(--join-glow) * 35%)
+    );
+    animation: join-glow 1.1s ease-out both;
+  }
+
+  [data-join-glow] [data-sheet-joined="top"] {
+    border-color: var(--join-edge);
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(
+        in oklab,
+        var(--primary) calc(var(--join-glow) * 8%),
+        transparent
+      ),
+      transparent
+    );
+  }
+
+  [data-sheet-join-bridge="top"][data-join-active][data-join-glow] {
+    border-inline-color: var(--join-edge);
+
+    &::before,
+    &::after {
+      border-color: var(--join-edge);
+    }
+  }
+}
+
+/* The glow is motion too: none when the person asks for less of it. */
+@media (prefers-reduced-motion: reduce) {
+  [data-join-glow] [data-sheet-joined="top"],
+  [data-sheet-join-bridge="top"][data-join-glow] {
+    animation: none;
+  }
+}
+
+/* Animated per element that wears the glow; the bridge's arcs inherit it. */
+@property --join-glow {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
+@keyframes join-glow {
+  0% {
+    --join-glow: 0;
+  }
+  18% {
+    --join-glow: 1;
+  }
+  40% {
+    --join-glow: 1;
+  }
+  100% {
+    --join-glow: 0;
+  }
 }
 
 /* The thumb and fill share one response: quick eased follow while dragging,

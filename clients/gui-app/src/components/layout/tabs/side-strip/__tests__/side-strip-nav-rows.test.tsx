@@ -12,6 +12,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -38,6 +39,10 @@ import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
+import {
+  __resetAgentActivityStoreForTests,
+  __setAgentActivityStateForTests,
+} from "@/stores/agent-activity-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -363,5 +368,177 @@ describe("SideStripNavRows", () => {
 
     fireEvent.click(screen.getByTestId("side-tab-strip-collapse"));
     expect(screen.queryByTestId("side-strip-tasks-label")).toBeNull();
+  });
+});
+
+/**
+ * The background utilities that set no colour: attachment, clip, origin,
+ * repeat, size, position, image (gradients included) and blend mode, and an
+ * arbitrary value typed as one of those.
+ */
+const NON_COLOUR_BACKGROUND =
+  /^bg-(?:fixed|local|scroll|clip-|origin-|repeat|no-repeat|auto|cover|contain|size-|position-|top|bottom|center|left|right|none|linear-|radial-|conic-|gradient-|blend-|[[(](?:url\(|image:|length:|size:|position:))/;
+
+/**
+ * The resting colour fills a class list paints: its unmodified `bg-*` colour
+ * utilities. A token with a `hover:` / `dark:` / `aria-*:` modifier is a
+ * state's fill, not the button's, and starts with its modifier, never with
+ * `bg-`; the `bg-*` utilities that paint no colour are dropped by name. jsdom
+ * resolves no cascade, so the class list is the contract a stylesheet is
+ * handed.
+ */
+function restingFillClasses(element: HTMLElement): ReadonlyArray<string> {
+  return [...element.classList].filter(
+    (token) => token.startsWith("bg-") && !NON_COLOUR_BACKGROUND.test(token),
+  );
+}
+
+describe("SideStripNewTask (F7)", () => {
+  beforeEach(() => {
+    resetSharedState();
+    signIn();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+    resetSharedState();
+  });
+
+  it.each([
+    { collapsed: false, label: "expanded" },
+    { collapsed: true, label: "collapsed" },
+  ])(
+    "$label: New Task is filled with the primary colour and with no other resting fill",
+    async ({ collapsed }) => {
+      useSideTabStripStore.setState({ collapsed });
+      renderStrip("left");
+      await screen.findByTestId("side-tab-strip");
+
+      const newTask = screen.getByTestId("side-strip-new-task");
+      // Exactly the primary: a second fill class would mean two answers to
+      // the one question, and the cascade would pick between them.
+      expect(restingFillClasses(newTask)).toEqual(["bg-primary"]);
+      expect(newTask.classList.contains("text-primary-foreground")).toBe(true);
+
+      // The control: All tasks is a plain nav row beside it and is not
+      // primary. Without it `bg-primary` could be what every nav row wears.
+      const allTasks = screen.getByTestId("side-strip-all-tasks");
+      expect(restingFillClasses(allTasks)).not.toContain("bg-primary");
+      expect(allTasks.classList.contains("text-primary-foreground")).toBe(
+        false,
+      );
+    },
+  );
+});
+
+/**
+ * `AgentSpinningDots`' default ("dots") frames: the ten braille cells a
+ * running agent shows everywhere. Written out, not imported, because the claim
+ * is that the strip draws THESE and not some other preset.
+ */
+const RUNNING_DOTS_FRAMES: ReadonlyArray<string> = [
+  "⠋",
+  "⠙",
+  "⠹",
+  "⠸",
+  "⠼",
+  "⠴",
+  "⠦",
+  "⠧",
+  "⠇",
+  "⠏",
+];
+
+/**
+ * Running work on the strip's own rows (F3, D5), read off the real
+ * `SideTabStrip` with the host's activity plane seeded rather than the row's
+ * props written by hand: the expanded row draws a running turn as the shared
+ * spinning dots, and the collapsed tile draws it as the meter's turn pips and
+ * carries no spinner. The dots' own motion and reduced-motion behaviour are
+ * `tab-leading-icon.test.tsx`'s.
+ */
+describe("SideTabStrip rows: running work (F3, D5)", () => {
+  beforeEach(() => {
+    resetSharedState();
+    __resetAgentActivityStoreForTests();
+    signIn();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+    resetSharedState();
+    __resetAgentActivityStoreForTests();
+  });
+
+  /** Alpha has two agents mid-turn; nothing is seeded for any other task. */
+  function seedRunningAlpha(): void {
+    __setAgentActivityStateForTests(
+      {
+        "e-alpha": {
+          working: ["agent-1", "agent-2"],
+          turn: ["agent-1", "agent-2"],
+        },
+      },
+      "local",
+      "connected",
+    );
+  }
+
+  it("expanded: a running task's row draws AgentSpinningDots' default dots inside a named status, and an idle task's row draws none", async () => {
+    openEpicTabs(["Alpha", "Beta"]);
+    seedRunningAlpha();
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+
+    const alpha = within(screen.getByTestId("tab-epic-e-alpha"));
+    const glyph = alpha
+      .getByTestId("side-tab-leading")
+      .querySelector('[data-status-glyph="running"]');
+    if (!(glyph instanceof HTMLElement))
+      throw new Error("expected the running task's row to draw a glyph");
+
+    expect(glyph.querySelector("svg")).toBeNull();
+    expect(RUNNING_DOTS_FRAMES).toContain(glyph.textContent);
+    expect(glyph.closest('[role="status"]')?.getAttribute("aria-label")).toBe(
+      "Task activity in progress",
+    );
+    // The control: Beta has nothing running and draws no spinner, so the glyph
+    // above follows its own task's activity rather than every row's.
+    expect(
+      screen
+        .getByTestId("tab-epic-e-beta")
+        .querySelector('[data-status-glyph="running"]'),
+    ).toBeNull();
+  });
+
+  it("collapsed: a running task's tile shows its running agents as turn pips and draws no spinner, where the expanded row draws one", async () => {
+    openEpicTabs(["Alpha"]);
+    seedRunningAlpha();
+    useSideTabStripStore.setState({ collapsed: true });
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+
+    const tile = screen.getByTestId("tab-epic-e-alpha");
+    expect(tile.getAttribute("data-side-tab")).toBe("collapsed");
+    // One turn pip per agent mid-turn: the tile says WHAT is running by
+    // counting it, in the meter's own mark.
+    expect(
+      tile.querySelectorAll('[data-testid="side-tab-meter"] [data-pip="turn"]'),
+    ).toHaveLength(2);
+    expect(
+      tile.querySelector('[data-status-glyph="running"], .font-mono'),
+    ).toBe(null);
+
+    // The control: the same seeded work on the same task DOES draw a spinner
+    // once the strip is expanded, so its absence on the tile is the rail's
+    // doing and not a task that was never running.
+    act(() => {
+      useSideTabStripStore.setState({ collapsed: false });
+    });
+    const row = screen.getByTestId("tab-epic-e-alpha");
+    expect(row.getAttribute("data-side-tab")).toBe("expanded");
+    expect(row.querySelector('[data-status-glyph="running"]')).not.toBeNull();
   });
 });

@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import {
   Popover,
@@ -11,6 +11,8 @@ import { useTabsStore } from "@/stores/tabs/store";
 import type { TabGroup } from "@/stores/tabs/tab-groups";
 import { TabGroupEditor } from "./tab-group-editor";
 import { cn } from "@/lib/utils";
+import { stripGroupMarkKey } from "@/stores/tabs/strip-motion";
+import { useStripEntrance } from "./use-strip-entrance";
 
 export function TabGroupChip(props: {
   readonly groupId: string;
@@ -19,6 +21,9 @@ export function TabGroupChip(props: {
 }) {
   const [editing, setEditing] = useState(false);
   const { group, groupId } = props;
+  const chipRef = useRef<HTMLButtonElement | null>(null);
+  // A group a reopen brings back opens its chip first; its tabs follow.
+  useStripEntrance(chipRef, stripGroupMarkKey(groupId), "chip");
   const actions = useTabsStore.getState();
   return (
     <Popover
@@ -35,7 +40,11 @@ export function TabGroupChip(props: {
           align="start"
         >
           <button
+            ref={chipRef}
             type="button"
+            // A strip member of its own: a closing slot's spacer is placed
+            // relative to it (`strip-exit-ghosts.ts`).
+            data-strip-group-chip={groupId}
             aria-label={`${group.name || "Unnamed group"}: ${group.collapsed ? "expand" : "collapse"} group`}
             aria-expanded={!group.collapsed}
             className="relative mx-1 flex min-h-6 self-center max-w-48 shrink-0 items-center gap-1 rounded-md bg-[var(--swatch)] px-2 text-ui-xs font-medium text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [-webkit-app-region:no-drag]"

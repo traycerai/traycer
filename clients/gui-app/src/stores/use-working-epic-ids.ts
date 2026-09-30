@@ -3,6 +3,7 @@ import { agentActivityTiers } from "@/lib/agent-activity";
 import {
   chatSessionActivity,
   epicActivityStatusFromSources,
+  type EpicActivityStatus,
 } from "@/hooks/epic/use-epic-activity-status";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
@@ -17,17 +18,37 @@ import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 const CHAT_REGISTRY = getChatSessionRegistry();
 const EPIC_REGISTRY = getOpenEpicRegistry();
 const EMPTY_WORKING_EPIC_IDS: ReadonlySet<string> = new Set<string>();
-let cachedWorkingEpicIds: {
+
+/**
+ * Which epics count: `"any"` is every epic with activity of either tier, and
+ * `"turn"` only epics with an agent turn in progress - a background shell or
+ * monitor alone does not qualify.
+ */
+type WorkingEpicTier = "any" | "turn";
+
+interface CachedWorkingEpicIds {
   readonly key: string;
   readonly ids: ReadonlySet<string>;
-} = { key: "", ids: EMPTY_WORKING_EPIC_IDS };
+}
+
+const cachedWorkingEpicIds: Record<WorkingEpicTier, CachedWorkingEpicIds> = {
+  any: { key: "", ids: EMPTY_WORKING_EPIC_IDS },
+  turn: { key: "", ids: EMPTY_WORKING_EPIC_IDS },
+};
 
 /** Content identity used to suppress notifications for activity-frame churn. */
 export function workingEpicIdsKey(ids: ReadonlySet<string>): string {
   return [...ids].sort().join("\u0000");
 }
 
-function getWorkingEpicIdsSnapshot(): ReadonlySet<string> {
+function countsAsWorking(
+  status: EpicActivityStatus,
+  tier: WorkingEpicTier,
+): boolean {
+  return tier === "turn" ? status === "turn" : status !== "idle";
+}
+
+function workingEpicIdsSnapshot(tier: WorkingEpicTier): ReadonlySet<string> {
   const candidateEpicIds = new Set<string>();
   for (const host of useAgentActivityStore.getState().byHost.values()) {
     for (const epicId of host.byEpic.keys()) candidateEpicIds.add(epicId);
@@ -45,20 +66,41 @@ function getWorkingEpicIdsSnapshot(): ReadonlySet<string> {
       agentActivityTiers(getEpicAgentActivity(epicId)),
       liveAgentIdsForEpic(epicId),
     );
-    if (activity !== "idle") ids.add(epicId);
+    if (countsAsWorking(activity, tier)) ids.add(epicId);
   }
   const key = workingEpicIdsKey(ids);
-  if (key === cachedWorkingEpicIds.key) return cachedWorkingEpicIds.ids;
-  cachedWorkingEpicIds = { key, ids };
+  if (key === cachedWorkingEpicIds[tier].key) {
+    return cachedWorkingEpicIds[tier].ids;
+  }
+  cachedWorkingEpicIds[tier] = { key, ids };
   return ids;
 }
 
+function getWorkingEpicIdsSnapshot(): ReadonlySet<string> {
+  return workingEpicIdsSnapshot("any");
+}
+
+function getTurnEpicIdsSnapshot(): ReadonlySet<string> {
+  return workingEpicIdsSnapshot("turn");
+}
+
 function subscribeWorkingEpicIds(onChange: () => void): () => void {
-  let previousKey = workingEpicIdsKey(getWorkingEpicIdsSnapshot());
+  return subscribeWorkingEpicIdsForTier("any", onChange);
+}
+
+function subscribeTurnEpicIds(onChange: () => void): () => void {
+  return subscribeWorkingEpicIdsForTier("turn", onChange);
+}
+
+function subscribeWorkingEpicIdsForTier(
+  tier: WorkingEpicTier,
+  onChange: () => void,
+): () => void {
+  let previousKey = workingEpicIdsKey(workingEpicIdsSnapshot(tier));
   const chatSubscriptions = new Map<ChatSessionStoreHandle, () => void>();
   const epicSubscriptions = new Map<OpenEpicStoreHandle, () => void>();
   const emitIfChanged = (): void => {
-    const nextKey = workingEpicIdsKey(getWorkingEpicIdsSnapshot());
+    const nextKey = workingEpicIdsKey(workingEpicIdsSnapshot(tier));
     if (nextKey === previousKey) return;
     previousKey = nextKey;
     onChange();
@@ -126,6 +168,19 @@ export function useWorkingEpicIds(): ReadonlySet<string> {
   return useSyncExternalStore(
     subscribeWorkingEpicIds,
     getWorkingEpicIdsSnapshot,
+    () => EMPTY_WORKING_EPIC_IDS,
+  );
+}
+
+/**
+ * Epics with an agent turn in progress. Background-only work (a shell or a
+ * monitor left running with no reply streaming) is excluded, which is what the
+ * phone's task lists lift to the top.
+ */
+export function useTurnEpicIds(): ReadonlySet<string> {
+  return useSyncExternalStore(
+    subscribeTurnEpicIds,
+    getTurnEpicIdsSnapshot,
     () => EMPTY_WORKING_EPIC_IDS,
   );
 }

@@ -32,6 +32,20 @@ function command(taskId: string): BackgroundItem {
   };
 }
 
+function cron(taskId: string): BackgroundItem {
+  return {
+    taskId,
+    kind: "cron",
+    title: `Cron ${taskId}`,
+    blockId: `${taskId}-block`,
+    parentTaskId: null,
+    schedule: "*/5 * * * *",
+    humanSchedule: "Every 5 minutes",
+    prompt: "check the build",
+    recurring: true,
+  };
+}
+
 /** The tree {@link backgroundSectionCounts} takes, over the deduped items. */
 function treeFor(
   items: ReadonlyArray<BackgroundItem>,
@@ -129,8 +143,31 @@ describe("backgroundSectionCounts", () => {
       runningCount: 2,
       heldCount: 1,
       waitingWakeCount: 1,
+      scheduledJobCount: 0,
       portForwardCount: 2,
       total: 6,
+    });
+  });
+});
+
+// A scheduled job waits on its schedule the way a wake waits on its time: it
+// is listed, so the chip counts it, but it is never "running".
+describe("backgroundSectionCounts with scheduled jobs", () => {
+  it("counts a cron job as scheduled, not running, and in the total", () => {
+    expect(
+      backgroundSectionCounts({
+        tree: treeFor([cron("cron-1"), cron("cron-2"), command("cmd-1")]),
+        runningManagedCommandIds: [],
+        heldManagedCommandIds: [],
+        portForwardCount: 0,
+      }),
+    ).toEqual({
+      runningCount: 1,
+      heldCount: 0,
+      waitingWakeCount: 0,
+      scheduledJobCount: 2,
+      portForwardCount: 0,
+      total: 3,
     });
   });
 });
@@ -142,6 +179,7 @@ describe("backgroundHeaderSummary", () => {
         runningCount: 0,
         heldCount: 0,
         waitingWakeCount: 0,
+        scheduledJobCount: 0,
         portForwardCount: 0,
       }),
     ).toBe("0 running");
@@ -153,6 +191,7 @@ describe("backgroundHeaderSummary", () => {
         runningCount: 0,
         heldCount: 0,
         waitingWakeCount: 0,
+        scheduledJobCount: 0,
         portForwardCount: 1,
       }),
     ).toBe("1 port forward");
@@ -164,6 +203,7 @@ describe("backgroundHeaderSummary", () => {
         runningCount: 0,
         heldCount: 0,
         waitingWakeCount: 0,
+        scheduledJobCount: 0,
         portForwardCount: 3,
       }),
     ).toBe("3 port forwards");
@@ -175,6 +215,7 @@ describe("backgroundHeaderSummary", () => {
         runningCount: 2,
         heldCount: 1,
         waitingWakeCount: 0,
+        scheduledJobCount: 0,
         portForwardCount: 0,
       }),
     ).toBe("2 running · 1 held");
@@ -188,8 +229,21 @@ describe("backgroundHeaderSummary", () => {
         runningCount: 2,
         heldCount: 1,
         waitingWakeCount: 4,
+        scheduledJobCount: 0,
         portForwardCount: 1,
       }),
     ).toBe("2 running · 1 held · 4 waiting · 1 port forward");
+  });
+
+  it("names scheduled jobs after the waiting wakes", () => {
+    expect(
+      backgroundHeaderSummary({
+        runningCount: 1,
+        heldCount: 0,
+        waitingWakeCount: 1,
+        scheduledJobCount: 2,
+        portForwardCount: 0,
+      }),
+    ).toBe("1 running · 1 waiting · 2 scheduled");
   });
 });

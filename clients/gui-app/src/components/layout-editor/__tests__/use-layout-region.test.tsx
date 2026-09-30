@@ -8,6 +8,10 @@ import {
   preferredRegionInstance,
   useLayoutEditorStore,
 } from "@/stores/layout/layout-editor-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 
 function Region(props: {
   regionId: RegionId;
@@ -19,6 +23,29 @@ function Region(props: {
     instanceId: props.instanceId,
   });
   return <div ref={ref} data-testid={props.testId} />;
+}
+
+/**
+ * Reports what the hook says about the ghost on the node itself, so a test can
+ * read the returned `ghost` and the `data-ghost` the hook stamped side by side.
+ * The two are separate writes: one is a render value, the other a DOM attribute
+ * written after the commit.
+ */
+function GhostProbe(props: {
+  regionId: RegionId;
+  testId: string;
+}): ReactElement {
+  const { ref, ghost } = useLayoutRegion({
+    regionId: props.regionId,
+    instanceId: null,
+  });
+  return (
+    <div
+      ref={ref}
+      data-testid={props.testId}
+      data-reported-ghost={`${ghost}`}
+    />
+  );
 }
 
 function openSession(): void {
@@ -309,5 +336,166 @@ describe("a region with many instances", () => {
     );
     expect(anchored).toHaveLength(1);
     expect(anchored[0]).toBe(last);
+  });
+});
+
+/**
+ * L-14. A region the user HID is not on the canvas at rest, and materialises
+ * in place only while the editor points at it - its index row hovered, or the
+ * region selected. All three conjuncts are the claim: hidden, pointed at, and
+ * in a session. Each test below holds the other two true so it can only be
+ * decided by the one it names.
+ */
+describe("the ghost of a hidden region", () => {
+  function hide(regionId: "mic" | "minimap"): void {
+    act(() => {
+      useLayoutStore.getState().setRegionValues(regionId, { shown: "hidden" });
+    });
+  }
+
+  function reported(node: HTMLElement): string | null {
+    return node.getAttribute("data-reported-ghost");
+  }
+
+  beforeEach(() => {
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  });
+
+  afterEach(() => {
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  });
+
+  it("reports ghost and stamps data-ghost on the node while a Hidden region's index row is hovered", () => {
+    const view = render(<GhostProbe regionId="mic" testId="mic" />);
+    const node = view.getByTestId("mic");
+    openSession();
+    hide("mic");
+    // Hidden but not pointed at: the control for what follows.
+    expect(reported(node)).toBe("false");
+    expect(node.hasAttribute("data-ghost")).toBe(false);
+
+    act(() => {
+      useLayoutEditorStore.getState().setHovered("mic");
+    });
+
+    expect(reported(node)).toBe("true");
+    expect(node.getAttribute("data-ghost")).toBe("1");
+  });
+
+  it("takes the ghost away again the moment the pointer leaves the index row", () => {
+    const view = render(<GhostProbe regionId="mic" testId="mic" />);
+    const node = view.getByTestId("mic");
+    openSession();
+    hide("mic");
+    act(() => {
+      useLayoutEditorStore.getState().setHovered("mic");
+    });
+    expect(node.getAttribute("data-ghost")).toBe("1");
+
+    act(() => {
+      useLayoutEditorStore.getState().setHovered(null);
+    });
+
+    expect(reported(node)).toBe("false");
+    expect(node.hasAttribute("data-ghost")).toBe(false);
+  });
+
+  it("ghosts a Hidden region that is selected, not only hovered", () => {
+    const view = render(<GhostProbe regionId="mic" testId="mic" />);
+    const node = view.getByTestId("mic");
+    openSession();
+    hide("mic");
+
+    act(() => {
+      useLayoutEditorStore.getState().select("mic");
+    });
+
+    expect(reported(node)).toBe("true");
+    expect(node.getAttribute("data-ghost")).toBe("1");
+  });
+
+  it("never ghosts a region that is not hidden, under the same pointing", () => {
+    // Two regions pointed at at once - one hovered, one selected - and only
+    // the one the user hid is asked for. A shown region is already on screen,
+    // and stamping it would dim a real control to look like a preview.
+    const view = render(
+      <>
+        <GhostProbe regionId="mic" testId="hidden-mic" />
+        <GhostProbe regionId="minimap" testId="shown-minimap" />
+      </>,
+    );
+    const hiddenMic = view.getByTestId("hidden-mic");
+    const shownMinimap = view.getByTestId("shown-minimap");
+    openSession();
+    hide("mic");
+
+    act(() => {
+      useLayoutEditorStore.getState().select("mic");
+      useLayoutEditorStore.getState().setHovered("minimap");
+    });
+
+    expect(hiddenMic.getAttribute("data-ghost")).toBe("1");
+    expect(reported(shownMinimap)).toBe("false");
+    expect(shownMinimap.hasAttribute("data-ghost")).toBe(false);
+  });
+
+  it("follows the Hidden value: showing the region again takes the ghost off while it is still hovered", () => {
+    const view = render(<GhostProbe regionId="mic" testId="mic" />);
+    const node = view.getByTestId("mic");
+    openSession();
+    hide("mic");
+    act(() => {
+      useLayoutEditorStore.getState().setHovered("mic");
+    });
+    expect(node.getAttribute("data-ghost")).toBe("1");
+
+    act(() => {
+      useLayoutStore.getState().setRegionValues("mic", { shown: "shown" });
+    });
+
+    expect(useLayoutEditorStore.getState().hovered).toBe("mic");
+    expect(reported(node)).toBe("false");
+    expect(node.hasAttribute("data-ghost")).toBe(false);
+  });
+
+  it("draws no ghost for a Hidden region at rest, with a session open and nothing pointed at", () => {
+    const view = render(<GhostProbe regionId="mic" testId="mic" />);
+    const node = view.getByTestId("mic");
+    openSession();
+    hide("mic");
+
+    expect(useLayoutEditorStore.getState().hovered).toBeNull();
+    expect(useLayoutEditorStore.getState().selected).toBeNull();
+    expect(reported(node)).toBe("false");
+    expect(node.hasAttribute("data-ghost")).toBe(false);
+
+    // The same Hidden region under a hover does ghost, so the absence above is
+    // the missing pointer's doing and not a region that can never ghost.
+    act(() => {
+      useLayoutEditorStore.getState().setHovered("mic");
+    });
+    expect(reported(node)).toBe("true");
+  });
+
+  it("asks for no ghost outside a session, even for a Hidden region the store still says is hovered", () => {
+    const view = render(<GhostProbe regionId="mic" testId="mic" />);
+    const node = view.getByTestId("mic");
+    hide("mic");
+
+    act(() => {
+      useLayoutEditorStore.setState({ hovered: "mic" });
+    });
+
+    expect(useLayoutEditorStore.getState().session).toBeNull();
+    expect(reported(node)).toBe("false");
+    expect(node.hasAttribute("data-ghost")).toBe(false);
+
+    // The same hover inside a session ghosts, so the absence above is the
+    // missing session's doing and not a region that can never ghost.
+    openSession();
+    act(() => {
+      useLayoutEditorStore.getState().setHovered("mic");
+    });
+    expect(reported(node)).toBe("true");
   });
 });

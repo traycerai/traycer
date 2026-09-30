@@ -396,6 +396,7 @@ function sessionTabVisualProps(isActive: boolean) {
     chrome: "own" as const,
     isActive,
     joined: isActive,
+    concealed: false,
     titleControl: null,
     trailingControl: null,
     leaderVisible: false,
@@ -582,6 +583,7 @@ describe("layout-editor.css is read, not assumed", () => {
       createElement(TabChrome, {
         isActive: true,
         joined: true,
+        concealed: false,
         color,
         session: true,
       }),

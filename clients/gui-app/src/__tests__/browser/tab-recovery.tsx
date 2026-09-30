@@ -42,11 +42,6 @@ import { persistKey } from "@/lib/persist/keys";
 import { useTabRecovery } from "@/lib/tab-recovery/use-tab-recovery";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { collectPanes } from "@/stores/epics/canvas/tile-tree";
-import {
-  CHAT_A,
-  SPEC_A,
-} from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { tabItemId, type PersistedTabStripLayout } from "@/stores/tabs/layout";
@@ -212,24 +207,15 @@ function entrySummary() {
     id: entry.id,
     kind: entry.kind,
     bulk: entry.bulk,
-    items:
-      entry.kind === "header"
-        ? entry.items.map((item) => ({
-            kind: item.kind,
-            id: item.kind === "epic" ? item.tab.tabId : item.draftId,
-            index: item.index,
-            ...(item.placement === undefined
-              ? {}
-              : { placement: item.placement }),
-            ...(item.kind === "draft"
-              ? { hasSnapshot: "content" in item || "draft" in item }
-              : {}),
-          }))
-        : {
-            tabId: entry.tab.tabId,
-            instanceIds: entry.instanceIds,
-            paneIds: entry.paneIds ?? [],
-          },
+    items: entry.items.map((item) => ({
+      kind: item.kind,
+      id: item.kind === "epic" ? item.tab.tabId : item.draftId,
+      index: item.index,
+      ...(item.placement === undefined ? {} : { placement: item.placement }),
+      ...(item.kind === "draft"
+        ? { hasSnapshot: "content" in item || "draft" in item }
+        : {}),
+    })),
   }));
 }
 
@@ -261,21 +247,6 @@ function snapshot() {
     toasts: Array.from(
       document.querySelectorAll("[data-sonner-toast]"),
       (toast) => String(toast.textContent),
-    ),
-    canvases: Object.fromEntries(
-      Object.entries(canvas.canvasByTabId).map(([tabId, state]) => [
-        tabId,
-        state === undefined
-          ? null
-          : {
-              activePaneId: state.activePaneId,
-              panes: collectPanes(state.root).map((pane) => ({
-                id: pane.id,
-                tabInstanceIds: pane.tabInstanceIds,
-                activeTabId: pane.activeTabId,
-              })),
-            },
-      ]),
     ),
   };
 }
@@ -334,45 +305,6 @@ function installBridge(reopen: () => Promise<void>): void {
         collapsed: false,
       });
       return groupId;
-    },
-    seedInnerSplit: (tabId: string) => {
-      const store = useEpicCanvasStore.getState();
-      store.openTileInTab(tabId, CHAT_A);
-      const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
-      const pane =
-        canvas === undefined ? undefined : collectPanes(canvas.root)[0];
-      if (pane === undefined) throw new Error("canvas pane was not created");
-      const splitPaneId = store.splitPaneEmptyInTab(
-        tabId,
-        pane.id,
-        "horizontal",
-      );
-      if (splitPaneId === null) throw new Error("canvas split was not created");
-      store.setActiveTilePane(tabId, splitPaneId);
-      store.openTileInTab(tabId, SPEC_A);
-      store.setActiveTilePane(tabId, pane.id);
-    },
-    seedEmptySplit: (tabId: string) => {
-      const store = useEpicCanvasStore.getState();
-      store.ensureEmptyPaneInTab(tabId);
-      const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
-      const pane =
-        canvas === undefined ? undefined : collectPanes(canvas.root).at(0);
-      if (pane === undefined)
-        throw new Error("canvas root pane was not created");
-      const emptyPaneId = store.splitPaneEmptyInTab(
-        tabId,
-        pane.id,
-        "horizontal",
-      );
-      if (emptyPaneId === null) throw new Error("empty split was not created");
-      return emptyPaneId;
-    },
-    closeInnerTile: (tabId: string, paneId: string, instanceId: string) => {
-      useEpicCanvasStore.getState().closeCanvasTab(tabId, paneId, instanceId);
-    },
-    closeEmptyPane: (tabId: string, paneId: string) => {
-      useEpicCanvasStore.getState().closeCanvasPane(tabId, paneId);
     },
     reopen: async () => {
       await reopen();

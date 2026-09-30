@@ -33,7 +33,8 @@ import {
   resetNestedRouteDomFocusForTests,
 } from "@/lib/nested-route-dom-focus";
 import {
-  recordClosedCanvas,
+  recordClosedHeaderTab,
+  recoveryTiles,
   useTabRecoveryHistory,
 } from "@/lib/tab-recovery/history";
 import {
@@ -1260,22 +1261,14 @@ describe("useEpicRouteSynchronization", () => {
       "inst-deleted-artifact-reopened",
       "Deleted artifact",
     );
-    const before = canvasWithSingleTile(oldInstance);
-    const after: EpicCanvasState = {
-      ...before,
-      root: null,
-      activePaneId: null,
-      tilesByInstanceId: {},
-    };
-
-    // Simulate the first close having left an older instance in recovery,
-    // followed by a manual reopen that created a distinct live instance.
-    recordClosedCanvas(
-      { epicId: EPIC_ID, tabId: TAB_ID, name: EPIC_ID },
-      before,
-      after,
-      false,
-    );
+    // Simulate a closed view of this task that left an older instance in
+    // recovery, followed by a manual open that created a distinct live instance.
+    recordClosedHeaderTab({
+      kind: "epic",
+      tab: { epicId: EPIC_ID, tabId: "closed-view-tab", name: EPIC_ID },
+      canvas: canvasWithSingleTile(oldInstance),
+      index: 0,
+    });
     testState.records = [{ id: oldInstance.id }];
     setSinglePaneCanvas(
       "reopened-pane",
@@ -1299,7 +1292,9 @@ describe("useEpicRouteSynchronization", () => {
     );
 
     await waitFor(() => {
-      expect(useTabRecoveryHistory.getState().entries).toHaveLength(1);
+      expect(recoveryTiles().map(({ tile }) => tile.instanceId)).toEqual([
+        oldInstance.instanceId,
+      ]);
     });
 
     // The authoritative record disappears remotely. The current reopened
@@ -1321,7 +1316,7 @@ describe("useEpicRouteSynchronization", () => {
         "reopened-pane",
         reopenedInstance.instanceId,
       );
-      expect(useTabRecoveryHistory.getState().entries).toEqual([]);
+      expect(recoveryTiles()).toEqual([]);
     });
   });
 
@@ -1350,31 +1345,21 @@ describe("useEpicRouteSynchronization", () => {
       name: "Chat on another host",
       hostId: "host-2",
     };
-    const emptyCanvas: EpicCanvasState = {
-      root: null,
-      activePaneId: null,
-      tilesByInstanceId: {},
-      sizesByGroupId: {},
-    };
+    const recordClosedTask = (
+      epicId: string,
+      tabId: string,
+      tile: EpicCanvasTileRef,
+    ) =>
+      recordClosedHeaderTab({
+        kind: "epic",
+        tab: { epicId, tabId, name: epicId },
+        canvas: canvasWithSingleTile(tile),
+        index: 0,
+      });
 
-    recordClosedCanvas(
-      { epicId: EPIC_ID, tabId: TAB_ID, name: EPIC_ID },
-      canvasWithSingleTile(deletedArtifact),
-      emptyCanvas,
-      false,
-    );
-    recordClosedCanvas(
-      { epicId: EPIC_ID, tabId: TAB_ID, name: EPIC_ID },
-      canvasWithSingleTile(pendingClosedArtifact),
-      emptyCanvas,
-      false,
-    );
-    recordClosedCanvas(
-      { epicId: "other-epic", tabId: "other-tab", name: "Other Epic" },
-      canvasWithSingleTile(sameIdOtherEpic),
-      emptyCanvas,
-      false,
-    );
+    recordClosedTask(EPIC_ID, "closed-deleted-tab", deletedArtifact);
+    recordClosedTask(EPIC_ID, "closed-pending-tab", pendingClosedArtifact);
+    recordClosedTask("other-epic", "other-tab", sameIdOtherEpic);
     Object.assign(testState.canvasStore, {
       closedTilePayloadsByTabId: {
         [TAB_ID]: {
@@ -1385,12 +1370,7 @@ describe("useEpicRouteSynchronization", () => {
         },
       },
     });
-    recordClosedCanvas(
-      { epicId: EPIC_ID, tabId: "other-host-tab", name: EPIC_ID },
-      canvasWithSingleTile(otherHostChat),
-      emptyCanvas,
-      false,
-    );
+    recordClosedTask(EPIC_ID, "other-host-tab", otherHostChat);
 
     renderHook(
       (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
@@ -1408,16 +1388,7 @@ describe("useEpicRouteSynchronization", () => {
     );
 
     await waitFor(() => {
-      const entries = useTabRecoveryHistory.getState().entries;
-      expect(entries).toHaveLength(3);
-      expect(
-        entries.flatMap((entry) =>
-          entry.kind === "canvas"
-            ? entry.before.tilesByInstanceId[entry.instanceIds[0] ?? ""]
-                ?.instanceId
-            : [],
-        ),
-      ).toEqual([
+      expect(recoveryTiles().map(({ tile }) => tile.instanceId)).toEqual([
         pendingClosedArtifact.instanceId,
         sameIdOtherEpic.instanceId,
         otherHostChat.instanceId,

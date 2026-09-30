@@ -46,6 +46,12 @@ import {
 import { useAppColumnChromeInput } from "@/components/layout/use-app-column-chrome-input";
 import { TabChrome } from "@/components/layout/tabs/header-tab-visual";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
+import {
+  SIDE_STRIP_DEFAULT_WIDTH_PX,
+  SIDE_STRIP_MIN_WIDTH_PX,
+  SIDE_STRIP_RAIL_WIDTH_PX,
+  SIDE_STRIP_SNAP_TO_RAIL_BELOW_PX,
+} from "@/components/layout/tabs/side-strip/side-strip-tokens";
 import { SampleSceneProvider } from "@/components/sample-workspace/sample-scene-provider";
 import { SampleWorkspaceBody } from "@/components/sample-workspace/sample-workspace-body";
 import { SampleStripLiveAgents } from "@/components/sample-workspace/sample-strip-live-agents";
@@ -68,6 +74,7 @@ import {
   sideTabStripEdge,
   stackRailPanels,
   unstackRail,
+  type BarHost,
   type EdgeSide,
   type SideStripView,
   type TabStripPlacement,
@@ -113,7 +120,7 @@ import {
 } from "@/stores/layout/layout-store";
 import { sampleWorkspaceTabModule } from "@/stores/tabs/kinds/sample-workspace";
 import { tabItemId } from "@/stores/tabs/layout";
-import { useTabsStore } from "@/stores/tabs/store";
+import { type TabsStoreState, useTabsStore } from "@/stores/tabs/store";
 import { tabAppearance } from "@/stores/tabs/types";
 import { seedSideStripTabs } from "./side-tab-strip-seed";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
@@ -219,7 +226,13 @@ const SESSION_TAB_COLOR: string | null =
 function SessionTabSpecimen(): ReactNode {
   return (
     <span data-fixture-session-tab className="relative h-9 w-48 shrink-0">
-      <TabChrome isActive joined={false} color={SESSION_TAB_COLOR} session />
+      <TabChrome
+        isActive
+        joined={false}
+        concealed={false}
+        color={SESSION_TAB_COLOR}
+        session
+      />
       {/* The label colour the real tab gives itself on this fill, restated
           rather than imported: `header-tab-visual.tsx` exports components
           only, and a string export would cost that file its fast refresh. */}
@@ -424,6 +437,42 @@ interface LayoutCanvasProbe {
   readonly holdActivations: () => void;
   readonly releaseActivations: () => void;
   readonly activationCount: () => number;
+  /**
+   * Everything a check changes LIVE, back to the document as it was loaded,
+   * so one load can serve every check that shares its load-time
+   * configuration (`wco`, `surface`, `account`, `hosts`, `header`,
+   * `readings`, which are read once at mount): the layout snapshot (with the
+   * URL's placement, sidebar side and strip view), the strip's width and
+   * collapse, the inspector's dock, the theme, the panel's collapse, the
+   * indicators and activity a check fed in, a slowed panel-motion token, any
+   * open session, and the seeded tabs (`restoreTabs`).
+   */
+  readonly restoreLoadState: () => void;
+  /**
+   * The seeded tabs, as the document loaded them: a reorder or an activation
+   * undone. It puts back the very objects the load seeded, so a strip no
+   * check changed re-renders nothing and a changed one keeps its rows mounted.
+   */
+  readonly restoreTabs: () => void;
+  /**
+   * Which readings the strip foot (or header) holds, live: the layout's
+   * `usageHost` / `resourceHost`, which `readings=` writes only at load. The
+   * readings plumbing itself (the usage poll, the resource stream) is what
+   * `readings=usage|resource|both` mounts at load, so a load that will switch
+   * between these is loaded with `readings=both`.
+   */
+  readonly setReadings: (readings: CanvasVariant["readings"]) => void;
+  /**
+   * The production constants a check used to restate, taken from the module
+   * that owns them, so a drift in the design is a red test rather than two
+   * copies of a number agreeing.
+   */
+  readonly tokens: {
+    readonly stripRailWidthPx: number;
+    readonly stripMinWidthPx: number;
+    readonly stripDefaultWidthPx: number;
+    readonly stripSnapToRailBelowPx: number;
+  };
 }
 
 declare global {
@@ -1039,7 +1088,70 @@ function buildProbe(): LayoutCanvasProbe {
     setPanelCollapsed: (collapsed) => {
       useLeftPanelStore.getState().setMainCollapsed(EPIC_SURFACE_ID, collapsed);
     },
+    restoreLoadState: () => {
+      const editor = useLayoutEditorStore.getState();
+      editor.endSession();
+      editor.setDockMode(VARIANT.dock);
+      resetLayout();
+      const strip = useSideTabStripStore.getState();
+      strip.resetWidth();
+      strip.setCollapsed(VARIANT.collapsed);
+      useSettingsStore.getState().setTheme("system");
+      useLeftPanelStore.getState().setMainCollapsed(EPIC_SURFACE_ID, false);
+      fixtureIndicators = { epics: {}, chats: {} };
+      applyFixtureIndicators();
+      __setAgentActivityStateForTests({}, "local", null);
+      document.documentElement.style.removeProperty(
+        "--panel-animation-duration",
+      );
+      restoreLoadedTabs();
+    },
+    restoreTabs: restoreLoadedTabs,
+    setReadings: (readings) => {
+      const { arrangement } = useLayoutStore.getState();
+      const shown = (wanted: boolean, fallback: BarHost): BarHost =>
+        wanted ? "header" : fallback;
+      useLayoutStore.getState().setArrangement({
+        ...arrangement,
+        usageHost: shown(
+          readings === "usage" || readings === "both",
+          DEFAULT_LAYOUT_SNAPSHOT.arrangement.usageHost,
+        ),
+        resourceHost: shown(
+          readings === "resource" || readings === "both",
+          DEFAULT_LAYOUT_SNAPSHOT.arrangement.resourceHost,
+        ),
+      });
+    },
+    tokens: {
+      stripRailWidthPx: SIDE_STRIP_RAIL_WIDTH_PX,
+      stripMinWidthPx: SIDE_STRIP_MIN_WIDTH_PX,
+      stripDefaultWidthPx: SIDE_STRIP_DEFAULT_WIDTH_PX,
+      stripSnapToRailBelowPx: SIDE_STRIP_SNAP_TO_RAIL_BELOW_PX,
+    },
   };
+}
+
+/** The tabs store as the load seeded it, which `restoreLoadedTabs` puts back. */
+let loadedTabs: TabsStoreState | null = null;
+
+/**
+ * The seeded tabs and, for a task window, Epsilon's one-pane canvas, in the
+ * order the load applies them: seeding a task's record resets its canvas.
+ */
+function seedVariantTabs(variant: CanvasVariant): void {
+  seedSideStripTabs(variant.surface === "sample");
+  if (variant.surface === "epic") seedEpicSurfaceCanvas();
+  loadedTabs = useTabsStore.getState();
+}
+
+/**
+ * The tabs store back to the load's own objects: the order, the split pair,
+ * the group, the active tab and its activation history.
+ */
+function restoreLoadedTabs(): void {
+  if (loadedTabs === null) throw new Error("the fixture never seeded its tabs");
+  useTabsStore.setState(loadedTabs);
 }
 
 /**
@@ -1632,8 +1744,7 @@ function applyVariant(variant: CanvasVariant): void {
   useLayoutEditorStore.getState().setDockMode(variant.dock);
   // A task window has no layout session, so no Customizing tab: Epsilon is
   // the active tab, which is what the join and the Activity view are about.
-  seedSideStripTabs(variant.surface === "sample");
-  if (variant.surface === "epic") seedEpicSurfaceCanvas();
+  seedVariantTabs(variant);
 }
 
 applyVariant(VARIANT);

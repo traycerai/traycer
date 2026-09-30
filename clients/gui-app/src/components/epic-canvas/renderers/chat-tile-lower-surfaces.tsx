@@ -21,7 +21,6 @@ import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/cha
 import type { ChatProviderFallbackState } from "@/components/chat/fallback/fallback-state";
 import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
 import { ChatDockCompactStripProvider } from "@/components/chat/chat-dock-compact-strip";
-import type { ChatDockSection } from "@/lib/chat/chat-dock-sections";
 import {
   type ChatLowerSurfaceTopSpacing,
   type ChatPinnedStackTopSpacing,
@@ -46,6 +45,7 @@ import { ComposerReadonlyWorkspaceModeRow } from "@/components/home/composer/com
 import {
   chatBackgroundSectionVisible,
   lowerScrollRegionMaxHeightClass,
+  lowerSurfaceFrame,
 } from "@/lib/chat/chat-lower-scroll-budget";
 import type { WorkspaceComposerAvailability } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
@@ -248,6 +248,11 @@ export interface ChatLowerComposerState {
   /** The Location / Mode+branch / Environment chip cluster (+ context usage). */
   readonly workspaceControls: ReactNode;
   readonly workspaceAvailability: WorkspaceComposerAvailability;
+  /**
+   * The host's `suggestedPrompt` (`chat.subscribe@1.20`), offered as the
+   * composer's placeholder.
+   */
+  readonly suggestedPrompt: string | undefined;
 }
 
 interface ComposerSurfaceModel {
@@ -485,32 +490,25 @@ export function ChatLowerInteractionSurfaces(
     queue: props.queue.value,
     todo: props.todo,
   });
-  // What each dock member DRAWS below the transcript: its full row inside the
-  // frame, or the one attached panel its open pill put there (L-142). The
-  // scroll budget and the composer's top spacing both ask this, and a pill
-  // panel is a scroll region exactly as a row is.
-  const drawsInDock = (
-    section: ChatDockSection,
-    hasContent: boolean,
-  ): boolean =>
-    (hasContent && !chrome.folded.has(section)) ||
-    chrome.openSection === section;
-  const todoVisible = props.runtime.snapshotLoaded && props.todo !== null;
-  const dockTodoVisible = drawsInDock("todo", todoVisible);
-  const dockFilesChangedVisible = drawsInDock(
-    "filesChanged",
-    chrome.hotspots.filesChanged.hasContent,
-  );
-  // Kept as one boolean (rather than two) for the scroll-budget calc below,
-  // which has always treated Todo and Files changed as a single pressure
-  // unit - unchanged now that Files changed can render apart from Todo.
-  const pinnedStackVisible = dockTodoVisible || dockFilesChangedVisible;
-  // Show the queue surface whenever it holds anything - user-typed sends and
-  // received A2A responses alike (the latter render read-only). It is never a
-  // pill, in any mode (G1-G2, staging round 4).
-  const queueVisible = props.queue.value.items.length > 0;
-  const dockAgentsVisible = drawsInDock("activeAgents", activeAgentsVisible);
-  const dockBackgroundVisible = drawsInDock("background", backgroundVisible);
+  // What each dock member DRAWS below the transcript, and what that means for
+  // the composer's top edge: `lowerSurfaceFrame`
+  // (`lib/chat/chat-lower-scroll-budget.ts`) is the one place that decides it,
+  // and the browser fixture calls the same function.
+  const {
+    pinnedStackVisible,
+    queueVisible,
+    dockAgentsVisible,
+    dockBackgroundVisible,
+    topSpacing: lowerSurfaceTopSpacing,
+  } = lowerSurfaceFrame({
+    folded: chrome.folded,
+    openSection: chrome.openSection,
+    todoHasContent: props.runtime.snapshotLoaded && props.todo !== null,
+    filesChangedHasContent: chrome.hotspots.filesChanged.hasContent,
+    activeAgentsHasContent: activeAgentsVisible,
+    backgroundHasContent: backgroundVisible,
+    queueItemCount: props.queue.value.items.length,
+  });
   const approvalVisible = approvalSurfaceVisible(
     props.runtime.snapshotLoaded,
     props.access.isViewer,
@@ -523,13 +521,6 @@ export function ChatLowerInteractionSurfaces(
     activeAgentsVisible: dockAgentsVisible,
     approvalVisible,
   });
-  const lowerSurfaceTopSpacing: ChatLowerSurfaceTopSpacing =
-    pinnedStackVisible ||
-    queueVisible ||
-    dockAgentsVisible ||
-    dockBackgroundVisible
-      ? "connected"
-      : "normal";
   const pinnedStackTopSpacing: ChatPinnedStackTopSpacing = approvalVisible
     ? "compact"
     : "normal";
@@ -869,6 +860,7 @@ function LiveChatComposer(props: {
       providerFallback={model.providerFallback}
       topSpacing={props.topSpacing}
       topSlot={null}
+      suggestedPrompt={model.composer.suggestedPrompt}
     />
   );
 }

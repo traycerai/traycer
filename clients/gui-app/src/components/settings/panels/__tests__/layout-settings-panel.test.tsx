@@ -39,6 +39,7 @@ import {
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { searchSettings } from "@/lib/settings-search/settings-search";
+import { useSettingsAnchorReveal } from "@/components/settings/use-settings-anchor-reveal";
 
 // The provider list is read through the watched host's scope; this page needs
 // it mounted, never connected.
@@ -1277,6 +1278,173 @@ describe("Settings - Layout", () => {
           origin: { kind: "settings", area: "sidebar" },
         }),
       );
+    });
+  });
+
+  describe("the phone's area select says which areas changed (H2)", () => {
+    // jsdom draws the rail AND the select (nothing here applies `md:hidden`),
+    // so the select is read as it is on a phone without a viewport to fake.
+    // `browser-tests/layout-settings.spec.ts` keeps the real-pointer pick;
+    // what the trigger and the open list SAY is decided by the markup, which
+    // is this file's.
+    function areaSelect(): HTMLElement {
+      return screen.getByRole("combobox", { name: "Layout area" });
+    }
+
+    function changeChat(): void {
+      act(() => {
+        useLayoutStore.getState().setArrangement({
+          ...DEFAULT_ARRANGEMENT,
+          minimapSide: "left", // Chat
+        });
+      });
+    }
+
+    it("draws the dot and says ', changed' on the trigger only while the picked area differs", async () => {
+      const user = userEvent.setup();
+      changeChat();
+      renderPanel();
+
+      await goToSurfaceTab(user, "chat");
+      expect(within(areaSelect()).getByTestId("area-changed-dot")).toBeTruthy();
+      expect(areaSelect().textContent).toContain(", changed");
+
+      // The dot follows the picked area, not the page: Composer is untouched.
+      await goToSurfaceTab(user, "composer");
+      expect(within(areaSelect()).queryByTestId("area-changed-dot")).toBeNull();
+      expect(areaSelect().textContent).not.toContain(", changed");
+    });
+
+    it("marks, in the open list, exactly the areas that changed - by the dot and in words", () => {
+      changeChat();
+      renderPanel();
+
+      fireEvent.keyDown(areaSelect(), { key: "ArrowDown" });
+
+      const options = screen.getAllByRole("option");
+      expect(options).toHaveLength(SURFACE_GROUPS.length + 1);
+      const marked = options
+        .filter(
+          (option) =>
+            option.textContent.includes(", changed") &&
+            option.querySelector('[data-testid="area-changed-dot"]') !== null,
+        )
+        .map((option) => option.querySelector(".truncate")?.textContent);
+      // Presets reads as changed whenever anything differs from the shipped
+      // preset (its own summary says "Modified"); of the surfaces, only Chat.
+      expect(marked).toEqual(["Presets", "Chat"]);
+    });
+
+    it("keeps focus inside the area's panel when Enter on a changed row's revert puts the row back", async () => {
+      const user = userEvent.setup();
+      changeChat();
+      renderPanel();
+      await goToSurfaceTab(user, "chat");
+      const revert = within(activeTabPanel()).getByRole("button", {
+        name: "Revert Minimap",
+      });
+      act(() => {
+        revert.focus();
+      });
+      expect(document.activeElement).toBe(revert);
+
+      await user.keyboard("{Enter}");
+
+      expect(
+        within(activeTabPanel()).queryByRole("button", {
+          name: "Revert Minimap",
+        }),
+      ).toBeNull();
+      expect(useLayoutStore.getState().arrangement.minimapSide).toBe(
+        DEFAULT_ARRANGEMENT.minimapSide,
+      );
+      // The revert unmounted with the change it undid; focus must not have
+      // fallen to the page with it.
+      expect(document.activeElement).not.toBe(document.body);
+      expect(activeTabPanel().contains(document.activeElement)).toBe(true);
+    });
+  });
+
+  describe("a landing marks its row, and the marks retire (H2)", () => {
+    // The retired CDP driver read `data-settings-anchor-flash` beside the
+    // row's place in the pane. The place needs layout and stays a browser
+    // claim (`browser-tests/layout-settings.spec.ts`); the
+    // mark, its retirement and the composition of the two landing doors with
+    // the pane's tabs are decided here.
+    const ANCHOR = LAYOUT.definitions.sidebarSide.anchor;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      Object.defineProperty(Element.prototype, "checkVisibility", {
+        configurable: true,
+        value: function checkVisibility(this: Element): boolean {
+          return this.closest("[hidden]") === null;
+        },
+      });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      Reflect.deleteProperty(Element.prototype, "checkVisibility");
+    });
+
+    function Page(): ReactNode {
+      useSettingsAnchorReveal("layout");
+      return <LayoutSettingsPanel />;
+    }
+
+    function flashed(): ReadonlyArray<Element> {
+      return [...document.querySelectorAll("[data-settings-anchor-flash]")];
+    }
+
+    it("a deep link to a region marks its row, keeps the mark while it reads, then retires it", async () => {
+      setSystemTabModalApi({
+        active: null,
+        openSettings: vi.fn(),
+        openHistory: vi.fn(),
+        close: vi.fn(),
+        setSection: vi.fn(),
+        promoteToTab: vi.fn(),
+        isOverlayActive: () => true,
+      });
+      renderPanel();
+
+      await act(async () => {
+        navigateToLayoutRegion("contextUsage");
+        await Promise.resolve();
+      });
+
+      expect(flashed()).toEqual([row("contextUsage")]);
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(flashed()).toEqual([row("contextUsage")]);
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(flashed()).toEqual([]);
+    });
+
+    it("a search result marks its row in the area it switched to, never the hidden one it started from", () => {
+      render(<Page />);
+      expect(tabPanelHiddenFor("layout-surface-sidebar")).toBe(true);
+
+      act(() => {
+        useSettingsSearchStore.getState().requestReveal("layout", ANCHOR);
+      });
+      act(() => {
+        vi.advanceTimersByTime(16);
+      });
+
+      const marked = flashed();
+      expect(marked).toHaveLength(1);
+      expect(marked[0].getAttribute("data-settings-anchor")).toBe(ANCHOR);
+      expect(marked[0].closest('[role="tabpanel"]')).toBe(activeTabPanel());
+      expect(marked[0].closest("[hidden]")).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(flashed()).toEqual([]);
     });
   });
 });

@@ -541,6 +541,8 @@ function renderFind(input: {
       getNavigationGeneration: () => navigationGeneration,
       setScrolledActiveUserMessageIdIfChanged:
         callbacks.setScrolledActiveUserMessageIdIfChanged,
+      openSubagentId: null,
+      getSubagentViewRoot: () => null,
     });
     useChatFindIndexFeed({
       client: input.client,

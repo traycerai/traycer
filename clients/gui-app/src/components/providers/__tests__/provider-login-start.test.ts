@@ -7,6 +7,7 @@ import {
   PROVIDER_LOGIN_PACK_POLL_MS,
   PROVIDER_LOGIN_STILL_STARTING_CAP,
   providerLoginAnswerHeldForNobody,
+  providerLoginAnswerHoldsLogin,
   providerLoginAnswerStillStarting,
   providerLoginAnswerWantsPackRetry,
   providerLoginNotStartedMessage,
@@ -402,6 +403,24 @@ describe("providerLoginAnswerStillStarting", () => {
 
   it("is false for a started answer, even though it also carries no pending", () => {
     expect(providerLoginAnswerStillStarting(STARTED_ANSWER)).toBe(false);
+  });
+});
+
+describe("providerLoginAnswerHoldsLogin", () => {
+  it("is true for a started answer and for one still starting", () => {
+    expect(providerLoginAnswerHoldsLogin(STARTED_ANSWER)).toBe(true);
+    expect(providerLoginAnswerHoldsLogin(STARTING_ANSWER)).toBe(true);
+  });
+
+  it("is false while the pack is still preparing: nothing runs on the host yet", () => {
+    expect(providerLoginAnswerHoldsLogin(DOWNLOADING_ANSWER)).toBe(false);
+  });
+
+  it("is false for a start the host refused or that failed", () => {
+    expect(providerLoginAnswerHoldsLogin(NOT_STARTED_ANSWER)).toBe(false);
+    expect(
+      providerLoginAnswerHoldsLogin(answer({ failure: "device_code_missing" })),
+    ).toBe(false);
   });
 });
 

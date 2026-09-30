@@ -52,6 +52,7 @@ import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
@@ -1264,6 +1265,62 @@ describe("<SideTabStrip />", () => {
 
       expect(bridge?.hasAttribute("data-join-active")).toBe(false);
       expect(bridge?.hasAttribute("data-join-pane")).toBe(false);
+    });
+
+    // A pair joins as one unit but takes its FILL from one member: the one on
+    // the strip's own edge (`memberTab(item[edge])`), because that is the
+    // member whose sheet borders the strip. The retired sheet-join browser
+    // driver walked this per split variant; which pane a pair meets is
+    // decided here.
+    describe("the split pair's pane (D3)", () => {
+      const pairPane = (): string | null =>
+        screen
+          .getByTestId("split-tab-group-split-a")
+          .getAttribute("data-join-pane");
+      const collapse = (tabId: string): void => {
+        act(() => {
+          useLeftPanelStore.setState({
+            mainCollapsedByTabId: { [tabId]: true },
+          });
+        });
+      };
+      afterEach(() => {
+        act(() => {
+          useLeftPanelStore.setState({ mainCollapsedByTabId: {} });
+        });
+      });
+
+      it("meets the sidebar panel when the panel is on the strip's own edge, and its rail once that panel collapses", async () => {
+        setSidebarSide("left");
+        openSplitPair("left");
+        await renderStrip("/elsewhere", LEFT_STRIP);
+
+        expect(pairPane()).toBe("panel");
+        collapse("e-alpha");
+        expect(pairPane()).toBe("rail");
+      });
+
+      it("meets the canvas when the sidebar is on the far edge", async () => {
+        setSidebarSide("right");
+        openSplitPair("left");
+        await renderStrip("/elsewhere", LEFT_STRIP);
+
+        expect(pairPane()).toBe("canvas");
+        collapse("e-alpha");
+        expect(pairPane()).toBe("canvas");
+      });
+
+      it("reads the member on the RIGHT strip's edge, not the left one, whichever half is focused", async () => {
+        setSidebarSide("right");
+        openSplitPair("left");
+        await renderStrip("/elsewhere", { ...LEFT_STRIP, edge: "right" });
+
+        // The left member's panel state must not move a pair on the right edge.
+        collapse("e-alpha");
+        expect(pairPane()).toBe("panel");
+        collapse("e-beta");
+        expect(pairPane()).toBe("rail");
+      });
     });
   });
 

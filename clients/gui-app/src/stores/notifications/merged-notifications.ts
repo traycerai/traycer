@@ -2032,6 +2032,9 @@ function navigationPayloadFromKnown(
         hostId: known.hostId,
         focus: { resourceId: known.runId },
       };
+    // The chat's queue is paused and its remedy lives in that chat.
+    case "managed_command_delivery_parked":
+      return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
   }
 }
 

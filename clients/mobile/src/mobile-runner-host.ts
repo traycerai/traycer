@@ -2018,6 +2018,8 @@ class MobileNetworkPathWatcher {
 }
 
 class MobileNoopTrayState implements ITrayState {
+  readonly showsEpics = false;
+
   async setEpics(epics: readonly TrayEpic[]): Promise<void> {
     void epics;
   }

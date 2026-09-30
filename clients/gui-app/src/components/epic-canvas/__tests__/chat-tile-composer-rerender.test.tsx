@@ -233,6 +233,7 @@ const COMPOSER: ChatLowerComposerState = {
     </>
   ),
   workspaceAvailability: WORKSPACE_COMPOSER_READY,
+  suggestedPrompt: undefined,
 };
 
 // ── Per-token (dock-only) inputs: fresh identity each token, like the real app ─

@@ -826,6 +826,51 @@ describe("<EpicLeftPanelRail />", () => {
     }
   });
 
+  it("hands a rail label to the neighbouring icon's at once: the rail's icons share one HoverCardGroup", () => {
+    // The rail is its own group (`epic-sidebar-rail.tsx`): the first label waits
+    // for intent and the next icon's replaces it with no wait, so a sweep along
+    // the rail reads one icon after another rather than a delay per icon.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(
+        <EpicLeftPanelRail
+          epicId={EPIC_ID}
+          tabId={TAB_ID}
+          orientation="vertical"
+        />,
+      );
+      const first = screen.getByTestId("epic-rail-terminals");
+      const neighbour = screen.getByTestId("epic-rail-sharing");
+      const settle = (ms: number) => {
+        act(() => {
+          vi.advanceTimersByTime(ms);
+        });
+      };
+      const labels = (): ReadonlyArray<string> =>
+        [...document.querySelectorAll('[data-slot="hover-card-content"]')].map(
+          (label) => label.textContent,
+        );
+
+      fireEvent.pointerEnter(first, { pointerType: "mouse" });
+      fireEvent.mouseEnter(first);
+      settle(499);
+      expect(labels()).toEqual([]);
+      settle(1);
+      expect(labels()).toEqual([first.getAttribute("aria-label")]);
+
+      fireEvent.mouseLeave(first);
+      fireEvent.pointerEnter(neighbour, { pointerType: "mouse" });
+      fireEvent.mouseEnter(neighbour);
+      // Two acts: the group closes the label before in an effect the
+      // arriving label's own effect sets up, a scheduler task later.
+      settle(1);
+      settle(1);
+      expect(labels()).toEqual([neighbour.getAttribute("aria-label")]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("collapses the column even when the ACTIVE member's own section is collapsed", () => {
     // A stack draws every member at once, so which one is "active" is not on
     // screen; the lit icon toggles the column whatever the sections say

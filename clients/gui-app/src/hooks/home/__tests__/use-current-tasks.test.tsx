@@ -169,6 +169,8 @@ vi.mock("@/lib/cloud-epic-tasks-query", async (importOriginal) => {
 const NO_TASK_CONTEXTS = vi.hoisted(() => ({
   tasksById: new Map<string, never>(),
   localHomedTaskIds: new Set<string>(),
+  refetch: () => Promise.resolve(),
+  refetchBatches: [],
   isFetching: false,
 }));
 

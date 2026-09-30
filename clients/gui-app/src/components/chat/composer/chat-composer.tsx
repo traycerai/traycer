@@ -79,6 +79,10 @@ import {
   type ProfileEligibilityGate,
 } from "./use-profile-eligibility-gate";
 import { ChatComposerBannerPortal } from "./chat-composer-banner-portal";
+import {
+  fillComposerWithSuggestion,
+  promptSuggestionAllowed,
+} from "./prompt-suggestion";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
 import { useComposerReingestOnReplacement } from "./use-composer-reingest-on-replacement";
 import {
@@ -234,6 +238,12 @@ interface ChatComposerProps {
    * `null` renders nothing.
    */
   readonly topSlot: ReactNode | null;
+  /**
+   * The provider's predicted next prompt (`chat.subscribe@1.20`), offered as
+   * the empty composer's placeholder: → or a tap fills it. `undefined` offers
+   * nothing - which is also every host below `1.20`.
+   */
+  readonly suggestedPrompt: string | undefined;
 }
 
 export interface ChatComposerSubmitInput {
@@ -303,6 +313,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     topSpacing,
     topSlot,
     getDraftBlobBridgeSupported,
+    suggestedPrompt,
   } = props;
   const readingWidth = useReadingWidthStyle();
   const runnerHost = useRunnerHost();
@@ -691,6 +702,27 @@ function ChatComposerImpl(props: ChatComposerProps) {
     editorRef.current?.removeImageAttachmentById(id);
   }, []);
 
+  // Accepting the suggestion (→, or a tap on touch) FILLS and focuses - it
+  // never sends.
+  const fillSuggestedPrompt = useCallback(
+    (suggestion: string): boolean =>
+      fillComposerWithSuggestion(editorRef.current, suggestion),
+    [],
+  );
+  const offeredSuggestion =
+    suggestedPrompt !== undefined &&
+    suggestedPrompt.trim() !== "" &&
+    promptSuggestionAllowed({
+      topBannerKind,
+      sendDisabled: sendBlocked,
+      workspaceBlocked,
+      draftHasText,
+      draftHasImages,
+      draftContent,
+    })
+      ? suggestedPrompt
+      : null;
+
   // Excludes the model-resolution gate: ComposerToolbarRight ANDs the
   // store-derived `modelResolved` onto the send button, and the submit hook
   // re-checks it at dispatch, so this composer never re-renders when the
@@ -847,6 +879,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
                       onSelectionChange={handleSelectionChange}
                       onSubmit={handleSubmitDraft}
                       steerHintActive={steerHintActive}
+                      suggestedPrompt={offeredSuggestion}
+                      onAcceptSuggestion={fillSuggestedPrompt}
                       onPaste={onPaste}
                       onDragOver={onDragOver}
                       onDrop={onDrop}

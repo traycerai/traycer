@@ -44,6 +44,11 @@ type AwaitLoginVariables = {
   readonly profileId: string | null;
 };
 type AwaitLoginCompletion = {
+  // Absent from a host before `providers.awaitLogin@2.2`.
+  readonly refusal?: {
+    readonly reason: string;
+    readonly actionUrl: string | null;
+  } | null;
   readonly state: {
     readonly auth: { readonly status: string };
     // The host's "my auth probe has not answered yet" flag. Carried here
@@ -169,6 +174,11 @@ const fixtures = vi.hoisted(() => {
     // matrix cannot be written at all.
     isLocalMachine: true,
     toastError: vi.fn(),
+    // One spy for every `useOpenLink()` call, so a test can see which link a
+    // button sent the user to.
+    openLink: vi.fn<(url: string, kind: string, event: unknown) => unknown>(
+      () => Promise.resolve(),
+    ),
   };
 });
 
@@ -260,7 +270,7 @@ vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => ({
 }));
 
 vi.mock("@/lib/links/open-link", () => ({
-  useOpenLink: () => vi.fn(() => Promise.resolve()),
+  useOpenLink: () => fixtures.openLink,
 }));
 
 vi.mock("@/components/onboarding/onboarding-provider-discovery", () => ({
@@ -1780,5 +1790,101 @@ describe("SignInToEnableButton releasing a login nobody is coming back for", () 
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// A provider that accepts the browser consent and then refuses the account
+// (`providers.awaitLogin@2.2` `refusal`) is not the generic "did not complete":
+// the row says which provider refused, why, and where to resolve it.
+describe("SignInToEnableButton when the provider refuses the sign-in", () => {
+  afterEach(resetFixtures);
+
+  const REFUSAL = {
+    reason:
+      "Your current account is not eligible for Antigravity. Verify your account to continue.",
+    actionUrl: "https://accounts.google.com/signin/continue?sarp=1&scc=1",
+  };
+
+  async function refuseSignIn(
+    completion: AwaitLoginCompletion,
+  ): Promise<RenderResult> {
+    fixtures.providers = [
+      { ...fixtures.signInProvider, providerId: "antigravity" },
+    ];
+    const view = render(<OnboardingDetectedAgents />);
+    fireEvent.click(signInButton());
+    const [, startOptions] = latestStartLoginCall();
+    await act(() => {
+      startOptions.onSuccess({ started: true });
+      return Promise.resolve();
+    });
+    act(() => {
+      latestAwaitLoginOptions().onSuccess(completion);
+    });
+    fixtures.awaitLoginSuccess = true;
+    fixtures.awaitLoginData = completion;
+    act(() => {
+      view.rerender(<OnboardingDetectedAgents />);
+    });
+    return view;
+  }
+
+  it("says which provider refused and why, offers Verify account, and never enables the provider", async () => {
+    await refuseSignIn({ state: null, refusal: REFUSAL });
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain(
+      "Antigravity turned down this sign-in.",
+    );
+    expect(alert.textContent).toContain(REFUSAL.reason);
+    // The generic line is replaced, not stacked with the provider's.
+    expect(screen.queryByText(/did not complete/)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Verify account" }),
+    ).toBeDefined();
+    expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
+  });
+
+  it("opens the provider's verification link through the auth link opener", async () => {
+    await refuseSignIn({ state: null, refusal: REFUSAL });
+    fixtures.openLink.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "Verify account" }));
+
+    expect(fixtures.openLink).toHaveBeenCalledTimes(1);
+    expect(fixtures.openLink).toHaveBeenCalledWith(
+      REFUSAL.actionUrl,
+      "auth",
+      expect.anything(),
+    );
+  });
+
+  it("offers no Verify account button when the provider offered no link", async () => {
+    await refuseSignIn({
+      state: null,
+      refusal: { reason: "This account cannot be used.", actionUrl: null },
+    });
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "This account cannot be used.",
+    );
+    expect(screen.queryByRole("button", { name: "Verify account" })).toBeNull();
+  });
+
+  it("keeps the generic outcome line when the sign-in did not complete without a refusal", async () => {
+    await refuseSignIn({ state: null, refusal: null });
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("did not complete");
+    expect(alert.textContent).toContain("still off");
+    expect(screen.queryByText(/turned down this sign-in/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Verify account" })).toBeNull();
+  });
+
+  it("keeps the generic outcome line for an answer from a host before 2.2, which carries no refusal", async () => {
+    await refuseSignIn({ state: null });
+
+    expect(screen.getByRole("alert").textContent).toContain("did not complete");
+    expect(screen.queryByRole("button", { name: "Verify account" })).toBeNull();
   });
 });
