@@ -161,7 +161,7 @@ export const STRIP_AGENT_GROUP_CLASS =
   "flex flex-col ms-3.75 border-s border-border/70";
 /**
  * A nested agent row: 26px tall, 12px text, muted at rest, with the strip's
- * own hover tint. The 24px start padding puts the dot column on the task
+ * own hover tint. The 24px start padding puts the glyph column on the task
  * title's start edge (the row's 8px padding, the 16px leading slot, its 8px
  * badge space and the row's 8px gap, less the guide's 1px and its 15px
  * margin), and the gap takes the name one step past.
@@ -171,20 +171,12 @@ export const STRIP_AGENT_ROW_CLASS = cn(
   "transition-colors duration-100 ease-[ease] hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 [-webkit-app-region:no-drag]",
   SIDE_TAB_TILE_HOVER_CLASS,
 );
-/** The dot: the meter's pip fill (`PIP_FILL`) on a 6px disc. */
-export const STRIP_AGENT_DOT_CLASS = "size-1.5 shrink-0 rounded-full";
 /**
- * Where a row's chat is showing, with no hue and no edge bar (those are the
- * tab's own). On screen: full-strength text and a pane glyph after the name,
- * a 12px outline in the row's text colour. In the focused pane: also the
- * active row's tint, which the hover tint does not lighten.
+ * A row whose chat is on screen, in any pane, reads in full-strength text; one
+ * that is not stays muted. Nothing else marks it: the sidebar has one
+ * selection, the current task's tint, and hue and edge bars are the tab's own.
  */
 export const STRIP_AGENT_ON_SCREEN_CLASS = "text-foreground";
-export const STRIP_AGENT_PANE_GLYPH_CLASS = "size-3 shrink-0";
-export const STRIP_AGENT_FOCUSED_CLASS = cn(
-  SIDE_TAB_TILE_ACTIVE_CLASS,
-  "hover:bg-foreground/8",
-);
 /** An expanded task shows this many agents, then "Show N more". */
 export const STRIP_AGENT_VISIBLE_MAX = 5;
 /** The trailing text never truncates: the name gives way first. */

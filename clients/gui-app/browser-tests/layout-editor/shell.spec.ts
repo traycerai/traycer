@@ -1658,9 +1658,9 @@ interface LiveAgentsRead {
   readonly rows: readonly string[];
   readonly active: Box | null;
   readonly strip: Box | null;
-  /** Where the task's title text starts, and where the first agent's dot does. */
+  /** Where the task's title text starts, and where the first agent's glyph does. */
   readonly taskTitleX: number | null;
-  readonly dotX: number | null;
+  readonly glyphX: number | null;
 }
 
 const LIVE_AGENTS_PROBE = `(() => {
@@ -1681,21 +1681,21 @@ const LIVE_AGENTS_PROBE = `(() => {
     taskTitleX = range.getBoundingClientRect().x;
     break;
   }
-  const dot = rows.length === 0 ? null : rows[0].firstElementChild;
+  const glyph = rows.length === 0 ? null : rows[0].firstElementChild;
   return {
     group: box(group),
     rows: rows.map((row) => row.getAttribute("data-testid")),
     active: box(document.querySelector('[data-testid="side-tab-strip"] [data-side-tab][data-active="true"]')),
     strip: box(strip),
     taskTitleX,
-    dotX: dot === null ? null : dot.getBoundingClientRect().x,
+    glyphX: glyph === null ? null : glyph.getBoundingClientRect().x,
   };
 })()`;
 
 /**
  * D9: the active task's agents nest under its row and inside the strip, and
- * their dot column sits on the task's title start edge. That alignment is read
- * across two components - the task's title in the row, the dot in the group -
+ * their glyph column sits on the task's title start edge. That alignment is read
+ * across two components - the task's title in the row, the glyph in the group -
  * so it is measured here, not from either.
  */
 async function assertLiveAgents(page: Page): Promise<void> {
@@ -1707,14 +1707,14 @@ async function assertLiveAgents(page: Page): Promise<void> {
   await settleShell(page);
   const shown = await page.evaluate<LiveAgentsRead>(LIVE_AGENTS_PROBE);
   const violations = violationLog();
-  if (shown.taskTitleX === null || shown.dotX === null) {
+  if (shown.taskTitleX === null || shown.glyphX === null) {
     violations.add(
-      `no ${shown.taskTitleX === null ? "task title text" : "agent dot"} to measure`,
+      `no ${shown.taskTitleX === null ? "task title text" : "agent glyph"} to measure`,
     );
   } else {
     violations.check(
-      Math.abs(shown.dotX - shown.taskTitleX) <= 0.5,
-      `the agents' dot column starts ${(shown.dotX - shown.taskTitleX).toFixed(1)}px past the task's title start edge, expected 0`,
+      Math.abs(shown.glyphX - shown.taskTitleX) <= 0.5,
+      `the agents' glyph column starts ${(shown.glyphX - shown.taskTitleX).toFixed(1)}px past the task's title start edge, expected 0`,
     );
   }
   if (shown.group === null || shown.active === null || shown.strip === null) {
@@ -2369,7 +2369,7 @@ test.describe("the shell with the panel loaded on the left", () => {
     });
   });
 
-  test("the active task's agents nest under its row and inside the strip, their dot column on its title start edge", async () => {
+  test("the active task's agents nest under its row and inside the strip, their glyph column on its title start edge", async () => {
     const page = getPage();
     await probe(page, 'setStripView("activity")');
     await setActivity(page);

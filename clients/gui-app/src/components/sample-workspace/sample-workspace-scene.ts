@@ -384,19 +384,21 @@ export const SAMPLE_SIDEBAR_AGENTS: ReadonlyArray<{
  * every picture of it draw these.
  */
 export const SAMPLE_LIVE_AGENTS: ReadonlyArray<StripAgent> = [
-  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[0], "waiting"),
-  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[2], "failed"),
-  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[1], "turn"),
+  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[0], "waiting", "interview"),
+  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[2], "failed", "failure"),
+  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[1], "turn", "running"),
 ];
 
 function sampleLiveAgent(
   agent: (typeof SAMPLE_SIDEBAR_AGENTS)[number],
   status: StripAgentStatus,
+  kind: StripAgent["kind"],
 ): StripAgent {
   return {
     id: agent.id,
     title: agent.title,
     status,
+    kind,
     since: SAMPLE_EPOCH - agent.idleMinutes * MINUTE_MS,
   };
 }

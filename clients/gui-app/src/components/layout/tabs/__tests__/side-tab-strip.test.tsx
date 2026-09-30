@@ -41,6 +41,10 @@ import {
   SIDE_STRIP_RAIL_WIDTH_PX,
   SIDE_STRIP_SNAP_TO_RAIL_BELOW_PX,
 } from "@/components/layout/tabs/side-strip/side-strip-tokens";
+import {
+  NotificationIndicatorIcon,
+  type IndicatorRunningKind,
+} from "@/components/notifications/notification-indicator-icon";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { EpicWaitingReason } from "@/hooks/epic/use-epic-activity-status";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
@@ -52,7 +56,10 @@ import {
 } from "@/lib/keybindings/dispatch";
 import type { EdgeSide } from "@/lib/layout/layout-arrangement";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
-import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
+import type {
+  NotificationIndicatorState,
+  SurfaceNotificationIndicators,
+} from "@/stores/notifications/notification-indicator-state";
 import type { HostNotificationEntryV22 } from "@traycer/protocol/host/notifications/contracts";
 import {
   __resetAgentActivityStoreForTests,
@@ -995,6 +1002,41 @@ describe("<SideTabStrip />", () => {
       });
     }
 
+    /** The glyph a row draws, by the `StatusGlyph` kind it carries. */
+    function glyphKindOf(row: HTMLElement): string | null {
+      return (
+        row
+          .querySelector("[data-status-glyph]")
+          ?.getAttribute("data-status-glyph") ?? null
+      );
+    }
+
+    /** The glyph the Agents panel's own icon draws for a chat in this state. */
+    function panelGlyphKind(
+      state: NotificationIndicatorState,
+      running: IndicatorRunningKind,
+    ): string | null {
+      const { container, unmount } = render(
+        <TooltipProvider>
+          <NotificationIndicatorIcon
+            state={state}
+            running={running}
+            activityCoverage="indeterminate"
+            subjectId="panel"
+            testIdPrefix="panel"
+            className={undefined}
+            style={undefined}
+            runningTitle="Running"
+            defaultIcon={null}
+            agentSurface="gui"
+          />
+        </TooltipProvider>,
+      );
+      const kind = glyphKindOf(container);
+      unmount();
+      return kind;
+    }
+
     it("nests a warm task's agents in a group its row names, and the chevron folds it to the agents waiting on you", async () => {
       openEpicTabs(["Alpha"]);
       warmEpic("e-alpha", [
@@ -1035,6 +1077,36 @@ describe("<SideTabStrip />", () => {
       expect(agentIds(screen.getByTestId("strip-agent-group"))).toEqual([
         "strip-agent-c-wait",
       ]);
+    });
+
+    it("draws a running, a waiting and a failed agent with the glyph the Agents panel draws for the same state", async () => {
+      openEpicTabs(["Alpha"]);
+      warmEpic("e-alpha", [
+        chatProjection("c-run", { title: "Runs" }),
+        chatProjection("c-wait", { title: "Waits" }),
+        chatProjection("c-fail", { title: "Fails" }),
+      ]);
+      busy("e-alpha", ["c-run"]);
+      const waiting = { ...NO_FLAGS, pendingApproval: true };
+      const failed = { ...NO_FLAGS, unreadFailure: true };
+      indicatorState.value = {
+        epics: {},
+        chats: { "c-wait": waiting, "c-fail": failed },
+      };
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const drawn = ["c-run", "c-wait", "c-fail"].map((id) =>
+        glyphKindOf(screen.getByTestId(`strip-agent-${id}`)),
+      );
+
+      expect(drawn).toEqual([
+        panelGlyphKind(NO_FLAGS, "turn"),
+        panelGlyphKind(waiting, false),
+        panelGlyphKind(failed, false),
+      ]);
+      // Three states, three shapes: the parity is not two nulls agreeing.
+      expect(new Set(drawn).size).toBe(3);
+      expect(drawn).not.toContain(null);
     });
 
     it("toggles another task's agents from its chevron without activating the task, on Enter as on a click, swapping the meter for the rows", async () => {
@@ -1081,6 +1153,7 @@ describe("<SideTabStrip />", () => {
       expect(agentIds(group)).toEqual(["strip-agent-host:approval-0"]);
       const needsYou = within(group).getByTestId("strip-agent-host:approval-0");
       expect(needsYou.getAttribute("data-status")).toBe("waiting");
+      expect(glyphKindOf(needsYou)).toBe("approval");
 
       fireEvent.click(needsYou);
 
@@ -1233,25 +1306,32 @@ describe("<SideTabStrip />", () => {
 
       const rowOf = (id: string): HTMLElement =>
         screen.getByTestId(`strip-agent-${id}`);
-      const glyphOf = (id: string): HTMLElement | null =>
-        within(rowOf(id)).queryByTestId("strip-agent-pane-glyph");
+      // The row's two states: a chat on screen (any pane) reads in full-strength
+      // text and says so in its name; one that is not stays muted.
+      const isOnScreen = (id: string): boolean =>
+        rowOf(id).classList.contains("text-foreground");
+      const namedOnScreen = (id: string): boolean =>
+        (rowOf(id).getAttribute("aria-label") ?? "").endsWith(", on screen");
 
-      it("marks a chat in the focused pane and a chat on screen elsewhere with the pane glyph, and leaves the rest unmarked", async () => {
+      it("reads a chat on screen in any pane as on screen, the focused pane's like the other, and leaves one behind a tab or not open muted", async () => {
         await renderAlphaWithChats();
         seedTwoPanes("e-alpha");
 
-        expect(rowOf("c-focused").getAttribute("aria-current")).toBe("true");
-        expect(glyphOf("c-focused")).not.toBeNull();
-        expect(rowOf("c-side").getAttribute("aria-current")).toBeNull();
-        expect(glyphOf("c-side")).not.toBeNull();
+        for (const id of ["c-focused", "c-side"]) {
+          expect(isOnScreen(id)).toBe(true);
+          expect(namedOnScreen(id)).toBe(true);
+          expect(rowOf(id).hasAttribute("aria-current")).toBe(false);
+        }
+        // Focus is no third state: the focused pane's row is the other's twin.
+        expect(rowOf("c-focused").className).toBe(rowOf("c-side").className);
         // In a background tab of a pane, or not open: not on screen.
         for (const id of ["c-back", "c-closed"]) {
-          expect(rowOf(id).getAttribute("aria-current")).toBeNull();
-          expect(glyphOf(id)).toBeNull();
+          expect(isOnScreen(id)).toBe(false);
+          expect(namedOnScreen(id)).toBe(false);
         }
       });
 
-      it("counts the split partner's canvas as on screen but never focused, and a task that is not in front as neither", async () => {
+      it("counts the split partner's canvas as on screen, and a task that is not in front as not", async () => {
         openSplitPair("left");
         warmEpic("e-alpha", []);
         warmEpic("e-beta", [
@@ -1268,8 +1348,7 @@ describe("<SideTabStrip />", () => {
         };
         await renderStrip("/elsewhere", LEFT_STRIP);
 
-        expect(glyphOf("s-right")).not.toBeNull();
-        expect(rowOf("s-right").getAttribute("aria-current")).toBeNull();
+        expect(isOnScreen("s-right")).toBe(true);
 
         // Un-pair: the same tile in a task that is no longer showing.
         cleanup();
@@ -1286,7 +1365,7 @@ describe("<SideTabStrip />", () => {
         await renderStrip("/elsewhere", LEFT_STRIP);
 
         expect(rowOf("s-right")).toBeTruthy();
-        expect(glyphOf("s-right")).toBeNull();
+        expect(isOnScreen("s-right")).toBe(false);
       });
 
       const SIDE_PANE = { front: "c-side", chats: ["c-side"] };

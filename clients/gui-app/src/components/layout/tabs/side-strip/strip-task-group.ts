@@ -89,6 +89,7 @@ export function useStripTaskGroup(
         id: item.row.feedId,
         title: item.agentTitle,
         status: "waiting",
+        kind: item.reason === "approval" ? "approval" : "interview",
         since: item.createdAt,
       },
       notification: item.row,

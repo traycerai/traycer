@@ -1,7 +1,7 @@
 import { useContext, useMemo } from "react";
 import {
   ownChatStatusKind,
-  type OwnChatStatusKind,
+  type ChatDescendantStatusKind,
 } from "@/components/epic-canvas/sidebar/use-chat-archive-hidden-ids";
 import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
 import { agentActivityTiers } from "@/lib/agent-activity";
@@ -23,6 +23,8 @@ export interface StripAgent {
   /** `null` while the agent is untitled. */
   readonly title: string | null;
   readonly status: StripAgentStatus;
+  /** The Agents panel's ladder kind behind `status`, which picks the row's glyph. */
+  readonly kind: ChatDescendantStatusKind;
   /**
    * The node's `updatedAt`, so for a running agent the time of its last
    * update, not of its turn's start: the session projection carries no time
@@ -70,7 +72,7 @@ function orderStripAgents(
  * does not reach, is not one of them.
  */
 const STATUS_OF_KIND: Readonly<
-  Record<OwnChatStatusKind, StripAgentStatus | null>
+  Record<ChatDescendantStatusKind, StripAgentStatus | null>
 > = {
   approval: "waiting",
   interview: "waiting",
@@ -80,7 +82,6 @@ const STATUS_OF_KIND: Readonly<
   background: "background",
   done: null,
   "terminal-failure": null,
-  unknown: null,
 };
 
 /**
@@ -101,6 +102,7 @@ export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
     const found: Array<{
       readonly id: string;
       readonly status: StripAgentStatus;
+      readonly kind: ChatDescendantStatusKind;
     }> = [];
     if (epicId === null || liveAgentIds === null) return found;
     for (const id of liveAgentIds) {
@@ -112,11 +114,12 @@ export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
           indicators,
         ),
         tiers.get(id),
-        // "unknown" is an agent nothing says is live, which the strip skips.
         "indeterminate",
       );
-      const status = kind === null ? null : STATUS_OF_KIND[kind];
-      if (status !== null) found.push({ id, status });
+      // "unknown" is an agent nothing says is live, which the strip skips.
+      if (kind === null || kind === "unknown") continue;
+      const status = STATUS_OF_KIND[kind];
+      if (status !== null) found.push({ id, status, kind });
     }
     return found;
   }, [epicId, liveAgentIds, tiers, indicators, localRows]);
@@ -131,7 +134,7 @@ export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
   const agents = useMemo(
     () =>
       orderStripAgents(
-        statuses.flatMap(({ id, status }, index) => {
+        statuses.flatMap(({ id, status, kind }, index) => {
           const agent = named[index] ?? null;
           return agent === null
             ? []
@@ -140,6 +143,7 @@ export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
                   id,
                   title: agent.title,
                   status,
+                  kind,
                   since: updatedAts.at(index) ?? 0,
                 },
               ];

@@ -12,7 +12,7 @@ export function SampleLiveAgentItems(): ReactNode {
     <li key={agent.id}>
       <StripAgentRow
         agent={agent}
-        screen={null}
+        onScreen={false}
         onClick={undefined}
         onHoverChange={undefined}
       />

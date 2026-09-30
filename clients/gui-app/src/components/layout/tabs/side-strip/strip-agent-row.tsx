@@ -1,14 +1,10 @@
-import { RectangleHorizontal } from "lucide-react";
 import type { ReactNode } from "react";
+import { NestedChatStatusGlyph } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
 import { displayTitle } from "@/lib/display-title";
 import { useSampledNow } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import {
-  PIP_FILL,
-  STRIP_AGENT_DOT_CLASS,
-  STRIP_AGENT_FOCUSED_CLASS,
   STRIP_AGENT_ON_SCREEN_CLASS,
-  STRIP_AGENT_PANE_GLYPH_CLASS,
   STRIP_AGENT_ROW_CLASS,
   STRIP_AGENT_TRAILING_CLASS,
 } from "./side-strip-tokens";
@@ -62,25 +58,20 @@ function Trailing(props: { readonly agent: StripAgent }): ReactNode {
   );
 }
 
-/** Where an agent's chat is, from the row's side: `null` is not on screen. */
-export type StripAgentScreen = "focused" | "on-screen" | null;
-
 /**
- * One agent nested under its task in the Activity view: the meter's pip as a
- * dot, the name, and the status or elapsed time. A chat that is on screen shows
- * a pane glyph after its name and reads in full-strength text, and the one in
- * the focused pane also takes the active row's tint; a chat that is not on
- * screen stays muted with no glyph. Presentational, so the layout editor's
- * pictures draw this same row from sample data and cannot drift from the live
- * strip.
+ * One agent nested under its task in the Activity view: the glyph its row
+ * shows in the Agents panel, the name, and the status or elapsed time. A chat
+ * that is on screen, in any pane, reads in full-strength text; one that is not
+ * stays muted. Presentational, so the layout editor's pictures draw this same
+ * row from sample data and cannot drift from the live strip.
  */
 export function StripAgentRow(props: {
   readonly agent: StripAgent;
-  readonly screen: StripAgentScreen;
+  readonly onScreen: boolean;
   readonly onClick: (() => void) | undefined;
   readonly onHoverChange: ((hovering: boolean) => void) | undefined;
 }): ReactNode {
-  const { agent, screen, onHoverChange } = props;
+  const { agent, onScreen, onHoverChange } = props;
   const title = displayTitle(agent.title ?? "", "agent");
   const label = `${title}, ${STATUS_LABEL[agent.status]}`;
   return (
@@ -88,8 +79,7 @@ export function StripAgentRow(props: {
       type="button"
       data-testid={`strip-agent-${agent.id}`}
       data-status={agent.status}
-      aria-label={screen === null ? label : `${label}, on screen`}
-      aria-current={screen === "focused" ? "true" : undefined}
+      aria-label={onScreen ? `${label}, on screen` : label}
       onClick={props.onClick}
       onPointerEnter={() => {
         onHoverChange?.(true);
@@ -99,24 +89,11 @@ export function StripAgentRow(props: {
       }}
       className={cn(
         STRIP_AGENT_ROW_CLASS,
-        screen !== null && STRIP_AGENT_ON_SCREEN_CLASS,
-        screen === "focused" && STRIP_AGENT_FOCUSED_CLASS,
+        onScreen && STRIP_AGENT_ON_SCREEN_CLASS,
       )}
     >
-      <span
-        aria-hidden
-        className={cn(STRIP_AGENT_DOT_CLASS, PIP_FILL[agent.status])}
-      />
-      <span className="flex min-w-0 flex-1 items-center gap-1">
-        <span className="min-w-0 truncate">{title}</span>
-        {screen === null ? null : (
-          <RectangleHorizontal
-            aria-hidden
-            data-testid="strip-agent-pane-glyph"
-            className={STRIP_AGENT_PANE_GLYPH_CLASS}
-          />
-        )}
-      </span>
+      <NestedChatStatusGlyph kind={agent.kind} />
+      <span className="min-w-0 flex-1 truncate">{title}</span>
       <Trailing agent={agent} />
     </button>
   );

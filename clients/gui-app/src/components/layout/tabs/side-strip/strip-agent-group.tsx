@@ -23,8 +23,8 @@ import {
   STRIP_AGENT_ROW_CLASS,
   STRIP_AGENT_VISIBLE_MAX,
 } from "./side-strip-tokens";
-import { useAgentOnScreen, type AgentOnScreen } from "./strip-agent-on-screen";
-import { StripAgentRow, type StripAgentScreen } from "./strip-agent-row";
+import { useAgentOnScreen } from "./strip-agent-on-screen";
+import { StripAgentRow } from "./strip-agent-row";
 import {
   stripAgentGroupId,
   stripTaskRowId,
@@ -97,7 +97,7 @@ function StripAgentGroupBody(props: {
           }}
           className={cn(STRIP_AGENT_ROW_CLASS, fade)}
         >
-          <span aria-hidden className="size-1.5 shrink-0" />
+          <span aria-hidden className="size-3.5 shrink-0" />
           Show {more} more
         </button>
       ) : null}
@@ -117,7 +117,7 @@ function GroupRow(props: {
     return (
       <StripAgentRow
         agent={row.agent}
-        screen={null}
+        onScreen={false}
         onClick={() => {
           onNeedsYou(notification);
         }}
@@ -129,7 +129,7 @@ function GroupRow(props: {
     return (
       <StripAgentRow
         agent={row.agent}
-        screen={null}
+        onScreen={false}
         onClick={undefined}
         onHoverChange={undefined}
       />
@@ -145,11 +145,6 @@ function GroupRow(props: {
       onNeedsYou={onNeedsYou}
     />
   );
-}
-
-function screenOf(onScreen: AgentOnScreen | null): StripAgentScreen {
-  if (onScreen === null) return null;
-  return onScreen.focused ? "focused" : "on-screen";
 }
 
 /**
@@ -208,7 +203,7 @@ function OpenAgentRow(props: {
   return (
     <StripAgentRow
       agent={agent}
-      screen={screenOf(onScreen)}
+      onScreen={onScreen !== null}
       onHoverChange={setHovering}
       onClick={() => {
         if (onScreen !== null && !onScreen.focused) {
