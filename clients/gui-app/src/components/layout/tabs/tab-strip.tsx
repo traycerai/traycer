@@ -118,10 +118,21 @@ function TabStripBody() {
   // After `useStripScroller`, whose reveal has by then scrolled the
   // destination into view for the travel to measure.
   useSelectionTravel({ scrollerRef, travellerRef, activeItemId, layoutItems });
-  const { ghosts, settleGhost } = useStripExitGhosts(
-    scrollerRef,
-    headerItemIds.join("\n"),
+  // The rows as drawn, so a group that collapses or expands counts as well as
+  // a close: a spacer whose row it hid is not drawn to finish closing.
+  const drawnRowsKey = useMemo(
+    () =>
+      rows
+        .map((row) =>
+          [
+            row.groupStart === null ? "" : `chip:${row.groupStart.groupId}`,
+            `${row.hidden ? "hidden" : "item"}:${row.itemId}`,
+          ].join(" "),
+        )
+        .join("\n"),
+    [rows],
   );
+  const { ghosts, settleGhost } = useStripExitGhosts(scrollerRef, drawnRowsKey);
   const ghostBefore = useMemo(() => {
     const byAnchor = new Map<string | null, StripExitGhost>();
     for (const ghost of ghosts) byAnchor.set(ghost.beforeAnchor, ghost);

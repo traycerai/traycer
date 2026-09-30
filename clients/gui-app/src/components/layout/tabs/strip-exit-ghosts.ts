@@ -197,12 +197,14 @@ function revealWhereItLands(scroller: HTMLElement): void {
 }
 
 /**
- * `itemIdsKey` changes whenever the strip's items do; that commit is the one
- * that may have closed something.
+ * `drawnRowsKey` changes whenever the strip's rows or what it draws of them
+ * do. That commit may be the one a close landed in, or one that stopped
+ * drawing a spacer (its group collapsed), which is then forgotten rather than
+ * replayed at full width when the group expands.
  */
 export function useStripExitGhosts(
   scrollerRef: RefObject<HTMLDivElement | null>,
-  itemIdsKey: string,
+  drawnRowsKey: string,
 ): {
   readonly ghosts: ReadonlyArray<StripExitGhost>;
   readonly settleGhost: (key: string) => void;
@@ -262,14 +264,15 @@ export function useStripExitGhosts(
         });
       }
       // No close to answer for, but a spacer whose member left some other
-      // way (a drag, a split) is no longer rendered; forget it.
+      // way (a drag, a split, a collapsed group) is no longer rendered;
+      // forget it.
       const present = new Set(after.slots.map((slot) => slot.key));
       const kept = current.filter((ghost) =>
         present.has(ghostSlotKey(ghost.key)),
       );
       return kept.length === current.length ? current : kept;
     });
-  }, [scrollerRef, itemIdsKey]);
+  }, [scrollerRef, drawnRowsKey]);
 
   useLayoutEffect(() => {
     const scroller = scrollerRef.current;

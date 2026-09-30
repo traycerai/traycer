@@ -499,6 +499,69 @@ test("closing an inactive tab holds its space, then closes the gap", async ({
   );
 });
 
+test("a close spacer whose group collapses mid-close is forgotten, not replayed when the group expands", async ({
+  page,
+}) => {
+  const tabIds = await openStrip(page, 5);
+  const groupId = z
+    .string()
+    .parse(
+      await callBridge(page, "seedNamedGroup", [
+        itemAt(tabIds, 1),
+        itemAt(tabIds, 2),
+      ]),
+    );
+  await expectResting(page, 5);
+  const chipSelector = `[data-strip-group-chip="${groupId}"]`;
+
+  // The close and the collapse must land inside the spacer's 240ms, which the
+  // round trips between test and page would not keep to: both run in one page
+  // task, a frame apart. The frame between lets the spacer be seen drawn, so
+  // the collapse is known to have hidden a spacer that was still closing.
+  const spacerWasDrawn = await page.evaluate(
+    async (input: {
+      readonly tabId: string;
+      readonly chip: string;
+    }): Promise<boolean> => {
+      const bridge: unknown = Reflect.get(window, "__traycerTabRecovery");
+      const closeTask: unknown =
+        typeof bridge === "object" && bridge !== null
+          ? Reflect.get(bridge, "closeTask")
+          : undefined;
+      if (typeof closeTask !== "function")
+        throw new Error("the tab recovery bridge has no closeTask");
+      await Reflect.apply(closeTask, bridge, [input.tabId]);
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          resolve();
+        });
+      });
+      const drawn = document.querySelector("[data-strip-exit-ghost]") !== null;
+      // Looked up after the close, not before: the strip may have drawn the
+      // chip anew.
+      const chip = document.querySelector(input.chip);
+      if (!(chip instanceof HTMLElement))
+        throw new Error("the group chip is missing");
+      chip.click();
+      return drawn;
+    },
+    { tabId: itemAt(tabIds, 1), chip: chipSelector },
+  );
+  expect(spacerWasDrawn, "the close drew a spacer before the collapse").toBe(
+    true,
+  );
+  // The closed tab is gone and its group-mate is hidden by the collapse.
+  await expectResting(page, 3);
+
+  const samples = await record(page, 4, () =>
+    page.locator(chipSelector).click(),
+  );
+  expect(
+    samples.flatMap((sample) => sample.ghosts),
+    "no spacer is replayed when the group expands",
+  ).toHaveLength(0);
+});
+
 test("a single reopen grows its slot from nothing without passing its width, slides the selection to it, and glows once it lands", async ({
   page,
 }) => {
