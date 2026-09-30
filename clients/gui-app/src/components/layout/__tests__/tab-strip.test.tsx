@@ -1,5 +1,9 @@
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
+import {
+  SheetJoinBridge,
+  SheetJoinScope,
+} from "@/components/layout/tabs/sheet-join";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import {
   SplitMemberChrome,
@@ -601,7 +605,12 @@ function buildRouter(initialPath: string) {
     component: () => (
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <TabStrip />
+          {/* The app's own join scope and top bridge (`AppColumnFrame`), so a
+              joined tab's published outline reaches the real bridge. */}
+          <SheetJoinScope>
+            <TabStrip />
+            <SheetJoinBridge edge="top" />
+          </SheetJoinScope>
         </TooltipProvider>
       </QueryClientProvider>
     ),
@@ -869,7 +878,7 @@ describe("<TabStrip />", () => {
     ).toContain("--swatch: #12ab34;");
   });
 
-  it("draws an inactive lone tab's color as the color mark, and no mark on the active one (F4 round 2)", () => {
+  it("draws an inactive coloured tab's color as an edge line, and none on the active one", () => {
     const { rerender } = render(
       <TabChrome
         isActive={false}
@@ -880,7 +889,9 @@ describe("<TabStrip />", () => {
       />,
     );
     expect(
-      screen.getByTestId("tab-color-mark").style.getPropertyValue("--swatch"),
+      screen
+        .getByTestId("tab-color-edge-line")
+        .style.getPropertyValue("--swatch"),
     ).toBe("#12ab34");
 
     rerender(
@@ -893,8 +904,13 @@ describe("<TabStrip />", () => {
       />,
     );
     // The box's own border carries the color once the tab is active; nothing
-    // left for the mark to draw.
-    expect(screen.queryByTestId("tab-color-mark")).toBeNull();
+    // left for the edge line to draw.
+    expect(screen.queryByTestId("tab-color-edge-line")).toBeNull();
+    expect(
+      screen
+        .getByTestId("tab-chrome-box")
+        .style.getPropertyValue("--swatch-border"),
+    ).toBe("#12ab34");
   });
 
   /**
@@ -940,7 +956,7 @@ describe("<TabStrip />", () => {
       />,
     );
 
-    expect(screen.queryByTestId("tab-color-mark")).toBeNull();
+    expect(screen.queryByTestId("tab-color-edge-line")).toBeNull();
   });
 
   /**
@@ -1119,14 +1135,16 @@ describe("<TabStrip />", () => {
       "group-hover/tab:bg-foreground/5",
     );
     // An unfocused colored member has no box to wear its color in, so it
-    // gets the same short mark a lone tab does (F4 round 2). The focused
-    // member above never draws one - its box border carries the color.
+    // gets the same edge line an inactive lone tab does. The focused member
+    // above never draws one - its box border carries the color.
     expect(
-      screen.getByTestId("tab-color-mark").style.getPropertyValue("--swatch"),
+      screen
+        .getByTestId("tab-color-edge-line")
+        .style.getPropertyValue("--swatch"),
     ).toBe("#12ab34");
 
     rerender(<SplitMemberChrome focused={false} color={null} />);
-    expect(screen.queryByTestId("tab-color-mark")).toBeNull();
+    expect(screen.queryByTestId("tab-color-edge-line")).toBeNull();
   });
 
   describe("the task tray join (top strip)", () => {
@@ -1203,6 +1221,38 @@ describe("<TabStrip />", () => {
           .getByTestId("tab-chrome-box")
           .hasAttribute("data-sheet-joined"),
       ).toBe(false);
+    });
+
+    it("joins an active tab that has its own color, and draws the join outline in that color", async () => {
+      const { alpha } = seedTwoEpicTabs();
+      const router = buildRouter("/epics/e-a/e-a");
+      const { container } = render(<RouterProvider router={router} />);
+
+      const activeTab = await screen.findByTestId("tab-epic-e-a");
+      // Uncoloured control: the same tab in the same setup joins.
+      expect(
+        within(activeTab)
+          .getByTestId("tab-chrome-box")
+          .getAttribute("data-sheet-joined"),
+      ).toBe("top");
+
+      act(() => {
+        useTabsStore
+          .getState()
+          .setTabCustomization(alpha, { color: "#12ab34" });
+      });
+
+      const box = within(activeTab).getByTestId("tab-chrome-box");
+      expect(box.getAttribute("data-sheet-joined")).toBe("top");
+      expect(box.style.getPropertyValue("--join-outline")).toBe("#12ab34");
+      expect(box.style.getPropertyValue("--swatch-border")).toBe("#12ab34");
+
+      const bridge = container.querySelector<HTMLElement>(
+        '[data-sheet-join-bridge="top"]',
+      );
+      if (bridge === null) throw new Error("expected the top join bridge");
+      expect(bridge.hasAttribute("data-join-active")).toBe(true);
+      expect(bridge.style.getPropertyValue("--join-outline")).toBe("#12ab34");
     });
 
     it("joins the active Home tab", () => {
@@ -1804,7 +1854,7 @@ describe("<TabStrip />", () => {
     }
   });
 
-  it("scopes the epic title tooltip trigger to the title text", async () => {
+  it("scopes the epic title hover card trigger to the title text", async () => {
     openEpicFixture(EPIC_A);
     const router = buildRouter("/epics/e-a/e-a");
     render(<RouterProvider router={router} />);
@@ -1813,10 +1863,14 @@ describe("<TabStrip />", () => {
     const title = screen.getByTestId("tab-title-epic-e-a");
     const closeButton = screen.getByTestId("tab-close-epic-e-a");
 
-    const trigger = tab.querySelector('[data-slot="tooltip-trigger"]');
-    if (trigger === null) throw new Error("Expected a tooltip trigger");
+    // The hover card's `HoverCard.trigger` clones its interaction props onto
+    // the title's own wrapping span (`Slot.Root`, no extra DOM node), so the
+    // title's parent IS the trigger - the same scoping the plain tooltip it
+    // replaced had, checked structurally rather than through a `data-slot`
+    // Radix no longer sets on this primitive.
+    const trigger = title.parentElement;
+    if (trigger === null) throw new Error("Expected a hover card trigger");
 
-    expect(tab.getAttribute("data-slot")).not.toBe("tooltip-trigger");
     expect(trigger).not.toBe(tab);
     expect(trigger.contains(title)).toBe(true);
     expect(trigger.contains(closeButton)).toBe(false);

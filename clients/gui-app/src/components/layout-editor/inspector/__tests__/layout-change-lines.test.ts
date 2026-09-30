@@ -136,6 +136,28 @@ describe("arrangementChangeLine - Reading width", () => {
   });
 });
 
+/**
+ * `wideReadingWidthPx` is a continuous number, not one of a small option set
+ * like `readingWidth` above - `fieldWord` formats it directly rather than
+ * looking it up in `FIELD_OPTIONS`.
+ */
+describe("arrangementChangeLine - Wide column width", () => {
+  it("words a changed px value as itself, not through the option table", () => {
+    const line = arrangementChangeLine({
+      kind: "field",
+      field: "wideReadingWidthPx",
+      current: 1240,
+      baseline: DEFAULT_ARRANGEMENT.wideReadingWidthPx,
+    });
+
+    expect(line.label).toBe("Wide column width");
+    expect(line.current).toBe("1240px");
+    expect(line.baseline).toBe(
+      `Default: ${DEFAULT_ARRANGEMENT.wideReadingWidthPx}px`,
+    );
+  });
+});
+
 function sessionSnapshot(
   basePreset: LayoutSnapshot["basePreset"],
   overrides: LayoutOverrides,

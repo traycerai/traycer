@@ -49,7 +49,8 @@ export function useSideTabJoin(
       pane = collapsed ? "rail" : "panel";
     }
   }
-  usePublishSheetJoin(pane);
+  // The side strip's colour is its accent bar / ring, never its join outline.
+  usePublishSheetJoin(pane, null);
   return edge === null || pane === null ? null : { edge, pane };
 }
 

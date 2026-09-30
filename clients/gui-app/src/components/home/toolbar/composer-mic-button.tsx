@@ -91,11 +91,11 @@ export function ComposerMicButton({
         aria-pressed={isRecording}
         onClick={onToggle}
         className={cn(
-          // The chip is bordered now, so recording takes the border too: a
-          // destructive fill inside a neutral hairline reads as a mis-painted
-          // chip rather than as a live state.
+          // Recording keeps its border whichever toolbar chrome is active
+          // (Layout ▸ Composer ▸ Toolbar style): a destructive fill with no
+          // edge reads as a mis-painted chip rather than as a live state.
           isRecording &&
-            "border-destructive/30 bg-destructive/15 text-destructive hover:bg-destructive/20 hover:text-destructive",
+            "border border-destructive/30 bg-destructive/15 text-destructive hover:bg-destructive/20 hover:text-destructive",
         )}
       >
         <MicButtonIcon isBusy={isBusy} isRecording={isRecording} />

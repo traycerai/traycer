@@ -160,4 +160,33 @@ describe("SideTabGroupHeader", () => {
     ).toBe("failed");
     expect(screen.queryByTestId("side-tab-group-count")).toBeNull();
   });
+
+  it("drops the empty pill for an unnamed group, leaving only the count and chevron", () => {
+    const group: TabGroup = { name: "", color: "#8ab4f8", collapsed: false };
+    const member: TabRef = { kind: "epic", id: "e-1" };
+    useTabsStore.setState({
+      version: 2,
+      items: [{ kind: "tab", id: tabItemId(member), ref: member }],
+      activeItemId: tabItemId(member),
+      stripOrder: [member],
+      systemTabs: { history: null, settings: null },
+      groups: { [GROUP_ID]: group },
+      customizations: {
+        [tabRefKey(member)]: { color: null, icon: null, groupId: GROUP_ID },
+      },
+    });
+    renderHeader({
+      group,
+      variant: "expanded",
+      memberEntities: [],
+      indicators: { epics: {}, chats: {} },
+      columnSide: null,
+    });
+
+    expect(header().textContent).toBe("3");
+    expect(screen.getByTestId("side-tab-group-count").textContent).toBe("3");
+    expect(
+      header().querySelector('[style*="--side-tab-group-color"]'),
+    ).toBeNull();
+  });
 });

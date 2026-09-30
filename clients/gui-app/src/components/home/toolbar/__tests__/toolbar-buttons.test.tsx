@@ -1,11 +1,15 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { ShieldCheck } from "lucide-react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ComposerAttachImageTrigger } from "@/components/home/toolbar/composer-attach-image-button";
 import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-trigger";
 import { PermissionsTrigger } from "@/components/home/pickers/permissions-picker";
 import type { HarnessModelSelection } from "@/components/home/data/landing-options";
 import type { ModelStyle } from "@/lib/layout/layout-values";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 
 // jsdom applies no stylesheet, so a chip's look is observed where the app
 // states it: the class list the real leaf renders. Every case below mounts the
@@ -58,11 +62,33 @@ function renderAccessTrigger(input: {
 }
 
 describe("composer toolbar chips (L-88)", () => {
-  afterEach(() => {
-    cleanup();
+  beforeEach(() => {
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
-  it("draws the attach button as a bordered square on the app's own background", () => {
+  afterEach(() => {
+    cleanup();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  });
+
+  it("draws the attach button flat by default: no border, no fill", () => {
+    render(<ComposerAttachImageTrigger />);
+
+    const classes = classesOf(
+      screen.getByRole("button", { name: "Attach image" }),
+    );
+    expect(classes).not.toContain("border");
+    expect(classes).not.toContain("border-border");
+    expect(classes).not.toContain("bg-background");
+    expect(classes).toContain("rounded-md");
+    expect(classes).toContain("size-7");
+    expect(classes).not.toContain("rounded-full");
+  });
+
+  it("draws the attach button as a bordered square when Toolbar style is Bordered", () => {
+    useLayoutStore.getState().setRegionValues("model", {
+      toolbarStyle: "bordered",
+    });
     render(<ComposerAttachImageTrigger />);
 
     const classes = classesOf(
@@ -71,9 +97,6 @@ describe("composer toolbar chips (L-88)", () => {
     expect(classes).toContain("border");
     expect(classes).toContain("border-border");
     expect(classes).toContain("bg-background");
-    expect(classes).toContain("rounded-md");
-    expect(classes).toContain("size-7");
-    expect(classes).not.toContain("rounded-full");
   });
 
   // The square and the pill are one chip at two geometries. Rather than
@@ -94,7 +117,7 @@ describe("composer toolbar chips (L-88)", () => {
       expect(pillStates).toContain(state);
     }
 
-    // ...and the states the redesign owes a bordered chip are all present.
+    // ...and the states the redesign owes the chip are all present.
     for (const prefix of [
       "hover:",
       "focus-visible:",
@@ -112,7 +135,7 @@ describe("composer toolbar chips (L-88)", () => {
 
   // What the parity check above cannot see is a call site whose `className`
   // tailwind-merges a state away. The access pill is that call site.
-  it("keeps every state the redesign owes a bordered chip, and hover off a disabled one", () => {
+  it("keeps every state the redesign owes the chip, and hover off a disabled one", () => {
     const trigger = renderAccessTrigger({ compact: false, disabled: true });
     const classes = classesOf(trigger);
 
@@ -131,8 +154,17 @@ describe("composer toolbar chips (L-88)", () => {
     }
     expect(trigger.hasAttribute("disabled")).toBe(true);
     expect(classes).toContain("disabled:opacity-50");
-    expect(classes).toContain("disabled:hover:bg-background");
+    expect(classes).toContain("disabled:hover:bg-transparent");
     expect(classes).toContain("disabled:hover:text-muted-foreground");
+  });
+
+  it("keeps hover off a disabled chip when Toolbar style is Bordered too", () => {
+    useLayoutStore.getState().setRegionValues("model", {
+      toolbarStyle: "bordered",
+    });
+    const trigger = renderAccessTrigger({ compact: false, disabled: true });
+    const classes = classesOf(trigger);
+    expect(classes).toContain("disabled:hover:bg-background");
   });
 
   it("collapses the compact access chip to a square with the shield alone", () => {
@@ -157,16 +189,25 @@ describe("composer toolbar chips (L-88)", () => {
     expect(classes).not.toContain("@max-lg:size-8");
   });
 
-  it("borders the model chip whichever thinking-effort style is chosen", () => {
+  it("draws the model chip flat by default, whichever thinking-effort style is chosen", () => {
     for (const style of ["text", "bars", "bars-text"] as const) {
       const classes = classesOf(renderModelTrigger(style));
-      expect(classes).toContain("border");
-      expect(classes).toContain("bg-background");
+      expect(classes).not.toContain("border");
+      expect(classes).not.toContain("bg-background");
       expect(classes).toContain("h-7");
       // The narrow collapse is the chip's own height, not the old 32px circle.
       expect(classes).toContain("@max-lg:size-7");
       expect(classes).not.toContain("@max-lg:size-8");
       cleanup();
     }
+  });
+
+  it("borders the model chip when Toolbar style is Bordered", () => {
+    useLayoutStore.getState().setRegionValues("model", {
+      toolbarStyle: "bordered",
+    });
+    const classes = classesOf(renderModelTrigger("text"));
+    expect(classes).toContain("border");
+    expect(classes).toContain("bg-background");
   });
 });

@@ -134,7 +134,11 @@ describe("useLayoutStore", () => {
       });
       expect(
         effectiveLayoutValues("default", getLayoutSnapshot().overrides).model,
-      ).toEqual({ style: "bars", reasoningControl: "slider" });
+      ).toEqual({
+        style: "bars",
+        reasoningControl: "slider",
+        toolbarStyle: "flat",
+      });
     });
 
     it("keeps a key set back to the base's own value, and stops counting it", () => {

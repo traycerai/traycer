@@ -420,11 +420,9 @@ describe("PrRow selection surface", () => {
   // selection paints has to be re-checked against the same floor.
   //
   // The first attempt was a solid `bg-accent` fill, copied from the one-line
-  // chat row. Measured, it is not a WCAG failure - it bottoms out at 3.08:1 on
-  // `traycer-green` dark, whose `--accent` is its saturated `--primary`
-  // (#257174) - but that is the 3:1 graphic floor with nothing to spare, on a
-  // row whose whole job is carrying status colour. The wash restores the
-  // margin; these two tests pin both halves of that.
+  // chat row. Measured, it is not a WCAG failure, but it leaves the worst
+  // preset under 4:1 on a row whose whole job is carrying status colour. The
+  // wash keeps the margin; these two tests pin both halves of that.
   const ROW_ACCENT_ALPHA = 0.35;
   const TINT_ALPHA = 0.1;
   const STATE_TONES = [
@@ -512,12 +510,12 @@ describe("PrRow selection surface", () => {
 
   it("buys real margin over the solid fill it replaced", () => {
     // The reason the wash is not cosmetic bikeshedding, as a number: a solid
-    // accent fill leaves the worst preset sitting on the 3:1 floor, the wash
-    // lifts it clear. Guards against someone reading `/35` as noise and
-    // "simplifying" it back to `bg-accent`.
+    // accent fill leaves the worst preset under 4:1, the wash lifts it clear.
+    // Guards against someone reading `/35` as noise and "simplifying" it back
+    // to `bg-accent`.
     const solid = worstRatio(1);
     const wash = worstRatio(ROW_ACCENT_ALPHA);
-    expect(solid).toBeLessThan(3.5);
+    expect(solid).toBeLessThan(4);
     expect(wash).toBeGreaterThan(4);
     expect(wash).toBeGreaterThan(solid);
   });

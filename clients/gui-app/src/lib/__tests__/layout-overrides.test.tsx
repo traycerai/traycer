@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   useArrangementValue,
-  useReadingWidthClass,
+  useReadingWidthStyle,
   useRegionShown,
   useRegionValue,
   useRegionValues,
@@ -245,10 +245,15 @@ describe("layout override seam", () => {
     });
   });
 
-  describe("useReadingWidthClass", () => {
-    it("returns max-w-3xl by default and max-w-5xl when wide", () => {
-      expect(readUnder(() => useReadingWidthClass(), bare)).toBe("max-w-3xl");
+  describe("useReadingWidthStyle", () => {
+    it("returns the static class for comfortable, with no maxWidth", () => {
+      const result = readUnder(() => useReadingWidthStyle(), bare);
 
+      expect(result.className).toBe("[--md-block-measure:none] max-w-3xl");
+      expect(result.maxWidth).toBeUndefined();
+    });
+
+    it("returns a viewport-clamped maxWidth for wide, with only the measure hand-off", () => {
       act(() => {
         useLayoutStore.getState().setArrangement({
           ...useLayoutStore.getState().arrangement,
@@ -256,16 +261,37 @@ describe("layout override seam", () => {
         });
       });
 
-      expect(readUnder(() => useReadingWidthClass(), bare)).toBe("max-w-5xl");
+      const result = readUnder(() => useReadingWidthStyle(), bare);
+
+      // No fixed column, but `.md-prose`'s 72ch block cap still stands down:
+      // left in place it capped every paragraph at 72ch however wide this went.
+      expect(result.className).toBe("[--md-block-measure:none]");
+      // 1024 is DEFAULT_ARRANGEMENT.wideReadingWidthPx, left untouched here.
+      expect(result.maxWidth).toBe("min(1024px, calc(100vw - 24px))");
+    });
+
+    it("reflects a chosen wide width in the viewport clamp", () => {
+      act(() => {
+        useLayoutStore.getState().setArrangement({
+          ...useLayoutStore.getState().arrangement,
+          readingWidth: "wide",
+          wideReadingWidthPx: 1600,
+        });
+      });
+
+      const result = readUnder(() => useReadingWidthStyle(), bare);
+
+      expect(result.maxWidth).toBe("min(1600px, calc(100vw - 24px))");
     });
 
     it("respects a LayoutOverrideProvider arrangement override", () => {
-      expect(
-        readUnder(
-          () => useReadingWidthClass(),
-          under({ arrangement: { readingWidth: "wide" } }),
-        ),
-      ).toBe("max-w-5xl");
+      const result = readUnder(
+        () => useReadingWidthStyle(),
+        under({ arrangement: { readingWidth: "wide" } }),
+      );
+
+      expect(result.className).toBe("[--md-block-measure:none]");
+      expect(result.maxWidth).toBe("min(1024px, calc(100vw - 24px))");
       // The store is untouched: an override is a drawing, never a write.
       expect(useLayoutStore.getState().arrangement.readingWidth).toBe(
         "comfortable",

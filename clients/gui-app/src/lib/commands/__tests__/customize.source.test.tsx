@@ -17,6 +17,7 @@ import type { OpenLayoutEditorInput } from "@/lib/layout/editor-session";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
+import { setMobileApp } from "@/lib/mobile-app";
 
 const openLayoutEditorMock = vi.hoisted(() =>
   vi.fn<(input: OpenLayoutEditorInput) => boolean>(),
@@ -99,11 +100,20 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  setMobileApp(false);
   resetPalette();
   useLayoutEditorStore.setState({ session: null, lockedBy: "none" });
 });
 
 describe("customizeSource", () => {
+  it("offers only Layout settings in the installed app, where the editor can never open", () => {
+    setMobileApp(true);
+
+    expect(items().map((item) => item.id)).toEqual([
+      "customize:layout-settings",
+    ]);
+  });
+
   it("opens the editor through the door, as a keyboard entry, with the palette's own navigateToTabIntent", () => {
     const [item, settingsItem, ...rest] = items();
     expect(rest).toEqual([]);

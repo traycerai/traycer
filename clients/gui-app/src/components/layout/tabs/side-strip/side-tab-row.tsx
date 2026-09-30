@@ -20,7 +20,6 @@ import { SESSION_TAB_LABEL_CLASS } from "../header-tab-visual";
 import { MonogramChip } from "../monogram-chip";
 import {
   SIDE_TAB_COLORLESS_TILE_CLASS,
-  SIDE_TAB_TINT_FILL_CLASS,
   type SideTabTile,
 } from "../tab-identity";
 import { SideTabMeter, type SideTabLiveAgents } from "./agent-meter";
@@ -28,6 +27,7 @@ import { sideTabAgentsAreFloor } from "./side-tab-live-agents";
 import { SideTabRailBadge } from "./side-tab-rail-badge";
 import type { RailBadgeKind } from "./rail-badge-kind";
 import {
+  SIDE_TAB_ACCENT_BAR_CLASS,
   SIDE_TAB_ACTIVE_CLASS,
   SIDE_TAB_GROUP_LINE_CLASS,
   SIDE_TAB_DROP_LINE_SEAT_CLASS,
@@ -40,6 +40,7 @@ import {
   SIDE_TAB_RAIL_BADGE_POSITION_CLASS,
   SIDE_TAB_ROW_CLASS,
   SIDE_TAB_SESSION_ACTIVE_CLASS,
+  SIDE_TAB_TILE_ACCENT_RING_CLASS,
   SIDE_TAB_TILE_ACTIVE_CLASS,
   SIDE_TAB_TILE_CLASS,
   SIDE_TAB_TILE_HOVER_CLASS,
@@ -88,11 +89,6 @@ export interface SideTabRowProps {
   readonly session: "active" | "rest" | null;
   /** The tab colour, `#rrggbb`. */
   readonly tint: string | null;
-  /**
-   * The rail tile's monogram tint when the tab has no colour (D11): a stable
-   * hue from the epic id, or `null` for a tab that is not a task.
-   */
-  readonly autoTint: string | null;
   /** The group line's segment, on a group member. */
   readonly groupLine: SideGroupLine | null;
   /**
@@ -136,18 +132,14 @@ const REVEAL_CLASS =
 const YIELD_TO_CLOSE_CLASS =
   "group-hover/side-tab:opacity-0 group-focus-visible/side-tab:opacity-0 group-has-[:focus-visible]/side-tab:opacity-0";
 
-/** Whether a tile paints the tab colour: a coloured tab whose title is not still generating. */
-function tileTinted(tint: string | null, tile: SideTabTile): tint is string {
-  return tint !== null && tile.kind !== "generating";
-}
-
-/** Where a rail tile's monogram tint comes from, if it has one. */
-type TileTint = "tab" | "auto" | "none";
-
-function tileTintOf(props: SideTabRowProps): TileTint {
-  if (props.tile.kind === "generating") return "none";
-  if (props.tint !== null) return "tab";
-  return props.autoTint === null ? "none" : "auto";
+/**
+ * The row's per-tab accent colour: the tab's own colour, ignored while the
+ * title is still generating (the tile stays neutral then, S-17) and never a
+ * stand-in for the auto-tint hash (D11) - that no longer reaches this row at
+ * all. `null` means no colour: `SideTabAccent` renders it transparent.
+ */
+function tabAccentOf(tint: string | null, tile: SideTabTile): string | null {
+  return tile.kind === "generating" ? null : tint;
 }
 
 /**
@@ -182,7 +174,7 @@ export function SideTabRow(props: SideTabRowProps) {
   const { frame } = props;
   const collapsed = props.variant === "collapsed";
   const sessionActive = props.session === "active";
-  const tileTint = collapsed ? tileTintOf(props) : "none";
+  const accent = tabAccentOf(props.tint, props.tile);
   const pulse = useWaitingPulse(props.badge);
   return (
     <SideTabRowHoverCard
@@ -194,8 +186,6 @@ export function SideTabRow(props: SideTabRowProps) {
         data-side-tab={props.variant}
         data-active={props.active}
         data-tile-kind={collapsed ? props.tile.kind : undefined}
-        data-tinted={collapsed ? tileTint !== "none" : undefined}
-        data-tint={collapsed ? tileTint : undefined}
         data-waiting-pulse={pulse.pulsing ? true : undefined}
         onAnimationEnd={(event) => {
           frame.onAnimationEnd?.(event);
@@ -232,16 +222,14 @@ export function SideTabRow(props: SideTabRowProps) {
             }
           />
         )}
-        {props.session === null ? null : (
+        {props.session === null ? (
+          <SideTabAccent variant={props.variant} color={accent} />
+        ) : (
           <SideSessionMark session={props.session} tint={props.tint} />
         )}
         {collapsed ? (
           <>
-            <MonogramChip
-              tile={props.tile}
-              tint={tileTint === "tab" ? props.tint : props.autoTint}
-              tinted={tileTint !== "none"}
-            />
+            <MonogramChip tile={props.tile} tint={null} tinted={false} />
             <SideTabMeter
               agents={props.agents}
               attention={props.badge}
@@ -370,6 +358,35 @@ function SideSessionMark(props: {
   );
 }
 
+/**
+ * The per-tab colour accent (owner ruling, fix/layout-regression-and-improvements):
+ * always mounted so toggling a tab's colour never shifts the row. `color` is
+ * `null` for a colourless tab, rendered transparent rather than a
+ * hash-derived stand-in (D11's `tabAutoTint` no longer feeds this mark).
+ * Skipped on the session tab, which already carries its own edge mark
+ * (`SideSessionMark`, L-163).
+ */
+function SideTabAccent(props: {
+  readonly variant: SideTabRowVariant;
+  readonly color: string | null;
+}) {
+  return (
+    <span
+      aria-hidden
+      data-testid="side-tab-accent"
+      data-accent={props.color !== null}
+      className={
+        props.variant === "collapsed"
+          ? SIDE_TAB_TILE_ACCENT_RING_CLASS
+          : SIDE_TAB_ACCENT_BAR_CLASS
+      }
+      style={
+        { "--side-tab-accent": props.color ?? "transparent" } as CSSProperties
+      }
+    />
+  );
+}
+
 function CornerBadge(props: {
   readonly badge: RailBadgeKind | null;
   readonly size: "tile" | "leading";
@@ -394,15 +411,15 @@ function CornerBadge(props: {
 }
 
 /**
- * The fixed 16px leading slot: a custom icon, or a coloured tab's monogram, on
- * a 16px tile with the status as a badge in the space reserved beside it;
- * otherwise the status glyph alone.
+ * The fixed 16px leading slot: a custom icon on a 16px tile with the status
+ * as a badge in the space reserved beside it; otherwise the status glyph
+ * alone. A monogram never forces a tile here - on this small a tile the
+ * status badge would overlap its corner and read as a tiny growth on the
+ * letters (the row's colour lives in its accent bar instead).
  */
 function LeadingSlot(props: SideTabRowProps) {
   const tile = props.tile;
-  const showTile =
-    tile.kind === "icon" || (tile.kind === "monogram" && props.tint !== null);
-  if (!showTile) {
+  if (tile.kind !== "icon") {
     return (
       <span
         data-testid="side-tab-leading"
@@ -416,37 +433,21 @@ function LeadingSlot(props: SideTabRowProps) {
       </span>
     );
   }
-  const tinted = tileTinted(props.tint, tile);
   return (
     <span
       data-testid="side-tab-leading"
       data-leading="tile"
-      className={cn(
-        SIDE_TAB_LEADING_TILE_SLOT_CLASS[
-          tile.kind === "icon" ? "icon" : "monogram"
-        ],
-        "relative flex shrink-0",
-      )}
+      className={cn(SIDE_TAB_LEADING_TILE_SLOT_CLASS, "relative flex shrink-0")}
     >
       <span
         data-testid="side-tab-leading-tile"
-        data-tinted={tinted}
         className={cn(
           SIDE_TAB_LEADING_TILE_CLASS,
           "flex items-center justify-center overflow-hidden",
-          tinted ? SIDE_TAB_TINT_FILL_CLASS : SIDE_TAB_COLORLESS_TILE_CLASS,
+          SIDE_TAB_COLORLESS_TILE_CLASS,
         )}
-        style={
-          tinted
-            ? ({ "--side-tab-tint": props.tint } as CSSProperties)
-            : undefined
-        }
       >
-        {tile.kind === "icon" ? (
-          tile.icon
-        ) : (
-          <span aria-hidden>{tile.text}</span>
-        )}
+        {tile.icon}
       </span>
       <CornerBadge badge={props.badge} size="leading" />
     </span>

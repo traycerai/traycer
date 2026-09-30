@@ -64,6 +64,22 @@ export type TaskTabLayout = "scroll" | "shrink";
 export type ReadingWidth = "comfortable" | "wide";
 
 /**
+ * `wide`'s own floor: today's fixed wide column (`max-w-5xl`), so the slider
+ * never reads narrower than what picking "Wide" has always meant.
+ */
+export const WIDE_READING_WIDTH_MIN_PX = 1024;
+
+/**
+ * The slider's own ceiling - generously past any real monitor, so in practice
+ * a user hits the VIEWPORT clamp (`useReadingWidthStyle`) before this. It only
+ * bounds the control itself, never what actually renders.
+ */
+export const WIDE_READING_WIDTH_MAX_PX = 3000;
+
+/** A "how much of the window" control: coarse steps, not fine precision. */
+export const WIDE_READING_WIDTH_STEP_PX = 16;
+
+/**
  * The two regions that name a bar AND an end of it, each for itself (L-156).
  *
  * In this order, which is the order a cluster holding both draws them: usage
@@ -237,6 +253,14 @@ export interface LayoutArrangement {
    * much chrome someone wants, so a density switch must leave it alone.
    */
   readonly readingWidth: ReadingWidth;
+  /**
+   * How wide the `wide` column reads, in px - meaningful only while
+   * `readingWidth` is `"wide"`. Defaults to today's fixed wide column, so
+   * picking "Wide" with the slider untouched changes nothing visually.
+   * `useReadingWidthStyle` still viewport-clamps it, so this is a ceiling the
+   * user is choosing, not a guaranteed rendered width.
+   */
+  readonly wideReadingWidthPx: number;
 }
 
 /** Every provider that reports account rate limits, in the strip's own order. */
@@ -349,6 +373,7 @@ export const DEFAULT_ARRANGEMENT: LayoutArrangement = {
   sideStripView: "layered",
   taskTabLayout: "scroll",
   readingWidth: "comfortable",
+  wideReadingWidthPx: WIDE_READING_WIDTH_MIN_PX,
 };
 
 /** What a provider draws until told otherwise: its tightest limit, and only that. */
@@ -566,8 +591,10 @@ export function statusBarHostsAnyRegion(
  * (L-51), which is off by default - and it ignores them for the CONTENTS too
  * (L-162): a footer switched on draws both readings whichever bar each of
  * them names, because the phone has one bar and a footer that honoured a
- * header pick would silently drop a readout. The picks are kept, not
- * overridden, so the desktop window they were made in still honours them.
+ * header pick would silently drop a readout. Its ends are fixed as well -
+ * usage left, resources right - since an end picked for a desktop bar says
+ * nothing about the phone's. The picks are kept, not overridden, so the
+ * desktop window they were made in still honours them.
  */
 export function statusBarShown(
   arrangement: LayoutArrangement,
@@ -858,6 +885,43 @@ export function moveRailEntry(
     ...arrangement,
     rail: movedWithin(arrangement.rail, fromIndex, toIndex),
   };
+}
+
+/**
+ * A panel reordered among panels alone, `toIndex` counted the same way: the
+ * phone's flat chip bar draws no divider or stack, so a move there must
+ * leave both exactly where they are - every divider and stack stays
+ * immediately after the SAME panel it already followed, wherever that panel
+ * now stands, rather than after whatever panel now occupies its old ARRAY
+ * slot. `normalizeRail` then keeps or splits a stack whose members the new
+ * order no longer holds adjacent.
+ */
+export function movePanelAmongPanels(
+  arrangement: LayoutArrangement,
+  panelId: string,
+  toIndex: number,
+): LayoutArrangement {
+  const panelIds = arrangement.rail.flatMap((entry) =>
+    entry.kind === "panel" ? [entry.id] : [],
+  );
+  const fromIndex = panelIds.findIndex((id) => id === panelId);
+  if (fromIndex < 0) return arrangement;
+  const reordered = movedWithin(panelIds, fromIndex, toIndex);
+  const markersAfter = new Map<RailRegionId | null, RailEntry[]>();
+  let anchor: RailRegionId | null = null;
+  for (const entry of arrangement.rail) {
+    if (entry.kind === "panel") {
+      anchor = entry.id;
+      continue;
+    }
+    markersAfter.set(anchor, [...(markersAfter.get(anchor) ?? []), entry]);
+  }
+  const rail: RailEntry[] = [...(markersAfter.get(null) ?? [])];
+  for (const id of reordered) {
+    rail.push({ kind: "panel", id });
+    rail.push(...(markersAfter.get(id) ?? []));
+  }
+  return { ...arrangement, rail: normalizeRail(rail) };
 }
 
 /** A new divider at `index`, on an id no divider has held before. */

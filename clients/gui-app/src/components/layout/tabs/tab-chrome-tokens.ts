@@ -22,15 +22,6 @@ export const TAB_CLASS_BASE =
 export const TAB_BOX_CLASS =
   "pointer-events-none absolute inset-0.5 rounded-xl";
 
-/**
- * A tab's colour on a tab with no box of its own to wear it: a short line
- * centred inside the box's bottom edge, the same for a lone tab, a split
- * member and the joined active tab. Never a rule across the tab - the header
- * has no baseline.
- */
-export const TAB_COLOR_MARK_CLASS =
-  "pointer-events-none absolute bottom-1.25 left-1/2 h-0.5 w-6 -translate-x-1/2 rounded-full bg-(--swatch)";
-
 export const SPLIT_MEMBER_CLASS =
   "gap-1 px-[var(--header-tab-padding,1.25rem)]";
 export const SPLIT_TAB_CONTROL_CLASS =

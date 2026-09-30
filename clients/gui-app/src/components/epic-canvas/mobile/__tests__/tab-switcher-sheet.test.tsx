@@ -6,6 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TabSwitcherSheet } from "@/components/epic-canvas/mobile/tab-switcher-sheet";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
+import { railFromPanelIdOrder } from "@/lib/layout/rail";
+import { LEFT_PANEL_IDS } from "@/lib/left-panel-ids";
 import type {
   EpicArtifactRef,
   EpicCanvasTileRef,
@@ -71,17 +77,19 @@ vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
 const TAB_ID = "tab-switcher-test";
 const EPIC_ID = "epic-1";
 const HOST_ID = "host-A";
-const CATEGORY_NAMES = [
-  "Chats",
-  "Artifacts",
-  "File Tree",
-  "Git Diff",
-  "Pull Requests",
-  "Terminals",
-  "Browsers",
-  "Sharing",
-  "Comments",
-];
+function resetSwitcherInputs(): void {
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLeftPanelStore.setState({
+    activePanelIdByTabId: {},
+    commentsPanelRevealedByTabId: {},
+  });
+}
+
+function tabIds(): ReadonlyArray<string | null> {
+  return screen
+    .getAllByRole("tab")
+    .map((tab) => tab.getAttribute("data-testid"));
+}
 
 function renderSheet(open: boolean, onOpenChange: (open: boolean) => void) {
   return render(
@@ -97,27 +105,59 @@ function renderSheet(open: boolean, onOpenChange: (open: boolean) => void) {
 describe("<TabSwitcherSheet />", () => {
   beforeEach(() => {
     mobileState.value = true;
-    // Reset the shared left-panel store so category selection never leaks.
-    useLeftPanelStore.setState({ activePanelIdByTabId: {} });
+    // Reset every input the bar is derived from, so nothing leaks.
+    resetSwitcherInputs();
   });
   afterEach(cleanup);
 
-  it("renders every curated category, including Pull Requests, when open on mobile", () => {
+  it("renders every category in the rail's order, with no More entry", () => {
+    // No PR presence and no revealed comment: on the phone Auto still reads as
+    // shown, so Pull Requests and Comments are chips like the rest.
     renderSheet(true, () => {});
-    for (const name of CATEGORY_NAMES) {
-      expect(screen.getByRole("tab", { name })).toBeTruthy();
-    }
-    expect(screen.getAllByRole("tab")).toHaveLength(9);
+    expect(tabIds()).toEqual([
+      "mobile-switcher-tab-chats",
+      "mobile-switcher-tab-artifacts",
+      "mobile-switcher-tab-terminals",
+      "mobile-switcher-tab-browsers",
+      "mobile-switcher-tab-git-diff",
+      "mobile-switcher-tab-pull-requests",
+      "mobile-switcher-tab-file-tree",
+      "mobile-switcher-tab-sharing",
+      "mobile-switcher-tab-comments",
+    ]);
+    expect(
+      screen.queryByRole("button", { name: "More categories" }),
+    ).toBeNull();
   });
 
-  it("keeps the Comments tab on the bar with no artifact tile open", () => {
-    // Desktop hides Comments until an artifact tile reveals it; the phone sheet
-    // is the only route to a thread list, so a tab that came and went with the
-    // shown tile would leave an anchor tap with nowhere to land. The category's
-    // own body says what it is waiting for when no artifact is open - the
-    // canvas here holds no tiles at all.
+  it("orders the bar by the user's rail order from Settings > Layout", () => {
+    const reversed = [...LEFT_PANEL_IDS].reverse();
+    useLayoutStore.setState({
+      arrangement: {
+        ...useLayoutStore.getState().arrangement,
+        rail: railFromPanelIdOrder(reversed),
+      },
+    });
     renderSheet(true, () => {});
-    expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
+    expect(tabIds()).toEqual(
+      reversed.map((panelId) => `mobile-switcher-tab-${panelId}`),
+    );
+  });
+
+  it("moves a panel turned off in Settings into More, and picking it selects it like its chip", async () => {
+    const user = userEvent.setup();
+    useLayoutStore.getState().setRegionValues("railSharing", {
+      shown: "hidden",
+    });
+    renderSheet(true, () => {});
+    expect(screen.queryByRole("tab", { name: "Sharing" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "More categories" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Sharing" }));
+    expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe(
+      "sharing",
+    );
+    const embed = await screen.findByTestId("mock-panel-embed");
+    expect(embed.dataset.category).toBe("sharing");
   });
 
   it("labels the chats category 'Chats' and renders the active tab as an underline, not a box", () => {
@@ -187,23 +227,6 @@ describe("<TabSwitcherSheet />", () => {
       "artifacts",
     );
     expect(screen.getByTestId("mock-artifacts-list")).toBeTruthy();
-  });
-
-  it("keeps Pull Requests reachable before its panel has reported presence", () => {
-    renderSheet(true, () => {});
-    const tabs = screen.getAllByRole("tab");
-    expect(tabs).toHaveLength(9);
-    expect(tabs.map((tab) => tab.getAttribute("data-testid"))).toEqual([
-      "mobile-switcher-tab-chats",
-      "mobile-switcher-tab-artifacts",
-      "mobile-switcher-tab-file-tree",
-      "mobile-switcher-tab-git-diff",
-      "mobile-switcher-tab-pull-requests",
-      "mobile-switcher-tab-terminals",
-      "mobile-switcher-tab-browsers",
-      "mobile-switcher-tab-sharing",
-      "mobile-switcher-tab-comments",
-    ]);
   });
 
   it("carries a Browsers tab, so an agent's browser tab is reachable", () => {

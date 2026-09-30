@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { deriveToolInputSummary, toSummaryLine } from "../tool-input-summary";
+import {
+  deriveToolInputSummary,
+  toolHeaderLine,
+  toSummaryLine,
+} from "../tool-input-summary";
 
 const EXISTING_REGISTRY_SNAPSHOTS = [
   {
@@ -555,5 +559,79 @@ describe("the 80-unit cap never cuts through a surrogate pair", () => {
       }),
     );
     expect(summary).toBe(`/repo/${"d".repeat(72)}\u2026`);
+  });
+});
+
+describe("toolHeaderLine", () => {
+  // Multi-line, runs of spaces, and well past the 80-unit summary cap.
+  const LONG_COMMAND =
+    "cd /repo &&\n  bun run --filter @traycer/protocol vitest run   src/host/agent/gui/__tests__/tool-input-summary.test.ts\n  && echo done and then some more trailing words";
+  const LONG_LINE = LONG_COMMAND.trim().replace(/\s+/g, " ");
+
+  function bashSummary(command: string): string | null {
+    return deriveToolInputSummary("Bash", { command });
+  }
+
+  it("returns the whole collapsed command when the summary is its capped cut", () => {
+    const summary = bashSummary(LONG_COMMAND);
+    expect(summary?.endsWith("\u2026")).toBe(true);
+
+    const line = toolHeaderLine(summary, {
+      kind: "command",
+      command: LONG_COMMAND,
+    });
+
+    expect(line).toBe(LONG_LINE);
+    expect(line?.includes("\u2026")).toBe(false);
+  });
+
+  it("returns a short command's summary unchanged", () => {
+    const summary = bashSummary("git status");
+    expect(
+      toolHeaderLine(summary, { kind: "command", command: "git status" }),
+    ).toBe("git status");
+  });
+
+  it("keeps a summary that is not the cap of the detail's input", () => {
+    const detail = { kind: "command", command: LONG_COMMAND } as const;
+    expect(toolHeaderLine("Run the protocol tests", detail)).toBe(
+      "Run the protocol tests",
+    );
+    // Also a capped summary of a DIFFERENT long command.
+    const other = bashSummary(
+      `${LONG_COMMAND} --different`.replace("cd", "ls"),
+    );
+    expect(toolHeaderLine(other, detail)).toBe(other);
+  });
+
+  it("returns the whole value of a single-entry fields detail", () => {
+    const summary = bashSummary(LONG_COMMAND);
+    expect(
+      toolHeaderLine(summary, {
+        kind: "fields",
+        entries: [{ key: "command", label: "Command", value: LONG_COMMAND }],
+      }),
+    ).toBe(LONG_LINE);
+  });
+
+  it("keeps the summary for a multi-entry fields detail", () => {
+    const summary = bashSummary(LONG_COMMAND);
+    expect(
+      toolHeaderLine(summary, {
+        kind: "fields",
+        entries: [
+          { key: "command", label: "Command", value: LONG_COMMAND },
+          { key: "cwd", label: "Cwd", value: "/repo" },
+        ],
+      }),
+    ).toBe(summary);
+  });
+
+  it("passes a null summary or null detail through", () => {
+    expect(
+      toolHeaderLine(null, { kind: "command", command: LONG_COMMAND }),
+    ).toBeNull();
+    const summary = bashSummary(LONG_COMMAND);
+    expect(toolHeaderLine(summary, null)).toBe(summary);
   });
 });

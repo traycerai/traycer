@@ -2,9 +2,20 @@ import { describe, expect, it } from "vitest";
 import {
   deriveHostNotificationStoppedReason,
   HOST_NOTIFICATION_STOPPED_REASONS,
+  HOST_OPERATION_MANAGED_COMMAND_DELIVERY,
   parseKnownHostNotificationPayload,
   parseKnownHostNotificationPayloadForKind,
 } from "@traycer/protocol/host/notifications/payloads";
+
+const MANAGED_COMMAND_DELIVERY_PARKED = {
+  kind: "managed_command_delivery_parked",
+  operation: HOST_OPERATION_MANAGED_COMMAND_DELIVERY,
+  title: "Command output is waiting",
+  message: "A managed command finished but the chat couldn't receive it.",
+  commandId: "2f1d0a2c-0000-4000-8000-000000000002",
+  epicId: "epic-1",
+  chatId: "chat-1",
+};
 
 const CHAT_STOPPED = {
   kind: "chat",
@@ -281,6 +292,31 @@ describe("parseKnownHostNotificationPayloadForKind", () => {
       kind: "workspace_operation_failed",
       operation: "provision",
     });
+    expect(
+      parseKnownHostNotificationPayloadForKind(
+        "host.operation.finished",
+        MANAGED_COMMAND_DELIVERY_PARKED,
+      ),
+    ).toMatchObject({
+      kind: "managed_command_delivery_parked",
+      epicId: "epic-1",
+      chatId: "chat-1",
+    });
+  });
+
+  // Forward compatibility: an extra field a newer producer stamped on the
+  // row (here, a failure detail) must survive the catchall rather than be
+  // stripped or rejected.
+  it("keeps a catchall extra field on the parked-delivery arm", () => {
+    expect(
+      parseKnownHostNotificationPayloadForKind("host.operation.finished", {
+        ...MANAGED_COMMAND_DELIVERY_PARKED,
+        failure: "queue_paused",
+      }),
+    ).toMatchObject({
+      kind: "managed_command_delivery_parked",
+      failure: "queue_paused",
+    });
   });
 
   // Cross-kind corruption: a valid payload shape under the WRONG notification
@@ -306,6 +342,31 @@ describe("parseKnownHostNotificationPayloadForKind", () => {
       parseKnownHostNotificationPayloadForKind(
         "workspace.operation.failed",
         APPROVAL,
+      ),
+    ).toBeNull();
+    expect(
+      parseKnownHostNotificationPayloadForKind(
+        "agent.stopped",
+        MANAGED_COMMAND_DELIVERY_PARKED,
+      ),
+    ).toBeNull();
+  });
+
+  // A legacy row minted before epicId/chatId existed on this arm must
+  // degrade rather than parse into a payload the deep-link mapper cannot
+  // route from.
+  it("rejects a legacy parked-delivery row missing epicId/chatId", () => {
+    const legacy = {
+      kind: MANAGED_COMMAND_DELIVERY_PARKED.kind,
+      operation: MANAGED_COMMAND_DELIVERY_PARKED.operation,
+      title: MANAGED_COMMAND_DELIVERY_PARKED.title,
+      message: MANAGED_COMMAND_DELIVERY_PARKED.message,
+      commandId: MANAGED_COMMAND_DELIVERY_PARKED.commandId,
+    };
+    expect(
+      parseKnownHostNotificationPayloadForKind(
+        "host.operation.finished",
+        legacy,
       ),
     ).toBeNull();
   });

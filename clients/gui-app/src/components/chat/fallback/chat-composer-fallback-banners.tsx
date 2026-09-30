@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { useReadingWidthClass } from "@/lib/layout-overrides";
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import type { ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { ChatComposerBannerPortal } from "@/components/chat/composer/chat-composer-banner-portal";
@@ -206,15 +206,16 @@ function FallbackReturnBannerSlot({
  * would have drifted.
  */
 function FallbackBannerSlot({ children }: { readonly children: ReactNode }) {
-  const readingWidth = useReadingWidthClass();
+  const readingWidth = useReadingWidthStyle();
   return (
     <ChatComposerBannerPortal>
       <div className="pointer-events-none px-4">
         <div
           className={cn(
             "pointer-events-auto mx-auto w-full bg-canvas pt-4",
-            readingWidth,
+            readingWidth.className,
           )}
+          style={{ maxWidth: readingWidth.maxWidth }}
         >
           {children}
         </div>

@@ -13,7 +13,7 @@ export function StripSelectionTraveller({
   readonly ref: Ref<HTMLSpanElement>;
 }) {
   const travelling = useSelectionTravelling();
-  usePublishSheetJoin(travelling ? "canvas" : null);
+  usePublishSheetJoin(travelling ? "canvas" : null, null);
   return (
     <span
       ref={ref}

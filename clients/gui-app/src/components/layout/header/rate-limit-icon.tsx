@@ -260,9 +260,10 @@ function LiveRateLimitGlyph({
 }
 
 /**
- * The readings, where the trigger has the room for them - the desktop header
- * and the vertical strip's readings row (F6) - or the glyph where it has not:
- * the phone header and the collapsed rail's 40px tile.
+ * The readings, where the trigger has the room for them and Display is Full -
+ * the desktop header and the vertical strip's readings row (F6) - or the
+ * glyph otherwise: the phone header, the collapsed rail's 40px tile, and a
+ * desktop Tab strip reading whose Display is Icon only.
  */
 function RateLimitTriggerContent({
   cluster,

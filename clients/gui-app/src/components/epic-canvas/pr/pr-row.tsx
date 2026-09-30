@@ -227,12 +227,9 @@ export function PrRow(props: {
             // `bg-accent` fill a chat/terminal row uses. Those rows are one line
             // of plain text, so a flat fill costs nothing; this row carries the
             // status palette (state tint, failing checks, review decision), and
-            // most presets keep `--accent` a near-grey while `traycer-green` sets
-            // it to its saturated `--primary` (#257174) - a full fill there stacks
-            // the row's hues on a competing one and leaves the state glyph at
-            // 3.08:1, the WCAG 1.4.11 graphic floor with nothing to spare. The
-            // wash lifts the worst preset past 4:1 and keeps the same token, so
-            // the sidebar still speaks one selection language. See
+            // a full fill leaves the worst preset's state glyph under 4:1. The
+            // wash lifts every preset past 4:1 and keeps the same token, so the
+            // sidebar still speaks one selection language. See
             // `pr-row.test.tsx`'s "PrRow selection surface" matrix.
             isActive ? "bg-accent/35" : clickable && "hover:bg-accent/20",
             item.state === "closed" && "opacity-70",
