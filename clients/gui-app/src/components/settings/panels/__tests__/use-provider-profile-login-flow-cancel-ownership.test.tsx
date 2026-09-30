@@ -1256,4 +1256,195 @@ describe("useProviderProfileLoginFlow — a failed cancel RPC must not latch out
 
     expect(cancelLoginImpl).toHaveBeenCalledTimes(1);
   });
+
+  it("with ownership: a release that rejects after the hook unmounted is retried once", async () => {
+    const recorder = startLoginRecorder();
+    const pendingCancel = deferred<CancelLoginResponse>();
+    const cancelLoginImpl = vi
+      .fn<
+        (request: CancelLoginRequest) => void | Promise<CancelLoginResponse>
+      >()
+      .mockImplementationOnce(() => pendingCancel.promise)
+      .mockImplementation(() => undefined);
+    const { unmount } = render(
+      <LoginFlowHarness
+        mode="create"
+        existingProfileId={null}
+        loginCapability={null}
+        supportsLoginOwnership
+        startLoginImpl={recorder.impl}
+        cancelLoginImpl={cancelLoginImpl}
+      />,
+      { wrapper: queryClientWrapper() },
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "start" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      recorder.calls[0].resolve(
+        startLoginAnswer({
+          started: true,
+          profileId: "p-new",
+          url: "https://example.test",
+        }),
+      );
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("flow-state").textContent).toBe("waiting");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "cancel" }));
+      await Promise.resolve();
+    });
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(1);
+
+    const holderId = (
+      cancelLoginImpl.mock.calls[0]?.[0] as { holderId?: unknown }
+    ).holderId;
+    expect(typeof holderId).toBe("string");
+    expect(cancelLoginImpl).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ holderId, profileId: "p-new" }),
+    );
+
+    // The hook unmounts while the release is still pending on the host - the
+    // panel closed before the RPC ever answered.
+    act(() => {
+      unmount();
+    });
+
+    // The pending release now rejects. Nothing owns a press or an unmount
+    // cleanup for this hook any more, so the retry has to fire from inside
+    // the rejection handler itself.
+    await act(async () => {
+      pendingCancel.reject(new Error("cancel rpc failed"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(2);
+    expect(cancelLoginImpl).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ holderId, profileId: "p-new" }),
+    );
+  });
+
+  it("with ownership: the post-unmount retry is not retried again when it also rejects", async () => {
+    const recorder = startLoginRecorder();
+    const pendingCancel = deferred<CancelLoginResponse>();
+    const cancelLoginImpl = vi
+      .fn<
+        (request: CancelLoginRequest) => void | Promise<CancelLoginResponse>
+      >()
+      .mockImplementationOnce(() => pendingCancel.promise)
+      .mockImplementation(() => {
+        throw new Error("cancel rpc failed again");
+      });
+    const { unmount } = render(
+      <LoginFlowHarness
+        mode="create"
+        existingProfileId={null}
+        loginCapability={null}
+        supportsLoginOwnership
+        startLoginImpl={recorder.impl}
+        cancelLoginImpl={cancelLoginImpl}
+      />,
+      { wrapper: queryClientWrapper() },
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "start" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      recorder.calls[0].resolve(
+        startLoginAnswer({
+          started: true,
+          profileId: "p-new",
+          url: "https://example.test",
+        }),
+      );
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "cancel" }));
+      await Promise.resolve();
+    });
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      unmount();
+    });
+
+    await act(async () => {
+      pendingCancel.reject(new Error("cancel rpc failed"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(2);
+
+    // The post-unmount retry itself rejects (synchronously). Let a second
+    // rejection fully settle before asserting nothing sent a third call.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("no ownership: a release that rejects after unmount is not resent", async () => {
+    const recorder = startLoginRecorder();
+    const pendingCancel = deferred<CancelLoginResponse>();
+    const cancelLoginImpl = vi
+      .fn<
+        (request: CancelLoginRequest) => void | Promise<CancelLoginResponse>
+      >()
+      .mockImplementationOnce(() => pendingCancel.promise)
+      .mockImplementation(() => undefined);
+    const { unmount } = render(
+      <LoginFlowHarness
+        mode="reauth"
+        existingProfileId="p-1"
+        loginCapability={null}
+        supportsLoginOwnership={false}
+        startLoginImpl={recorder.impl}
+        cancelLoginImpl={cancelLoginImpl}
+      />,
+      { wrapper: queryClientWrapper() },
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "start" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      recorder.calls[0].resolve(
+        startLoginAnswer({
+          started: true,
+          profileId: "p-1",
+          url: "https://example.test",
+        }),
+      );
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "cancel" }));
+      await Promise.resolve();
+    });
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      unmount();
+    });
+
+    await act(async () => {
+      pendingCancel.reject(new Error("cancel rpc failed"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(1);
+  });
 });

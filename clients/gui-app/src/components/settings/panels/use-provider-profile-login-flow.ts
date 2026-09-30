@@ -655,10 +655,18 @@ export function useProviderProfileLoginFlow(
               deferredReleaseRef.current = null;
             },
             () => {
+              const owe = (): void => {
+                if (holderId === null) return;
+                oweRelease(holderId, target);
+                // A hook that has already unmounted has no press and no
+                // cleanup left to drain what it owes, so the one retry it
+                // gets goes now; the drain's own failure only re-owes.
+                if (unmountedRef.current) settleOwedReleasesRef.current();
+              };
               if (attemptIdRef.current !== thisAttemptId) {
                 // A fresh press has already reset the attempt's refs; the
                 // claim this call failed to release is still the host's.
-                if (holderId !== null) oweRelease(holderId, target);
+                owe();
                 return;
               }
               releaseInFlightRef.current = false;
@@ -667,7 +675,7 @@ export function useProviderProfileLoginFlow(
                 send(deferred.profileId);
                 return;
               }
-              if (holderId !== null) oweRelease(holderId, target);
+              owe();
               cancelledRef.current = false;
             },
           );
