@@ -11031,7 +11031,7 @@ describe("restart with no launchd job to restart (packaged macOS, neither host l
         continuation: "activate",
       });
 
-      const outcome = await controller.respawn({ kind: "background" });
+      const outcome = await controller.respawn({ kind: "background" }, "force");
 
       expect(outcome).toEqual({
         kind: "deferred",
