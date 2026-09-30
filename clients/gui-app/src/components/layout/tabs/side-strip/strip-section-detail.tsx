@@ -3,6 +3,7 @@ import { Check, X } from "lucide-react";
 import { displayTitle } from "@/lib/display-title";
 import { cn } from "@/lib/utils";
 import type { NeedsYouReason } from "@/stores/notifications/needs-you-items";
+import { StripElapsedTime } from "./strip-elapsed-time";
 import type { NeedsYouRow, ToReviewRow } from "./strip-sections";
 
 /** Both lines' type: 12px, on the row's 16px line. */
@@ -68,5 +69,40 @@ export function ToReviewDetail(props: {
         {done ? "Done · ready to review" : "Failed"}
       </span>
     </span>
+  );
+}
+
+/**
+ * A rail tile's card for a Needs you or To review task: the title, the second
+ * line its row would draw, and the wait or how long ago it finished.
+ */
+export function RailSectionCard(props: {
+  readonly title: string;
+  readonly row: NeedsYouRow | ToReviewRow;
+}): ReactNode {
+  const { row } = props;
+  const waiting = row.section === "needs-you";
+  const since = waiting ? row.createdAt : row.at;
+  return (
+    <div
+      data-testid="side-tab-hover-card-body"
+      className="flex flex-col gap-1.5"
+    >
+      <div className="text-ui-sm font-medium break-words text-foreground">
+        {props.title}
+      </div>
+      {waiting ? <NeedsYouDetail row={row} /> : <ToReviewDetail row={row} />}
+      {since === null ? null : (
+        <div className="text-muted-foreground">
+          {waiting ? "Waiting " : null}
+          <StripElapsedTime
+            since={since}
+            className="tabular-nums"
+            testId="side-tab-hover-card-time"
+          />
+          {waiting ? null : " ago"}
+        </div>
+      )}
+    </div>
   );
 }

@@ -12,7 +12,10 @@ import {
   type SideStripHandlers,
 } from "./side-strip-item-input";
 import { SideStripItem } from "./side-strip-item";
+import type { SideTabRowVariant } from "./side-tab-row";
 import {
+  SIDE_STRIP_RAIL_NEEDS_YOU_DOT_CLASS,
+  SIDE_STRIP_RAIL_SECTION_SEPARATOR_CLASS,
   SIDE_TAB_HOVER_CLASS,
   SIDE_TAB_ROW_CLASS,
   SIDE_TAB_SECTION_ROW_CLASS,
@@ -28,6 +31,7 @@ import {
   sectionTaskCount,
   visualOrderOf,
   type StripPromptEntry,
+  type StripSection,
   type StripSectionEntry,
   type StripSectionGroup,
   type StripTabEntry,
@@ -43,6 +47,12 @@ import { useStripSections } from "./use-strip-sections";
  * drawn order is published for the tab-number and next/previous shortcuts,
  * and numbers the Alt-digit badges.
  *
+ * The rail draws the same sections as runs of tiles: a hairline between runs,
+ * Needs you marked by an amber dot, no headers, so no fold, no pill, and no
+ * tile for a task with no tab (the Notifications tile counts its prompt). It
+ * is this same component, so the announcer, the holds and the drawn order
+ * carry across a collapse.
+ *
  * A task that changes section slides there and glows, unless the pointer is on
  * its row or keyboard focus is, in which case it stays until the person leaves
  * it. Arrivals in Needs you are announced, and the "↑ N need you" pill floats
@@ -51,11 +61,12 @@ import { useStripSections } from "./use-strip-sections";
 export function SideStripSections(props: {
   readonly controller: TabStripController;
   readonly handlers: SideStripHandlers;
+  readonly variant: SideTabRowVariant;
   /** The list's scroller, which holds the rows' frames. */
   readonly scroller: HTMLElement | null;
   readonly needsYouAbove: boolean;
 }): ReactNode {
-  const { controller, handlers, scroller, needsYouAbove } = props;
+  const { controller, handlers, variant, scroller, needsYouAbove } = props;
   const assigned = useStripSections(controller);
   const holds = useStripSectionHolds(scroller);
   const sections = useMemo(
@@ -85,6 +96,12 @@ export function SideStripSections(props: {
     };
   }, [keys]);
   const needsYou = sections.find((group) => group.section === "needs-you");
+  const drawn =
+    variant === "collapsed"
+      ? sections.filter((group) =>
+          group.entries.some((entry) => entry.kind === "tabs"),
+        )
+      : sections;
   return (
     <>
       {needsYouAbove && scroller !== null && needsYou !== undefined ? (
@@ -94,19 +111,21 @@ export function SideStripSections(props: {
         />
       ) : null}
       <StripRowMotion scroller={scroller} placements={placements} slide={slide}>
-        {sections.map((group) => (
+        {drawn.map((group, index) => (
           <StripSectionRows
             key={group.section}
             group={group}
+            variant={variant}
+            separated={index > 0}
             memberOffsets={offsets}
             controller={controller}
             handlers={handlers}
           />
         ))}
       </StripRowMotion>
-      {/* Outside the tablist, which holds only tabs and headers. A live region
-          has to be in the page before it speaks; `id` makes the same words said
-          twice two announcements. */}
+      {/* Outside the tablist, which holds only tabs, headers and the rail's
+          marks. A live region has to be in the page before it speaks; `id`
+          makes the same words said twice two announcements. */}
       {createPortal(
         <span
           role="status"
@@ -124,12 +143,16 @@ export function SideStripSections(props: {
 
 function StripSectionRows(props: {
   readonly group: StripSectionGroup;
+  readonly variant: SideTabRowVariant;
+  /** A run of the rail after another: a hairline parts them. */
+  readonly separated: boolean;
   /** Tabs drawn before each item, for its Alt-digit badge. */
   readonly memberOffsets: ReadonlyMap<string, number>;
   readonly controller: TabStripController;
   readonly handlers: SideStripHandlers;
 }): ReactNode {
-  const { group, memberOffsets, controller, handlers } = props;
+  const { group, variant, memberOffsets, controller, handlers } = props;
+  const rail = variant === "collapsed";
   const [folded] = useStripSectionFolded(group.section);
   const draggedItemId = useActiveHeaderTab()?.stripItemId ?? null;
   const tabEntries = group.entries.filter(
@@ -158,19 +181,27 @@ function StripSectionRows(props: {
       : null;
   };
   // A folded section keeps the current task's row, so the person still sees
-  // where they are; the header's count is still the whole section's.
-  const shown = folded
-    ? group.entries.filter(
-        (entry) =>
-          entry.kind === "tabs" && entry.itemId === controller.activeItemId,
-      )
-    : group.entries;
+  // where they are; the header's count is still the whole section's. The rail
+  // has no header to fold from, so it draws every tile.
+  let shown: ReadonlyArray<StripSectionEntry> = group.entries;
+  if (rail) {
+    shown = tabEntries;
+  } else if (folded) {
+    shown = group.entries.filter(
+      (entry) =>
+        entry.kind === "tabs" && entry.itemId === controller.activeItemId,
+    );
+  }
   return (
     <>
-      <StripSectionHeader
-        section={group.section}
-        count={sectionTaskCount(group)}
-      />
+      {rail ? (
+        <RailSectionMarks section={group.section} separated={props.separated} />
+      ) : (
+        <StripSectionHeader
+          section={group.section}
+          count={sectionTaskCount(group)}
+        />
+      )}
       {shown.map((entry: StripSectionEntry) =>
         entry.kind === "tabs" ? (
           <SideStripItem
@@ -184,7 +215,7 @@ function StripSectionRows(props: {
               entry,
               tabEntries.indexOf(entry),
             )}
-            variant="expanded"
+            variant={variant}
             groupLine={entry.groupColor}
             lane={group.section}
             members={entry.members}
@@ -194,6 +225,35 @@ function StripSectionRows(props: {
           <StripPromptRow key={entry.item.row.feedId} entry={entry} />
         ),
       )}
+    </>
+  );
+}
+
+/**
+ * What parts the rail's runs of tiles: a 24px hairline before every run but
+ * the first, and Needs you's amber dot over its tiles. Decoration only: the
+ * tiles carry their own names.
+ */
+function RailSectionMarks(props: {
+  readonly section: StripSection;
+  readonly separated: boolean;
+}): ReactNode {
+  return (
+    <>
+      {props.separated ? (
+        <span
+          aria-hidden
+          data-testid="side-strip-rail-section-separator"
+          className={SIDE_STRIP_RAIL_SECTION_SEPARATOR_CLASS}
+        />
+      ) : null}
+      {props.section === "needs-you" ? (
+        <span
+          aria-hidden
+          data-testid="side-strip-rail-needs-you-dot"
+          className={SIDE_STRIP_RAIL_NEEDS_YOU_DOT_CLASS}
+        />
+      ) : null}
     </>
   );
 }

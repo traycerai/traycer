@@ -1,6 +1,11 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { centreOf, fixture, nextFrames } from "./support/fixtures.ts";
+import {
+  finishAnimations,
+  slowAnimations,
+  startedAnimations,
+} from "./support/section-motion.ts";
 
 // What the Activity view does when a task changes section, and how it scrolls
 // over twenty tasks, in real Chrome: the claims only real layout, real input
@@ -12,75 +17,11 @@ test.use({ viewport: { width: 900, height: 900 } });
 const STRIP = `${fixture("side-tab-strip")}?edge=left&scene=sections&tasks=20`;
 const SCROLLER = "header-tab-strip-scroll";
 
-/** An animation a row's move started: on its frame (the slide) or on its row (the glow). */
-interface StartedAnimation {
-  readonly on: "frame" | "row";
-  readonly properties: ReadonlyArray<string>;
-}
-
 async function openStrip(page: Page): Promise<void> {
   await page.goto(STRIP);
   await page.waitForFunction("window.__sideTabStripProbe?.ready === true");
   await nextFrames(page, 4);
 }
-
-/**
- * Runs the page's animations at a hundredth of their speed, so geometry can be
- * read at an animation's first frame however long the test takes to ask.
- */
-async function slowAnimations(page: Page): Promise<void> {
-  const session = await page.context().newCDPSession(page);
-  await session.send("Animation.enable");
-  await session.send("Animation.setPlaybackRate", { playbackRate: 0.01 });
-}
-
-const startedAnimations = (page: Page): Promise<Array<StartedAnimation>> =>
-  page.evaluate(() =>
-    document.getAnimations().flatMap((animation): Array<StartedAnimation> => {
-      const { effect } = animation;
-      // Only what a script started: the stylesheet's own transitions are not
-      // the move's.
-      if (
-        animation instanceof CSSTransition ||
-        animation instanceof CSSAnimation ||
-        !(effect instanceof KeyframeEffect)
-      ) {
-        return [];
-      }
-      const { target } = effect;
-      let on: StartedAnimation["on"] | null = null;
-      if (target?.hasAttribute("data-strip-item-id")) on = "frame";
-      else if (target?.hasAttribute("data-side-tab")) on = "row";
-      if (on === null) return [];
-      return [
-        {
-          on,
-          // The styles animated, not each keyframe's own timing fields.
-          properties: Array.from(
-            new Set(
-              effect
-                .getKeyframes()
-                .flatMap((frame) => Object.keys(frame))
-                .filter(
-                  (name) =>
-                    ![
-                      "offset",
-                      "computedOffset",
-                      "easing",
-                      "composite",
-                    ].includes(name),
-                ),
-            ),
-          ),
-        },
-      ];
-    }),
-  );
-
-const finishAnimations = (page: Page): Promise<void> =>
-  page.evaluate(() => {
-    for (const animation of document.getAnimations()) animation.finish();
-  });
 
 const row = (page: Page, id: string): Locator =>
   page.getByTestId(`tab-epic-fixture-${id}`);

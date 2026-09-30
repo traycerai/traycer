@@ -20,7 +20,7 @@ import {
 } from "./side-strip-item-input";
 import { SideStripItem } from "./side-strip-item";
 import { SideStripSections } from "./side-strip-sections";
-import { useLiveAgentsInStrip } from "./strip-agents-mode";
+import { useSectionedStrip } from "./strip-agents-mode";
 import {
   SIDE_STRIP_LIST_CLASS,
   SIDE_STRIP_SECTIONED_SCROLL_PADDING_CLASS,
@@ -43,8 +43,9 @@ interface GroupRun {
  * scrolls, and every row is reachable by wheel and by the leader badges.
  *
  * The Layered view lists the rows in the user's order under their group
- * headers; the Activity view lists them in its sections, where the list fades
- * at its bottom edge while more lies below.
+ * headers; the Activity view lists them in its sections, where the expanded
+ * list fades at its bottom edge while more lies below, and the rail runs its
+ * tiles in the same sections.
  */
 export function SideStripRowList(props: {
   readonly controller: TabStripController;
@@ -78,8 +79,10 @@ export function SideStripRowList(props: {
     extraRef: setScroller,
   });
   const lastIndex = headerItemIds.length - 1;
-  const sectioned = useLiveAgentsInStrip() && variant === "expanded";
-  const scroll = useSectionScroll(sectioned ? scroller : null);
+  const sectioned = useSectionedStrip();
+  // Only the expanded list has section headers to stick, fold and scroll to.
+  const sectionedList = sectioned && variant === "expanded";
+  const scroll = useSectionScroll(sectionedList ? scroller : null);
   return (
     <div
       ref={setScrollerNode}
@@ -95,14 +98,16 @@ export function SideStripRowList(props: {
       className={cn(
         SIDE_STRIP_LIST_CLASS[variant],
         "no-scrollbar min-h-0 flex-[0_1_auto] overflow-y-auto overscroll-y-contain [-webkit-app-region:no-drag]",
-        sectioned && SIDE_STRIP_SECTIONED_SCROLL_PADDING_CLASS,
-        sectioned && resolveMinimapRailMaskClassName(false, scroll.moreBelow),
+        sectionedList && SIDE_STRIP_SECTIONED_SCROLL_PADDING_CLASS,
+        sectionedList &&
+          resolveMinimapRailMaskClassName(false, scroll.moreBelow),
       )}
     >
       {sectioned ? (
         <SideStripSections
           controller={controller}
           handlers={handlers}
+          variant={variant}
           scroller={scroller}
           needsYouAbove={scroll.needsYouAbove}
         />

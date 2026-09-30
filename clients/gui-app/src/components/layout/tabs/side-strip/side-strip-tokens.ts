@@ -290,11 +290,29 @@ export const SIDE_STRIP_NAV_TILE_CLASS = "size-8 rounded-lg";
 /** The rail's nav tiles as a column: centred, 4px apart. */
 export const SIDE_STRIP_RAIL_NAV_CLASS = "flex flex-col items-center gap-1";
 /**
- * The rail's divider between New Task and Home (F1): a 24px hairline, 8px from
- * each, so the rail keeps its 8px rhythm from there down. A foreground alpha,
- * not `bg-border`: on the light ground `--border` is the ground's own grey.
+ * The rail's hairline: 24px wide, a foreground alpha and not `bg-border`,
+ * since on the light ground `--border` is the ground's own grey.
  */
-export const SIDE_STRIP_RAIL_DIVIDER_CLASS = "my-2 h-px w-6 bg-foreground/15";
+const SIDE_STRIP_RAIL_HAIRLINE_CLASS = "h-px w-6 bg-foreground/15";
+/**
+ * The rail's divider between New Task and Home (F1): the hairline, 8px from
+ * each, so the rail keeps its 8px rhythm from there down.
+ */
+export const SIDE_STRIP_RAIL_DIVIDER_CLASS = cn(
+  "my-2",
+  SIDE_STRIP_RAIL_HAIRLINE_CLASS,
+);
+/**
+ * The Activity rail's marks between runs of tiles. The hairline that parts two
+ * sections sits in the list's own 8px gap, so the tiles keep their rhythm; the
+ * 4px amber dot marks Needs you and stands 4px over its first tile.
+ */
+export const SIDE_STRIP_RAIL_SECTION_SEPARATOR_CLASS = cn(
+  "shrink-0 self-center",
+  SIDE_STRIP_RAIL_HAIRLINE_CLASS,
+);
+export const SIDE_STRIP_RAIL_NEEDS_YOU_DOT_CLASS =
+  "-mb-1 size-1 shrink-0 self-center rounded-full bg-warning";
 /**
  * The collapsed Notifications tile's marks, both cut out of the strip's ground and
  * seated on the 16px glyph's top-right corner as a task tile's badge sits on

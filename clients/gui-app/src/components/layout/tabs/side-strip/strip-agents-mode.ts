@@ -32,3 +32,14 @@ export function useLiveAgentsInStrip(): boolean {
   const view = useArrangementValue("sideStripView");
   return liveAgentsInStrip(placement, collapsed, view);
 }
+
+/**
+ * Whether the strip draws the Activity view's sections: expanded as a list,
+ * collapsed as the rail's runs of tiles. The Layered view never does, and
+ * neither does a strip at the top.
+ */
+export function useSectionedStrip(): boolean {
+  const placement = useTabStripPlacement();
+  const view = useArrangementValue("sideStripView");
+  return liveAgentsInStrip(placement, false, view);
+}

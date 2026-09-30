@@ -1757,6 +1757,7 @@ describe("<SideTabStrip />", () => {
     });
 
     afterEach(() => {
+      vi.useRealTimers();
       coolAllEpics();
       __resetAgentActivityStoreForTests();
       __resetHostNotificationsStoreForTests();
@@ -1764,6 +1765,15 @@ describe("<SideTabStrip />", () => {
       indicatorState.value = { epics: {}, chats: {} };
       useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     });
+
+    /**
+     * Holds the clock still, so a request made "after the list appeared" is a
+     * fact of the test and not of the milliseconds it happened to run in.
+     */
+    function freezeClock(): void {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-06-01T12:00:00Z"));
+    }
 
     interface Prompt {
       readonly id: string;
@@ -2328,6 +2338,7 @@ describe("<SideTabStrip />", () => {
 
     it("announces a task arriving in Needs you once, and no other move", async () => {
       openSectionedTasks();
+      freezeClock();
       const releasePrompt = (id: string, minutesAgo: number) => ({
         id,
         epicId: "e-release",
@@ -2336,6 +2347,14 @@ describe("<SideTabStrip />", () => {
         taskTitle: "Release task",
         minutesAgo,
       });
+      const betaPrompt = {
+        id: "approval-beta",
+        epicId: "e-beta",
+        chatId: "c-beta",
+        agentTitle: "Beta agent",
+        taskTitle: "Beta",
+        minutesAgo: 0,
+      };
       seedPrompts([
         releasePrompt("approval-first", 7),
         releasePrompt("approval-second", 3),
@@ -2349,7 +2368,13 @@ describe("<SideTabStrip />", () => {
       expect(region.textContent).toBe("");
       const approval = { ...NO_FLAGS, pendingApproval: true };
 
-      // Beta, which was running, now waits on an approval.
+      // Beta, which was running, now asks for an approval, a minute on.
+      vi.setSystemTime(Date.now() + MINUTE_MS);
+      seedPrompts([
+        releasePrompt("approval-first", 8),
+        releasePrompt("approval-second", 4),
+        betaPrompt,
+      ]);
       act(() => {
         indicatorState.value = {
           epics: {
@@ -2387,13 +2412,63 @@ describe("<SideTabStrip />", () => {
 
       // Release task's oldest prompt is answered and it still waits on the
       // other: the same task, not an arrival.
-      seedPrompts([releasePrompt("approval-second", 3)]);
+      seedPrompts([releasePrompt("approval-second", 4), betaPrompt]);
       expect(
         screen.getByTestId("strip-needs-you-prompt").textContent,
       ).toContain("Release task");
       expect(region.textContent).toBe("Beta needs you");
       expect(spoken.takeRecords()).toEqual([]);
       spoken.disconnect();
+    });
+
+    it("announces only a task whose request was made after the list appeared, not one the stores were late to fill in", async () => {
+      openEpicTabs(["Alpha", "Gamma", "Zeta"]);
+      freezeClock();
+      const prompt = (epic: string, title: string, minutesAgo: number) => ({
+        id: `approval-${epic}`,
+        epicId: `e-${epic}`,
+        chatId: `c-${epic}`,
+        agentTitle: `${title} agent`,
+        taskTitle: title,
+        minutesAgo,
+      });
+      const approval = { ...NO_FLAGS, pendingApproval: true };
+      const waiting = (
+        epics: ReadonlyArray<string>,
+        activeEpic: string,
+      ): void => {
+        act(() => {
+          indicatorState.value = {
+            epics: Object.fromEntries(epics.map((epic) => [epic, approval])),
+            chats: {},
+          };
+          // The strip reads its indicators when it renders; a new active tab does.
+          useTabsStore.setState({
+            activeItemId: tabItemId({ kind: "epic", id: activeEpic }),
+          });
+        });
+      };
+      await renderStrip("/elsewhere", LEFT_STRIP);
+      const region = screen.getByTestId("strip-needs-you-announcement");
+      expect(region.textContent).toBe("");
+
+      // The host's state lands after the list appeared: the session says Gamma
+      // waits, then its notification arrives, made four minutes before the
+      // list did. The task was waiting already; it is not news.
+      waiting(["e-gamma"], "e-zeta");
+      seedPrompts([prompt("gamma", "Gamma", 4)]);
+      expect(header("needs-you").textContent).toBe("Needs you1");
+      expect(region.textContent).toBe("");
+
+      // A minute on, the session says Alpha waits: no request time yet, so
+      // nothing is said until its notification lands, made after the list
+      // appeared, and then it is.
+      vi.setSystemTime(Date.now() + MINUTE_MS);
+      waiting(["e-gamma", "e-alpha"], "e-alpha");
+      expect(header("needs-you").textContent).toBe("Needs you2");
+      expect(region.textContent).toBe("");
+      seedPrompts([prompt("gamma", "Gamma", 5), prompt("alpha", "Alpha", 0)]);
+      expect(region.textContent).toBe("Alpha needs you");
     });
 
     it("numbers the Alt-digit badges in the order the sections draw the tabs, and the digit opens that tab", async () => {
@@ -2466,6 +2541,132 @@ describe("<SideTabStrip />", () => {
       } finally {
         useKeybindingStore.setState({ bindings: getDefaultBindings() });
       }
+    });
+
+    describe("the collapsed rail", () => {
+      beforeEach(() => {
+        useSideTabStripStore.setState({ collapsed: true });
+      });
+
+      it("runs the tiles in the sections, a hairline between them and a dot over Needs you, and in the tab order in the Layered view", async () => {
+        openSectionedTasks();
+        await renderStrip("/elsewhere", LEFT_STRIP);
+
+        expect(listed()).toEqual([
+          "side-strip-rail-needs-you-dot",
+          "tab-epic-e-gamma",
+          "side-strip-rail-section-separator",
+          "tab-epic-e-delta",
+          "tab-epic-e-epsilon",
+          "side-strip-rail-section-separator",
+          "tab-epic-e-beta",
+          "side-strip-rail-section-separator",
+          "tab-epic-e-alpha",
+          "tab-epic-e-zeta",
+        ]);
+
+        act(() => {
+          setSideStripView("layered");
+        });
+
+        expect(listed()).toEqual([
+          "tab-epic-e-alpha",
+          "tab-epic-e-beta",
+          "tab-epic-e-gamma",
+          "tab-epic-e-delta",
+          "tab-epic-e-epsilon",
+          "tab-epic-e-zeta",
+        ]);
+      });
+
+      it("has the digit shortcut and next-tab follow the order the rail draws", async () => {
+        openEpicTabs(["Alpha", "Beta", "Gamma"]);
+        isWorking("e-beta", "c-beta");
+        useKeybindingStore.setState({
+          bindings: { ...getDefaultBindings(), "epic.next": "alt+j" },
+        });
+        try {
+          const router = buildRouter("/elsewhere", LEFT_STRIP, undefined);
+          render(
+            <KeybindingProvider router={router}>
+              <RouterProvider router={router} />
+            </KeybindingProvider>,
+          );
+          await screen.findByTestId("tab-epic-e-alpha");
+          // Beta is drawn first, under Working, then Alpha and Gamma under Idle.
+          fireEvent.keyDown(window, { code: "Digit1", key: "1", altKey: true });
+          await flushNav();
+          expect(router.state.location.pathname).toContain("e-beta");
+
+          fireEvent.keyDown(window, { code: "KeyJ", key: "j", altKey: true });
+          await flushNav();
+
+          expect(router.state.location.pathname).toContain("e-alpha");
+        } finally {
+          useKeybindingStore.setState({ bindings: getDefaultBindings() });
+        }
+      });
+
+      it("opens a card on a Needs you or To review tile with the row's second line and the wait, and on the others the card it always had", async () => {
+        openSectionedTasks();
+        seedPrompts([
+          {
+            id: "approval-gamma",
+            epicId: "e-gamma",
+            chatId: "c-gamma",
+            agentTitle: "Deploy agent",
+            taskTitle: "Gamma",
+            minutesAgo: 2,
+          },
+        ]);
+        await renderStrip("/elsewhere", LEFT_STRIP);
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const cardOf = (epic: string): HTMLElement => {
+          const tile = screen.getByTestId(`tab-epic-${epic}`);
+          fireEvent.pointerEnter(tile, { pointerType: "mouse" });
+          fireEvent.mouseEnter(tile);
+          act(() => {
+            vi.advanceTimersByTime(1000);
+          });
+          const card = document.querySelector<HTMLElement>(
+            '[data-slot="hover-card-content"]',
+          );
+          if (card === null) throw new Error(`no card opened for ${epic}`);
+          return card;
+        };
+        const secondLine = (card: HTMLElement): string | null =>
+          card.querySelector('[data-testid="side-tab-section-detail"]')
+            ?.textContent ?? null;
+        const close = (epic: string): void => {
+          const tile = screen.getByTestId(`tab-epic-${epic}`);
+          fireEvent.pointerLeave(tile, { pointerType: "mouse" });
+          fireEvent.mouseLeave(tile);
+          act(() => {
+            vi.advanceTimersByTime(1000);
+          });
+        };
+
+        const gamma = cardOf("e-gamma");
+        expect(gamma.textContent).toContain("Gamma");
+        expect(secondLine(gamma)).toBe("Approve · Deploy agent");
+        expect(
+          gamma.querySelector('[data-testid="side-tab-hover-card-time"]')
+            ?.textContent,
+        ).toBe("2m");
+        close("e-gamma");
+
+        expect(secondLine(cardOf("e-delta"))).toBe("Done · ready to review");
+        close("e-delta");
+        expect(secondLine(cardOf("e-epsilon"))).toBe("Failed");
+        close("e-epsilon");
+
+        // A Working task keeps the card it had: its state and counts.
+        const beta = cardOf("e-beta");
+        expect(secondLine(beta)).toBeNull();
+        expect(
+          beta.querySelector('[data-testid="side-tab-hover-card-state"]'),
+        ).not.toBeNull();
+      });
     });
 
     it("leaves the Layered view in the user's tab order, under its group headers and its Tasks label", async () => {

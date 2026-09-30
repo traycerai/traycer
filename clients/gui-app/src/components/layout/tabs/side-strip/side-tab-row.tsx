@@ -139,7 +139,10 @@ export interface SideTabRowProps {
   readonly agents: SideTabLiveAgents;
   /** Expanded: the one trailing status, or `null` for a row with none. */
   readonly status: SideTabRowStatus | null;
-  /** Expanded: the Activity view's section treatment, or `null` in the Layered view. */
+  /**
+   * The Activity view's section treatment, or `null` in the Layered view:
+   * expanded, the row's weight and second line; collapsed, an idle tile's dim.
+   */
   readonly section: SideRowSection | null;
   /** The chevron of a task with nested agents; `null` on every other row. */
   readonly disclosure: SideTabDisclosure | null;
@@ -393,7 +396,9 @@ function expandedFill(
 
 /**
  * The collapsed tile fills like an expanded row: the active fill, else a hover
- * fill. The colour lives on the monogram chip inside it.
+ * fill, and an idle task's tile in the Activity view dims to half until it is
+ * hovered or focused, so its focus ring is never faint. The colour lives on the
+ * monogram chip inside it.
  */
 function collapsedFill(props: SideTabRowProps): string {
   if (props.session === "active") {
@@ -403,6 +408,8 @@ function collapsedFill(props: SideTabRowProps): string {
   return cn(
     SIDE_TAB_TILE_HOVER_CLASS,
     "text-muted-foreground hover:text-foreground",
+    props.section?.title === "muted" &&
+      "opacity-50 hover:opacity-100 focus-visible:opacity-100",
   );
 }
 

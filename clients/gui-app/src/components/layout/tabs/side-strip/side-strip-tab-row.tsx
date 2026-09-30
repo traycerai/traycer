@@ -12,11 +12,17 @@ import {
 import { TabLeadingIcon } from "../tab-leading-icon";
 import type { StripTabItem, StripTabItemInput } from "../use-strip-tab-item";
 import { useLiveAgentsInStrip } from "./strip-agents-mode";
+import type { SideTabLiveAgents } from "./agent-meter";
 import { useSideTabLiveAgents } from "./side-tab-live-agents";
-import { railBadgeOf } from "./rail-badge-kind";
+import { railBadgeOf, type RailBadgeKind } from "./rail-badge-kind";
 import type { DropIndicator } from "./side-strip-item-input";
 import { SIDE_TAB_TITLE_INPUT_CLASS } from "./side-strip-tokens";
-import { sectionStyleOf, taskStatusOf } from "./strip-section-row";
+import { RailSectionCard } from "./strip-section-detail";
+import {
+  sectionStyleOf,
+  taskStatusOf,
+  twoLineRowOf,
+} from "./strip-section-row";
 import type { StripTaskRow } from "./strip-sections";
 import {
   stripAgentGroupId,
@@ -85,26 +91,14 @@ export function SideStripTabRow(props: {
       tabId={tab.id}
     />
   );
-  const fullCard =
-    tab.kind === "sample-workspace" ? (
-      // A mode, not a task: no agents, so no "Idle" (audit F2).
-      <div
-        data-testid="side-tab-hover-card-body"
-        className="flex flex-col gap-2"
-      >
-        <div className="text-ui-sm font-medium text-foreground">
-          {item.displayName}
-        </div>
-        <div className="text-muted-foreground">Sample workspace</div>
-      </div>
-    ) : (
-      <SideTabHoverCardBody
-        title={item.displayName}
-        epicId={epicId}
-        badge={badge}
-        agents={agents}
-      />
-    );
+  const fullCard = fullCardOf({
+    tab,
+    title: item.displayName,
+    variant: props.variant,
+    row,
+    badge,
+    agents,
+  });
   return (
     <StripTabContextMenu item={item} input={input}>
       <div className="contents">
@@ -205,6 +199,45 @@ export function SideStripTabRow(props: {
         />
       </div>
     </StripTabContextMenu>
+  );
+}
+
+/**
+ * The card body a row or tile opens when it is not showing the title alone. The
+ * Activity rail's tile has no second line of its own, so the card of a task
+ * that needs the person carries the one its row would.
+ */
+function fullCardOf(input: {
+  readonly tab: HeaderTab;
+  readonly title: string;
+  readonly variant: SideTabRowVariant;
+  readonly row: StripTaskRow | null;
+  readonly badge: RailBadgeKind | null;
+  readonly agents: SideTabLiveAgents;
+}): ReactNode {
+  const { tab, title } = input;
+  if (tab.kind === "sample-workspace") {
+    // A mode, not a task: no agents, so no "Idle" (audit F2).
+    return (
+      <div
+        data-testid="side-tab-hover-card-body"
+        className="flex flex-col gap-2"
+      >
+        <div className="text-ui-sm font-medium text-foreground">{title}</div>
+        <div className="text-muted-foreground">Sample workspace</div>
+      </div>
+    );
+  }
+  const railRow =
+    input.variant === "collapsed" ? twoLineRowOf(input.row) : null;
+  if (railRow !== null) return <RailSectionCard title={title} row={railRow} />;
+  return (
+    <SideTabHoverCardBody
+      title={title}
+      epicId={tab.kind === "epic" ? tab.epicId : null}
+      badge={input.badge}
+      agents={input.agents}
+    />
   );
 }
 

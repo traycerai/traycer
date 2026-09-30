@@ -31,6 +31,15 @@ export function sectionStyleOf(row: StripTaskRow): SideRowSection {
   }
 }
 
+/** The row when it is a two-line one (Needs you, To review), else `null`. */
+export function twoLineRowOf(
+  row: StripTaskRow | null,
+): NeedsYouRow | ToReviewRow | null {
+  return row?.section === "needs-you" || row?.section === "to-review"
+    ? row
+    : null;
+}
+
 /**
  * The trailing status of a two-line row: the time since the request or the
  * finish, after the pending fork's glyph when the task has one. It stays when
@@ -84,9 +93,10 @@ export function taskStatusOf(input: {
   readonly meterHidden: boolean;
 }): SideTabRowStatus | null {
   const { row, tabId, indicator } = input;
-  if (row?.section === "needs-you" || row?.section === "to-review") {
+  const twoLine = twoLineRowOf(row);
+  if (twoLine !== null) {
     return twoLineStatusOf(
-      row,
+      twoLine,
       indicator.pendingFork ? (
         <SideTabStatusGlyph
           tabId={tabId}

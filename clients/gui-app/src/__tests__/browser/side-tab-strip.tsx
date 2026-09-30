@@ -81,6 +81,9 @@ import "@/index.css";
  * the list, and `moveTask` puts one of them in another section as its state
  * changing would.
  *
+ * `&rail=1` collapses the strip to the rail, which in the sections scene runs
+ * the same tasks as tiles in the same sections.
+ *
  * `window.__sideTabStripProbe.ready` gates all of it.
  */
 
@@ -122,6 +125,7 @@ const SECTIONS_SCENE =
   new URLSearchParams(window.location.search).get("scene") === "sections";
 const LONG_LIST =
   new URLSearchParams(window.location.search).get("tasks") === "20";
+const RAIL = new URLSearchParams(window.location.search).get("rail") === "1";
 
 function seedScene(): void {
   if (!SECTIONS_SCENE) {
@@ -327,7 +331,7 @@ function buildRouter() {
 
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
 useSideTabStripStore.getState().resetWidth();
-useSideTabStripStore.getState().setCollapsed(false);
+useSideTabStripStore.getState().setCollapsed(RAIL);
 seedScene();
 
 const container = document.getElementById("root");
