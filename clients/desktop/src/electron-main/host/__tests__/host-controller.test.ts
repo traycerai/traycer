@@ -9723,6 +9723,30 @@ describe("restart with no launchd job to restart (packaged macOS, neither host l
         expect(spawnedRestarts()).toEqual([]);
       },
     );
+
+    it("still defers a parked update under desktop-activation-maintenance when the login-item status is not-found", async () => {
+      // A `not-found` leg now admits a real register cycle when activation is
+      // otherwise safe (covered in host-login-item.test.ts). It must not
+      // weaken the separate update-attempt admission: this parked update owns
+      // activation, so respawn cannot re-register whichever bytes happen to
+      // be on disk.
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("not-found");
+      writeNonterminalAttemptRecord({
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+      });
+
+      const outcome = await controller.respawn({ kind: "background" });
+
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: expect.stringContaining("no-job-attempt-1"),
+      });
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+      expect(spawnedRestarts()).toEqual([]);
+    });
   });
 
   describe("recoverIfDown", () => {
