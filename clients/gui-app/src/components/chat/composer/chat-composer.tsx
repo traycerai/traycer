@@ -1,4 +1,4 @@
-import { useReadingWidthClass } from "@/lib/layout-overrides";
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import {
   memo,
   useCallback,
@@ -304,7 +304,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     topSlot,
     getDraftBlobBridgeSupported,
   } = props;
-  const readingWidth = useReadingWidthClass();
+  const readingWidth = useReadingWidthStyle();
   const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
@@ -738,8 +738,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
             <div
               className={cn(
                 "pointer-events-auto mx-auto w-full bg-canvas pt-4",
-                readingWidth,
+                readingWidth.className,
               )}
+              style={{ maxWidth: readingWidth.maxWidth }}
             >
               {rateLimitPrompt.kind === "visible" ? (
                 <ProfileRateLimitSwitchBanner
@@ -780,9 +781,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
         <div
           className={cn(
             "pointer-events-auto relative mx-auto w-full bg-canvas pb-4 after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']",
-            readingWidth,
+            readingWidth.className,
             topSpacing === "normal" ? "pt-4" : "pt-0",
           )}
+          style={{ maxWidth: readingWidth.maxWidth }}
         >
           <ProfileDisabledRecovery
             eligibility={profileEligibility}

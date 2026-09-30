@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Cpu,
   Layers,
@@ -30,7 +30,12 @@ import {
 } from "@/components/layout-editor/regions/region-grammar";
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
+import {
+  DEFAULT_ARRANGEMENT,
+  WIDE_READING_WIDTH_MAX_PX,
+  WIDE_READING_WIDTH_MIN_PX,
+  WIDE_READING_WIDTH_STEP_PX,
+} from "@/lib/layout/layout-arrangement";
 import { SIDE_STRIP_DEFAULT_WIDTH_PX } from "@/components/layout/tabs/side-strip/side-strip-tokens";
 import {
   mobileFooterChanged,
@@ -45,6 +50,12 @@ import {
 } from "@/stores/layout/layout-store";
 import { effectiveLayoutValues } from "@/lib/layout/layout-presets";
 import { Switch } from "@/components/ui/switch";
+import {
+  Slider,
+  SliderRange,
+  SliderThumb,
+  SliderTrack,
+} from "@/components/ui/slider";
 import {
   isControlValueChanged,
   revertControlValue,
@@ -88,7 +99,14 @@ export function SurfaceLeadingRows(props: {
     );
   }
   if (props.surface === "sidebar") return <SidebarSideRow />;
-  if (props.surface === "chat") return <ReadingWidthRow />;
+  if (props.surface === "chat") {
+    return (
+      <>
+        <ReadingWidthRow />
+        <WideReadingWidthRow />
+      </>
+    );
+  }
   return null;
 }
 
@@ -313,6 +331,80 @@ export function ReadingWidthRow(): ReactNode {
             writeArrangementField("readingWidth", next);
           }}
         />
+      }
+    />
+  );
+}
+
+/**
+ * The wide column's own width, as a slider beneath the Reading width row -
+ * visible only while `readingWidth` is "wide" (the same conditional-row
+ * pattern `surface-section.tsx`'s `tabStripHosted` gate uses for the Display
+ * row: read the sibling value, drop the row where it has nothing to do). The
+ * floor matches today's fixed wide column, so the slider never reads
+ * narrower than "Wide" has always meant; the ceiling is generous, since
+ * `useReadingWidthStyle` viewport-clamps whatever is actually applied.
+ *
+ * `draftPx` is `null` whenever the thumb is at rest, so the slider reads the
+ * STORE value directly and always stays fresh against a revert, an undo, or
+ * another window. It is only ever non-null mid-drag, and `onValueCommit`
+ * writes the arrangement exactly once and clears it back to `null` - a whole
+ * drag is one recorded gesture (`writeArrangement`'s own invariant), so
+ * writing on every intermediate `onValueChange` would flood undo with one
+ * step per pixel.
+ */
+export function WideReadingWidthRow(): ReactNode {
+  const readingWidth = useLayoutStore(
+    (state) => state.arrangement.readingWidth,
+  );
+  const storedPx = useLayoutStore(
+    (state) => state.arrangement.wideReadingWidthPx,
+  );
+  const [draftPx, setDraftPx] = useState<number | null>(null);
+  const availability = useSettingsAvailabilityContext();
+  // Withheld wherever its parent row is: a slider under a missing row.
+  if (readingWidth !== "wide" || !READING_WIDTH_ROW.availableWhen(availability))
+    return null;
+  const px = draftPx ?? storedPx;
+  return (
+    <LayoutFormRow
+      anchor={null}
+      icon={null}
+      label="Wide column width"
+      description={`${px}px, clamped to the window width near its edge.`}
+      onRevert={
+        storedPx === DEFAULT_ARRANGEMENT.wideReadingWidthPx
+          ? null
+          : () => {
+              writeArrangementField(
+                "wideReadingWidthPx",
+                DEFAULT_ARRANGEMENT.wideReadingWidthPx,
+              );
+            }
+      }
+      revertLabel={`Reset wide column width to default: ${DEFAULT_ARRANGEMENT.wideReadingWidthPx}px`}
+      stacked
+      selected={false}
+      control={
+        <Slider
+          className="min-w-0 flex-1"
+          value={[px]}
+          min={WIDE_READING_WIDTH_MIN_PX}
+          max={WIDE_READING_WIDTH_MAX_PX}
+          step={WIDE_READING_WIDTH_STEP_PX}
+          onValueChange={(next) => {
+            setDraftPx(next[0]);
+          }}
+          onValueCommit={(next) => {
+            writeArrangementField("wideReadingWidthPx", next[0]);
+            setDraftPx(null);
+          }}
+        >
+          <SliderTrack size="default">
+            <SliderRange />
+          </SliderTrack>
+          <SliderThumb size="default" aria-label="Wide column width" />
+        </Slider>
       }
     />
   );

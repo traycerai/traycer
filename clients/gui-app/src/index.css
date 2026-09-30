@@ -955,9 +955,14 @@
  * Wide panes and modals may intentionally give markdown room for tables,
  * diagrams, and code. Cap only prose-bearing blocks so plain paragraphs do not
  * stretch into uncomfortable 4K line lengths while wide media remains usable.
+ *
+ * Inside a reading-width column (`useReadingWidthStyle`) the column IS the
+ * measure - the user picked it - so that column sets `--md-block-measure`
+ * to `none` and this guard stands down. Left at 72ch there, it silently
+ * overrode Wide: the column grew and every paragraph stayed at 72ch.
  */
 .md-prose :where(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
-  max-width: 72ch;
+  max-width: var(--md-block-measure, 72ch);
 }
 
 /*

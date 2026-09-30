@@ -59,6 +59,12 @@ const REASONING_CONTROL_EXAMPLES: ReadonlyArray<StyleExample<"model">> = [
   { id: "list", label: "List", patch: { reasoningControl: "list" } },
 ];
 
+/** Flat first: it is the shipped default (L-88 overturned). */
+const TOOLBAR_STYLE_EXAMPLES: ReadonlyArray<StyleExample<"model">> = [
+  { id: "flat", label: "Flat", patch: { toolbarStyle: "flat" } },
+  { id: "bordered", label: "Bordered", patch: { toolbarStyle: "bordered" } },
+];
+
 export const RUNNING_AGENTS_REGION: LayoutRegion<"runningAgents"> = {
   id: "runningAgents",
   name: "Running agents",
@@ -161,6 +167,15 @@ export const MODEL_REGION: LayoutRegion<"model"> = {
       key: "reasoningControl",
       label: "Reasoning control",
       examples: REASONING_CONTROL_EXAMPLES,
+    },
+    // The whole toolbar row's chrome (attach, access, model, mic), not just
+    // the model chip - it sits on Model because Model is the one toolbar
+    // region that never hides (G6), so this row is always reachable.
+    {
+      kind: "style",
+      key: "toolbarStyle",
+      label: "Toolbar style",
+      examples: TOOLBAR_STYLE_EXAMPLES,
     },
     TOOLBAR_RIGHT_ORDER_ROW,
   ],

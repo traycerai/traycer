@@ -68,6 +68,8 @@ import {
   type LayoutChange,
 } from "@/lib/layout/layout-diff";
 import {
+  asBarRegionId,
+  barPlacement,
   DEFAULT_ARRANGEMENT,
   type LayoutArrangement,
   type OrderGroupId,
@@ -399,6 +401,7 @@ function DetailRowView(props: {
 }): ReactNode {
   const { row, regionId, values, snapshot } = props;
   const arrangement = snapshot.arrangement;
+  const narrow = useIsMobileViewport();
   switch (row.kind) {
     case "position-host":
       return (
@@ -429,21 +432,48 @@ function DetailRowView(props: {
           arrangement={arrangement}
         />
       );
-    case "fine-tune":
+    case "fine-tune": {
+      // The Display row (icon-only) only means something in the Tab strip
+      // (F6): the Status bar has the room for the full reading, so a Status
+      // bar region drops the row rather than showing it with nothing to do.
+      const rows = tabStripHosted(regionId, arrangement, narrow)
+        ? row.rows
+        : row.rows.filter((detail) => detail.id !== "display");
       return (
         <FineTuneRows
-          rows={row.rows}
+          rows={rows}
           regionId={regionId}
           regionValues={values[regionId]}
           regionHidden={regionValuesHidden(values[regionId])}
         />
       );
+    }
     case "position-order":
     case "children":
       return null;
     default:
       return assertNever(row);
   }
+}
+
+/**
+ * Whether this region's reading is placed in the Tab strip right now - the
+ * one Location the Display row (icon-only) does anything for (F6). Neither a
+ * bar region nor placed there: the row is dropped by `DetailRowView` above.
+ * Never on a narrow viewport, whose one bar is the footer (L-162) and whose
+ * header draws every reading as its glyph anyway.
+ */
+function tabStripHosted(
+  regionId: RegionId,
+  arrangement: LayoutArrangement,
+  narrow: boolean,
+): boolean {
+  const barRegion = asBarRegionId(regionId);
+  return (
+    !narrow &&
+    barRegion !== null &&
+    barPlacement(arrangement, barRegion).host === "header"
+  );
 }
 
 /** The grammar row kinds a row's disclosure draws. */

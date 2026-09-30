@@ -64,6 +64,22 @@ export type TaskTabLayout = "scroll" | "shrink";
 export type ReadingWidth = "comfortable" | "wide";
 
 /**
+ * `wide`'s own floor: today's fixed wide column (`max-w-5xl`), so the slider
+ * never reads narrower than what picking "Wide" has always meant.
+ */
+export const WIDE_READING_WIDTH_MIN_PX = 1024;
+
+/**
+ * The slider's own ceiling - generously past any real monitor, so in practice
+ * a user hits the VIEWPORT clamp (`useReadingWidthStyle`) before this. It only
+ * bounds the control itself, never what actually renders.
+ */
+export const WIDE_READING_WIDTH_MAX_PX = 3000;
+
+/** A "how much of the window" control: coarse steps, not fine precision. */
+export const WIDE_READING_WIDTH_STEP_PX = 16;
+
+/**
  * The two regions that name a bar AND an end of it, each for itself (L-156).
  *
  * In this order, which is the order a cluster holding both draws them: usage
@@ -237,6 +253,14 @@ export interface LayoutArrangement {
    * much chrome someone wants, so a density switch must leave it alone.
    */
   readonly readingWidth: ReadingWidth;
+  /**
+   * How wide the `wide` column reads, in px - meaningful only while
+   * `readingWidth` is `"wide"`. Defaults to today's fixed wide column, so
+   * picking "Wide" with the slider untouched changes nothing visually.
+   * `useReadingWidthStyle` still viewport-clamps it, so this is a ceiling the
+   * user is choosing, not a guaranteed rendered width.
+   */
+  readonly wideReadingWidthPx: number;
 }
 
 /** Every provider that reports account rate limits, in the strip's own order. */
@@ -349,6 +373,7 @@ export const DEFAULT_ARRANGEMENT: LayoutArrangement = {
   sideStripView: "layered",
   taskTabLayout: "scroll",
   readingWidth: "comfortable",
+  wideReadingWidthPx: WIDE_READING_WIDTH_MIN_PX,
 };
 
 /** What a provider draws until told otherwise: its tightest limit, and only that. */
