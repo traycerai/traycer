@@ -40,11 +40,19 @@ import {
   type TranscriptFoldState,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection-fold-state";
 import {
+  CURRENT_ROW_FOLD_BUILD,
   RowFoldStore,
   type ApplyResult,
+  type RowFoldBuild,
   type RowFoldChangeInput,
 } from "./support/row-fold-store";
 import { legacyProjectTranscriptRows } from "./support/legacy-row-projection-oracle";
+import {
+  foldTranscriptRows as v141FoldTranscriptRows,
+  foldTranscriptRowsInMemory as v141FoldTranscriptRowsInMemory,
+} from "./support/v1-4-1-row-projection";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 /**
  * Seeded, deterministic parity fuzz between the incremental fold
@@ -2868,6 +2876,403 @@ describe("mechanism tests on a large chat", () => {
 });
 
 // ---------------------------------------------------------------------------
+// h. A span of attempts after one user record: guards the fix that stops
+//    re-handling a span's turns once it already marks (2+ attempts), and caps
+//    the persisted `spanKeysBefore` at its first two keys.
+// ---------------------------------------------------------------------------
+
+/**
+ * One attempt turn: its own `turnId`, a single text block, `turnProfile`
+ * mostly false (the fix's target - an unrecorded turn is one whose marking
+ * matters) with a few true mixed in via `recorded`.
+ */
+function attemptMessage(
+  id: string,
+  turnId: string,
+  ts: number,
+  recorded: boolean,
+): Message {
+  return assistantMessage(id, turnId, ts, [textBlock(ts)], {
+    turnProfile: recorded,
+    startedAt: ts,
+  });
+}
+
+describe("h. a span of attempts after one user record", () => {
+  it("N attempts after one user record: 40 attempts, one appended per change", () => {
+    const store = new RowFoldStore("chat-span-1");
+    applyStep(
+      store,
+      {
+        upserts: [userMessage("u1", 1000, null)],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "seed user",
+    );
+    for (let i = 1; i <= 40; i += 1) {
+      const recorded = i % 7 === 0;
+      applyStep(
+        store,
+        {
+          upserts: [attemptMessage(`a${i}`, `t${i}`, 1000 + i, recorded)],
+          removes: [],
+          events: [],
+          activeTurnId: null,
+        },
+        { mayDecline: false },
+        `attempt ${i}`,
+      );
+    }
+  });
+
+  it("the 1->2 transition across the region boundary", () => {
+    const store = new RowFoldStore("chat-span-2");
+    applyStep(
+      store,
+      {
+        upserts: [userMessage("u1", 1000, anchor("p1"))],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "seed user",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [attemptMessage("a-a", "t-a", 1001, false)],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "the span's sole attempt A",
+    );
+    for (let i = 1; i <= 10; i += 1) {
+      const ts = 1002 + i;
+      const turnId = `t-auto-${i}`;
+      applyStep(
+        store,
+        {
+          upserts: [
+            assistantMessage(
+              `a-auto-${i}`,
+              turnId,
+              ts,
+              [autonomousResumeBlock(ts), textBlock(ts)],
+              { turnProfile: false, startedAt: ts },
+            ),
+          ],
+          removes: [],
+          events: [],
+          activeTurnId: null,
+        },
+        { mayDecline: false },
+        `autonomous turn ${i}`,
+      );
+    }
+    applyStep(
+      store,
+      {
+        upserts: [attemptMessage("a-b", "t-b", 1200, false)],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "attempt B: the span now marks (A, B)",
+    );
+    for (let i = 1; i <= 3; i += 1) {
+      applyStep(
+        store,
+        {
+          upserts: [attemptMessage(`a-c${i}`, `t-c${i}`, 1201 + i, i === 2)],
+          removes: [],
+          events: [],
+          activeTurnId: null,
+        },
+        { mayDecline: false },
+        `attempt after the transition ${i}`,
+      );
+    }
+  });
+
+  it("a late record of an early attempt's turn", () => {
+    const store = new RowFoldStore("chat-span-3");
+    applyStep(
+      store,
+      {
+        upserts: [userMessage("u1", 1000, null)],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "seed user",
+    );
+    for (let i = 1; i <= 30; i += 1) {
+      applyStep(
+        store,
+        {
+          upserts: [attemptMessage(`a${i}`, `t${i}`, 1000 + i, i % 7 === 0)],
+          removes: [],
+          events: [],
+          activeTurnId: null,
+        },
+        { mayDecline: false },
+        `attempt ${i}`,
+      );
+    }
+    // Attempt #2's turn (t2) gets a new record, its own messageId, same turnKey.
+    applyStep(
+      store,
+      {
+        upserts: [attemptMessage("a2-late", "t2", 2000, false)],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "a late record of attempt #2's turn",
+    );
+    for (let i = 31; i <= 32; i += 1) {
+      applyStep(
+        store,
+        {
+          upserts: [attemptMessage(`a${i}`, `t${i}`, 2001 + i, false)],
+          removes: [],
+          events: [],
+          activeTurnId: null,
+        },
+        { mayDecline: false },
+        `attempt after the late record ${i}`,
+      );
+    }
+  });
+
+  it("a removal inside the span", () => {
+    const store = new RowFoldStore("chat-span-4");
+    applyStep(
+      store,
+      {
+        upserts: [userMessage("u1", 1000, null)],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "seed user",
+    );
+    for (let i = 1; i <= 30; i += 1) {
+      applyStep(
+        store,
+        {
+          upserts: [attemptMessage(`a${i}`, `t${i}`, 1000 + i, i % 7 === 0)],
+          removes: [],
+          events: [],
+          activeTurnId: null,
+        },
+        { mayDecline: false },
+        `attempt ${i}`,
+      );
+    }
+    // An early attempt, before the region: a3.
+    applyStep(
+      store,
+      { upserts: [], removes: ["a3"], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "remove an early attempt's record",
+    );
+    // One of the last two attempts, inside the region: a30.
+    applyStep(
+      store,
+      { upserts: [], removes: ["a30"], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "remove one of the last two attempts",
+    );
+    for (let i = 31; i <= 32; i += 1) {
+      applyStep(
+        store,
+        {
+          upserts: [attemptMessage(`a${i}`, `t${i}`, 2000 + i, false)],
+          removes: [],
+          events: [],
+          activeTurnId: null,
+        },
+        { mayDecline: false },
+        `attempt after the removals ${i}`,
+      );
+    }
+  });
+
+  it("a removal inside a two-attempt span drops its mark", () => {
+    const store = new RowFoldStore("chat-span-5");
+    applyStep(
+      store,
+      {
+        upserts: [userMessage("u1", 1000, anchor("p1"))],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "seed user",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [attemptMessage("a1", "t1", 1001, false)],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "attempt A1",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [attemptMessage("a2", "t2", 1002, false)],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "attempt A2: the span now marks (A1, A2)",
+    );
+    for (let i = 1; i <= 10; i += 1) {
+      const ts = 1002 + i;
+      const turnId = `t-auto-${i}`;
+      applyStep(
+        store,
+        {
+          upserts: [
+            assistantMessage(
+              `a-auto-${i}`,
+              turnId,
+              ts,
+              [autonomousResumeBlock(ts), textBlock(ts)],
+              { turnProfile: false, startedAt: ts },
+            ),
+          ],
+          removes: [],
+          events: [],
+          activeTurnId: null,
+        },
+        { mayDecline: false },
+        `autonomous turn ${i}: the region seats past A1 and A2`,
+      );
+    }
+    applyStep(
+      store,
+      { upserts: [], removes: ["a2"], events: [], activeTurnId: null },
+      { mayDecline: false },
+      "remove A2: A1's span drops to one attempt, losing its mark",
+    );
+    applyStep(
+      store,
+      {
+        upserts: [attemptMessage("a3", "t3", 2100, false)],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      },
+      { mayDecline: false },
+      "one more ordinary attempt",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mechanism: a span of attempts after one user record costs the same per
+// append whatever its length - the defect this fix removes.
+// ---------------------------------------------------------------------------
+
+describe("mechanism: a span of attempts after one user record costs the same per append whatever its length", () => {
+  /**
+   * Seeds through raw `store.apply`, unchecked per step (see
+   * `buildLargeChat`'s own note): one user record, then `n` attempts
+   * (`turnProfile: false`, the unrecorded shape the fix targets), one change
+   * each.
+   */
+  function buildSpanChat(n: number): RowFoldStore {
+    const store = new RowFoldStore(`chat-span-mech-${String(n)}`);
+    const userResult = store.apply({
+      upserts: [userMessage("u1", 1000, null)],
+      removes: [],
+      events: [],
+      activeTurnId: null,
+    });
+    expect(userResult.continued, "seed user").toBe(true);
+    for (let i = 1; i <= n; i += 1) {
+      const result = store.apply({
+        upserts: [attemptMessage(`a${i}`, `t${i}`, 1000 + i, false)],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      });
+      expect(result.continued, `seed attempt ${String(i)}`).toBe(true);
+    }
+    return store;
+  }
+
+  function appendOneMoreAttempt(store: RowFoldStore, n: number): ApplyResult {
+    return store.apply({
+      upserts: [attemptMessage(`a${n + 1}`, `t${n + 1}`, 2000 + n, false)],
+      removes: [],
+      events: [],
+      activeTurnId: null,
+    });
+  }
+
+  it.each([10, 1000])(
+    "N=%i: one more attempt sums <= 16 loaded rows and touches <= 2 units",
+    (n) => {
+      const store = buildSpanChat(n);
+      const result = appendOneMoreAttempt(store, n);
+      expect(result.continued, "the append itself").toBe(true);
+      const loadSum = result.loads.reduce(
+        (sum, load) => sum + load.resultCount,
+        0,
+      );
+      expect(
+        loadSum,
+        `N=${String(n)}: loads were ${JSON.stringify(result.loads)}`,
+      ).toBeLessThanOrEqual(16);
+      expect(
+        result.touchedUnitKeys.length,
+        `N=${String(n)}: touched ${JSON.stringify(result.touchedUnitKeys)}`,
+      ).toBeLessThanOrEqual(2);
+    },
+    30_000,
+  );
+
+  it("full parity holds on the N=1000 store after the extra attempt", () => {
+    const store = buildSpanChat(1000);
+    const result = appendOneMoreAttempt(store, 1000);
+    expect(result.continued).toBe(true);
+    assertRowParity(store, "N=1000 span, one more attempt");
+  });
+
+  it("the persisted state length at N=1000 is within 64 bytes of N=10's", () => {
+    const small = buildSpanChat(10);
+    expect(appendOneMoreAttempt(small, 10).continued).toBe(true);
+    const large = buildSpanChat(1000);
+    expect(appendOneMoreAttempt(large, 1000).continued).toBe(true);
+    const smallLength = small.stateJson().length;
+    const largeLength = large.stateJson().length;
+    expect(
+      largeLength,
+      `small state length ${String(smallLength)}, large ${String(largeLength)}`,
+    ).toBeLessThanOrEqual(smallLength + 64);
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
 // g. Long agent chats: crosses MAX_TURNS_AFTER_LAST_USER (8) and
 //    MAX_TURNS_AFTER_OPEN_TURN (32); an open turn gains a record after the
 //    region moved past it; then an edit of the old user record.
@@ -2989,5 +3394,337 @@ describe("f. batches: one change carries several touches at once", () => {
       activeTurnId: null,
     };
     applyStep(store, batch, { mayDecline: false }, "batched change");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// i. Mixed builds: a fold state the other build wrote.
+//
+// `__tests__/support/v1-4-1-row-projection.ts` is a byte-for-byte copy of the
+// v1.4.1-pinned `row-projection.ts`, from OSS commit `bbb637ca1`, path
+// `protocol/src/persistence/chat-transcript/row-projection.ts`, sha256
+// `2f8677e0eeeaa4220934dbbf6edee7c58aeadf73df612456e853bbb45b4acf43`, git blob
+// `6a8dc786`. It exports the OLD, uncapped `foldTranscriptRows` /
+// `foldTranscriptRowsInMemory` under the CURRENT `row-projection-fold-state.ts`
+// types (that module's shape did not change), so a `RowFoldStore` can fold one
+// chat across a build boundary: a state the live build wrote, continued by the
+// old reader, and the reverse.
+// ---------------------------------------------------------------------------
+
+const V1_4_1_PINNED_SOURCE_SHA256 =
+  "2f8677e0eeeaa4220934dbbf6edee7c58aeadf73df612456e853bbb45b4acf43";
+
+const V1_4_1_ROW_FOLD_BUILD: RowFoldBuild = {
+  name: "v1.4.1",
+  fold: v141FoldTranscriptRows,
+  foldInMemory: v141FoldTranscriptRowsInMemory,
+};
+
+interface MixedScenarioStep {
+  readonly change: RowFoldChangeInput;
+  readonly label: string;
+}
+
+/**
+ * ONE deterministic chat, fixed ids/turnIds/timestamps throughout (only block
+ * ids come from `freshId`, via the block builders): one user record and a
+ * span of 12 attempts (2 recorded), 10 autonomous turns, 3 more attempts, a
+ * second user record, a 1->2 span transition across the region boundary, a
+ * third user record with a two-attempt span whose second attempt is later
+ * removed, and a late record that widens the walk.
+ */
+function mixedScenarioSteps(): readonly MixedScenarioStep[] {
+  const steps: MixedScenarioStep[] = [];
+  let ts = 1000;
+  const upsert = (message: Message, label: string): void => {
+    steps.push({
+      change: {
+        upserts: [message],
+        removes: [],
+        events: [],
+        activeTurnId: null,
+      },
+      label,
+    });
+  };
+  const remove = (messageId: string, label: string): void => {
+    steps.push({
+      change: {
+        upserts: [],
+        removes: [messageId],
+        events: [],
+        activeTurnId: null,
+      },
+      label,
+    });
+  };
+  const autonomousTurn = (id: string, turnId: string, label: string): void => {
+    ts += 1;
+    upsert(
+      assistantMessage(
+        id,
+        turnId,
+        ts,
+        [autonomousResumeBlock(ts), textBlock(ts)],
+        { turnProfile: false, startedAt: ts },
+      ),
+      label,
+    );
+  };
+
+  // 1. U1.
+  ts += 1;
+  upsert(userMessage("mx-u1", ts, anchor("p1")), "U1");
+
+  // 2. A1..A12, turnProfile true on A5 and A10 only.
+  for (let i = 1; i <= 12; i += 1) {
+    ts += 1;
+    upsert(
+      attemptMessage(
+        `mx-a${String(i)}`,
+        `mx-t-a${String(i)}`,
+        ts,
+        i === 5 || i === 10,
+      ),
+      `A${String(i)}`,
+    );
+  }
+
+  // 3. 10 autonomous turns.
+  for (let i = 1; i <= 10; i += 1) {
+    autonomousTurn(
+      `mx-auto${String(i)}`,
+      `mx-t-auto${String(i)}`,
+      `autonomous ${String(i)}`,
+    );
+  }
+
+  // 4. A13..A15.
+  for (let i = 13; i <= 15; i += 1) {
+    ts += 1;
+    upsert(
+      attemptMessage(`mx-a${String(i)}`, `mx-t-a${String(i)}`, ts, false),
+      `A${String(i)}`,
+    );
+  }
+
+  // 5. U2.
+  ts += 1;
+  upsert(userMessage("mx-u2", ts, anchor("p2")), "U2");
+
+  // 6. B1 alone, 10 autonomous turns, B2, B3: the 1->2 transition.
+  ts += 1;
+  upsert(
+    attemptMessage("mx-b1", "mx-t-b1", ts, false),
+    "B1: the span's sole attempt",
+  );
+  for (let i = 1; i <= 10; i += 1) {
+    autonomousTurn(
+      `mx-bauto${String(i)}`,
+      `mx-t-bauto${String(i)}`,
+      `B-autonomous ${String(i)}`,
+    );
+  }
+  ts += 1;
+  upsert(
+    attemptMessage("mx-b2", "mx-t-b2", ts, false),
+    "B2: the span now marks (B1, B2)",
+  );
+  ts += 1;
+  upsert(attemptMessage("mx-b3", "mx-t-b3", ts, false), "B3");
+
+  // 7. U3, a span of exactly two (C1, C2), 10 autonomous turns, remove C2, C3.
+  ts += 1;
+  upsert(userMessage("mx-u3", ts, anchor("p3")), "U3");
+  ts += 1;
+  upsert(attemptMessage("mx-c1", "mx-t-c1", ts, false), "C1");
+  ts += 1;
+  upsert(
+    attemptMessage("mx-c2", "mx-t-c2", ts, false),
+    "C2: the span now marks (C1, C2)",
+  );
+  for (let i = 1; i <= 10; i += 1) {
+    autonomousTurn(
+      `mx-cauto${String(i)}`,
+      `mx-t-cauto${String(i)}`,
+      `C-autonomous ${String(i)}`,
+    );
+  }
+  remove("mx-c2", "remove C2: C1's span drops to one attempt");
+  ts += 1;
+  upsert(attemptMessage("mx-c3", "mx-t-c3", ts, false), "C3");
+
+  // 8. A late record of A2's turn (same turnKey, new messageId): widens. D1, D2.
+  ts += 1;
+  upsert(
+    attemptMessage("mx-a2-late", "mx-t-a2", ts, false),
+    "a late record of A2's turn",
+  );
+  ts += 1;
+  upsert(attemptMessage("mx-d1", "mx-t-d1", ts, false), "D1");
+  ts += 1;
+  upsert(attemptMessage("mx-d2", "mx-t-d2", ts, false), "D2");
+
+  return steps;
+}
+
+function applyStepRange(
+  store: RowFoldStore,
+  build: RowFoldBuild,
+  steps: readonly MixedScenarioStep[],
+  from: number,
+  through: number,
+  context: string,
+): void {
+  for (let index = from; index < through; index += 1) {
+    const step = steps[index];
+    if (step === undefined)
+      throw new Error("mixed scenario: step index out of range");
+    const label = `${context}: ${step.label} (step ${String(index + 1)}, build ${build.name})`;
+    const result = store.applyWith(build, step.change);
+    expect(result.continued, label).toBe(true);
+    assertRowParity(store, label);
+  }
+}
+
+/**
+ * Builds one chat solely with `build`, the region's `spanKeysBefore.length`
+ * snapshotted after every step - the witness data for the capped-vs-uncapped
+ * comparison in (a).
+ */
+function spanKeysBeforeLengths(
+  build: RowFoldBuild,
+  steps: readonly MixedScenarioStep[],
+): readonly number[] {
+  const store = new RowFoldStore(`chat-mixed-probe-${build.name}`);
+  const lengths: number[] = [];
+  for (const step of steps) {
+    const result = store.applyWith(build, step.change);
+    expect(result.continued, `probe (${build.name}): ${step.label}`).toBe(true);
+    const state = JSON.parse(store.stateJson()) as TranscriptFoldState;
+    lengths.push(state.region.spanKeysBefore.length);
+  }
+  return lengths;
+}
+
+describe("i. mixed builds: a fold state the other build wrote", () => {
+  it("the pinned v1.4.1 copy's bytes match the recorded sha256", () => {
+    const path = new URL("./support/v1-4-1-row-projection.ts", import.meta.url);
+    const bytes = readFileSync(path);
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    expect(digest).toBe(V1_4_1_PINNED_SOURCE_SHA256);
+  });
+
+  it("(a) a state this build wrote, continued by the v1.4.1 reader", () => {
+    const steps = mixedScenarioSteps();
+    const v141OnlyLengths = spanKeysBeforeLengths(V1_4_1_ROW_FOLD_BUILD, steps);
+
+    let coveredCutPoints = 0;
+    let witness: {
+      readonly cut: number;
+      readonly cappedLength: number;
+      readonly uncappedLength: number;
+    } | null = null;
+    for (let cut = 1; cut < steps.length; cut += 1) {
+      const store = new RowFoldStore(`chat-mixed-a-${String(cut)}`);
+      applyStepRange(
+        store,
+        CURRENT_ROW_FOLD_BUILD,
+        steps,
+        0,
+        cut,
+        `cut=${String(cut)}`,
+      );
+      const cutState = JSON.parse(store.stateJson()) as TranscriptFoldState;
+      const cappedLength = cutState.region.spanKeysBefore.length;
+      applyStepRange(
+        store,
+        V1_4_1_ROW_FOLD_BUILD,
+        steps,
+        cut,
+        steps.length,
+        `cut=${String(cut)}`,
+      );
+      coveredCutPoints += 1;
+      const uncappedLength = v141OnlyLengths[cut - 1];
+      if (
+        witness === null &&
+        cappedLength === 2 &&
+        uncappedLength !== undefined &&
+        uncappedLength > 2
+      ) {
+        witness = { cut, cappedLength, uncappedLength };
+      }
+    }
+    expect(coveredCutPoints).toBe(steps.length - 1);
+    expect(
+      witness,
+      `no cut point witnessed a capped list; v1.4.1-only spanKeysBefore lengths per step were ${JSON.stringify(v141OnlyLengths)}`,
+    ).not.toBeNull();
+  });
+
+  it("(b) a state the v1.4.1 build wrote, continued by this build", () => {
+    const steps = mixedScenarioSteps();
+    let coveredCutPoints = 0;
+    for (let cut = 1; cut < steps.length; cut += 1) {
+      const store = new RowFoldStore(`chat-mixed-b-${String(cut)}`);
+      applyStepRange(
+        store,
+        V1_4_1_ROW_FOLD_BUILD,
+        steps,
+        0,
+        cut,
+        `cut=${String(cut)}`,
+      );
+      applyStepRange(
+        store,
+        CURRENT_ROW_FOLD_BUILD,
+        steps,
+        cut,
+        steps.length,
+        `cut=${String(cut)}`,
+      );
+      coveredCutPoints += 1;
+    }
+    expect(coveredCutPoints).toBe(steps.length - 1);
+  });
+
+  it("(c) new, old, new over one chat", () => {
+    const steps = mixedScenarioSteps();
+    const alternating = new RowFoldStore("chat-mixed-c-alternating");
+    const newOnly = new RowFoldStore("chat-mixed-c-new-only");
+    const oldOnly = new RowFoldStore("chat-mixed-c-old-only");
+
+    steps.forEach((step, index) => {
+      const stepNumber = index + 1;
+      const label = `${step.label} (step ${String(stepNumber)})`;
+      const alternatingBuild =
+        stepNumber % 2 === 1 ? CURRENT_ROW_FOLD_BUILD : V1_4_1_ROW_FOLD_BUILD;
+
+      const altResult = alternating.applyWith(alternatingBuild, step.change);
+      expect(altResult.continued, `alternating: ${label}`).toBe(true);
+      assertRowParity(alternating, `alternating: ${label}`);
+
+      const newResult = newOnly.applyWith(CURRENT_ROW_FOLD_BUILD, step.change);
+      expect(newResult.continued, `new-only: ${label}`).toBe(true);
+
+      const oldResult = oldOnly.applyWith(V1_4_1_ROW_FOLD_BUILD, step.change);
+      expect(oldResult.continued, `old-only: ${label}`).toBe(true);
+
+      expect(alternating.rowsSorted(), `rows vs new-only: ${label}`).toEqual(
+        newOnly.rowsSorted(),
+      );
+      expect(alternating.rowsSorted(), `rows vs old-only: ${label}`).toEqual(
+        oldOnly.rowsSorted(),
+      );
+      expect(
+        alternating.skeletonSorted(),
+        `skeleton vs new-only: ${label}`,
+      ).toEqual(newOnly.skeletonSorted());
+      expect(
+        alternating.skeletonSorted(),
+        `skeleton vs old-only: ${label}`,
+      ).toEqual(oldOnly.skeletonSorted());
+    });
   });
 });
