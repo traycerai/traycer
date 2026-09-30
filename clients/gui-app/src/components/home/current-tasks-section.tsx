@@ -8,7 +8,9 @@ import {
   useRef,
   useState,
 } from "react";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import {
+  canEditHistoryItemTitle,
   historyRowTimeLabel,
   type HistoryItem,
 } from "@/components/home/data/home-page.data";
@@ -16,8 +18,19 @@ import { HistoryTaskRow } from "@/components/epics/history-task-row";
 import { historyItemDisplayTitle } from "@/components/epics/history-item-title";
 import { EpicsListLoading } from "@/components/epics/epics-list-shared";
 import { useHistoryOpenItem } from "@/components/epics/use-history-open-item";
+import {
+  useHistoryOpenInNewWindowFlow,
+  type HistoryNewWindowFlow,
+} from "@/components/epics/use-history-open-in-new-window";
+import {
+  HistoryOpenInBackgroundMenuItem,
+  HistoryOpenInNewWindowMenuItem,
+} from "@/components/epics/history-row-open-menu-items";
+import { openHistoryItemInBackground } from "@/components/epics/open-history-item-in-background";
+import { UnsyncedEpicMoveDialog } from "@/components/layout/dialogs/unsynced-epic-move-dialog";
 import { PARTIAL_ACTIVITY_NOTICE } from "@/components/notifications/notification-indicator-icon";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import { HistoryTaskOrganizationMenu } from "@/components/organization/task-organization-menu";
 import { Kbd } from "@/components/ui/kbd";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -27,11 +40,19 @@ import {
 } from "@/hooks/epic/use-epic-set-pinned-mutation";
 import { useCurrentTasks } from "@/hooks/home/use-current-tasks";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import { useTaskWorktreeMetadata } from "@/hooks/worktree/use-task-worktree-metadata-query";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 const GROUP_PREVIEW_COUNT = 5;
+const EMPTY_WORKTREES: readonly WorktreeHostEntryV12[] = [];
 const ROW_SELECTOR = "[data-current-task-id]";
 const MORE_CLASS_NAME =
   "mt-2 ml-1 self-start rounded-sm bg-foreground/6 px-2.5 py-1.25 text-ui-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground active:press-scrim focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2";
@@ -68,6 +89,16 @@ export function CurrentTasksSection(): ReactNode {
     chatIds: [],
     enabled: epicIds.length > 0,
   });
+  // The same worktree read History makes, so a row can show its task's PRs.
+  const { worktreesByEpicId } = useTaskWorktreeMetadata(epicIds);
+  const newWindowFlow = useHistoryOpenInNewWindowFlow();
+  const groupRowProps = {
+    onRowKeyDown,
+    onSetPinned,
+    pendingPinIds,
+    worktreesByEpicId,
+    newWindowFlow,
+  };
   const isEmpty = epicIds.length === 0;
   const confirmedEmpty =
     isEmpty && !isPending && pinsComplete && activityCoverage === "fleet";
@@ -124,9 +155,7 @@ export function CurrentTasksSection(): ReactNode {
                 <CurrentTaskGroup
                   title="In progress"
                   items={groups.inProgress}
-                  onRowKeyDown={onRowKeyDown}
-                  onSetPinned={onSetPinned}
-                  pendingPinIds={pendingPinIds}
+                  {...groupRowProps}
                   notice={
                     activityCoverage === "fleet"
                       ? null
@@ -136,9 +165,7 @@ export function CurrentTasksSection(): ReactNode {
                 <CurrentTaskGroup
                   title="Pinned"
                   items={groups.pinned}
-                  onRowKeyDown={onRowKeyDown}
-                  onSetPinned={onSetPinned}
-                  pendingPinIds={pendingPinIds}
+                  {...groupRowProps}
                   notice={
                     !isPending && !pinsComplete
                       ? pinnedTasksUnavailableNotice(groups.pinned.length)
@@ -148,9 +175,7 @@ export function CurrentTasksSection(): ReactNode {
                 <CurrentTaskGroup
                   title="Open"
                   items={groups.open}
-                  onRowKeyDown={onRowKeyDown}
-                  onSetPinned={onSetPinned}
-                  pendingPinIds={pendingPinIds}
+                  {...groupRowProps}
                   notice={null}
                 />
               </>
@@ -158,6 +183,7 @@ export function CurrentTasksSection(): ReactNode {
           </div>
         </section>
       </NotificationIndicatorsProvider>
+      <UnsyncedEpicMoveDialog flow={newWindowFlow.epicFlow} />
     </TooltipProvider>
   );
 }
@@ -169,6 +195,11 @@ function CurrentTaskGroup(props: {
   readonly onSetPinned: (item: HistoryItem, pinned: boolean) => void;
   readonly pendingPinIds: ReadonlySet<string>;
   readonly onRowKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
+  readonly worktreesByEpicId: ReadonlyMap<
+    string,
+    readonly WorktreeHostEntryV12[]
+  >;
+  readonly newWindowFlow: HistoryNewWindowFlow;
 }): ReactNode {
   const headingId = useId();
   const [expanded, setExpanded] = useState(false);
@@ -199,6 +230,10 @@ function CurrentTaskGroup(props: {
             onRowKeyDown={props.onRowKeyDown}
             onSetPinned={props.onSetPinned}
             isPinPending={props.pendingPinIds.has(item.epicId)}
+            worktrees={
+              props.worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES
+            }
+            newWindowFlow={props.newWindowFlow}
           />
         ))}
       </ul>
@@ -220,17 +255,30 @@ function CurrentTaskGroup(props: {
   );
 }
 
+// A task shows the same labels, PRs, menu and middle-click here as in
+// History. Renaming, deleting and worktree clean-up stay History-only: this
+// list is for getting back to a task, History is where tasks are tidied up.
 function CurrentTaskRow(props: {
   readonly item: HistoryItem;
   readonly onSetPinned: (item: HistoryItem, pinned: boolean) => void;
   readonly isPinPending: boolean;
   readonly onRowKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
+  readonly worktrees: readonly WorktreeHostEntryV12[];
+  readonly newWindowFlow: HistoryNewWindowFlow;
 }): ReactNode {
   const openItem = useHistoryOpenItem({ onSelectEpic: null, onOpenItem: null });
   const item = props.item;
+  const isPhase = item.taskType === "phase";
+  const isOpen = useEpicCanvasStore(
+    (state) => state.resolveTabIdForEpic(item.epicId) !== null,
+  );
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const canEdit = canEditHistoryItemTitle(item, cloudAuthorized);
   return (
     <HistoryTaskRow
-      organization={null}
+      organization={{ canEdit }}
       item={item}
       timeLabel={historyRowTimeLabel(item, "recent")}
       selectionMode={false}
@@ -245,6 +293,11 @@ function CurrentTaskRow(props: {
           aria-label={`Open task ${historyItemDisplayTitle(item)}`}
           aria-describedby={describedBy}
           onClick={() => openItem(item)}
+          onAuxClick={onMiddleClick(() => {
+            // A phase has no background open, so it opens in place.
+            if (isPhase) openItem(item);
+            else openHistoryItemInBackground(item, isOpen);
+          })}
           onKeyDown={props.onRowKeyDown}
           className="absolute inset-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         />
@@ -255,14 +308,27 @@ function CurrentTaskRow(props: {
       sweepControl={null}
       sweepMenuItem={null}
       hasSweepControl={false}
-      contextMenuItems={null}
-      openInNewWindowControl={null}
+      contextMenuItems={
+        isPhase ? null : (
+          <>
+            <HistoryTaskOrganizationMenu item={item} canEdit={canEdit} />
+            <HistoryOpenInBackgroundMenuItem item={item} isOpen={isOpen} />
+          </>
+        )
+      }
+      openInNewWindowControl={
+        props.newWindowFlow.isAvailable ? (
+          <HistoryOpenInNewWindowMenuItem
+            onSelect={() => props.newWindowFlow.requestOpen(item)}
+          />
+        ) : null
+      }
       onSetPinned={(_epicId, pinned) => props.onSetPinned(item, pinned)}
       isPinPending={props.isPinPending}
       pinAlwaysVisible
       showOpenBadge={false}
-      isOpen={false}
-      worktrees={[]}
+      isOpen={isOpen}
+      worktrees={props.worktrees}
     />
   );
 }

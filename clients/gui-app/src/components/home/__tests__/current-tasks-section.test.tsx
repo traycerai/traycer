@@ -1,4 +1,6 @@
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
+import type { HistoryNewWindowFlow } from "@/components/epics/use-history-open-in-new-window";
 import type { CurrentTaskGroups } from "@/lib/home/current-tasks";
 import type { ActivityFleetCoverage } from "@/stores/agent-activity-store";
 
@@ -11,6 +13,11 @@ const testState = vi.hoisted(() => ({
   openHistory: vi.fn(),
   setPinnedMutate: vi.fn<(variables: SetPinnedVariables) => void>(),
   pendingPinIds: new Set<string>(),
+  worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
+  openInBackground:
+    vi.fn<(epicId: string, title: string | undefined) => void>(),
+  requestOpenInNewWindow: vi.fn<(item: HistoryItem) => void>(),
+  isNewWindowAvailable: false,
 }));
 
 const pinSupport = vi.hoisted(() =>
@@ -68,6 +75,38 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
 }));
 
+// Reads the host-wide worktree listing through `useHostClient()`, which this
+// fixture has no provider for. Rows only need the per-task result.
+vi.mock("@/hooks/worktree/use-task-worktree-metadata-query", () => ({
+  useTaskWorktreeMetadata: () => ({
+    worktreesByEpicId: testState.worktreesByEpicId,
+    isFetching: false,
+    error: null,
+  }),
+}));
+
+// The real flow reads the router and the desktop windows bridge, neither of
+// which this fixture mounts; what a row needs from it is availability and the
+// request to open a task in another window.
+vi.mock("@/components/epics/use-history-open-in-new-window", () => ({
+  useHistoryOpenInNewWindowFlow: (): HistoryNewWindowFlow => ({
+    isAvailable: testState.isNewWindowAvailable,
+    requestOpen: testState.requestOpenInNewWindow,
+    epicFlow: {
+      isAvailable: testState.isNewWindowAvailable,
+      pendingMove: null,
+      requestOpenInNewWindow: () => undefined,
+      waitForSync: () => undefined,
+      cancelMove: () => undefined,
+      discardAndMove: () => undefined,
+    },
+  }),
+}));
+
+vi.mock("@/lib/commands/actions/open-epic-in-background", () => ({
+  openEpicInBackground: testState.openInBackground,
+}));
+
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openHistory: testState.openHistory }),
 }));
@@ -81,9 +120,24 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
+import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
+import type { TaskLabel } from "@traycer/protocol/host/organization/schemas";
 import { CurrentTasksSection } from "@/components/home/current-tasks-section";
+import type { OrganizationDialog } from "@/components/organization/organization-dialogs";
+import {
+  OrganizationContext,
+  type OrganizationContextValue,
+} from "@/hooks/organization/organization-context";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 
 const CAPTION =
@@ -129,6 +183,90 @@ function renderSection() {
   return render(<CurrentTasksSection />);
 }
 
+const openOrganizationDialog = vi.fn<(dialog: OrganizationDialog) => void>();
+const organizationClient = new HostClient<HostRpcRegistry>({
+  registry: hostRpcRegistry,
+  invalidator: { invalidateHostScope: () => undefined },
+  messenger: new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "request-1",
+    handlers: {},
+  }),
+});
+
+function organizationView(
+  overrides: Partial<OrganizationView>,
+): OrganizationView {
+  return {
+    catalog: [],
+    groups: { version: "0", groups: [], memberships: [] },
+    appearances: [],
+    taskLabels: {},
+    ready: true,
+    authenticationRequired: false,
+    pending: [],
+    failures: [],
+    ...overrides,
+  };
+}
+
+function taskLabel(name: string): TaskLabel {
+  return {
+    ownerId: "user-1",
+    labelId: `label-${name}`,
+    assignmentId: `assignment-${name}`,
+    kind: "custom",
+    systemKey: null,
+    name,
+    color: "#8ab4f8",
+    version: "0",
+  };
+}
+
+// The start page sits under the same organization provider as History, so a
+// supported context is what makes labels, groups and the organization menu
+// appear on a row.
+function renderSectionWithOrganization(view: OrganizationView) {
+  const organization: OrganizationContextValue = {
+    client: organizationClient,
+    supported: true,
+    userId: "user-1",
+    view,
+    register: () => () => undefined,
+    command: () => Promise.resolve(undefined),
+    refresh: () => Promise.resolve(undefined),
+    openDialog: openOrganizationDialog,
+  };
+  return render(
+    <OrganizationContext.Provider value={organization}>
+      <CurrentTasksSection />
+    </OrganizationContext.Provider>,
+  );
+}
+
+function taskWorktree(epicId: string): WorktreeHostEntryV12 {
+  return {
+    worktreePath: `/worktrees/app/${epicId}`,
+    repoLabel: "acme/app",
+    repoIdentifier: { owner: "acme", repo: "app" },
+    branch: "feature/current-tasks",
+    inUse: false,
+    uncommittedCount: 0,
+    gitRemovable: true,
+    scripts: null,
+    lastActivityAt: null,
+    owners: [{ epicId, ownerKind: "chat", ownerId: "chat-1", updatedAt: 1 }],
+    branchStatus: { ahead: 1, behind: 0, mergedIntoDefault: false },
+    createdAt: null,
+    prState: "open",
+    prNumber: 84,
+    prUrl: "https://github.com/acme/app/pull/84",
+    mergedHeadShaMatches: false,
+    submodules: [],
+    atBaseCommit: false,
+  };
+}
+
 function rowIds(): string[] {
   return Array.from(
     document.querySelectorAll<HTMLElement>("[data-current-task-id]"),
@@ -157,6 +295,12 @@ describe("<CurrentTasksSection />", () => {
     testState.openHistory.mockReset();
     testState.setPinnedMutate.mockReset();
     testState.pendingPinIds = new Set();
+    testState.worktreesByEpicId = new Map();
+    testState.openInBackground.mockReset();
+    testState.requestOpenInNewWindow.mockReset();
+    testState.isNewWindowAvailable = false;
+    openOrganizationDialog.mockReset();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     pinSupport.mockReset();
     pinSupport.mockReturnValue(true);
     useAuthStore.setState({ status: "signed-in" });
@@ -319,6 +463,294 @@ describe("<CurrentTasksSection />", () => {
       expect(testState.setPinnedMutate).not.toHaveBeenCalled();
       fireEvent.click(pinC);
       expect(testState.setPinnedMutate).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("task organization", () => {
+    it("shows a task's group, labels and custom icon on its row", () => {
+      setGroups({ open: [task("a", {}), task("b", {})] });
+      renderSectionWithOrganization(
+        organizationView({
+          groups: {
+            version: "0",
+            groups: [
+              {
+                groupId: "group-1",
+                name: "Backend",
+                color: "#445566",
+                position: 0,
+              },
+            ],
+            memberships: [
+              { taskId: "epic-a", groupId: "group-1", position: 0 },
+            ],
+          },
+          appearances: [
+            { taskId: "epic-a", version: "0", color: null, icon: "★" },
+          ],
+          taskLabels: {
+            "epic-a": { labels: [taskLabel("Urgent")], removed: [] },
+          },
+        }),
+      );
+
+      expect(
+        within(rowItem("a")).getByRole("button", {
+          name: "Task organization: Group: Backend; Label: Urgent",
+        }),
+      ).not.toBeNull();
+      expect(
+        within(rowItem("a")).getByLabelText("Custom icon: ★"),
+      ).not.toBeNull();
+      expect(
+        within(rowItem("b")).queryByRole("button", {
+          name: /^Task organization/,
+        }),
+      ).toBeNull();
+    });
+
+    it("opens the labels window from a row's label chip", () => {
+      setGroups({ open: [task("a", {})] });
+      renderSectionWithOrganization(
+        organizationView({
+          taskLabels: {
+            "epic-a": { labels: [taskLabel("Urgent")], removed: [] },
+          },
+        }),
+      );
+
+      fireEvent.click(
+        screen.getByRole("button", { name: /^Task organization/ }),
+      );
+
+      expect(openOrganizationDialog).toHaveBeenCalledWith({
+        kind: "labels",
+        taskId: "epic-a",
+        canEdit: true,
+      });
+      expect(testState.openItem).not.toHaveBeenCalled();
+    });
+
+    it("lets a viewer read a task's labels but not edit them", () => {
+      setGroups({
+        open: [task("a", { permissionRole: "viewer", ownership: "shared" })],
+      });
+      renderSectionWithOrganization(organizationView({}));
+
+      fireEvent.contextMenu(screen.getByTestId("epics-list-row-card"));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Labels" }));
+
+      expect(openOrganizationDialog).toHaveBeenCalledWith({
+        kind: "labels",
+        taskId: "epic-a",
+        canEdit: false,
+      });
+    });
+  });
+
+  describe("context menu", () => {
+    const rowCard = (id: string) =>
+      within(rowItem(id)).getByTestId("epics-list-row-card");
+
+    it("offers the organization actions and both open actions", async () => {
+      testState.isNewWindowAvailable = true;
+      setGroups({ open: [task("a", {})] });
+      renderSectionWithOrganization(organizationView({}));
+
+      fireEvent.contextMenu(rowCard("a"));
+
+      expect(
+        await screen.findByRole("menuitem", { name: "Labels" }),
+      ).not.toBeNull();
+      expect(
+        screen.getByRole("menuitem", { name: "Task appearance" }),
+      ).not.toBeNull();
+      expect(
+        screen.getByRole("menuitem", { name: "Add to group" }),
+      ).not.toBeNull();
+      expect(
+        screen.getByRole("menuitem", { name: "Open in Background" }),
+      ).not.toBeNull();
+      expect(
+        screen.getByRole("menuitem", { name: "Open in New Window" }),
+      ).not.toBeNull();
+    });
+
+    it("still offers Open in Background when the organization is unavailable", async () => {
+      setGroups({ open: [task("a", {})] });
+      renderSection();
+
+      fireEvent.contextMenu(rowCard("a"));
+
+      expect(
+        await screen.findByRole("menuitem", { name: "Open in Background" }),
+      ).not.toBeNull();
+      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+    });
+
+    it("opens the task in a background tab from Open in Background", async () => {
+      setGroups({ open: [task("a", {})] });
+      renderSection();
+
+      fireEvent.contextMenu(rowCard("a"));
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: "Open in Background" }),
+      );
+
+      expect(testState.openInBackground).toHaveBeenCalledWith(
+        "epic-a",
+        "Task a",
+      );
+      expect(testState.openItem).not.toHaveBeenCalled();
+    });
+
+    it("disables Open in Background for a task already open in a tab, keeping Open in New Window", async () => {
+      testState.isNewWindowAvailable = true;
+      useEpicCanvasStore.getState().openEpicTab("epic-a", "Task a");
+      setGroups({ open: [task("a", {})] });
+      renderSection();
+
+      fireEvent.contextMenu(rowCard("a"));
+
+      const background = await screen.findByTestId(
+        "epics-list-row-open-background",
+      );
+      expect(background.hasAttribute("data-disabled")).toBe(true);
+      expect(within(background).getByText("Already open")).not.toBeNull();
+      fireEvent.click(background);
+      expect(testState.openInBackground).not.toHaveBeenCalled();
+      expect(
+        screen.getByTestId("epics-list-row-open-new-window"),
+      ).not.toBeNull();
+    });
+
+    it("asks to open the row's task in a new window", async () => {
+      testState.isNewWindowAvailable = true;
+      const item = task("a", {});
+      setGroups({ open: [item] });
+      renderSection();
+
+      fireEvent.contextMenu(rowCard("a"));
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: "Open in New Window" }),
+      );
+
+      expect(testState.requestOpenInNewWindow).toHaveBeenCalledWith(item);
+    });
+
+    it("leaves out Open in New Window where there is no windows bridge", async () => {
+      setGroups({ open: [task("a", {})] });
+      renderSection();
+
+      fireEvent.contextMenu(rowCard("a"));
+
+      await screen.findByRole("menuitem", { name: "Open in Background" });
+      expect(
+        screen.queryByRole("menuitem", { name: "Open in New Window" }),
+      ).toBeNull();
+    });
+
+    it("offers a phase only Open in New Window, since a phase cannot open in the background", async () => {
+      testState.isNewWindowAvailable = true;
+      setGroups({ open: [task("p", { taskType: "phase" })] });
+      renderSectionWithOrganization(organizationView({}));
+
+      fireEvent.contextMenu(rowCard("p"));
+
+      expect(
+        await screen.findByRole("menuitem", { name: "Open in New Window" }),
+      ).not.toBeNull();
+      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+      expect(
+        screen.queryByRole("menuitem", { name: "Open in Background" }),
+      ).toBeNull();
+    });
+
+    it("mounts no context menu for a phase when nothing is left to offer", () => {
+      setGroups({ open: [task("p", { taskType: "phase" })] });
+      renderSection();
+
+      fireEvent.contextMenu(rowCard("p"));
+
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+  });
+
+  describe("middle click", () => {
+    // A middle-button activation arrives as `auxclick`, never `click`.
+    const auxClick = (name: string, button: number) =>
+      fireEvent(
+        screen.getByRole("button", { name }),
+        new MouseEvent("auxclick", { bubbles: true, cancelable: true, button }),
+      );
+    const middleClick = (name: string) => auxClick(name, 1);
+
+    it("opens the task in a background tab and leaves the page where it is", () => {
+      setGroups({ open: [task("a", {})] });
+      renderSection();
+
+      middleClick("Open task Task a");
+
+      expect(testState.openInBackground).toHaveBeenCalledWith(
+        "epic-a",
+        "Task a",
+      );
+      expect(testState.openItem).not.toHaveBeenCalled();
+    });
+
+    it("does not open a task that is already open in a tab again", () => {
+      useEpicCanvasStore.getState().openEpicTab("epic-a", "Task a");
+      setGroups({ open: [task("a", {})] });
+      renderSection();
+
+      middleClick("Open task Task a");
+
+      expect(testState.openInBackground).not.toHaveBeenCalled();
+      expect(testState.openItem).not.toHaveBeenCalled();
+    });
+
+    it("opens a phase in place, since a phase has no background open", () => {
+      const phase = task("p", { taskType: "phase" });
+      setGroups({ open: [phase] });
+      renderSection();
+
+      middleClick("Open task Task p");
+
+      expect(testState.openItem).toHaveBeenCalledWith(phase);
+      expect(testState.openInBackground).not.toHaveBeenCalled();
+    });
+
+    it("leaves the right button to the context menu", () => {
+      setGroups({ open: [task("a", {})] });
+      renderSection();
+
+      auxClick("Open task Task a", 2);
+
+      expect(testState.openInBackground).not.toHaveBeenCalled();
+      expect(testState.openItem).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("pull requests", () => {
+    it("shows a task's PR pill on its row", () => {
+      testState.worktreesByEpicId = new Map([
+        ["epic-a", [taskWorktree("epic-a")]],
+      ]);
+      setGroups({ open: [task("a", {}), task("b", {})] });
+      // The pill's links read the query client through the open-link seam.
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          <CurrentTasksSection />
+        </QueryClientProvider>,
+      );
+
+      const pills = within(rowItem("a")).getByTestId("task-history-prs-epic-a");
+      expect(
+        within(pills).getByRole("link", { name: "Open PR #84 Open" }),
+      ).not.toBeNull();
+      expect(
+        within(rowItem("b")).queryByTestId("task-history-prs-epic-b"),
+      ).toBeNull();
     });
   });
 
