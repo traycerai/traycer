@@ -2218,7 +2218,12 @@ export function useRegisteredEpicLiveAgentIds(
   );
 }
 
-function liveAgentIdsSnapshot(
+/**
+ * {@link useRegisteredEpicLiveAgentIds} read outside React: the chat and TUI
+ * agent ids `handle`'s projection holds, the same set while they are
+ * unchanged, or `null` for no session.
+ */
+export function liveAgentIdsSnapshot(
   handle: OpenEpicStoreHandle | null,
 ): ReadonlySet<string> | null {
   if (handle === null) return null;
