@@ -100,14 +100,13 @@ export async function runCommand(
     // reporting those made the CLI a quarter of the account's error volume.
     // A skipped code still leaves a breadcrumb, so an unexpected capture
     // later in the same process shows what preceded it.
-    if (EXPECTED_CLI_ERROR_CODES.has(cliErr.code)) {
+    const expected = EXPECTED_CLI_ERROR_CODES.has(cliErr.code);
+    if (expected) {
       Sentry.addBreadcrumb({
         category: "cli",
         message: "CLI command failed with an expected code",
         data: { code: cliErr.code },
       });
-    } else {
-      await reportCommandFailure(runtime, cliErr, err);
     }
     runtime.logger.error(
       "CLI command failed",
@@ -119,6 +118,12 @@ export async function runCommand(
       errorFromUnknown(err),
     );
     output.emitError(cliErr.code, cliErr.message, cliErr.details);
+    // The log line and the envelope go out before the repeat gate's file read,
+    // the first yield on this path: a process-fatal handler that fires inside
+    // that await must find the command's answer already written.
+    if (!expected) {
+      await reportCommandFailure(runtime, cliErr, err);
+    }
     // The error envelope was just written to a possibly-piped stdout, and the
     // Sentry client is still live. `finishAndExit` flushes the first and shuts
     // down the second before letting the loop end - see exit.ts for why the

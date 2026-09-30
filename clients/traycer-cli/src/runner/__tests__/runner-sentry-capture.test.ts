@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RepeatDecision, RepeatGateIo } from "../sentry-repeat-gate";
+import type { MockInstance } from "vitest";
+import {
+  cliSentryRepeatKey,
+  defaultRepeatGateIo,
+  type RepeatDecision,
+  type RepeatGateIo,
+} from "../sentry-repeat-gate";
+import { config } from "../../config";
 
 // The runner used to report EVERY thrown command error to Sentry, before
 // `toCliError` had classified it. Three expected outcomes - an expired token,
@@ -63,6 +70,7 @@ const stdoutChunks: string[] = [];
 
 describe("runner Sentry capture", () => {
   let priorExitCode: number | string | null | undefined;
+  let stdoutWriteSpy: MockInstance;
 
   beforeEach(() => {
     priorExitCode = process.exitCode;
@@ -77,7 +85,7 @@ describe("runner Sentry capture", () => {
     repeatGateMocks.recordCliFailureForSentry
       .mockReset()
       .mockResolvedValue({ kind: "report", repeatsSinceLastReport: 0 });
-    vi.spyOn(process.stdout, "write").mockImplementation(((
+    stdoutWriteSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
       chunk: string | Uint8Array,
       callback: (() => void) | undefined,
     ) => {
@@ -318,5 +326,50 @@ describe("runner Sentry capture", () => {
     );
 
     expect(repeatGateMocks.recordCliFailureForSentry).not.toHaveBeenCalled();
+  });
+
+  it("calls the gate with exactly (runtime.environment, the real cliSentryRepeatKey, defaultRepeatGateIo)", async () => {
+    const { CLI_ERROR_CODES, CliError } = await import("../errors");
+    const err = new CliError({
+      code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
+      message: "extract failed",
+      details: null,
+      exitCode: 1,
+    });
+
+    await runThrowing(err);
+
+    expect(repeatGateMocks.recordCliFailureForSentry).toHaveBeenCalledTimes(1);
+    expect(repeatGateMocks.recordCliFailureForSentry).toHaveBeenCalledWith(
+      config.environment,
+      cliSentryRepeatKey(err.code, err, err.message),
+      defaultRepeatGateIo,
+    );
+  });
+
+  it("emits the error envelope (and logs the failure) before consulting the repeat gate", async () => {
+    const { CLI_ERROR_CODES, CliError } = await import("../errors");
+    const err = new CliError({
+      code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
+      message: "extract failed",
+      details: null,
+      exitCode: 1,
+    });
+
+    await runThrowing(err);
+
+    // `stdoutChunks` is populated, in call order, by the SAME spy whose
+    // `invocationCallOrder` this compares against - so this index locates
+    // the exact stdout.write call that carried the error envelope.
+    const errorEnvelopeCallIndex = stdoutChunks.findIndex((chunk) =>
+      chunk.includes('"status":"error"'),
+    );
+    expect(errorEnvelopeCallIndex).toBeGreaterThanOrEqual(0);
+    const errorEnvelopeCallOrder =
+      stdoutWriteSpy.mock.invocationCallOrder[errorEnvelopeCallIndex];
+    const gateCallOrder =
+      repeatGateMocks.recordCliFailureForSentry.mock.invocationCallOrder[0];
+
+    expect(errorEnvelopeCallOrder).toBeLessThan(gateCallOrder);
   });
 });

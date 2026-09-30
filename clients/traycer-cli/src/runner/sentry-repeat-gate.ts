@@ -17,9 +17,12 @@ import { isErrnoException } from "./errors";
 // next report of that kind once the window has passed.
 //
 // Fail-open by construction: a ledger that cannot be read reports, exactly as
-// the runner did before the gate existed, and one that cannot be written loses
-// only the count. Concurrent invocations race on the file; the race costs at
-// most an extra report or a lost count, never a missed first report.
+// the runner did before the gate existed. One that can be read but not written
+// (a full disk, a home made read-only) turns the gate off on that machine: no
+// window is ever recorded, so every run reports, again as before the gate, and
+// the count on those reports is stale. Concurrent invocations race on the
+// file; the race costs at most an extra report or a lost count, never a missed
+// first report.
 
 export const CLI_SENTRY_REPEAT_WINDOW_MS = 60 * 60 * 1000;
 // Dropped on write whatever their count, so a failure that stopped leaves no
@@ -30,6 +33,9 @@ const LEDGER_MAX_ENTRIES = 100;
 const LEDGER_FILE_NAME = "sentry-repeats.json";
 const LEDGER_VERSION = 1;
 const MAX_TEMPLATE_LENGTH = 240;
+// Enough frames to reach past the shared constructors and mappers (`cliError`,
+// the host-RPC mapper chain) to the code that failed.
+const SITE_FRAMES = 8;
 
 export interface RepeatLedgerEntry {
   readonly windowStartMs: number;
@@ -65,29 +71,51 @@ export function cliSentryRepeatLedgerPath(environment: Environment): string {
 }
 
 // What makes two failures "the same": the CLI code, the thrown value's name,
-// and the message with its per-event values replaced.
+// where it was thrown, and the message with its per-event values replaced.
 //
 // The code alone is too coarse: every wrapped failure is UNEXPECTED, and one
 // service code covers launchctl, systemd and schtasks. The raw message is too
 // fine: it carries ids, paths and exit codes, so every event would be its own
 // key and nothing would ever repeat. The template keeps the text a code path
-// wrote and replaces each value, so it changes only when the failure does.
+// wrote and replaces each value, so it changes only when the failure does. The
+// throw site keeps apart two different failures whose templates happen to
+// match (`Cannot read properties of undefined (reading '<q>')` from two
+// places), so one looping failure cannot hide another.
 export function cliSentryRepeatKey(
   code: string,
   error: unknown,
   message: string,
 ): string {
   const name = error instanceof Error ? error.name : typeof error;
-  return `${code}|${name}|${messageTemplate(message)}`;
+  return `${code}|${name}|${stackSite(error)}|${messageTemplate(message)}`;
+}
+
+// The first stack positions of a thrown Error, `line:col` without their paths.
+// Stable for one build on one machine, which is all a per-machine gate needs; a
+// new CLI build is a new key and one fresh report. Frames with no position
+// (`native`, `<anonymous>`) are skipped. "-" when there is no stack to read.
+export function stackSite(error: unknown): string {
+  if (!(error instanceof Error) || typeof error.stack !== "string") return "-";
+  const positions: string[] = [];
+  for (const line of error.stack.split("\n")) {
+    if (!/^\s+at\s/.test(line)) continue;
+    const position = /:(\d+):(\d+)\)?\s*$/.exec(line);
+    if (position === null) continue;
+    positions.push(`${position[1]}:${position[2]}`);
+    if (positions.length === SITE_FRAMES) break;
+  }
+  return positions.length === 0 ? "-" : positions.join(",");
 }
 
 // Order matters: quoted values first, so a quoted path or id is one
 // placeholder; UUIDs before the hex run that would split them; e-mail
-// addresses and paths before the digit pass that would leave their shape.
+// addresses and paths before the digit pass that would leave their shape. A
+// single quote opens a value only after a non-word character, so the
+// apostrophes in "host's" and "Desktop's" are text, not a quoted span.
 export function messageTemplate(message: string): string {
   return message
     .replace(/"[^"]*"/g, '"<q>"')
-    .replace(/'[^']*'/g, "'<q>'")
+    .replace(/(^|\W)'[^']*'/g, "$1'<q>'")
     .replace(
       /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
       "<id>",

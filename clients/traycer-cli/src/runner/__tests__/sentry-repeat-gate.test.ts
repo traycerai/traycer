@@ -12,6 +12,7 @@ import {
   messageTemplate,
   parseLedger,
   recordCliFailureForSentry,
+  stackSite,
   type RepeatGateIo,
   type RepeatLedgerEntry,
 } from "../sentry-repeat-gate";
@@ -43,8 +44,16 @@ describe("messageTemplate", () => {
   ): string =>
     `launchctl bootstrap failed for ai.traycer.host: launchctl bootstrap gui/${uid} /Users/${username}/Library/LaunchAgents/ai.traycer.host.plist exited with code ${bootstrapCode}: Bootstrap failed: ${innerCode}: Input/output error`;
 
-  const desktopOwnsRegistration =
-    "service install: Traycer Desktop owns host registration on this machine (SMAppService); install it from Traycer Desktop instead";
+  // The message `service install.ts` in `src/service/platforms/macos.ts`
+  // (~line 1128) actually produces, when Desktop's SMAppService agent owns
+  // host registration on this machine. Interpolates the agent label, the
+  // path launchd loaded it from, and the raw CLI label.
+  const desktopOwnsRegistration = (
+    agentLabelId: string,
+    loadedPath: string,
+    rawLabelId: string,
+  ): string =>
+    `service install: Traycer Desktop owns host registration on this machine (SMAppService agent '${agentLabelId}' loaded from ${loadedPath}); installing the raw '${rawLabelId}' LaunchAgent would run a second host beside it. If you only need the host running again, run 'traycer host restart' (it starts the Desktop-managed host). To move host management to the CLI instead, re-run with --takeover (the running host is stopped cooperatively first), or relaunch the Traycer app to let it repair its own host.`;
 
   it("folds two profile-removed messages that differ only in the uuid to the same template", () => {
     const a = profileRemoved("464ec16b-b0ad-48bc-bddc-843e059a5813");
@@ -73,10 +82,19 @@ describe("messageTemplate", () => {
     expect(messageTemplate(a)).not.toContain("502");
   });
 
-  it("leaves the constant Desktop-owns-registration message untouched", () => {
-    expect(messageTemplate(desktopOwnsRegistration)).toBe(
-      desktopOwnsRegistration,
+  it("folds two Desktop-owns-registration messages that differ only in the agent label and the loaded path to the same template", () => {
+    const a = desktopOwnsRegistration(
+      "ai.traycer.host.agent",
+      "/Library/LaunchDaemons/ai.traycer.host.agent.plist",
+      "ai.traycer.host",
     );
+    const b = desktopOwnsRegistration(
+      "ai.traycer.host.agent.dev",
+      "/Users/alice/Library/LaunchAgents/ai.traycer.host.agent.dev.plist",
+      "ai.traycer.host.dev",
+    );
+
+    expect(messageTemplate(a)).toBe(messageTemplate(b));
   });
 
   it("produces four different templates for the four different kinds", () => {
@@ -84,7 +102,13 @@ describe("messageTemplate", () => {
       messageTemplate(profileRemoved("464ec16b-b0ad-48bc-bddc-843e059a5813")),
       messageTemplate(systemdUnreachable(1, 1)),
       messageTemplate(launchctlBootstrapFailed(502, "alice", 5, 5)),
-      messageTemplate(desktopOwnsRegistration),
+      messageTemplate(
+        desktopOwnsRegistration(
+          "ai.traycer.host.agent",
+          "/Library/LaunchDaemons/ai.traycer.host.agent.plist",
+          "ai.traycer.host",
+        ),
+      ),
     ]);
 
     expect(templates.size).toBe(4);
@@ -113,29 +137,162 @@ describe("messageTemplate", () => {
     expect(messageTemplate(long)).toHaveLength(240);
     expect(messageTemplate(long)).toBe("x".repeat(240));
   });
+
+  // A single quote opens a quoted span only after start-of-string or a
+  // non-word character, so an apostrophe inside a word ("host's",
+  // "Desktop's") is left as plain text rather than swallowed as `'<q>'`.
+  it("leaves apostrophes inside words as text, while still folding a genuinely quoted value", () => {
+    const withoutParen =
+      "the running host's RPC endpoint is unreachable (ECONNREFUSED); Desktop's agent will restart it";
+    const withParen =
+      "the running host's RPC endpoint is unreachable (ECONNREFUSED); Desktop's agent will restart it (the pid file names a process that is not the host)";
+
+    expect(messageTemplate(withoutParen)).not.toBe(messageTemplate(withParen));
+    expect(messageTemplate(withoutParen)).toContain("host's");
+    expect(messageTemplate(withoutParen)).toContain("Desktop's");
+  });
+
+  it("still folds a quoted property name after a non-word character", () => {
+    const message = "Cannot read properties of undefined (reading 'version')";
+
+    expect(messageTemplate(message)).toBe(
+      "Cannot read properties of undefined (reading '<q>')",
+    );
+  });
+});
+
+describe("stackSite", () => {
+  function throwHelper(): never {
+    throw new Error("boom");
+  }
+
+  function throwFromCallSiteA(): unknown {
+    try {
+      throwHelper();
+    } catch (error) {
+      return error;
+    }
+  }
+
+  function throwFromCallSiteB(): unknown {
+    try {
+      throwHelper();
+    } catch (error) {
+      return error;
+    }
+  }
+
+  it("gives the same site for the same throw site hit twice from one call site", () => {
+    // Both errors are minted by calling `throwFromCallSiteA()` from this
+    // SAME line inside the loop - unlike two separate top-level statements,
+    // which would each add their own distinct call-site frame.
+    const errors: unknown[] = [];
+    for (let i = 0; i < 2; i += 1) {
+      errors.push(throwFromCallSiteA());
+    }
+
+    expect(stackSite(errors[0])).toBe(stackSite(errors[1]));
+    expect(stackSite(errors[0])).not.toBe("-");
+  });
+
+  it("gives a different site for a different throw site", () => {
+    const fromA = throwFromCallSiteA();
+    const fromB = throwFromCallSiteB();
+
+    expect(stackSite(fromA)).not.toBe(stackSite(fromB));
+  });
+
+  it("contains no path separator", () => {
+    const error = throwFromCallSiteA();
+
+    expect(stackSite(error)).not.toMatch(/[\\/]/);
+  });
+
+  it('returns "-" for a non-Error', () => {
+    expect(stackSite("just a string")).toBe("-");
+    expect(stackSite(undefined)).toBe("-");
+  });
+
+  it('returns "-" for an Error whose stack has no parseable frames', () => {
+    const error = new Error("boom");
+    error.stack = "no frames in here at all";
+
+    expect(stackSite(error)).toBe("-");
+  });
 });
 
 describe("cliSentryRepeatKey", () => {
-  it("includes the code and the error's name", () => {
-    expect(
-      cliSentryRepeatKey(
-        "E_HOST_INSTALL_FAILED",
-        new TypeError("boom"),
-        "boom",
-      ),
-    ).toBe("E_HOST_INSTALL_FAILED|TypeError|boom");
+  function throwHelper(): never {
+    throw new TypeError("boom");
+  }
+
+  function throwFromSiteA(): unknown {
+    try {
+      throwHelper();
+    } catch (error) {
+      return error;
+    }
+  }
+
+  function throwFromSiteB(): unknown {
+    try {
+      throwHelper();
+    } catch (error) {
+      return error;
+    }
+  }
+
+  it("includes the code, the error's name and its stack site", () => {
+    const err = throwFromSiteA();
+    expect(cliSentryRepeatKey("E_HOST_INSTALL_FAILED", err, "boom")).toBe(
+      `E_HOST_INSTALL_FAILED|TypeError|${stackSite(err)}|boom`,
+    );
   });
 
   it("uses typeof for a non-Error thrown value", () => {
     expect(
       cliSentryRepeatKey("E_UNEXPECTED", "just a string", "just a string"),
-    ).toBe("E_UNEXPECTED|string|just a string");
+    ).toBe("E_UNEXPECTED|string|-|just a string");
   });
 
   it("differs when the code differs, everything else held equal", () => {
-    const err = new Error("boom");
+    const err = throwFromSiteA();
     expect(cliSentryRepeatKey("CODE_A", err, "boom")).not.toBe(
       cliSentryRepeatKey("CODE_B", err, "boom"),
+    );
+  });
+
+  // The fix this module exists for: two distinct throw sites whose messages
+  // fold to the SAME template (e.g. two different
+  // `Cannot read properties of undefined (reading '<q>')` failures) must
+  // still produce different keys, or one looping failure hides the other.
+  it("gives different keys for two different throw sites sharing the same code and message template", () => {
+    const fromA = throwFromSiteA();
+    const fromB = throwFromSiteB();
+
+    expect(
+      cliSentryRepeatKey(
+        "E_UNEXPECTED",
+        fromA,
+        "Cannot read properties of undefined (reading 'version')",
+      ),
+    ).not.toBe(
+      cliSentryRepeatKey(
+        "E_UNEXPECTED",
+        fromB,
+        "Cannot read properties of undefined (reading 'attemptId')",
+      ),
+    );
+  });
+
+  it("gives the same key for the same throw site and the same message", () => {
+    const errors: unknown[] = [];
+    for (let i = 0; i < 2; i += 1) {
+      errors.push(throwFromSiteA());
+    }
+
+    expect(cliSentryRepeatKey("E_UNEXPECTED", errors[0], "boom")).toBe(
+      cliSentryRepeatKey("E_UNEXPECTED", errors[1], "boom"),
     );
   });
 });
