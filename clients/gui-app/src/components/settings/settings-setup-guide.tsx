@@ -2,7 +2,10 @@ import { lazy, Suspense, type RefObject } from "react";
 import { useLayoutLitMoment } from "@/components/layout-editor/lit-moment";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import {
+  clampOnboardingStep,
+  useOnboardingStore,
+} from "@/stores/onboarding/onboarding-store";
 import { setupGuideStepsFor } from "@/stores/onboarding/setup-guides";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
@@ -39,9 +42,7 @@ export function SettingsSetupGuide(props: {
   // past that point clamps to the last step this shell actually shows,
   // rather than indexing past the filtered array and vanishing.
   const displayStep =
-    active === null || steps.length === 0
-      ? 0
-      : Math.min(active.step, steps.length - 1);
+    active === null ? 0 : clampOnboardingStep(active.step, steps.length);
   const step = active === null ? null : (steps[displayStep] ?? null);
   // Resolved above the early returns, because it is a hook: the lit moment
   // belongs to the step that asked for it and ends when that step does,
@@ -87,7 +88,7 @@ export function SettingsSetupGuide(props: {
         back={
           displayStep > 0
             ? () => {
-                useOnboardingStore.getState().retreatSetup();
+                useOnboardingStore.getState().retreatSetup(steps.length);
                 go(displayStep - 1);
               }
             : null

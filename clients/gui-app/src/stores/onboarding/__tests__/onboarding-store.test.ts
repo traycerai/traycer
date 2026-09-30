@@ -134,12 +134,13 @@ describe("useOnboardingStore", () => {
 
   it("retreats an active setup step without changing saved progress or completion", () => {
     const completedAt = 1_600_000_000_000;
+    const fullLength = setupGuideLength("appearance");
     useOnboardingStore.setState({
       completedAt,
       setupProgress: { agents: 0, appearance: 2, cookies: 0 },
       activeSetup: { id: "appearance", step: 2 },
     });
-    useOnboardingStore.getState().retreatSetup();
+    useOnboardingStore.getState().retreatSetup(fullLength);
 
     expect(useOnboardingStore.getState().activeSetup).toEqual({
       id: "appearance",
@@ -152,11 +153,29 @@ describe("useOnboardingStore", () => {
     });
     expect(useOnboardingStore.getState().completedAt).toBe(completedAt);
 
-    useOnboardingStore.getState().retreatSetup();
-    useOnboardingStore.getState().retreatSetup();
+    useOnboardingStore.getState().retreatSetup(fullLength);
+    useOnboardingStore.getState().retreatSetup(fullLength);
     expect(useOnboardingStore.getState().activeSetup).toEqual({
       id: "appearance",
       step: 0,
+    });
+  });
+
+  it("retreats to the predecessor of the step actually shown, not one below a resumed step a smaller count no longer holds", () => {
+    // A guide resumed at its raw last step (the layout-editor door), read
+    // back on a shell whose `stepCount` leaves that door out (L-50): Back
+    // must land on the step just before the one this shell can show, not
+    // one below the stale raw step - which the clamp already draws too, so
+    // decrementing IT unclamped would repeat the same displayed step.
+    const fullLength = setupGuideLength("appearance");
+    useOnboardingStore.setState({
+      activeSetup: { id: "appearance", step: fullLength - 1 },
+    });
+    useOnboardingStore.getState().retreatSetup(fullLength - 1);
+
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "appearance",
+      step: fullLength - 3,
     });
   });
 
