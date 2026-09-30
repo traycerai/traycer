@@ -41,18 +41,18 @@ vi.mock("@sentry/node", () => ({
 }));
 
 const repeatGateMocks = vi.hoisted(() => ({
-  recordCliFailureForSentry: vi.fn<
-    (
-      environment: string,
-      key: string,
-      io: RepeatGateIo,
-    ) => Promise<RepeatDecision>
-  >(),
+  recordCliFailureForSentry:
+    vi.fn<
+      (
+        environment: string,
+        key: string,
+        io: RepeatGateIo,
+      ) => Promise<RepeatDecision>
+    >(),
 }));
 
 vi.mock("../sentry-repeat-gate", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../sentry-repeat-gate")>();
+  const actual = await importOriginal<typeof import("../sentry-repeat-gate")>();
   return {
     ...actual,
     recordCliFailureForSentry: repeatGateMocks.recordCliFailureForSentry,

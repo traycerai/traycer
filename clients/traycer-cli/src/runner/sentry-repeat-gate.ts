@@ -106,7 +106,10 @@ export function decideRepeat(
   ledger: ReadonlyMap<string, RepeatLedgerEntry>,
   key: string,
   nowMs: number,
-): { readonly decision: RepeatDecision; readonly next: Map<string, RepeatLedgerEntry> } {
+): {
+  readonly decision: RepeatDecision;
+  readonly next: Map<string, RepeatLedgerEntry>;
+} {
   const next = pruneLedger(ledger, nowMs, key);
   const entry = next.get(key);
   // A start in the future is a clock that went backwards: treat the window as
@@ -118,7 +121,10 @@ export function decideRepeat(
   ) {
     const suppressed = entry.suppressed + 1;
     next.set(key, { windowStartMs: entry.windowStartMs, suppressed });
-    return { decision: { kind: "suppress", repeatsInWindow: suppressed }, next };
+    return {
+      decision: { kind: "suppress", repeatsInWindow: suppressed },
+      next,
+    };
   }
   next.set(key, { windowStartMs: nowMs, suppressed: 0 });
   return {

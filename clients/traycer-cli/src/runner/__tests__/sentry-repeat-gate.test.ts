@@ -29,7 +29,10 @@ describe("messageTemplate", () => {
   const profileRemoved = (uuid: string): string =>
     `Profile "${uuid}" for provider "claude-code" was removed and can no longer be used.`;
 
-  const systemdUnreachable = (showEnvCode: number, statusCode: number): string =>
+  const systemdUnreachable = (
+    showEnvCode: number,
+    statusCode: number,
+  ): string =>
     `the systemd user manager is not reachable, so the ai.traycer.host.service service cannot be installed: systemctl --user show-environment exited with code ${showEnvCode}: Failed to get environment: Process org.freedesktop.systemd1 exited with status ${statusCode}`;
 
   const launchctlBootstrapFailed = (
@@ -115,14 +118,18 @@ describe("messageTemplate", () => {
 describe("cliSentryRepeatKey", () => {
   it("includes the code and the error's name", () => {
     expect(
-      cliSentryRepeatKey("E_HOST_INSTALL_FAILED", new TypeError("boom"), "boom"),
+      cliSentryRepeatKey(
+        "E_HOST_INSTALL_FAILED",
+        new TypeError("boom"),
+        "boom",
+      ),
     ).toBe("E_HOST_INSTALL_FAILED|TypeError|boom");
   });
 
   it("uses typeof for a non-Error thrown value", () => {
-    expect(cliSentryRepeatKey("E_UNEXPECTED", "just a string", "just a string")).toBe(
-      "E_UNEXPECTED|string|just a string",
-    );
+    expect(
+      cliSentryRepeatKey("E_UNEXPECTED", "just a string", "just a string"),
+    ).toBe("E_UNEXPECTED|string|just a string");
   });
 
   it("differs when the code differs, everything else held equal", () => {
@@ -146,7 +153,10 @@ describe("decideRepeat", () => {
   it("suppresses repeats within the window, counting up 1, 2, 3", () => {
     const start = 1_000_000;
     const first = decideRepeat(new Map(), "key-b", start);
-    expect(first.decision).toEqual({ kind: "report", repeatsSinceLastReport: 0 });
+    expect(first.decision).toEqual({
+      kind: "report",
+      repeatsSinceLastReport: 0,
+    });
 
     const second = decideRepeat(first.next, "key-b", start + 1_000);
     expect(second.decision).toEqual({ kind: "suppress", repeatsInWindow: 1 });
@@ -167,7 +177,10 @@ describe("decideRepeat", () => {
     const atWindowEnd = start + CLI_SENTRY_REPEAT_WINDOW_MS;
     const third = decideRepeat(second.next, "key-c", atWindowEnd);
 
-    expect(third.decision).toEqual({ kind: "report", repeatsSinceLastReport: 1 });
+    expect(third.decision).toEqual({
+      kind: "report",
+      repeatsSinceLastReport: 1,
+    });
     expect(third.next.get("key-c")).toEqual({
       windowStartMs: atWindowEnd,
       suppressed: 0,
@@ -180,7 +193,10 @@ describe("decideRepeat", () => {
 
     const result = decideRepeat(next, "key-d", start - 1);
 
-    expect(result.decision).toEqual({ kind: "report", repeatsSinceLastReport: 0 });
+    expect(result.decision).toEqual({
+      kind: "report",
+      repeatsSinceLastReport: 0,
+    });
     expect(result.next.get("key-d")).toEqual({
       windowStartMs: start - 1,
       suppressed: 0,
@@ -192,7 +208,10 @@ describe("decideRepeat", () => {
     const first = decideRepeat(new Map(), "key-e", start);
     const second = decideRepeat(first.next, "key-f", start);
 
-    expect(second.decision).toEqual({ kind: "report", repeatsSinceLastReport: 0 });
+    expect(second.decision).toEqual({
+      kind: "report",
+      repeatsSinceLastReport: 0,
+    });
     expect(second.next.get("key-e")).toEqual({
       windowStartMs: start,
       suppressed: 0,
@@ -249,7 +268,10 @@ describe("decideRepeat", () => {
     const nowMs = 1_000_000_000;
     const currentWindowStart = nowMs - 30 * 60 * 1000; // 30 minutes ago
     const ledger = new Map<string, RepeatLedgerEntry>();
-    ledger.set("current-key", { windowStartMs: currentWindowStart, suppressed: 2 });
+    ledger.set("current-key", {
+      windowStartMs: currentWindowStart,
+      suppressed: 2,
+    });
     for (let i = 0; i < 100; i += 1) {
       ledger.set(`newer-key-${i}`, {
         windowStartMs: nowMs - i * 1_000,
