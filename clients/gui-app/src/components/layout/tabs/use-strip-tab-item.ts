@@ -443,6 +443,8 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
       if (rename.isEditing) return;
+      // A key on a button inside the tab (close, chevron) is that button's.
+      if (event.target !== event.currentTarget) return;
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
       activateTab();

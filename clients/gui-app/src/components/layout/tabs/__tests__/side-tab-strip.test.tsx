@@ -903,6 +903,22 @@ describe("<SideTabStrip />", () => {
     expect(screen.queryByTestId("split-quick-actions-split-a")).toBeNull();
   });
 
+  it("leaves Enter and Space on a row's close button to the button, never activating the row", async () => {
+    openEpicTabs(["Alpha", "Beta"]);
+    await renderStrip("/elsewhere", LEFT_STRIP);
+
+    const beta = screen.getByTestId("tab-epic-e-beta");
+    const close = within(beta).getByTestId("tab-close-epic-e-beta");
+    const enter = fireEvent.keyDown(close, { key: "Enter" });
+    const space = fireEvent.keyDown(close, { key: " " });
+    await flushNav();
+
+    // Not cancelled, so the button still synthesizes its own click.
+    expect(enter).toBe(true);
+    expect(space).toBe(true);
+    expect(beta.getAttribute("aria-selected")).toBe("false");
+  });
+
   describe("the Activity view's nested agents (D9)", () => {
     const NO_FLAGS = {
       pendingApproval: false,

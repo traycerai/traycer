@@ -489,7 +489,7 @@ function LeadingSlot(props: SideTabRowProps) {
 /**
  * The chevron button in the leading slot. It is a button inside the row's tab,
  * as the close button is: a click toggles the group and never activates the
- * row, and Enter and Space on it never reach the row's own key handler.
+ * row, and the row's key handler leaves Enter and Space on it to the button.
  */
 function DisclosureChevron(props: { readonly disclosure: SideTabDisclosure }) {
   const { disclosure } = props;
@@ -511,9 +511,6 @@ function DisclosureChevron(props: { readonly disclosure: SideTabDisclosure }) {
           event.stopPropagation();
           // A keyboard click has no pointer position or click count.
           disclosure.onToggle(event.detail > 0);
-        }}
-        onKeyDown={(event) => {
-          event.stopPropagation();
         }}
         className="flex size-4 items-center justify-center rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
       >
