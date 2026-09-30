@@ -1,3 +1,4 @@
+import { stat } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -272,31 +273,34 @@ describe("stackSite", () => {
     expect(stackSite(error)).toBe("-");
   });
 
-  // Verified empirically (15 runs of a standalone script under this same
-  // runtime) before trusting it as a test: an extra `setImmediate` queued
-  // ahead of time on one of the two calls does not change the captured site,
-  // because the awaited macrotask boundary is not part of the synchronous
-  // frame list `stackSite` reads - the two calls still throw from the SAME
-  // call site inside the loop below.
-  it("gives the same site across an awaited setImmediate, regardless of what else was queued first", async () => {
-    async function throwAfterImmediate(): Promise<never> {
+  // The shape that actually exercises the Node-frame filter: resuming an
+  // `await` from inside a `fs.stat` callback (a real libuv completion, not a
+  // promise-native continuation) puts `process.processTicksAndRejections
+  // (node:internal/process/task_queues:...)` on the captured stack ONLY when
+  // something else (here, a `process.nextTick`) was also queued from that
+  // same callback first - verified empirically under plain `node` (not this
+  // suite's `bun` runner) across 5 repeated runs before trusting it: the
+  // no-nextTick variant's stack never shows that frame, the with-nextTick
+  // variant's stack always does. Without the filter the two variants'
+  // positions differ (the with-nextTick site carries the frame's line:col);
+  // with it, they must be equal and carry neither.
+  it("gives the same site whether or not a process.nextTick was queued alongside the fs.stat completion that resumed the await", async () => {
+    async function throwAfterStat(queueNextTickToo: boolean): Promise<never> {
       await new Promise<void>((resolve) => {
-        setImmediate(resolve);
+        stat(import.meta.dirname, () => {
+          if (queueNextTickToo) {
+            process.nextTick(() => {});
+          }
+          resolve();
+        });
       });
-      throwHelper();
+      throw new Error("x");
     }
 
     const sites: string[] = [];
-    for (let i = 0; i < 2; i += 1) {
-      if (i === 1) {
-        // Queue an extra setImmediate ahead of time on the second iteration
-        // only - a difference in what else was pending, not in the site.
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-      }
+    for (const queueNextTickToo of [false, true]) {
       try {
-        await throwAfterImmediate();
+        await throwAfterStat(queueNextTickToo);
       } catch (error) {
         sites.push(stackSite(error));
       }
@@ -304,6 +308,7 @@ describe("stackSite", () => {
 
     expect(sites[0]).toBe(sites[1]);
     expect(sites[0]).not.toBe("-");
+    expect(sites[0]).not.toMatch(/104:5/);
   });
 });
 
