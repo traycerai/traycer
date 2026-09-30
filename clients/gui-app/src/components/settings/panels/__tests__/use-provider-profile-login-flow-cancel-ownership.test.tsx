@@ -165,6 +165,13 @@ function LoginFlowHarness(props: {
   readonly cancelLoginImpl: (
     request: CancelLoginRequest,
   ) => void | Promise<CancelLoginResponse>;
+  /** Defaults to a promise that never settles (matches every other test's
+   *  assumption that `awaitLogin` is inert). A test that presses `start`
+   *  again after reaching `waiting` needs this to actually settle first -
+   *  `start()` itself gates a fresh attempt on `!awaitLogin.isPending`. */
+  readonly awaitLoginImpl?: (
+    request: AwaitLoginRequest,
+  ) => Promise<AwaitLoginResponse>;
 }): ReactNode {
   const startLogin: StartLoginMutation = useMutation<
     StartLoginResponse,
@@ -181,7 +188,9 @@ function LoginFlowHarness(props: {
     AwaitLoginRequest,
     { readonly hostId: string | null }
   >({
-    mutationFn: () => new Promise<AwaitLoginResponse>(() => undefined),
+    mutationFn:
+      props.awaitLoginImpl ??
+      (() => new Promise<AwaitLoginResponse>(() => undefined)),
     onMutate: () => ({ hostId: null }),
   });
   const cancelLogin: CancelLoginMutation = useMutation<
@@ -987,6 +996,244 @@ describe("useProviderProfileLoginFlow — a failed cancel RPC must not latch out
     await act(async () => {
       firstCancel.resolve({ cancelled: true });
       await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("with ownership: the next press releases a holder whose cancel from waiting failed", async () => {
+    // Codex review of OSS #2283 head 8ee3e1a0a: a cancel pressed from the
+    // settled `waiting` state (the started answer already landed) has no
+    // later start answer to retry it if its cancel RPC rejects - round 1
+    // only reopened the latch. Nothing else calls `cancelProfile` again for
+    // this attempt, so with nothing retried the old holder's claim is never
+    // released on the host, and the FIX owes it: the next press (and
+    // unmount) sends it again, best effort, before minting a new holder.
+    const recorder = startLoginRecorder();
+    const cancelLoginImpl = vi
+      .fn<
+        (request: CancelLoginRequest) => void | Promise<CancelLoginResponse>
+      >()
+      .mockImplementationOnce(() => {
+        throw new Error("cancel rpc failed");
+      })
+      .mockImplementation(() => undefined);
+    // `awaitLogin` is dispatched the moment the flow reaches `waiting`
+    // (`beginLogin`'s `awaitOnce`) and normally never settles in this
+    // harness - but `start()` gates a fresh attempt on
+    // `!awaitLogin.isPending`, so this attempt's own copy is rejected
+    // (deliberately AFTER cancelling, not eagerly, since a too-early
+    // settle would resolve the attempt as failed before the cancel ever
+    // runs) to unblock the second press below. `attemptAbandoned()`/
+    // `cancelRequestedRef` make that rejection a no-op for the flow's own
+    // state by the time it lands.
+    const awaitLoginAbandoned = deferred<AwaitLoginResponse>();
+    render(
+      <LoginFlowHarness
+        mode="create"
+        existingProfileId={null}
+        loginCapability={null}
+        supportsLoginOwnership
+        startLoginImpl={recorder.impl}
+        cancelLoginImpl={cancelLoginImpl}
+        awaitLoginImpl={() => awaitLoginAbandoned.promise}
+      />,
+      { wrapper: queryClientWrapper() },
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "start" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      recorder.calls[0].resolve(
+        startLoginAnswer({
+          started: true,
+          profileId: "p-new",
+          url: "https://example.test",
+        }),
+      );
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("flow-state").textContent).toBe("waiting");
+
+    // Cancel from the settled `waiting` state - the first (and, before the
+    // fix, only) cancel - and let its rejection fully settle.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "cancel" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("flow-state").textContent).toBe("cancelled");
+
+    const holderId = (
+      cancelLoginImpl.mock.calls[0]?.[0] as { holderId?: unknown }
+    ).holderId;
+    expect(typeof holderId).toBe("string");
+    expect(cancelLoginImpl).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ holderId, profileId: "p-new" }),
+    );
+
+    // Now release `awaitLogin` and give both it and the rejected cancel
+    // `mutateAsync` room to fully drain through TanStack Query's own
+    // dispatch before the next press.
+    await act(async () => {
+      awaitLoginAbandoned.reject(new Error("await abandoned"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // A fresh press. Before the fix this only starts a new attempt under a
+    // new holder, leaving the first holder's claim stuck on the host with no
+    // UI left to release it from.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "start" }));
+      await Promise.resolve();
+    });
+
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(2);
+    expect(cancelLoginImpl).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ holderId, profileId: "p-new" }),
+    );
+    const secondHolderId = (recorder.requests[1] as { holderId?: unknown })
+      .holderId;
+    expect(typeof secondHolderId).toBe("string");
+    expect(secondHolderId).not.toBe(holderId);
+  });
+
+  it("with ownership: a cancel from waiting that succeeded owes nothing to the next press", async () => {
+    const recorder = startLoginRecorder();
+    const cancelLoginImpl =
+      vi.fn<
+        (request: CancelLoginRequest) => void | Promise<CancelLoginResponse>
+      >();
+    const awaitLoginAbandoned = deferred<AwaitLoginResponse>();
+    render(
+      <LoginFlowHarness
+        mode="create"
+        existingProfileId={null}
+        loginCapability={null}
+        supportsLoginOwnership
+        startLoginImpl={recorder.impl}
+        cancelLoginImpl={cancelLoginImpl}
+        awaitLoginImpl={() => awaitLoginAbandoned.promise}
+      />,
+      { wrapper: queryClientWrapper() },
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "start" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      recorder.calls[0].resolve(
+        startLoginAnswer({
+          started: true,
+          profileId: "p-new",
+          url: "https://example.test",
+        }),
+      );
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("flow-state").textContent).toBe("waiting");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "cancel" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(1);
+
+    // Let the now-abandoned `awaitLogin` mutation settle before the next
+    // press - `start()` gates a fresh attempt on `!awaitLogin.isPending`.
+    // TanStack Query's own dispatch for this needs a macrotask, not just
+    // microtask ticks.
+    await act(async () => {
+      awaitLoginAbandoned.reject(new Error("await abandoned"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // A fresh press: the prior cancel already succeeded, so there is nothing
+    // owed - a second cancel call here would be a wrong, duplicate release.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "start" }));
+      await Promise.resolve();
+    });
+
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("no ownership: a failed cancel from waiting is not re-sent at the next press", async () => {
+    // The owed-release retry is an ownership-only mechanism: a legacy
+    // (null-holder) release is a SCOPE cancel, and sending it again at the
+    // next press would end the very login that press is about to attach to.
+    const recorder = startLoginRecorder();
+    const cancelLoginImpl = vi
+      .fn<
+        (request: CancelLoginRequest) => void | Promise<CancelLoginResponse>
+      >()
+      .mockImplementationOnce(() => {
+        throw new Error("cancel rpc failed");
+      })
+      .mockImplementation(() => undefined);
+    const awaitLoginAbandoned = deferred<AwaitLoginResponse>();
+    render(
+      <LoginFlowHarness
+        mode="reauth"
+        existingProfileId="p-1"
+        loginCapability={null}
+        supportsLoginOwnership={false}
+        startLoginImpl={recorder.impl}
+        cancelLoginImpl={cancelLoginImpl}
+        awaitLoginImpl={() => awaitLoginAbandoned.promise}
+      />,
+      { wrapper: queryClientWrapper() },
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "start" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      recorder.calls[0].resolve(
+        startLoginAnswer({
+          started: true,
+          profileId: "p-1",
+          url: "https://example.test",
+        }),
+      );
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("flow-state").textContent).toBe("waiting");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "cancel" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(1);
+    expect(cancelLoginImpl).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ holderId: null, profileId: "p-1" }),
+    );
+
+    // Let the now-abandoned `awaitLogin` mutation settle before the next
+    // press - `start()` gates a fresh attempt on `!awaitLogin.isPending`.
+    // TanStack Query's own dispatch for this needs a macrotask, not just
+    // microtask ticks.
+    await act(async () => {
+      awaitLoginAbandoned.reject(new Error("await abandoned"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // A fresh press under the released policy: the failed release is not
+    // retried - the new start attaches to whatever the host still holds
+    // instead of a stray scope cancel racing it.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "start" }));
       await Promise.resolve();
     });
 

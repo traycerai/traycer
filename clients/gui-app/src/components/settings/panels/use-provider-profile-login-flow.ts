@@ -459,6 +459,20 @@ export function useProviderProfileLoginFlow(
   const deferredReleaseRef = useRef<{
     readonly profileId: string | null;
   } | null>(null);
+  // Releases the user asked for that the host never acknowledged: a holder
+  // whose cancel call failed with nothing left in its attempt to send it
+  // again - the start answer had already landed, or a fresh press had
+  // already moved the attempt on. Kept by holder rather than by attempt,
+  // since the attempt is what the next press replaces; drained at that press
+  // before its own attempt begins, and at unmount. Only ownership holders
+  // belong here: a legacy release is a scope cancel, and sent at the next
+  // press it would end the very login that press attaches to.
+  const owedReleasesRef = useRef<
+    ReadonlyArray<{
+      readonly holderId: string;
+      readonly profileId: string | null;
+    }>
+  >([]);
   // `finishCancellation` can now be reached twice for one press: once from
   // `cancel` itself, and again when a start call that was already in flight
   // answers. The second visit may still have a login to cancel on the host;
@@ -525,6 +539,10 @@ export function useProviderProfileLoginFlow(
       retryPackFirst: boolean,
     ) => void
   >(() => {});
+  // Same shape for `settleOwedReleases`: the unmount cleanup below must call
+  // it without depending on it, or the mutation's own state changes would
+  // re-run that effect and drain the owed releases mid-flow.
+  const settleOwedReleasesRef = useRef<() => void>(() => {});
 
   const clearRepollTimer = useCallback((): void => {
     if (repollTimerRef.current !== null) {
@@ -547,8 +565,45 @@ export function useProviderProfileLoginFlow(
     return () => {
       unmountedRef.current = true;
       clearRepollTimer();
+      settleOwedReleasesRef.current();
     };
   }, [clearRepollTimer]);
+
+  const oweRelease = useCallback(
+    (holderId: string, profileId: string | null): void => {
+      owedReleasesRef.current = [
+        ...owedReleasesRef.current.filter(
+          (release) => release.holderId !== holderId,
+        ),
+        { holderId, profileId },
+      ];
+    },
+    [],
+  );
+
+  // Sends every owed release once more, best effort: the host keys a
+  // holder's cancel by the holder alone, so one that already landed is a
+  // no-op there, and one that fails again is owed again for the next press
+  // or the unmount. The hook's own `onError` toasts each failure.
+  const settleOwedReleases = useCallback((): void => {
+    const owed = owedReleasesRef.current;
+    if (owed.length === 0) return;
+    owedReleasesRef.current = [];
+    for (const release of owed) {
+      void cancelLogin
+        .mutateAsync({
+          providerId,
+          profileId: release.profileId,
+          holderId: release.holderId,
+        })
+        .then(
+          () => {},
+          () => {
+            oweRelease(release.holderId, release.profileId);
+          },
+        );
+    }
+  }, [cancelLogin, oweRelease, providerId]);
 
   const cancelProfile = useCallback(
     (profileId: string | null): void => {
@@ -576,14 +631,21 @@ export function useProviderProfileLoginFlow(
       // the host. If a later path asked for a release while this one was in
       // flight, that release is sent now with what it learned; otherwise the
       // latch reopens for the next path that learns what the attempt holds -
-      // the start answer still in flight, or the unmount cleanup. `mutateAsync`,
-      // not `mutate` with an `onError`: the promise is the mutation's own
-      // `execute()` and settles after the caller unmounts too, where
-      // per-`mutate` callbacks are dropped (see `beginLogin`). The hook's own
-      // `onError` still toasts.
+      // the start answer still in flight, or the unmount cleanup - and a
+      // holder's release is owed besides, since a settled attempt has no such
+      // path left and a fresh press replaces the attempt without one. Sent
+      // with `mutateAsync`, not `mutate` with an `onError`: the promise is
+      // the mutation's own `execute()` and settles after the caller unmounts
+      // too, where per-`mutate` callbacks are dropped (see `beginLogin`). The
+      // hook's own `onError` still toasts.
       const send = (target: string | null): void => {
         releaseInFlightRef.current = true;
         deferredReleaseRef.current = null;
+        if (holderId !== null) {
+          owedReleasesRef.current = owedReleasesRef.current.filter(
+            (release) => release.holderId !== holderId,
+          );
+        }
         void cancelLogin
           .mutateAsync({ providerId, profileId: target, holderId })
           .then(
@@ -593,20 +655,26 @@ export function useProviderProfileLoginFlow(
               deferredReleaseRef.current = null;
             },
             () => {
-              if (attemptIdRef.current !== thisAttemptId) return;
+              if (attemptIdRef.current !== thisAttemptId) {
+                // A fresh press has already reset the attempt's refs; the
+                // claim this call failed to release is still the host's.
+                if (holderId !== null) oweRelease(holderId, target);
+                return;
+              }
               releaseInFlightRef.current = false;
               const deferred = deferredReleaseRef.current;
               if (deferred !== null) {
                 send(deferred.profileId);
                 return;
               }
+              if (holderId !== null) oweRelease(holderId, target);
               cancelledRef.current = false;
             },
           );
       };
       send(profileId);
     },
-    [cancelLogin, mode, providerId],
+    [cancelLogin, mode, oweRelease, providerId],
   );
 
   // The user-visible half of a cancel: the flow is over as far as this
@@ -1039,6 +1107,7 @@ export function useProviderProfileLoginFlow(
   // from inside async mutation callbacks, well after the first commit.
   useEffect(() => {
     beginLoginRef.current = beginLogin;
+    settleOwedReleasesRef.current = settleOwedReleases;
   });
 
   const start = useCallback(
@@ -1054,6 +1123,9 @@ export function useProviderProfileLoginFlow(
       ) {
         return;
       }
+      // Ahead of the fresh attempt: a holder the last attempt failed to
+      // release is sent again now, before this press claims a new one.
+      settleOwedReleases();
       cancelRequestedRef.current = false;
       cancelledRef.current = false;
       releaseInFlightRef.current = false;
@@ -1074,7 +1146,14 @@ export function useProviderProfileLoginFlow(
         providerLoginAnswerWantsPackRetry(lastAnswerRef.current),
       );
     },
-    [awaitLogin.isPending, beginLogin, mode, providerId, state.kind],
+    [
+      awaitLogin.isPending,
+      beginLogin,
+      mode,
+      providerId,
+      settleOwedReleases,
+      state.kind,
+    ],
   );
 
   const commitPending =
