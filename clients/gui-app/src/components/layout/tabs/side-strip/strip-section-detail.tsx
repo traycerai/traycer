@@ -8,6 +8,14 @@ import type { NeedsYouRow, ToReviewRow } from "./strip-sections";
 /** Both lines' type: 12px, on the row's 16px line. */
 const DETAIL_CLASS = "flex min-w-0 items-center gap-1.5 text-ui-xs leading-4";
 
+/**
+ * The line's words fade at the edge, as the title above does, rather than end
+ * in an ellipsis. The fade is the last 1.25rem of the text's own box, so the
+ * box takes the room the line has (a "+N" after it sits at the line's end) and
+ * short words leave the fade over empty space.
+ */
+const DETAIL_TEXT_CLASS = "header-tab-title-text min-w-0 flex-1";
+
 /** The one word a request asks of the person. */
 const NEEDS_YOU_VERB: Readonly<Record<NeedsYouReason, string>> = {
   approval: "Approve",
@@ -30,7 +38,7 @@ export function NeedsYouDetail(props: {
       className={cn(DETAIL_CLASS, "text-warning-foreground")}
     >
       <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-warning" />
-      <span className="min-w-0 truncate">{text}</span>
+      <span className={DETAIL_TEXT_CLASS}>{text}</span>
       {row.count > 1 ? (
         <span className="shrink-0 tabular-nums">+{row.count - 1}</span>
       ) : null}
@@ -56,7 +64,7 @@ export function ToReviewDetail(props: {
       ) : (
         <X aria-hidden className="size-3 shrink-0 text-destructive" />
       )}
-      <span className="min-w-0 truncate">
+      <span className={DETAIL_TEXT_CLASS}>
         {done ? "Done · ready to review" : "Failed"}
       </span>
     </span>

@@ -33,11 +33,14 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLayoutStore } from "@/stores/layout/layout-store";
 import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
-import { tabRefKey, type StripItem } from "@/stores/tabs/layout";
+import { tabItemId, tabRefKey, type StripItem } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
+  moveSideStripLongListTask,
+  seedSideStripLongList,
   seedSideStripSections,
   seedSideStripTabs,
+  type SeededSection,
 } from "./side-tab-strip-seed";
 import "@/lib/theme-applier";
 import "@/index.css";
@@ -74,6 +77,10 @@ import "@/index.css";
  * the claims only real layout answers: the rows' heights and what truncates
  * first at the narrowest width.
  *
+ * `?scene=sections&tasks=20` is that view over twenty tasks, enough to overflow
+ * the list, and `moveTask` puts one of them in another section as its state
+ * changing would.
+ *
  * `window.__sideTabStripProbe.ready` gates all of it.
  */
 
@@ -92,6 +99,10 @@ interface SideTabStripProbe {
   readonly markTitlePending: (epicId: string, title: string) => void;
   /** Sets the expanded strip's width, in CSS pixels. */
   readonly setWidth: (widthPx: number) => void;
+  /** Moves a long-list task to a section (`tasks=20` only). */
+  readonly moveTask: (epicId: string, section: SeededSection) => void;
+  /** Makes a task's tab the active one, as a shortcut or a palette jump would. */
+  readonly activate: (epicId: string) => void;
 }
 
 declare global {
@@ -109,6 +120,8 @@ function readEdge(): EdgeSide {
 const EDGE = readEdge();
 const SECTIONS_SCENE =
   new URLSearchParams(window.location.search).get("scene") === "sections";
+const LONG_LIST =
+  new URLSearchParams(window.location.search).get("tasks") === "20";
 
 function seedScene(): void {
   if (!SECTIONS_SCENE) {
@@ -122,7 +135,8 @@ function seedScene(): void {
       sideStripView: "activity",
     },
   });
-  seedSideStripSections();
+  if (LONG_LIST) seedSideStripLongList();
+  else seedSideStripSections();
 }
 const detachRequests: string[] = [];
 
@@ -187,6 +201,12 @@ function buildProbe(): SideTabStripProbe {
     setWidth: (widthPx) => {
       useSideTabStripStore.setState({ widthPx });
     },
+    moveTask: moveSideStripLongListTask,
+    activate: (epicId) => {
+      useTabsStore.setState({
+        activeItemId: tabItemId({ kind: "epic", id: epicId }),
+      });
+    },
   };
 }
 
@@ -216,7 +236,7 @@ export function StripFixture(): ReactNode {
     <main data-fixture-content className="min-w-0 flex-1 bg-background" />
   );
   const shell = (
-    <div className="flex h-dvh bg-canvas text-canvas-foreground">
+    <div className="flex h-dvh bg-canvas text-canvas-foreground md:bg-shell-ground">
       <TabNavigationRouteBridge />
       <RootDndProvider>
         {EDGE === "left" ? margin : content}

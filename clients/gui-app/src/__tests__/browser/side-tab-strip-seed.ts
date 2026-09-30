@@ -279,7 +279,7 @@ export function seedSideStripSections(): void {
       feedRow({
         epicId: "fixture-staging",
         minutesAgo: 2,
-        kind: { prompt: "approval", agentTitle: "CDP pass" },
+        kind: { prompt: "approval", agentTitle: "CDP verification pass" },
       }),
       feedRow({
         epicId: "fixture-onboarding",
@@ -300,4 +300,104 @@ export function seedSideStripSections(): void {
     summary: { totalCount: 4, unreadCount: 4, attentionCount: 2 },
     version: 1,
   });
+}
+
+// ── Movement and long lists ─────────────────────────────────────────────────
+
+/** Where a task of the long list sits: which Activity-view section the stores put it in. */
+export type SeededSection = "needs-you" | "to-review" | "working" | "idle";
+
+const LONG_LIST_TASKS: ReadonlyArray<readonly [string, SeededSection]> = [
+  ["Staging CDP verification", "needs-you"],
+  ["Onboarding copy", "needs-you"],
+  ["Release checklist", "to-review"],
+  ["Migration dry run", "to-review"],
+  ["Sidebar redesign", "working"],
+  ["Cookie sync perf", "working"],
+  ["Watcher fix", "working"],
+  ["Layout persist schema", "working"],
+  ["Telemetry rollup", "working"],
+  ["Keyboard shortcuts", "working"],
+  ["Launch notes", "idle"],
+  ["React UI performance", "idle"],
+  ["Billing export", "idle"],
+  ["Search indexing", "idle"],
+  ["Inspector polish", "idle"],
+  ["Terminal resize", "idle"],
+  ["Worktree cleanup", "idle"],
+  ["Checkout flow", "idle"],
+  ["Docs refresh", "idle"],
+  ["Dependency audit", "idle"],
+];
+
+const longListSections = new Map<string, SeededSection>();
+let longListVersion = 0;
+
+/** Writes the stores so every task of the long list is in the section it is assigned. */
+function writeLongList(): void {
+  const working: Record<string, { working: string[]; turn: string[] }> = {};
+  const rows: HostNotificationsCloudFeedRowV11[] = [];
+  let minutesAgo = 0;
+  for (const [epicId, section] of longListSections) {
+    minutesAgo += 3;
+    if (section === "working") {
+      working[epicId] = { working: [`${epicId}-a`], turn: [`${epicId}-a`] };
+    } else if (section === "needs-you") {
+      rows.push(
+        feedRow({
+          epicId,
+          minutesAgo,
+          kind: { prompt: "approval", agentTitle: "CDP pass" },
+        }),
+      );
+    } else if (section === "to-review") {
+      rows.push(feedRow({ epicId, minutesAgo, kind: { stopped: "done" } }));
+    }
+  }
+  __setAgentActivityStateForTests(working, "local", "connected");
+  longListVersion += 1;
+  useCloudNotificationsStore.getState().applySnapshot({
+    rows,
+    summary: {
+      totalCount: rows.length,
+      unreadCount: rows.length,
+      attentionCount: rows.filter(
+        (row) => row.entry.severity === "needs_action",
+      ).length,
+    },
+    version: longListVersion,
+  });
+}
+
+/**
+ * Twenty tasks, two in each of Needs you and To review, six working and ten
+ * idle, the current one working: enough to overflow a short window. Written
+ * through the product's own stores, like `seedSideStripSections`.
+ */
+export function seedSideStripLongList(): void {
+  longListSections.clear();
+  const refs = LONG_LIST_TASKS.map(([name, section]) => {
+    const ref = epicRef(name);
+    longListSections.set(ref.id, section);
+    return ref;
+  });
+  useTabsStore.setState({
+    version: 2,
+    items: refs.map(loneItem),
+    activeItemId: tabItemId(refs[4] ?? refs[0]),
+    stripOrder: refs,
+    systemTabs: { history: null, settings: null },
+    groups: {},
+    customizations: {},
+  });
+  writeLongList();
+}
+
+/** Moves one task of the long list to a section, as its state changing would. */
+export function moveSideStripLongListTask(
+  epicId: string,
+  section: SeededSection,
+): void {
+  longListSections.set(epicId, section);
+  writeLongList();
 }

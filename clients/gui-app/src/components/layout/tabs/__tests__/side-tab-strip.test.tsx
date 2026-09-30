@@ -645,7 +645,11 @@ function installRevealGeometry(
   return {
     scrolled: () => scrolled,
     restore: () => {
-      if (realRect !== undefined) {
+      // jsdom defines the method on `Element`, so without an own descriptor
+      // the override is the one own property to remove.
+      if (realRect === undefined) {
+        Reflect.deleteProperty(HTMLElement.prototype, "getBoundingClientRect");
+      } else {
         Object.defineProperty(
           HTMLElement.prototype,
           "getBoundingClientRect",
@@ -2320,6 +2324,76 @@ describe("<SideTabStrip />", () => {
         "e-epsilon",
         "e-zeta",
       ]);
+    });
+
+    it("announces a task arriving in Needs you once, and no other move", async () => {
+      openSectionedTasks();
+      const releasePrompt = (id: string, minutesAgo: number) => ({
+        id,
+        epicId: "e-release",
+        chatId: "c-release",
+        agentTitle: "Release agent",
+        taskTitle: "Release task",
+        minutesAgo,
+      });
+      seedPrompts([
+        releasePrompt("approval-first", 7),
+        releasePrompt("approval-second", 3),
+      ]);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+      const region = screen.getByTestId("strip-needs-you-announcement");
+      const spoken = new MutationObserver(() => undefined);
+      spoken.observe(region, { childList: true, subtree: true });
+      // Gamma and the tab-less Release task were waiting when the list
+      // appeared: nothing to announce.
+      expect(region.textContent).toBe("");
+      const approval = { ...NO_FLAGS, pendingApproval: true };
+
+      // Beta, which was running, now waits on an approval.
+      act(() => {
+        indicatorState.value = {
+          epics: {
+            "e-gamma": approval,
+            "e-beta": approval,
+            "e-delta": { ...NO_FLAGS, unreadDone: true },
+            "e-epsilon": { ...NO_FLAGS, unreadFailure: true },
+          },
+          chats: {},
+        };
+        // The strip reads its indicators when it renders; a new active tab does.
+        useTabsStore.setState({
+          activeItemId: tabItemId({ kind: "epic", id: "e-zeta" }),
+        });
+      });
+      expect(header("needs-you").textContent).toBe("Needs you3");
+      expect(region.textContent).toBe("Beta needs you");
+      expect(spoken.takeRecords().length).toBeGreaterThan(0);
+
+      // Delta and Epsilon are read, leaving To review, and Zeta starts working:
+      // moves, but not into Needs you.
+      act(() => {
+        indicatorState.value = {
+          epics: { "e-gamma": approval, "e-beta": approval },
+          chats: {},
+        };
+        isWorking("e-zeta", "c-zeta");
+        useTabsStore.setState({
+          activeItemId: tabItemId({ kind: "epic", id: "e-alpha" }),
+        });
+      });
+      expect(screen.queryByTestId("side-strip-section-to-review")).toBeNull();
+      expect(region.textContent).toBe("Beta needs you");
+      expect(spoken.takeRecords()).toEqual([]);
+
+      // Release task's oldest prompt is answered and it still waits on the
+      // other: the same task, not an arrival.
+      seedPrompts([releasePrompt("approval-second", 3)]);
+      expect(
+        screen.getByTestId("strip-needs-you-prompt").textContent,
+      ).toContain("Release task");
+      expect(region.textContent).toBe("Beta needs you");
+      expect(spoken.takeRecords()).toEqual([]);
+      spoken.disconnect();
     });
 
     it("numbers the Alt-digit badges in the order the sections draw the tabs, and the digit opens that tab", async () => {

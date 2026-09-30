@@ -66,7 +66,9 @@ test("starts every title on the row's padding, and does not move it on hover", a
 
   for (const id of ["staging", "cookie", "react"]) {
     const target = row(page, id);
-    const title = target.locator(".header-tab-title-text");
+    const title = target
+      .getByTestId("side-tab-title")
+      .locator(".header-tab-title-text");
     const rowBox = await boxOf(target);
     const atRest = await boxOf(title);
     expect(atRest.x - rowBox.x).toBeCloseTo(8, 0);
@@ -99,7 +101,9 @@ test("keeps a two-line row's time on hover, and the close joins after it", async
   // The time steps aside for the close, which sits on the title's line.
   expect(closeBox.x).toBeGreaterThanOrEqual(timeHovered.x + timeHovered.width);
   expect(timeAtRest.x - timeHovered.x).toBeCloseTo(20, 0);
-  const titleBox = await boxOf(staging.locator(".header-tab-title-text"));
+  const titleBox = await boxOf(
+    staging.getByTestId("side-tab-title").locator(".header-tab-title-text"),
+  );
   expect(closeBox.y + closeBox.height / 2).toBeCloseTo(
     titleBox.y + titleBox.height / 2,
     0,
@@ -113,7 +117,9 @@ test("has a one-line row's meter fade out where the close fades in, and the titl
   const cookie = row(page, "cookie");
   const meter = cookie.getByTestId("side-tab-meter");
   const close = closeWrapper(page, "cookie");
-  const title = cookie.locator(".header-tab-title-text");
+  const title = cookie
+    .getByTestId("side-tab-title")
+    .locator(".header-tab-title-text");
   await expect(meter).toBeVisible();
   await expect(close).toHaveCSS("opacity", "0");
   const titleAtRest = await boxOf(title);
@@ -134,7 +140,9 @@ test("cuts the title short before the time and the close at 192px", async ({
   await page.evaluate("window.__sideTabStripProbe.setWidth(192)");
   await nextFrames(page, 3);
   const staging = row(page, "staging");
-  const title = staging.locator(".header-tab-title-text");
+  const title = staging
+    .getByTestId("side-tab-title")
+    .locator(".header-tab-title-text");
   const time = staging.getByTestId("side-tab-section-time");
 
   expect(
@@ -162,4 +170,30 @@ test("cuts the title short before the time and the close at 192px", async ({
   expect(detailBox.x + detailBox.width).toBeLessThanOrEqual(
     rowBox.x + rowBox.width,
   );
+});
+
+test("fades a second line at the edge at 192px, as the title does, instead of ending in an ellipsis", async ({
+  page,
+}) => {
+  await openStrip(page);
+  await page.evaluate("window.__sideTabStripProbe.setWidth(192)");
+  await nextFrames(page, 3);
+  const staging = row(page, "staging");
+  const title = staging
+    .getByTestId("side-tab-title")
+    .locator(".header-tab-title-text");
+  const detailText = staging
+    .getByTestId("side-tab-section-detail")
+    .locator(".header-tab-title-text");
+  const faded = (locator: Locator) =>
+    locator.evaluate((node) => {
+      const style = getComputedStyle(node);
+      return { mask: style.maskImage, overflow: style.textOverflow };
+    });
+
+  expect(
+    await detailText.evaluate((node) => node.scrollWidth > node.clientWidth),
+  ).toBe(true);
+  expect(await faded(detailText)).toEqual(await faded(title));
+  expect((await faded(detailText)).overflow).toBe("clip");
 });

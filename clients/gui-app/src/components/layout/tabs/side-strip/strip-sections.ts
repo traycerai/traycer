@@ -172,6 +172,15 @@ export interface StripSectionGroup {
   readonly entries: ReadonlyArray<StripSectionEntry>;
 }
 
+/** The rows a section draws: a split's halves count separately, a prompt once. */
+export function sectionTaskCount(group: StripSectionGroup): number {
+  return group.entries.reduce(
+    (count, entry) =>
+      count + (entry.kind === "tabs" ? entry.members.length : 1),
+    0,
+  );
+}
+
 /**
  * The Needs you entries for prompts whose task has no row in the strip: one
  * per task, then any prompt that names no task on its own.

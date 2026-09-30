@@ -55,9 +55,50 @@ export const SIDE_TAB_SECTION_ROW_CLASS = {
   twoLine: "h-11.5",
   oneLine: "h-7",
 } as const;
+/**
+ * The strip's own ground, so a badge reads as cut out of what it sits on: the
+ * canvas on a narrow window, the shell ground on a wide one.
+ */
+const SIDE_STRIP_GROUND_FILL_CLASS = "bg-canvas md:bg-shell-ground";
 /** A section header's button: the "Tasks" label's type, as a full-width row. */
 export const SIDE_STRIP_SECTION_HEADER_CLASS =
   "group/side-section flex w-full shrink-0 items-center gap-1 rounded-md px-2 pt-2 pb-1 text-start text-overline font-medium uppercase tracking-wide outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50 [-webkit-app-region:no-drag]";
+/**
+ * The live list's section header sticks to the top of the list in the strip's
+ * own ground, so the rows that scroll under it are hidden and the header of the
+ * section at the top stays readable; a later header covers the one before it.
+ * Sticking is measured from inside the list's 8px padding, so `-top-2` puts it
+ * on the list's own edge.
+ */
+export const SIDE_STRIP_STICKY_SECTION_HEADER_CLASS = cn(
+  "sticky -top-2 z-10",
+  SIDE_STRIP_GROUND_FILL_CLASS,
+);
+/**
+ * What covers the Activity list's scrollport: the sticky header's 26px at the
+ * top and the bottom fade's 1.25rem. Revealing a row (an activation, a
+ * shortcut) keeps it clear of both.
+ */
+export const SIDE_STRIP_SECTIONED_SCROLL_PADDING_CLASS =
+  "scroll-pt-6.5 scroll-pb-5";
+/**
+ * The "↑ N need you" pill. Its seat is a zero-height row that sticks just under
+ * the sticky header (its 26px, a 4px gap, less the list's 8px padding), so the
+ * list below does not move when the pill comes and goes. The pill is neutral
+ * apart from its amber text, and so is its shadow.
+ */
+export const SIDE_STRIP_NEEDS_YOU_PILL_SEAT_CLASS =
+  "pointer-events-none sticky top-5.5 z-20 -mb-0.5 flex h-0 justify-center";
+export const SIDE_STRIP_NEEDS_YOU_PILL_CLASS =
+  "pointer-events-auto h-6 rounded-full bg-popover px-2.5 text-ui-xs font-medium text-warning-foreground shadow-md ring-1 ring-foreground/10 outline-none select-none hover:bg-popover/80 focus-visible:ring-3 focus-visible:ring-ring/50 animate-in fade-in-0 duration-120 ease-out motion-reduce:animate-none [-webkit-app-region:no-drag]";
+/**
+ * A row that changes section slides from its old place to its new one in
+ * 200ms, on a strong ease-out: it starts fast so the eye catches it, then
+ * settles. The arrival glow fades over 600ms. Only the slide is motion.
+ */
+export const SIDE_STRIP_SLIDE_MS = 200;
+export const SIDE_STRIP_SLIDE_EASING = "cubic-bezier(0.23, 1, 0.32, 1)";
+export const SIDE_STRIP_ARRIVAL_GLOW_MS = 600;
 /**
  * The 16px icon box and its 8px gap that a nav row (Notifications, All tasks,
  * Home, New Task) keeps. A task row has no leading slot: its title starts on
@@ -184,11 +225,6 @@ export const STRIP_AGENT_TRAILING_CLASS = "shrink-0 tabular-nums";
 /** Nested rows fade in over 120ms with no height slide; reduced motion drops it. */
 export const STRIP_AGENT_FADE_IN_CLASS =
   "animate-in fade-in-0 duration-120 ease-out motion-reduce:animate-none";
-/**
- * The strip's own ground, so a badge reads as cut out of what it sits on: the
- * canvas on a narrow window, the shell ground on a wide one.
- */
-const SIDE_STRIP_GROUND_FILL_CLASS = "bg-canvas md:bg-shell-ground";
 /** A group header's badge: a 10px disc, ringed in the ground. */
 export const SIDE_TAB_BADGE_CLASS = cn(
   "size-2.5 ring-2 ring-canvas md:ring-shell-ground",

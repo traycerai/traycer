@@ -1,6 +1,7 @@
-import { Fragment, useMemo, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
 import { VERTICAL_STRIP_AXIS } from "@/components/epic-canvas/dnd/strip-axis";
+import { resolveMinimapRailMaskClassName } from "@/components/minimap/minimap-rail-mask";
 import type { EdgeSide } from "@/lib/layout/layout-arrangement";
 import { cn } from "@/lib/utils";
 import {
@@ -20,9 +21,13 @@ import {
 import { SideStripItem } from "./side-strip-item";
 import { SideStripSections } from "./side-strip-sections";
 import { useLiveAgentsInStrip } from "./strip-agents-mode";
-import { SIDE_STRIP_LIST_CLASS } from "./side-strip-tokens";
+import {
+  SIDE_STRIP_LIST_CLASS,
+  SIDE_STRIP_SECTIONED_SCROLL_PADDING_CLASS,
+} from "./side-strip-tokens";
 import { SideTabGroupHeader } from "./side-tab-group-header";
 import type { SideTabRowVariant } from "./side-tab-row";
+import { useSectionScroll } from "./use-section-scroll";
 
 /** One run of a group: its tab members' count and notification entities. */
 interface GroupRun {
@@ -38,7 +43,8 @@ interface GroupRun {
  * scrolls, and every row is reachable by wheel and by the leader badges.
  *
  * The Layered view lists the rows in the user's order under their group
- * headers; the Activity view lists them in its sections.
+ * headers; the Activity view lists them in its sections, where the list fades
+ * at its bottom edge while more lies below.
  */
 export function SideStripRowList(props: {
   readonly controller: TabStripController;
@@ -64,14 +70,16 @@ export function SideStripRowList(props: {
     [rows, layoutItems, tabs],
   );
   const handlers = useSideStripHandlers(controller);
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const setScrollerNode = useStripScroller({
     axis: VERTICAL_STRIP_AXIS,
     activeItemId,
     itemCount: headerItemIds.length,
-    extraRef: null,
+    extraRef: setScroller,
   });
   const lastIndex = headerItemIds.length - 1;
   const sectioned = useLiveAgentsInStrip() && variant === "expanded";
+  const scroll = useSectionScroll(sectioned ? scroller : null);
   return (
     <div
       ref={setScrollerNode}
@@ -87,10 +95,17 @@ export function SideStripRowList(props: {
       className={cn(
         SIDE_STRIP_LIST_CLASS[variant],
         "no-scrollbar min-h-0 flex-[0_1_auto] overflow-y-auto overscroll-y-contain [-webkit-app-region:no-drag]",
+        sectioned && SIDE_STRIP_SECTIONED_SCROLL_PADDING_CLASS,
+        sectioned && resolveMinimapRailMaskClassName(false, scroll.moreBelow),
       )}
     >
       {sectioned ? (
-        <SideStripSections controller={controller} handlers={handlers} />
+        <SideStripSections
+          controller={controller}
+          handlers={handlers}
+          scroller={scroller}
+          needsYouAbove={scroll.needsYouAbove}
+        />
       ) : (
         rows.map((row) => (
           <Fragment key={row.itemId}>

@@ -151,6 +151,34 @@ describe("revealMemberAlongAxis", () => {
         revealMemberAlongAxis(scroller, boxed(place(120, 60)), axis);
         expect(offset(scroller)).toBe(0);
       });
+
+      // Something covers 30 at the start and 20 at the end of the scrollport.
+      const padded = (): HTMLElement => {
+        const scroller = boxed(view);
+        for (const [side, px] of [
+          ["left", 30],
+          ["top", 30],
+          ["right", 20],
+          ["bottom", 20],
+        ] as const) {
+          scroller.style.setProperty(`scroll-padding-${side}`, `${px}px`);
+        }
+        return scroller;
+      };
+
+      it("keeps a member clipped at the end clear of the scroll-padding", () => {
+        const scroller = padded();
+        revealMemberAlongAxis(scroller, boxed(place(250, 80)), axis);
+        expect(offset(scroller)).toBe(50);
+      });
+
+      it("keeps a member clipped at the start clear of the scroll-padding", () => {
+        const scroller = padded();
+        if (axis.id === "x") scroller.scrollLeft = 50;
+        else scroller.scrollTop = 50;
+        revealMemberAlongAxis(scroller, boxed(place(110, 60)), axis);
+        expect(offset(scroller)).toBe(30);
+      });
     });
   }
 });

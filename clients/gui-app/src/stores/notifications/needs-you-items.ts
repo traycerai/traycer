@@ -55,7 +55,7 @@ export function needsYouReasonOf(
  * The task a prompt belongs to: the epic its notification payload names, or
  * `null` when the payload names none (an approval may carry no epic).
  */
-function needsYouItemEpicId(item: NeedsYouItem): string | null {
+export function needsYouItemEpicId(item: NeedsYouItem): string | null {
   const payload = item.row.payload;
   if (payload?.kind === "approval" || payload?.kind === "interview") {
     return payload.epicId ?? null;
