@@ -44,6 +44,18 @@ export const DEFAULT_TAB_CUSTOMIZATION: TabCustomization = {
   groupId: null,
 };
 
+/**
+ * The colour a tab draws: its group's while it is grouped, else its own. The
+ * group's colour is read, never written into the tab's customization, so the
+ * tab's own colour is what comes back when it leaves the group.
+ */
+export function effectiveTabColor(
+  group: { readonly color: string } | null | undefined,
+  ownColor: string | null,
+): string | null {
+  return group?.color ?? ownColor;
+}
+
 export function parseTabCustomizations(value: unknown): TabCustomizations {
   const parsed = z.record(z.string(), tabCustomizationSchema).safeParse(value);
   return parsed.success ? parsed.data : {};

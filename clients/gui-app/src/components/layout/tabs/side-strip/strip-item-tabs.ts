@@ -9,25 +9,34 @@ export type StripItemsSource = Pick<
   "headerItemIds" | "layoutItems" | "groups" | "customizations" | "tabs"
 >;
 
+/** The tab group a strip item is in, as a section's block draws it. */
+export interface StripItemGroup {
+  readonly id: string;
+  readonly name: string;
+  readonly color: string;
+  /** The group's tasks in the whole strip, a split's halves each; a block's "of N". */
+  readonly taskCount: number;
+}
+
 /** One strip item's tabs (two for a split pair) in strip order. */
 export interface StripItemTabs {
   readonly itemId: string;
   /** The item's index in the strip, which its drop slot is keyed by. */
   readonly stripIndex: number;
-  readonly groupColor: string | null;
+  readonly group: StripItemGroup | null;
   readonly tabs: ReadonlyArray<HeaderTab>;
 }
 
 /**
  * The strip's items in the user's order, every tab group flattened: a member
- * of a collapsed group is here, carrying the group's color.
+ * of a collapsed group is here, carrying its group.
  */
 export function stripItemTabsOf(
   source: StripItemsSource,
 ): ReadonlyArray<StripItemTabs> {
   const { headerItemIds, layoutItems, groups, customizations, tabs } = source;
   const tabsByKey = new Map(tabs.map((tab) => [tabRefKey(tab), tab]));
-  return stripRowsOf(
+  const items = stripRowsOf(
     headerItemIds,
     layoutItems,
     groups,
@@ -38,17 +47,28 @@ export function stripItemTabsOf(
     const itemTabs = flattenStripItemRefs(item).flatMap(
       (ref) => tabsByKey.get(tabRefKey(ref)) ?? [],
     );
-    return itemTabs.length === 0
-      ? []
-      : [
-          {
-            itemId: row.itemId,
-            stripIndex: row.stripIndex,
-            groupColor: row.group?.group.color ?? null,
-            tabs: itemTabs,
-          },
-        ];
+    return itemTabs.length === 0 ? [] : [{ row, tabs: itemTabs }];
   });
+  const taskCounts = new Map<string, number>();
+  for (const { row, tabs: itemTabs } of items) {
+    if (row.group === null) continue;
+    const { groupId } = row.group;
+    taskCounts.set(groupId, (taskCounts.get(groupId) ?? 0) + itemTabs.length);
+  }
+  return items.map(({ row, tabs: itemTabs }) => ({
+    itemId: row.itemId,
+    stripIndex: row.stripIndex,
+    group:
+      row.group === null
+        ? null
+        : {
+            id: row.group.groupId,
+            name: row.group.group.name,
+            color: row.group.group.color,
+            taskCount: taskCounts.get(row.group.groupId) ?? 0,
+          },
+    tabs: itemTabs,
+  }));
 }
 
 /** The tasks that have a row in the strip, a collapsed group's members included. */

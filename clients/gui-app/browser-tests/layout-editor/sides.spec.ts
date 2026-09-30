@@ -21,7 +21,6 @@ import { moveTo } from "../support/layout-editor/input.ts";
 import { layoutEditorUse, sharedPage } from "../support/layout-editor/pages.ts";
 import {
   contrastRatio,
-  countLit,
   inkInside,
   resolveRgb,
   rgbText,
@@ -56,8 +55,8 @@ import { waitForStableBoxes } from "../support/layout-editor/waits.ts";
 //        chip its tint.
 //   L-163. The session row (the Customizing tab) is a SOLID
 //        `--warning-foreground` object with `--background` text.
-//   Row kit. The group line is ONE continuous line down the group, the split
-//        pair's rows included.
+//   Row kit. The group is ONE tinted block holding its header and every
+//        member, the split pair's rows included.
 //   S-33. With the inspector docked left, the traffic-light reserve moves to
 //        its header and the strip's title row drops to the 12px gutter.
 //   6.1. A right strip sits left of a right-docked inspector, never under it.
@@ -743,9 +742,9 @@ async function assertTileFill(page: Page): Promise<void> {
 const CHIP_DIFFERS_FLOOR = 1.05;
 
 /**
- * The group line in the expanded strip, at rest (review-10): down the
- * group's inline-start edge as ONE continuous line across its members,
- * including the split pair's rows inside the pair's padding.
+ * The group block in the expanded strip, at rest: ONE tinted box holding the
+ * group's header and every member, including the split pair, with the members'
+ * rows inside its box and a fill that is not the strip's own ground.
  *
  * This used to also check the 10px status badge on a 16px leading tile, but
  * a task row has no leading slot any more: its one status trails
@@ -755,75 +754,53 @@ const CHIP_DIFFERS_FLOOR = 1.05;
  */
 async function assertRowKit(page: Page): Promise<void> {
   const kit = await page.evaluate<{
-    readonly lines: ReadonlyArray<{
-      readonly rect: Rect;
-      readonly color: string;
-      readonly inPair: boolean;
-    }>;
+    readonly block: Rect | null;
+    readonly fill: string;
+    readonly header: Rect | null;
+    readonly rows: ReadonlyArray<Rect>;
   }>(`(() => {
     const strip = document.querySelector('[data-testid="side-tab-strip"]');
     const rect = (node) => {
       const r = node.getBoundingClientRect();
       return { x: r.x, y: r.y, width: r.width, height: r.height };
     };
-    const lines = [...strip.querySelectorAll('[data-testid="side-tab-group-line"]')].map((line) => ({
-      rect: rect(line),
-      color: getComputedStyle(line).backgroundColor,
-      inPair: line.closest("[data-side-split-pair]") !== null,
-    }));
-    return { lines };
+    const block = strip.querySelector('[data-testid^="side-tab-group-block-"]');
+    if (block === null) return { block: null, fill: "", header: null, rows: [] };
+    const header = block.querySelector('[data-testid^="side-tab-group-header-"]');
+    return {
+      block: rect(block),
+      fill: getComputedStyle(block).backgroundColor,
+      header: header === null ? null : rect(header),
+      rows: [...block.querySelectorAll('[role="tab"]')].map(rect),
+    };
   })()`);
   const violations = violationLog();
-  const lines = kit.lines;
+  const { block, header, rows } = kit;
+  violations.check(block !== null, "no group block in the expanded strip");
+  violations.check(header !== null, "the group block has no header inside it");
   violations.check(
-    lines.length >= 3,
-    `${String(lines.length)} group line segments, expected one per member of the seeded group (Alpha and the Beta/Gamma pair)`,
+    rows.length >= 3,
+    `${String(rows.length)} member rows inside the block, expected the seeded group's three (Alpha and the Beta/Gamma pair)`,
   );
-  if (lines.length >= 3) {
+  if (block !== null) {
     note(
-      `group line segments: ${lines.map((line) => `${boxText(line.rect)}${line.inPair ? " (in pair)" : ""}`).join(", ")}`,
-    );
-    const first = lines[0];
-    for (const line of lines) {
-      violations.check(
-        Math.abs(line.rect.x - first.rect.x) <= 0.5,
-        `a group line segment${line.inPair ? " inside the split pair" : ""} sits at x=${line.rect.x.toFixed(1)}, the group's first at x=${first.rect.x.toFixed(1)}: the line steps sideways`,
-      );
-    }
-    for (let index = 1; index < lines.length; index += 1) {
-      const above = lines[index - 1].rect;
-      const below = lines[index].rect;
-      const gap = below.y - (above.y + above.height);
-      violations.check(
-        gap <= 0.5,
-        `the group line breaks for ${gap.toFixed(1)}px between y=${(above.y + above.height).toFixed(1)} and y=${below.y.toFixed(1)}`,
-      );
-    }
-    // The pixels, top to bottom down the first segment's centre column.
-    const last = lines[lines.length - 1];
-    const top = first.rect.y;
-    const bottom = last.rect.y + last.rect.height;
-    const colour = await resolveRgb(page, first.color);
-    const count = await countLit(
-      page,
-      {
-        x: first.rect.x + first.rect.width / 2 - 0.5,
-        y: top,
-        width: 1,
-        height: Math.max(1, bottom - top),
-      },
-      { horizontal: false, target: colour, tolerance: 60 },
-    );
-    const lit = count.along === 0 ? 0 : count.lit / count.along;
-    note(
-      `group line pixels: ${String(count.lit)}/${String(count.along)} in the group colour ${rgbText(colour)} from y=${top.toFixed(1)} to y=${bottom.toFixed(1)}`,
+      `group block: ${boxText(block)}, fill ${kit.fill}; ${String(rows.length)} rows inside`,
     );
     violations.check(
-      lit >= 0.97,
-      `only ${(lit * 100).toFixed(1)}% of the group line's run from y=${top.toFixed(1)} to y=${bottom.toFixed(1)} is painted in the group colour, so it is not one continuous line`,
+      kit.fill !== "rgba(0, 0, 0, 0)",
+      "the group block paints no fill, so it does not read as one block",
     );
+    for (const row of rows) {
+      violations.check(
+        row.x >= block.x - 0.5 &&
+          row.x + row.width <= block.x + block.width + 0.5 &&
+          row.y >= block.y - 0.5 &&
+          row.y + row.height <= block.y + block.height + 0.5,
+        `a member row at ${boxText(row)} overruns its group block at ${boxText(block)}`,
+      );
+    }
   }
-  violations.assertNone("Row kit: the expanded row's group line");
+  violations.assertNone("Row kit: the expanded group's block");
 }
 
 /** A right strip sits left of a right-docked inspector, never under it (6.1). */
@@ -943,14 +920,14 @@ test.describe("a frameless window (no window-controls overlay)", () => {
     await assertTileFill(page);
   });
 
-  test("the expanded row's group line is one continuous line", async () => {
+  test("the expanded group is one tinted block holding its header and members", async () => {
     const page = getPage();
     await configureCanvas(page, tabsAt("left", false));
     await moveTo(page, 1, 1);
     await waitForStableBoxes(
       page,
-      ['[data-testid="side-tab-strip"] [data-testid="side-tab-group-line"]'],
-      3,
+      ['[data-testid="side-tab-strip"] [data-testid^="side-tab-group-block-"]'],
+      1,
     );
     await assertRowKit(page);
   });

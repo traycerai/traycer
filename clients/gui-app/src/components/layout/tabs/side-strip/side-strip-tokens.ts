@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import type { SideGroupLineSeat, SideTabRowVariant } from "./side-tab-row";
+import type { SideTabRowVariant } from "./side-tab-row";
 
 /**
  * The vertical tab strip's visual constants, and their only home.
@@ -117,11 +117,10 @@ export const SIDE_TAB_SESSION_ACTIVE_CLASS = "bg-warning-foreground";
  * The per-tab colour accent (owner ruling, fix/layout-regression-and-improvements):
  * an expanded row's 4px bar down its own leading edge, inside the row's own
  * padding - never tinted, never auto-hashed (D11's `tabAutoTint` no longer
- * reaches this mark). Always rendered, coloured through `--side-tab-accent`;
- * a colourless tab sets it to `transparent`, so the mark reserves its space
- * without inventing a colour. Distinct from the 2px group line (S-16), which
- * sits *outside* the row in the list's gutter, so the two never merge into
- * one mark even on the same row.
+ * reaches this mark). Rendered on every row outside a group's block or column,
+ * coloured through `--side-tab-accent`; a colourless tab sets it to
+ * `transparent`, so the mark reserves its space without inventing a colour. A
+ * row inside a group draws none: its block or column carries the group's colour.
  */
 export const SIDE_TAB_ACCENT_BAR_CLASS =
   "pointer-events-none absolute inset-y-1.5 start-0 w-1 rounded-full bg-(--side-tab-accent)";
@@ -136,35 +135,6 @@ export const SIDE_TAB_ACCENT_BAR_CLASS =
 export const SIDE_TAB_TILE_ACCENT_RING_CLASS =
   "pointer-events-none absolute inset-0 z-22 rounded-xl ring-2 ring-(--side-tab-accent)";
 /**
- * The group colour line down the group's inline-start edge, in the list's
- * inset outside the row fill: 2px wide, 6px before the row's box.
- */
-export const SIDE_TAB_GROUP_LINE_CLASS = "w-0.5";
-/**
- * Where each member's segment of the group line sits, so a group's segments
- * join into one line at one x. A lone row's segment reaches across the row
- * gap below it (2px expanded, 8px collapsed). A split pair's members sit
- * inside the pair's 2px padding: the top member's segment also covers the
- * pair's top padding and the 4px seam, the bottom member's its bottom padding
- * and the row gap. Expanded, the members are also 2px further in than a lone
- * row, so their segments step 2px further out; collapsed, the pair is centred
- * like a lone tile and they do not.
- */
-export const SIDE_TAB_GROUP_LINE_SEAT_CLASS: Readonly<
-  Record<SideTabRowVariant, Readonly<Record<SideGroupLineSeat, string>>>
-> = {
-  expanded: {
-    row: "-start-1.5 top-0 -bottom-0.5",
-    "pair-top": "-start-2 -top-0.5 -bottom-1",
-    "pair-bottom": "-start-2 top-0 -bottom-1",
-  },
-  collapsed: {
-    row: "-start-1.5 top-0 -bottom-2",
-    "pair-top": "-start-1.5 -top-0.5 -bottom-1",
-    "pair-bottom": "-start-1.5 top-0 -bottom-2.5",
-  },
-};
-/**
  * Where a drop's 2px line sits: centred in the row gap before or after the
  * row it is on (2px expanded, 8px on the rail).
  */
@@ -174,7 +144,47 @@ export const SIDE_TAB_DROP_LINE_SEAT_CLASS: Readonly<
   expanded: { before: "-top-0.5", after: "-bottom-0.5" },
   collapsed: { before: "-top-1.25", after: "-bottom-1.25" },
 };
+/**
+ * A tab group's fill, in the expanded strip's block and the rail's column: its
+ * colour (`--side-tab-group-color`) at 12% over the strip's ground (dark) or
+ * 16% (light). The ground is the strip's own, so the fill tints whatever the
+ * theme paints there (`SIDE_STRIP_GROUND_FILL_CLASS`).
+ */
+const SIDE_TAB_GROUP_FILL_CLASS = cn(
+  "bg-[color-mix(in_srgb,var(--side-tab-group-color)_16%,var(--canvas))] md:bg-[color-mix(in_srgb,var(--side-tab-group-color)_16%,var(--shell-ground))]",
+  "dark:bg-[color-mix(in_srgb,var(--side-tab-group-color)_12%,var(--canvas))] dark:md:bg-[color-mix(in_srgb,var(--side-tab-group-color)_12%,var(--shell-ground))]",
+);
+/** A tab group in the expanded strip: one rounded block holding the header and the rows, 4px inside its edge. */
+export const SIDE_TAB_GROUP_BLOCK_CLASS = cn(
+  "flex flex-col gap-0.5 rounded-xl p-1 text-foreground",
+  SIDE_TAB_GROUP_FILL_CLASS,
+);
+/**
+ * A tab group in the rail: one rounded column around its tiles, 4px inside its
+ * edge and 4px between them. It is 48px wide against the 44px the list leaves,
+ * so it overhangs 2px on each side, into the list's own 8px padding. The 14px
+ * radius sits concentric round the tiles' 10px. A split pair in it drops its
+ * side padding, so it is a tile wide and keeps the tiles' 4px inset.
+ */
+export const SIDE_TAB_GROUP_COLUMN_CLASS = cn(
+  "-mx-0.5 flex flex-col items-center gap-1 rounded-3xl p-1 [&_[data-side-split-pair]]:px-0",
+  SIDE_TAB_GROUP_FILL_CLASS,
+);
+/** The Layered view's group header: a 28px row, its name on the rows' own title edge. */
 export const SIDE_TAB_GROUP_HEADER_CLASS = "h-7";
+/**
+ * The block's header name, in the group's colour lifted to 4.5:1 on the block
+ * (`--side-tab-group-name`, set by `useGroupNameColor`); it falls back to the
+ * group's colour.
+ */
+export const SIDE_TAB_GROUP_NAME_CLASS =
+  "font-medium text-(--side-tab-group-name,var(--side-tab-group-color))";
+/**
+ * The Activity view's block label: a 20px line in 11px medium text, under the
+ * section header's own weight so the sections stay the loudest structure.
+ */
+export const SIDE_TAB_GROUP_LABEL_CLASS =
+  "flex h-5 shrink-0 items-center gap-1 px-2 text-overline font-medium select-none";
 /**
  * A collapsed-rail tile (D4): the collapsed row itself, 40x44 with a 10px
  * radius, stacking the monogram over the meter 4px apart.
@@ -228,14 +238,8 @@ export const STRIP_AGENT_TRAILING_CLASS = "shrink-0 tabular-nums";
 /** Nested rows fade in over 120ms with no height slide; reduced motion drops it. */
 export const STRIP_AGENT_FADE_IN_CLASS =
   "animate-in fade-in-0 duration-120 ease-out motion-reduce:animate-none";
-/** A group header's badge: a 10px disc, ringed in the ground. */
-export const SIDE_TAB_BADGE_CLASS = cn(
-  "size-2.5 ring-2 ring-canvas md:ring-shell-ground",
-  SIDE_STRIP_GROUND_FILL_CLASS,
-);
-/** Where a collapsed group's badge sits on its expanded header: the header's top-right corner. */
-export const SIDE_TAB_BADGE_POSITION_CLASS =
-  "absolute top-0 right-0 translate-x-1/4 -translate-y-1/4";
+/** A collapsed group's badge on its header: the trailing 20px cell a row's status has. */
+export const SIDE_TAB_BADGE_CLASS = "size-5 shrink-0";
 /**
  * The rail tile's badge (D5): a 14px disc of the strip's ground holding a 12px
  * status glyph, at the tile's top-right, 1px above and 1px in.
@@ -273,9 +277,6 @@ export const SIDE_SPLIT_PAIR_COLLAPSED_HAIRLINE_CLASS = "w-5";
 /** The inline rename input in an expanded row's title slot. */
 export const SIDE_TAB_TITLE_INPUT_CLASS =
   "min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring";
-/** A group header's colour pill holding the group name; the colour arrives as `--side-tab-group-color`. */
-export const SIDE_TAB_GROUP_PILL_CLASS =
-  "rounded-md bg-(--side-tab-group-color) px-1.5 text-ui-xs font-medium text-black";
 /** A row's footprint before hydration: the expanded row's height and radius. */
 export const SIDE_TAB_ROW_PLACEHOLDER_CLASS = "h-8 w-full rounded-lg";
 /** The 8px inline inset of the top block's rows. */

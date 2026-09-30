@@ -2,7 +2,6 @@ import { useColumnOverlayPlacement } from "@/components/layout/column-edge-conte
 import {
   useContext,
   useId,
-  useState,
   type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
@@ -18,6 +17,7 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
+import { useGroupEditor } from "@/stores/tabs/group-editor-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -33,10 +33,9 @@ import {
 } from "../tab-identity";
 import { SideTabRailBadge } from "./side-tab-rail-badge";
 import {
-  SIDE_TAB_BADGE_POSITION_CLASS,
   SIDE_TAB_GROUP_COUNT_CLASS,
   SIDE_TAB_GROUP_HEADER_CLASS,
-  SIDE_TAB_GROUP_PILL_CLASS,
+  SIDE_TAB_GROUP_NAME_CLASS,
   SIDE_TAB_HOVER_CLASS,
   SIDE_TAB_METER_CLASS,
   SIDE_TAB_RAIL_BADGE_POSITION_CLASS,
@@ -57,16 +56,19 @@ export interface SideTabGroupHeaderProps {
 }
 
 /**
- * A tab group in the vertical strip (S-19): a 28px row with the colour pill,
- * the name, the member count and a chevron on hover, or in the rail a 40x44
- * tile with the name's first grapheme on a chip in the group colour. A click collapses or expands the group;
- * right-click and the context-menu keys open the shared group editor. A
- * collapsed group carries its members' worst notification badge (S-30).
+ * A tab group's header in the vertical strip (S-19): expanded, the 28px top row
+ * of the group's block (`SideTabGroupBlock`) with the name in the group's
+ * colour, the member count and a chevron on hover; in the rail the first tile
+ * of the group's column (`SideTabGroupColumn`), 40x44, with the name's first
+ * grapheme on a chip in the group colour. A click
+ * collapses or expands the group; right-click, F2 and the context-menu keys
+ * open the shared group editor. A collapsed group carries its members' worst
+ * notification badge (S-30), at the trailing edge of its header.
  */
 export function SideTabGroupHeader(props: SideTabGroupHeaderProps): ReactNode {
   const { groupId, group } = props;
   const placement = useColumnOverlayPlacement("row");
-  const [editing, setEditing] = useState(false);
+  const { open: editing, setOpen: setEditing } = useGroupEditor(groupId);
   // The editor can open over the strip's drag spacer (S-44).
   useTitleBarDragSuppression(`group-editor:${useId()}`, editing);
   const label = `${group.name || "Unnamed group"}: ${group.collapsed ? "expand" : "collapse"} group`;
@@ -90,7 +92,6 @@ export function SideTabGroupHeader(props: SideTabGroupHeaderProps): ReactNode {
       setEditing(true);
     }
   };
-  const swatch = { "--side-tab-group-color": group.color } as CSSProperties;
   return (
     <Popover open={editing} onOpenChange={setEditing}>
       <PopoverAnchor asChild>
@@ -144,8 +145,11 @@ export function SideTabGroupHeader(props: SideTabGroupHeaderProps): ReactNode {
             <>
               {group.name ? (
                 <span
-                  className={cn(SIDE_TAB_GROUP_PILL_CLASS, "min-w-0 truncate")}
-                  style={swatch}
+                  data-testid="side-tab-group-name"
+                  className={cn(
+                    SIDE_TAB_GROUP_NAME_CLASS,
+                    "min-w-0 truncate text-ui-xs",
+                  )}
                 >
                   {group.name}
                 </span>
@@ -209,20 +213,21 @@ function CollapsedGroupBadge(props: {
     ),
   );
   if (badge === null) return null;
+  const mark = (
+    <SideTabRailBadge
+      kind={badge}
+      size={props.size}
+      testId="side-tab-group-badge"
+    />
+  );
+  // A header's badge is its trailing status, in the row; a tile's is cut into
+  // the tile's corner.
+  if (props.size === "leading") return mark;
   return (
     <span
-      className={cn(
-        props.size === "tile"
-          ? SIDE_TAB_RAIL_BADGE_POSITION_CLASS
-          : SIDE_TAB_BADGE_POSITION_CLASS,
-        "pointer-events-none",
-      )}
+      className={cn(SIDE_TAB_RAIL_BADGE_POSITION_CLASS, "pointer-events-none")}
     >
-      <SideTabRailBadge
-        kind={badge}
-        size={props.size}
-        testId="side-tab-group-badge"
-      />
+      {mark}
     </span>
   );
 }

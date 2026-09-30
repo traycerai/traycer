@@ -78,11 +78,20 @@ test("parts the runs of tiles with 24px hairlines in the rail's 8px rhythm, and 
       return { x: box.x, y: box.y, width: box.width, height: box.height };
     }),
   );
+  // A grouped tile stands 4px inside its column, which is what sits 8px from
+  // the hairline.
+  const unitOf = (id: string): Locator =>
+    tile(page, id)
+      .locator(
+        "xpath=ancestor::*[starts-with(@data-testid,'side-tab-group-column-')]",
+      )
+      .or(tile(page, id))
+      .first();
   const above = await Promise.all(
-    ["onboarding", "migration", "host"].map((id) => boxOf(tile(page, id))),
+    ["onboarding", "migration", "host"].map((id) => boxOf(unitOf(id))),
   );
   const below = await Promise.all(
-    ["release", "gui", "layout"].map((id) => boxOf(tile(page, id))),
+    ["release", "gui", "layout"].map((id) => boxOf(unitOf(id))),
   );
   hairlineBoxes.forEach((hairline, index) => {
     expect([hairline.width, hairline.height]).toEqual([24, 1]);
@@ -93,6 +102,25 @@ test("parts the runs of tiles with 24px hairlines in the rail's 8px rhythm, and 
     );
     expect(below[index].y - (hairline.y + hairline.height)).toBeCloseTo(8, 0);
   });
+});
+
+test("wraps a group's run in a 48px column, its tiles 4px inside and on the rail's axis", async ({
+  page,
+}) => {
+  await openRail(page, RAIL);
+  const plain = await boxOf(tile(page, "staging"));
+  // Working holds one of the group's tasks, Idle two.
+  const working = page
+    .getByTestId("side-tab-group-column-fixture-group")
+    .first();
+  const column = await boxOf(working);
+  const host = await boxOf(tile(page, "host"));
+
+  expect(column.width).toBe(48);
+  expect(column.x + column.width / 2).toBeCloseTo(plain.x + plain.width / 2, 0);
+  expect(host.x - column.x).toBe(4);
+  expect(host.y - column.y).toBe(4);
+  expect(column.y + column.height - (host.y + host.height)).toBe(4);
 });
 
 test("dims an Idle tile to half and leaves every other tile whole, the current task's filled", async ({

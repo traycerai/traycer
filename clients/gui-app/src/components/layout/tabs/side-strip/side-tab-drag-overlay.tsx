@@ -169,7 +169,7 @@ function OverlayMember(props: {
       active={props.focused}
       session={null}
       tint={null}
-      groupLine={null}
+      inBlock={false}
       titleIcon={<Plus className="size-3.5 me-1.5" />}
       tile={{ kind: "icon", icon }}
       badge={null}
@@ -252,7 +252,7 @@ function OverlayTabRow(props: {
       active={props.active}
       session={null}
       tint={appearance?.color ?? null}
-      groupLine={null}
+      inBlock={false}
       titleIcon={sideTabTitleIconOf({ appearance, icon: tab.icon })}
       tile={sideTabTileOf({
         appearance,

@@ -12,6 +12,9 @@ import {
   type SideStripHandlers,
 } from "./side-strip-item-input";
 import { SideStripItem } from "./side-strip-item";
+import { SideTabGroupBlock } from "./side-tab-group-block";
+import { SideTabGroupColumn } from "./side-tab-group-column";
+import { SideTabGroupLabel } from "./side-tab-group-label";
 import type { SideTabRowVariant } from "./side-tab-row";
 import {
   SIDE_STRIP_RAIL_NEEDS_YOU_DOT_CLASS,
@@ -29,6 +32,7 @@ import { useStripSectionFolded } from "./strip-section-fold";
 import { holdInPlace, useStripSectionHolds } from "./strip-section-hold";
 import { sectionStyleOf, twoLineStatusOf } from "./strip-section-row";
 import {
+  sectionSegmentsOf,
   sectionTaskCount,
   visualOrderOf,
   type StripPromptEntry,
@@ -43,16 +47,17 @@ import { useStripSections } from "./use-strip-sections";
 
 /**
  * The Activity view's rows: each non-empty section under its header, its
- * tasks in the user's own order, every tab group flattened. A needs-you task
- * with no tab in the strip follows the strip's tasks in Needs you. The tabs'
- * drawn order is published for the tab-number and next/previous shortcuts,
- * and numbers the Alt-digit badges.
+ * tasks in the user's own order, a run of one group's tasks in that group's
+ * block under a label, so a group across sections has a block in each. A
+ * needs-you task with no tab in the strip follows the strip's tasks in Needs
+ * you. The tabs' drawn order is published for the tab-number and next/previous
+ * shortcuts, and numbers the Alt-digit badges.
  *
- * The rail draws the same sections as runs of tiles: a hairline between runs,
- * Needs you marked by an amber dot, no headers, so no fold, no pill, and no
- * tile for a task with no tab (the Notifications tile counts its prompt). It
- * is this same component, so the announcer, the holds and the drawn order
- * carry across a collapse.
+ * The rail draws the same sections as runs of tiles, a group's run in a column
+ * of its own: a hairline between runs, Needs you marked by an amber dot, no
+ * headers, so no fold, no pill, and no tile for a task with no tab (the
+ * Notifications tile counts its prompt). It is this same component, so the
+ * announcer, the holds and the drawn order carry across a collapse.
  *
  * A task that changes section slides there and glows, unless the pointer is on
  * its row or keyboard focus is, in which case it stays until the person leaves
@@ -193,6 +198,26 @@ function StripSectionRows(props: {
         entry.kind === "tabs" && entry.itemId === controller.activeItemId,
     );
   }
+  // A grouped task sits in its group's block or column, which carries the colour.
+  const row = (entry: StripSectionEntry): ReactNode =>
+    entry.kind === "tabs" ? (
+      <SideStripItem
+        key={entry.itemId}
+        itemId={entry.itemId}
+        stripIndex={entry.stripIndex}
+        offset={controller.offsets.get(entry.itemId) ?? 0}
+        memberOffset={memberOffsets.get(entry.itemId) ?? 0}
+        isActive={entry.itemId === controller.activeItemId}
+        dropIndicator={dropIndicatorOfEntry(entry, tabEntries.indexOf(entry))}
+        variant={variant}
+        inBlock={entry.group !== null}
+        lane={group.section}
+        members={entry.members}
+        handlers={handlers}
+      />
+    ) : (
+      <StripPromptRow key={entry.item.row.feedId} entry={entry} />
+    );
   return (
     <>
       {rail ? (
@@ -203,29 +228,35 @@ function StripSectionRows(props: {
           count={sectionTaskCount(group)}
         />
       )}
-      {shown.map((entry: StripSectionEntry) =>
-        entry.kind === "tabs" ? (
-          <SideStripItem
-            key={entry.itemId}
-            itemId={entry.itemId}
-            stripIndex={entry.stripIndex}
-            offset={controller.offsets.get(entry.itemId) ?? 0}
-            memberOffset={memberOffsets.get(entry.itemId) ?? 0}
-            isActive={entry.itemId === controller.activeItemId}
-            dropIndicator={dropIndicatorOfEntry(
-              entry,
-              tabEntries.indexOf(entry),
-            )}
-            variant={variant}
-            groupLine={entry.groupColor}
-            lane={group.section}
-            members={entry.members}
-            handlers={handlers}
-          />
+      {sectionSegmentsOf(shown, group).map((segment) => {
+        if (segment.kind === "entry") return row(segment.entry);
+        const members = segment.entries.map((entry) => row(entry));
+        return rail ? (
+          <SideTabGroupColumn
+            key={segment.key}
+            groupId={segment.group.id}
+            color={segment.group.color}
+          >
+            {members}
+          </SideTabGroupColumn>
         ) : (
-          <StripPromptRow key={entry.item.row.feedId} entry={entry} />
-        ),
-      )}
+          <SideTabGroupBlock
+            key={segment.key}
+            groupId={segment.group.id}
+            color={segment.group.color}
+            collapsed={null}
+            header={
+              <SideTabGroupLabel
+                groupId={segment.group.id}
+                name={segment.group.name}
+                count={segment.count}
+              />
+            }
+          >
+            {members}
+          </SideTabGroupBlock>
+        );
+      })}
     </>
   );
 }

@@ -29,11 +29,7 @@ import {
   stripTaskRowId,
   type StripTaskGroup,
 } from "./strip-task-group";
-import {
-  SideTabRow,
-  type SideGroupLine,
-  type SideTabRowVariant,
-} from "./side-tab-row";
+import { SideTabRow, type SideTabRowVariant } from "./side-tab-row";
 import { SideTabHoverCardBody } from "./side-tab-hover-card";
 import { joinedAttribute, type SheetJoin } from "./side-tab-join";
 import { sideTabTileOf, sideTabTitleIconOf } from "../tab-identity";
@@ -48,7 +44,8 @@ export function SideStripTabRow(props: {
   readonly rootRef: (node: HTMLDivElement | null) => void;
   readonly input: StripTabItemInput;
   readonly variant: SideTabRowVariant;
-  readonly groupLine: SideGroupLine | null;
+  /** The row sits in its group's block or column, which carries the group's colour. */
+  readonly inBlock: boolean;
   readonly dropIndicator: DropIndicator;
   /** How this row joins its task's sheet; `null` for a plain row. */
   readonly joined: SheetJoin | null;
@@ -121,7 +118,7 @@ export function SideStripTabRow(props: {
           active={isActive}
           session={sessionOf(tab, isActive)}
           tint={item.appearance?.color ?? null}
-          groupLine={props.groupLine}
+          inBlock={props.inBlock}
           titleIcon={sideTabTitleIconOf({
             appearance: item.appearance,
             icon: tab.icon,

@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import { ChevronRight } from "lucide-react";
 import {
   Popover,
@@ -7,6 +7,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useGroupEditor } from "@/stores/tabs/group-editor-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabGroup } from "@/stores/tabs/tab-groups";
 import { TabGroupEditor } from "./tab-group-editor";
@@ -19,19 +20,14 @@ export function TabGroupChip(props: {
   readonly group: TabGroup;
   readonly onClose: (groupId: string) => void;
 }) {
-  const [editing, setEditing] = useState(false);
   const { group, groupId } = props;
+  const { open: editing, setOpen: setEditing } = useGroupEditor(groupId);
   const chipRef = useRef<HTMLButtonElement | null>(null);
   // A group a reopen brings back opens its chip first; its tabs follow.
   useStripEntrance(chipRef, stripGroupMarkKey(groupId), "chip");
   const actions = useTabsStore.getState();
   return (
-    <Popover
-      open={editing}
-      onOpenChange={(open) => {
-        setEditing(open);
-      }}
-    >
+    <Popover open={editing} onOpenChange={setEditing}>
       <PopoverTrigger asChild>
         <TooltipWrapper
           label="Right-click to edit group"

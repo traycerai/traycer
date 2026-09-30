@@ -25,8 +25,6 @@ import {
   SIDE_SPLIT_PAIR_COLLAPSED_HAIRLINE_CLASS,
   SIDE_SPLIT_PAIR_EXPANDED_HAIRLINE_CLASS,
   SIDE_TAB_ACTIVE_CLASS,
-  SIDE_TAB_GROUP_LINE_CLASS,
-  SIDE_TAB_GROUP_LINE_SEAT_CLASS,
   SIDE_TAB_ROW_CLASS,
   SIDE_TAB_SESSION_ACTIVE_CLASS,
   SIDE_TAB_TILE_ACTIVE_CLASS,
@@ -89,7 +87,7 @@ function baseProps(): SideTabRowProps {
     active: false,
     session: null,
     tint: null,
-    groupLine: null,
+    inBlock: false,
     titleIcon: null,
     tile: { kind: "monogram", text: "FL" },
     badge: null,
@@ -327,37 +325,6 @@ describe("SideTabRow expanded paint", () => {
     cleanup();
     const idle = renderRow({ active: false });
     expect(hasClasses(idle, SIDE_TAB_ACTIVE_CLASS)).toBe(false);
-  });
-
-  it("draws the group colour line outside the fill, joined across the gap", () => {
-    const row = renderRow({
-      groupLine: { color: "#ff8800", seat: "row" },
-      active: true,
-    });
-    const line = byTestId(row, "side-tab-group-line");
-    expect(line.style.getPropertyValue("--side-tab-group-line")).toBe(
-      "#ff8800",
-    );
-    expect(hasClasses(line, SIDE_TAB_GROUP_LINE_CLASS)).toBe(true);
-    expect(hasClasses(line, SIDE_TAB_GROUP_LINE_SEAT_CLASS.expanded.row)).toBe(
-      true,
-    );
-    expect(line.className).not.toContain("rounded");
-  });
-
-  it("places a split pair member's segment by its seat in the pair", () => {
-    const row = renderRow({
-      groupLine: { color: "#ff8800", seat: "pair-top" },
-      active: false,
-    });
-    const line = byTestId(row, "side-tab-group-line");
-    expect(line.getAttribute("data-seat")).toBe("pair-top");
-    expect(
-      hasClasses(line, SIDE_TAB_GROUP_LINE_SEAT_CLASS.expanded["pair-top"]),
-    ).toBe(true);
-    expect(hasClasses(line, SIDE_TAB_GROUP_LINE_SEAT_CLASS.expanded.row)).toBe(
-      false,
-    );
   });
 
   it("opens the hover card body on hover, expanded as well as collapsed", () => {

@@ -1692,8 +1692,12 @@ describe("<SideTabStrip />", () => {
     expect(strip.className).not.toContain(easingClass);
   });
 
-  it("counts, lines and folds a group holding a tab and a split", async () => {
+  it("draws a group holding a tab and a split as one block with its header and no colour bars, and folds", async () => {
     openGroupWithTabAndSplit();
+    // A member's own colour is kept but not drawn while it is grouped.
+    useTabsStore
+      .getState()
+      .setTabCustomization({ kind: "epic", id: "e-one" }, { color: "#ff0000" });
     // Two flagged members, so the folded badge has to pick the worst:
     // waiting outranks a failure (S-17).
     indicatorState.value = {
@@ -1717,23 +1721,24 @@ describe("<SideTabStrip />", () => {
     };
     await renderStrip("/elsewhere", LEFT_STRIP);
 
-    const header = screen.getByTestId("side-tab-group-header-g");
-    expect(header.textContent).toContain("Work");
+    const block = screen.getByTestId("side-tab-group-block-g");
+    const header = within(block).getByTestId("side-tab-group-header-g");
+    expect(within(header).getByTestId("side-tab-group-name").textContent).toBe(
+      "Work",
+    );
     expect(within(header).getByTestId("side-tab-group-count").textContent).toBe(
       "3",
     );
     for (const id of ["e-one", "e-two", "e-three"]) {
-      expect(
-        within(screen.getByTestId(`tab-epic-${id}`)).queryByTestId(
-          "side-tab-group-line",
-        ),
-      ).not.toBeNull();
+      const row = within(block).getByTestId(`tab-epic-${id}`);
+      expect(within(row).queryByTestId("side-tab-accent")).toBeNull();
     }
+    expect(within(block).queryByTestId("tab-epic-e-four")).toBeNull();
     expect(
       within(screen.getByTestId("tab-epic-e-four")).queryByTestId(
-        "side-tab-group-line",
+        "side-tab-accent",
       ),
-    ).toBeNull();
+    ).not.toBeNull();
     expect(screen.queryByTestId("side-tab-group-badge")).toBeNull();
 
     fireEvent.click(header);
@@ -1742,9 +1747,60 @@ describe("<SideTabStrip />", () => {
       expect(screen.queryByTestId(`tab-epic-${id}`)).toBeNull();
     }
     expect(screen.getByTestId("tab-epic-e-four")).toBeDefined();
-    expect(screen.getByTestId("side-tab-group-header-g")).toBeDefined();
+    expect(
+      within(screen.getByTestId("side-tab-group-block-g")).getByTestId(
+        "side-tab-group-header-g",
+      ),
+    ).toBeDefined();
     expect(
       screen.getByTestId("side-tab-group-badge").getAttribute("data-kind"),
+    ).toBe("approval");
+  });
+
+  it("draws the rail's group as one column around its header tile and its tiles, with no rings, and leaves an ungrouped tile its ring", async () => {
+    openGroupWithTabAndSplit();
+    const own = { kind: "epic", id: "e-one" } as const;
+    useTabsStore.getState().setTabCustomization(own, { color: "#ff0000" });
+    useTabsStore
+      .getState()
+      .setTabCustomization(
+        { kind: "epic", id: "e-four" },
+        { color: "#00aa00" },
+      );
+    useSideTabStripStore.setState({ collapsed: true });
+    await renderStrip("/elsewhere", LEFT_STRIP);
+
+    const column = screen.getByTestId("side-tab-group-column-g");
+    expect(within(column).getByTestId("side-tab-group-header-g")).toBeDefined();
+    for (const id of ["e-one", "e-two", "e-three"]) {
+      const tile = within(column).getByTestId(`tab-epic-${id}`);
+      expect(within(tile).queryByTestId("side-tab-accent")).toBeNull();
+    }
+    const four = screen.getByTestId("tab-epic-e-four");
+    expect(column.contains(four)).toBe(false);
+    expect(
+      within(four)
+        .getByTestId("side-tab-accent")
+        .style.getPropertyValue("--side-tab-accent"),
+    ).toBe("#00aa00");
+  });
+
+  it("keeps a folded group's header tile and badge inside its column", async () => {
+    openGroupWithTabAndSplit();
+    useTabsStore.getState().updateGroup("g", { collapsed: true });
+    indicatorState.value = {
+      epics: { "e-one": { ...NO_FLAGS, pendingApproval: true } },
+      chats: {},
+    };
+    useSideTabStripStore.setState({ collapsed: true });
+    await renderStrip("/elsewhere", LEFT_STRIP);
+
+    const column = screen.getByTestId("side-tab-group-column-g");
+    expect(within(column).queryAllByRole("tab")).toHaveLength(0);
+    expect(
+      within(column)
+        .getByTestId("side-tab-group-badge")
+        .getAttribute("data-kind"),
     ).toBe("approval");
   });
 
@@ -2145,23 +2201,80 @@ describe("<SideTabStrip />", () => {
       ).toBe("Approve · Deploy agent");
     });
 
-    it("flattens tab groups: no group header, each member keeps its colour line, and a split pair stays one unit", async () => {
+    it("draws a group in its section as a block under a label-only header, with no colour bars and a split pair still one unit", async () => {
       openGroupWithTabAndSplit();
       await renderStrip("/elsewhere", LEFT_STRIP);
 
+      const block = screen.getByTestId("side-tab-group-block-g");
+      const label = within(block).getByTestId("side-tab-group-label-g");
+      expect(label.textContent).toBe("Work3");
+      expect(within(label).queryByRole("button")).toBeNull();
       expect(screen.queryByTestId("side-tab-group-header-g")).toBeNull();
-      const lines = screen.getAllByTestId("side-tab-group-line");
-      expect(lines.map((line) => line.getAttribute("data-seat"))).toEqual([
-        "row",
-        "pair-top",
-        "pair-bottom",
-      ]);
+      for (const row of within(block).getAllByRole("tab")) {
+        expect(within(row).queryByTestId("side-tab-accent")).toBeNull();
+      }
+      expect(
+        within(screen.getByTestId("tab-epic-e-four")).queryByTestId(
+          "side-tab-accent",
+        ),
+      ).not.toBeNull();
       expect(screen.getAllByTestId(/^split-tab-group-/)).toHaveLength(1);
       expect(
-        screen
+        within(block)
           .getByTestId("split-tab-group-split-g")
           .querySelectorAll('[role="tab"]'),
       ).toHaveLength(2);
+    });
+
+    it("gives a group whose tasks fall in two sections a block in each, counting 1 of 3 and 2 of 3", async () => {
+      openGroupWithTabAndSplit();
+      isWorking("e-one", "c-one");
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      expect(listed()).toEqual([
+        "side-strip-section-working",
+        "side-tab-group-block-g",
+        "side-strip-section-idle",
+        "side-tab-group-block-g",
+        "tab-epic-e-four",
+      ]);
+      const [working, idle] = screen.getAllByTestId("side-tab-group-block-g");
+      expect(
+        within(working).getByTestId("side-tab-group-label-g").textContent,
+      ).toBe("Work1 of 3");
+      expect(within(working).getAllByRole("tab")).toHaveLength(1);
+      expect(
+        within(idle).getByTestId("side-tab-group-label-g").textContent,
+      ).toBe("Work2 of 3");
+      expect(within(idle).getAllByRole("tab")).toHaveLength(2);
+    });
+
+    it("draws the rail's group runs as a column in each section, with no rings, and no column for an ungrouped tile", async () => {
+      openGroupWithTabAndSplit();
+      isWorking("e-one", "c-one");
+      useTabsStore
+        .getState()
+        .setTabCustomization(
+          { kind: "epic", id: "e-four" },
+          { color: "#00aa00" },
+        );
+      useSideTabStripStore.setState({ collapsed: true });
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const [working, idle] = screen.getAllByTestId("side-tab-group-column-g");
+      expect(within(working).getAllByRole("tab")).toHaveLength(1);
+      expect(within(idle).getAllByRole("tab")).toHaveLength(2);
+      for (const tile of [
+        ...within(working).getAllByRole("tab"),
+        ...within(idle).getAllByRole("tab"),
+      ]) {
+        expect(within(tile).queryByTestId("side-tab-accent")).toBeNull();
+      }
+      const four = screen.getByTestId("tab-epic-e-four");
+      expect(
+        four.closest('[data-testid^="side-tab-group-column-"]'),
+      ).toBeNull();
+      expect(within(four).getByTestId("side-tab-accent")).toBeDefined();
     });
 
     it("keeps a collapsed group's members in their sections", async () => {

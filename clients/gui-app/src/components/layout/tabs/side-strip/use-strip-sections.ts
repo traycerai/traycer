@@ -159,7 +159,7 @@ export function useStripSections(
         section: members
           .map((member) => member.row.section)
           .reduce(moreUrgentSection),
-        groupColor: item.groupColor,
+        group: item.group,
         members,
       };
     });

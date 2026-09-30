@@ -16,7 +16,7 @@ import type { TabRef } from "@/stores/tabs/types";
  * tile. The canvas fixture adds the layout session's own tab and makes it the
  * active one, which is what a session holds.
  *
- * Nothing here draws a row: every row, tile, badge and group line the drivers
+ * Nothing here draws a row: every row, tile, badge and group block the drivers
  * measure is the real `SideTabStrip` reading these stores.
  */
 
@@ -209,10 +209,13 @@ function feedRow(input: {
 /**
  * The Activity view with every section: two tasks waiting on the person (an
  * approval and a reply), one finished and one failed and unread, three working
- * (the current one, one with two agents, one with one) and three idle (one with
- * an icon and a colour, one in a tab group). Written through the product's own
- * stores, as `seedSideStripTabs` is: the strip draws all of it, reading the
- * cloud feed, so the fixture mounts it in the `cloud` feed mode.
+ * (the current one, one with two agents, one with one) and three idle. The
+ * "Work" group holds Host watcher fix (working) and Layout persist schema and
+ * Launch notes (idle), so it is split across Working and Idle; Launch has an
+ * icon and a colour of its own, and the group's colour is the one it draws.
+ * Written through the product's own stores, as `seedSideStripTabs` is: the
+ * strip draws all of it, reading the cloud feed, so the fixture mounts it in
+ * the `cloud` feed mode.
  */
 export function seedSideStripSections(): void {
   const staging = epicRef("Staging CDP verification");
@@ -245,7 +248,11 @@ export function seedSideStripSections(): void {
       groupId: SEED_GROUP_ID,
     },
     [tabRefKey(layout)]: { color: null, icon: null, groupId: SEED_GROUP_ID },
-    [tabRefKey(launch)]: { color: "#3fb8a8", icon: "🚀", groupId: null },
+    [tabRefKey(launch)]: {
+      color: "#3fb8a8",
+      icon: "🚀",
+      groupId: SEED_GROUP_ID,
+    },
   };
   useTabsStore.setState({
     version: 2,

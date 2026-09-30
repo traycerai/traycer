@@ -60,7 +60,7 @@ function SideHomeRowBody(props: SideHomeRowProps): ReactNode {
       active={isActive}
       session={null}
       tint={null}
-      groupLine={null}
+      inBlock={false}
       titleIcon={titleIcon}
       tile={{ kind: "icon", icon }}
       badge={null}

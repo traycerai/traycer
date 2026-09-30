@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
 import { VERTICAL_STRIP_AXIS } from "@/components/epic-canvas/dnd/strip-axis";
 import { resolveMinimapRailMaskClassName } from "@/components/minimap/minimap-rail-mask";
@@ -12,7 +12,11 @@ import {
 import type { HeaderTab } from "@/stores/tabs/types";
 import { HEADER_STRIP_SCROLL_TEST_ID } from "../header-strip-geometry";
 import type { TabStripController } from "../tab-strip-controller";
-import { stripRowsOf, type StripRow } from "../tab-strip-rows";
+import {
+  stripRowsOf,
+  type StripRow,
+  type StripRowGroupStart,
+} from "../tab-strip-rows";
 import { useStripScroller } from "../use-strip-scroller";
 import {
   dropIndicatorOf,
@@ -25,15 +29,29 @@ import {
   SIDE_STRIP_LIST_CLASS,
   SIDE_STRIP_SECTIONED_SCROLL_PADDING_CLASS,
 } from "./side-strip-tokens";
+import { SideTabGroupBlock } from "./side-tab-group-block";
+import { SideTabGroupColumn } from "./side-tab-group-column";
 import { SideTabGroupHeader } from "./side-tab-group-header";
 import type { SideTabRowVariant } from "./side-tab-row";
 import { useSectionScroll } from "./use-section-scroll";
 
-/** One run of a group: its tab members' count and notification entities. */
+/** One run of a group: its rows, tab members' count and notification entities. */
 interface GroupRun {
+  readonly rows: Array<StripRow>;
   memberCount: number;
   readonly memberEntities: Array<HostNotificationsEntityRef>;
 }
+
+/** What the Layered view draws in order: a row of no group, or a group's run. */
+type ListSegment =
+  | { readonly kind: "row"; readonly row: StripRow }
+  | {
+      readonly kind: "group";
+      /** The run's first item, which keys it. */
+      readonly key: string;
+      readonly start: StripRowGroupStart;
+      readonly run: GroupRun;
+    };
 
 /**
  * The vertical strip's scrolling row list. The scroller is the drag contract
@@ -66,8 +84,8 @@ export function SideStripRowList(props: {
     () => stripRowsOf(headerItemIds, layoutItems, groups, customizations),
     [headerItemIds, layoutItems, groups, customizations],
   );
-  const groupRuns = useMemo(
-    () => groupRunsOf(rows, layoutItems, tabs),
+  const segments = useMemo(
+    () => listSegmentsOf(rows, layoutItems, tabs),
     [rows, layoutItems, tabs],
   );
   const handlers = useSideStripHandlers(controller);
@@ -80,9 +98,33 @@ export function SideStripRowList(props: {
   });
   const lastIndex = headerItemIds.length - 1;
   const sectioned = useSectionedStrip();
-  // Only the expanded list has section headers to stick, fold and scroll to.
-  const sectionedList = sectioned && variant === "expanded";
+  // Only the expanded list has section headers to stick, fold and scroll to,
+  // and group blocks (the rail's groups are columns).
+  const expanded = variant === "expanded";
+  const sectionedList = sectioned && expanded;
   const scroll = useSectionScroll(sectionedList ? scroller : null);
+  // A grouped row sits in its group's block or column, which carries the colour.
+  const item = (row: StripRow): ReactNode =>
+    row.hidden ? null : (
+      <SideStripItem
+        key={row.itemId}
+        itemId={row.itemId}
+        stripIndex={row.stripIndex}
+        offset={controller.offsets.get(row.itemId) ?? 0}
+        memberOffset={row.memberOffset}
+        isActive={row.itemId === activeItemId}
+        dropIndicator={dropIndicatorOf(
+          dropIndicatorIndex,
+          row.stripIndex,
+          lastIndex,
+        )}
+        variant={variant}
+        inBlock={row.group !== null}
+        lane={null}
+        members={null}
+        handlers={handlers}
+      />
+    );
   return (
     <div
       ref={setScrollerNode}
@@ -112,57 +154,43 @@ export function SideStripRowList(props: {
           needsYouAbove={scroll.needsYouAbove}
         />
       ) : (
-        rows.map((row) => (
-          <Fragment key={row.itemId}>
-            <GroupStart
-              row={row}
-              run={groupRuns.get(row.stripIndex)}
+        segments.map((segment) => {
+          if (segment.kind === "row") return item(segment.row);
+          const { start, run } = segment;
+          const members = run.rows.map((row) => item(row));
+          const header = (
+            <SideTabGroupHeader
+              groupId={start.groupId}
+              group={start.group}
               variant={variant}
-              onCloseGroup={controller.onCloseGroup}
+              memberCount={run.memberCount}
+              memberEntities={run.memberEntities}
+              onClose={controller.onCloseGroup}
             />
-            {row.hidden ? null : (
-              <SideStripItem
-                itemId={row.itemId}
-                stripIndex={row.stripIndex}
-                offset={controller.offsets.get(row.itemId) ?? 0}
-                memberOffset={row.memberOffset}
-                isActive={row.itemId === activeItemId}
-                dropIndicator={dropIndicatorOf(
-                  dropIndicatorIndex,
-                  row.stripIndex,
-                  lastIndex,
-                )}
-                variant={variant}
-                groupLine={row.group?.group.color ?? null}
-                lane={null}
-                members={null}
-                handlers={handlers}
-              />
-            )}
-          </Fragment>
-        ))
+          );
+          return expanded ? (
+            <SideTabGroupBlock
+              key={segment.key}
+              groupId={start.groupId}
+              color={start.group.color}
+              collapsed={start.group.collapsed}
+              header={header}
+            >
+              {members}
+            </SideTabGroupBlock>
+          ) : (
+            <SideTabGroupColumn
+              key={segment.key}
+              groupId={start.groupId}
+              color={start.group.color}
+            >
+              {header}
+              {members}
+            </SideTabGroupColumn>
+          );
+        })
       )}
     </div>
-  );
-}
-
-function GroupStart(props: {
-  readonly row: StripRow;
-  readonly run: GroupRun | undefined;
-  readonly variant: SideTabRowVariant;
-  readonly onCloseGroup: (groupId: string) => void;
-}): ReactNode {
-  const start = props.row.groupStart;
-  if (start === null) return null;
-  return (
-    <SideTabGroupHeader
-      groupId={start.groupId}
-      group={start.group}
-      variant={props.variant}
-      memberCount={props.run?.memberCount ?? 0}
-      memberEntities={props.run?.memberEntities ?? []}
-      onClose={props.onCloseGroup}
-    />
   );
 }
 
@@ -214,34 +242,43 @@ function useSideStripHandlers(
 }
 
 /**
- * Each group run's tab count and member entities, keyed by the strip index of
- * the run's first item. A split counts each tab half; an entity is the epic,
- * or the tab id for a non-epic tab, as a row's own indicator reads it.
+ * The rows as the Layered view draws them: each group's run of rows with its
+ * tab count and member entities, and every other row on its own. A split counts
+ * each tab half; an entity is the epic, or the tab id for a non-epic tab, as a
+ * row's own indicator reads it.
  */
-function groupRunsOf(
+function listSegmentsOf(
   rows: ReadonlyArray<StripRow>,
   layoutItems: ReadonlyArray<StripItem>,
   tabs: ReadonlyArray<HeaderTab>,
-): ReadonlyMap<number, GroupRun> {
+): ReadonlyArray<ListSegment> {
   const tabsByKey = new Map(tabs.map((tab) => [tabRefKey(tab), tab]));
-  const runs = new Map<number, GroupRun>();
-  let current: GroupRun | null = null;
+  const segments: Array<ListSegment> = [];
+  let open: GroupRun | null = null;
   for (const row of rows) {
     if (row.groupStart !== null) {
-      current = { memberCount: 0, memberEntities: [] };
-      runs.set(row.stripIndex, current);
+      open = { rows: [row], memberCount: 0, memberEntities: [] };
+      segments.push({
+        kind: "group",
+        key: row.itemId,
+        start: row.groupStart,
+        run: open,
+      });
     } else if (row.group === null) {
-      current = null;
+      open = null;
+      segments.push({ kind: "row", row });
+    } else {
+      open?.rows.push(row);
     }
     const item = layoutItems.at(row.stripIndex);
-    if (current === null || item === undefined) continue;
+    if (open === null || item === undefined) continue;
     for (const ref of flattenStripItemRefs(item)) {
       const tab = tabsByKey.get(tabRefKey(ref));
-      current.memberCount += 1;
-      current.memberEntities.push({
+      open.memberCount += 1;
+      open.memberEntities.push({
         epicId: tab?.kind === "epic" ? tab.epicId : ref.id,
       });
     }
   }
-  return runs;
+  return segments;
 }

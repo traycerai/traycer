@@ -441,12 +441,12 @@ describe("useStripSections", () => {
         createdAt: 100,
       },
     ]);
-    // A collapsed group's member is listed, keeping the group's color.
+    // A collapsed group's member is listed, carrying its group.
     expect(entryOf(tabItemId(refOf(doneInGroup)))).toMatchObject({
       kind: "tabs",
-      groupColor: "#8ab4f8",
+      group: { id: "group-1", name: "Later", color: "#8ab4f8", taskCount: 1 },
     });
-    expect(entryOf(tabItemId(refOf(idle)))).toMatchObject({ groupColor: null });
+    expect(entryOf(tabItemId(refOf(idle)))).toMatchObject({ group: null });
     expect(rowsOf(tabItemId(refOf(doneInGroup)))).toEqual([
       { section: "to-review", outcome: "done", at: 5_000 },
     ]);

@@ -11,8 +11,8 @@ import { StatusGlyph } from "@/components/notifications/status-glyph";
 /**
  * The one state that needs the user, as a badge (D5). On a rail tile it is the
  * status glyph on a 14px disc of the strip's ground, so it reads as cut out of
- * the tile; on an expanded group header it is the same glyph at 10px on its
- * ringed dot.
+ * the tile; on an expanded group header it is the same glyph at 14px, the
+ * header's trailing status.
  */
 export function SideTabRailBadge(props: {
   readonly kind: RailBadgeKind;
@@ -35,7 +35,7 @@ export function SideTabRailBadge(props: {
       <StatusGlyph
         status={RAIL_BADGE_TONE[props.kind]}
         className={
-          props.size === "tile" ? SIDE_TAB_RAIL_BADGE_GLYPH_CLASS : "size-2.5"
+          props.size === "tile" ? SIDE_TAB_RAIL_BADGE_GLYPH_CLASS : "size-3.5"
         }
         testId={undefined}
         label={null}

@@ -25,9 +25,7 @@ import type { RailBadgeKind } from "./rail-badge-kind";
 import {
   SIDE_TAB_ACCENT_BAR_CLASS,
   SIDE_TAB_ACTIVE_CLASS,
-  SIDE_TAB_GROUP_LINE_CLASS,
   SIDE_TAB_DROP_LINE_SEAT_CLASS,
-  SIDE_TAB_GROUP_LINE_SEAT_CLASS,
   SIDE_TAB_HOVER_CLASS,
   SIDE_TAB_RAIL_BADGE_POSITION_CLASS,
   SIDE_TAB_ROW_CLASS,
@@ -42,16 +40,6 @@ import {
   SIDE_TAB_TRAILING_CLASS,
 } from "./side-strip-tokens";
 export type SideTabRowVariant = "expanded" | "collapsed";
-
-/** Where a row sits for its group-line segment: alone, or as a split pair's top or bottom member. */
-export type SideGroupLineSeat = "row" | "pair-top" | "pair-bottom";
-
-/** A group member's segment of the group colour line. */
-export interface SideGroupLine {
-  /** The group colour. */
-  readonly color: string;
-  readonly seat: SideGroupLineSeat;
-}
 
 /**
  * A task's disclosure: the chevron button that joins the trailing edge, before
@@ -119,10 +107,13 @@ export interface SideTabRowProps {
   readonly active: boolean;
   /** Set only on the sample-workspace tab: its session state (L-163). */
   readonly session: "active" | "rest" | null;
-  /** The tab colour, `#rrggbb`. */
+  /** The tab colour as it draws (`effectiveTabColor`), `#rrggbb`. */
   readonly tint: string | null;
-  /** The group line's segment, on a group member. */
-  readonly groupLine: SideGroupLine | null;
+  /**
+   * The row sits inside its group's block or column, which carries the group's
+   * colour, so it draws no colour bar or ring of its own.
+   */
+  readonly inBlock: boolean;
   /**
    * Expanded: what draws before the title, inline, with its own space after it
    * (a custom icon's characters, or a component icon); the title starts on the
@@ -264,30 +255,12 @@ export function SideTabRow(props: SideTabRowProps) {
           frame.className,
         )}
       >
-        {props.groupLine === null ? null : (
-          <span
-            aria-hidden
-            data-testid="side-tab-group-line"
-            data-seat={props.groupLine.seat}
-            className={cn(
-              SIDE_TAB_GROUP_LINE_CLASS,
-              SIDE_TAB_GROUP_LINE_SEAT_CLASS[props.variant][
-                props.groupLine.seat
-              ],
-              "pointer-events-none absolute bg-(--side-tab-group-line)",
-            )}
-            style={
-              {
-                "--side-tab-group-line": props.groupLine.color,
-              } as CSSProperties
-            }
-          />
-        )}
-        {props.session === null ? (
-          <SideTabAccent variant={props.variant} color={accent} />
-        ) : (
+        {props.session === null ? null : (
           <SideSessionMark session={props.session} tint={props.tint} />
         )}
+        {props.session === null && !props.inBlock ? (
+          <SideTabAccent variant={props.variant} color={accent} />
+        ) : null}
         {collapsed ? (
           <>
             <MonogramChip tile={props.tile} tint={null} tinted={false} />

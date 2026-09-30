@@ -52,7 +52,8 @@ export interface SideStripItemProps {
   readonly isActive: boolean;
   readonly dropIndicator: DropIndicator;
   readonly variant: SideTabRowVariant;
-  readonly groupLine: string | null;
+  /** The item sits in its group's block or column, which carries the group's colour. */
+  readonly inBlock: boolean;
   /**
    * The Activity view's section this item is in, which is also the lane it
    * drags in: a drop outside it is never offered. `null` in the Layered view.

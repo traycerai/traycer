@@ -50,7 +50,6 @@ import { useStripTaskGroup, type StripTaskGroup } from "./strip-task-group";
 import { joinedAttribute, useSideTabJoin } from "./side-tab-join";
 import {
   SideTabRow,
-  type SideGroupLine,
   type SideRowFrame,
   type SideTabRowVariant,
 } from "./side-tab-row";
@@ -125,14 +124,7 @@ export function SideSplitItem(
           : props.memberOffset + Number(item.left.kind === "tab")
       }
       variant={props.variant}
-      groupLine={
-        props.groupLine === null
-          ? null
-          : {
-              color: props.groupLine,
-              seat: side === "left" ? "pair-top" : "pair-bottom",
-            }
-      }
+      inBlock={props.inBlock}
       dropIndicator={
         (side === "left" && props.dropIndicator === "before") ||
         (side === "right" && props.dropIndicator === "after")
@@ -210,7 +202,7 @@ interface SideSplitMemberProps {
   readonly stripIndex: number;
   readonly memberIndex: number;
   readonly variant: SideTabRowVariant;
-  readonly groupLine: SideGroupLine | null;
+  readonly inBlock: boolean;
   readonly dropIndicator: DropIndicator;
   readonly handlers: SideStripHandlers;
 }
@@ -250,7 +242,7 @@ function SideSplitTabMember(
       rootRef={rootRef}
       input={input}
       variant={props.variant}
-      groupLine={props.groupLine}
+      inBlock={props.inBlock}
       dropIndicator={props.dropIndicator}
       joined={null}
       group={props.group}
@@ -299,7 +291,7 @@ function SideFillableMember(
       active={props.focused}
       session={null}
       tint={null}
-      groupLine={props.groupLine}
+      inBlock={props.inBlock}
       titleIcon={<Plus className="size-3.5 me-1.5" />}
       tile={{ kind: "icon", icon }}
       badge={null}

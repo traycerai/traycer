@@ -15,6 +15,7 @@ import {
   Check,
   Group,
   Palette,
+  Pencil,
   Plus,
   Tag,
   Ungroup,
@@ -27,15 +28,46 @@ import {
   ContextMenuSubContent,
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
-import { useOrganization } from "@/hooks/organization/organization-context";
+import {
+  useOrganization,
+  type OrganizationContextValue,
+} from "@/hooks/organization/organization-context";
 import { OrganizationDot } from "./organization-metadata";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useGroupEditorAnchored } from "@/stores/tabs/group-editor-store";
+
+/** The group a task is in, as the organization view has it. */
+function taskGroupIdOf(
+  organization: OrganizationContextValue | null,
+  taskId: string,
+): string | null {
+  return (
+    organization?.view?.groups.memberships.find((m) => m.taskId === taskId)
+      ?.groupId ?? null
+  );
+}
+
+/**
+ * "Edit group…" for a grouped task, where the menu's host can open a group's
+ * editor and the group has an anchor mounted to open it on.
+ */
+function useEditGroupAction(
+  groupId: string | null,
+  onEditGroup: ((groupId: string) => void) | null,
+): (() => void) | null {
+  const anchored = useGroupEditorAnchored(groupId);
+  return groupId === null || onEditGroup === null || !anchored
+    ? null
+    : () => onEditGroup(groupId);
+}
 
 export function TaskOrganizationMenu(props: {
   readonly taskId: string;
   readonly canEdit: boolean;
   readonly title: string | undefined;
   readonly dropdown?: boolean;
+  /** Opens a group's editor, where the menu's host has one to open; else `null`. */
+  readonly onEditGroup: ((groupId: string) => void) | null;
 }) {
   const MenuItem = props.dropdown ? DropdownMenuItem : ContextMenuItem;
   const MenuSeparator = props.dropdown
@@ -49,11 +81,10 @@ export function TaskOrganizationMenu(props: {
     ? DropdownMenuSubTrigger
     : ContextMenuSubTrigger;
   const organization = useOrganization();
+  const groupId = taskGroupIdOf(organization, props.taskId);
+  const editGroup = useEditGroupAction(groupId, props.onEditGroup);
   if (!organization?.supported) return null;
   const view = organization.view;
-  const groupId = view?.groups.memberships.find(
-    (m) => m.taskId === props.taskId,
-  )?.groupId;
   return (
     <>
       <MenuItem
@@ -90,6 +121,12 @@ export function TaskOrganizationMenu(props: {
           }}
         >
           <TaskAppearancePicker taskId={props.taskId} />
+          {editGroup === null ? null : (
+            <MenuItem onSelect={editGroup}>
+              <Pencil />
+              Edit group…
+            </MenuItem>
+          )}
         </MenuSubContent>
       </MenuSub>
       <MenuSub>
@@ -205,7 +242,7 @@ export function TaskOrganizationDropdown(props: {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <TaskOrganizationMenu {...props} dropdown />
+        <TaskOrganizationMenu {...props} dropdown onEditGroup={null} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -225,6 +262,7 @@ export function HistoryTaskOrganizationMenu({
       taskId={item.epicId}
       canEdit={canEdit}
       title={item.title}
+      onEditGroup={null}
     />
   );
 }

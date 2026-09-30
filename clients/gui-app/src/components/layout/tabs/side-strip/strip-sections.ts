@@ -8,6 +8,7 @@ import { tabRefKey } from "@/stores/tabs/layout";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { SideTabLiveAgents } from "./agent-meter";
 import { railBadgeOf } from "./rail-badge-kind";
+import type { StripItemGroup } from "./strip-item-tabs";
 
 /** What a task needs from the person, most urgent first. */
 export type StripSection = "needs-you" | "to-review" | "working" | "idle";
@@ -151,8 +152,8 @@ export interface StripTabEntry {
   readonly stripIndex: number;
   /** The more urgent half's section. */
   readonly section: StripSection;
-  /** The tab group's color line; `null` for an ungrouped item. */
-  readonly groupColor: string | null;
+  /** The tab group the item is in; `null` for an ungrouped item. */
+  readonly group: StripItemGroup | null;
   readonly members: ReadonlyArray<StripTabMember>;
 }
 
@@ -170,6 +171,59 @@ export type StripSectionEntry = StripTabEntry | StripPromptEntry;
 export interface StripSectionGroup {
   readonly section: StripSection;
   readonly entries: ReadonlyArray<StripSectionEntry>;
+}
+
+/** What a section draws in order: an entry of no group, or one group's run of tasks. */
+export type SectionSegment =
+  | { readonly kind: "entry"; readonly entry: StripSectionEntry }
+  | {
+      readonly kind: "group";
+      /** The run's first item, which keys it. */
+      readonly key: string;
+      readonly group: StripItemGroup;
+      readonly entries: Array<StripTabEntry>;
+      /** The block header's count: "3", or "1 of 3" when the group has tasks in other sections. */
+      readonly count: string;
+    };
+
+/**
+ * The entries a section draws, each run of one group's tasks in a segment of
+ * its own. The count is of the group's tasks in the whole section, a fold's
+ * hidden ones included, so it reads as the section header's does.
+ */
+export function sectionSegmentsOf(
+  shown: ReadonlyArray<StripSectionEntry>,
+  section: StripSectionGroup,
+): ReadonlyArray<SectionSegment> {
+  const segments: Array<SectionSegment> = [];
+  for (const entry of shown) {
+    const last = segments.at(-1);
+    if (entry.kind !== "tabs" || entry.group === null) {
+      segments.push({ kind: "entry", entry });
+    } else if (last?.kind === "group" && last.group.id === entry.group.id) {
+      last.entries.push(entry);
+    } else {
+      const { group } = entry;
+      const inSection = section.entries.reduce(
+        (count, each) =>
+          each.kind === "tabs" && each.group?.id === group.id
+            ? count + each.members.length
+            : count,
+        0,
+      );
+      segments.push({
+        kind: "group",
+        key: entry.itemId,
+        group,
+        entries: [entry],
+        count:
+          inSection < group.taskCount
+            ? `${String(inSection)} of ${String(group.taskCount)}`
+            : String(group.taskCount),
+      });
+    }
+  }
+  return segments;
 }
 
 /** The rows a section draws: a split's halves count separately, a prompt once. */

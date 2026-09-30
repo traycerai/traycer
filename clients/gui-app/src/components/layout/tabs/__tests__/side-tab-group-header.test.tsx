@@ -161,7 +161,7 @@ describe("SideTabGroupHeader", () => {
     expect(screen.queryByTestId("side-tab-group-count")).toBeNull();
   });
 
-  it("drops the empty pill for an unnamed group, leaving only the count and chevron", () => {
+  it("leaves out the name of an unnamed group, keeping the count and chevron", () => {
     const group: TabGroup = { name: "", color: "#8ab4f8", collapsed: false };
     const member: TabRef = { kind: "epic", id: "e-1" };
     useTabsStore.setState({
@@ -185,8 +185,6 @@ describe("SideTabGroupHeader", () => {
 
     expect(header().textContent).toBe("3");
     expect(screen.getByTestId("side-tab-group-count").textContent).toBe("3");
-    expect(
-      header().querySelector('[style*="--side-tab-group-color"]'),
-    ).toBeNull();
+    expect(screen.queryByTestId("side-tab-group-name")).toBeNull();
   });
 });
