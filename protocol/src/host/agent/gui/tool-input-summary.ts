@@ -79,6 +79,7 @@ function storedValue(value: string): unknown {
 function inputFromDetail(
   toolName: string,
   detail: ToolInputDetail,
+  typed: boolean,
 ): Record<string, unknown> {
   if (detail.kind === "command") {
     return (
@@ -88,7 +89,10 @@ function inputFromDetail(
     );
   }
   return Object.fromEntries(
-    detail.entries.map((entry) => [entry.key, storedValue(entry.value)]),
+    detail.entries.map((entry) => [
+      entry.key,
+      typed ? storedValue(entry.value) : entry.value,
+    ]),
   );
 }
 
@@ -113,10 +117,15 @@ export function toolHeaderLine(
 ): string | null {
   if (summary === null || detail === null) return summary;
   const name = toolName ?? "";
-  const whole = uncappedSummary(name, inputFromDetail(name, detail));
-  return whole !== null && trim(whole) === summary
-    ? whole.trim().replace(/\s+/g, " ")
-    : summary;
+  // Typed first (a stored number or array back as itself); the raw strings
+  // second, for a string field whose text merely parses as JSON.
+  for (const typed of [true, false]) {
+    const whole = uncappedSummary(name, inputFromDetail(name, detail, typed));
+    if (whole !== null && trim(whole) === summary) {
+      return whole.trim().replace(/\s+/g, " ");
+    }
+  }
+  return summary;
 }
 
 function summarizeFileRange(record: Record<string, unknown>): string | null {

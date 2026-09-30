@@ -658,6 +658,19 @@ describe("toolHeaderLine", () => {
     ).toBe(`CELL_"worker" \\d+ in ${LONG_PATH}`);
   });
 
+  it("keeps a flag-like Grep pattern as the pattern", () => {
+    expect(headerFor("Grep", { pattern: "-i", path: LONG_PATH })).toBe(
+      `-i in ${LONG_PATH}`,
+    );
+  });
+
+  it("returns a string field that merely parses as JSON whole", () => {
+    const payload = `{"message": "${"x".repeat(100)}"}`;
+    const summary = deriveToolInputSummary("Custom", { payload });
+    expect(summary?.endsWith("\u2026")).toBe(true);
+    expect(headerFor("Custom", { payload })).toBe(payload);
+  });
+
   it("returns a Codex argv command whole", () => {
     const argv = ["bash", "-lc", LONG_LINE];
     expect(headerFor("exec_command", { argv, cwd: "/repo" })).toBe(

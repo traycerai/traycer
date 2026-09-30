@@ -147,10 +147,16 @@ const GREP_FLAG_ARITY: ReadonlyMap<string, number> = new Map([
   ["--glob", 1],
 ]);
 
+interface ReconstructedWord {
+  readonly text: string;
+  readonly quoted: boolean;
+}
+
 // Space-separated words, a double-quoted word unescaped the way
-// `escapeDoubleQuoted` escaped it; null for an unterminated quote.
-function reconstructedWords(line: string): string[] | null {
-  const words: string[] = [];
+// `escapeDoubleQuoted` escaped it, each marked quoted or not (a quoted `"-i"`
+// is a pattern, never the flag); null for an unterminated quote.
+function reconstructedWords(line: string): ReconstructedWord[] | null {
+  const words: ReconstructedWord[] = [];
   let index = 0;
   while (index < line.length) {
     if (line[index] === " ") {
@@ -158,7 +164,8 @@ function reconstructedWords(line: string): string[] | null {
       continue;
     }
     let word = "";
-    if (line[index] === '"') {
+    const quoted = line[index] === '"';
+    if (quoted) {
       index += 1;
       while (index < line.length && line[index] !== '"') {
         if (line[index] === "\\" && index + 1 < line.length) index += 1;
@@ -173,9 +180,15 @@ function reconstructedWords(line: string): string[] | null {
         index += 1;
       }
     }
-    words.push(word);
+    words.push({ text: word, quoted });
   }
   return words;
+}
+
+function flagArity(word: ReconstructedWord | undefined): number | undefined {
+  return word === undefined || word.quoted
+    ? undefined
+    : GREP_FLAG_ARITY.get(word.text);
 }
 
 /**
@@ -188,18 +201,20 @@ export function parseReconstructedGrep(
   command: string,
 ): Record<string, string> | null {
   const words = reconstructedWords(command);
-  if (words === null || words[0] !== "grep") return null;
+  if (words === null || words[0]?.text !== "grep") return null;
   let index = 1;
   for (
-    let arity = GREP_FLAG_ARITY.get(words[index] ?? "");
+    let arity = flagArity(words[index]);
     arity !== undefined;
-    arity = GREP_FLAG_ARITY.get(words[index] ?? "")
+    arity = flagArity(words[index])
   ) {
     index += 1 + arity;
   }
   const [pattern, path, ...extra] = words.slice(index);
   if (pattern === undefined || extra.length > 0) return null;
-  return path === undefined ? { pattern } : { pattern, path };
+  return path === undefined
+    ? { pattern: pattern.text }
+    : { pattern: pattern.text, path: path.text };
 }
 
 function prettifyKey(key: string): string {
