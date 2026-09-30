@@ -293,9 +293,12 @@
   }
 
   /* A header tab's box already carries its border; it only opens at the
-     bottom. */
+     bottom. Its outline is `--join-outline` (the tab's own colour, set by
+     `TabChromeBackground`), which the bridge below continues down its sides
+     and round its feet - one silhouette in one colour, the pre-#2021 tab cap.
+     Unset, it is the sheets' border. */
   [data-sheet-joined="top"] {
-    border-color: var(--canvas-border);
+    border-color: var(--join-outline, var(--canvas-border));
     border-bottom-width: 0;
     border-end-start-radius: 0;
     border-end-end-radius: 0;
@@ -342,7 +345,10 @@
     position-anchor: --sheet-joined;
     position-visibility: anchors-visible;
     /* Over the strip's resize handle (z-20), whose hover line would otherwise
-       cut the joined band in two; the handle still takes the pointer here. */
+       cut the joined band in two; the handle still takes the pointer here.
+       Under the collapsed tile's accent ring (z-22,
+       `SIDE_TAB_TILE_ACCENT_RING_CLASS`), whose right side lies inside this
+       box on the joined tile - move the two together. */
     z-index: 21;
     background-color: var(--join-fill);
     pointer-events: none;
@@ -362,7 +368,7 @@
       position: absolute;
       width: var(--join-radius);
       height: var(--join-radius);
-      border: 0 solid var(--canvas-border);
+      border: 0 solid var(--join-outline, var(--canvas-border));
       box-shadow: calc(var(--arc-x) * var(--join-radius) / 2)
         calc(var(--arc-y) * var(--join-radius) / 2) 0
         calc(var(--join-radius) / 2 - 1px) var(--join-fill);
@@ -377,7 +383,7 @@
     right: anchor(right);
     top: anchor(bottom);
     bottom: calc(anchor(--task-frame top) - 1px);
-    border-inline: 1px solid var(--canvas-border);
+    border-inline: 1px solid var(--join-outline, var(--canvas-border));
 
     &::before,
     &::after {

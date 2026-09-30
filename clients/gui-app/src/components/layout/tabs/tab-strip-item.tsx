@@ -10,6 +10,7 @@ import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-q
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
 import { leaderDigitFor } from "@/components/ui/leader-digit-shortcuts";
 import { useTopLevelStripPairPreview } from "@/components/epic-canvas/dnd/dnd-store";
+import type { MergeSide } from "@/components/epic-canvas/dnd/strip-drag-model";
 import { HeaderTabVisual } from "./header-tab-visual";
 import {
   useStripTabItem,
@@ -73,6 +74,17 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const { tab, dnd, chrome, includeMotionFrame, isActive } = props;
   const { rootRef, ...item } = useStripTabItem(props);
   const joined = isActive && chrome === "own" && !item.isDragging;
+  const pairPreviewSide = useTopLevelStripPairPreview(tab.kind, tab.id);
+  // The same gate the vertical strip's hover card applies
+  // (`hoverCardAllowed`, `side-tab-row.tsx`): shut while renaming, a drag
+  // source, a drop indicator sits on this tab, or a pair-merge preview is
+  // active - each one already fights the pointer for something else.
+  const hoverCardEnabled =
+    !item.rename.isEditing &&
+    !item.isDragging &&
+    !props.showDropIndicatorBefore &&
+    !props.showDropIndicatorAfter &&
+    pairPreviewSide === null;
   const control = (
     <StripTabContextMenu item={item} input={props}>
       <div
@@ -116,8 +128,13 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             />
           }
           leaderVisible={item.leaderBadge !== null}
+          enabled={hoverCardEnabled}
         />
-        <StripPairPreview tabKind={tab.kind} tabId={tab.id} />
+        <StripPairPreview
+          tabKind={tab.kind}
+          tabId={tab.id}
+          side={pairPreviewSide}
+        />
         <HeaderTabSeparator visible={props.showSeparatorAfter} />
         <HeaderTabDropIndicator
           visible={props.showDropIndicatorAfter}
@@ -300,8 +317,9 @@ export function HeaderTabSeparator(props: { readonly visible: boolean }) {
 function StripPairPreview(props: {
   readonly tabKind: HeaderTabKind;
   readonly tabId: string;
+  readonly side: MergeSide | null;
 }) {
-  const side = useTopLevelStripPairPreview(props.tabKind, props.tabId);
+  const { side } = props;
   if (side === null) return null;
   return (
     <span

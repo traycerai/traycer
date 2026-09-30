@@ -1,27 +1,36 @@
-import { use, useCallback, useState, type ReactNode } from "react";
-import type { SheetJoinPane } from "./side-strip/side-tab-join";
+import {
+  use,
+  useCallback,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 
-import { JoinPaneContext, PublishJoinContext } from "./sheet-join-context";
+import {
+  JoinContext,
+  PublishJoinContext,
+  type SheetJoin,
+} from "./sheet-join-context";
 
 /** The bridge follows the latest remaining eligible row or drag overlay. */
 export function SheetJoinScope(props: {
   readonly children: ReactNode;
 }): ReactNode {
-  const [joins, setJoins] = useState<{ owner: symbol; pane: SheetJoinPane }[]>(
-    [],
-  );
-  const publish = useCallback((pane: SheetJoinPane) => {
+  const [joins, setJoins] = useState<{ owner: symbol; join: SheetJoin }[]>([]);
+  const publish = useCallback((join: SheetJoin) => {
     const owner = Symbol();
-    setJoins((current) => [...current, { owner, pane }]);
+    setJoins((current) => [...current, { owner, join }]);
     return () => {
-      setJoins((current) => current.filter((join) => join.owner !== owner));
+      setJoins((current) => current.filter((entry) => entry.owner !== owner));
     };
   }, []);
   return (
     <PublishJoinContext value={publish}>
-      <JoinPaneContext value={joins.at(-1)?.pane ?? null}>
+      {/* The published object itself, not a copy: it is created once per
+          publish, so the value stays referentially stable between renders. */}
+      <JoinContext value={joins.at(-1)?.join ?? null}>
         {props.children}
-      </JoinPaneContext>
+      </JoinContext>
     </PublishJoinContext>
   );
 }
@@ -29,13 +38,16 @@ export function SheetJoinScope(props: {
 export function SheetJoinBridge(props: {
   readonly edge: "top" | "left" | "right";
 }): ReactNode {
-  const pane = use(JoinPaneContext);
+  const join = use(JoinContext);
   return (
     <span
       aria-hidden
       data-sheet-join-bridge={props.edge}
-      data-join-active={pane !== null ? "" : undefined}
-      data-join-pane={pane ?? undefined}
+      data-join-active={join !== null ? "" : undefined}
+      data-join-pane={join?.pane ?? undefined}
+      // `--join-outline` (index.css) colours the bridge's sides and feet; left
+      // unset, they fall back to the sheets' border.
+      style={{ "--join-outline": join?.outline ?? undefined } as CSSProperties}
     />
   );
 }
