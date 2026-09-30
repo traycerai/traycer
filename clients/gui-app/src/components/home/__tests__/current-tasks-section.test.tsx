@@ -235,6 +235,9 @@ function renderSection() {
 }
 
 const openOrganizationDialog = vi.fn<(dialog: OrganizationDialog) => void>();
+const registerOrganizationTasks = vi.fn<
+  (key: string, taskIds: readonly string[]) => () => void
+>(() => () => undefined);
 const organizationClient = new HostClient<HostRpcRegistry>({
   registry: hostRpcRegistry,
   invalidator: { invalidateHostScope: () => undefined },
@@ -283,7 +286,7 @@ function renderSectionWithOrganization(view: OrganizationView) {
     supported: true,
     userId: "user-1",
     view,
-    register: () => () => undefined,
+    register: registerOrganizationTasks,
     command: () => Promise.resolve(undefined),
     refresh: () => Promise.resolve(undefined),
     openDialog: openOrganizationDialog,
@@ -352,6 +355,7 @@ describe("<CurrentTasksSection />", () => {
     testState.requestOpenInNewWindow.mockReset();
     testState.isNewWindowAvailable = false;
     openOrganizationDialog.mockReset();
+    registerOrganizationTasks.mockClear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     pinSupport.mockReset();
     pinSupport.mockReturnValue(true);
@@ -597,6 +601,66 @@ describe("<CurrentTasksSection />", () => {
         taskId: "epic-a",
         canEdit: false,
       });
+    });
+  });
+
+  describe("organization registration", () => {
+    // The organization view only carries the tasks some surface registered, and
+    // a pinned or running task that is not open is registered by nobody else.
+    const registrations = () =>
+      registerOrganizationTasks.mock.calls.map(([, taskIds]) => [...taskIds]);
+    const registeredTaskIds = () => new Set(registrations().flat());
+
+    it("registers every shown task, a closed pinned one included", () => {
+      setGroups({
+        inProgress: [task("c", {})],
+        pinned: [task("a", { isPinned: true })],
+        open: [task("b", {})],
+      });
+      renderSectionWithOrganization(organizationView({}));
+
+      expect([...registeredTaskIds()].toSorted()).toEqual([
+        "epic-a",
+        "epic-b",
+        "epic-c",
+      ]);
+    });
+
+    it("registers nothing for local-home, preserved-orphan and phase rows, which have no cloud organization", () => {
+      setGroups({
+        open: [
+          task("a", {}),
+          task("l", { isLocalHome: true }),
+          task("x", { isPreservedOrphan: true }),
+          task("p", { taskType: "phase" }),
+        ],
+      });
+      renderSectionWithOrganization(organizationView({}));
+
+      expect(registrations().filter((taskIds) => taskIds.length > 0)).toEqual([
+        ["epic-a"],
+      ]);
+      expect(
+        registrations().filter((taskIds) => taskIds.length === 0),
+      ).toHaveLength(3);
+    });
+
+    it("registers a row hidden behind 'Show more' only once it is shown", () => {
+      setGroups({ open: tasks("o", 7) });
+      renderSectionWithOrganization(organizationView({}));
+
+      expect([...registeredTaskIds()].toSorted()).toEqual([
+        "epic-o1",
+        "epic-o2",
+        "epic-o3",
+        "epic-o4",
+        "epic-o5",
+      ]);
+
+      fireEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
+
+      expect(registeredTaskIds().has("epic-o6")).toBe(true);
+      expect(registeredTaskIds().has("epic-o7")).toBe(true);
     });
   });
 

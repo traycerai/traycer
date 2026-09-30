@@ -40,6 +40,7 @@ import {
 } from "@/hooks/epic/use-epic-set-pinned-mutation";
 import { useCurrentTasks } from "@/hooks/home/use-current-tasks";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import { useOrganizationTasks } from "@/hooks/organization/organization-context";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useTaskWorktreeMetadataForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
@@ -267,6 +268,15 @@ function CurrentTaskRow(props: {
     authorizesCloudCapability(state.status),
   );
   const canEdit = canEditHistoryItemTitle(item, cloudAuthorized);
+  // The organization view only carries tasks some surface registered. Open
+  // tabs and History register theirs, but a pinned or running task that is
+  // not open is registered by nobody else, and its menu would then read no
+  // group membership or appearance. Same exclusions as History's registration.
+  const hasTaskOrganization =
+    item.taskType === "epic" &&
+    item.isLocalHome !== true &&
+    item.isPreservedOrphan !== true;
+  useOrganizationTasks(hasTaskOrganization ? [item.epicId] : []);
   return (
     <HistoryTaskRow
       organization={{ canEdit }}
