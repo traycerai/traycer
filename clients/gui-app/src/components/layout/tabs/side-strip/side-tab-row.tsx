@@ -31,6 +31,7 @@ import {
   SIDE_TAB_HOVER_CLASS,
   SIDE_TAB_RAIL_BADGE_POSITION_CLASS,
   SIDE_TAB_ROW_CLASS,
+  SIDE_TAB_SECTION_ROW_CLASS,
   SIDE_TAB_SESSION_ACTIVE_CLASS,
   SIDE_TAB_TILE_ACCENT_RING_CLASS,
   SIDE_TAB_TILE_ACTIVE_CLASS,
@@ -65,6 +66,18 @@ export interface SideTabDisclosure {
   readonly label: string;
   /** Whether the toggle came from a pointer, so a keyboard one skips the motion. */
   readonly onToggle: (viaPointer: boolean) => void;
+}
+
+/**
+ * What the Activity view's sections change about an expanded row: the title's
+ * weight and tone, and, on a Needs you or To review row, the second line that
+ * makes it a 46px two-line row. The Layered view passes `null`.
+ */
+export interface SideRowSection {
+  /** `strong` is a loud row's bold title, `muted` an idle one's. */
+  readonly title: "strong" | "normal" | "muted";
+  /** The second line, or `null` on a one-line row. */
+  readonly detail: ReactNode | null;
 }
 
 export interface SideTabRowClose {
@@ -126,6 +139,8 @@ export interface SideTabRowProps {
   readonly agents: SideTabLiveAgents;
   /** Expanded: the one trailing status, or `null` for a row with none. */
   readonly status: SideTabRowStatus | null;
+  /** Expanded: the Activity view's section treatment, or `null` in the Layered view. */
+  readonly section: SideRowSection | null;
   /** The chevron of a task with nested agents; `null` on every other row. */
   readonly disclosure: SideTabDisclosure | null;
   /**
@@ -237,10 +252,10 @@ export function SideTabRow(props: SideTabRowProps) {
           "group/side-tab relative flex items-center outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50",
           collapsed
             ? cn(SIDE_TAB_TILE_CLASS, "shrink-0 justify-center self-center")
-            : SIDE_TAB_ROW_CLASS,
+            : cn(SIDE_TAB_ROW_CLASS, sectionRowHeight(props.section)),
           collapsed
             ? collapsedFill(props)
-            : expandedFill(props.active, sessionActive),
+            : expandedFill(props.active, sessionActive, props.section),
           props.dragSource && "opacity-0",
           frame.className,
         )}
@@ -350,14 +365,29 @@ function SideTabPairPreview(props: {
   );
 }
 
-function expandedFill(active: boolean, sessionActive: boolean): string {
+function sectionRowHeight(section: SideRowSection | null): string | undefined {
+  if (section === null) return undefined;
+  return section.detail === null
+    ? SIDE_TAB_SECTION_ROW_CLASS.oneLine
+    : SIDE_TAB_SECTION_ROW_CLASS.twoLine;
+}
+
+function expandedFill(
+  active: boolean,
+  sessionActive: boolean,
+  section: SideRowSection | null,
+): string {
   if (sessionActive) {
     return cn(SIDE_TAB_SESSION_ACTIVE_CLASS, SESSION_TAB_LABEL_CLASS);
   }
   if (active) return cn(SIDE_TAB_ACTIVE_CLASS, "text-foreground");
+  // A loud or working row reads at full strength; only idle, and every row of
+  // the Layered view, is muted until it is hovered.
   return cn(
     SIDE_TAB_HOVER_CLASS,
-    "text-muted-foreground hover:text-foreground",
+    section === null || section.title === "muted"
+      ? "text-muted-foreground hover:text-foreground"
+      : "text-foreground",
   );
 }
 
@@ -496,39 +526,59 @@ function ExpandedContent(
   const { titleRef } = props;
   // A rename input takes the whole row: no icon, status, chevron or close.
   const renaming = typeof props.title !== "string";
+  const detail = renaming ? null : (props.section?.detail ?? null);
+  const title = (
+    <span
+      data-testid="side-tab-title"
+      className={cn(
+        SIDE_TAB_TITLE_CLASS,
+        "flex min-w-0 items-center",
+        detail === null && "flex-1",
+        props.section?.title === "strong" && "font-semibold",
+      )}
+    >
+      {typeof props.title === "string" ? (
+        <>
+          {props.titleIcon === null ? null : (
+            <span className="flex shrink-0 items-center">
+              {props.titleIcon}
+            </span>
+          )}
+          <span className="block min-w-0 flex-1">
+            <span
+              ref={titleRef}
+              className={cn(
+                "header-tab-title-text",
+                props.tile.kind === "generating" && "text-muted-foreground",
+              )}
+            >
+              {props.title}
+            </span>
+          </span>
+        </>
+      ) : (
+        props.title
+      )}
+    </span>
+  );
   return (
     <>
-      <span
-        data-testid="side-tab-title"
-        className={cn(SIDE_TAB_TITLE_CLASS, "flex min-w-0 flex-1 items-center")}
-      >
-        {typeof props.title === "string" ? (
-          <>
-            {props.titleIcon === null ? null : (
-              <span className="flex shrink-0 items-center">
-                {props.titleIcon}
-              </span>
-            )}
-            <span className="block min-w-0 flex-1">
-              <span
-                ref={titleRef}
-                className={cn(
-                  "header-tab-title-text",
-                  props.tile.kind === "generating" && "text-muted-foreground",
-                )}
-              >
-                {props.title}
-              </span>
-            </span>
-          </>
-        ) : (
-          props.title
-        )}
-      </span>
+      {detail === null ? (
+        title
+      ) : (
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          {title}
+          {detail}
+        </span>
+      )}
       {renaming ? null : (
         <span
           data-testid="side-tab-trailing"
-          className="flex shrink-0 items-center justify-end"
+          // A two-line row's trailing content sits on its title line.
+          className={cn(
+            "flex shrink-0 items-center justify-end",
+            detail !== null && "mt-1 self-start",
+          )}
         >
           <TrailingContent
             active={props.active}

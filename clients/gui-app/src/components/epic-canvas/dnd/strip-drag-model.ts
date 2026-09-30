@@ -62,6 +62,11 @@ export interface StripSlot {
    * carries a single `TabRef` and a two-ref item has no unambiguous one.
    */
   readonly isMergeTarget: boolean;
+  /**
+   * The section a sectioned strip holds the item in, `null` for a strip with
+   * none. A drag moves an item among the slots of its own lane only.
+   */
+  readonly lane: string | null;
 }
 
 export interface StripDragGeometry {
@@ -460,6 +465,53 @@ export function reconstructionErrorPx(slots: ReadonlyArray<StripSlot>): number {
 }
 
 /**
+ * The slots of the source item's own lane, each one's `advance` measured to
+ * the next slot of that lane. A lane is one contiguous run of the strip, so
+ * the model reorders it as a strip of its own; a source in no lane (or a strip
+ * with none) leaves the slots as measured.
+ */
+export function laneSlotsOf(
+  slots: ReadonlyArray<StripSlot>,
+  sourceItemId: string,
+): ReadonlyArray<StripSlot> {
+  const lane = slots.find((slot) => slot.itemId === sourceItemId)?.lane ?? null;
+  if (lane === null) return slots;
+  const inLane = slots.filter((slot) => slot.lane === lane);
+  return inLane.map((slot, index) => ({
+    ...slot,
+    advance:
+      index + 1 < inLane.length
+        ? inLane[index + 1].contentStart - slot.contentStart
+        : slot.extent,
+  }));
+}
+
+/**
+ * The viewport range, along the main axis, of the source's lane, which the
+ * dragged item never leaves; `null` when the source is in no lane.
+ */
+export function laneBoundsOf(
+  geometry: StripDragGeometry,
+  contentOrigin: number,
+): { readonly start: number; readonly end: number } | null {
+  const first = geometry.slots.at(0);
+  const last = geometry.slots.at(-1);
+  const source = geometry.slots.at(geometry.sourceIndex);
+  if (
+    first === undefined ||
+    last === undefined ||
+    source === undefined ||
+    source.lane === null
+  ) {
+    return null;
+  }
+  return {
+    start: contentOrigin + first.contentStart,
+    end: contentOrigin + last.contentStart + last.extent,
+  };
+}
+
+/**
  * Re-measure after the strip's item list changed mid-drag (agent activity opens
  * tabs). The source is tracked by id, not index, because everything around it
  * may have shifted. Returns null when the dragged item is gone, which the caller
@@ -476,7 +528,10 @@ export function remapGeometryToSlots(
     return null;
   }
   const sourceItemId = geometry.slots[geometry.sourceIndex].itemId;
-  const sourceIndex = slots.findIndex((slot) => slot.itemId === sourceItemId);
+  const laneSlots = laneSlotsOf(slots, sourceItemId);
+  const sourceIndex = laneSlots.findIndex(
+    (slot) => slot.itemId === sourceItemId,
+  );
   if (sourceIndex < 0) return null;
-  return { ...geometry, slots, sourceIndex };
+  return { ...geometry, slots: laneSlots, sourceIndex };
 }

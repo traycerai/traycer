@@ -7,13 +7,13 @@ const NO_ITEMS: ReadonlyArray<NeedsYouItem> = [];
 export interface StripNeedsYou {
   /** The prompts by task, for the rows nested under each task. */
   readonly byEpic: ReadonlyMap<string, ReadonlyArray<NeedsYouItem>>;
-  /** The prompts whose task has no row in the strip: the pinned block's. */
-  readonly pinned: ReadonlyArray<NeedsYouItem>;
+  /** The prompts whose task has no row in the strip: Needs you rows of their own. */
+  readonly rowless: ReadonlyArray<NeedsYouItem>;
 }
 
 export const NO_STRIP_NEEDS_YOU: StripNeedsYou = {
   byEpic: new Map(),
-  pinned: NO_ITEMS,
+  rowless: NO_ITEMS,
 };
 
 export const StripNeedsYouContext = createContext(NO_STRIP_NEEDS_YOU);
@@ -24,9 +24,4 @@ export function useStripTaskNeedsYou(
 ): ReadonlyArray<NeedsYouItem> {
   const { byEpic } = useContext(StripNeedsYouContext);
   return epicId === null ? NO_ITEMS : (byEpic.get(epicId) ?? NO_ITEMS);
-}
-
-/** The prompts the pinned Needs you block lists. */
-export function useStripPinnedNeedsYou(): ReadonlyArray<NeedsYouItem> {
-  return useContext(StripNeedsYouContext).pinned;
 }

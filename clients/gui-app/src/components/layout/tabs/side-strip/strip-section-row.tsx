@@ -1,0 +1,117 @@
+import type { ReactNode } from "react";
+import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
+import { cn } from "@/lib/utils";
+import {
+  EMPTY_NOTIFICATION_INDICATOR_STATE,
+  type NotificationIndicatorState,
+} from "@/stores/notifications/notification-indicator-state";
+import type { SideTabLiveAgents } from "./agent-meter";
+import type { SideRowSection, SideTabRowStatus } from "./side-tab-row";
+import { sideTabStatusOf } from "./side-tab-status";
+import { SideTabStatusGlyph } from "./side-tab-status-glyph";
+import { StripElapsedTime } from "./strip-elapsed-time";
+import { NeedsYouDetail, ToReviewDetail } from "./strip-section-detail";
+import type { NeedsYouRow, StripTaskRow, ToReviewRow } from "./strip-sections";
+
+/**
+ * How a section styles a row: a Needs you or To review row is a two-line row
+ * with a bold title, a Working row one line of normal weight, an Idle row one
+ * line of muted text.
+ */
+export function sectionStyleOf(row: StripTaskRow): SideRowSection {
+  switch (row.section) {
+    case "needs-you":
+      return { title: "strong", detail: <NeedsYouDetail row={row} /> };
+    case "to-review":
+      return { title: "strong", detail: <ToReviewDetail row={row} /> };
+    case "working":
+      return { title: "normal", detail: null };
+    case "idle":
+      return { title: "muted", detail: null };
+  }
+}
+
+/**
+ * The trailing status of a two-line row: the time since the request or the
+ * finish, after the pending fork's glyph when the task has one. It stays when
+ * the row is hovered, and the close joins after it. `null` when there is
+ * nothing to show (a Needs you row with no loaded prompt has no wait).
+ */
+export function twoLineStatusOf(
+  row: NeedsYouRow | ToReviewRow,
+  forkGlyph: ReactNode | null,
+): SideTabRowStatus | null {
+  const since = row.section === "needs-you" ? row.createdAt : row.at;
+  if (since === null && forkGlyph === null) return null;
+  return {
+    yieldsToClose: false,
+    node: (
+      <span className="flex items-center gap-1.5">
+        {forkGlyph}
+        {since === null ? null : (
+          <StripElapsedTime
+            since={since}
+            className={cn(
+              "text-ui-xs tabular-nums",
+              row.section === "needs-you"
+                ? "text-warning-foreground/70"
+                : "text-muted-foreground",
+            )}
+            testId="side-tab-section-time"
+          />
+        )}
+      </span>
+    ),
+  };
+}
+
+/**
+ * A task row's one trailing status. In the Activity view (`row` set) a Needs
+ * you or To review row says what a chip would on its second line, so its
+ * trailing edge is the time, and a pending fork keeps its glyph; a Working or
+ * Idle row draws the glyph or the meter, and the meter yields to the close
+ * as a glyph does. The Layered view (`row` null) draws the chip, meter or
+ * glyph of the flush-title row.
+ */
+export function taskStatusOf(input: {
+  readonly row: StripTaskRow | null;
+  readonly tabId: string;
+  readonly indicator: NotificationIndicatorState;
+  readonly agents: SideTabLiveAgents;
+  readonly activityStatus: EpicActivityStatus;
+  readonly titleGenerating: boolean;
+  /** The task's nested agents are showing, so they carry what the meter would. */
+  readonly meterHidden: boolean;
+}): SideTabRowStatus | null {
+  const { row, tabId, indicator } = input;
+  if (row?.section === "needs-you" || row?.section === "to-review") {
+    return twoLineStatusOf(
+      row,
+      indicator.pendingFork ? (
+        <SideTabStatusGlyph
+          tabId={tabId}
+          indicatorState={{
+            ...EMPTY_NOTIFICATION_INDICATOR_STATE,
+            pendingFork: true,
+          }}
+          activityStatus="idle"
+          titleGenerating={false}
+        />
+      ) : null,
+    );
+  }
+  return sideTabStatusOf({
+    indicator,
+    agents: input.agents,
+    meterHidden: input.meterHidden,
+    meterYields: row !== null,
+    glyph: (
+      <SideTabStatusGlyph
+        tabId={tabId}
+        indicatorState={indicator}
+        activityStatus={input.activityStatus}
+        titleGenerating={input.titleGenerating}
+      />
+    ),
+  });
+}

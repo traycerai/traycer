@@ -1,16 +1,14 @@
 import type { ReactNode } from "react";
 import { NestedChatStatusGlyph } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
 import { displayTitle } from "@/lib/display-title";
-import { useSampledNow } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import {
   STRIP_AGENT_ON_SCREEN_CLASS,
   STRIP_AGENT_ROW_CLASS,
   STRIP_AGENT_TRAILING_CLASS,
 } from "./side-strip-tokens";
+import { StripElapsedTime } from "./strip-elapsed-time";
 import type { StripAgent, StripAgentStatus } from "./strip-task-agents";
-
-const MINUTE_MS = 60_000;
 
 /** Each status's name, the row's accessible name after its title. */
 const STATUS_LABEL: Readonly<Record<StripAgentStatus, string>> = {
@@ -20,34 +18,17 @@ const STATUS_LABEL: Readonly<Record<StripAgentStatus, string>> = {
   background: "background",
 };
 
-/** "<1m", "12m", "2h 5m", "3d": how long a running agent has gone, never an age. */
-function formatElapsed(elapsedMs: number): string {
-  const minutes = Math.floor(Math.max(0, elapsedMs) / MINUTE_MS);
-  if (minutes < 1) return "<1m";
-  if (minutes < 60) return `${String(minutes)}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours >= 24) return `${String(Math.floor(hours / 24))}d`;
-  const rest = minutes % 60;
-  return rest === 0
-    ? `${String(hours)}h`
-    : `${String(hours)}h ${String(rest)}m`;
-}
-
-/** Its own leaf, so the shared minute tick repaints this span and not the row. */
-function ElapsedTime(props: { readonly since: number }): ReactNode {
-  const now = useSampledNow();
-  return (
-    <span className={STRIP_AGENT_TRAILING_CLASS}>
-      {formatElapsed(now - props.since)}
-    </span>
-  );
-}
-
 function Trailing(props: { readonly agent: StripAgent }): ReactNode {
   const { agent } = props;
   if (agent.status === "turn") {
     // No start time known (`since` is 0): no time, rather than an epoch's worth.
-    return agent.since > 0 ? <ElapsedTime since={agent.since} /> : null;
+    return agent.since > 0 ? (
+      <StripElapsedTime
+        since={agent.since}
+        className={STRIP_AGENT_TRAILING_CLASS}
+        testId={undefined}
+      />
+    ) : null;
   }
   return (
     <span

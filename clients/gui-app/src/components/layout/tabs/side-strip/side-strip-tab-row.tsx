@@ -16,8 +16,8 @@ import { useSideTabLiveAgents } from "./side-tab-live-agents";
 import { railBadgeOf } from "./rail-badge-kind";
 import type { DropIndicator } from "./side-strip-item-input";
 import { SIDE_TAB_TITLE_INPUT_CLASS } from "./side-strip-tokens";
-import { sideTabStatusOf } from "./side-tab-status";
-import { SideTabStatusGlyph } from "./side-tab-status-glyph";
+import { sectionStyleOf, taskStatusOf } from "./strip-section-row";
+import type { StripTaskRow } from "./strip-sections";
 import {
   stripAgentGroupId,
   stripTaskRowId,
@@ -48,6 +48,8 @@ export function SideStripTabRow(props: {
   readonly joined: SheetJoin | null;
   /** The agents nested under this row, whose chevron and state it carries. */
   readonly group: StripTaskGroup | null;
+  /** The Activity view's section and what it draws on this row; `null` in the Layered view. */
+  readonly section: StripTaskRow | null;
 }): ReactNode {
   const { item, input, rootRef } = props;
   const { tab, isActive } = input;
@@ -61,6 +63,17 @@ export function SideStripTabRow(props: {
   const titleOnlyCard = useLiveAgentsInStrip();
   const badge = railBadgeOf(item.indicatorState);
   const groupDisclosure = props.group?.disclosure ?? null;
+  const row = props.section;
+  const section = row === null ? null : sectionStyleOf(row);
+  const status = taskStatusOf({
+    row,
+    tabId: tab.id,
+    indicator: item.indicatorState,
+    agents,
+    activityStatus,
+    titleGenerating,
+    meterHidden: groupDisclosure?.expanded === true,
+  });
   // The rail's tile falls back on the status glyph for a title with no letter.
   const leading = (
     <TabLeadingIcon
@@ -132,19 +145,8 @@ export function SideStripTabRow(props: {
           }
           badge={badge}
           agents={agents}
-          status={sideTabStatusOf({
-            indicator: item.indicatorState,
-            agents,
-            meterHidden: groupDisclosure?.expanded === true,
-            glyph: (
-              <SideTabStatusGlyph
-                tabId={tab.id}
-                indicatorState={item.indicatorState}
-                activityStatus={activityStatus}
-                titleGenerating={titleGenerating}
-              />
-            ),
-          })}
+          status={status}
+          section={section}
           disclosure={
             groupDisclosure === null
               ? null

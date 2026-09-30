@@ -10,6 +10,11 @@ import { useSurfaceNotificationIndicatorState } from "@/components/notifications
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { useRegisteredEpicTitleGenerating } from "@/lib/epic-selectors";
 import { useSideStripCollapsed } from "@/stores/layout/side-tab-strip-store";
+import {
+  groupNeedsYouByEpic,
+  useNeedsYouItems,
+} from "@/stores/notifications/needs-you-items";
+import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { tabAppearance, type HeaderTab } from "@/stores/tabs/types";
 import type {
   HeaderStripItem,
@@ -18,13 +23,15 @@ import type {
 import type { HeaderTabDragData } from "../header-tab-dnd";
 import { splitSlotLabel, useHeaderTabTitle } from "../header-tab-presentation";
 import { TabLeadingIcon } from "../tab-leading-icon";
+import type { SideTabLiveAgents } from "./agent-meter";
 import { NO_LIVE_AGENTS, useSideTabLiveAgents } from "./side-tab-live-agents";
 import { railBadgeOf } from "./rail-badge-kind";
 import { sideTabTileOf, sideTabTitleIconOf } from "../tab-identity";
 import { SideSplitRowPair } from "./side-split-row-pair";
 import { SideTabRow, type SideTabRowVariant } from "./side-tab-row";
-import { sideTabStatusOf } from "./side-tab-status";
-import { SideTabStatusGlyph } from "./side-tab-status-glyph";
+import { useLiveAgentsInStrip } from "./strip-agents-mode";
+import { sectionStyleOf, taskStatusOf } from "./strip-section-row";
+import { stripTaskRowOf, type StripTaskRow } from "./strip-sections";
 
 /**
  * The dragged object of a vertical strip drag: the row (or the split pair)
@@ -168,6 +175,7 @@ function OverlayMember(props: {
       badge={null}
       agents={NO_LIVE_AGENTS}
       status={null}
+      section={null}
       disclosure={null}
       title={label}
       hoverCardBody={label}
@@ -179,6 +187,30 @@ function OverlayMember(props: {
       dragSource={false}
     />
   );
+}
+
+/**
+ * What the dragged row draws in the Activity view, from the drag's captured
+ * indicator and the live prompts and agents, so the thing under the pointer is
+ * the section row that was picked up; `null` in the Layered view and the rail. The time a
+ * To review row shows is not carried, only the section's own data is.
+ */
+function useOverlayStripRow(
+  epicId: string | null,
+  indicator: NotificationIndicatorState,
+  agents: SideTabLiveAgents,
+  variant: SideTabRowVariant,
+): StripTaskRow | null {
+  const sectioned = useLiveAgentsInStrip() && variant === "expanded";
+  const items = useNeedsYouItems();
+  if (!sectioned) return null;
+  return stripTaskRowOf({
+    indicator,
+    agents,
+    needsYou:
+      epicId === null ? [] : (groupNeedsYouByEpic(items).get(epicId) ?? []),
+    reviewTimes: { done: null, failed: null },
+  });
 }
 
 /** One tab as a row: the ghost's captured state when given, else the live reads. */
@@ -202,6 +234,7 @@ function OverlayTabRow(props: {
   const titleGenerating = useRegisteredEpicTitleGenerating(epicId);
   const appearance = ghost === null ? tabAppearance(tab) : ghost.appearance;
   const indicatorState = ghost?.indicatorState ?? liveIndicator;
+  const row = useOverlayStripRow(epicId, indicatorState, agents, props.variant);
   const leading = (
     <TabLeadingIcon
       icon={tab.icon}
@@ -229,19 +262,16 @@ function OverlayTabRow(props: {
       })}
       badge={railBadgeOf(indicatorState)}
       agents={agents}
-      status={sideTabStatusOf({
+      status={taskStatusOf({
+        row,
+        tabId: tab.id,
         indicator: indicatorState,
         agents,
+        activityStatus,
+        titleGenerating,
         meterHidden: false,
-        glyph: (
-          <SideTabStatusGlyph
-            tabId={tab.id}
-            indicatorState={indicatorState}
-            activityStatus={activityStatus}
-            titleGenerating={titleGenerating}
-          />
-        ),
       })}
+      section={row === null ? null : sectionStyleOf(row)}
       disclosure={null}
       title={displayName}
       hoverCardBody={displayName}

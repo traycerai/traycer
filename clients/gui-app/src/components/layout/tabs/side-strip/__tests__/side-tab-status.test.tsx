@@ -16,6 +16,7 @@ describe("sideTabStatusOf", () => {
       indicator: EMPTY_NOTIFICATION_INDICATOR_STATE,
       agents: { turn: 1, background: 0, coverage: "unserved" },
       meterHidden: false,
+      meterYields: false,
       glyph,
     });
     render(status.node);
@@ -30,6 +31,7 @@ describe("sideTabStatusOf", () => {
       indicator: EMPTY_NOTIFICATION_INDICATOR_STATE,
       agents: { turn: 0, background: 0, coverage: "unserved" },
       meterHidden: false,
+      meterYields: false,
       glyph,
     });
     expect(status.yieldsToClose).toBe(true);

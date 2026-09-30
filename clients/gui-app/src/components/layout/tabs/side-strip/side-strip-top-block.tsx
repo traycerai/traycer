@@ -21,7 +21,7 @@ import {
   SideStripNewTask,
   SideStripTasksLabel,
 } from "./side-strip-nav-rows";
-import { SideStripNeedsYou } from "./side-strip-needs-you";
+import { useLiveAgentsInStrip } from "./strip-agents-mode";
 import type { SideTabRowVariant } from "./side-tab-row";
 import {
   SIDE_STRIP_INSET_CLASS,
@@ -49,8 +49,8 @@ export interface SideStripTopBlockProps {
 /**
  * What leads in the header, in the strip (S-03). Expanded: history back and
  * forward beside the collapse toggle, the Notifications and All tasks nav rows (D6),
- * the Activity view's Needs you block (D10), Home, New Task as the primary
- * last row (F7), then the "Tasks" label over the rows. On macOS with the
+ * Home, New Task as the primary last row (F7), then the "Tasks" label over the
+ * rows (the Activity view's section headers replace it). On macOS with the
  * strip at the left the first row is the title bar: a drag row that reserves
  * the traffic lights and puts the arrows right of them (S-04).
  *
@@ -61,6 +61,8 @@ export interface SideStripTopBlockProps {
  */
 export function SideStripTopBlock(props: SideStripTopBlockProps): ReactNode {
   const collapsed = props.variant === "collapsed";
+  // The Activity view's section headers say what the "Tasks" label does.
+  const sectioned = useLiveAgentsInStrip();
   const toggle = (
     <SideStripCollapseToggle
       edge={props.edge}
@@ -135,10 +137,9 @@ export function SideStripTopBlock(props: SideStripTopBlockProps): ReactNode {
         >
           {props.ownsTitleBar ? null : <FirstRow toggle={toggle} />}
           <SideStripNavRows variant={props.variant} />
-          <SideStripNeedsYou />
           {home}
           {newTask}
-          <SideStripTasksLabel count={props.taskCount} />
+          {sectioned ? null : <SideStripTasksLabel count={props.taskCount} />}
         </div>
       )}
     </div>

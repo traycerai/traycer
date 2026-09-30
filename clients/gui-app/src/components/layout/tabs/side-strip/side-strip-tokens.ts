@@ -47,6 +47,18 @@ export const SIDE_STRIP_LIST_CLASS: Readonly<
 /** One expanded row: 32px tall, 8px radius, 8px padding and gap. */
 export const SIDE_TAB_ROW_CLASS = "h-8 rounded-lg px-2 gap-2";
 /**
+ * The Activity view's rows by section (owner default: the loud rows are the
+ * tall ones): Needs you and To review draw a second line in 46px, Working and
+ * Idle one line in 28px.
+ */
+export const SIDE_TAB_SECTION_ROW_CLASS = {
+  twoLine: "h-11.5",
+  oneLine: "h-7",
+} as const;
+/** A section header's button: the "Tasks" label's type, as a full-width row. */
+export const SIDE_STRIP_SECTION_HEADER_CLASS =
+  "group/side-section flex w-full shrink-0 items-center gap-1 rounded-md px-2 pt-2 pb-1 text-start text-overline font-medium uppercase tracking-wide outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50 [-webkit-app-region:no-drag]";
+/**
  * The 16px icon box and its 8px gap that a nav row (Notifications, All tasks,
  * Home, New Task) keeps. A task row has no leading slot: its title starts on
  * the row's own padding.

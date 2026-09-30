@@ -168,14 +168,26 @@ function cloudRow(input: {
 }
 
 /**
- * The strip's one needs-you read. `pinned` holds every prompt, tasks with a
- * row included, so the hook has to leave those to their own entries.
+ * The strip's one needs-you read, as `StripNeedsYouScope` splits it (which the
+ * strip-boundary suite drives for real): the prompts by task, and `rowless`,
+ * the prompts of tasks outside `withRow`, which the hook files as Needs you
+ * entries of their own.
  */
-function NeedsYouReads(props: { readonly children: ReactNode }): ReactNode {
+function NeedsYouReads(props: {
+  readonly withRow: ReadonlySet<string>;
+  readonly children: ReactNode;
+}): ReactNode {
   const items = useNeedsYouItems();
+  const byEpic = groupNeedsYouByEpic(items);
+  const nested = [...props.withRow].flatMap(
+    (epicId) => byEpic.get(epicId) ?? [],
+  );
   return (
     <StripNeedsYouContext.Provider
-      value={{ byEpic: groupNeedsYouByEpic(items), pinned: items }}
+      value={{
+        byEpic,
+        rowless: items.filter((item) => !nested.includes(item)),
+      }}
     >
       {props.children}
     </StripNeedsYouContext.Provider>
@@ -184,13 +196,14 @@ function NeedsYouReads(props: { readonly children: ReactNode }): ReactNode {
 
 function wrapperOf(
   epics: Readonly<Record<string, HostNotificationsIndicatorState>>,
+  withRow: ReadonlySet<string>,
 ) {
   return function Wrapper(props: { readonly children: ReactNode }): ReactNode {
     return createElement(
       NotificationFeedModeContext.Provider,
       { value: "cloud" },
       <NotificationIndicatorsProvider indicators={{ epics, chats: {} }}>
-        <NeedsYouReads>{props.children}</NeedsYouReads>
+        <NeedsYouReads withRow={withRow}>{props.children}</NeedsYouReads>
       </NotificationIndicatorsProvider>,
     );
   };
@@ -358,12 +371,17 @@ describe("useStripSections", () => {
           tabs,
         }),
       {
-        wrapper: wrapperOf({
-          "epic-approval": { ...NO_FLAGS, pendingApproval: true },
-          "epic-reply": { ...NO_FLAGS, pendingInterview: true },
-          "epic-done": { ...NO_FLAGS, unreadDone: true },
-          "epic-split-failed": { ...NO_FLAGS, unreadFailure: true },
-        }),
+        wrapper: wrapperOf(
+          {
+            "epic-approval": { ...NO_FLAGS, pendingApproval: true },
+            "epic-reply": { ...NO_FLAGS, pendingInterview: true },
+            "epic-done": { ...NO_FLAGS, unreadDone: true },
+            "epic-split-failed": { ...NO_FLAGS, unreadFailure: true },
+          },
+          new Set(
+            tabs.flatMap((tab) => (tab.kind === "epic" ? [tab.epicId] : [])),
+          ),
+        ),
       },
     );
 
@@ -464,7 +482,7 @@ describe("useStripSections", () => {
           customizations: undefined,
           tabs: [tab],
         }),
-      { wrapper: wrapperOf({}) },
+      { wrapper: wrapperOf({}, new Set(["epic-gated"])) },
     );
 
     expect(

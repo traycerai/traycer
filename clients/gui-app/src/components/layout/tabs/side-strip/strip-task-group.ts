@@ -11,6 +11,7 @@ import type { HeaderTab } from "@/stores/tabs/types";
 import { useStripAgentsMode } from "./strip-agents-mode";
 import { useStripTaskExpanded } from "./strip-disclosure";
 import { useStripTaskNeedsYou } from "./strip-needs-you-context";
+import type { StripTaskRow } from "./strip-sections";
 import { useStripTaskAgents, type StripAgent } from "./strip-task-agents";
 
 /** One nested row: an agent, and the notification behind it for a needs-you row. */
@@ -64,13 +65,16 @@ export function stripAgentGroupId(tabId: string): string {
  * collapsed only those waiting on the person. Either way it also nests each
  * prompt of the task that no waiting agent accounts for, so a prompt is never
  * left without a row. A cold task has no names, so it nests its needs-you rows
- * alone and cannot expand. The layout editor's sample
- * tab nests the sample agents, and under the sample scene no real task nests
- * anything.
+ * alone and cannot expand. A task in the Activity view's Needs you section
+ * (`row`) names its requests on its own second line, so it nests none: expanded
+ * it shows all its agents, waiting ones first, and collapsed nothing. The
+ * layout editor's sample tab nests the sample agents, and under the sample
+ * scene no real task nests anything.
  */
 export function useStripTaskGroup(
   tab: HeaderTab | null,
   active: boolean,
+  row: StripTaskRow | null,
 ): StripTaskGroup | null {
   const mode = useStripAgentsMode();
   const sample = useSampleScene();
@@ -80,6 +84,7 @@ export function useStripTaskGroup(
   const [expandedChoice, setExpanded] = useStripTaskExpanded(epicId, active);
   const [viaPointer, setViaPointer] = useState(false);
   const motionEnabled = useMotionEnabled();
+  const namedOnRow = row?.section === "needs-you";
   const expandable = warm && agents.length > 0;
   const expanded = expandable && expandedChoice;
   const animate = viaPointer && motionEnabled;
@@ -95,7 +100,7 @@ export function useStripTaskGroup(
       notification: item.row,
       prompt: null,
     });
-    if (!warm) return needsYou.map(promptRow);
+    if (!warm) return namedOnRow ? [] : needsYou.map(promptRow);
     const promptOfChat = new Map<string, MergedNotificationRow>();
     for (const item of needsYou) {
       const chatId = needsYouItemChatId(item);
@@ -111,6 +116,8 @@ export function useStripTaskGroup(
           ? (promptOfChat.get(agent.id) ?? null)
           : null,
     });
+    // `agents` is in the strip's order, waiting ones first.
+    if (namedOnRow) return expanded ? agents.map(agentRow) : [];
     const waiting = agents.filter((a) => a.status === "waiting");
     const waitingIds = new Set(waiting.map((a) => a.id));
     // Every prompt of a task with a row shows under it: one no waiting agent
@@ -126,7 +133,7 @@ export function useStripTaskGroup(
         agentRow,
       ),
     ];
-  }, [warm, expanded, agents, needsYou]);
+  }, [warm, namedOnRow, expanded, agents, needsYou]);
   return useMemo((): StripTaskGroup | null => {
     if (tab === null || mode === null) return null;
     if (tab.kind === "sample-workspace") {

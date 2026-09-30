@@ -17,6 +17,7 @@ import type { ResourceMetric } from "@/lib/layout/layout-values";
 import type { PrLightItem } from "@traycer/protocol/host/pr-schemas";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { MessageSegment } from "@/stores/composer/chat-store";
+import type { NeedsYouRow } from "@/components/layout/tabs/side-strip/strip-sections";
 import type {
   StripAgent,
   StripAgentStatus,
@@ -388,6 +389,19 @@ export const SAMPLE_LIVE_AGENTS: ReadonlyArray<StripAgent> = [
   sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[2], "failed", "failure"),
   sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[1], "turn", "running"),
 ];
+
+/**
+ * The sample task's row in the Activity view's sections: waiting on the reply
+ * its first agent asks for, so the layout editor's strip shows a Needs you row
+ * over the agents nested under it.
+ */
+export const SAMPLE_NEEDS_YOU_ROW: NeedsYouRow = {
+  section: "needs-you",
+  reason: "reply",
+  agentTitle: SAMPLE_SIDEBAR_AGENTS[0].title,
+  count: 1,
+  createdAt: SAMPLE_EPOCH - 2 * MINUTE_MS,
+};
 
 function sampleLiveAgent(
   agent: (typeof SAMPLE_SIDEBAR_AGENTS)[number],

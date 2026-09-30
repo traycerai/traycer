@@ -45,6 +45,7 @@ import {
 import { SideSplitRowPair } from "./side-split-row-pair";
 import { SideStripTabRow } from "./side-strip-tab-row";
 import { StripAgentGroup } from "./strip-agent-group";
+import { memberRowOf, type StripTaskRow } from "./strip-sections";
 import { useStripTaskGroup, type StripTaskGroup } from "./strip-task-group";
 import { joinedAttribute, useSideTabJoin } from "./side-tab-join";
 import {
@@ -96,18 +97,23 @@ export function SideSplitItem(
     [setNodeRef],
   );
   const focusedSide = props.isActive ? item.focusedSide : null;
+  const leftSection = memberRowOf(props.members, memberTab(item.left));
+  const rightSection = memberRowOf(props.members, memberTab(item.right));
   const leftGroup = useStripTaskGroup(
     memberTab(item.left),
     focusedSide === "left",
+    leftSection,
   );
   const rightGroup = useStripTaskGroup(
     memberTab(item.right),
     focusedSide === "right",
+    rightSection,
   );
   const member = (side: "left" | "right"): ReactNode => (
     <SideSplitMember
       member={side === "left" ? item.left : item.right}
       group={side === "left" ? leftGroup : rightGroup}
+      section={side === "left" ? leftSection : rightSection}
       partner={memberTab(side === "left" ? item.right : item.left)}
       side={side}
       focused={focusedSide === side}
@@ -160,6 +166,7 @@ export function SideSplitItem(
       transition={transition}
       data-strip-item-id={item.id}
       data-strip-item-mergeable="false"
+      data-strip-lane={props.lane ?? undefined}
       className="relative flex flex-col"
     >
       <SideSplitRowPair
@@ -193,6 +200,8 @@ interface SideSplitMemberProps {
   readonly member: HeaderStripMember;
   /** The agents nested under this half's task, drawn after the pair. */
   readonly group: StripTaskGroup | null;
+  /** What this half draws in the Activity view's section; `null` in the Layered view. */
+  readonly section: StripTaskRow | null;
   /** The other half's tab, which scopes an empty half's own menu. */
   readonly partner: HeaderTab | null;
   readonly side: "left" | "right";
@@ -245,6 +254,7 @@ function SideSplitTabMember(
       dropIndicator={props.dropIndicator}
       joined={null}
       group={props.group}
+      section={props.section}
     />
   );
 }
@@ -295,6 +305,7 @@ function SideFillableMember(
       badge={null}
       agents={NO_LIVE_AGENTS}
       status={null}
+      section={null}
       disclosure={null}
       title={label}
       hoverCardBody={label}

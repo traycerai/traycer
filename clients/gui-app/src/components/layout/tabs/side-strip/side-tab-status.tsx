@@ -15,13 +15,16 @@ import { sideTabAgentsAreFloor } from "./side-tab-live-agents";
  * then the shared glyph for everything below (running, background, done,
  * terminal failure, generating), which draws nothing for an idle task. The
  * glyph is the one that yields its place to the close; a chip and the meter
- * stay.
+ * stay, except on the Activity view's one-line rows (`meterYields`), where the
+ * meter yields too.
  */
 export function sideTabStatusOf(input: {
   readonly indicator: NotificationIndicatorState;
   readonly agents: SideTabLiveAgents;
   /** The task's nested agents are showing, so they carry what the meter would. */
   readonly meterHidden: boolean;
+  /** The meter gives its place to the close, as a glyph does. */
+  readonly meterYields: boolean;
   readonly glyph: ReactNode;
 }): SideTabRowStatus {
   const { indicator, agents } = input;
@@ -50,7 +53,7 @@ export function sideTabStatusOf(input: {
     agents.turn + agents.background > 1 || sideTabAgentsAreFloor(agents);
   if (several && !indicator.pendingFork && !input.meterHidden) {
     return {
-      yieldsToClose: false,
+      yieldsToClose: input.meterYields,
       node: (
         <SideTabMeter
           agents={agents}

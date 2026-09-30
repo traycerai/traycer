@@ -8,8 +8,9 @@ import {
 
 /**
  * Opens a waiting prompt's chat on its pending card through the
- * notification's own activation: the Needs you block's rows and the tasks'
- * needs-you rows both go through it. Nothing is approved or answered here.
+ * notification's own activation: a Needs you row with no task tab in the strip
+ * and a task's nested needs-you rows both go through it. Nothing is approved
+ * or answered here.
  */
 export function useNeedsYouActivation(): (row: MergedNotificationRow) => void {
   const { activate } = useNotificationActivation();

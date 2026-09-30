@@ -118,6 +118,7 @@ export function readTileStripSlots(groupId: string): ReadonlyArray<StripSlot> {
         // merge target. This - not the zero band width - is what makes the
         // model's merge branch unreachable here.
         isMergeTarget: false,
+        lane: null,
       },
     ];
   });

@@ -1,0 +1,165 @@
+import { expect, test, type Locator, type Page } from "@playwright/test";
+
+import { fixture, nextFrames } from "./support/fixtures.ts";
+
+// The Activity view's sections in real Chrome: the claims only real layout
+// answers. Which task is in which section, the second line's words and the
+// folding are in `side-tab-strip.test.tsx`; here the rows' real heights, what
+// hovering does to a two-line row and to a one-line row's meter, and what
+// gives way first at the narrowest width.
+
+test.use({ viewport: { width: 900, height: 900 } });
+
+const STRIP = `${fixture("side-tab-strip")}?edge=left&scene=sections`;
+
+async function openStrip(page: Page): Promise<void> {
+  await page.goto(STRIP);
+  await page.waitForFunction("window.__sideTabStripProbe?.ready === true");
+  await nextFrames(page, 4);
+}
+
+async function boxOf(locator: Locator) {
+  const box = await locator.boundingBox();
+  if (box === null) throw new Error(`no layout box for ${locator.toString()}`);
+  return box;
+}
+
+const row = (page: Page, id: string): Locator =>
+  page.getByTestId(`tab-epic-fixture-${id}`);
+
+const closeWrapper = (page: Page, id: string): Locator =>
+  row(page, id).getByTestId(`tab-close-epic-fixture-${id}`).locator("..");
+
+test("draws Needs you and To review rows 46px tall and Working and Idle rows 28px tall", async ({
+  page,
+}) => {
+  await openStrip(page);
+
+  for (const id of ["staging", "onboarding", "release", "migration"]) {
+    expect((await boxOf(row(page, id))).height).toBe(46);
+  }
+  for (const id of ["gui", "cookie", "host", "layout", "launch", "react"]) {
+    expect((await boxOf(row(page, id))).height).toBe(28);
+  }
+});
+
+test("colours only the Needs you header amber", async ({ page }) => {
+  await openStrip(page);
+
+  const colourOf = (section: string): Promise<string> =>
+    page
+      .getByTestId(`side-strip-section-${section}`)
+      .evaluate((node) => getComputedStyle(node).color);
+  const needsYou = await colourOf("needs-you");
+  const others = await Promise.all(
+    ["to-review", "working", "idle"].map(colourOf),
+  );
+
+  expect(new Set(others).size).toBe(1);
+  expect(others[0]).not.toBe(needsYou);
+});
+
+test("starts every title on the row's padding, and does not move it on hover", async ({
+  page,
+}) => {
+  await openStrip(page);
+
+  for (const id of ["staging", "cookie", "react"]) {
+    const target = row(page, id);
+    const title = target.locator(".header-tab-title-text");
+    const rowBox = await boxOf(target);
+    const atRest = await boxOf(title);
+    expect(atRest.x - rowBox.x).toBeCloseTo(8, 0);
+
+    await target.hover();
+    await nextFrames(page, 2);
+
+    expect((await boxOf(title)).x).toBeCloseTo(atRest.x, 1);
+  }
+});
+
+test("keeps a two-line row's time on hover, and the close joins after it", async ({
+  page,
+}) => {
+  await openStrip(page);
+  const staging = row(page, "staging");
+  const time = staging.getByTestId("side-tab-section-time");
+  const close = closeWrapper(page, "staging");
+  await expect(close).toHaveCSS("opacity", "0");
+  const timeAtRest = await boxOf(time);
+
+  await staging.hover();
+
+  await expect(close).toHaveCSS("opacity", "1");
+  await expect(time).toHaveCSS("opacity", "1");
+  const timeHovered = await boxOf(time);
+  const closeBox = await boxOf(
+    staging.getByTestId("tab-close-epic-fixture-staging"),
+  );
+  // The time steps aside for the close, which sits on the title's line.
+  expect(closeBox.x).toBeGreaterThanOrEqual(timeHovered.x + timeHovered.width);
+  expect(timeAtRest.x - timeHovered.x).toBeCloseTo(20, 0);
+  const titleBox = await boxOf(staging.locator(".header-tab-title-text"));
+  expect(closeBox.y + closeBox.height / 2).toBeCloseTo(
+    titleBox.y + titleBox.height / 2,
+    0,
+  );
+});
+
+test("has a one-line row's meter fade out where the close fades in, and the title does not move", async ({
+  page,
+}) => {
+  await openStrip(page);
+  const cookie = row(page, "cookie");
+  const meter = cookie.getByTestId("side-tab-meter");
+  const close = closeWrapper(page, "cookie");
+  const title = cookie.locator(".header-tab-title-text");
+  await expect(meter).toBeVisible();
+  await expect(close).toHaveCSS("opacity", "0");
+  const titleAtRest = await boxOf(title);
+
+  await cookie.hover();
+
+  await expect(close).toHaveCSS("opacity", "1");
+  await expect(meter.locator("xpath=..")).toHaveCSS("opacity", "0");
+  const titleHovered = await boxOf(title);
+  expect(titleHovered.x).toBeCloseTo(titleAtRest.x, 1);
+  expect(titleHovered.width).toBeCloseTo(titleAtRest.width, 1);
+});
+
+test("cuts the title short before the time and the close at 192px", async ({
+  page,
+}) => {
+  await openStrip(page);
+  await page.evaluate("window.__sideTabStripProbe.setWidth(192)");
+  await nextFrames(page, 3);
+  const staging = row(page, "staging");
+  const title = staging.locator(".header-tab-title-text");
+  const time = staging.getByTestId("side-tab-section-time");
+
+  expect(
+    await title.evaluate((node) => node.scrollWidth > node.clientWidth),
+  ).toBe(true);
+  expect(
+    await time.evaluate((node) => node.scrollWidth <= node.clientWidth),
+  ).toBe(true);
+  const rowBox = await boxOf(staging);
+
+  await staging.hover();
+  await nextFrames(page, 2);
+
+  const closeBox = await boxOf(
+    staging.getByTestId("tab-close-epic-fixture-staging"),
+  );
+  const timeBox = await boxOf(time);
+  expect(timeBox.x + timeBox.width).toBeLessThanOrEqual(closeBox.x + 0.5);
+  expect(closeBox.x + closeBox.width).toBeLessThanOrEqual(
+    rowBox.x + rowBox.width,
+  );
+  // The second line gives way to its own edge and does not overflow the row.
+  const detail = staging.getByTestId("side-tab-section-detail");
+  const detailBox = await boxOf(detail);
+  expect(detailBox.x + detailBox.width).toBeLessThanOrEqual(
+    rowBox.x + rowBox.width,
+  );
+});

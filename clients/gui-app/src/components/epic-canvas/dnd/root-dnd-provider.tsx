@@ -116,6 +116,7 @@ import {
   insertionIndexForTarget,
   insertionIndexFromPointer,
   insertionOffsetsFor,
+  laneBoundsOf,
   overlayStartForPointer,
   remapGeometryToSlots,
   resolveStripDragState,
@@ -133,7 +134,10 @@ import {
   readHeaderStripSlots,
   type HeaderStripDeclaration,
 } from "@/components/layout/tabs/header-strip-geometry";
-import { pulledOutOfStrip } from "@/components/epic-canvas/dnd/strip-axis";
+import {
+  pulledOutOfStrip,
+  type StripAxis,
+} from "@/components/epic-canvas/dnd/strip-axis";
 import { pointIsOutsideViewport } from "@/components/epic-canvas/dnd/viewport-release";
 import {
   readTabDetachHandler,
@@ -404,15 +408,13 @@ const rootDragOverlayModifier: Modifier = (args) => {
   const strip = document.querySelector(
     `[data-testid="${HEADER_STRIP_SCROLL_TEST_ID}"]`,
   );
-  const stripRect = strip === null ? null : strip.getBoundingClientRect();
+  const bounds = overlayBoundsOf(axis, geometry, strip);
   const start = overlayStartForPointer({
     pointer: axis.pointerMain(pointer),
     grabOffset: geometry.grabOffset,
     sourceExtent: geometry.sourceExtent,
-    stripStart:
-      stripRect === null ? Number.NEGATIVE_INFINITY : axis.mainStart(stripRect),
-    stripEnd:
-      stripRect === null ? Number.POSITIVE_INFINITY : axis.mainEnd(stripRect),
+    stripStart: bounds.start,
+    stripEnd: bounds.end,
   });
   const tearOff = useEpicDndStore.getState().headerTearOffPreview;
   const main =
@@ -424,6 +426,26 @@ const rootDragOverlayModifier: Modifier = (args) => {
     ? { ...args.transform, x: main, y: cross }
     : { ...args.transform, x: cross, y: main };
 };
+
+/**
+ * The range, along the strip's axis, the dragged tab's overlay stays in: the
+ * strip, or for a sectioned strip the section the tab is dragged in.
+ */
+function overlayBoundsOf(
+  axis: StripAxis,
+  geometry: StripDragGeometry,
+  strip: Element | null,
+): { readonly start: number; readonly end: number } {
+  const contentOrigin = readHeaderStripContentOrigin(axis);
+  const lane =
+    contentOrigin === null ? null : laneBoundsOf(geometry, contentOrigin);
+  if (lane !== null) return lane;
+  if (strip === null) {
+    return { start: Number.NEGATIVE_INFINITY, end: Number.POSITIVE_INFINITY };
+  }
+  const rect = strip.getBoundingClientRect();
+  return { start: axis.mainStart(rect), end: axis.mainEnd(rect) };
+}
 
 // DragOverlay is anchored to the grabbed node, which can be a member
 // inside a split. Keep that initial origin while the source frame slides.
@@ -819,9 +841,7 @@ function publishHeaderStripDragState(input: {
       : insertionIndexForTarget(geometry.sourceIndex, next.targetIndex),
   );
   const pairTarget =
-    next.kind === "merge"
-      ? resolveStripPairTarget(headerTab, geometry, next)
-      : null;
+    next.kind === "merge" ? resolveStripPairTarget(headerTab, next) : null;
   dndStore.topLevelStripPairPreviewChanged(
     next.kind !== "merge" || pairTarget === null
       ? null
@@ -835,17 +855,17 @@ function publishHeaderStripDragState(input: {
  */
 function resolveStripPairTarget(
   headerTab: HeaderTabDragData,
-  geometry: StripDragGeometry,
   state: StripDragState,
 ): TopLevelStripPairTarget | null {
   if (state.kind !== "merge") {
     return null;
   }
-  const index = geometry.slots.findIndex(
-    (slot) => slot.itemId === state.targetItemId,
+  const layout = layoutFromTabsStore();
+  const index = layout.items.findIndex(
+    (item) => item.id === state.targetItemId,
   );
   if (index < 0) return null;
-  const target = stripPairTargetForIndex(index, layoutFromTabsStore());
+  const target = stripPairTargetForIndex(index, layout);
   if (target === null) return null;
   return resolveLiveTopLevelDrop(headerTab, target) === null ? null : target;
 }
@@ -929,11 +949,7 @@ function commitHeaderTabDrop(input: {
   // position, and which half of the neighbour the dragged tab's centre is on
   // is what distinguishes "combine with this tab" from "move next to it".
   if (input.dragState.kind === "merge") {
-    const pairTarget = resolveStripPairTarget(
-      headerTab,
-      input.geometry,
-      input.dragState,
-    );
+    const pairTarget = resolveStripPairTarget(headerTab, input.dragState);
     if (pairTarget !== null) {
       commitHeaderStripPair(
         headerTab,
@@ -945,17 +961,42 @@ function commitHeaderTabDrop(input: {
     }
   }
   if (input.dragState.targetIndex === input.geometry.sourceIndex) return;
+  const targetIndex = layoutInsertionIndex(
+    input.geometry,
+    insertionIndexForTarget(
+      input.geometry.sourceIndex,
+      input.dragState.targetIndex,
+    ),
+  );
+  if (targetIndex === null) return;
   // Arm BEFORE the reorder is written: the strip items re-base their transform
   // against the new baseline in the layout effect of the render this causes, so
   // the flag has to be set by the time that render commits.
   armHeaderStripCommitHandoff();
   tabCommandCoordinator.reorderStripItem({
     itemId: headerTab.stripItemId,
-    targetIndex: insertionIndexForTarget(
-      input.geometry.sourceIndex,
-      input.dragState.targetIndex,
-    ),
+    targetIndex,
   });
+}
+
+/**
+ * The layout index of an insertion index counted in the model's slots: before
+ * the slot at that index, or after the last. A sectioned strip's slots are
+ * one section's items, so the layout index is read from the slot's item and
+ * not assumed to be the slot's own. `null` when that item has left the
+ * layout, so the drop writes nothing rather than landing somewhere unseen.
+ */
+function layoutInsertionIndex(
+  geometry: StripDragGeometry,
+  insertion: number,
+): number | null {
+  const after = insertion >= geometry.slots.length;
+  const anchorId = geometry.slots.at(after ? -1 : insertion)?.itemId;
+  const index = layoutFromTabsStore().items.findIndex(
+    (item) => item.id === anchorId,
+  );
+  if (index < 0) return null;
+  return after ? index + 1 : index;
 }
 
 /**

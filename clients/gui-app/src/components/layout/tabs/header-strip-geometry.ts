@@ -17,9 +17,10 @@ import {
   type StripEdge,
 } from "@/components/epic-canvas/dnd/strip-axis";
 import type { RectLike } from "@/components/epic-canvas/dnd/dnd";
-import type {
-  StripDragGeometry,
-  StripSlot,
+import {
+  laneSlotsOf,
+  type StripDragGeometry,
+  type StripSlot,
 } from "@/components/epic-canvas/dnd/strip-drag-model";
 
 export const HEADER_STRIP_SCROLL_TEST_ID = "header-tab-strip-scroll";
@@ -130,6 +131,7 @@ export function readHeaderStripSlots(
     readonly extent: number;
     readonly contentStart: number;
     readonly isMergeTarget: boolean;
+    readonly lane: string | null;
   }> = [];
   for (const child of strip.querySelectorAll<HTMLElement>(
     "[data-strip-item-id]",
@@ -142,6 +144,7 @@ export function readHeaderStripSlots(
       extent: rect.extent,
       contentStart: rect.start - origin,
       isMergeTarget: child.dataset.stripItemMergeable !== "false",
+      lane: child.dataset.stripLane ?? null,
     });
   }
   // `order` reorders the flex row visually but not in the DOM, so at drag start
@@ -195,7 +198,7 @@ export function measureHeaderStripGeometry(input: {
   const { axis } = input;
   const strip = stripElement();
   if (strip === null) return null;
-  const slots = readHeaderStripSlots(axis);
+  const slots = laneSlotsOf(readHeaderStripSlots(axis), input.stripItemId);
   const sourceIndex = slots.findIndex(
     (slot) => slot.itemId === input.stripItemId,
   );

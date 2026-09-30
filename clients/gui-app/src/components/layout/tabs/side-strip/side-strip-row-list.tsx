@@ -1,13 +1,4 @@
-import {
-  Fragment,
-  memo,
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import * as m from "motion/react-m";
+import { Fragment, useMemo, type ReactNode } from "react";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
 import { VERTICAL_STRIP_AXIS } from "@/components/epic-canvas/dnd/strip-axis";
 import type { EdgeSide } from "@/lib/layout/layout-arrangement";
@@ -18,28 +9,17 @@ import {
   type StripItem,
 } from "@/stores/tabs/layout";
 import type { HeaderTab } from "@/stores/tabs/types";
-import { useAppearanceHeaderStripItem } from "@/stores/tabs/use-header-tabs";
 import { HEADER_STRIP_SCROLL_TEST_ID } from "../header-strip-geometry";
-import { useHeaderTabDisplacementTransition } from "../tab-chrome-tokens";
 import type { TabStripController } from "../tab-strip-controller";
 import { stripRowsOf, type StripRow } from "../tab-strip-rows";
-import {
-  useStripTabItem,
-  type HeaderTabDndConfig,
-} from "../use-strip-tab-item";
-import { useStripItemDisplacement } from "../use-strip-item-displacement";
 import { useStripScroller } from "../use-strip-scroller";
 import {
-  stripTabItemInputOf,
-  type DropIndicator,
+  dropIndicatorOf,
   type SideStripHandlers,
-  type SideStripItemProps,
 } from "./side-strip-item-input";
-import { SideSplitItem } from "./side-strip-split-item";
-import { SideStripTabRow } from "./side-strip-tab-row";
-import { StripAgentGroup } from "./strip-agent-group";
-import { useStripTaskGroup } from "./strip-task-group";
-import { useSideTabJoin } from "./side-tab-join";
+import { SideStripItem } from "./side-strip-item";
+import { SideStripSections } from "./side-strip-sections";
+import { useLiveAgentsInStrip } from "./strip-agents-mode";
 import { SIDE_STRIP_LIST_CLASS } from "./side-strip-tokens";
 import { SideTabGroupHeader } from "./side-tab-group-header";
 import type { SideTabRowVariant } from "./side-tab-row";
@@ -56,6 +36,9 @@ interface GroupRun {
  * trailing drop slot, re-bases every item after each commit and keeps the
  * active row in view (L-146). There is no hidden-tabs menu: the column
  * scrolls, and every row is reachable by wheel and by the leader badges.
+ *
+ * The Layered view lists the rows in the user's order under their group
+ * headers; the Activity view lists them in its sections.
  */
 export function SideStripRowList(props: {
   readonly controller: TabStripController;
@@ -88,6 +71,7 @@ export function SideStripRowList(props: {
     extraRef: null,
   });
   const lastIndex = headerItemIds.length - 1;
+  const sectioned = useLiveAgentsInStrip() && variant === "expanded";
   return (
     <div
       ref={setScrollerNode}
@@ -105,33 +89,39 @@ export function SideStripRowList(props: {
         "no-scrollbar min-h-0 flex-[0_1_auto] overflow-y-auto overscroll-y-contain [-webkit-app-region:no-drag]",
       )}
     >
-      {rows.map((row) => (
-        <Fragment key={row.itemId}>
-          <GroupStart
-            row={row}
-            run={groupRuns.get(row.stripIndex)}
-            variant={variant}
-            onCloseGroup={controller.onCloseGroup}
-          />
-          {row.hidden ? null : (
-            <SideStripItem
-              itemId={row.itemId}
-              stripIndex={row.stripIndex}
-              offset={controller.offsets.get(row.itemId) ?? 0}
-              memberOffset={row.memberOffset}
-              isActive={row.itemId === activeItemId}
-              dropIndicator={dropIndicatorOf(
-                dropIndicatorIndex,
-                row.stripIndex,
-                lastIndex,
-              )}
+      {sectioned ? (
+        <SideStripSections controller={controller} handlers={handlers} />
+      ) : (
+        rows.map((row) => (
+          <Fragment key={row.itemId}>
+            <GroupStart
+              row={row}
+              run={groupRuns.get(row.stripIndex)}
               variant={variant}
-              groupLine={row.group?.group.color ?? null}
-              handlers={handlers}
+              onCloseGroup={controller.onCloseGroup}
             />
-          )}
-        </Fragment>
-      ))}
+            {row.hidden ? null : (
+              <SideStripItem
+                itemId={row.itemId}
+                stripIndex={row.stripIndex}
+                offset={controller.offsets.get(row.itemId) ?? 0}
+                memberOffset={row.memberOffset}
+                isActive={row.itemId === activeItemId}
+                dropIndicator={dropIndicatorOf(
+                  dropIndicatorIndex,
+                  row.stripIndex,
+                  lastIndex,
+                )}
+                variant={variant}
+                groupLine={row.group?.group.color ?? null}
+                lane={null}
+                members={null}
+                handlers={handlers}
+              />
+            )}
+          </Fragment>
+        ))
+      )}
     </div>
   );
 }
@@ -234,99 +224,4 @@ function groupRunsOf(
     }
   }
   return runs;
-}
-
-/** The insertion line on the row it lands before, or after the last row. */
-function dropIndicatorOf(
-  dropIndex: number | null,
-  stripIndex: number,
-  lastIndex: number,
-): DropIndicator {
-  if (dropIndex === stripIndex) return "before";
-  if (dropIndex === stripIndex + 1 && stripIndex === lastIndex) return "after";
-  return null;
-}
-
-const SideStripItem = memo(function SideStripItem(
-  props: SideStripItemProps,
-): ReactNode {
-  const item = useAppearanceHeaderStripItem(props.itemId);
-  if (item === null) return null;
-  if (item.kind === "split") return <SideSplitItem {...props} item={item} />;
-  return <SideTabItem {...props} tab={item.tab} />;
-});
-
-/** A lone tab: its reorder frame, displaced along y, around its row. */
-function SideTabItem(
-  props: SideStripItemProps & { readonly tab: HeaderTab },
-): ReactNode {
-  const transition = useHeaderTabDisplacementTransition();
-  const frameRef = useRef<HTMLDivElement | null>(null);
-  const y = useStripItemDisplacement({
-    nodeRef: frameRef,
-    offset: props.offset,
-    transition,
-  });
-  const dnd = useMemo<HeaderTabDndConfig>(
-    () => ({
-      stripItemId: props.itemId,
-      index: props.stripIndex,
-      isDropSlot: true,
-    }),
-    [props.itemId, props.stripIndex],
-  );
-  const input = stripTabItemInputOf(
-    {
-      tab: props.tab,
-      index: props.memberOffset,
-      dnd,
-      isActive: props.isActive,
-    },
-    props.handlers,
-  );
-  const { rootRef, ...item } = useStripTabItem(input);
-  const [rowNode, setRowNode] = useState<HTMLDivElement | null>(null);
-  const bindRow = useCallback(
-    (node: HTMLDivElement | null) => {
-      rootRef(node);
-      setRowNode(node);
-    },
-    [rootRef],
-  );
-  const joined = useSideTabJoin(
-    props.isActive && !item.isDragging,
-    rowNode,
-    props.tab,
-  );
-  const group = useStripTaskGroup(props.tab, props.isActive);
-  return (
-    <m.div
-      ref={frameRef}
-      initial={false}
-      // Hidden on the frame the overlay first paints, so the column never
-      // shows two copies of the dragged row.
-      animate={{ opacity: item.isDragging ? 0 : 1 }}
-      style={{ y }}
-      transition={transition}
-      data-strip-item-id={props.itemId}
-      data-strip-item-mergeable="true"
-      className="relative flex flex-col"
-    >
-      <SideStripTabRow
-        item={item}
-        rootRef={bindRow}
-        input={input}
-        variant={props.variant}
-        groupLine={
-          props.groupLine === null
-            ? null
-            : { color: props.groupLine, seat: "row" }
-        }
-        dropIndicator={props.dropIndicator}
-        joined={joined}
-        group={group}
-      />
-      <StripAgentGroup group={group} />
-    </m.div>
-  );
 }

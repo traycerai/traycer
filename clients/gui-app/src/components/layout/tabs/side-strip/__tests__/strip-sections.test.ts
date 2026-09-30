@@ -226,7 +226,6 @@ describe("promptEntriesOf", () => {
         promptRow("epic-less", 4_000, null, "approval"),
         promptRow("orphan-old", 1_000, "epic-orphan", "interview"),
       ]),
-      new Set(),
     );
 
     expect(

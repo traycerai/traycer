@@ -23,14 +23,22 @@ import {
   type HostRpcRegistry,
   type MessengerFactory,
 } from "@/lib/host";
-import type { EdgeSide } from "@/lib/layout/layout-arrangement";
+import {
+  DEFAULT_ARRANGEMENT,
+  type EdgeSide,
+} from "@/lib/layout/layout-arrangement";
+import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
 import { tabRefKey, type StripItem } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
-import { seedSideStripTabs } from "./side-tab-strip-seed";
+import {
+  seedSideStripSections,
+  seedSideStripTabs,
+} from "./side-tab-strip-seed";
 import "@/lib/theme-applier";
 import "@/index.css";
 
@@ -61,6 +69,11 @@ import "@/index.css";
  * that owner publishes on, so the product's own tear-off decision is what
  * calls it. Opening the window is the Staging pass's.
  *
+ * `?scene=sections` puts the strip in the Activity view over a seeded set of
+ * tasks that fills every section (Needs you, To review, Working, Idle), for
+ * the claims only real layout answers: the rows' heights and what truncates
+ * first at the narrowest width.
+ *
  * `window.__sideTabStripProbe.ready` gates all of it.
  */
 
@@ -77,6 +90,8 @@ interface SideTabStripProbe {
   readonly detachRequests: () => ReadonlyArray<string>;
   /** Puts a task's title back to generating, so its row shows the spinner glyph. */
   readonly markTitlePending: (epicId: string, title: string) => void;
+  /** Sets the expanded strip's width, in CSS pixels. */
+  readonly setWidth: (widthPx: number) => void;
 }
 
 declare global {
@@ -92,6 +107,23 @@ function readEdge(): EdgeSide {
 }
 
 const EDGE = readEdge();
+const SECTIONS_SCENE =
+  new URLSearchParams(window.location.search).get("scene") === "sections";
+
+function seedScene(): void {
+  if (!SECTIONS_SCENE) {
+    seedSideStripTabs(false);
+    return;
+  }
+  useLayoutStore.setState({
+    arrangement: {
+      ...DEFAULT_ARRANGEMENT,
+      tabStripPlacement: EDGE,
+      sideStripView: "activity",
+    },
+  });
+  seedSideStripSections();
+}
 const detachRequests: string[] = [];
 
 const queryClient = new QueryClient({
@@ -145,14 +177,15 @@ function buildProbe(): SideTabStripProbe {
   return {
     ready: true,
     edge: EDGE,
-    reset: () => {
-      seedSideStripTabs(false);
-    },
+    reset: seedScene,
     items: () => useTabsStore.getState().items.map(itemKeys),
     tearOffPreview: () => useEpicDndStore.getState().headerTearOffPreview,
     detachRequests: () => [...detachRequests],
     markTitlePending: (epicId, title) => {
       useEpicCanvasStore.getState().markEpicTitlePending(epicId, title);
+    },
+    setWidth: (widthPx) => {
+      useSideTabStripStore.setState({ widthPx });
     },
   };
 }
@@ -182,7 +215,7 @@ export function StripFixture(): ReactNode {
   const content = (
     <main data-fixture-content className="min-w-0 flex-1 bg-background" />
   );
-  return (
+  const shell = (
     <div className="flex h-dvh bg-canvas text-canvas-foreground">
       <TabNavigationRouteBridge />
       <RootDndProvider>
@@ -191,6 +224,14 @@ export function StripFixture(): ReactNode {
         {EDGE === "left" ? content : margin}
       </RootDndProvider>
     </div>
+  );
+  // The sections scene's prompts and finished tasks are cloud-feed rows.
+  return SECTIONS_SCENE ? (
+    <NotificationFeedModeContext.Provider value="cloud">
+      {shell}
+    </NotificationFeedModeContext.Provider>
+  ) : (
+    shell
   );
 }
 
@@ -267,7 +308,7 @@ function buildRouter() {
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
 useSideTabStripStore.getState().resetWidth();
 useSideTabStripStore.getState().setCollapsed(false);
-seedSideStripTabs(false);
+seedScene();
 
 const container = document.getElementById("root");
 if (container !== null)

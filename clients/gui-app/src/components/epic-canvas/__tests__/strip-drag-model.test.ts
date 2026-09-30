@@ -3,6 +3,8 @@ import {
   insertionIndexForTarget,
   insertionIndexFromPointer,
   insertionOffsetsFor,
+  laneBoundsOf,
+  laneSlotsOf,
   stripOffsetsFor,
   overlayStartForPointer,
   provisionalStripOrder,
@@ -31,6 +33,7 @@ function slots(
       contentStart,
       advance: isLast ? width : width + gap,
       isMergeTarget: mergeable === null ? true : (mergeable[index] ?? true),
+      lane: null,
     };
     contentStart += width + gap;
     return slot;
@@ -563,6 +566,7 @@ describe("header strip drag model", () => {
           contentStart: 0,
           advance: 191,
           isMergeTarget: true,
+          lane: null,
         },
       ];
       expect(remapGeometryToSlots(geometry, removed)).toBeNull();
@@ -876,6 +880,119 @@ describe("header strip drag model", () => {
       expect(provisionalStripOrder(["a", "b"], 0, 0)).toEqual(["a", "b"]);
       expect(provisionalStripOrder(["a", "b"], 0, 5)).toEqual(["a", "b"]);
       expect(provisionalStripOrder(["a", "b"], -1, 1)).toEqual(["a", "b"]);
+    });
+  });
+
+  describe("a sectioned strip's lanes", () => {
+    const ROW = 30;
+    const GAP = 2;
+    const HEADER = 28;
+
+    /**
+     * Two sections under headers: Working holds w0 and w1, Idle holds i0, i1
+     * and i2. Each slot's `advance` is measured to the next slot of the whole
+     * strip, so w1's takes in Idle's header.
+     */
+    function sectioned(): ReadonlyArray<StripSlot> {
+      const starts: ReadonlyArray<readonly [string, string, number]> = [
+        ["w0", "working", 0],
+        ["w1", "working", ROW + GAP],
+        ["i0", "idle", 2 * (ROW + GAP) + HEADER],
+        ["i1", "idle", 3 * (ROW + GAP) + HEADER],
+        ["i2", "idle", 4 * (ROW + GAP) + HEADER],
+      ];
+      return starts.map(([itemId, lane, contentStart], index) => ({
+        itemId,
+        extent: ROW,
+        contentStart,
+        advance:
+          index + 1 < starts.length ? starts[index + 1][2] - contentStart : ROW,
+        isMergeTarget: true,
+        lane,
+      }));
+    }
+
+    function geometryOver(
+      laneSlots: ReadonlyArray<StripSlot>,
+      sourceItemId: string,
+    ): StripDragGeometry {
+      const sourceIndex = laneSlots.findIndex(
+        (slot) => slot.itemId === sourceItemId,
+      );
+      return {
+        slots: laneSlots,
+        sourceIndex,
+        grabOffset: ROW / 2,
+        sourceInitialStart: ORIGIN + laneSlots[sourceIndex].contentStart,
+        sourceExtent: ROW,
+        bandStart: 0,
+        bandEnd: 240,
+      };
+    }
+
+    it("keeps the source's lane, each slot's advance measured to the next slot of that lane", () => {
+      const lane = laneSlotsOf(sectioned(), "i1");
+
+      expect(lane.map((slot) => slot.itemId)).toEqual(["i0", "i1", "i2"]);
+      // w1's advance, which reached across the header, is not in play here.
+      expect(lane.map((slot) => slot.advance)).toEqual([
+        ROW + GAP,
+        ROW + GAP,
+        ROW,
+      ]);
+    });
+
+    it("leaves a strip with no lanes as measured", () => {
+      const flat = slotsFor([191, 191, 191]);
+
+      expect(laneSlotsOf(flat, "item-1")).toBe(flat);
+    });
+
+    it("keeps a fresh full measurement to the lane the drag began in", () => {
+      const began = geometryOver(laneSlotsOf(sectioned(), "i1"), "i1");
+
+      const remapped = remapGeometryToSlots(began, sectioned());
+
+      expect(remapped?.slots.map((slot) => slot.itemId)).toEqual([
+        "i0",
+        "i1",
+        "i2",
+      ]);
+      expect(remapped?.sourceIndex).toBe(1);
+    });
+
+    it("reorders among the lane's slots however far the pointer goes, and displaces only them", () => {
+      const geometry = geometryOver(laneSlotsOf(sectioned(), "i1"), "i1");
+      const above = resolveStripDragState({
+        geometry,
+        contentOrigin: ORIGIN,
+        pointer: ORIGIN - 500,
+        previous: null,
+      });
+      const below = resolveStripDragState({
+        geometry,
+        contentOrigin: ORIGIN,
+        pointer: ORIGIN + 5_000,
+        previous: null,
+      });
+
+      expect(above.targetIndex).toBe(0);
+      expect(below.targetIndex).toBe(2);
+      expect([...stripOffsetsFor(geometry, 2).keys()].sort()).toEqual([
+        "i0",
+        "i1",
+        "i2",
+      ]);
+    });
+
+    it("bounds the lane by its first and last slot", () => {
+      const geometry = geometryOver(laneSlotsOf(sectioned(), "i1"), "i1");
+
+      expect(laneBoundsOf(geometry, ORIGIN)).toEqual({
+        start: ORIGIN + 2 * (ROW + GAP) + HEADER,
+        end: ORIGIN + 4 * (ROW + GAP) + HEADER + ROW,
+      });
+      expect(laneBoundsOf(geometryFor([191, 191], 0, null), ORIGIN)).toBeNull();
     });
   });
 });

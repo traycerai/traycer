@@ -5,6 +5,7 @@ import { reopenClosedTab } from "@/lib/tab-recovery/reopen";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { inVisualOrder } from "@/stores/tabs/tab-visual-order-store";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { isSettingsPath } from "@/stores/tabs/kinds/settings";
@@ -515,8 +516,10 @@ export function isRepeatSensitiveAction(id: ActionId): boolean {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// A digit opens the tab its badge is on, and next/previous step to the row
+// drawn beside the current one: both follow the strip's drawn order.
 function switchToTabByIndex(router: KeybindingRouter, index: number): boolean {
-  const allTabs = getHeaderTabs();
+  const allTabs = inVisualOrder(getHeaderTabs());
   if (index < 0 || index >= allTabs.length) return false;
   const tab = allTabs[index];
   router.navigateToTabIntent(tabResolveIntent(tab));
@@ -524,7 +527,7 @@ function switchToTabByIndex(router: KeybindingRouter, index: number): boolean {
 }
 
 function moveHeaderTabFocus(router: KeybindingRouter, delta: -1 | 1): boolean {
-  const allTabs = getHeaderTabs();
+  const allTabs = inVisualOrder(getHeaderTabs());
   if (allTabs.length === 0) return false;
   const pathname = router.getPathname();
   const activeIndex = allTabs.findIndex((tab) => tabMatchesPath(tab, pathname));

@@ -30,6 +30,7 @@ import {
 } from "@tanstack/react-router";
 import { pointerEvent } from "@/components/epic-canvas/canvas/__tests__/test-pointer-events";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
+import { SampleSceneContext } from "@/components/sample-workspace/sample-scene-context";
 import { useStripDisclosureStore } from "@/components/layout/tabs/side-strip/strip-disclosure";
 import {
   chatProjection,
@@ -1142,7 +1143,7 @@ describe("<SideTabStrip />", () => {
       expect(within(beta).queryByTestId("side-tab-meter")).toBeNull();
     });
 
-    it("puts the chevron at the trailing edge, after a stayed chip or before a yielding glyph's cell, and before the close", async () => {
+    it("puts the chevron at the trailing edge, before a yielding glyph's cell and before the close, on a Needs you row as on a Working one", async () => {
       openEpicTabs(["Alpha", "Beta", "Gamma"]);
       warmEpic("e-beta", [chatProjection("b-wait", { title: "B waits" })]);
       warmEpic("e-gamma", [chatProjection("g-run", { title: "G runs" })]);
@@ -1158,7 +1159,7 @@ describe("<SideTabStrip />", () => {
           within(row)
             .getByTestId("side-tab-trailing")
             .querySelectorAll(
-              '[data-testid="side-tab-waiting-chip"], [data-testid="side-tab-disclosure"], [data-status-glyph], [data-testid^="tab-close-"]',
+              '[data-testid="side-tab-disclosure"], [data-status-glyph], [data-testid^="tab-close-"]',
             ),
         ).map(
           (node) =>
@@ -1169,7 +1170,6 @@ describe("<SideTabStrip />", () => {
             "",
         );
       expect(inOrder(screen.getByTestId("tab-epic-e-beta"))).toEqual([
-        "side-tab-waiting-chip",
         "side-tab-disclosure",
         "close",
       ]);
@@ -1742,6 +1742,729 @@ describe("<SideTabStrip />", () => {
     expect(
       screen.getByTestId("side-tab-group-badge").getAttribute("data-kind"),
     ).toBe("approval");
+  });
+
+  describe("the Activity view's sections", () => {
+    const MINUTE_MS = 60_000;
+
+    beforeEach(() => {
+      setSideStripView("activity");
+      activateSpy.mockClear();
+    });
+
+    afterEach(() => {
+      coolAllEpics();
+      __resetAgentActivityStoreForTests();
+      __resetHostNotificationsStoreForTests();
+      useStripDisclosureStore.setState({ expanded: {} });
+      indicatorState.value = { epics: {}, chats: {} };
+      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    });
+
+    interface Prompt {
+      readonly id: string;
+      readonly epicId: string;
+      readonly chatId: string;
+      readonly agentTitle: string;
+      readonly taskTitle: string;
+      readonly minutesAgo: number;
+    }
+
+    /** Approvals waiting on the person, as the host's feed files them. */
+    function seedPrompts(prompts: ReadonlyArray<Prompt>): void {
+      const entries = prompts.map((prompt): HostNotificationEntryV22 => ({
+        id: prompt.id,
+        updatedAt: Date.now() - prompt.minutesAgo * MINUTE_MS,
+        readAt: null,
+        kind: "approval.requested",
+        sourceRef: prompt.id,
+        severity: "needs_action",
+        outcome: null,
+        resolvedAt: null,
+        epicId: prompt.epicId,
+        chatId: prompt.chatId,
+        payload: {
+          kind: "approval",
+          epicId: prompt.epicId,
+          chatId: prompt.chatId,
+          chatTitle: prompt.agentTitle,
+          taskTitle: prompt.taskTitle,
+          approvalId: prompt.id,
+        },
+      }));
+      act(() => {
+        useHostNotificationsStore.getState().applySnapshot({
+          attention: { entries, nextCursor: null },
+          recent: { entries, nextCursor: null },
+          summary: {
+            unreadCount: entries.length,
+            attentionCount: entries.length,
+          },
+        });
+      });
+    }
+
+    function isWorking(epicId: string, chatId: string): void {
+      __setAgentActivityStateForTests(
+        { [epicId]: { working: [chatId], turn: [chatId] } },
+        "local",
+        "connected",
+      );
+    }
+
+    /**
+     * Alpha (in front) and Zeta are idle, Beta is running, Gamma is waiting on
+     * an approval, Delta finished and Epsilon failed, both unread.
+     */
+    function openSectionedTasks(): void {
+      openEpicTabs(["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"]);
+      isWorking("e-beta", "c-beta");
+      indicatorState.value = {
+        epics: {
+          "e-gamma": { ...NO_FLAGS, pendingApproval: true },
+          "e-delta": { ...NO_FLAGS, unreadDone: true },
+          "e-epsilon": { ...NO_FLAGS, unreadFailure: true },
+        },
+        chats: {},
+      };
+    }
+
+    /** The scroller's children in order: section headers and the tabs under them. */
+    function listed(): ReadonlyArray<string | null> {
+      return Array.from(
+        screen.getByTestId("header-tab-strip-scroll").children,
+      ).map(
+        (child) =>
+          child.getAttribute("data-testid") ??
+          child.querySelector('[role="tab"]')?.getAttribute("data-testid") ??
+          null,
+      );
+    }
+
+    function header(section: string): HTMLElement {
+      return screen.getByTestId(`side-strip-section-${section}`);
+    }
+
+    it("lists the tasks under Needs you, To review, Working and Idle, each section in the tab order", async () => {
+      openSectionedTasks();
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      expect(listed()).toEqual([
+        "side-strip-section-needs-you",
+        "tab-epic-e-gamma",
+        "side-strip-section-to-review",
+        "tab-epic-e-delta",
+        "tab-epic-e-epsilon",
+        "side-strip-section-working",
+        "tab-epic-e-beta",
+        "side-strip-section-idle",
+        "tab-epic-e-alpha",
+        "tab-epic-e-zeta",
+      ]);
+      expect(
+        ["needs-you", "to-review", "working", "idle"].map(
+          (section) => header(section).textContent,
+        ),
+      ).toEqual(["Needs you1", "To review2", "Working1", "Idle2"]);
+      expect(screen.queryByTestId("side-strip-tasks-label")).toBeNull();
+    });
+
+    it("leaves out a section with nothing in it", async () => {
+      openEpicTabs(["Alpha", "Beta"]);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      expect(listed()).toEqual([
+        "side-strip-section-idle",
+        "tab-epic-e-alpha",
+        "tab-epic-e-beta",
+      ]);
+    });
+
+    it("draws each header as a button the tablist holds beside its tabs, amber only for Needs you", async () => {
+      openSectionedTasks();
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const tablist = screen.getByRole("tablist");
+      for (const section of ["needs-you", "to-review", "working", "idle"]) {
+        const button = header(section);
+        expect(button.tagName).toBe("BUTTON");
+        expect(button.parentElement).toBe(tablist);
+        expect(button.getAttribute("aria-expanded")).toBe("true");
+      }
+      expect(header("needs-you").className).toContain(
+        "text-warning-foreground",
+      );
+      for (const section of ["to-review", "working", "idle"]) {
+        expect(header(section).className).not.toContain(
+          "text-warning-foreground",
+        );
+      }
+      expect(screen.getAllByRole("tab")).toHaveLength(6);
+    });
+
+    it("folds and unfolds a section from its header, leaving the others alone", async () => {
+      openSectionedTasks();
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      fireEvent.click(header("idle"));
+
+      expect(header("idle").getAttribute("aria-expanded")).toBe("false");
+      // A folded section keeps its header and its whole count, and only its rows go.
+      expect(header("idle").textContent).toBe("Idle2");
+      expect(screen.queryByTestId("tab-epic-e-zeta")).toBeNull();
+      expect(screen.getByTestId("tab-epic-e-beta")).toBeTruthy();
+      expect(screen.getByTestId("tab-epic-e-gamma")).toBeTruthy();
+
+      fireEvent.click(header("idle"));
+
+      expect(header("idle").getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByTestId("tab-epic-e-zeta")).toBeTruthy();
+    });
+
+    it("keeps the current task's row, and its agents while it is expanded, in a folded section", async () => {
+      openEpicTabs(["Alpha", "Beta"]);
+      warmEpic("e-alpha", [
+        chatProjection("a-run", { title: "Runs" }),
+        chatProjection("a-bg", { title: "Watches" }),
+      ]);
+      __setAgentActivityStateForTests(
+        {
+          "e-alpha": { working: ["a-run", "a-bg"], turn: ["a-run"] },
+          "e-beta": { working: ["b-run"], turn: ["b-run"] },
+        },
+        "local",
+        "connected",
+      );
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      fireEvent.click(header("working"));
+      try {
+        // Alpha is in front and expanded; Beta goes, and the count stays whole.
+        expect(header("working").textContent).toBe("Working2");
+        expect(screen.getByTestId("tab-epic-e-alpha")).toBeTruthy();
+        expect(screen.getByTestId("strip-agent-a-bg")).toBeTruthy();
+        expect(screen.queryByTestId("tab-epic-e-beta")).toBeNull();
+      } finally {
+        // The fold is kept for the session, so this case hands it back open.
+        fireEvent.click(header("working"));
+      }
+    });
+
+    it("keeps a section folded for the session, through a change of view", async () => {
+      openSectionedTasks();
+      await renderStrip("/elsewhere", LEFT_STRIP);
+      fireEvent.click(header("working"));
+
+      act(() => {
+        setSideStripView("layered");
+      });
+      expect(screen.queryByTestId("side-strip-section-working")).toBeNull();
+      act(() => {
+        setSideStripView("activity");
+      });
+
+      expect(header("working").getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByTestId("tab-epic-e-beta")).toBeNull();
+      fireEvent.click(header("working"));
+      expect(screen.getByTestId("tab-epic-e-beta")).toBeTruthy();
+    });
+
+    it("draws Needs you and To review as two lines and Working and Idle as one", async () => {
+      openSectionedTasks();
+      seedPrompts([
+        {
+          id: "approval-gamma",
+          epicId: "e-gamma",
+          chatId: "c-gamma",
+          agentTitle: "Deploy agent",
+          taskTitle: "Gamma",
+          minutesAgo: 2,
+        },
+      ]);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const secondLine = (epic: string): string | null =>
+        within(screen.getByTestId(`tab-epic-${epic}`)).queryByTestId(
+          "side-tab-section-detail",
+        )?.textContent ?? null;
+      expect(secondLine("e-gamma")).toBe("Approve · Deploy agent");
+      expect(secondLine("e-delta")).toBe("Done · ready to review");
+      expect(secondLine("e-epsilon")).toBe("Failed");
+      expect(secondLine("e-beta")).toBeNull();
+      expect(secondLine("e-alpha")).toBeNull();
+      // The wait runs from the request, on the title's line, muted amber.
+      expect(
+        within(screen.getByTestId("tab-epic-e-gamma")).getByTestId(
+          "side-tab-section-time",
+        ).textContent,
+      ).toBe("2m");
+      // A two-line row carries no chip: its second line says it.
+      expect(screen.queryByTestId("side-tab-waiting-chip")).toBeNull();
+      expect(screen.queryByTestId("side-tab-failed-chip")).toBeNull();
+      // Loud titles are bold and foreground; an idle one is muted.
+      const title = (epic: string): string =>
+        within(screen.getByTestId(`tab-epic-${epic}`)).getByTestId(
+          "side-tab-title",
+        ).className;
+      expect(title("e-gamma")).toContain("font-semibold");
+      expect(title("e-delta")).toContain("font-semibold");
+      expect(title("e-beta")).not.toContain("font-semibold");
+      expect(screen.getByTestId("tab-epic-e-zeta").className).toContain(
+        "text-muted-foreground",
+      );
+      expect(screen.getByTestId("tab-epic-e-beta").className).not.toContain(
+        "text-muted-foreground",
+      );
+    });
+
+    it("counts the other requests as +N, and shows no agent, wait or count for a task waiting with no prompt loaded", async () => {
+      openEpicTabs(["Alpha", "Beta"]);
+      indicatorState.value = {
+        epics: {
+          "e-alpha": { ...NO_FLAGS, pendingApproval: true },
+          "e-beta": { ...NO_FLAGS, pendingInterview: true },
+        },
+        chats: {},
+      };
+      seedPrompts([
+        {
+          id: "approval-1",
+          epicId: "e-alpha",
+          chatId: "c-1",
+          agentTitle: "Deploy agent",
+          taskTitle: "Alpha",
+          minutesAgo: 5,
+        },
+        {
+          id: "approval-2",
+          epicId: "e-alpha",
+          chatId: "c-2",
+          agentTitle: "Test agent",
+          taskTitle: "Alpha",
+          minutesAgo: 1,
+        },
+      ]);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const alpha = screen.getByTestId("tab-epic-e-alpha");
+      // The oldest request, and the one other behind it.
+      expect(
+        within(alpha).getByTestId("side-tab-section-detail").textContent,
+      ).toBe("Approve · Deploy agent+1");
+      expect(
+        within(alpha).getByTestId("side-tab-section-time").textContent,
+      ).toBe("5m");
+      const beta = screen.getByTestId("tab-epic-e-beta");
+      expect(
+        within(beta).getByTestId("side-tab-section-detail").textContent,
+      ).toBe("Reply");
+      expect(within(beta).queryByTestId("side-tab-section-time")).toBeNull();
+    });
+
+    it("gives a prompt whose task has no tab in the strip a Needs you row of its own, opened through the notification's activation", async () => {
+      openSectionedTasks();
+      seedPrompts([
+        {
+          id: "approval-gamma",
+          epicId: "e-gamma",
+          chatId: "c-gamma",
+          agentTitle: "Deploy agent",
+          taskTitle: "Gamma",
+          minutesAgo: 3,
+        },
+        {
+          id: "approval-elsewhere",
+          epicId: "e-elsewhere",
+          chatId: "c-elsewhere",
+          agentTitle: "Release agent",
+          taskTitle: "Release task",
+          minutesAgo: 7,
+        },
+      ]);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      // After the strip's own tasks, inside Needs you; the block is gone.
+      expect(listed().slice(0, 3)).toEqual([
+        "side-strip-section-needs-you",
+        "tab-epic-e-gamma",
+        "strip-needs-you-prompt",
+      ]);
+      expect(header("needs-you").textContent).toBe("Needs you2");
+      expect(screen.queryByTestId("side-strip-needs-you")).toBeNull();
+      const prompt = screen.getByTestId("strip-needs-you-prompt");
+      expect(prompt.textContent).toContain("Release task");
+      expect(prompt.textContent).toContain("Approve · Release agent");
+      expect(prompt.textContent).toContain("7m");
+
+      fireEvent.click(prompt);
+
+      expect(activateSpy).toHaveBeenCalledTimes(1);
+      expect(activateSpy.mock.calls[0]?.[0]).toMatchObject({
+        feedId: "host:approval-elsewhere",
+      });
+    });
+
+    it("counts a prompt of a task in a collapsed group as that task's own, not a row of its own", async () => {
+      openGroupWithTabAndSplit();
+      useTabsStore.getState().updateGroup("g", { collapsed: true });
+      indicatorState.value = {
+        epics: { "e-one": { ...NO_FLAGS, pendingApproval: true } },
+        chats: {},
+      };
+      seedPrompts([
+        {
+          id: "approval-one",
+          epicId: "e-one",
+          chatId: "c-one",
+          agentTitle: "Deploy agent",
+          taskTitle: "One",
+          minutesAgo: 1,
+        },
+      ]);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      expect(screen.queryByTestId("strip-needs-you-prompt")).toBeNull();
+      expect(
+        within(screen.getByTestId("tab-epic-e-one")).getByTestId(
+          "side-tab-section-detail",
+        ).textContent,
+      ).toBe("Approve · Deploy agent");
+    });
+
+    it("flattens tab groups: no group header, each member keeps its colour line, and a split pair stays one unit", async () => {
+      openGroupWithTabAndSplit();
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      expect(screen.queryByTestId("side-tab-group-header-g")).toBeNull();
+      const lines = screen.getAllByTestId("side-tab-group-line");
+      expect(lines.map((line) => line.getAttribute("data-seat"))).toEqual([
+        "row",
+        "pair-top",
+        "pair-bottom",
+      ]);
+      expect(screen.getAllByTestId(/^split-tab-group-/)).toHaveLength(1);
+      expect(
+        screen
+          .getByTestId("split-tab-group-split-g")
+          .querySelectorAll('[role="tab"]'),
+      ).toHaveLength(2);
+    });
+
+    it("keeps a collapsed group's members in their sections", async () => {
+      openGroupWithTabAndSplit();
+      useTabsStore.getState().updateGroup("g", { collapsed: true });
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      expect(screen.getAllByRole("tab")).toHaveLength(4);
+      expect(screen.queryByTestId("side-tab-group-header-g")).toBeNull();
+    });
+
+    it("nests no needs-you rows under a Needs you task and, expanded, lists all its agents with the waiting one first", async () => {
+      openEpicTabs(["Alpha", "Gamma"]);
+      warmEpic("e-gamma", [
+        chatProjection("c-run", { title: "Runs", updatedAt: 1 }),
+        chatProjection("c-wait", { title: "Waits", updatedAt: 2 }),
+      ]);
+      isWorking("e-gamma", "c-run");
+      indicatorState.value = {
+        epics: { "e-gamma": { ...NO_FLAGS, pendingApproval: true } },
+        chats: { "c-wait": { ...NO_FLAGS, pendingApproval: true } },
+      };
+      seedPrompts([
+        {
+          id: "approval-gamma",
+          epicId: "e-gamma",
+          chatId: "c-wait",
+          agentTitle: "Waits",
+          taskTitle: "Gamma",
+          minutesAgo: 1,
+        },
+      ]);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const row = screen.getByTestId("tab-epic-e-gamma");
+      // Its second line names the request: nothing is nested under it.
+      expect(screen.getByTestId("strip-agent-group").hidden).toBe(true);
+      expect(screen.queryByTestId("strip-agent-c-wait")).toBeNull();
+      expect(
+        screen.queryByTestId("strip-agent-host:approval-gamma"),
+      ).toBeNull();
+
+      fireEvent.click(within(row).getByTestId("side-tab-disclosure"));
+
+      expect(row.getAttribute("aria-expanded")).toBe("true");
+      expect(
+        Array.from(
+          screen
+            .getByTestId("strip-agent-group")
+            .querySelectorAll('[data-testid^="strip-agent-"]'),
+        ).map((node) => node.getAttribute("data-testid")),
+      ).toEqual(["strip-agent-c-wait", "strip-agent-c-run"]);
+    });
+
+    it("keeps a two-line row's pending-fork glyph and time, then the chevron, then the close, at the trailing edge", async () => {
+      openEpicTabs(["Alpha", "Gamma"]);
+      warmEpic("e-gamma", [chatProjection("c-run", { title: "Runs" })]);
+      isWorking("e-gamma", "c-run");
+      indicatorState.value = {
+        epics: {
+          "e-gamma": { ...NO_FLAGS, pendingApproval: true, pendingFork: true },
+        },
+        chats: {},
+      };
+      seedPrompts([
+        {
+          id: "approval-gamma",
+          epicId: "e-gamma",
+          chatId: "c-gamma",
+          agentTitle: "Deploy agent",
+          taskTitle: "Gamma",
+          minutesAgo: 2,
+        },
+      ]);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      expect(
+        Array.from(
+          within(screen.getByTestId("tab-epic-e-gamma"))
+            .getByTestId("side-tab-trailing")
+            .querySelectorAll(
+              '[data-status-glyph], [data-testid="side-tab-section-time"], [data-testid="side-tab-disclosure"], [data-testid^="tab-close-"]',
+            ),
+        ).map(
+          (node) =>
+            node.getAttribute("data-status-glyph") ??
+            (node.getAttribute("data-testid") ?? "").replace(
+              /^tab-close-.*/,
+              "close",
+            ),
+        ),
+      ).toEqual([
+        "fork",
+        "side-tab-section-time",
+        "side-tab-disclosure",
+        "close",
+      ]);
+    });
+
+    it("lets a one-line row's meter and glyph yield to the chevron and the close, where a chip stayed", async () => {
+      openEpicTabs(["Alpha", "Beta", "Gamma"]);
+      warmEpic("e-beta", [
+        chatProjection("b-1", { title: "One" }),
+        chatProjection("b-2", { title: "Two" }),
+      ]);
+      __setAgentActivityStateForTests(
+        {
+          "e-beta": { working: ["b-1", "b-2"], turn: ["b-1", "b-2"] },
+          "e-gamma": { working: ["g-1"], turn: ["g-1"] },
+        },
+        "local",
+        "connected",
+      );
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const yields = (epic: string, status: string): boolean => {
+        const trailing = within(
+          screen.getByTestId(`tab-epic-${epic}`),
+        ).getByTestId("side-tab-trailing");
+        const node = trailing.querySelector(status);
+        return (
+          node
+            ?.closest("span.col-start-1")
+            ?.className.includes("group-hover/side-tab:opacity-0") ?? false
+        );
+      };
+      expect(yields("e-beta", '[data-testid="side-tab-meter"]')).toBe(true);
+      expect(yields("e-gamma", "[data-status-glyph]")).toBe(true);
+    });
+
+    it("keeps the current task's tint and its always-shown close in whichever section it is in", async () => {
+      openSectionedTasks();
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      // Alpha is in front and idle.
+      const alpha = screen.getByTestId("tab-epic-e-alpha");
+      expect(alpha.getAttribute("aria-selected")).toBe("true");
+      expect(alpha.getAttribute("data-active")).toBe("true");
+      expect(alpha.querySelector('[data-revealed="always"]')).not.toBeNull();
+      expect(
+        screen
+          .getByTestId("tab-epic-e-zeta")
+          .querySelector('[data-revealed="always"]'),
+      ).toBeNull();
+    });
+
+    it("moves a task between sections as its state changes, in place of a reorder", async () => {
+      openSectionedTasks();
+      await renderStrip("/elsewhere", LEFT_STRIP);
+      expect(header("working").textContent).toBe("Working1");
+
+      act(() => {
+        __setAgentActivityStateForTests(
+          {
+            "e-beta": { working: ["c-beta"], turn: ["c-beta"] },
+            "e-zeta": { working: ["c-zeta"], turn: ["c-zeta"] },
+          },
+          "local",
+          "connected",
+        );
+      });
+
+      expect(header("working").textContent).toBe("Working2");
+      expect(header("idle").textContent).toBe("Idle1");
+      expect(useTabsStore.getState().stripOrder.map((ref) => ref.id)).toEqual([
+        "e-alpha",
+        "e-beta",
+        "e-gamma",
+        "e-delta",
+        "e-epsilon",
+        "e-zeta",
+      ]);
+    });
+
+    it("numbers the Alt-digit badges in the order the sections draw the tabs, and the digit opens that tab", async () => {
+      openEpicTabs(["Alpha", "Beta"]);
+      isWorking("e-beta", "c-beta");
+      const router = buildRouter("/elsewhere", LEFT_STRIP, undefined);
+      render(
+        <KeybindingProvider router={router}>
+          <RouterProvider router={router} />
+        </KeybindingProvider>,
+      );
+      await screen.findByTestId("tab-epic-e-alpha");
+
+      // Beta is drawn first, under Working, though Alpha is first in the strip.
+      vi.useFakeTimers();
+      try {
+        fireEvent.keyDown(window, {
+          code: "MetaLeft",
+          key: "Meta",
+          metaKey: true,
+        });
+        act(() => {
+          vi.advanceTimersByTime(300);
+        });
+        expect(
+          within(screen.getByTestId("tab-epic-e-beta")).getByTestId(
+            "tab-digit-1",
+          ),
+        ).toBeDefined();
+        expect(
+          within(screen.getByTestId("tab-epic-e-alpha")).getByTestId(
+            "tab-digit-2",
+          ),
+        ).toBeDefined();
+      } finally {
+        vi.useRealTimers();
+      }
+      fireEvent.keyUp(window, { code: "MetaLeft", key: "Meta" });
+
+      fireEvent.keyDown(window, { code: "Digit1", key: "1", altKey: true });
+      await flushNav();
+
+      expect(router.state.location.pathname).toContain("e-beta");
+    });
+
+    it("steps to the next tab in the order the sections draw them", async () => {
+      openEpicTabs(["Alpha", "Beta", "Gamma"]);
+      isWorking("e-beta", "c-beta");
+      useKeybindingStore.setState({
+        bindings: { ...getDefaultBindings(), "epic.next": "alt+j" },
+      });
+      try {
+        const router = buildRouter("/elsewhere", LEFT_STRIP, undefined);
+        render(
+          <KeybindingProvider router={router}>
+            <RouterProvider router={router} />
+          </KeybindingProvider>,
+        );
+        await screen.findByTestId("tab-epic-e-alpha");
+        // Beta is drawn first, under Working, then Alpha and Gamma under Idle.
+        fireEvent.keyDown(window, { code: "Digit1", key: "1", altKey: true });
+        await flushNav();
+        expect(router.state.location.pathname).toContain("e-beta");
+
+        fireEvent.keyDown(window, { code: "KeyJ", key: "j", altKey: true });
+        await flushNav();
+
+        // The row drawn below Beta, where the strip's own order has Gamma.
+        expect(router.state.location.pathname).toContain("e-alpha");
+      } finally {
+        useKeybindingStore.setState({ bindings: getDefaultBindings() });
+      }
+    });
+
+    it("leaves the Layered view in the user's tab order, under its group headers and its Tasks label", async () => {
+      openSectionedTasks();
+      setSideStripView("layered");
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      expect(screen.queryByTestId(/^side-strip-section-/)).toBeNull();
+      expect(screen.getByTestId("side-strip-tasks-label")).toBeTruthy();
+      expect(
+        screen
+          .getAllByRole("tab")
+          .map((tab) => tab.getAttribute("data-testid")),
+      ).toEqual([
+        "tab-epic-e-alpha",
+        "tab-epic-e-beta",
+        "tab-epic-e-gamma",
+        "tab-epic-e-delta",
+        "tab-epic-e-epsilon",
+        "tab-epic-e-zeta",
+      ]);
+      // One line at today's 32px, with a chip where a section draws a second line.
+      expect(screen.queryByTestId("side-tab-section-detail")).toBeNull();
+      expect(screen.getByTestId("side-tab-waiting-chip")).toBeTruthy();
+      expect(screen.getByTestId("side-tab-failed-chip")).toBeTruthy();
+    });
+
+    it("frames the layout editor's sample task as a Needs you row with its agents nested", async () => {
+      const real: TabRef = { kind: "epic", id: "e-real" };
+      const sample: TabRef = {
+        kind: "sample-workspace",
+        id: "sample-workspace",
+      };
+      useEpicCanvasStore
+        .getState()
+        .seedEpic(real.id, { tabId: real.id, name: "Real task" }, []);
+      useTabsStore.setState({
+        version: 2,
+        items: [real, sample].map((ref) => ({
+          kind: "tab",
+          id: tabItemId(ref),
+          ref,
+        })),
+        activeItemId: tabItemId(sample),
+        stripOrder: [real, sample],
+        systemTabs: { history: null, settings: null },
+      });
+      render(
+        <SampleSceneContext.Provider value>
+          <RouterProvider
+            router={buildRouter("/elsewhere", LEFT_STRIP, undefined)}
+          />
+        </SampleSceneContext.Provider>,
+      );
+      await screen.findByTestId("side-tab-strip");
+
+      expect(listed()).toEqual([
+        "side-strip-section-needs-you",
+        "tab-sample-workspace-sample-workspace",
+        "side-strip-section-idle",
+        "tab-epic-e-real",
+      ]);
+      expect(
+        within(
+          screen.getByTestId("tab-sample-workspace-sample-workspace"),
+        ).getByTestId("side-tab-section-detail").textContent,
+      ).toBe("Reply · Plan the migration");
+      expect(
+        within(screen.getByTestId("strip-agent-group"))
+          .getAllByRole("button")
+          .map((agent) => agent.getAttribute("data-status")),
+      ).toEqual(["waiting", "failed", "turn"]);
+    });
   });
 
   describe("the trailing status and the close", () => {

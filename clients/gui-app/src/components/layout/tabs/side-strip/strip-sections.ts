@@ -4,12 +4,21 @@ import {
   type NeedsYouItem,
   type NeedsYouReason,
 } from "@/stores/notifications/needs-you-items";
+import { tabRefKey } from "@/stores/tabs/layout";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { SideTabLiveAgents } from "./agent-meter";
 import { railBadgeOf } from "./rail-badge-kind";
 
 /** What a task needs from the person, most urgent first. */
 export type StripSection = "needs-you" | "to-review" | "working" | "idle";
+
+/** Each section's name, as its header and the layout editor's pictures read it. */
+export const STRIP_SECTION_LABEL: Readonly<Record<StripSection, string>> = {
+  "needs-you": "Needs you",
+  "to-review": "To review",
+  working: "Working",
+  idle: "Idle",
+};
 
 /** The Activity view's sections in the order it draws them. */
 const STRIP_SECTIONS: ReadonlyArray<StripSection> = [
@@ -138,6 +147,8 @@ export interface StripTabEntry {
   readonly kind: "tabs";
   /** The strip item's id: the entry's key and its drag unit. */
   readonly itemId: string;
+  /** The item's index in the strip. */
+  readonly stripIndex: number;
   /** The more urgent half's section. */
   readonly section: StripSection;
   /** The tab group's color line; `null` for an ungrouped item. */
@@ -162,21 +173,17 @@ export interface StripSectionGroup {
 }
 
 /**
- * The prompts whose task has no row in the strip, one entry per task, then
- * any prompt that names no task on its own. Prompts of a task in `stripEpicIds`
- * are not here: its own entry carries them.
+ * The Needs you entries for prompts whose task has no row in the strip: one
+ * per task, then any prompt that names no task on its own.
  */
 export function promptEntriesOf(
-  pinned: ReadonlyArray<NeedsYouItem>,
-  stripEpicIds: ReadonlySet<string>,
+  rowless: ReadonlyArray<NeedsYouItem>,
 ): ReadonlyArray<StripPromptEntry> {
-  const byEpic = groupNeedsYouByEpic(pinned);
+  const byEpic = groupNeedsYouByEpic(rowless);
   const named = new Set([...byEpic.values()].flat());
   const groups = [
-    ...[...byEpic]
-      .filter(([epicId]) => !stripEpicIds.has(epicId))
-      .map(([, items]) => items),
-    ...pinned.filter((item) => !named.has(item)).map((item) => [item]),
+    ...byEpic.values(),
+    ...rowless.filter((item) => !named.has(item)).map((item) => [item]),
   ];
   return groups.flatMap((items): ReadonlyArray<StripPromptEntry> => {
     const oldest = oldestNeedsYouItem(items);
@@ -191,6 +198,39 @@ export function promptEntriesOf(
           },
         ];
   });
+}
+
+/** What one tab of a sectioned strip draws; `null` while the strip is not sectioned. */
+export function memberRowOf(
+  members: ReadonlyArray<StripTabMember> | null,
+  tab: HeaderTab | null,
+): StripTaskRow | null {
+  if (members === null || tab === null) return null;
+  return (
+    members.find(
+      (member) => member.tab.kind === tab.kind && member.tab.id === tab.id,
+    )?.row ?? null
+  );
+}
+
+/**
+ * The strip's tabs in the order the sections draw them: each tab's key, and
+ * how many tabs come before each item, which the Alt-digit badges count from.
+ */
+export function visualOrderOf(sections: ReadonlyArray<StripSectionGroup>): {
+  readonly keys: ReadonlyArray<string>;
+  readonly offsets: ReadonlyMap<string, number>;
+} {
+  const keys: string[] = [];
+  const offsets = new Map<string, number>();
+  for (const { entries } of sections) {
+    for (const entry of entries) {
+      if (entry.kind !== "tabs") continue;
+      offsets.set(entry.itemId, keys.length);
+      keys.push(...entry.members.map((member) => tabRefKey(member.tab)));
+    }
+  }
+  return { keys, offsets };
 }
 
 /**

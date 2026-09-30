@@ -95,6 +95,7 @@ function baseProps(): SideTabRowProps {
     badge: null,
     agents: NO_LIVE_AGENTS,
     status: null,
+    section: null,
     disclosure: null,
     title: "Fix login",
     hoverCardBody: <div data-testid="hover-card-probe">Fix login</div>,
