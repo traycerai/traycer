@@ -149,7 +149,9 @@ const organizationClient = new HostClient<HostRpcRegistry>({
     handlers: {},
   }),
 });
-vi.spyOn(organizationClient, "getActiveHostId").mockReturnValue("host-1");
+const activeHostId = vi
+  .spyOn(organizationClient, "getActiveHostId")
+  .mockReturnValue("host-1");
 vi.spyOn(organizationClient, "getRequestContextUserId").mockReturnValue(
   "user-1",
 );
@@ -278,10 +280,13 @@ describe("tab appearance and grouping controls", () => {
   describe("task context already cached by another surface", () => {
     // The tab strip resolves every open tab's context in one batch, which is a
     // different cache entry from this tab's own single-task lookup.
+    const stripBatchKeyOnHost = (hostId: string, userId: string) =>
+      hostQueryKeys.epicTaskContexts(hostId, userId, ["epic-a", "epic-b"]);
     const stripBatchKey = (userId: string) =>
-      hostQueryKeys.epicTaskContexts("host-1", userId, ["epic-a", "epic-b"]);
+      stripBatchKeyOnHost("host-1", userId);
 
     beforeEach(() => {
+      activeHostId.mockReturnValue("host-1");
       organizationState.organization = organizationFixture();
       // This tab's own lookup never answers, so whatever the menu shows comes
       // from the other batch.
@@ -454,6 +459,56 @@ describe("tab appearance and grouping controls", () => {
     it("ignores a batch cached for another account", () => {
       queryClient.setQueryData(
         stripBatchKey("user-2"),
+        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+      );
+      renderMenu();
+
+      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+      expect(screen.queryByText("Tab appearance")).toBeNull();
+    });
+
+    // Hosts can disagree about a task (whether it is local-homed, who can
+    // edit it), so only the host this tab's own lookup asks may stand in for it.
+    it("ignores a batch cached for another host", () => {
+      queryClient.setQueryData(
+        stripBatchKeyOnHost("host-2", "user-1"),
+        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+      );
+      renderMenu();
+
+      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+      expect(
+        screen.queryByRole("menuitem", { name: "Task appearance" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("menuitem", { name: "Add to group" }),
+      ).toBeNull();
+      expect(screen.queryByText("Tab appearance")).toBeNull();
+    });
+
+    it("takes the tab's own host's answer when another host's batch disagrees", () => {
+      // Cached first, so a lookup that ignored the host would meet it first.
+      queryClient.setQueryData(
+        stripBatchKeyOnHost("host-2", "user-1"),
+        taskContextsResponse({
+          found: ["epic-a", "epic-b"],
+          localHomed: ["epic-a"],
+        }),
+      );
+      queryClient.setQueryData(
+        stripBatchKeyOnHost("host-1", "user-1"),
+        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+      );
+      renderMenu();
+
+      expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
+      expect(screen.queryByText("Tab appearance")).toBeNull();
+    });
+
+    it("stands in with nothing while the client has no active host", () => {
+      activeHostId.mockReturnValue(null);
+      queryClient.setQueryData(
+        stripBatchKey("user-1"),
         taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
       );
       renderMenu();

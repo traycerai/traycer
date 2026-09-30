@@ -202,10 +202,13 @@ function useTabTaskContext(
   const contexts = useEpicGetTaskContexts([epicId], userId, {
     enabled: organization?.supported ?? false,
   });
+  // Only the host this tab's own lookup asks, as the retry item below keys it:
+  // another host's batch can disagree about whether the task is local-homed.
+  const hostId = organization?.client.getActiveHostId() ?? null;
   const standIn =
-    userId === null || !contexts.isPending
+    userId === null || hostId === null || !contexts.isPending
       ? null
-      : findCachedTaskContext(queryClient, { hostId: null, userId }, epicId);
+      : findCachedTaskContext(queryClient, { hostId, userId }, epicId);
   const answered = contexts.tasksById.get(epicId);
   return {
     task: answered ?? standIn?.task,
