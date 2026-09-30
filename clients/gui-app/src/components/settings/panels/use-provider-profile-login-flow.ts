@@ -450,6 +450,15 @@ export function useProviderProfileLoginFlow(
   // `cancelProfile` when that release fails, so a later path can send it
   // again; `cancelRequestedRef` is what keeps the attempt abandoned meanwhile.
   const cancelledRef = useRef(false);
+  // Whether the release `cancelledRef` stands for is still in flight, and the
+  // release a later path asked for while it was: the start answer that lands
+  // during a pending cancel names the profile the host actually holds, and a
+  // cancel that then fails is retried for that profile rather than only
+  // reopening the latch after the answer has already been consumed.
+  const releaseInFlightRef = useRef(false);
+  const deferredReleaseRef = useRef<{
+    readonly profileId: string | null;
+  } | null>(null);
   // `finishCancellation` can now be reached twice for one press: once from
   // `cancel` itself, and again when a start call that was already in flight
   // answers. The second visit may still have a login to cancel on the host;
@@ -548,25 +557,54 @@ export function useProviderProfileLoginFlow(
       // legacy reauth's null profile is the ambient scope.
       const holderId = holderIdRef.current;
       if (holderId === null && mode !== "reauth" && profileId === null) return;
-      if (cancelledRef.current) return;
+      if (cancelledRef.current) {
+        // A release is already on its way, or has landed. What this path
+        // learned - usually the profile the start answer named - is kept
+        // while that release is still in flight, so one that fails can be
+        // sent again for it; once a release has landed there is nothing
+        // left to retry.
+        if (releaseInFlightRef.current) {
+          deferredReleaseRef.current = { profileId };
+        }
+        return;
+      }
       cancelledRef.current = true;
       const thisAttemptId = attemptIdRef.current;
       // The latch means "a release is on its way", not "released": the flow
       // already reads `cancelled` by now, so nothing the user can press would
       // send another. A cancel call that fails leaves this attempt's claim on
-      // the host, so the latch reopens for the next path that learns what the
-      // attempt holds - the start answer already in flight, or the unmount
-      // cleanup - to release it again. `mutateAsync`, not `mutate` with an
-      // `onError`: the promise is the mutation's own `execute()` and settles
-      // after the caller unmounts too, where per-`mutate` callbacks are
-      // dropped (see `beginLogin`). The hook's own `onError` still toasts.
-      void cancelLogin
-        .mutateAsync({ providerId, profileId, holderId })
-        .then(undefined, () => {
-          if (attemptIdRef.current === thisAttemptId) {
-            cancelledRef.current = false;
-          }
-        });
+      // the host. If a later path asked for a release while this one was in
+      // flight, that release is sent now with what it learned; otherwise the
+      // latch reopens for the next path that learns what the attempt holds -
+      // the start answer still in flight, or the unmount cleanup. `mutateAsync`,
+      // not `mutate` with an `onError`: the promise is the mutation's own
+      // `execute()` and settles after the caller unmounts too, where
+      // per-`mutate` callbacks are dropped (see `beginLogin`). The hook's own
+      // `onError` still toasts.
+      const send = (target: string | null): void => {
+        releaseInFlightRef.current = true;
+        deferredReleaseRef.current = null;
+        void cancelLogin
+          .mutateAsync({ providerId, profileId: target, holderId })
+          .then(
+            () => {
+              if (attemptIdRef.current !== thisAttemptId) return;
+              releaseInFlightRef.current = false;
+              deferredReleaseRef.current = null;
+            },
+            () => {
+              if (attemptIdRef.current !== thisAttemptId) return;
+              releaseInFlightRef.current = false;
+              const deferred = deferredReleaseRef.current;
+              if (deferred !== null) {
+                send(deferred.profileId);
+                return;
+              }
+              cancelledRef.current = false;
+            },
+          );
+      };
+      send(profileId);
     },
     [cancelLogin, mode, providerId],
   );
@@ -733,6 +771,8 @@ export function useProviderProfileLoginFlow(
       const holderId = supportsLoginOwnership ? crypto.randomUUID() : null;
       holderIdRef.current = holderId;
       cancelledRef.current = false;
+      releaseInFlightRef.current = false;
+      deferredReleaseRef.current = null;
       awaitOutcomeRef.current = null;
       submitOutcomeRef.current = "none";
       successPayloadRef.current = null;
@@ -1016,6 +1056,8 @@ export function useProviderProfileLoginFlow(
       }
       cancelRequestedRef.current = false;
       cancelledRef.current = false;
+      releaseInFlightRef.current = false;
+      deferredReleaseRef.current = null;
       cancellationReportedRef.current = false;
       restartCountRef.current = 0;
       Analytics.getInstance().track(AnalyticsEvent.ProviderProfileLinkStarted, {
