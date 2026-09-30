@@ -1589,7 +1589,7 @@
     opacity: 0;
   }
 
-  /* The close button is inert until keyboard focus, or hover on a wide tab.
+  /* The close button is inert until keyboard focus or hover.
      Keep BOTH the `none`
      default and the `auto` reveal in this same @layer so the reveal wins by
      specificity. Do NOT put a `pointer-events-none` Tailwind utility on the
@@ -1633,19 +1633,21 @@
     pointer-events: auto;
   }
 
-  @container (min-width: 7rem) {
-    .group\/tab:hover .header-tab-title {
-      padding-inline-end: calc(1.25rem + var(--spacing) * 1.5);
-    }
+  /* Ungated by width: shrink's narrowest tab (`min-w-12`,
+     `tab-strip-item.tsx`) still fits the close control whole beside the
+     icon, the title giving up its room. A `min-width: 7rem` container gate
+     here predated shrink-to-fit and hid the close on every shrunk tab. */
+  .group\/tab:hover .header-tab-title {
+    padding-inline-end: calc(1.25rem + var(--spacing) * 1.5);
+  }
 
-    .group\/tab:hover .header-tab-trailing-slot {
-      width: 1.25rem;
-      opacity: 1;
-    }
+  .group\/tab:hover .header-tab-trailing-slot {
+    width: 1.25rem;
+    opacity: 1;
+  }
 
-    .group\/tab:hover .header-tab-close-button {
-      pointer-events: auto;
-    }
+  .group\/tab:hover .header-tab-close-button {
+    pointer-events: auto;
   }
 
   .header-tab-label[data-leader-visible="true"] .header-tab-title {
