@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import {
@@ -254,6 +255,7 @@ function LoginFlowHarness(props: {
   return (
     <div>
       <div data-testid="flow-state">{flow.state.kind}</div>
+      <div data-testid="flow-busy">{String(flow.busy)}</div>
       <button
         type="button"
         onClick={() =>
@@ -1077,12 +1079,17 @@ describe("useProviderProfileLoginFlow — a failed cancel RPC must not latch out
       expect.objectContaining({ holderId, profileId: "p-new" }),
     );
 
-    // Now release `awaitLogin` and give both it and the rejected cancel
-    // `mutateAsync` room to fully drain through TanStack Query's own
-    // dispatch before the next press.
+    // Now release `awaitLogin` so the next press is admitted.
     await act(async () => {
       awaitLoginAbandoned.reject(new Error("await abandoned"));
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await Promise.resolve();
+    });
+    // `start()` refuses a press while `awaitLogin.isPending`, and that flag
+    // clears on TanStack Query's own schedule (a macrotask at least, more
+    // under load), so wait for the flow to report itself idle rather than
+    // for a fixed number of ticks.
+    await waitFor(() => {
+      expect(screen.getByTestId("flow-busy").textContent).toBe("false");
     });
 
     // A fresh press. Before the fix this only starts a new attempt under a
@@ -1149,11 +1156,16 @@ describe("useProviderProfileLoginFlow — a failed cancel RPC must not latch out
 
     // Let the now-abandoned `awaitLogin` mutation settle before the next
     // press - `start()` gates a fresh attempt on `!awaitLogin.isPending`.
-    // TanStack Query's own dispatch for this needs a macrotask, not just
-    // microtask ticks.
     await act(async () => {
       awaitLoginAbandoned.reject(new Error("await abandoned"));
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await Promise.resolve();
+    });
+    // `start()` refuses a press while `awaitLogin.isPending`, and that flag
+    // clears on TanStack Query's own schedule (a macrotask at least, more
+    // under load), so wait for the flow to report itself idle rather than
+    // for a fixed number of ticks.
+    await waitFor(() => {
+      expect(screen.getByTestId("flow-busy").textContent).toBe("false");
     });
 
     // A fresh press: the prior cancel already succeeded, so there is nothing
@@ -1222,11 +1234,16 @@ describe("useProviderProfileLoginFlow — a failed cancel RPC must not latch out
 
     // Let the now-abandoned `awaitLogin` mutation settle before the next
     // press - `start()` gates a fresh attempt on `!awaitLogin.isPending`.
-    // TanStack Query's own dispatch for this needs a macrotask, not just
-    // microtask ticks.
     await act(async () => {
       awaitLoginAbandoned.reject(new Error("await abandoned"));
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await Promise.resolve();
+    });
+    // `start()` refuses a press while `awaitLogin.isPending`, and that flag
+    // clears on TanStack Query's own schedule (a macrotask at least, more
+    // under load), so wait for the flow to report itself idle rather than
+    // for a fixed number of ticks.
+    await waitFor(() => {
+      expect(screen.getByTestId("flow-busy").textContent).toBe("false");
     });
 
     // A fresh press under the released policy: the failed release is not
