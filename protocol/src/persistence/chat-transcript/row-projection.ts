@@ -2229,9 +2229,10 @@ export function* foldTranscriptRows(
     ) {
       const spanIndex = seated.spanIndex;
       // At most the span's first attempts: see `MARKING_SPAN_ATTEMPTS`.
-      const keysBefore = spans[spanIndex]
-        .slice(0, seated.keysBefore)
-        .slice(0, MARKING_SPAN_ATTEMPTS);
+      const keysBefore = spans[spanIndex].slice(
+        0,
+        Math.min(seated.keysBefore, MARKING_SPAN_ATTEMPTS),
+      );
       nextRegion = {
         from: seat,
         anchorBefore: seated.entry.sessionAnchor,
