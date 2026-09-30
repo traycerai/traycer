@@ -35,6 +35,7 @@ import {
   type HostRpcRegistry,
 } from "@/lib/host";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -200,14 +201,32 @@ function approvalEntry(
  * unread and the needs-you counts at once (a fresh prompt is unread by
  * construction). */
 function seedApprovals(count: number): void {
-  const entries = Array.from({ length: count }, (_unused, index) =>
+  seedFeed(count, count);
+}
+
+/** Seeds `needsYou` unresolved approvals under a summary of `unread` unread. */
+function seedFeed(needsYou: number, unread: number): void {
+  const entries = Array.from({ length: needsYou }, (_unused, index) =>
     approvalEntry(`approval-${index}`, 10 + index),
   );
   act(() => {
     useHostNotificationsStore.getState().applySnapshot({
       attention: { entries, nextCursor: null },
       recent: { entries, nextCursor: null },
-      summary: { unreadCount: count, attentionCount: count },
+      summary: { unreadCount: unread, attentionCount: needsYou },
+    });
+  });
+}
+
+/** Vertical, expanded, Activity: the one arrangement `useLiveAgentsInStrip` admits. */
+function activateActivityView(): void {
+  act(() => {
+    useLayoutStore.setState({
+      arrangement: {
+        ...DEFAULT_ARRANGEMENT,
+        tabStripPlacement: "left",
+        sideStripView: "activity",
+      },
     });
   });
 }
@@ -280,6 +299,21 @@ describe("SideStripNavRows", () => {
 
     seedApprovals(2);
 
+    const badge = screen.getByTestId("side-strip-inbox-count");
+    expect(badge.textContent).toBe("2");
+    expect(badge.dataset.needsYou).toBe("true");
+  });
+
+  it("Activity view: the pill is the needs-you count, not the unread total, and is absent at 0", async () => {
+    activateActivityView();
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+
+    // Unread with nothing waiting: the Layered view would show a muted "3".
+    seedFeed(0, 3);
+    expect(screen.queryByTestId("side-strip-inbox-count")).toBeNull();
+
+    seedFeed(2, 5);
     const badge = screen.getByTestId("side-strip-inbox-count");
     expect(badge.textContent).toBe("2");
     expect(badge.dataset.needsYou).toBe("true");
@@ -430,6 +464,45 @@ describe("SideStripNewTask (F7)", () => {
       );
     },
   );
+});
+
+describe("SideStripNewTask in the Activity view", () => {
+  beforeEach(() => {
+    resetSharedState();
+    signIn();
+    activateActivityView();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+    resetSharedState();
+  });
+
+  it("is a quiet nav row: no primary fill, the same label and its shortcut", async () => {
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+
+    const newTask = screen.getByTestId("side-strip-new-task");
+    expect(restingFillClasses(newTask)).not.toContain("bg-primary");
+    expect(newTask.classList.contains("text-primary-foreground")).toBe(false);
+    expect(screen.getByTestId("side-strip-new-task-label").textContent).toBe(
+      "New Task",
+    );
+    const chord = useKeybindingStore.getState().bindings["epic.new"];
+    if (chord === null) throw new Error("expected a default binding");
+    expect(newTask.textContent).toContain(formatChordForDisplay(chord));
+  });
+
+  it("collapsed: the rail keeps the primary tile", async () => {
+    useSideTabStripStore.setState({ collapsed: true });
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+
+    expect(
+      restingFillClasses(screen.getByTestId("side-strip-new-task")),
+    ).toEqual(["bg-primary"]);
+  });
 });
 
 /**

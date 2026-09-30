@@ -28,6 +28,7 @@ import {
   useSystemTabModalActions,
 } from "@/stores/tabs/use-system-tab-modal";
 import type { SideTabRowVariant } from "./side-tab-row";
+import { useLiveAgentsInStrip } from "./strip-agents-mode";
 import {
   SIDE_STRIP_NAV_TILE_CLASS,
   SIDE_STRIP_NAV_TILE_COUNT_CLASS,
@@ -60,21 +61,57 @@ export function SideStripNavRows(props: {
 }
 
 /**
- * New Task (F7): the primary button that closes the nav list - after Home
+ * New Task (F7): the button that closes the nav list - after Home
  * expanded, after All tasks on the rail - and does what the header's `+` does.
  * Expanded, a row lined up with the nav rows, its shortcut trailing as All
- * tasks' does; collapsed, a primary 32px tile.
+ * tasks' does; collapsed, a primary 32px tile. In the Activity view the
+ * expanded row is a quiet nav row instead of the solid primary, so nothing in
+ * the top block outshouts Needs you.
  */
 export function SideStripNewTask(props: {
   readonly variant: SideTabRowVariant;
   readonly onNewTab: () => void;
 }): ReactNode {
   const collapsed = props.variant === "collapsed";
+  const quiet = useLiveAgentsInStrip();
   const placement = useColumnOverlayPlacement("top");
   const chord = useBindingForAction("epic.new");
   const shortcut = chord === null ? null : formatChordForDisplay(chord);
   const tooltip =
     shortcut === null ? NEW_TASK_LABEL : `${NEW_TASK_LABEL} (${shortcut})`;
+  const content = (
+    <>
+      <Plus
+        aria-hidden
+        className={cn(SIDE_TAB_LEADING_CLASS, collapsed && "me-0", "shrink-0")}
+      />
+      {collapsed ? null : (
+        <>
+          <span
+            data-testid="side-strip-new-task-label"
+            className={cn(
+              SIDE_TAB_TITLE_CLASS,
+              "min-w-0 flex-1 truncate text-left",
+            )}
+          >
+            {NEW_TASK_LABEL}
+          </span>
+          {shortcut === null ? null : (
+            <span
+              className={cn(
+                "shrink-0 text-ui-xs",
+                quiet
+                  ? "text-muted-foreground"
+                  : "font-normal text-primary-foreground/70",
+              )}
+            >
+              {shortcut}
+            </span>
+          )}
+        </>
+      )}
+    </>
+  );
   return (
     <TooltipWrapper
       label={collapsed ? tooltip : null}
@@ -82,46 +119,32 @@ export function SideStripNewTask(props: {
       sideOffset={6}
       align={placement?.align}
     >
-      <Button
-        type="button"
-        size={collapsed ? "nav-tile" : "nav-row"}
-        // Non-editable chrome, dimmed while a layout session is live (4.2).
-        data-layout-passive
-        data-testid="side-strip-new-task"
-        aria-label={collapsed ? NEW_TASK_LABEL : undefined}
-        onClick={props.onNewTab}
-        className={cn(
-          collapsed ? "self-center" : "w-full",
-          "[-webkit-app-region:no-drag]",
-        )}
-      >
-        <Plus
-          aria-hidden
+      {quiet ? (
+        <NavRowButton
+          variant={props.variant}
+          active={false}
+          data-testid="side-strip-new-task"
+          onClick={props.onNewTab}
+        >
+          {content}
+        </NavRowButton>
+      ) : (
+        <Button
+          type="button"
+          size={collapsed ? "nav-tile" : "nav-row"}
+          // Non-editable chrome, dimmed while a layout session is live (4.2).
+          data-layout-passive
+          data-testid="side-strip-new-task"
+          aria-label={collapsed ? NEW_TASK_LABEL : undefined}
+          onClick={props.onNewTab}
           className={cn(
-            SIDE_TAB_LEADING_CLASS,
-            collapsed && "me-0",
-            "shrink-0",
+            collapsed ? "self-center" : "w-full",
+            "[-webkit-app-region:no-drag]",
           )}
-        />
-        {collapsed ? null : (
-          <>
-            <span
-              data-testid="side-strip-new-task-label"
-              className={cn(
-                SIDE_TAB_TITLE_CLASS,
-                "min-w-0 flex-1 truncate text-left",
-              )}
-            >
-              {NEW_TASK_LABEL}
-            </span>
-            {shortcut === null ? null : (
-              <span className="shrink-0 text-ui-xs font-normal text-primary-foreground/70">
-                {shortcut}
-              </span>
-            )}
-          </>
-        )}
-      </Button>
+        >
+          {content}
+        </Button>
+      )}
     </TooltipWrapper>
   );
 }
@@ -192,6 +215,11 @@ function InboxNavRow(props: {
   } = useNotificationCenter();
   const needsYouCount = useNeedsYouItems().length;
   const unreadCount = useMergedNotificationUnreadCount();
+  // The Activity view's pill is the Needs you count alone; the Layered view's
+  // is the unread total, falling back to it when nothing is unread.
+  const needsYouOnly = useLiveAgentsInStrip();
+  const pillCount =
+    needsYouOnly || unreadCount === 0 ? needsYouCount : unreadCount;
   // The bell's `unknown`: a summary is unavailable, so zero counts are not a
   // claim that nothing is waiting (see `useNotificationBellState`).
   const unavailable = bellState.kind === "unknown";
@@ -242,8 +270,9 @@ function InboxNavRow(props: {
                 </span>
                 {/* One count, the unread total; a pending ask tints it
                     rather than adding a second number. An ask already read
-                    is still pending, so with nothing unread it shows alone. */}
-                {unreadCount > 0 || needsYouCount > 0 ? (
+                    is still pending, so with nothing unread it shows alone.
+                    In the Activity view it is the Needs you count itself. */}
+                {pillCount > 0 ? (
                   <Badge
                     variant={needsYouCount > 0 ? "warning" : "muted"}
                     size="sm"
@@ -251,9 +280,7 @@ function InboxNavRow(props: {
                     data-testid="side-strip-inbox-count"
                     data-needs-you={needsYouCount > 0}
                   >
-                    <span className="tabular-nums">
-                      {unreadCount > 0 ? unreadCount : needsYouCount}
-                    </span>
+                    <span className="tabular-nums">{pillCount}</span>
                   </Badge>
                 ) : null}
                 {unavailable ? (
