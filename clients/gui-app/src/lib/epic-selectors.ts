@@ -1483,13 +1483,15 @@ export interface RegisteredEpicAgentRef {
 /**
  * What an epic's live projection knows about one agent: which slice it lives
  * in (`chats` → `chat`, `tuiAgents` → `terminal-agent`), its Y.Doc title
- * (`null` while untitled) and its recorded host (`null` for a legacy chat
- * that predates the field).
+ * (`null` while untitled), its recorded host (`null` for a legacy chat
+ * that predates the field) and its owning user.
  */
 export interface RegisteredEpicLiveAgent {
   readonly kind: "chat" | "terminal-agent";
   readonly title: string | null;
   readonly hostId: string | null;
+  /** The chat's owning user; `null` for a terminal agent, which has none. */
+  readonly userId: string | null;
 }
 
 /**
@@ -1541,6 +1543,75 @@ export function useRegisteredEpicLiveAgents(
     () => JSON.stringify(refs.map(() => null)),
   );
   return useMemo(() => decodeRegisteredAgents(encodedAgents), [encodedAgents]);
+}
+
+/**
+ * The `updatedAt` of each named agent in a mounted epic's projection: `0` for
+ * an agent it does not hold, or when this window has no session for the epic.
+ *
+ * A hook of its own rather than a field of {@link RegisteredEpicLiveAgent}: a
+ * chat's `updatedAt` moves on every message, and the readers of that
+ * projection that only want a name or a host would re-render on each one.
+ */
+export function useRegisteredEpicAgentUpdatedAts(
+  epicId: string | null,
+  agentIds: readonly string[],
+): readonly number[] {
+  const registry = getOpenEpicRegistry();
+  const encodedUpdatedAts = useSyncExternalStore(
+    (listener) =>
+      subscribeToRegisteredEpics(
+        registry,
+        epicId === null ? [] : [epicId],
+        listener,
+      ),
+    () =>
+      JSON.stringify(
+        agentIds.map((agentId) =>
+          agentUpdatedAtFromHandle(
+            epicId === null ? null : registry.peek(epicId),
+            agentId,
+          ),
+        ),
+      ),
+    () => JSON.stringify(agentIds.map(() => 0)),
+  );
+  return useMemo(() => {
+    const decoded: unknown = JSON.parse(encodedUpdatedAts);
+    if (!Array.isArray(decoded)) return [];
+    return decoded.map((value): number =>
+      typeof value === "number" ? value : 0,
+    );
+  }, [encodedUpdatedAts]);
+}
+
+function agentUpdatedAtFromHandle(
+  handle: OpenEpicStoreHandle | null,
+  agentId: string,
+): number {
+  if (handle === null) return 0;
+  const state = handle.store.getState();
+  if (Object.hasOwn(state.chats.byId, agentId)) {
+    return state.chats.byId[agentId].updatedAt;
+  }
+  if (Object.hasOwn(state.tuiAgents.byId, agentId)) {
+    return state.tuiAgents.byId[agentId].updatedAt;
+  }
+  return 0;
+}
+
+/**
+ * The host that serves a mounted epic's session, `null` while this window has
+ * none: the host an agent row falls back to when its record names no owner.
+ */
+export function useRegisteredEpicSessionHostId(epicId: string): string | null {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => registry.peek(epicId),
+    () => null,
+  );
+  return handle === null ? null : getEpicSessionHandleHostId(handle);
 }
 
 /**
@@ -1713,7 +1784,7 @@ function subscribeToRegisteredEpics(
 }
 
 /**
- * Encoded per-ref tuples (`[kind, title, hostId]`, or `null`) so
+ * Encoded per-ref tuples (`[kind, title, hostId, userId]`, or `null`) so
  * `useSyncExternalStore` compares by value: the registry and every store
  * notify on unrelated changes, and a fresh array per notification would
  * re-render the whole list surface each time.
@@ -1725,7 +1796,9 @@ function registeredAgentsSnapshot(
   return JSON.stringify(
     refs.map((ref) => {
       const agent = liveAgentFromHandle(registry.peek(ref.epicId), ref.agentId);
-      return agent === null ? null : [agent.kind, agent.title, agent.hostId];
+      return agent === null
+        ? null
+        : [agent.kind, agent.title, agent.hostId, agent.userId];
     }),
   );
 }
@@ -1740,11 +1813,13 @@ function decodeRegisteredAgents(
     const kind: unknown = entry[0];
     const title: unknown = entry[1];
     const hostId: unknown = entry[2];
+    const userId: unknown = entry[3];
     if (kind !== "chat" && kind !== "terminal-agent") return null;
     return {
       kind,
       title: typeof title === "string" ? title : null,
       hostId: typeof hostId === "string" ? hostId : null,
+      userId: typeof userId === "string" ? userId : null,
     };
   });
 }
@@ -1761,6 +1836,7 @@ function liveAgentFromHandle(
       kind: "chat",
       title: chat.title.length > 0 ? chat.title : null,
       hostId: chat.hostId,
+      userId: chat.userId,
     };
   }
   if (Object.hasOwn(state.tuiAgents.byId, agentId)) {
@@ -1769,6 +1845,7 @@ function liveAgentFromHandle(
       kind: "terminal-agent",
       title: agent.title.length > 0 ? agent.title : null,
       hostId: agent.hostId,
+      userId: null,
     };
   }
   return null;

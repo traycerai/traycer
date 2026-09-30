@@ -138,9 +138,8 @@ import { nextFrames } from "../support/fixtures.ts";
 // (`side-strip-nav-rows.test.tsx`); the sample workspace never joining
 // (`side-tab-join.test.tsx`); which side an overlay opens on
 // (`side-tab-strip-overlay-placement.test.tsx`); the crossing's rules, commit
-// and persistence (`side-tab-strip.test.tsx`); the live agents' count, indent
-// and visibility (`strip-live-agents.test.tsx`,
-// `side-strip-live-agents-slot.test.tsx`); the group's rendering
+// and persistence (`side-tab-strip.test.tsx`); the live agents' disclosure,
+// count and visibility (`side-tab-strip.test.tsx`); the group's rendering
 // (`epic-sidebar.test.tsx`) and keyboard reorder (`sortable-list.test.tsx`);
 // and the running turn's glyph (`agent-spinning-dots.test.tsx`,
 // `tab-leading-icon.test.tsx`, `side-strip-nav-rows.test.tsx`).
@@ -1331,7 +1330,7 @@ const STRIP_RESIZE_PROBE = `(() => {
     rows: strip.querySelectorAll('[data-side-tab="expanded"]').length,
     divider: strip.querySelector('[data-testid="side-strip-rail-divider"]') !== null,
     newTaskLabel: strip.querySelector('[data-testid="side-strip-new-task-label"]') !== null,
-    liveAgents: strip.querySelectorAll('[data-testid="side-strip-live-agents-slot"] [data-testid^="strip-live-agent-fixture-agent-"]').length,
+    liveAgents: strip.querySelectorAll('[data-testid="strip-agent-group"] [data-testid^="strip-agent-fixture-agent-"]').length,
     joined: joined === null ? null : joined.getAttribute("data-side-tab"),
   };
 })()`;
@@ -1655,90 +1654,83 @@ async function assertOverlays(page: Page): Promise<void> {
 }
 
 interface LiveAgentsRead {
-  readonly slot: Box | null;
+  readonly group: Box | null;
   readonly rows: readonly string[];
   readonly active: Box | null;
   readonly strip: Box | null;
-  readonly titles: ReadonlyArray<number | null>;
+  /** Where the task's title text starts, and where the first agent's dot does. */
+  readonly taskTitleX: number | null;
+  readonly dotX: number | null;
 }
 
 const LIVE_AGENTS_PROBE = `(() => {
-  const slot = document.querySelector('[data-testid="side-strip-live-agents-slot"]');
-  const rows = slot === null ? [] : [...slot.querySelectorAll('[data-testid^="strip-live-agent-fixture-agent-"]')];
+  const group = document.querySelector('[data-testid="strip-agent-group"]');
+  const rows = group === null ? [] : [...group.querySelectorAll('[data-testid^="strip-agent-fixture-agent-"]')];
   const box = (node) => {
     if (node === null) return null;
     const r = node.getBoundingClientRect();
     return { x: r.x, y: r.y, width: r.width, height: r.height, cx: r.x + r.width / 2, cy: r.y + r.height / 2 };
   };
+  const strip = document.querySelector('[data-testid="side-tab-strip"]');
+  const walker = document.createTreeWalker(strip, NodeFilter.SHOW_TEXT);
+  let taskTitleX = null;
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    if (node.data.trim() !== "Epsilon cleanup") continue;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    taskTitleX = range.getBoundingClientRect().x;
+    break;
+  }
+  const dot = rows.length === 0 ? null : rows[0].firstElementChild;
   return {
-    slot: box(slot),
+    group: box(group),
     rows: rows.map((row) => row.getAttribute("data-testid")),
     active: box(document.querySelector('[data-testid="side-tab-strip"] [data-side-tab][data-active="true"]')),
-    strip: box(document.querySelector('[data-testid="side-tab-strip"]')),
-    // Where each title's text starts: the task's, then the first live agent's.
-    titles: ["Epsilon cleanup", "Plan the migration"].map((text) => {
-      const strip = document.querySelector('[data-testid="side-tab-strip"]');
-      const walker = document.createTreeWalker(strip, NodeFilter.SHOW_TEXT);
-      for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
-        if (node.data.trim() !== text) continue;
-        const range = document.createRange();
-        range.selectNodeContents(node);
-        return range.getBoundingClientRect().x;
-      }
-      return null;
-    }),
+    strip: box(strip),
+    taskTitleX,
+    dotX: dot === null ? null : dot.getBoundingClientRect().x,
   };
 })()`;
 
 /**
- * `INDENT_PX` (`epic-sidebar-tree-shared.ts`): the step a top-level live
- * agent's title sits past its task's title. `LIVE_AGENTS_LIST_CLASS`
- * (`live-agent-row.tsx`) sets it as the slot's own inset against the row's
- * leading slot, so it is read across the two components, not from either.
- */
-const LIVE_AGENT_INDENT_PX = 16;
-
-/**
- * D9: the first indent step of the active task's live agents is read across
- * two components - the task's title in the row, the agent's title in the slot -
- * and starts one 16px step past the task's, with the slot under the active row
- * and inside the strip. (How many show, and the deeper steps, are the slot
- * stores' own.)
+ * D9: the active task's agents nest under its row and inside the strip, and
+ * their dot column sits on the task's title start edge. That alignment is read
+ * across two components - the task's title in the row, the dot in the group -
+ * so it is measured here, not from either.
  */
 async function assertLiveAgents(page: Page): Promise<void> {
   await settleShell(page);
   await waitUntil(
     page,
-    `document.querySelector('[data-testid="side-strip-live-agents-slot"] [data-testid^="strip-live-agent-fixture-agent-"]') !== null`,
+    `document.querySelector('[data-testid="strip-agent-group"] [data-testid^="strip-agent-fixture-agent-"]') !== null`,
   );
   await settleShell(page);
   const shown = await page.evaluate<LiveAgentsRead>(LIVE_AGENTS_PROBE);
   const violations = violationLog();
-  const [task, plan] = shown.titles;
-  if (task === null || plan === null) {
+  if (shown.taskTitleX === null || shown.dotX === null) {
     violations.add(
-      `no title text for ${plan === null ? "Plan the migration" : "the task"}`,
+      `no ${shown.taskTitleX === null ? "task title text" : "agent dot"} to measure`,
     );
   } else {
     violations.check(
-      Math.abs(plan - task - LIVE_AGENT_INDENT_PX) <= 0.5,
-      `Plan the migration's title starts ${(plan - task).toFixed(1)}px past the task's title, expected ${String(LIVE_AGENT_INDENT_PX)}`,
+      Math.abs(shown.dotX - shown.taskTitleX) <= 0.5,
+      `the agents' dot column starts ${(shown.dotX - shown.taskTitleX).toFixed(1)}px past the task's title start edge, expected 0`,
     );
   }
-  if (shown.slot === null || shown.active === null || shown.strip === null) {
-    violations.add("no live-agents slot or no active row to measure");
+  if (shown.group === null || shown.active === null || shown.strip === null) {
+    violations.add("no agent group or no active row to measure");
   } else {
     violations.check(
-      shown.slot.y >= shown.active.y + shown.active.height - 0.5,
-      `the live agents ${boxText(shown.slot)} are not under the active row ${boxText(shown.active)}`,
+      shown.group.y >= shown.active.y + shown.active.height - 0.5,
+      `the agents ${boxText(shown.group)} are not under the active row ${boxText(shown.active)}`,
     );
     violations.check(
-      shown.slot.x >= shown.strip.x &&
-        shown.slot.x + shown.slot.width <= shown.strip.x + shown.strip.width,
-      `the live agents ${boxText(shown.slot)} leave the strip ${boxText(shown.strip)}`,
+      shown.group.x >= shown.strip.x &&
+        shown.group.x + shown.group.width <= shown.strip.x + shown.strip.width,
+      `the agents ${boxText(shown.group)} leave the strip ${boxText(shown.strip)}`,
     );
   }
-  violations.assertNone("D9: the live agents under the active row");
+  violations.assertNone("D9: the agents under the active row");
 }
 
 // --- the rail groups --------------------------------------------------------
@@ -2105,7 +2097,7 @@ function registerShellTests(getPage: () => Page, side: Side): void {
 }
 
 test.describe("the shell with the panel loaded on the left", () => {
-  const getPage = sharedPage(shellLoad("left", { hosts: 1 }));
+  const getPage = sharedPage(shellLoad("left", { hosts: 1, warm: 1 }));
   registerShellTests(getPage, "left");
 
   test("the joined row paints the panel's fill across the gap and the seam, and not past its corners, with the bridge level, then the same for the collapsed tile", async () => {
@@ -2377,7 +2369,7 @@ test.describe("the shell with the panel loaded on the left", () => {
     });
   });
 
-  test("the active task's live agents start one indent step past its title, under its row and inside the strip", async () => {
+  test("the active task's agents nest under its row and inside the strip, their dot column on its title start edge", async () => {
     const page = getPage();
     await probe(page, 'setStripView("activity")');
     await setActivity(page);
@@ -2435,7 +2427,7 @@ test.describe("the shell with the panel loaded on the left", () => {
 
 test.describe("the shell with the panel loaded on the right", () => {
   const getPage = sharedPage(
-    shellLoad("right", { hosts: 1, readings: "both" }),
+    shellLoad("right", { hosts: 1, readings: "both", warm: 1 }),
   );
   registerShellTests(getPage, "right");
 

@@ -1,12 +1,7 @@
-import { useCallback, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { NeedsYouItem } from "@/components/notifications/needs-you-item";
-import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
-import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
 import { cn } from "@/lib/utils";
-import {
-  useMergedNotificationsActions,
-  type MergedNotificationRow,
-} from "@/stores/notifications/merged-notifications";
+import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import {
   useNeedsYouItems,
   type NeedsYouItem as NeedsYouItemData,
@@ -16,8 +11,9 @@ import {
   SAMPLE_NEEDS_YOU_ITEMS,
   sampleNoop,
 } from "@/components/sample-workspace/sample-workspace-scene";
-import { useLiveAgentsInStrip } from "./live-agents-slot-store";
+import { useLiveAgentsInStrip } from "./strip-agents-mode";
 import { SIDE_STRIP_SECTION_LABEL_CLASS } from "./side-strip-tokens";
+import { useNeedsYouActivation } from "./use-needs-you-activation";
 
 /**
  * The Activity view's Needs you block (D10, D13), pinned under the nav rows:
@@ -73,29 +69,5 @@ function NeedsYouBlock(props: {
         ))}
       </div>
     </section>
-  );
-}
-
-function useNeedsYouActivation(): (row: MergedNotificationRow) => void {
-  const { activate } = useNotificationActivation();
-  const { markAsRead } = useMergedNotificationsActions();
-  return useCallback(
-    (row: MergedNotificationRow) => {
-      if (row.payload === null) return;
-      activate({
-        payload: row.payload,
-        receivedAt: Date.now(),
-        feedId: row.feedId,
-        originHostId: row.originHostId,
-        onResult: activationResultHandler({
-          row,
-          feedId: row.feedId,
-          surface: "strip",
-          markAsRead,
-          onSuccess: null,
-        }),
-      });
-    },
-    [activate, markAsRead],
   );
 }

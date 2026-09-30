@@ -43,8 +43,9 @@ import {
   type SideStripItemProps,
 } from "./side-strip-item-input";
 import { SideSplitRowPair } from "./side-split-row-pair";
-import { SideStripLiveAgentsSlot } from "./side-strip-live-agents-slot";
 import { SideStripTabRow } from "./side-strip-tab-row";
+import { StripAgentGroup } from "./strip-agent-group";
+import { useStripTaskGroup, type StripTaskGroup } from "./strip-task-group";
 import { joinedAttribute, useSideTabJoin } from "./side-tab-join";
 import {
   SideTabRow,
@@ -95,9 +96,18 @@ export function SideSplitItem(
     [setNodeRef],
   );
   const focusedSide = props.isActive ? item.focusedSide : null;
+  const leftGroup = useStripTaskGroup(
+    memberTab(item.left),
+    focusedSide === "left",
+  );
+  const rightGroup = useStripTaskGroup(
+    memberTab(item.right),
+    focusedSide === "right",
+  );
   const member = (side: "left" | "right"): ReactNode => (
     <SideSplitMember
       member={side === "left" ? item.left : item.right}
+      group={side === "left" ? leftGroup : rightGroup}
       partner={memberTab(side === "left" ? item.right : item.left)}
       side={side}
       focused={focusedSide === side}
@@ -126,15 +136,6 @@ export function SideSplitItem(
       handlers={props.handlers}
     />
   );
-  // The focused half's live agents, right under that half and inside the
-  // pair, so the pair stays one drag and join unit (D9).
-  const liveAgents = (side: "left" | "right"): ReactNode =>
-    focusedSide === side ? (
-      <SideStripLiveAgentsSlot
-        tab={memberTab(item[side])}
-        active={props.isActive}
-      />
-    ) : null;
   // The pair joins as one unit.
   const [pairNode, setPairNode] = useState<HTMLDivElement | null>(null);
   const edge = use(ColumnEdgeContext);
@@ -165,16 +166,18 @@ export function SideSplitItem(
         frame={pairFrame}
         variant={props.variant}
         testId={`split-tab-group-${item.id}`}
+        // Each half's agents sit right under that half and inside the pair's
+        // fill, so the pair and its agents stay one drag and join unit (D9).
         first={
           <>
             {member("left")}
-            {liveAgents("left")}
+            <StripAgentGroup group={leftGroup} />
           </>
         }
         second={
           <>
             {member("right")}
-            {liveAgents("right")}
+            <StripAgentGroup group={rightGroup} />
           </>
         }
       />
@@ -188,6 +191,8 @@ function memberTab(member: HeaderStripMember): HeaderTab | null {
 
 interface SideSplitMemberProps {
   readonly member: HeaderStripMember;
+  /** The agents nested under this half's task, drawn after the pair. */
+  readonly group: StripTaskGroup | null;
   /** The other half's tab, which scopes an empty half's own menu. */
   readonly partner: HeaderTab | null;
   readonly side: "left" | "right";
@@ -239,6 +244,7 @@ function SideSplitTabMember(
       groupLine={props.groupLine}
       dropIndicator={props.dropIndicator}
       joined={null}
+      group={props.group}
     />
   );
 }
@@ -288,6 +294,7 @@ function SideFillableMember(
       tile={{ kind: "icon", icon }}
       badge={null}
       agents={NO_LIVE_AGENTS}
+      disclosure={null}
       title={label}
       hoverCardBody={label}
       leaderBadge={null}

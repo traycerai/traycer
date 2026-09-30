@@ -21,7 +21,6 @@ import {
   depictRegion,
 } from "@/components/layout-editor/region-depiction";
 import { PanelTaskHeaderBody } from "@/components/epic-canvas/sidebar/panel-task-header-body";
-import { LIVE_AGENTS_LIST_CLASS } from "@/components/epic-canvas/sidebar/live-agent-row";
 import { SampleLiveAgentItems } from "@/components/sample-workspace/sample-strip-live-agents";
 import {
   barClusterRegions,
@@ -59,6 +58,7 @@ import {
   SIDE_TAB_TILE_ACTIVE_CLASS,
   SIDE_TAB_TILE_CLASS,
   SIDE_TAB_TITLE_CLASS,
+  STRIP_AGENT_GROUP_CLASS,
 } from "@/components/layout/tabs/side-strip/side-strip-tokens";
 import type {
   RailRegionId,
@@ -514,10 +514,10 @@ export function AppFramePanelTaskHeader(): ReactNode {
   );
 }
 
-/** The active task's live agents under its row, as the Activity view lists them (D9). */
+/** The active task's live agents under its row, as the Activity view nests them (D9). */
 function AppFrameLiveAgents(): ReactNode {
   return (
-    <ul data-testid="app-frame-live-agents" className={LIVE_AGENTS_LIST_CLASS}>
+    <ul data-testid="app-frame-live-agents" className={STRIP_AGENT_GROUP_CLASS}>
       <SampleLiveAgentItems />
     </ul>
   );

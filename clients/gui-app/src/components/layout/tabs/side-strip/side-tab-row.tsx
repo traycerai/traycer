@@ -7,7 +7,7 @@ import type {
   ReactElement,
   ReactNode,
 } from "react";
-import { X } from "lucide-react";
+import { ChevronRight, X } from "lucide-react";
 import * as m from "motion/react-m";
 import type { MergeSide } from "@/components/epic-canvas/dnd/strip-drag-model";
 import { Badge } from "@/components/ui/badge";
@@ -59,6 +59,22 @@ export interface SideGroupLine {
   readonly seat: SideGroupLineSeat;
 }
 
+/**
+ * A task's disclosure: the chevron button that swaps in for the leading slot
+ * while the row is hovered or focused, and the state it toggles.
+ */
+export interface SideTabDisclosure {
+  readonly expanded: boolean;
+  /** Whether the chevron eases; a keyboard toggle does not. */
+  readonly animate: boolean;
+  /** The nested group's DOM id, for `aria-controls`. */
+  readonly controlsId: string;
+  /** "Hide agents in <title>" or "Show agents in <title>". */
+  readonly label: string;
+  /** Whether the toggle came from a pointer, so a keyboard one skips the motion. */
+  readonly onToggle: (viaPointer: boolean) => void;
+}
+
 export interface SideTabRowClose {
   /** "Close <title>". */
   readonly label: string;
@@ -108,6 +124,8 @@ export interface SideTabRowProps {
   readonly badge: RailBadgeKind | null;
   /** The task's live agents, drawn by the meter. */
   readonly agents: SideTabLiveAgents;
+  /** The chevron of a task with nested agents; `null` on every other row. */
+  readonly disclosure: SideTabDisclosure | null;
   /**
    * The title. A string is painted as one faded line, the hover card carrying
    * it in full; any other node (the rename input) is rendered as given.
@@ -128,7 +146,10 @@ export interface SideTabRowProps {
 const REVEAL_CLASS =
   "pointer-events-none opacity-0 group-hover/side-tab:pointer-events-auto group-hover/side-tab:opacity-100 group-focus-visible/side-tab:pointer-events-auto group-focus-visible/side-tab:opacity-100 group-has-[:focus-visible]/side-tab:pointer-events-auto group-has-[:focus-visible]/side-tab:opacity-100";
 
-/** Hides the waiting chip while the close button takes its place. */
+/**
+ * Hides what yields its place while the row is hovered or focused: the
+ * waiting chip to the close button, the leading icon to the chevron.
+ */
 const YIELD_TO_CLOSE_CLASS =
   "group-hover/side-tab:opacity-0 group-focus-visible/side-tab:opacity-0 group-has-[:focus-visible]/side-tab:opacity-0";
 
@@ -416,9 +437,17 @@ function CornerBadge(props: {
  * alone. A monogram never forces a tile here - on this small a tile the
  * status badge would overlap its corner and read as a tiny growth on the
  * letters (the row's colour lives in its accent bar instead).
+ *
+ * A task with nested agents keeps that at rest and swaps the icon or glyph
+ * for the disclosure chevron while the row is hovered or has keyboard focus.
  */
 function LeadingSlot(props: SideTabRowProps) {
   const tile = props.tile;
+  const swapped = props.disclosure !== null && YIELD_TO_CLOSE_CLASS;
+  const chevron =
+    props.disclosure === null ? null : (
+      <DisclosureChevron disclosure={props.disclosure} />
+    );
   if (tile.kind !== "icon") {
     return (
       <span
@@ -426,10 +455,11 @@ function LeadingSlot(props: SideTabRowProps) {
         data-leading="glyph"
         className={cn(
           SIDE_TAB_LEADING_CLASS,
-          "flex shrink-0 items-center justify-center",
+          "relative flex shrink-0 items-center justify-center",
         )}
       >
-        {props.leading}
+        <span className={cn("flex", swapped)}>{props.leading}</span>
+        {chevron}
       </span>
     );
   }
@@ -445,11 +475,58 @@ function LeadingSlot(props: SideTabRowProps) {
           SIDE_TAB_LEADING_TILE_CLASS,
           "flex items-center justify-center overflow-hidden",
           SIDE_TAB_COLORLESS_TILE_CLASS,
+          swapped,
         )}
       >
         {tile.icon}
       </span>
+      {chevron}
       <CornerBadge badge={props.badge} size="leading" />
+    </span>
+  );
+}
+
+/**
+ * The chevron button in the leading slot. It is a button inside the row's tab,
+ * as the close button is: a click toggles the group and never activates the
+ * row, and Enter and Space on it never reach the row's own key handler.
+ */
+function DisclosureChevron(props: { readonly disclosure: SideTabDisclosure }) {
+  const { disclosure } = props;
+  return (
+    <span
+      className={cn(
+        "absolute inset-0 flex items-center justify-center",
+        REVEAL_CLASS,
+      )}
+    >
+      <button
+        type="button"
+        data-testid="side-tab-disclosure"
+        aria-label={disclosure.label}
+        aria-expanded={disclosure.expanded}
+        aria-controls={disclosure.controlsId}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          // A keyboard click has no pointer position or click count.
+          disclosure.onToggle(event.detail > 0);
+        }}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+        }}
+        className="flex size-4 items-center justify-center rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+      >
+        <ChevronRight
+          aria-hidden
+          data-expanded={disclosure.expanded}
+          className={cn(
+            "size-3.5 data-[expanded=true]:rotate-90",
+            disclosure.animate &&
+              "transition-transform duration-120 ease-out motion-reduce:transition-none",
+          )}
+        />
+      </button>
     </span>
   );
 }
@@ -485,6 +562,7 @@ function ExpandedContent(props: SideTabRowProps) {
           waitingLabel={props.waitingLabel}
           badge={props.badge}
           agents={props.agents}
+          meterHidden={props.disclosure?.expanded === true}
         />
       </span>
     </>
@@ -507,6 +585,8 @@ function TrailingContent(props: {
   readonly waitingLabel: "Approve" | "Reply" | null;
   readonly badge: RailBadgeKind | null;
   readonly agents: SideTabLiveAgents;
+  /** The task's nested agents are showing, so they carry what the meter would. */
+  readonly meterHidden: boolean;
 }) {
   if (props.leaderBadge !== null) return props.leaderBadge;
   const close = props.close;
@@ -558,6 +638,7 @@ function trailingStatus(props: {
   readonly waitingLabel: "Approve" | "Reply" | null;
   readonly badge: RailBadgeKind | null;
   readonly agents: SideTabLiveAgents;
+  readonly meterHidden: boolean;
 }): ReactNode {
   if (props.waitingLabel !== null) {
     return (
@@ -576,8 +657,9 @@ function trailingStatus(props: {
   // One agent is the leading glyph's to show, unless it is a floor: then the
   // meter carries the "+" that says more may be running out of view.
   if (
-    props.agents.turn + props.agents.background > 1 ||
-    sideTabAgentsAreFloor(props.agents)
+    !props.meterHidden &&
+    (props.agents.turn + props.agents.background > 1 ||
+      sideTabAgentsAreFloor(props.agents))
   ) {
     return (
       <SideTabMeter agents={props.agents} attention={props.badge} size="row" />

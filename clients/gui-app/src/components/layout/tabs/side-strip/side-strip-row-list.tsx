@@ -35,9 +35,11 @@ import {
   type SideStripHandlers,
   type SideStripItemProps,
 } from "./side-strip-item-input";
-import { SideStripLiveAgentsSlot } from "./side-strip-live-agents-slot";
 import { SideSplitItem } from "./side-strip-split-item";
 import { SideStripTabRow } from "./side-strip-tab-row";
+import { StripAgentGroup } from "./strip-agent-group";
+import { StripNeedsYouScope } from "./strip-needs-you-scope";
+import { useStripTaskGroup } from "./strip-task-group";
 import { useSideTabJoin } from "./side-tab-join";
 import { SIDE_STRIP_LIST_CLASS } from "./side-strip-tokens";
 import { SideTabGroupHeader } from "./side-tab-group-header";
@@ -104,33 +106,35 @@ export function SideStripRowList(props: {
         "no-scrollbar min-h-0 flex-[0_1_auto] overflow-y-auto overscroll-y-contain [-webkit-app-region:no-drag]",
       )}
     >
-      {rows.map((row) => (
-        <Fragment key={row.itemId}>
-          <GroupStart
-            row={row}
-            run={groupRuns.get(row.stripIndex)}
-            variant={variant}
-            onCloseGroup={controller.onCloseGroup}
-          />
-          {row.hidden ? null : (
-            <SideStripItem
-              itemId={row.itemId}
-              stripIndex={row.stripIndex}
-              offset={controller.offsets.get(row.itemId) ?? 0}
-              memberOffset={row.memberOffset}
-              isActive={row.itemId === activeItemId}
-              dropIndicator={dropIndicatorOf(
-                dropIndicatorIndex,
-                row.stripIndex,
-                lastIndex,
-              )}
+      <StripNeedsYouScope>
+        {rows.map((row) => (
+          <Fragment key={row.itemId}>
+            <GroupStart
+              row={row}
+              run={groupRuns.get(row.stripIndex)}
               variant={variant}
-              groupLine={row.group?.group.color ?? null}
-              handlers={handlers}
+              onCloseGroup={controller.onCloseGroup}
             />
-          )}
-        </Fragment>
-      ))}
+            {row.hidden ? null : (
+              <SideStripItem
+                itemId={row.itemId}
+                stripIndex={row.stripIndex}
+                offset={controller.offsets.get(row.itemId) ?? 0}
+                memberOffset={row.memberOffset}
+                isActive={row.itemId === activeItemId}
+                dropIndicator={dropIndicatorOf(
+                  dropIndicatorIndex,
+                  row.stripIndex,
+                  lastIndex,
+                )}
+                variant={variant}
+                groupLine={row.group?.group.color ?? null}
+                handlers={handlers}
+              />
+            )}
+          </Fragment>
+        ))}
+      </StripNeedsYouScope>
     </div>
   );
 }
@@ -297,6 +301,7 @@ function SideTabItem(
     rowNode,
     props.tab,
   );
+  const group = useStripTaskGroup(props.tab, props.isActive);
   return (
     <m.div
       ref={frameRef}
@@ -322,8 +327,9 @@ function SideTabItem(
         }
         dropIndicator={props.dropIndicator}
         joined={joined}
+        group={group}
       />
-      <SideStripLiveAgentsSlot tab={props.tab} active={props.isActive} />
+      <StripAgentGroup group={group} />
     </m.div>
   );
 }

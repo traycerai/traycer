@@ -5,6 +5,8 @@ import { cn } from "@/lib/utils";
 import type { RailBadgeKind } from "./rail-badge-kind";
 import { sideTabAgentsAreFloor } from "./side-tab-live-agents";
 import {
+  PIP_FILL,
+  type MeterPip,
   SIDE_TAB_METER_CLASS,
   SIDE_TAB_METER_MORE_CLASS,
   SIDE_TAB_METER_PIP_CLASS,
@@ -26,22 +28,11 @@ const METER_MAX_PIPS = 4;
 /** The breathing pips' stagger, so a run of them reads as a wave. */
 const BREATHE_STAGGER_MS = 250;
 
-type MeterPip = "turn" | "background" | "waiting" | "failed" | "unread";
-
 const ATTENTION_PIP: Readonly<Record<RailBadgeKind, MeterPip>> = {
   approval: "waiting",
   reply: "waiting",
   failed: "failed",
   unread: "unread",
-};
-
-const PIP_FILL: Readonly<Record<MeterPip, string>> = {
-  turn: "bg-muted-foreground",
-  background: "ring-1 ring-inset ring-muted-foreground",
-  waiting: "bg-warning",
-  failed: "bg-destructive",
-  // The completed tone's green, verified >=3:1 on the strip's grounds.
-  unread: "bg-success-foreground",
 };
 
 /**

@@ -17,7 +17,10 @@ import type { ResourceMetric } from "@/lib/layout/layout-values";
 import type { PrLightItem } from "@traycer/protocol/host/pr-schemas";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { MessageSegment } from "@/stores/composer/chat-store";
-import type { LiveAgentKind } from "@/components/epic-canvas/sidebar/live-agent-row";
+import type {
+  StripAgent,
+  StripAgentStatus,
+} from "@/components/layout/tabs/side-strip/strip-task-agents";
 import type { NeedsYouItem } from "@/stores/notifications/needs-you-items";
 
 /**
@@ -375,38 +378,27 @@ export const SAMPLE_SIDEBAR_AGENTS: ReadonlyArray<{
   },
 ];
 
-export interface SampleLiveAgent {
-  readonly nodeId: string;
-  readonly title: string;
-  readonly kind: LiveAgentKind;
-  /** How many live agents it sits under. */
-  readonly depth: number;
-  readonly updatedAt: number;
-}
-
 /**
- * The same three agents as the Activity view lists them under the task's tab
- * (D9), one in each state that reads differently there: waiting on a reply
- * (its chip in place of a time), working, nested under the first, and stopped
- * on an error. The canvas's strip and every picture of it draw these.
+ * The same three agents as the Activity view nests them under the task's tab
+ * (D9), in its list order and one in each state that reads differently there:
+ * waiting on a reply, stopped on an error, and working. The canvas's strip and
+ * every picture of it draw these.
  */
-export const SAMPLE_LIVE_AGENTS: ReadonlyArray<SampleLiveAgent> = [
-  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[0], "interview", 0),
-  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[1], "running", 1),
-  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[2], "failure", 0),
+export const SAMPLE_LIVE_AGENTS: ReadonlyArray<StripAgent> = [
+  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[0], "waiting"),
+  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[2], "failed"),
+  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[1], "turn"),
 ];
 
 function sampleLiveAgent(
   agent: (typeof SAMPLE_SIDEBAR_AGENTS)[number],
-  kind: LiveAgentKind,
-  depth: number,
-): SampleLiveAgent {
+  status: StripAgentStatus,
+): StripAgent {
   return {
-    nodeId: agent.id,
+    id: agent.id,
     title: agent.title,
-    kind,
-    depth,
-    updatedAt: SAMPLE_EPOCH - agent.idleMinutes * MINUTE_MS,
+    status,
+    since: SAMPLE_EPOCH - agent.idleMinutes * MINUTE_MS,
   };
 }
 
@@ -422,7 +414,7 @@ export const SAMPLE_NEEDS_YOU_ITEMS: ReadonlyArray<NeedsYouItem> = [
       feedId: "sample-needs-you-1",
       source: "host",
       sourceId: "sample-needs-you-1",
-      createdAt: SAMPLE_LIVE_AGENTS[0].updatedAt,
+      createdAt: SAMPLE_LIVE_AGENTS[0].since,
       readAt: null,
       title: SAMPLE_TASK_TITLE,
       body: "",
@@ -442,7 +434,7 @@ export const SAMPLE_NEEDS_YOU_ITEMS: ReadonlyArray<NeedsYouItem> = [
     ask: "Question waiting",
     taskTitle: SAMPLE_TASK_TITLE,
     agentTitle: SAMPLE_LIVE_AGENTS[0].title,
-    createdAt: SAMPLE_LIVE_AGENTS[0].updatedAt,
+    createdAt: SAMPLE_LIVE_AGENTS[0].since,
   },
 ];
 

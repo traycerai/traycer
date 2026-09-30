@@ -6,6 +6,7 @@ import { NotificationFeedModeContext } from "@/lib/notifications/notification-fe
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
+  groupNeedsYouByEpic,
   needsYouReasonOf,
   selectNeedsYouItems,
   useNeedsYouItems,
@@ -133,6 +134,57 @@ describe("selectNeedsYouItems", () => {
       (row) => (row.feedId === "host:x" ? "Deploy agent" : null),
     );
     expect(items[0]?.agentTitle).toBe("Deploy agent");
+  });
+});
+
+describe("groupNeedsYouByEpic", () => {
+  it("groups approvals and interviews by the epic they name, dropping an epic-less approval", () => {
+    const items = selectNeedsYouItems(
+      [
+        buildRow({ feedId: "host:a", sourceId: "a" }),
+        buildRow({
+          feedId: "host:b",
+          sourceId: "b",
+          hostKind: "interview.requested",
+          payload: INTERVIEW_PAYLOAD,
+        }),
+        buildRow({
+          feedId: "host:c",
+          sourceId: "c",
+          hostKind: "interview.requested",
+          payload: {
+            kind: "interview",
+            epicId: "epic-2",
+            chatId: "chat-2",
+            interviewBlockId: undefined,
+          },
+        }),
+        buildRow({
+          feedId: "host:d",
+          sourceId: "d",
+          payload: {
+            kind: "approval",
+            epicId: undefined,
+            chatId: "chat-1",
+            approvalId: "approval-1",
+            sessionId: undefined,
+            artifactId: undefined,
+          },
+        }),
+      ],
+      () => null,
+    );
+
+    const groups = groupNeedsYouByEpic(items);
+
+    expect([...groups.keys()]).toEqual(["epic-1", "epic-2"]);
+    expect(groups.get("epic-1")?.map((item) => item.row.sourceId)).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(groups.get("epic-2")?.map((item) => item.row.sourceId)).toEqual([
+      "c",
+    ]);
   });
 });
 

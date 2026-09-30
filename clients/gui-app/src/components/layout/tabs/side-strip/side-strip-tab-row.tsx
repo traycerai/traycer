@@ -17,6 +17,11 @@ import { railBadgeOf } from "./rail-badge-kind";
 import type { DropIndicator } from "./side-strip-item-input";
 import { SIDE_TAB_TITLE_INPUT_CLASS } from "./side-strip-tokens";
 import {
+  stripAgentGroupId,
+  stripTaskRowId,
+  type StripTaskGroup,
+} from "./strip-task-group";
+import {
   SideTabRow,
   type SideGroupLine,
   type SideTabRowVariant,
@@ -39,6 +44,8 @@ export function SideStripTabRow(props: {
   readonly dropIndicator: DropIndicator;
   /** How this row joins its task's sheet; `null` for a plain row. */
   readonly joined: SheetJoin | null;
+  /** The agents nested under this row, whose chevron and state it carries. */
+  readonly group: StripTaskGroup | null;
 }): ReactNode {
   const { item, input, rootRef } = props;
   const { tab, isActive } = input;
@@ -48,6 +55,7 @@ export function SideStripTabRow(props: {
   const pairPreview = useTopLevelStripPairPreview(tab.kind, tab.id);
   const agents = useSideTabLiveAgents(epicId);
   const badge = railBadgeOf(item.indicatorState);
+  const groupDisclosure = props.group?.disclosure ?? null;
   // The bare status glyph: the custom icon, when there is one, is the tile.
   const leading = (
     <TabLeadingIcon
@@ -67,6 +75,13 @@ export function SideStripTabRow(props: {
             ...item.dragListeners,
             ...item.rootProps,
             ...joinedAttribute(props.joined),
+            id: stripTaskRowId(tab.id),
+            ...(groupDisclosure === null
+              ? {}
+              : {
+                  "aria-expanded": groupDisclosure.expanded,
+                  "aria-controls": stripAgentGroupId(tab.id),
+                }),
             ref: rootRef,
             className: "cursor-pointer [-webkit-app-region:no-drag]",
           }}
@@ -89,6 +104,17 @@ export function SideStripTabRow(props: {
           }
           badge={badge}
           agents={agents}
+          disclosure={
+            groupDisclosure === null
+              ? null
+              : {
+                  expanded: groupDisclosure.expanded,
+                  animate: groupDisclosure.animate,
+                  controlsId: stripAgentGroupId(tab.id),
+                  label: `${groupDisclosure.expanded ? "Hide" : "Show"} agents in ${item.displayName}`,
+                  onToggle: groupDisclosure.toggle,
+                }
+          }
           title={
             item.rename.isEditing ? (
               <StripTabTitleInput

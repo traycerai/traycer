@@ -166,6 +166,7 @@ function OverlayMember(props: {
       tile={{ kind: "icon", icon }}
       badge={null}
       agents={NO_LIVE_AGENTS}
+      disclosure={null}
       title={label}
       hoverCardBody={label}
       leaderBadge={null}
@@ -226,6 +227,7 @@ function OverlayTabRow(props: {
       })}
       badge={railBadgeOf(indicatorState)}
       agents={agents}
+      disclosure={null}
       title={displayName}
       hoverCardBody={displayName}
       leaderBadge={null}

@@ -46,6 +46,15 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
+import { tabItemId } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
+import type { TabRef } from "@/stores/tabs/types";
+import {
+  __resetAgentActivityStoreForTests,
+  __setAgentActivityStateForTests,
+} from "@/stores/agent-activity-store";
+import { chatProjection, coolAllEpics, warmEpic } from "./warm-epic-fixture";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
@@ -157,6 +166,13 @@ function renderHarness(tree: ReactNode): void {
 function resetSharedState(): void {
   __resetTabNavigationControllerForTesting();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  useTabsStore.setState(useTabsStore.getInitialState(), true);
+  useLayoutEditorStore.setState({
+    hoveredSetting: null,
+    selectedSetting: null,
+  });
+  coolAllEpics();
+  __resetAgentActivityStoreForTests();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useSideTabStripStore.setState({ collapsed: false });
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
@@ -439,5 +455,89 @@ describe("SideStripNeedsYou, framing the sample scene (B1)", () => {
     // Were the sample branch removed, this would resolve to the real,
     // seeded row instead, and the click above would call `activateSpy`.
     expect(activateSpy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The sample tab is the strip's only nested group under the scene: it draws
+   * the sample agents, and a real, busy, warm task with a prompt waiting
+   * nests nothing, so none of the person's own agents or prompts appear.
+   */
+  function seedRealTaskBesideSampleTab(): void {
+    const realRef: TabRef = { kind: "epic", id: "epic-1" };
+    const sampleRef: TabRef = {
+      kind: "sample-workspace",
+      id: "sample-workspace",
+    };
+    useEpicCanvasStore
+      .getState()
+      .seedEpic("epic-1", { tabId: "epic-1", name: "Real task" }, []);
+    useTabsStore.setState({
+      version: 2,
+      items: [realRef, sampleRef].map((ref) => ({
+        kind: "tab",
+        id: tabItemId(ref),
+        ref,
+      })),
+      activeItemId: tabItemId(sampleRef),
+      stripOrder: [realRef, sampleRef],
+      systemTabs: { history: null, settings: null },
+    });
+    warmEpic("epic-1", [chatProjection("chat-1", { title: "Real agent" })]);
+    __setAgentActivityStateForTests(
+      { "epic-1": { working: ["chat-1"], turn: ["chat-1"] } },
+      "local",
+      "connected",
+    );
+    seedApprovals(1);
+  }
+
+  it("nests the sample agents under the sample tab and nothing under a real task", async () => {
+    activateActivityView();
+    seedRealTaskBesideSampleTab();
+    renderStripInSampleScene(true);
+    await screen.findByTestId("side-tab-strip");
+
+    const group = await screen.findByTestId("strip-agent-group");
+    expect(screen.getAllByTestId("strip-agent-group")).toHaveLength(1);
+    expect(
+      screen
+        .getByTestId("tab-sample-workspace-sample-workspace")
+        .getAttribute("aria-controls"),
+    ).toBeNull();
+    expect(group.getAttribute("aria-labelledby")).toBe(
+      "side-tab-row-sample-workspace",
+    );
+    expect(
+      within(group)
+        .getAllByRole("button")
+        .map((row) => row.getAttribute("data-status")),
+    ).toEqual(["waiting", "failed", "turn"]);
+    expect(group.textContent).not.toContain("Real agent");
+    expect(screen.queryByTestId("strip-agent-chat-1")).toBeNull();
+    expect(screen.queryByTestId("strip-agent-host:approval-0")).toBeNull();
+  });
+
+  it("draws the sample agents ghosted in Tabs only while the editor points at Side tab view", async () => {
+    act(() => {
+      useLayoutStore.setState({
+        arrangement: {
+          ...DEFAULT_ARRANGEMENT,
+          tabStripPlacement: "left",
+          sideStripView: "layered",
+        },
+      });
+      useLayoutEditorStore.getState().setHoveredSetting("sideStripView");
+    });
+    seedRealTaskBesideSampleTab();
+    renderStripInSampleScene(true);
+    await screen.findByTestId("side-tab-strip");
+
+    const group = await screen.findByTestId("strip-agent-group");
+    expect(group.getAttribute("data-ghost")).toBe("1");
+
+    act(() => {
+      useLayoutEditorStore.getState().setHoveredSetting(null);
+    });
+    expect(screen.queryByTestId("strip-agent-group")).toBeNull();
   });
 });

@@ -78,6 +78,7 @@ function baseProps(): SideTabRowProps {
     tile: { kind: "monogram", text: "FL" },
     badge: null,
     agents: NO_LIVE_AGENTS,
+    disclosure: null,
     title: "Fix login",
     hoverCardBody: <div data-testid="hover-card-probe">Fix login</div>,
     leaderBadge: null,

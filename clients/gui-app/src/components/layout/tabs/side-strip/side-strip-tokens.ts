@@ -137,6 +137,49 @@ export const SIDE_TAB_TILE_CLASS = "h-11 w-10 rounded-xl flex-col gap-1";
 /** The collapsed tile's active and hover fills: the expanded row's own. */
 export const SIDE_TAB_TILE_ACTIVE_CLASS = "bg-foreground/8 text-foreground";
 export const SIDE_TAB_TILE_HOVER_CLASS = "hover:bg-foreground/5";
+/** A state a meter pip, and a nested agent row's dot, can draw. */
+export type MeterPip = "turn" | "background" | "waiting" | "failed" | "unread";
+/**
+ * What each pip kind fills with. The strip's nested agent rows draw their dot
+ * from it too, so a task's meter and its rows never say one state two ways.
+ */
+export const PIP_FILL: Readonly<Record<MeterPip, string>> = {
+  turn: "bg-muted-foreground",
+  background: "ring-1 ring-inset ring-muted-foreground",
+  waiting: "bg-warning",
+  failed: "bg-destructive",
+  // The completed tone's green, verified >=3:1 on the strip's grounds.
+  unread: "bg-success-foreground",
+};
+/**
+ * A task's nested agents in the Activity view (D9): a column under the task's
+ * row with a 1px guide down its inline-start edge, the Agents panel tree's own
+ * (`bg-border/70`). The guide sits 15px in, under the middle of the row's 16px
+ * leading slot (8px padding plus half the slot). No elbows, no colour.
+ */
+export const STRIP_AGENT_GROUP_CLASS =
+  "flex flex-col ms-3.75 border-s border-border/70";
+/**
+ * A nested agent row: 26px tall, 12px text, muted at rest, with the strip's
+ * own hover tint. The 24px start padding puts the dot column on the task
+ * title's start edge (the row's 8px padding, the 16px leading slot, its 8px
+ * badge space and the row's 8px gap, less the guide's 1px and its 15px
+ * margin), and the gap takes the name one step past.
+ */
+export const STRIP_AGENT_ROW_CLASS = cn(
+  "flex h-6.5 w-full min-w-0 items-center gap-2 rounded-md ps-6 pe-2 text-start text-ui-xs text-muted-foreground outline-none select-none",
+  "transition-colors duration-100 ease-[ease] hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 [-webkit-app-region:no-drag]",
+  SIDE_TAB_TILE_HOVER_CLASS,
+);
+/** The dot: the meter's pip fill (`PIP_FILL`) on a 6px disc. */
+export const STRIP_AGENT_DOT_CLASS = "size-1.5 shrink-0 rounded-full";
+/** An expanded task shows this many agents, then "Show N more". */
+export const STRIP_AGENT_VISIBLE_MAX = 5;
+/** The trailing text never truncates: the name gives way first. */
+export const STRIP_AGENT_TRAILING_CLASS = "shrink-0 tabular-nums";
+/** Nested rows fade in over 120ms with no height slide; reduced motion drops it. */
+export const STRIP_AGENT_FADE_IN_CLASS =
+  "animate-in fade-in-0 duration-120 ease-out motion-reduce:animate-none";
 /**
  * The strip's own ground, so a badge reads as cut out of what it sits on: the
  * canvas on a narrow window, the shell ground on a wide one.

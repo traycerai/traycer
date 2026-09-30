@@ -62,6 +62,7 @@ function SideHomeRowBody(props: SideHomeRowProps): ReactNode {
       tile={{ kind: "icon", icon }}
       badge={null}
       agents={NO_LIVE_AGENTS}
+      disclosure={null}
       title={HOME_LABEL}
       hoverCardBody={HOME_LABEL}
       leaderBadge={null}

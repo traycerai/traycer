@@ -30,6 +30,12 @@ import {
 } from "@tanstack/react-router";
 import { pointerEvent } from "@/components/epic-canvas/canvas/__tests__/test-pointer-events";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
+import { useStripDisclosureStore } from "@/components/layout/tabs/side-strip/strip-disclosure";
+import {
+  chatProjection,
+  coolAllEpics,
+  warmEpic,
+} from "@/components/layout/tabs/side-strip/__tests__/warm-epic-fixture";
 import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
 import {
   SIDE_STRIP_RAIL_WIDTH_PX,
@@ -47,6 +53,15 @@ import {
 import type { EdgeSide } from "@/lib/layout/layout-arrangement";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
+import type { HostNotificationEntryV22 } from "@traycer/protocol/host/notifications/contracts";
+import {
+  __resetAgentActivityStoreForTests,
+  __setAgentActivityStateForTests,
+} from "@/stores/agent-activity-store";
+import {
+  __resetHostNotificationsStoreForTests,
+  useHostNotificationsStore,
+} from "@/stores/notifications/host-notifications-store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
@@ -238,6 +253,13 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
 vi.mock("@/hooks/notifications/use-notification-host", () => ({
   useNotificationResolveHostId: () => null,
   useNotificationResolveHost: () => ({ hostId: null, client: null }),
+}));
+
+// The notification's activation pipeline is `useNotificationActivation`'s own
+// suite; a cold task's needs-you row only has to hand its row to it.
+const activateSpy = vi.hoisted(() => vi.fn());
+vi.mock("@/hooks/notifications/use-notification-activation", () => ({
+  useNotificationActivation: () => ({ activate: activateSpy }),
 }));
 
 // The account row's real `UserMenu` reaches `useRunnerHost()`, which this
@@ -881,39 +903,268 @@ describe("<SideTabStrip />", () => {
     expect(screen.queryByTestId("split-quick-actions-split-a")).toBeNull();
   });
 
-  describe("the split pair's live-agents slot placement (D9, finding 7)", () => {
-    it.each([
-      { focusedSide: "left" as const },
-      { focusedSide: "right" as const },
-    ])(
-      "places the slot right after the focused member, inside the pair ($focusedSide focused)",
-      async ({ focusedSide }) => {
-        openSplitPair(focusedSide);
-        setSideStripView("activity");
-        await renderStrip("/elsewhere", LEFT_STRIP);
+  describe("the Activity view's nested agents (D9)", () => {
+    const NO_FLAGS = {
+      pendingApproval: false,
+      pendingInterview: false,
+      pendingFork: false,
+      unreadFailure: false,
+      unreadDone: false,
+    };
 
-        const pair = screen.getByTestId("split-tab-group-split-a");
-        const leftRow = within(pair).getByTestId("tab-epic-e-alpha");
-        const rightRow = within(pair).getByTestId("tab-epic-e-beta");
-        const seam = within(pair).getByTestId("side-split-row-pair-seam");
-        const slot = within(pair).getByTestId("side-strip-live-agents-slot");
-        expect(pair.contains(slot)).toBe(true);
+    beforeEach(() => {
+      setSideStripView("activity");
+      activateSpy.mockClear();
+    });
 
-        const follows = (a: HTMLElement, b: HTMLElement): boolean =>
-          (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !==
-          0;
+    afterEach(() => {
+      coolAllEpics();
+      __resetAgentActivityStoreForTests();
+      __resetHostNotificationsStoreForTests();
+      useStripDisclosureStore.setState({ expanded: {} });
+      indicatorState.value = { epics: {}, chats: {} };
+      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    });
 
-        if (focusedSide === "left") {
-          expect(follows(leftRow, slot)).toBe(true);
-          expect(follows(slot, seam)).toBe(true);
-          expect(follows(seam, rightRow)).toBe(true);
-        } else {
-          expect(follows(leftRow, seam)).toBe(true);
-          expect(follows(seam, rightRow)).toBe(true);
-          expect(follows(rightRow, slot)).toBe(true);
-        }
-      },
-    );
+    function busy(epicId: string, turn: ReadonlyArray<string>): void {
+      __setAgentActivityStateForTests(
+        { [epicId]: { working: [...turn], turn: [...turn] } },
+        "local",
+        "connected",
+      );
+    }
+
+    function agentIds(group: HTMLElement): ReadonlyArray<string | null> {
+      return Array.from(
+        group.querySelectorAll('[data-testid^="strip-agent-"]'),
+      ).map((node) => node.getAttribute("data-testid"));
+    }
+
+    function seedApproval(epicId: string): void {
+      const entry: HostNotificationEntryV22 = {
+        id: "approval-0",
+        updatedAt: 10,
+        readAt: null,
+        kind: "approval.requested",
+        sourceRef: "approval-0",
+        severity: "needs_action",
+        outcome: null,
+        resolvedAt: null,
+        epicId,
+        chatId: "chat-cold",
+        payload: {
+          kind: "approval",
+          epicId,
+          chatId: "chat-cold",
+          chatTitle: "Deploy agent",
+          taskTitle: "Task",
+          approvalId: "approval-0",
+        },
+      };
+      act(() => {
+        useHostNotificationsStore.getState().applySnapshot({
+          attention: { entries: [entry], nextCursor: null },
+          recent: { entries: [entry], nextCursor: null },
+          summary: { unreadCount: 1, attentionCount: 1 },
+        });
+      });
+    }
+
+    it("nests a warm task's agents in a group its row names, and the chevron folds it to the agents waiting on you", async () => {
+      openEpicTabs(["Alpha"]);
+      warmEpic("e-alpha", [
+        chatProjection("c-run", { title: "Runs", updatedAt: 1 }),
+        chatProjection("c-wait", { title: "Waits", updatedAt: 2 }),
+        chatProjection("c-bg", { title: "Watches", updatedAt: 3 }),
+      ]);
+      __setAgentActivityStateForTests(
+        { "e-alpha": { working: ["c-run", "c-bg"], turn: ["c-run"] } },
+        "local",
+        "connected",
+      );
+      indicatorState.value = {
+        epics: {},
+        chats: { "c-wait": { ...NO_FLAGS, pendingApproval: true } },
+      };
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const row = screen.getByTestId("tab-epic-e-alpha");
+      const group = screen.getByTestId("strip-agent-group");
+      expect(group.getAttribute("role")).toBe("group");
+      expect(group.getAttribute("aria-labelledby")).toBe(row.id);
+      expect(row.getAttribute("aria-controls")).toBe(group.id);
+      // The active task opens expanded.
+      expect(row.getAttribute("aria-expanded")).toBe("true");
+      expect(agentIds(group)).toEqual([
+        "strip-agent-c-wait",
+        "strip-agent-c-run",
+        "strip-agent-c-bg",
+      ]);
+      // Agents are plain buttons in a tablist that still holds only tabs.
+      expect(within(group).queryAllByRole("tab")).toHaveLength(0);
+      expect(group.querySelector("[aria-selected]")).toBeNull();
+
+      fireEvent.click(within(row).getByTestId("side-tab-disclosure"));
+
+      expect(row.getAttribute("aria-expanded")).toBe("false");
+      expect(agentIds(screen.getByTestId("strip-agent-group"))).toEqual([
+        "strip-agent-c-wait",
+      ]);
+    });
+
+    it("toggles another task's agents from its chevron without activating the task, on Enter as on a click, swapping the meter for the rows", async () => {
+      openEpicTabs(["Alpha", "Beta"]);
+      warmEpic("e-beta", [
+        chatProjection("b-run", { title: "B runs" }),
+        chatProjection("b-run-2", { title: "B runs too" }),
+      ]);
+      busy("e-beta", ["b-run", "b-run-2"]);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const beta = screen.getByTestId("tab-epic-e-beta");
+      const chevron = within(beta).getByTestId("side-tab-disclosure");
+      expect(beta.getAttribute("aria-expanded")).toBe("false");
+      // Collapsed with nobody waiting: the group it controls is hidden.
+      expect(screen.getByTestId("strip-agent-group").hidden).toBe(true);
+      expect(within(beta).getByTestId("side-tab-meter")).toBeTruthy();
+
+      // The row activates on Enter; the chevron inside it must not.
+      fireEvent.keyDown(chevron, { key: "Enter" });
+      await flushNav();
+      expect(beta.getAttribute("aria-selected")).toBe("false");
+
+      fireEvent.click(chevron);
+      await flushNav();
+
+      expect(beta.getAttribute("aria-expanded")).toBe("true");
+      expect(beta.getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByTestId("strip-agent-group").hidden).toBe(false);
+      expect(screen.getByTestId("strip-agent-b-run")).toBeTruthy();
+      expect(within(beta).queryByTestId("side-tab-meter")).toBeNull();
+    });
+
+    it("gives a cold task no chevron, only its needs-you row, opened through the notification's activation", async () => {
+      openEpicTabs(["Alpha"]);
+      seedApproval("e-alpha");
+      busy("e-alpha", ["agent-1"]);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const row = screen.getByTestId("tab-epic-e-alpha");
+      expect(within(row).queryByTestId("side-tab-disclosure")).toBeNull();
+      expect(row.hasAttribute("aria-expanded")).toBe(false);
+      const group = screen.getByTestId("strip-agent-group");
+      expect(agentIds(group)).toEqual(["strip-agent-host:approval-0"]);
+      const needsYou = within(group).getByTestId("strip-agent-host:approval-0");
+      expect(needsYou.getAttribute("data-status")).toBe("waiting");
+
+      fireEvent.click(needsYou);
+
+      expect(activateSpy).toHaveBeenCalledTimes(1);
+      expect(activateSpy.mock.calls[0][0]).toMatchObject({
+        feedId: "host:approval-0",
+      });
+    });
+
+    it("shows five agents, then Show N more, which expands the rest in place", async () => {
+      openEpicTabs(["Alpha"]);
+      const ids = ["a1", "a2", "a3", "a4", "a5", "a6", "a7"];
+      warmEpic(
+        "e-alpha",
+        ids.map((id, index) =>
+          chatProjection(id, { title: id, updatedAt: index }),
+        ),
+      );
+      busy("e-alpha", ids);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const group = screen.getByTestId("strip-agent-group");
+      expect(agentIds(group)).toHaveLength(6);
+      expect(within(group).getAllByRole("button")).toHaveLength(6);
+      const more = within(group).getByTestId("strip-agent-show-more");
+      expect(more.textContent).toBe("Show 2 more");
+
+      fireEvent.click(more);
+
+      const rest = screen.getByTestId("strip-agent-group");
+      expect(within(rest).queryByTestId("strip-agent-show-more")).toBeNull();
+      expect(within(rest).getAllByRole("button")).toHaveLength(7);
+    });
+
+    it("opens an agent's chat in its task's canvas, activating the task first when it is not in front", async () => {
+      openEpicTabs(["Alpha", "Beta"]);
+      warmEpic("e-alpha", [chatProjection("a-1", { title: "Alpha agent" })]);
+      warmEpic("e-beta", [chatProjection("b-1", { title: "Beta agent" })]);
+      __setAgentActivityStateForTests(
+        {
+          "e-alpha": { working: ["a-1"], turn: ["a-1"] },
+          "e-beta": { working: ["b-1"], turn: ["b-1"] },
+        },
+        "local",
+        "connected",
+      );
+      await renderStrip("/elsewhere", LEFT_STRIP);
+      const tilesOf = (tabId: string): ReadonlyArray<string | undefined> =>
+        Object.values(
+          useEpicCanvasStore.getState().canvasByTabId[tabId]
+            ?.tilesByInstanceId ?? {},
+        ).map((tile) => tile?.id);
+
+      fireEvent.click(screen.getByTestId("strip-agent-a-1"));
+      expect(tilesOf("e-alpha")).toContain("a-1");
+
+      // Beta is a warm task that is not in front: its group is collapsed
+      // until expanded, and opening from it brings its task to the front.
+      fireEvent.click(
+        within(screen.getByTestId("tab-epic-e-beta")).getByTestId(
+          "side-tab-disclosure",
+        ),
+      );
+      fireEvent.click(screen.getByTestId("strip-agent-b-1"));
+      await flushNav();
+
+      expect(tilesOf("e-beta")).toContain("b-1");
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("tab-epic-e-beta").getAttribute("aria-selected"),
+        ).toBe("true");
+      });
+    });
+
+    it("nests each busy half of a split pair right under its own row, inside the pair's fill and either side of the seam", async () => {
+      openSplitPair("left");
+      warmEpic("e-alpha", [chatProjection("s-left", { title: "Left agent" })]);
+      warmEpic("e-beta", [chatProjection("s-right", { title: "Right agent" })]);
+      __setAgentActivityStateForTests(
+        { "e-alpha": { working: ["s-left"], turn: ["s-left"] } },
+        "local",
+        "connected",
+      );
+      // The unfocused half is collapsed, so only its waiting agent shows.
+      indicatorState.value = {
+        epics: {},
+        chats: { "s-right": { ...NO_FLAGS, pendingApproval: true } },
+      };
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const pair = screen.getByTestId("split-tab-group-split-a");
+      const leftRow = within(pair).getByTestId("tab-epic-e-alpha");
+      const rightRow = within(pair).getByTestId("tab-epic-e-beta");
+      const seam = within(pair).getByTestId("side-split-row-pair-seam");
+      const leftAgent = within(pair).getByTestId("strip-agent-s-left");
+      const rightAgent = within(pair).getByTestId("strip-agent-s-right");
+      expect(
+        leftAgent.closest('[role="group"]')?.getAttribute("aria-labelledby"),
+      ).toBe(leftRow.id);
+      expect(
+        rightAgent.closest('[role="group"]')?.getAttribute("aria-labelledby"),
+      ).toBe(rightRow.id);
+      const follows = (a: HTMLElement, b: HTMLElement): boolean =>
+        (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+      expect(follows(leftRow, leftAgent)).toBe(true);
+      expect(follows(leftAgent, seam)).toBe(true);
+      expect(follows(seam, rightRow)).toBe(true);
+      expect(follows(rightRow, rightAgent)).toBe(true);
+    });
   });
 
   it("shows the waiting chip on a row whose agent waits for a reply", async () => {

@@ -51,6 +51,37 @@ export function needsYouReasonOf(
   return null;
 }
 
+/**
+ * The task a prompt belongs to: the epic its notification payload names, or
+ * `null` when the payload names none (an approval may carry no epic).
+ */
+function needsYouItemEpicId(item: NeedsYouItem): string | null {
+  const payload = item.row.payload;
+  if (payload?.kind === "approval" || payload?.kind === "interview") {
+    return payload.epicId ?? null;
+  }
+  return null;
+}
+
+/**
+ * The prompts grouped by the task they belong to, in the order given. An item
+ * that names no task is in no group. The strip's task rows read their
+ * prompts through this.
+ */
+export function groupNeedsYouByEpic(
+  items: ReadonlyArray<NeedsYouItem>,
+): ReadonlyMap<string, ReadonlyArray<NeedsYouItem>> {
+  const byEpic = new Map<string, NeedsYouItem[]>();
+  for (const item of items) {
+    const epicId = needsYouItemEpicId(item);
+    if (epicId === null) continue;
+    const group = byEpic.get(epicId);
+    if (group === undefined) byEpic.set(epicId, [item]);
+    else group.push(item);
+  }
+  return byEpic;
+}
+
 /** The chat title a prompt entry carries, for the item's "task · agent" line. */
 function agentTitleOfEntry(entry: HostNotificationEntryV22): string | null {
   const known = parseKnownHostNotificationPayloadForKind(
