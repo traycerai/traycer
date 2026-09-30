@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildBearerHeadersFromContext,
   createRequestContext,
+  CredentialLeaseReleasedError,
   type AuthenticatedIdentity,
   type RequestContext,
   type RequestContextOrigin,
@@ -127,4 +128,55 @@ describe("RequestContext cloud verdict", () => {
     ctx.abort("test");
     expect(() => buildHeaders(ctx)).toThrow(/has been aborted/);
   });
+
+  /**
+   * The request-ended arms keep the released lease as the thrown error's
+   * `cause`, so a log site can tell a request that ended from a credential
+   * that was refused outright. Only those two arms set a cause - the
+   * no-verdict refusal below does not, because nothing was released there.
+   */
+  it("attaches a fresh CredentialLeaseReleasedError as the cause when aborted", () => {
+    const ctx = newContext({ origin: "host-rpc", cloudAuthorized: true });
+    ctx.abort("test");
+
+    const error = thrownBy(() => buildHeaders(ctx));
+
+    expect(error).toBeInstanceOf(TestCloudUnauthorizedError);
+    expect((error as TestCloudUnauthorizedError).cause).toBeInstanceOf(
+      CredentialLeaseReleasedError,
+    );
+  });
+
+  it("attaches the EXACT released-lease error as the cause when the lease was released", () => {
+    const ctx = newContext({ origin: "host-rpc", cloudAuthorized: true });
+    const releasedError = new CredentialLeaseReleasedError(
+      "Credential lease is no longer valid",
+    );
+    vi.spyOn(ctx.credentials, "getBearerToken").mockImplementation(() => {
+      throw releasedError;
+    });
+
+    const error = thrownBy(() => buildHeaders(ctx));
+
+    expect(error).toBeInstanceOf(TestCloudUnauthorizedError);
+    expect((error as TestCloudUnauthorizedError).cause).toBe(releasedError);
+  });
+
+  it("sets no cause when refusing for a missing cloud verdict", () => {
+    const ctx = newContext({ origin: "host-rpc", cloudAuthorized: false });
+
+    const error = thrownBy(() => buildHeaders(ctx));
+
+    expect(error).toBeInstanceOf(TestCloudUnauthorizedError);
+    expect((error as TestCloudUnauthorizedError).cause).toBeUndefined();
+  });
 });
+
+function thrownBy(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected fn to throw");
+}

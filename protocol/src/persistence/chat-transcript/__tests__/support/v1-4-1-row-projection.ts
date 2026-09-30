@@ -1251,19 +1251,6 @@ const MAX_TURNS_AFTER_OPEN_TURN = 32;
  */
 const MAX_TURNS_AFTER_LAST_USER = 8;
 
-/**
- * The attempts a span needs for the profile walk to mark every attempt in it.
- *
- * It also bounds what the walk region keeps of the span it continues: a span
- * that holds this many marks every attempt it gains, and nothing the region
- * adds or loses unmarks the ones before it, so its first attempts are all a
- * later walk needs of it. Keeping every attempt re-read each one's facts and
- * stored rows on every change - O(attempts) per append, for a chat an agent
- * keeps answering with no user record in between. See
- * {@link TranscriptWalkRegion.spanKeysBefore}.
- */
-const MARKING_SPAN_ATTEMPTS = 2;
-
 /** What the walk reads of one turn, folded from its records' fold facts. */
 interface FoldTurnFacts {
   readonly firstPosition: number;
@@ -2193,7 +2180,7 @@ export function* foldTranscriptRows(
 
     const markingSpans = new Map<string, number[]>();
     spans.forEach((keys, index) => {
-      if (keys.length < MARKING_SPAN_ATTEMPTS) return;
+      if (keys.length < 2) return;
       for (const turnKey of keys) {
         markingSpans.set(turnKey, [
           ...(markingSpans.get(turnKey) ?? []),
@@ -2228,11 +2215,7 @@ export function* foldTranscriptRows(
       (walkRegion.from === null || seat > walkRegion.from)
     ) {
       const spanIndex = seated.spanIndex;
-      // At most the span's first attempts: see `MARKING_SPAN_ATTEMPTS`.
-      const keysBefore = spans[spanIndex].slice(
-        0,
-        Math.min(seated.keysBefore, MARKING_SPAN_ATTEMPTS),
-      );
+      const keysBefore = spans[spanIndex].slice(0, seated.keysBefore);
       nextRegion = {
         from: seat,
         anchorBefore: seated.entry.sessionAnchor,
