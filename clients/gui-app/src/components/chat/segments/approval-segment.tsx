@@ -49,7 +49,7 @@ export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
       // The whole input on one line, cut by the header's own `truncate` at the
       // row's width (`toolHeaderLine`); the body below still compares against
       // the persisted summary.
-      inputSummary={toolHeaderLine(inputSummary, inputDetail)}
+      inputSummary={toolHeaderLine(toolName, inputSummary, inputDetail)}
       decision={decision}
     />
   );

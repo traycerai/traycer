@@ -6,7 +6,10 @@
  * can't drift between the activity view and the progress view.
  */
 
-import { quoteArg } from "@traycer/protocol/host/agent/gui/tool-input-detail";
+import {
+  parseReconstructedGrep,
+  quoteArg,
+} from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import type { ToolInputDetail } from "@traycer/protocol/persistence/epic/content-blocks";
 
 const SUMMARY_MAX = 80;
@@ -56,35 +59,64 @@ export function toSummaryLine(value: string): string | null {
   return singleLine.length === 0 ? null : singleLine;
 }
 
+// A string the detail stored for a non-string input (`stringifyValue`: a
+// number, boolean, array or object) back as that value, so a summarizer that
+// reads `startLine` as a number or `artifactPaths` as an array sees what the
+// tool sent. A string that merely looks like JSON is mistyped here, which the
+// exactness check in `toolHeaderLine` turns into "keep the summary".
+function storedValue(value: string): unknown {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === "string" ? value : parsed;
+  } catch {
+    return value;
+  }
+}
+
+// The tool input as far as the persisted detail still holds it: every
+// displayed field in full (only never-displayed bulk fields are dropped, and
+// no summarizer reads those), or the command line.
+function inputFromDetail(
+  toolName: string,
+  detail: ToolInputDetail,
+): Record<string, unknown> {
+  if (detail.kind === "command") {
+    return (
+      (toolName.toLowerCase().includes("grep")
+        ? parseReconstructedGrep(detail.command)
+        : null) ?? { command: detail.command }
+    );
+  }
+  return Object.fromEntries(
+    detail.entries.map((entry) => [entry.key, storedValue(entry.value)]),
+  );
+}
+
 /**
  * A segment HEADER's one-line text. The persisted summary is capped at
  * {@link SUMMARY_MAX} characters for the places that want a short line (the
  * approval card, find previews, the recent-decisions log). A header is sized by
  * layout instead: its text span truncates itself at the width the row actually
- * has, which follows the reading width. So when the summary is exactly this
- * cap's cut of an input the detail still holds whole, the header gets that
- * whole input on one line and its own CSS ends it - rather than every command
- * stopping at 80 characters however wide the column is.
+ * has, which follows the reading width. So the header re-derives the summary
+ * UNCAPPED - the same summarizer, over the input the persisted detail still
+ * holds whole - and its own CSS ends the line, rather than every row stopping
+ * at 80 characters however wide the column is.
  *
- * Exact, not a guess: the whole input is used only when re-applying the cap to
- * it reproduces the persisted summary, so a summary that is some other line (a
- * description, a reconstructed command) is never replaced.
+ * Exact, not a guess: the uncapped line is used only when capping it
+ * reproduces the persisted summary, so whatever the detail cannot rebuild (a
+ * summary from an older summarizer, a field it never held) keeps the summary.
  */
 export function toolHeaderLine(
+  toolName: string | null,
   summary: string | null,
   detail: ToolInputDetail | null,
 ): string | null {
   if (summary === null || detail === null) return summary;
-  const whole =
-    detail.kind === "command"
-      ? detail.command
-      : detail.entries.length === 1
-        ? detail.entries[0].value
-        : null;
-  if (whole === null) return summary;
-  // An input within the cap re-caps to itself, so this is the whole input
-  // exactly when the summary is its cut, and the summary itself otherwise.
-  return trim(whole) === summary ? whole.trim().replace(/\s+/g, " ") : summary;
+  const name = toolName ?? "";
+  const whole = uncappedSummary(name, inputFromDetail(name, detail));
+  return whole !== null && trim(whole) === summary
+    ? whole.trim().replace(/\s+/g, " ")
+    : summary;
 }
 
 function summarizeFileRange(record: Record<string, unknown>): string | null {
@@ -93,12 +125,12 @@ function summarizeFileRange(record: Record<string, unknown>): string | null {
   const start = asNumber(record["startLine"]) ?? asNumber(record["start"]);
   const end = asNumber(record["endLine"]) ?? asNumber(record["end"]);
   if (start !== null && end !== null) {
-    return trim(`${path}:${start}-${end}`);
+    return `${path}:${start}-${end}`;
   }
   if (start !== null) {
-    return trim(`${path}:${start}`);
+    return `${path}:${start}`;
   }
-  return trim(path);
+  return path;
 }
 
 function summarizeQuery(record: Record<string, unknown>): string | null {
@@ -108,14 +140,14 @@ function summarizeQuery(record: Record<string, unknown>): string | null {
     asString(record["search"]);
   if (query === null) return null;
   const path = asString(record["path"]) ?? asString(record["dir"]);
-  if (path !== null) return trim(`${query} in ${path}`);
-  return trim(query);
+  if (path !== null) return `${query} in ${path}`;
+  return query;
 }
 
 function summarizeUrl(record: Record<string, unknown>): string | null {
   const url = asString(record["url"]) ?? asString(record["href"]);
   if (url === null) return null;
-  return trim(url);
+  return url;
 }
 
 function summarizeCommand(record: Record<string, unknown>): string | null {
@@ -130,7 +162,7 @@ function summarizeCommand(record: Record<string, unknown>): string | null {
         asString(metadata["cmd"]) ??
         asString(metadata["script"])));
   if (cmd === null) return null;
-  return trim(cmd);
+  return cmd;
 }
 
 // The two comment-thread summarizers below outlive their tools on purpose.
@@ -158,7 +190,7 @@ function summarizeCommentThreadList(
         ? "1 artifact"
         : `${artifactCount} artifacts`;
   const status = asString(record["status"]) ?? "all";
-  return trim(`${artifacts}, ${status}`);
+  return `${artifacts}, ${status}`;
 }
 
 function summarizeCommentThreadStatus(
@@ -187,12 +219,12 @@ function summarizeCommentThreadStatus(
   }
   if (threadCount === 0 || status === null) return null;
   const threads = threadCount === 1 ? "1 thread" : `${threadCount} threads`;
-  return trim(`${threads} -> ${status}`);
+  return `${threads} -> ${status}`;
 }
 
 function summarizeArtifact(record: Record<string, unknown>): string | null {
   const title = asString(record["title"]);
-  if (title !== null) return trim(title);
+  if (title !== null) return title;
 
   const filePaths = record["file_paths"];
   const firstFilePath =
@@ -200,7 +232,7 @@ function summarizeArtifact(record: Record<string, unknown>): string | null {
     (Array.isArray(filePaths) ? asString(filePaths[0]) : null);
   if (firstFilePath !== null) {
     const fileName = firstFilePath.split(/[\\/]/).filter(Boolean).at(-1);
-    if (fileName !== undefined) return trim(fileName);
+    if (fileName !== undefined) return fileName;
   }
 
   const action = asString(record["action"]);
@@ -226,13 +258,13 @@ const TOOL_REGISTRY: Record<string, SummaryFn> = {
     const r = asRecord(input);
     if (r === null) return null;
     const path = asString(r["path"]) ?? asString(r["dir"]);
-    return path === null ? null : trim(path);
+    return path;
   },
   glob: (input) => {
     const r = asRecord(input);
     if (r === null) return null;
     const pattern = asString(r["pattern"]);
-    return pattern === null ? null : trim(pattern);
+    return pattern;
   },
   grep: (input) => {
     const r = asRecord(input);
@@ -267,9 +299,9 @@ const TOOL_REGISTRY: Record<string, SummaryFn> = {
     if (r === null) return null;
     const cron = asString(r["cron"]);
     const prompt = asString(r["prompt"]);
-    if (cron !== null && prompt !== null) return trim(`${cron} · ${prompt}`);
-    if (cron !== null) return trim(cron);
-    return prompt === null ? null : trim(prompt);
+    if (cron !== null && prompt !== null) return `${cron} · ${prompt}`;
+    if (cron !== null) return cron;
+    return prompt;
   },
   CronList: () => "Lists scheduled tasks",
   CronDelete: (input) => {
@@ -277,15 +309,15 @@ const TOOL_REGISTRY: Record<string, SummaryFn> = {
     const id = r === null ? null : asString(r["id"]);
     return id === null
       ? "Deletes a scheduled task"
-      : trim(`Deletes scheduled task ${id}`);
+      : `Deletes scheduled task ${id}`;
   },
   EnterWorktree: (input) => {
     const r = asRecord(input);
     if (r === null) return "Enters a worktree";
     const path = asString(r["path"]);
-    if (path !== null) return trim(path);
+    if (path !== null) return path;
     const name = asString(r["name"]);
-    return name === null ? "Enters a worktree" : trim(name);
+    return name === null ? "Enters a worktree" : name;
   },
   ExitWorktree: (input) => {
     const r = asRecord(input);
@@ -298,7 +330,7 @@ const TOOL_REGISTRY: Record<string, SummaryFn> = {
   TaskGet: (input) => {
     const r = asRecord(input);
     const taskId = r === null ? null : asString(r["taskId"]);
-    return taskId === null ? "Reads a task" : trim(`Reads task ${taskId}`);
+    return taskId === null ? "Reads a task" : `Reads task ${taskId}`;
   },
   ReportFindings: (input) => {
     const r = asRecord(input);
@@ -314,7 +346,7 @@ const TOOL_REGISTRY: Record<string, SummaryFn> = {
   PushNotification: (input) => {
     const r = asRecord(input);
     const message = r === null ? null : asString(r["message"]);
-    return message === null ? null : trim(message);
+    return message;
   },
   RemoteTrigger: (input) => {
     const r = asRecord(input);
@@ -322,21 +354,19 @@ const TOOL_REGISTRY: Record<string, SummaryFn> = {
     const action = asString(r["action"]);
     if (action === null) return null;
     const triggerId = asString(r["trigger_id"]);
-    return trim(
-      triggerId === null
-        ? `${action} trigger`
-        : `${action} trigger ${triggerId}`,
-    );
+    return triggerId === null
+      ? `${action} trigger`
+      : `${action} trigger ${triggerId}`;
   },
   SendFeedback: (input) => {
     const r = asRecord(input);
     const title = r === null ? null : asString(r["title"]);
-    return title === null ? null : trim(title);
+    return title;
   },
   ProposeGoal: (input) => {
     const r = asRecord(input);
     const condition = r === null ? null : asString(r["condition"]);
-    return condition === null ? null : trim(condition);
+    return condition;
   },
   ReadNotifications: () => "Reads notifications",
   SubagentHandback: (input) => {
@@ -344,7 +374,7 @@ const TOOL_REGISTRY: Record<string, SummaryFn> = {
     const message = r === null ? null : asString(r["message"]);
     return message === null
       ? "Hands a report back to the caller"
-      : trim(`Hands a report back to the caller: ${message}`);
+      : `Hands a report back to the caller: ${message}`;
   },
 };
 
@@ -437,18 +467,18 @@ function genericSummary(input: unknown): string | null {
   const record = asRecord(input);
   if (record === null) {
     if (typeof input === "string" && input.trim().length > 0) {
-      return trim(input);
+      return input;
     }
     return null;
   }
   for (const key of GENERIC_PRIORITY_KEYS) {
     const value = rankedValue(record, key);
-    if (value !== null) return trim(value);
+    if (value !== null) return value;
   }
   for (const [key, value] of Object.entries(record)) {
     if (isIdKey(key)) continue;
     const stringValue = asString(value);
-    if (stringValue !== null) return trim(stringValue);
+    if (stringValue !== null) return stringValue;
   }
   return null;
 }
@@ -486,6 +516,14 @@ export function deriveToolInputSummary(
   toolName: string,
   input: unknown,
 ): string | null {
+  const whole = uncappedSummary(toolName, input);
+  return whole === null ? null : trim(whole);
+}
+
+// The summary before the cap: every summarizer returns its whole line, and
+// the cap is applied once, above - so `toolHeaderLine` can ask for the line
+// the cap would cut.
+function uncappedSummary(toolName: string, input: unknown): string | null {
   const registryName = Object.hasOwn(TOOL_REGISTRY, toolName)
     ? toolName
     : Object.hasOwn(TOOL_ALIASES, toolName)

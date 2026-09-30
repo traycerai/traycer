@@ -718,7 +718,11 @@ function toolSegmentSearchText(segment: ToolSegment): ReadonlyArray<string> {
       [
         segment.toolName,
         // What the header paints (`toolHeaderLine`), not the capped summary.
-        toolHeaderLine(segment.inputSummary, segment.inputDetail) ?? "",
+        toolHeaderLine(
+          segment.toolName,
+          segment.inputSummary,
+          segment.inputDetail,
+        ) ?? "",
         segment.error === null || segment.error.length === 0 ? "" : "error",
       ].join(" "),
     ),
