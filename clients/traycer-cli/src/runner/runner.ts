@@ -2,6 +2,7 @@ import * as Sentry from "@sentry/node";
 import { errorFromUnknown } from "../logger";
 import {
   CLI_ERROR_CODES,
+  type CliError,
   EXPECTED_CLI_ERROR_CODES,
   toCliError,
 } from "./errors";
@@ -18,6 +19,11 @@ import {
   resolveRuntimeContext,
   type RuntimeContext,
 } from "./runtime";
+import {
+  cliSentryRepeatKey,
+  defaultRepeatGateIo,
+  recordCliFailureForSentry,
+} from "./sentry-repeat-gate";
 
 // Context handed to every CommandFn. `progress(info)` is a thin
 // convenience mirroring output.progress so command bodies don't have
@@ -94,14 +100,13 @@ export async function runCommand(
     // reporting those made the CLI a quarter of the account's error volume.
     // A skipped code still leaves a breadcrumb, so an unexpected capture
     // later in the same process shows what preceded it.
-    if (EXPECTED_CLI_ERROR_CODES.has(cliErr.code)) {
+    const expected = EXPECTED_CLI_ERROR_CODES.has(cliErr.code);
+    if (expected) {
       Sentry.addBreadcrumb({
         category: "cli",
         message: "CLI command failed with an expected code",
         data: { code: cliErr.code },
       });
-    } else {
-      Sentry.captureException(err);
     }
     runtime.logger.error(
       "CLI command failed",
@@ -113,6 +118,12 @@ export async function runCommand(
       errorFromUnknown(err),
     );
     output.emitError(cliErr.code, cliErr.message, cliErr.details);
+    // The log line and the envelope go out before the repeat gate's file read,
+    // the first yield on this path: a process-fatal handler that fires inside
+    // that await must find the command's answer already written.
+    if (!expected) {
+      await reportCommandFailure(runtime, cliErr, err);
+    }
     // The error envelope was just written to a possibly-piped stdout, and the
     // Sentry client is still live. `finishAndExit` flushes the first and shuts
     // down the second before letting the loop end - see exit.ts for why the
@@ -161,4 +172,31 @@ export async function runCommand(
   // truncation turned on, and it is unrelated to the teardown abort the rest
   // of that helper addresses. See std-write.ts and exit.ts.
   await finishAndExit(result.exitCode);
+}
+
+// Reports a failure the classification above let through, once per kind per
+// machine per window (see sentry-repeat-gate.ts). A build without a DSN has no
+// client, and then there is nothing to gate and no ledger to write.
+async function reportCommandFailure(
+  runtime: RuntimeContext,
+  cliErr: CliError,
+  err: unknown,
+): Promise<void> {
+  if (Sentry.getClient() === undefined) return;
+  const decision = await recordCliFailureForSentry(
+    runtime.environment,
+    cliSentryRepeatKey(cliErr.code, err, cliErr.message),
+    defaultRepeatGateIo,
+  );
+  if (decision.kind === "report") {
+    Sentry.captureException(err, {
+      extra: { repeatsSinceLastReport: decision.repeatsSinceLastReport },
+    });
+    return;
+  }
+  Sentry.addBreadcrumb({
+    category: "cli",
+    message: "CLI command failure repeated inside the report window",
+    data: { code: cliErr.code, repeatsInWindow: decision.repeatsInWindow },
+  });
 }
