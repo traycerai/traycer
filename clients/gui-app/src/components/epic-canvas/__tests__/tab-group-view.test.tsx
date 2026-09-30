@@ -21,6 +21,11 @@ import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
 import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  flashPaneOf,
+  outlinePaneOf,
+  usePaneEmphasisStore,
+} from "@/stores/epics/canvas/pane-emphasis-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   WORKSPACE_FILE_TAB_KIND,
@@ -647,6 +652,7 @@ describe("<TabGroupView />", () => {
     testState.missingArtifactIds.clear();
     testState.stableTileSurfaceHostEnabled = false;
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    usePaneEmphasisStore.setState({ outlinedInstanceId: null, flash: null });
   });
 
   it("keeps terminal-agent tiles mounted when another tab is selected", async () => {
@@ -845,6 +851,33 @@ describe("<TabGroupView />", () => {
     expect(testState.unmounts.get("spec-1")).toBe(1);
     expect(testState.unmounts.get("spec-2")).toBeUndefined();
     expect(testState.unmounts.get("agent-1")).toBeUndefined();
+  });
+
+  it("draws the strip's outline and flash on the pane whose visible tile they name, not on a tab behind it", async () => {
+    const tabs = [specTab(1), specTab(2)];
+    seedCanvas(tabs, "inst-spec-1");
+    const { container } = render(groupView(tabs, "inst-spec-1", true));
+    await waitFor(() => {
+      expect(testState.mounts.get("spec-1")).toBe(1);
+    });
+
+    act(() => {
+      outlinePaneOf("inst-spec-2");
+      flashPaneOf("inst-spec-2");
+    });
+    expect(container.querySelector('[data-testid="pane-outline"]')).toBeNull();
+    expect(container.querySelector('[data-testid="pane-flash"]')).toBeNull();
+
+    act(() => {
+      outlinePaneOf("inst-spec-1");
+      flashPaneOf("inst-spec-1");
+    });
+    expect(
+      container.querySelector('[data-testid="pane-outline"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[data-testid="pane-flash"]'),
+    ).not.toBeNull();
   });
 
   it("falls back to the first tab when pane.activeTabId is null (resolveActivePaneTab wiring)", async () => {

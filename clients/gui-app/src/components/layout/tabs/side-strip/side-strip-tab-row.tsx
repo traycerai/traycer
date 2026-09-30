@@ -12,6 +12,7 @@ import {
 import { TabLeadingIcon } from "../tab-leading-icon";
 import { sideTabWaitingLabel } from "../tab-waiting";
 import type { StripTabItem, StripTabItemInput } from "../use-strip-tab-item";
+import { useLiveAgentsInStrip } from "./strip-agents-mode";
 import { useSideTabLiveAgents } from "./side-tab-live-agents";
 import { railBadgeOf } from "./rail-badge-kind";
 import type { DropIndicator } from "./side-strip-item-input";
@@ -54,6 +55,9 @@ export function SideStripTabRow(props: {
   const titleGenerating = useRegisteredEpicTitleGenerating(epicId);
   const pairPreview = useTopLevelStripPairPreview(tab.kind, tab.id);
   const agents = useSideTabLiveAgents(epicId);
+  // The Activity view shows a task's agents and state in the strip itself, so
+  // its card is only the full title of a name the row cuts short.
+  const titleOnlyCard = useLiveAgentsInStrip();
   const badge = railBadgeOf(item.indicatorState);
   const groupDisclosure = props.group?.disclosure ?? null;
   // The bare status glyph: the custom icon, when there is one, is the tile.
@@ -67,6 +71,26 @@ export function SideStripTabRow(props: {
       tabId={tab.id}
     />
   );
+  const fullCard =
+    tab.kind === "sample-workspace" ? (
+      // A mode, not a task: no agents, so no "Idle" (audit F2).
+      <div
+        data-testid="side-tab-hover-card-body"
+        className="flex flex-col gap-2"
+      >
+        <div className="text-ui-sm font-medium text-foreground">
+          {item.displayName}
+        </div>
+        <div className="text-muted-foreground">Sample workspace</div>
+      </div>
+    ) : (
+      <SideTabHoverCardBody
+        title={item.displayName}
+        epicId={epicId}
+        badge={badge}
+        agents={agents}
+      />
+    );
   return (
     <StripTabContextMenu item={item} input={input}>
       <div className="contents">
@@ -127,26 +151,18 @@ export function SideStripTabRow(props: {
             )
           }
           hoverCardBody={
-            tab.kind === "sample-workspace" ? (
-              // A mode, not a task: no agents, so no "Idle" (audit F2).
+            titleOnlyCard ? (
               <div
                 data-testid="side-tab-hover-card-body"
-                className="flex flex-col gap-2"
+                className="text-ui-sm font-medium break-words text-foreground"
               >
-                <div className="text-ui-sm font-medium text-foreground">
-                  {item.displayName}
-                </div>
-                <div className="text-muted-foreground">Sample workspace</div>
+                {item.displayName}
               </div>
             ) : (
-              <SideTabHoverCardBody
-                title={item.displayName}
-                epicId={epicId}
-                badge={badge}
-                agents={agents}
-              />
+              fullCard
             )
           }
+          hoverCardOnOverflow={titleOnlyCard}
           leaderBadge={
             item.leaderBadge === null ? null : (
               <LeaderDigitBadge

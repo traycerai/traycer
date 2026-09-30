@@ -21,7 +21,6 @@ import type {
   StripAgent,
   StripAgentStatus,
 } from "@/components/layout/tabs/side-strip/strip-task-agents";
-import type { NeedsYouItem } from "@/stores/notifications/needs-you-items";
 
 /**
  * One sample data set for the canvas and every picture of it (C12): the
@@ -401,42 +400,6 @@ function sampleLiveAgent(
     since: SAMPLE_EPOCH - agent.idleMinutes * MINUTE_MS,
   };
 }
-
-/**
- * The Activity view's Needs you block on the canvas: the one sample agent
- * waiting on a reply, so the block, the agent's Reply chip and its row all
- * tell the same story. Never the person's own prompts (B1). A `null` payload,
- * so an activation that got past the canvas's firewall would open nothing.
- */
-export const SAMPLE_NEEDS_YOU_ITEMS: ReadonlyArray<NeedsYouItem> = [
-  {
-    row: {
-      feedId: "sample-needs-you-1",
-      source: "host",
-      sourceId: "sample-needs-you-1",
-      createdAt: SAMPLE_LIVE_AGENTS[0].since,
-      readAt: null,
-      title: SAMPLE_TASK_TITLE,
-      body: "",
-      payload: null,
-      hostKind: "interview.requested",
-      appLocalKind: null,
-      globalEntry: null,
-      severity: "needs_action",
-      outcome: null,
-      resolvedAt: null,
-      sourceRef: null,
-      originHostId: SAMPLE_HOST_ID,
-      providerPackAttribution: null,
-      category: "task",
-    },
-    reason: "reply",
-    ask: "Question waiting",
-    taskTitle: SAMPLE_TASK_TITLE,
-    agentTitle: SAMPLE_LIVE_AGENTS[0].title,
-    createdAt: SAMPLE_LIVE_AGENTS[0].since,
-  },
-];
 
 /** The Artifacts panel's rows; the first is the open, commented artifact. */
 export const SAMPLE_SIDEBAR_ARTIFACTS: ReadonlyArray<{

@@ -63,6 +63,15 @@ function needsYouItemEpicId(item: NeedsYouItem): string | null {
   return null;
 }
 
+/** The chat a prompt belongs to, or `null` when its payload names none. */
+export function needsYouItemChatId(item: NeedsYouItem): string | null {
+  const payload = item.row.payload;
+  if (payload?.kind === "approval" || payload?.kind === "interview") {
+    return payload.chatId ?? null;
+  }
+  return null;
+}
+
 /**
  * The prompts grouped by the task they belong to, in the order given. An item
  * that names no task is in no group. The strip's task rows read their

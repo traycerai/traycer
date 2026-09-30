@@ -169,6 +169,7 @@ function OverlayMember(props: {
       disclosure={null}
       title={label}
       hoverCardBody={label}
+      hoverCardOnOverflow={false}
       leaderBadge={null}
       close={null}
       waitingLabel={null}
@@ -230,6 +231,7 @@ function OverlayTabRow(props: {
       disclosure={null}
       title={displayName}
       hoverCardBody={displayName}
+      hoverCardOnOverflow={false}
       leaderBadge={null}
       close={null}
       waitingLabel={sideTabWaitingLabel(tabWaitingReason(indicatorState, null))}

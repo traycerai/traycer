@@ -66,7 +66,14 @@ import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
+import {
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
+import { usePaneEmphasisStore } from "@/stores/epics/canvas/pane-emphasis-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { collectPanes } from "@/stores/epics/canvas/tile-tree";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
@@ -940,6 +947,8 @@ describe("<SideTabStrip />", () => {
       useStripDisclosureStore.setState({ expanded: {} });
       indicatorState.value = { epics: {}, chats: {} };
       useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+      useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
+      usePaneEmphasisStore.setState({ outlinedInstanceId: null, flash: null });
     });
 
     function busy(epicId: string, turn: ReadonlyArray<string>): void {
@@ -956,7 +965,7 @@ describe("<SideTabStrip />", () => {
       ).map((node) => node.getAttribute("data-testid"));
     }
 
-    function seedApproval(epicId: string): void {
+    function seedApproval(epicId: string, chatId: string): void {
       const entry: HostNotificationEntryV22 = {
         id: "approval-0",
         updatedAt: 10,
@@ -967,11 +976,11 @@ describe("<SideTabStrip />", () => {
         outcome: null,
         resolvedAt: null,
         epicId,
-        chatId: "chat-cold",
+        chatId,
         payload: {
           kind: "approval",
           epicId,
-          chatId: "chat-cold",
+          chatId,
           chatTitle: "Deploy agent",
           taskTitle: "Task",
           approvalId: "approval-0",
@@ -1061,7 +1070,7 @@ describe("<SideTabStrip />", () => {
 
     it("gives a cold task no chevron, only its needs-you row, opened through the notification's activation", async () => {
       openEpicTabs(["Alpha"]);
-      seedApproval("e-alpha");
+      seedApproval("e-alpha", "chat-cold");
       busy("e-alpha", ["agent-1"]);
       await renderStrip("/elsewhere", LEFT_STRIP);
 
@@ -1143,6 +1152,233 @@ describe("<SideTabStrip />", () => {
         expect(
           screen.getByTestId("tab-epic-e-beta").getAttribute("aria-selected"),
         ).toBe("true");
+      });
+    });
+
+    describe("where the chat is, and what a click does", () => {
+      const HOST_ID = "host-a";
+      const IDS = ["c-focused", "c-side", "c-back", "c-closed"];
+
+      function chatTile(id: string): EpicCanvasTileRef {
+        return {
+          id,
+          instanceId: `tile-${id}`,
+          type: "chat",
+          name: id,
+          hostId: HOST_ID,
+        };
+      }
+
+      /** Each pane of `tabId`'s canvas by the chats in it: the one in front, then all. */
+      function panesOf(tabId: string): ReadonlyArray<{
+        readonly id: string;
+        readonly front: string | undefined;
+        readonly chats: ReadonlyArray<string | undefined>;
+      }> {
+        const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+        const chatOf = (instanceId: string | null): string | undefined =>
+          instanceId === null
+            ? undefined
+            : canvas?.tilesByInstanceId[instanceId]?.id;
+        return collectPanes(canvas?.root ?? null).map((pane) => ({
+          id: pane.id,
+          front: chatOf(pane.activeTabId),
+          chats: pane.tabInstanceIds.map(chatOf),
+        }));
+      }
+
+      /**
+       * Two panes side by side, the left one focused: `c-focused` is in front
+       * in the left pane with `c-back` behind it, `c-side` is in front in the
+       * right pane, and `c-closed` is not open at all.
+       */
+      function seedTwoPanes(tabId: string): void {
+        const canvas = useEpicCanvasStore.getState();
+        act(() => {
+          canvas.openTileInTab(tabId, chatTile("c-back"));
+          canvas.openTileInTab(tabId, chatTile("c-focused"));
+        });
+        const leftPaneId = panesOf(tabId)[0].id;
+        act(() => {
+          canvas.splitPaneWithNode(
+            tabId,
+            leftPaneId,
+            "right",
+            chatTile("c-side"),
+          );
+          canvas.setActiveTilePane(tabId, leftPaneId);
+        });
+      }
+
+      function focusedPaneOf(tabId: string): "left" | "right" {
+        const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+        return canvas?.activePaneId === panesOf(tabId)[0].id ? "left" : "right";
+      }
+
+      function requestedJump(chatId: string) {
+        return useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, chatId)
+        ]?.target;
+      }
+
+      async function renderAlphaWithChats(): Promise<void> {
+        openEpicTabs(["Alpha"]);
+        warmEpic(
+          "e-alpha",
+          IDS.map((id) => chatProjection(id, { title: id })),
+        );
+        busy("e-alpha", IDS);
+        await renderStrip("/elsewhere", LEFT_STRIP);
+      }
+
+      const rowOf = (id: string): HTMLElement =>
+        screen.getByTestId(`strip-agent-${id}`);
+      const glyphOf = (id: string): HTMLElement | null =>
+        within(rowOf(id)).queryByTestId("strip-agent-pane-glyph");
+
+      it("marks a chat in the focused pane and a chat on screen elsewhere with the pane glyph, and leaves the rest unmarked", async () => {
+        await renderAlphaWithChats();
+        seedTwoPanes("e-alpha");
+
+        expect(rowOf("c-focused").getAttribute("aria-current")).toBe("true");
+        expect(glyphOf("c-focused")).not.toBeNull();
+        expect(rowOf("c-side").getAttribute("aria-current")).toBeNull();
+        expect(glyphOf("c-side")).not.toBeNull();
+        // In a background tab of a pane, or not open: not on screen.
+        for (const id of ["c-back", "c-closed"]) {
+          expect(rowOf(id).getAttribute("aria-current")).toBeNull();
+          expect(glyphOf(id)).toBeNull();
+        }
+      });
+
+      it("counts the split partner's canvas as on screen but never focused, and a task that is not in front as neither", async () => {
+        openSplitPair("left");
+        warmEpic("e-alpha", []);
+        warmEpic("e-beta", [
+          chatProjection("s-right", { title: "Right agent" }),
+        ]);
+        act(() => {
+          useEpicCanvasStore
+            .getState()
+            .openTileInTab("e-beta", chatTile("s-right"));
+        });
+        indicatorState.value = {
+          epics: {},
+          chats: { "s-right": { ...NO_FLAGS, pendingApproval: true } },
+        };
+        await renderStrip("/elsewhere", LEFT_STRIP);
+
+        expect(glyphOf("s-right")).not.toBeNull();
+        expect(rowOf("s-right").getAttribute("aria-current")).toBeNull();
+
+        // Un-pair: the same tile in a task that is no longer showing.
+        cleanup();
+        coolAllEpics();
+        openEpicTabs(["Alpha", "Beta"]);
+        warmEpic("e-beta", [
+          chatProjection("s-right", { title: "Right agent" }),
+        ]);
+        act(() => {
+          useEpicCanvasStore
+            .getState()
+            .openTileInTab("e-beta", chatTile("s-right"));
+        });
+        await renderStrip("/elsewhere", LEFT_STRIP);
+
+        expect(rowOf("s-right")).toBeTruthy();
+        expect(glyphOf("s-right")).toBeNull();
+      });
+
+      const SIDE_PANE = { front: "c-side", chats: ["c-side"] };
+      it.each([
+        {
+          state: "not open",
+          chat: "c-closed",
+          left: {
+            front: "c-closed",
+            chats: ["c-back", "c-focused", "c-closed"],
+          },
+          focused: "left",
+          flashes: false,
+        },
+        {
+          state: "in a background tab",
+          chat: "c-back",
+          left: { front: "c-back", chats: ["c-back", "c-focused"] },
+          focused: "left",
+          flashes: false,
+        },
+        {
+          state: "on screen, not focused",
+          chat: "c-side",
+          left: { front: "c-focused", chats: ["c-back", "c-focused"] },
+          focused: "right",
+          flashes: true,
+        },
+        {
+          state: "in the focused pane",
+          chat: "c-focused",
+          left: { front: "c-focused", chats: ["c-back", "c-focused"] },
+          focused: "left",
+          flashes: false,
+        },
+      ])(
+        "takes a click on a chat $state to where it is live: focus, a flash only when it was on screen elsewhere, then its live point",
+        async ({ chat, left, focused, flashes }) => {
+          await renderAlphaWithChats();
+          seedTwoPanes("e-alpha");
+
+          fireEvent.click(rowOf(chat));
+
+          const [leftPane, rightPane] = panesOf("e-alpha");
+          expect({ front: leftPane.front, chats: leftPane.chats }).toEqual(
+            left,
+          );
+          expect({ front: rightPane.front, chats: rightPane.chats }).toEqual(
+            SIDE_PANE,
+          );
+          expect(focusedPaneOf("e-alpha")).toBe(focused);
+          const flash = usePaneEmphasisStore.getState().flash;
+          expect(flash?.instanceId).toBe(flashes ? "tile-c-side" : undefined);
+          expect(requestedJump(chat)).toEqual({ kind: "end" });
+        },
+      );
+
+      it("outlines the pane of a chat that is on screen while its row is hovered, and no pane for one that is not", async () => {
+        await renderAlphaWithChats();
+        seedTwoPanes("e-alpha");
+        const outlined = () =>
+          usePaneEmphasisStore.getState().outlinedInstanceId;
+
+        fireEvent.pointerEnter(rowOf("c-back"));
+        expect(outlined()).toBeNull();
+
+        fireEvent.pointerEnter(rowOf("c-side"));
+        expect(outlined()).toBe("tile-c-side");
+        fireEvent.pointerLeave(rowOf("c-side"));
+        expect(outlined()).toBeNull();
+      });
+
+      it("sends a waiting agent's click through its prompt's activation, which lands on the pending card, and still flashes a pane on screen elsewhere", async () => {
+        seedApproval("e-alpha", "c-side");
+        indicatorState.value = {
+          epics: {},
+          chats: { "c-side": { ...NO_FLAGS, pendingApproval: true } },
+        };
+        await renderAlphaWithChats();
+        seedTwoPanes("e-alpha");
+
+        fireEvent.click(rowOf("c-side"));
+
+        expect(activateSpy).toHaveBeenCalledTimes(1);
+        expect(activateSpy.mock.calls[0][0]).toMatchObject({
+          feedId: "host:approval-0",
+        });
+        expect(usePaneEmphasisStore.getState().flash?.instanceId).toBe(
+          "tile-c-side",
+        );
+        // The prompt's own landing is the live point: nothing parks an end jump.
+        expect(requestedJump("c-side")).toBeUndefined();
       });
     });
 

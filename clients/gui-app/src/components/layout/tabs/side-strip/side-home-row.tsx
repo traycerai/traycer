@@ -65,6 +65,7 @@ function SideHomeRowBody(props: SideHomeRowProps): ReactNode {
       disclosure={null}
       title={HOME_LABEL}
       hoverCardBody={HOME_LABEL}
+      hoverCardOnOverflow={false}
       leaderBadge={null}
       close={null}
       waitingLabel={null}

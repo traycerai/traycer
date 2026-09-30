@@ -81,6 +81,7 @@ function baseProps(): SideTabRowProps {
     disclosure: null,
     title: "Fix login",
     hoverCardBody: <div data-testid="hover-card-probe">Fix login</div>,
+    hoverCardOnOverflow: false,
     leaderBadge: null,
     close: null,
     waitingLabel: null,

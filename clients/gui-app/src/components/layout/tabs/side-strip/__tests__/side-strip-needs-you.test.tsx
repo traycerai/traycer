@@ -47,13 +47,14 @@ import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
-import { tabItemId } from "@/stores/tabs/layout";
+import { tabItemId, tabRefKey } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 import {
   __resetAgentActivityStoreForTests,
   __setAgentActivityStateForTests,
 } from "@/stores/agent-activity-store";
+import { useStripDisclosureStore } from "../strip-disclosure";
 import { chatProjection, coolAllEpics, warmEpic } from "./warm-epic-fixture";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
@@ -172,6 +173,7 @@ function resetSharedState(): void {
     selectedSetting: null,
   });
   coolAllEpics();
+  useStripDisclosureStore.setState({ expanded: {} });
   __resetAgentActivityStoreForTests();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useSideTabStripStore.setState({ collapsed: false });
@@ -201,6 +203,8 @@ function signIn(): void {
 function approvalEntry(
   id: string,
   updatedAt: number,
+  epicId: string,
+  chatId: string,
 ): HostNotificationEntryV22 {
   return {
     id,
@@ -211,12 +215,12 @@ function approvalEntry(
     severity: "needs_action",
     outcome: null,
     resolvedAt: null,
-    epicId: "epic-1",
-    chatId: "chat-1",
+    epicId,
+    chatId,
     payload: {
       kind: "approval",
-      epicId: "epic-1",
-      chatId: "chat-1",
+      epicId,
+      chatId,
       chatTitle: "Deploy checkout fix",
       taskTitle: "Deploy checkout fix",
       approvalId: id,
@@ -225,8 +229,25 @@ function approvalEntry(
 }
 
 function seedApprovals(count: number): void {
-  const entries = Array.from({ length: count }, (_unused, index) =>
-    approvalEntry(`approval-${index}`, 10 + index),
+  seedApprovalsFor(
+    Array.from({ length: count }, (_unused, index) => ({
+      id: `approval-${index}`,
+      epicId: "epic-1",
+      chatId: "chat-1",
+    })),
+  );
+}
+
+function seedApprovalsFor(
+  approvals: ReadonlyArray<{
+    readonly id: string;
+    readonly epicId: string;
+    readonly chatId: string;
+  }>,
+): void {
+  const count = approvals.length;
+  const entries = approvals.map(({ id, epicId, chatId }, index) =>
+    approvalEntry(id, 10 + index, epicId, chatId),
   );
   act(() => {
     useHostNotificationsStore.getState().applySnapshot({
@@ -381,20 +402,14 @@ describe("SideStripNeedsYou", () => {
 });
 
 /**
- * The layout editor's canvas frames the sample scene, never the person's own
- * (B1): `SideStripNeedsYou` reads `useSampleScene()` and, while it is true,
- * lists the sample's one prompt instead of the real feed and never mounts
- * `useNeedsYouItems` or the real activation path. A real pending prompt is
- * seeded in every case below, so a regression that dropped the `sample`
- * branch would show the real row instead - failing every assertion here.
+ * A prompt is listed in one place: under its task's row when the strip draws
+ * that task, else in the pinned block. The task's tab is seeded the way a real
+ * window holds it, and a cold task nests its prompt as a needs-you row.
  */
-describe("SideStripNeedsYou, framing the sample scene (B1)", () => {
+describe("SideStripNeedsYou, tasks with a row in the strip (D10)", () => {
   beforeEach(() => {
     resetSharedState();
     signIn();
-    // Not reset by the harness (no global `clearMocks`): an earlier file's
-    // own click test leaves a call on this shared spy.
-    activateSpy.mockClear();
   });
 
   afterEach(() => {
@@ -403,21 +418,143 @@ describe("SideStripNeedsYou, framing the sample scene (B1)", () => {
     resetSharedState();
   });
 
-  it("shows the sample prompt in place of a real one waiting, and only the sample's", async () => {
+  function seedTaskTabs(
+    epicIds: ReadonlyArray<string>,
+    collapsedGroupOf: string | null,
+  ): void {
+    const refs: ReadonlyArray<TabRef> = epicIds.map((id) => ({
+      kind: "epic",
+      id,
+    }));
+    for (const id of epicIds) {
+      useEpicCanvasStore
+        .getState()
+        .seedEpic(id, { tabId: id, name: `Task ${id}` }, []);
+    }
+    useTabsStore.setState({
+      version: 2,
+      items: refs.map((ref) => ({ kind: "tab", id: tabItemId(ref), ref })),
+      activeItemId: tabItemId(refs[0]),
+      stripOrder: refs,
+      systemTabs: { history: null, settings: null },
+      groups:
+        collapsedGroupOf === null
+          ? {}
+          : { g1: { name: "Group", color: "#8ab4f8", collapsed: true } },
+      customizations:
+        collapsedGroupOf === null
+          ? {}
+          : {
+              [tabRefKey({ kind: "epic", id: collapsedGroupOf })]: {
+                color: null,
+                icon: null,
+                groupId: "g1",
+              },
+            },
+    });
+  }
+
+  it("lists a prompt only under its task while the strip draws that task", async () => {
+    activateActivityView();
+    seedTaskTabs(["epic-1"], null);
+    seedApprovals(1);
+    renderStrip();
+    await screen.findByTestId("side-tab-strip");
+
+    expect(
+      await screen.findByTestId("strip-agent-host:approval-0"),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("side-strip-needs-you")).toBeNull();
+  });
+
+  it("nests a warm collapsed task's prompt whose chat has no waiting agent, and pins nothing", async () => {
+    activateActivityView();
+    // epic-2 is in front, so epic-1 is collapsed; its one live agent is busy.
+    seedTaskTabs(["epic-2", "epic-1"], null);
+    warmEpic("epic-1", [chatProjection("chat-1", { title: "Busy agent" })]);
+    __setAgentActivityStateForTests(
+      { "epic-1": { working: ["chat-1"], turn: ["chat-1"] } },
+      "local",
+      "connected",
+    );
+    seedApprovalsFor([
+      { id: "approval-unmatched", epicId: "epic-1", chatId: "chat-9" },
+    ]);
+    renderStrip();
+    await screen.findByTestId("side-tab-strip");
+
+    expect(
+      await screen.findByTestId("strip-agent-host:approval-unmatched"),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("strip-agent-chat-1")).toBeNull();
+    expect(screen.queryByTestId("side-strip-needs-you")).toBeNull();
+  });
+
+  it("keeps a prompt whose task has no row in the pinned block, beside a task that has one", async () => {
+    activateActivityView();
+    seedTaskTabs(["epic-1"], null);
+    seedApprovalsFor([
+      { id: "approval-in-strip", epicId: "epic-1", chatId: "chat-1" },
+      { id: "approval-elsewhere", epicId: "epic-2", chatId: "chat-2" },
+    ]);
+    renderStrip();
+    await screen.findByTestId("side-tab-strip");
+
+    const block = await screen.findByTestId("side-strip-needs-you");
+    const items = within(block).getAllByTestId("needs-you-item");
+    expect(items.map((item) => item.dataset.notificationId)).toEqual([
+      "host:approval-elsewhere",
+    ]);
+    expect(
+      screen.getByTestId("strip-agent-host:approval-in-strip"),
+    ).toBeTruthy();
+  });
+
+  it("keeps a prompt in the pinned block when its task sits in a collapsed group, which draws no row", async () => {
+    activateActivityView();
+    seedTaskTabs(["epic-1", "epic-2"], "epic-1");
+    seedApprovalsFor([
+      { id: "approval-hidden", epicId: "epic-1", chatId: "chat-1" },
+    ]);
+    renderStrip();
+    await screen.findByTestId("side-tab-strip");
+
+    const block = await screen.findByTestId("side-strip-needs-you");
+    expect(
+      within(block)
+        .getAllByTestId("needs-you-item")
+        .map((item) => item.dataset.notificationId),
+    ).toEqual(["host:approval-hidden"]);
+  });
+});
+
+/**
+ * The layout editor's canvas frames the sample scene, never the person's own
+ * (B1): the strip's needs-you read is empty while `useSampleScene()` is true.
+ * The sample task's waiting agent already shows under its row, so the pinned
+ * block has nothing of the sample's to list either. A real pending prompt is
+ * seeded in every case below, so a regression that read the real feed would
+ * show it in the block.
+ */
+describe("SideStripNeedsYou, framing the sample scene (B1)", () => {
+  beforeEach(() => {
+    resetSharedState();
+    signIn();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+    resetSharedState();
+  });
+
+  it("shows no block in place of a real prompt waiting", async () => {
     activateActivityView();
     seedApprovals(1);
     renderStripInSampleScene(true);
     await screen.findByTestId("side-tab-strip");
 
-    const block = await screen.findByTestId("side-strip-needs-you");
-    const items = within(block).getAllByTestId("needs-you-item");
-    expect(items).toHaveLength(1);
-    expect(items[0].dataset.notificationId).toBe("sample-needs-you-1");
-    expect(items[0].dataset.needsYouReason).toBe("reply");
-    expect(items[0].textContent).toContain("Question waiting");
-    expect(items[0].textContent).toContain("Sample task · Plan the migration");
-
-    // The real, seeded approval's own identity never reaches the document.
+    expect(screen.queryByTestId("side-strip-needs-you")).toBeNull();
     expect(
       document.querySelector('[data-notification-id="host:approval-0"]'),
     ).toBeNull();
@@ -434,27 +571,6 @@ describe("SideStripNeedsYou, framing the sample scene (B1)", () => {
     const items = within(block).getAllByTestId("needs-you-item");
     expect(items).toHaveLength(1);
     expect(items[0].dataset.notificationId).toBe("host:approval-0");
-
-    // The sample's own item never leaks into the real app.
-    expect(
-      document.querySelector('[data-notification-id="sample-needs-you-1"]'),
-    ).toBeNull();
-  });
-
-  it("activates nothing on a click, and never mounts the real activation path", async () => {
-    activateActivityView();
-    seedApprovals(1);
-    renderStripInSampleScene(true);
-    await screen.findByTestId("side-tab-strip");
-
-    const item = await screen.findByTestId("needs-you-item");
-    expect(item.dataset.notificationId).toBe("sample-needs-you-1");
-
-    fireEvent.click(item);
-
-    // Were the sample branch removed, this would resolve to the real,
-    // seeded row instead, and the click above would call `activateSpy`.
-    expect(activateSpy).not.toHaveBeenCalled();
   });
 
   /**

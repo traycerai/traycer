@@ -173,6 +173,18 @@ export const STRIP_AGENT_ROW_CLASS = cn(
 );
 /** The dot: the meter's pip fill (`PIP_FILL`) on a 6px disc. */
 export const STRIP_AGENT_DOT_CLASS = "size-1.5 shrink-0 rounded-full";
+/**
+ * Where a row's chat is showing, with no hue and no edge bar (those are the
+ * tab's own). On screen: full-strength text and a pane glyph after the name,
+ * a 12px outline in the row's text colour. In the focused pane: also the
+ * active row's tint, which the hover tint does not lighten.
+ */
+export const STRIP_AGENT_ON_SCREEN_CLASS = "text-foreground";
+export const STRIP_AGENT_PANE_GLYPH_CLASS = "size-3 shrink-0";
+export const STRIP_AGENT_FOCUSED_CLASS = cn(
+  SIDE_TAB_TILE_ACTIVE_CLASS,
+  "hover:bg-foreground/8",
+);
 /** An expanded task shows this many agents, then "Show N more". */
 export const STRIP_AGENT_VISIBLE_MAX = 5;
 /** The trailing text never truncates: the name gives way first. */

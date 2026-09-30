@@ -1,52 +1,30 @@
 import type { ReactNode } from "react";
 import { NeedsYouItem } from "@/components/notifications/needs-you-item";
 import { cn } from "@/lib/utils";
-import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
-import {
-  useNeedsYouItems,
-  type NeedsYouItem as NeedsYouItemData,
-} from "@/stores/notifications/needs-you-items";
-import { useSampleScene } from "@/components/sample-workspace/sample-scene-context";
-import {
-  SAMPLE_NEEDS_YOU_ITEMS,
-  sampleNoop,
-} from "@/components/sample-workspace/sample-workspace-scene";
-import { useLiveAgentsInStrip } from "./strip-agents-mode";
+import type { NeedsYouItem as NeedsYouItemData } from "@/stores/notifications/needs-you-items";
+import { useStripPinnedNeedsYou } from "./strip-needs-you-context";
 import { SIDE_STRIP_SECTION_LABEL_CLASS } from "./side-strip-tokens";
 import { useNeedsYouActivation } from "./use-needs-you-activation";
 
 /**
  * The Activity view's Needs you block (D10, D13), pinned under the nav rows:
- * the same items as the Notifications drawer's Needs you group, from the same selector, and
- * only while there is one. A row opens its chat on the pending card through
- * the notification's own activation; nothing is approved or answered here.
- *
- * On the layout editor's canvas the strip frames the sample scene, so the
- * block lists the scene's prompts and the person's own are never read (B1).
+ * the prompts of the Notifications drawer's Needs you group whose task has no
+ * row in the strip, from the strip's one read; a task's own row nests the rest.
+ * Shown only while there is one. A row opens its chat on the pending card
+ * through the notification's own activation; nothing is approved or answered
+ * here.
  */
 export function SideStripNeedsYou(): ReactNode {
-  const shown = useLiveAgentsInStrip();
-  const sample = useSampleScene();
-  if (!shown) return null;
-  if (sample)
-    return (
-      <NeedsYouBlock items={SAMPLE_NEEDS_YOU_ITEMS} onActivate={sampleNoop} />
-    );
-  return <LiveNeedsYou />;
-}
-
-function LiveNeedsYou(): ReactNode {
-  const items = useNeedsYouItems();
-  const activate = useNeedsYouActivation();
-  return <NeedsYouBlock items={items} onActivate={activate} />;
+  const items = useStripPinnedNeedsYou();
+  if (items.length === 0) return null;
+  return <NeedsYouBlock items={items} />;
 }
 
 function NeedsYouBlock(props: {
   readonly items: ReadonlyArray<NeedsYouItemData>;
-  readonly onActivate: (row: MergedNotificationRow) => void;
 }): ReactNode {
   const { items } = props;
-  if (items.length === 0) return null;
+  const onActivate = useNeedsYouActivation();
   return (
     <section aria-label="Needs you" data-testid="side-strip-needs-you">
       <div
@@ -64,7 +42,7 @@ function NeedsYouBlock(props: {
           <NeedsYouItem
             key={item.row.feedId}
             item={item}
-            onActivate={props.onActivate}
+            onActivate={onActivate}
           />
         ))}
       </div>

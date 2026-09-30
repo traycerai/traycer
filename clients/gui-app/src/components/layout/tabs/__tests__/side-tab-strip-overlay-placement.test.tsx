@@ -15,6 +15,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -57,6 +58,7 @@ import { __resetAppLocalNotificationsStoreForTests } from "@/stores/notification
 import { __resetHostNotificationsStoreForTests } from "@/stores/notifications/host-notifications-store";
 import { __resetNotificationsStoreForTests } from "@/stores/notifications/notifications-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
+import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
 import { tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
@@ -468,6 +470,106 @@ describe("<SideTabStrip /> the sides its overlays open on, per edge (D7)", () =>
     const menu = await screen.findByTestId("user-menu-content");
     expect(menu.getAttribute("data-side")).toBe("right");
     expect(menu.getAttribute("data-align")).toBe("end");
+  });
+});
+
+/**
+ * jsdom lays nothing out, so the painted title's overflow is stubbed on the
+ * one element that measures it: the row's `.header-tab-title-text`.
+ */
+function stubTaskTitleOverflow(truncated: boolean): void {
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.classList.contains("header-tab-title-text") && truncated
+        ? 320
+        : 0;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.classList.contains("header-tab-title-text") ? 120 : 0;
+    },
+  });
+}
+
+function restoreTitleMetrics(): void {
+  for (const property of ["scrollWidth", "clientWidth"] as const) {
+    Object.defineProperty(HTMLElement.prototype, property, {
+      configurable: true,
+      get: () => 0,
+    });
+  }
+}
+
+function setSideStripView(view: "layered" | "activity"): void {
+  act(() => {
+    useLayoutStore.setState({
+      arrangement: {
+        ...DEFAULT_ARRANGEMENT,
+        tabStripPlacement: "left",
+        sideStripView: view,
+      },
+    });
+  });
+}
+
+async function dwellOnAlphaRow(): Promise<void> {
+  openAlphaTab();
+  renderHarness(
+    <WindowsBridgeContext.Provider value={{ bridge: null, hasHydrated: true }}>
+      <SideTabStrip edge="left" ownsTitleBar={false} />
+    </WindowsBridgeContext.Provider>,
+  );
+  const row = await screen.findByTestId("tab-epic-e-alpha");
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  hoverIn(row);
+  act(() => {
+    vi.advanceTimersByTime(1000);
+  });
+}
+
+describe("<SideTabStrip /> a task row's hover card, by view", () => {
+  beforeEach(() => {
+    resetSharedState();
+    signIn();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    restoreTitleMetrics();
+    useAuthStore.getState().setSignedOut();
+    resetSharedState();
+  });
+
+  it("keeps the full card in the Layered view, its state line included, even for a title that fits", async () => {
+    setSideStripView("layered");
+    stubTaskTitleOverflow(false);
+    await dwellOnAlphaRow();
+
+    const card = screen.getByTestId("side-tab-hover-card");
+    expect(card.textContent).toContain("Alpha");
+    expect(within(card).getByTestId("side-tab-hover-card-state")).toBeTruthy();
+  });
+
+  it("shows only the full title in the Activity view, for a title the row cuts short", async () => {
+    setSideStripView("activity");
+    stubTaskTitleOverflow(true);
+    await dwellOnAlphaRow();
+
+    const card = screen.getByTestId("side-tab-hover-card");
+    expect(card.textContent).toBe("Alpha");
+    expect(within(card).queryByTestId("side-tab-hover-card-state")).toBeNull();
+  });
+
+  it("opens no card in the Activity view for a title that fits", async () => {
+    setSideStripView("activity");
+    stubTaskTitleOverflow(false);
+    await dwellOnAlphaRow();
+
+    expect(screen.queryByTestId("side-tab-hover-card")).toBeNull();
   });
 });
 

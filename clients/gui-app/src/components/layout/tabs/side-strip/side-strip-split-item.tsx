@@ -297,6 +297,7 @@ function SideFillableMember(
       disclosure={null}
       title={label}
       hoverCardBody={label}
+      hoverCardOnOverflow={false}
       leaderBadge={null}
       close={null}
       waitingLabel={null}

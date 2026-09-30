@@ -10,7 +10,12 @@ import { SAMPLE_LIVE_AGENTS } from "./sample-workspace-scene";
 export function SampleLiveAgentItems(): ReactNode {
   return SAMPLE_LIVE_AGENTS.map((agent) => (
     <li key={agent.id}>
-      <StripAgentRow agent={agent} onClick={undefined} />
+      <StripAgentRow
+        agent={agent}
+        screen={null}
+        onClick={undefined}
+        onHoverChange={undefined}
+      />
     </li>
   ));
 }

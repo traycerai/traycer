@@ -3,6 +3,10 @@ import { useSampleScene } from "@/components/sample-workspace/sample-scene-conte
 import { SAMPLE_LIVE_AGENTS } from "@/components/sample-workspace/sample-workspace-scene";
 import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
+import {
+  needsYouItemChatId,
+  type NeedsYouItem,
+} from "@/stores/notifications/needs-you-items";
 import type { HeaderTab } from "@/stores/tabs/types";
 import { useStripAgentsMode } from "./strip-agents-mode";
 import { useStripTaskExpanded } from "./strip-disclosure";
@@ -14,6 +18,11 @@ export interface StripGroupRow {
   readonly agent: StripAgent;
   /** Set on a cold task's needs-you row, whose click is the notification's activation. */
   readonly notification: MergedNotificationRow | null;
+  /**
+   * The waiting prompt of a named agent's row. Opening the agent goes through
+   * its activation, which lands on the pending card.
+   */
+  readonly prompt: MergedNotificationRow | null;
 }
 
 /** The chevron's state and its toggle, on a warm task with agents. */
@@ -52,8 +61,10 @@ export function stripAgentGroupId(tabId: string): string {
  * What the strip nests under `tab`'s row, or `null` for nothing.
  *
  * A warm task nests its named agents and can expand: expanded shows them all,
- * collapsed only those waiting on the person. A cold task has no names, so it
- * nests its needs-you rows alone and cannot expand. The layout editor's sample
+ * collapsed only those waiting on the person. Either way it also nests each
+ * prompt of the task that no waiting agent accounts for, so a prompt is never
+ * left without a row. A cold task has no names, so it nests its needs-you rows
+ * alone and cannot expand. The layout editor's sample
  * tab nests the sample agents, and under the sample scene no real task nests
  * anything.
  */
@@ -73,12 +84,7 @@ export function useStripTaskGroup(
   const expanded = expandable && expandedChoice;
   const animate = viaPointer && motionEnabled;
   const rows = useMemo((): ReadonlyArray<StripGroupRow> => {
-    if (warm) {
-      return (
-        expanded ? agents : agents.filter((a) => a.status === "waiting")
-      ).map((agent) => ({ agent, notification: null }));
-    }
-    return needsYou.map((item) => ({
+    const promptRow = (item: NeedsYouItem): StripGroupRow => ({
       agent: {
         id: item.row.feedId,
         title: item.agentTitle,
@@ -86,7 +92,39 @@ export function useStripTaskGroup(
         since: item.createdAt,
       },
       notification: item.row,
-    }));
+      prompt: null,
+    });
+    if (!warm) return needsYou.map(promptRow);
+    const promptOfChat = new Map<string, MergedNotificationRow>();
+    for (const item of needsYou) {
+      const chatId = needsYouItemChatId(item);
+      if (chatId !== null && !promptOfChat.has(chatId)) {
+        promptOfChat.set(chatId, item.row);
+      }
+    }
+    const agentRow = (agent: StripAgent): StripGroupRow => ({
+      agent,
+      notification: null,
+      prompt:
+        agent.status === "waiting"
+          ? (promptOfChat.get(agent.id) ?? null)
+          : null,
+    });
+    const waiting = agents.filter((a) => a.status === "waiting");
+    const waitingIds = new Set(waiting.map((a) => a.id));
+    // Every prompt of a task with a row shows under it: one no waiting agent
+    // above accounts for nests as a needs-you row, as a cold task's does.
+    const unmatched = needsYou.filter((item) => {
+      const chatId = needsYouItemChatId(item);
+      return chatId === null || !waitingIds.has(chatId);
+    });
+    return [
+      ...waiting.map(agentRow),
+      ...unmatched.map(promptRow),
+      ...(expanded ? agents.filter((a) => a.status !== "waiting") : []).map(
+        agentRow,
+      ),
+    ];
   }, [warm, expanded, agents, needsYou]);
   return useMemo((): StripTaskGroup | null => {
     if (tab === null || mode === null) return null;
@@ -99,6 +137,7 @@ export function useStripTaskGroup(
         rows: SAMPLE_LIVE_AGENTS.map((agent) => ({
           agent,
           notification: null,
+          prompt: null,
         })),
         disclosure: null,
       };

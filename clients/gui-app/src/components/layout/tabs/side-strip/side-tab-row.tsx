@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DropLine } from "@/components/ui/drop-line";
 import { HoverCard } from "@/components/ui/hover-card";
+import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
 import { cn } from "@/lib/utils";
 import { SESSION_TAB_LABEL_CLASS } from "../header-tab-visual";
@@ -133,6 +134,8 @@ export interface SideTabRowProps {
   readonly title: ReactNode;
   /** What the hover card shows: the title, the state, the counts and, warm, the agents. */
   readonly hoverCardBody: ReactNode;
+  /** Open the card only while the painted title is cut short. */
+  readonly hoverCardOnOverflow: boolean;
   readonly leaderBadge: ReactNode | null;
   readonly close: SideTabRowClose | null;
   readonly waitingLabel: "Approve" | "Reply" | null;
@@ -197,9 +200,14 @@ export function SideTabRow(props: SideTabRowProps) {
   const sessionActive = props.session === "active";
   const accent = tabAccentOf(props.tint, props.tile);
   const pulse = useWaitingPulse(props.badge);
+  const { ref: titleRef, isTruncated } = useIsTextTruncated<HTMLSpanElement>(
+    typeof props.title === "string" ? props.title : "",
+  );
   return (
     <SideTabRowHoverCard
-      allowed={hoverCardAllowed(props)}
+      allowed={
+        hoverCardAllowed(props) && (!props.hoverCardOnOverflow || isTruncated)
+      }
       body={props.hoverCardBody}
     >
       <div
@@ -259,7 +267,7 @@ export function SideTabRow(props: SideTabRowProps) {
             <CornerBadge badge={props.badge} size="tile" />
           </>
         ) : (
-          <ExpandedContent {...props} />
+          <ExpandedContent {...props} titleRef={titleRef} />
         )}
         <SideTabDropIndicator
           side={props.dropIndicator}
@@ -528,7 +536,12 @@ function DisclosureChevron(props: { readonly disclosure: SideTabDisclosure }) {
   );
 }
 
-function ExpandedContent(props: SideTabRowProps) {
+function ExpandedContent(
+  props: SideTabRowProps & {
+    readonly titleRef: (node: HTMLSpanElement | null) => void;
+  },
+) {
+  const { titleRef } = props;
   return (
     <>
       <LeadingSlot {...props} />
@@ -538,7 +551,9 @@ function ExpandedContent(props: SideTabRowProps) {
       >
         {typeof props.title === "string" ? (
           <span className="block min-w-0 flex-1">
-            <span className="header-tab-title-text">{props.title}</span>
+            <span ref={titleRef} className="header-tab-title-text">
+              {props.title}
+            </span>
           </span>
         ) : (
           props.title

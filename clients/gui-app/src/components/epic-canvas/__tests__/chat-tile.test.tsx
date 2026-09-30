@@ -370,6 +370,7 @@ vi.mock(
 );
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -2551,6 +2552,68 @@ describe("<ChatTile />", () => {
       expect(screen.queryByText("Which path should we take?")).toBeNull();
       expect(screen.getByRole("button", { name: "Send" })).not.toBeNull();
     });
+  });
+
+  it("lands a jump on the pending interview card of a hidden tile and lets its highlight go 600ms after the tile is shown", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      // Kept mounted under `display:none`, as `TopLevelTabHost` keeps a task
+      // that is not in front.
+      const tree = (paneVisible: boolean) => (
+        <PaneVisibilityContext.Provider value={paneVisible}>
+          {chatTileTestTree(queryClient, true, CHAT_ARTIFACT)}
+        </PaneVisibilityContext.Provider>
+      );
+      const { rerender } = render(tree(false));
+      await waitForChatTileLoaded();
+      act(() => {
+        emitChatSnapshotWithMessages({
+          callbacks: chatHarness.callbacks(),
+          access: "owner",
+          queueItems: [],
+          settings: SESSION_SETTINGS,
+          messages: [hostUserMessage(), streamingInterviewAssistantMessage()],
+          activeTurn: null,
+          pendingInterviews: [{ blockId: "question-1", requestedAt: 3 }],
+        });
+      });
+      const highlighted = (): string | null =>
+        screen
+          .getByTestId("interview-card")
+          .getAttribute("data-navigation-highlighted");
+
+      act(() => {
+        useChatTranscriptJumpStore
+          .getState()
+          .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+            kind: "block",
+            blockId: "question-1",
+          });
+      });
+      await waitFor(() => {
+        expect(highlighted()).toBe("true");
+      });
+      // Hidden, the card cannot paint, so its ring's time has not started.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(highlighted()).toBe("true");
+
+      rerender(tree(true));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(highlighted()).toBe("true");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(highlighted()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows resolved Q&A fork actions while the assistant turn continues", async () => {

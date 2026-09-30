@@ -44,6 +44,7 @@ import {
   useIsActivePane,
   usePaneTabRefs,
 } from "@/stores/epics/canvas/store";
+import { PaneEmphasis } from "@/components/epic-canvas/canvas/pane-emphasis";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 import {
   useEpicArtifact,
@@ -550,6 +551,7 @@ export const TabGroupView = memo(function TabGroupView(
               />
             </div>
           </div>
+          <PaneEmphasis activeInstanceId={activeTab?.instanceId ?? null} />
         </PaneFocusProbeContext.Provider>
       </PaneActivationFocusIntentContext.Provider>
     </div>

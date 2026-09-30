@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useChatRowOpenRef } from "@/components/epic-canvas/sidebar/use-chat-row-open-ref";
 import { useLayoutSettingPart } from "@/components/layout-editor/use-layout-surface";
@@ -9,6 +9,12 @@ import {
   useRegisteredEpicSessionHostId,
 } from "@/lib/epic-selectors";
 import { activateTabIntent, resourceEpicTabIntent } from "@/lib/tab-navigation";
+import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
+import {
+  clearPaneOutline,
+  flashPaneOf,
+  outlinePaneOf,
+} from "@/stores/epics/canvas/pane-emphasis-store";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { cn } from "@/lib/utils";
 import {
@@ -17,7 +23,8 @@ import {
   STRIP_AGENT_ROW_CLASS,
   STRIP_AGENT_VISIBLE_MAX,
 } from "./side-strip-tokens";
-import { StripAgentRow } from "./strip-agent-row";
+import { useAgentOnScreen, type AgentOnScreen } from "./strip-agent-on-screen";
+import { StripAgentRow, type StripAgentScreen } from "./strip-agent-row";
 import {
   stripAgentGroupId,
   stripTaskRowId,
@@ -106,17 +113,27 @@ function GroupRow(props: {
   const { group, row, onNeedsYou } = props;
   const { notification } = row;
   if (notification !== null) {
+    // A prompt with no agent to open: the notification's own activation.
     return (
       <StripAgentRow
         agent={row.agent}
+        screen={null}
         onClick={() => {
           onNeedsYou(notification);
         }}
+        onHoverChange={undefined}
       />
     );
   }
   if (group.epicId === null) {
-    return <StripAgentRow agent={row.agent} onClick={undefined} />;
+    return (
+      <StripAgentRow
+        agent={row.agent}
+        screen={null}
+        onClick={undefined}
+        onHoverChange={undefined}
+      />
+    );
   }
   return (
     <OpenAgentRow
@@ -124,23 +141,40 @@ function GroupRow(props: {
       tabId={group.tabId}
       active={group.active}
       agent={row.agent}
+      prompt={row.prompt}
+      onNeedsYou={onNeedsYou}
     />
   );
 }
 
+function screenOf(onScreen: AgentOnScreen | null): StripAgentScreen {
+  if (onScreen === null) return null;
+  return onScreen.focused ? "focused" : "on-screen";
+}
+
 /**
- * A warm task's agent row: a click opens the chat in that task's canvas, or
- * focuses its tile when it is already open, activating the task first when it
- * is not the one in front. The open is built from the task's session, not from
- * its canvas, so it works from the strip.
+ * A warm task's agent row. It shows where the agent's chat is, and a click
+ * takes the person to where that chat is live: it opens in the task's canvas,
+ * or focuses the tile that is already open there, activating the task first
+ * when it is not the one in front (the open is built from the task's session,
+ * not its canvas, so it works from the strip). The chat then scrolls to its
+ * live point: a prompt waiting on the person through the notification's own
+ * activation, which lands on the pending card, and any other agent's at the
+ * end of its transcript.
+ *
+ * The click also flashes the pane when it moves focus between two panes that
+ * are both on screen, the one move nothing else on screen shows. Hovering a row
+ * whose chat is on screen outlines its pane.
  */
 function OpenAgentRow(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly active: boolean;
   readonly agent: StripAgent;
+  readonly prompt: MergedNotificationRow | null;
+  readonly onNeedsYou: (row: MergedNotificationRow) => void;
 }): ReactNode {
-  const { epicId, tabId, active, agent } = props;
+  const { epicId, tabId, active, agent, prompt, onNeedsYou } = props;
   const refs = useMemo(
     () => [{ epicId, agentId: agent.id }],
     [epicId, agent.id],
@@ -158,28 +192,54 @@ function OpenAgentRow(props: {
   });
   const { openTile } = useEpicTileNavigation();
   const navigate = useNavigate();
+  const requestJump = useChatTranscriptJumpStore((state) => state.requestJump);
+  const identity = useMemo(() => openRef(), [openRef]);
+  const onScreen = useAgentOnScreen(tabId, identity);
+  const [hovering, setHovering] = useState(false);
+  const outlinedInstanceId =
+    hovering && onScreen !== null ? onScreen.instanceId : null;
+  useEffect(() => {
+    if (outlinedInstanceId === null) return;
+    outlinePaneOf(outlinedInstanceId);
+    return () => {
+      clearPaneOutline(outlinedInstanceId);
+    };
+  }, [outlinedInstanceId]);
   return (
     <StripAgentRow
       agent={agent}
+      screen={screenOf(onScreen)}
+      onHoverChange={setHovering}
       onClick={() => {
+        if (onScreen !== null && !onScreen.focused) {
+          flashPaneOf(onScreen.instanceId);
+        }
+        if (prompt !== null) {
+          onNeedsYou(prompt);
+          return;
+        }
         const node = openRef();
         if (active) {
           openTile(tileIntent(node, { tabId }, "single", "direct_ui"));
-          return;
+        } else {
+          // Tile placement alone does not activate another task's header tab.
+          activateTabIntent(
+            navigate,
+            resourceEpicTabIntent({
+              epicId,
+              tabId,
+              name: undefined,
+              focus: NO_FOCUS,
+              preparation: { kind: "open-tile", node, gesture: "single" },
+              includeNestedFocus: true,
+            }),
+            undefined,
+          );
         }
-        // Tile placement alone does not activate another task's header tab.
-        activateTabIntent(
-          navigate,
-          resourceEpicTabIntent({
-            epicId,
-            tabId,
-            name: undefined,
-            focus: NO_FOCUS,
-            preparation: { kind: "open-tile", node, gesture: "single" },
-            includeNestedFocus: true,
-          }),
-          undefined,
-        );
+        // Parked, so a chat this click opens picks it up when it mounts.
+        if (node.type === "chat") {
+          requestJump(node.hostId, node.id, { kind: "end" });
+        }
       }}
     />
   );

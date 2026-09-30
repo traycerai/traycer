@@ -38,7 +38,6 @@ import {
 import { SideSplitItem } from "./side-strip-split-item";
 import { SideStripTabRow } from "./side-strip-tab-row";
 import { StripAgentGroup } from "./strip-agent-group";
-import { StripNeedsYouScope } from "./strip-needs-you-scope";
 import { useStripTaskGroup } from "./strip-task-group";
 import { useSideTabJoin } from "./side-tab-join";
 import { SIDE_STRIP_LIST_CLASS } from "./side-strip-tokens";
@@ -106,35 +105,33 @@ export function SideStripRowList(props: {
         "no-scrollbar min-h-0 flex-[0_1_auto] overflow-y-auto overscroll-y-contain [-webkit-app-region:no-drag]",
       )}
     >
-      <StripNeedsYouScope>
-        {rows.map((row) => (
-          <Fragment key={row.itemId}>
-            <GroupStart
-              row={row}
-              run={groupRuns.get(row.stripIndex)}
+      {rows.map((row) => (
+        <Fragment key={row.itemId}>
+          <GroupStart
+            row={row}
+            run={groupRuns.get(row.stripIndex)}
+            variant={variant}
+            onCloseGroup={controller.onCloseGroup}
+          />
+          {row.hidden ? null : (
+            <SideStripItem
+              itemId={row.itemId}
+              stripIndex={row.stripIndex}
+              offset={controller.offsets.get(row.itemId) ?? 0}
+              memberOffset={row.memberOffset}
+              isActive={row.itemId === activeItemId}
+              dropIndicator={dropIndicatorOf(
+                dropIndicatorIndex,
+                row.stripIndex,
+                lastIndex,
+              )}
               variant={variant}
-              onCloseGroup={controller.onCloseGroup}
+              groupLine={row.group?.group.color ?? null}
+              handlers={handlers}
             />
-            {row.hidden ? null : (
-              <SideStripItem
-                itemId={row.itemId}
-                stripIndex={row.stripIndex}
-                offset={controller.offsets.get(row.itemId) ?? 0}
-                memberOffset={row.memberOffset}
-                isActive={row.itemId === activeItemId}
-                dropIndicator={dropIndicatorOf(
-                  dropIndicatorIndex,
-                  row.stripIndex,
-                  lastIndex,
-                )}
-                variant={variant}
-                groupLine={row.group?.group.color ?? null}
-                handlers={handlers}
-              />
-            )}
-          </Fragment>
-        ))}
-      </StripNeedsYouScope>
+          )}
+        </Fragment>
+      ))}
     </div>
   );
 }
