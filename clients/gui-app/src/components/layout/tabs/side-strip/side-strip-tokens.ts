@@ -47,21 +47,11 @@ export const SIDE_STRIP_LIST_CLASS: Readonly<
 /** One expanded row: 32px tall, 8px radius, 8px padding and gap. */
 export const SIDE_TAB_ROW_CLASS = "h-8 rounded-lg px-2 gap-2";
 /**
- * The expanded row's leading slot: a fixed 16px so titles line up, then 8px
- * reserved beside it for a leading tile's badge, on every row so a badge
- * never moves a title.
+ * The 16px icon box and its 8px gap that a nav row (Notifications, All tasks,
+ * Home, New Task) keeps. A task row has no leading slot: its title starts on
+ * the row's own padding.
  */
 export const SIDE_TAB_LEADING_CLASS = "size-4 me-2";
-/**
- * The leading slot when it holds a custom-icon tile: the 16px slot, so Home's
- * glyph stands where Notifications' and All tasks' do. A monogram never takes
- * this slot in the expanded row (see `LeadingSlot`) - only the collapsed
- * rail's own tile (`MonogramChip`) still draws one.
- */
-export const SIDE_TAB_LEADING_TILE_SLOT_CLASS = "size-4 me-2";
-/** A custom icon tile in that slot, the slot's own size. */
-export const SIDE_TAB_LEADING_TILE_CLASS =
-  "size-full rounded-sm text-[0.5625rem] font-semibold leading-none tracking-tight";
 export const SIDE_TAB_TITLE_CLASS = "text-[0.8125rem] leading-4";
 export const SIDE_TAB_TRAILING_CLASS = "min-w-5 h-5";
 export const SIDE_TAB_ACTIVE_CLASS = "bg-foreground/8";
@@ -154,20 +144,18 @@ export const PIP_FILL: Readonly<Record<MeterPip, string>> = {
 /**
  * A task's nested agents in the Activity view (D9): a column under the task's
  * row with a 1px guide down its inline-start edge, the Agents panel tree's own
- * (`bg-border/70`). The guide sits 15px in, under the middle of the row's 16px
- * leading slot (8px padding plus half the slot). No elbows, no colour.
+ * (`bg-border/70`). The guide sits on the task title's start edge (the row's
+ * 8px padding). No elbows, no colour.
  */
 export const STRIP_AGENT_GROUP_CLASS =
-  "flex flex-col ms-3.75 border-s border-border/70";
+  "flex flex-col ms-2 border-s border-border/70";
 /**
  * A nested agent row: 26px tall, 12px text, muted at rest, with the strip's
- * own hover tint. The 24px start padding puts the glyph column on the task
- * title's start edge (the row's 8px padding, the 16px leading slot, its 8px
- * badge space and the row's 8px gap, less the guide's 1px and its 15px
- * margin), and the gap takes the name one step past.
+ * own hover tint. The 8px start padding sets the agent's glyph just inside the
+ * guide, and the gap takes the name one step past.
  */
 export const STRIP_AGENT_ROW_CLASS = cn(
-  "flex h-6.5 w-full min-w-0 items-center gap-2 rounded-md ps-6 pe-2 text-start text-ui-xs text-muted-foreground outline-none select-none",
+  "flex h-6.5 w-full min-w-0 items-center gap-2 rounded-md px-2 text-start text-ui-xs text-muted-foreground outline-none select-none",
   "transition-colors duration-100 ease-[ease] hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 [-webkit-app-region:no-drag]",
   SIDE_TAB_TILE_HOVER_CLASS,
 );
@@ -189,7 +177,7 @@ export const STRIP_AGENT_FADE_IN_CLASS =
  * canvas on a narrow window, the shell ground on a wide one.
  */
 const SIDE_STRIP_GROUND_FILL_CLASS = "bg-canvas md:bg-shell-ground";
-/** The expanded row's leading-tile badge: a 10px disc, ringed in the ground. */
+/** A group header's badge: a 10px disc, ringed in the ground. */
 export const SIDE_TAB_BADGE_CLASS = cn(
   "size-2.5 ring-2 ring-canvas md:ring-shell-ground",
   SIDE_STRIP_GROUND_FILL_CLASS,
@@ -197,12 +185,6 @@ export const SIDE_TAB_BADGE_CLASS = cn(
 /** Where a collapsed group's badge sits on its expanded header: the header's top-right corner. */
 export const SIDE_TAB_BADGE_POSITION_CLASS =
   "absolute top-0 right-0 translate-x-1/4 -translate-y-1/4";
-/**
- * Where a leading tile's badge sits: in the space reserved beside the tile,
- * level with its top and flush against its edge, clear of its monogram.
- */
-export const SIDE_TAB_LEADING_BADGE_POSITION_CLASS =
-  "absolute -top-0.5 left-full";
 /**
  * The rail tile's badge (D5): a 14px disc of the strip's ground holding a 12px
  * status glyph, at the tile's top-right, 1px above and 1px in.

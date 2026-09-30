@@ -452,8 +452,8 @@ export function AppFrameStripTaskRows(props: {
 }
 
 /**
- * An expanded task row: the empty 16px leading slot of an uncoloured, idle
- * task, the title, and the meter while more than one agent is live.
+ * An expanded task row: the title, flush to the row's padding, and the meter
+ * while more than one agent is live.
  */
 function AppFrameTaskRow(props: {
   readonly task: AppFrameTask;
@@ -469,7 +469,6 @@ function AppFrameTaskRow(props: {
         task.active && cn("text-foreground", SIDE_TAB_ACTIVE_CLASS),
       )}
     >
-      <span aria-hidden className={cn(SIDE_TAB_LEADING_CLASS, "shrink-0")} />
       <span className={cn(SIDE_TAB_TITLE_CLASS, "min-w-0 flex-1 truncate")}>
         {task.label}
       </span>

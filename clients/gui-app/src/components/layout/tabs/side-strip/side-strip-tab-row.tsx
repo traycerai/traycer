@@ -10,13 +10,14 @@ import {
   StripTabTitleInput,
 } from "../strip-tab-item-parts";
 import { TabLeadingIcon } from "../tab-leading-icon";
-import { sideTabWaitingLabel } from "../tab-waiting";
 import type { StripTabItem, StripTabItemInput } from "../use-strip-tab-item";
 import { useLiveAgentsInStrip } from "./strip-agents-mode";
 import { useSideTabLiveAgents } from "./side-tab-live-agents";
 import { railBadgeOf } from "./rail-badge-kind";
 import type { DropIndicator } from "./side-strip-item-input";
 import { SIDE_TAB_TITLE_INPUT_CLASS } from "./side-strip-tokens";
+import { sideTabStatusOf } from "./side-tab-status";
+import { SideTabStatusGlyph } from "./side-tab-status-glyph";
 import {
   stripAgentGroupId,
   stripTaskRowId,
@@ -29,7 +30,7 @@ import {
 } from "./side-tab-row";
 import { SideTabHoverCardBody } from "./side-tab-hover-card";
 import { joinedAttribute, type SheetJoin } from "./side-tab-join";
-import { sideTabTileOf } from "../tab-identity";
+import { sideTabTileOf, sideTabTitleIconOf } from "../tab-identity";
 
 /**
  * One task tab's row over its `useStripTabItem` result, inside the tab's own
@@ -60,7 +61,7 @@ export function SideStripTabRow(props: {
   const titleOnlyCard = useLiveAgentsInStrip();
   const badge = railBadgeOf(item.indicatorState);
   const groupDisclosure = props.group?.disclosure ?? null;
-  // The bare status glyph: the custom icon, when there is one, is the tile.
+  // The rail's tile falls back on the status glyph for a title with no letter.
   const leading = (
     <TabLeadingIcon
       icon={tab.icon}
@@ -114,7 +115,10 @@ export function SideStripTabRow(props: {
           session={sessionOf(tab, isActive)}
           tint={item.appearance?.color ?? null}
           groupLine={props.groupLine}
-          leading={leading}
+          titleIcon={sideTabTitleIconOf({
+            appearance: item.appearance,
+            icon: tab.icon,
+          })}
           tile={
             // The session tab is a mode with its own icon, never a monogram.
             tab.kind === "sample-workspace"
@@ -128,6 +132,19 @@ export function SideStripTabRow(props: {
           }
           badge={badge}
           agents={agents}
+          status={sideTabStatusOf({
+            indicator: item.indicatorState,
+            agents,
+            meterHidden: groupDisclosure?.expanded === true,
+            glyph: (
+              <SideTabStatusGlyph
+                tabId={tab.id}
+                indicatorState={item.indicatorState}
+                activityStatus={activityStatus}
+                titleGenerating={titleGenerating}
+              />
+            ),
+          })}
           disclosure={
             groupDisclosure === null
               ? null
@@ -180,7 +197,6 @@ export function SideStripTabRow(props: {
             disabled: !item.canClose,
             onClose: item.close,
           }}
-          waitingLabel={sideTabWaitingLabel(item.waitingReason)}
           dropIndicator={props.dropIndicator}
           pairPreview={pairPreview}
           dragSource={item.isDragging}

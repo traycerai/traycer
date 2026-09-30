@@ -18,12 +18,13 @@ import type {
 import type { HeaderTabDragData } from "../header-tab-dnd";
 import { splitSlotLabel, useHeaderTabTitle } from "../header-tab-presentation";
 import { TabLeadingIcon } from "../tab-leading-icon";
-import { sideTabWaitingLabel, tabWaitingReason } from "../tab-waiting";
 import { NO_LIVE_AGENTS, useSideTabLiveAgents } from "./side-tab-live-agents";
 import { railBadgeOf } from "./rail-badge-kind";
-import { sideTabTileOf } from "../tab-identity";
+import { sideTabTileOf, sideTabTitleIconOf } from "../tab-identity";
 import { SideSplitRowPair } from "./side-split-row-pair";
 import { SideTabRow, type SideTabRowVariant } from "./side-tab-row";
+import { sideTabStatusOf } from "./side-tab-status";
+import { SideTabStatusGlyph } from "./side-tab-status-glyph";
 
 /**
  * The dragged object of a vertical strip drag: the row (or the split pair)
@@ -162,17 +163,17 @@ function OverlayMember(props: {
       session={null}
       tint={null}
       groupLine={null}
-      leading={icon}
+      titleIcon={<Plus className="size-3.5 me-1.5" />}
       tile={{ kind: "icon", icon }}
       badge={null}
       agents={NO_LIVE_AGENTS}
+      status={null}
       disclosure={null}
       title={label}
       hoverCardBody={label}
       hoverCardOnOverflow={false}
       leaderBadge={null}
       close={null}
-      waitingLabel={null}
       dropIndicator={null}
       pairPreview={null}
       dragSource={false}
@@ -219,7 +220,7 @@ function OverlayTabRow(props: {
       session={null}
       tint={appearance?.color ?? null}
       groupLine={null}
-      leading={leading}
+      titleIcon={sideTabTitleIconOf({ appearance, icon: tab.icon })}
       tile={sideTabTileOf({
         appearance,
         title: resolvedTabName,
@@ -228,13 +229,25 @@ function OverlayTabRow(props: {
       })}
       badge={railBadgeOf(indicatorState)}
       agents={agents}
+      status={sideTabStatusOf({
+        indicator: indicatorState,
+        agents,
+        meterHidden: false,
+        glyph: (
+          <SideTabStatusGlyph
+            tabId={tab.id}
+            indicatorState={indicatorState}
+            activityStatus={activityStatus}
+            titleGenerating={titleGenerating}
+          />
+        ),
+      })}
       disclosure={null}
       title={displayName}
       hoverCardBody={displayName}
       hoverCardOnOverflow={false}
       leaderBadge={null}
       close={null}
-      waitingLabel={sideTabWaitingLabel(tabWaitingReason(indicatorState, null))}
       dropIndicator={null}
       pairPreview={null}
       dragSource={false}

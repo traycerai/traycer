@@ -11,8 +11,10 @@ import { ColumnEdgeContext } from "@/components/layout/column-edge-context";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 import {
   SideTabRow,
+  type SideTabDisclosure,
   type SideTabRowClose,
   type SideTabRowProps,
+  type SideTabRowStatus,
 } from "../side-strip/side-tab-row";
 import { SideSplitRowPair } from "../side-strip/side-split-row-pair";
 import type { SideTabLiveAgents } from "../side-strip/agent-meter";
@@ -25,8 +27,6 @@ import {
   SIDE_TAB_ACTIVE_CLASS,
   SIDE_TAB_GROUP_LINE_CLASS,
   SIDE_TAB_GROUP_LINE_SEAT_CLASS,
-  SIDE_TAB_LEADING_CLASS,
-  SIDE_TAB_LEADING_TILE_SLOT_CLASS,
   SIDE_TAB_ROW_CLASS,
   SIDE_TAB_SESSION_ACTIVE_CLASS,
   SIDE_TAB_TILE_ACTIVE_CLASS,
@@ -62,6 +62,22 @@ function closeControl(onClose: () => void): SideTabRowClose {
   };
 }
 
+/** A chip or the meter: it stays, and the close joins after it. */
+const CHIP: SideTabRowStatus = {
+  yieldsToClose: false,
+  node: <span data-testid="status-chip" />,
+};
+
+function disclosureControl(): SideTabDisclosure {
+  return {
+    expanded: false,
+    animate: false,
+    controlsId: "agents-e1",
+    label: "Show agents in Fix login",
+    onToggle: () => {},
+  };
+}
+
 function rowFrame(extra: Frame): Frame {
   return { "data-testid": ROW_TEST_ID, ...extra };
 }
@@ -74,17 +90,17 @@ function baseProps(): SideTabRowProps {
     session: null,
     tint: null,
     groupLine: null,
-    leading: <span data-testid="leading-glyph" />,
+    titleIcon: null,
     tile: { kind: "monogram", text: "FL" },
     badge: null,
     agents: NO_LIVE_AGENTS,
+    status: null,
     disclosure: null,
     title: "Fix login",
     hoverCardBody: <div data-testid="hover-card-probe">Fix login</div>,
     hoverCardOnOverflow: false,
     leaderBadge: null,
     close: null,
-    waitingLabel: null,
     dropIndicator: null,
     pairPreview: null,
     dragSource: false,
@@ -125,33 +141,20 @@ function trailing(row: HTMLElement): HTMLElement {
 describe("SideTabRow expanded trailing slot", () => {
   const leader: ReactNode = <span data-testid="leader-badge">1</span>;
 
-  it("shows the leader badge over the close and the chip", () => {
+  it("shows the leader badge over the close and the status", () => {
     for (const active of [true, false]) {
       const row = renderRow({
         active,
         leaderBadge: leader,
         close: closeControl(() => {}),
-        waitingLabel: "Approve",
+        status: CHIP,
       });
       const slot = trailing(row);
       expect(slot.querySelector('[data-testid="leader-badge"]')).not.toBeNull();
       expect(screen.queryByTestId("tab-close-epic-e1")).toBeNull();
-      expect(screen.queryByTestId("side-tab-waiting-chip")).toBeNull();
+      expect(screen.queryByTestId("status-chip")).toBeNull();
       cleanup();
     }
-  });
-
-  it("shows the close on the active row without hover, and no chip", () => {
-    renderRow({
-      active: true,
-      close: closeControl(() => {}),
-      waitingLabel: "Reply",
-    });
-    const wrapper = closeWrapper();
-    expect(wrapper.dataset.revealed).toBe("always");
-    expect(wrapper.classList.contains("opacity-0")).toBe(false);
-    expect(wrapper.classList.contains("pointer-events-none")).toBe(false);
-    expect(screen.queryByTestId("side-tab-waiting-chip")).toBeNull();
   });
 
   it("reveals the close on hover or keyboard focus on an inactive row", () => {
@@ -168,91 +171,25 @@ describe("SideTabRow expanded trailing slot", () => {
     expect(wrapper.className).not.toContain("header-tab");
   });
 
-  it("keeps the chip at rest and swaps it for the close on reveal", () => {
+  it("gives the chevron no room until the row is hovered or focused", () => {
     renderRow({
-      active: false,
       close: closeControl(() => {}),
-      waitingLabel: "Approve",
+      status: CHIP,
+      disclosure: disclosureControl(),
     });
-    const chip = screen.getByTestId("side-tab-waiting-chip");
-    expect(chip.textContent).toBe("Approve");
-    const chipCell = chip.parentElement;
+    const chevronCell = screen.getByTestId("side-tab-disclosure").parentElement;
     expect(
-      chipCell !== null &&
+      chevronCell !== null &&
         hasClasses(
-          chipCell,
-          "col-start-1 row-start-1 group-hover/side-tab:opacity-0 group-has-[:focus-visible]/side-tab:opacity-0",
+          chevronCell,
+          "w-0 group-hover/side-tab:w-5 group-has-[:focus-visible]/side-tab:w-5",
         ),
     ).toBe(true);
-    expect(hasClasses(closeWrapper(), "col-start-1 row-start-1")).toBe(true);
   });
-
-  it.each(["Approve", "Reply"] as const)(
-    "shows the %s chip when there is no close",
-    (label) => {
-      renderRow({ waitingLabel: label });
-      const chip = screen.getByTestId("side-tab-waiting-chip");
-      expect(chip.textContent).toBe(label);
-      expect(chip.dataset.variant).toBe("warning");
-      expect(chip.parentElement?.className).not.toContain("opacity-0");
-    },
-  );
 
   it("renders an empty trailing slot when nothing applies", () => {
     const row = renderRow({});
     expect(trailing(row).childElementCount).toBe(0);
-  });
-
-  it("shows the row meter only once more than one agent is live", () => {
-    const one = renderRow({ agents: agents(1, 0, "covered") });
-    expect(
-      trailing(one).querySelector('[data-testid="side-tab-meter"]'),
-    ).toBeNull();
-    cleanup();
-
-    const several = renderRow({ agents: agents(1, 2, "covered") });
-    expect(
-      trailing(several).querySelector('[data-testid="side-tab-meter"]'),
-    ).not.toBeNull();
-  });
-
-  it("mounts the row meter for a single unserved agent (a floor), not for a single covered one (F8 round 3)", () => {
-    const covered = renderRow({ agents: agents(1, 0, "covered") });
-    expect(
-      trailing(covered).querySelector('[data-testid="side-tab-meter"]'),
-    ).toBeNull();
-    cleanup();
-
-    const unserved = renderRow({ agents: agents(1, 0, "unserved") });
-    const meter = trailing(unserved).querySelector(
-      '[data-testid="side-tab-meter"]',
-    );
-    expect(meter).not.toBeNull();
-    expect(
-      meter?.querySelector('[data-testid="side-tab-meter-floor"]'),
-    ).not.toBeNull();
-  });
-
-  it("prefers the waiting chip, then the failed chip, over the row meter", () => {
-    const waiting = renderRow({
-      badge: "approval",
-      waitingLabel: "Approve",
-      agents: agents(2, 1, "covered"),
-    });
-    expect(
-      trailing(waiting).querySelector('[data-testid="side-tab-meter"]'),
-    ).toBeNull();
-    expect(screen.getByTestId("side-tab-waiting-chip")).not.toBeNull();
-    cleanup();
-
-    const failed = renderRow({
-      badge: "failed",
-      agents: agents(2, 1, "covered"),
-    });
-    expect(
-      trailing(failed).querySelector('[data-testid="side-tab-meter"]'),
-    ).toBeNull();
-    expect(screen.getByTestId("side-tab-failed-chip")).not.toBeNull();
   });
 
   it("closes without activating the row", () => {
@@ -314,14 +251,13 @@ function fireWaitingPulseAnimationEnd(
 }
 
 describe("SideTabRow expanded paint", () => {
-  it("lays out leading, title, trailing in that order", () => {
+  it("lays out the title and the trailing edge, with nothing before the title", () => {
     const row = renderRow({});
     const order = Array.from(row.children)
       .map((child) => child.getAttribute("data-testid"))
       .filter((id) => id !== null);
     expect(order).toEqual([
       "side-tab-accent",
-      "side-tab-leading",
       "side-tab-title",
       "side-tab-trailing",
     ]);
@@ -343,58 +279,45 @@ describe("SideTabRow expanded paint", () => {
     expect(renamed.querySelector(".header-tab-title-text")).toBeNull();
   });
 
-  it("shows the status glyph alone for a tab with neither icon nor colour", () => {
-    const row = renderRow({ tint: null, badge: "unread" });
-    const leading = byTestId(row, "side-tab-leading");
-    expect(leading.dataset.leading).toBe("glyph");
-    expect(hasClasses(leading, SIDE_TAB_LEADING_CLASS)).toBe(true);
-    expect(
-      leading.querySelector('[data-testid="leading-glyph"]'),
-    ).not.toBeNull();
-    expect(
-      row.querySelector('[data-testid="side-tab-leading-tile"]'),
-    ).toBeNull();
-    expect(row.querySelector('[data-testid="side-tab-rail-badge"]')).toBeNull();
+  it("draws a title icon inline as the title's first content", () => {
+    const row = renderRow({
+      titleIcon: <span data-testid="title-icon">🚀</span>,
+    });
+    const title = byTestId(row, "side-tab-title");
+    expect(title.firstElementChild?.firstElementChild).toBe(
+      byTestId(row, "title-icon"),
+    );
+    expect(title.textContent).toBe("🚀Fix login");
   });
 
-  it("shows a coloured tab's status glyph, not a monogram tile - the colour lives on the accent bar alone", () => {
-    const row = renderRow({ tint: "#3366ff", badge: "failed" });
-    const leading = byTestId(row, "side-tab-leading");
-    // A monogram never forces a tile: on the small leading slot, a status
-    // badge would overlap its corner and read as a tiny growth on the
-    // letters. The plain glyph renders instead, same as an uncoloured tab -
-    // it is `props.leading` itself (the real status/notification icon in
-    // production) that carries the badge state, not a `CornerBadge` overlay.
-    expect(leading.dataset.leading).toBe("glyph");
+  it("mutes the title of a task whose title is still generating", () => {
+    const generating = renderRow({ tile: { kind: "generating" } });
     expect(
-      leading.querySelector('[data-testid="leading-glyph"]'),
-    ).not.toBeNull();
+      generating
+        .querySelector(".header-tab-title-text")
+        ?.classList.contains("text-muted-foreground"),
+    ).toBe(true);
+    cleanup();
+
+    const titled = renderRow({});
     expect(
-      row.querySelector('[data-testid="side-tab-leading-tile"]'),
-    ).toBeNull();
-    expect(row.querySelector('[data-testid="side-tab-rail-badge"]')).toBeNull();
-    const accent = byTestId(row, "side-tab-accent");
+      titled
+        .querySelector(".header-tab-title-text")
+        ?.classList.contains("text-muted-foreground"),
+    ).toBe(false);
+  });
+
+  it("keeps a tab's colour on the accent bar alone, and a colourless tab's bar transparent", () => {
+    const coloured = renderRow({ tint: "#3366ff" });
+    const accent = byTestId(coloured, "side-tab-accent");
     expect(accent.dataset.accent).toBe("true");
     expect(accent.style.getPropertyValue("--side-tab-accent")).toBe("#3366ff");
-  });
+    cleanup();
 
-  it("shows a custom icon on its 16px tile, always neutral", () => {
-    const row = renderRow({
-      tint: null,
-      tile: { kind: "icon", icon: <span data-testid="custom-icon">🚀</span> },
-      badge: "approval",
-    });
-    const leading = byTestId(row, "side-tab-leading");
-    expect(hasClasses(leading, SIDE_TAB_LEADING_TILE_SLOT_CLASS)).toBe(true);
-    const tile = byTestId(row, "side-tab-leading-tile");
-    expect(tile.querySelector('[data-testid="custom-icon"]')).not.toBeNull();
-    expect(hasClasses(tile, SIDE_TAB_COLORLESS_TILE_CLASS)).toBe(true);
-    expect(byTestId(row, "side-tab-rail-badge").dataset.kind).toBe("approval");
-    const accent = byTestId(row, "side-tab-accent");
-    expect(accent.dataset.accent).toBe("false");
-    expect(accent.style.getPropertyValue("--side-tab-accent")).toBe(
-      "transparent",
-    );
+    const plain = renderRow({ tint: null });
+    const bar = byTestId(plain, "side-tab-accent");
+    expect(bar.dataset.accent).toBe("false");
+    expect(bar.style.getPropertyValue("--side-tab-accent")).toBe("transparent");
   });
 
   it("fills the active row and not an inactive one", () => {
@@ -462,16 +385,15 @@ describe("SideTabRow collapsed", () => {
       variant: "collapsed",
       active: true,
       close: closeControl(() => {}),
-      waitingLabel: "Approve",
+      status: CHIP,
       leaderBadge: <span data-testid="leader-badge">1</span>,
       frame: rowFrame({ tabIndex: 0 }),
     });
     act(() => row.focus());
     expect(row.querySelector('[data-testid="side-tab-trailing"]')).toBeNull();
     expect(screen.queryByTestId("tab-close-epic-e1")).toBeNull();
-    expect(screen.queryByTestId("side-tab-waiting-chip")).toBeNull();
+    expect(screen.queryByTestId("status-chip")).toBeNull();
     expect(screen.queryByTestId("leader-badge")).toBeNull();
-    expect(row.querySelector('[data-testid="side-tab-leading"]')).toBeNull();
   });
 
   it("is the 40x44 tile itself, filled the same as an active expanded row", () => {

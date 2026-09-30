@@ -94,6 +94,7 @@ import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import type { TabRef } from "@/stores/tabs/types";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 
 // The foot's account row shows a signed-in user (never `SignInButton`, which
 // reaches `useAuthService` and throws outside a `<HostRuntimeProvider>` this
@@ -328,6 +329,15 @@ const STRIP_KEYBINDING_IDS: ReadonlyArray<ActionId> = [
 // The shipped arrangement keeps both readings in the status bar, so the
 // readings row stands empty (and hidden) between the update row and the account.
 const FOOT_ORDER = ["foot-update", "side-strip-readings", "foot-account"];
+
+/** A host indicator with nothing lit. */
+const NO_FLAGS = {
+  pendingApproval: false,
+  pendingInterview: false,
+  pendingFork: false,
+  unreadFailure: false,
+  unreadDone: false,
+};
 
 let queryClient: QueryClient;
 
@@ -934,14 +944,6 @@ describe("<SideTabStrip />", () => {
   });
 
   describe("the Activity view's nested agents (D9)", () => {
-    const NO_FLAGS = {
-      pendingApproval: false,
-      pendingInterview: false,
-      pendingFork: false,
-      unreadFailure: false,
-      unreadDone: false,
-    };
-
     beforeEach(() => {
       setSideStripView("activity");
       activateSpy.mockClear();
@@ -1138,6 +1140,44 @@ describe("<SideTabStrip />", () => {
       expect(screen.getByTestId("strip-agent-group").hidden).toBe(false);
       expect(screen.getByTestId("strip-agent-b-run")).toBeTruthy();
       expect(within(beta).queryByTestId("side-tab-meter")).toBeNull();
+    });
+
+    it("puts the chevron at the trailing edge, after a stayed chip or before a yielding glyph's cell, and before the close", async () => {
+      openEpicTabs(["Alpha", "Beta", "Gamma"]);
+      warmEpic("e-beta", [chatProjection("b-wait", { title: "B waits" })]);
+      warmEpic("e-gamma", [chatProjection("g-run", { title: "G runs" })]);
+      busy("e-gamma", ["g-run"]);
+      indicatorState.value = {
+        epics: { "e-beta": { ...NO_FLAGS, pendingApproval: true } },
+        chats: { "b-wait": { ...NO_FLAGS, pendingApproval: true } },
+      };
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const inOrder = (row: HTMLElement): ReadonlyArray<string> =>
+        Array.from(
+          within(row)
+            .getByTestId("side-tab-trailing")
+            .querySelectorAll(
+              '[data-testid="side-tab-waiting-chip"], [data-testid="side-tab-disclosure"], [data-status-glyph], [data-testid^="tab-close-"]',
+            ),
+        ).map(
+          (node) =>
+            node.getAttribute("data-status-glyph") ??
+            node
+              .getAttribute("data-testid")
+              ?.replace(/^tab-close-.*/, "close") ??
+            "",
+        );
+      expect(inOrder(screen.getByTestId("tab-epic-e-beta"))).toEqual([
+        "side-tab-waiting-chip",
+        "side-tab-disclosure",
+        "close",
+      ]);
+      expect(inOrder(screen.getByTestId("tab-epic-e-gamma"))).toEqual([
+        "side-tab-disclosure",
+        "running",
+        "close",
+      ]);
     });
 
     it("gives a cold task no chevron, only its needs-you row, opened through the notification's activation", async () => {
@@ -1704,52 +1744,296 @@ describe("<SideTabStrip />", () => {
     ).toBe("approval");
   });
 
-  describe("the leading slot's glyph presentation (D12, finding 4)", () => {
-    it("shows the shared approval glyph on an uncoloured row, not the message warning bubble", async () => {
-      openEpicTabs(["Alpha"]);
-      indicatorState.value = {
-        epics: {
-          "e-alpha": {
-            unreadFailure: false,
-            unreadDone: false,
-            pendingApproval: true,
-            pendingInterview: false,
-            pendingFork: false,
-          },
-        },
-        chats: {},
-      };
-      await renderStrip("/elsewhere", LEFT_STRIP);
+  describe("the trailing status and the close", () => {
+    interface StatusCase {
+      readonly name: string;
+      /** The host's flags for the task. */
+      readonly flags: Partial<typeof NO_FLAGS>;
+      /** An unread failure of the task's terminal, which the app records itself. */
+      readonly terminalFailure: boolean;
+      readonly turn: number;
+      readonly background: number;
+      readonly generating: boolean;
+      readonly shows: string;
+    }
 
-      const row = screen.getByTestId("tab-epic-e-alpha");
-      const leading = within(row).getByTestId("side-tab-leading");
-      expect(leading.getAttribute("data-leading")).toBe("glyph");
-      expect(
-        leading.querySelector('[data-status-glyph="approval"]'),
-      ).not.toBeNull();
+    const NONE = {
+      flags: {},
+      terminalFailure: false,
+      turn: 0,
+      background: 0,
+      generating: false,
+    } as const;
+
+    // The spec's table, top row first: what each state shows on an inactive
+    // row, and the states that a row above it outranks.
+    const STATUS_CASES: ReadonlyArray<StatusCase> = [
+      {
+        ...NONE,
+        name: "1 a reply over an approval",
+        flags: { pendingInterview: true, pendingApproval: true },
+        shows: "Reply chip",
+      },
+      {
+        ...NONE,
+        name: "1 an approval",
+        flags: { pendingApproval: true },
+        shows: "Approve chip",
+      },
+      {
+        ...NONE,
+        name: "1 an approval over an unread failure",
+        flags: { unreadFailure: true, pendingApproval: true },
+        shows: "Approve chip",
+      },
+      {
+        ...NONE,
+        name: "1 an approval over several agents",
+        flags: { pendingApproval: true },
+        turn: 2,
+        shows: "Approve chip",
+      },
+      {
+        ...NONE,
+        name: "1 an approval over a pending fork",
+        flags: { pendingApproval: true, pendingFork: true },
+        shows: "Approve chip",
+      },
+      {
+        ...NONE,
+        name: "2 an unread failure",
+        flags: { unreadFailure: true },
+        shows: "Failed chip",
+      },
+      {
+        ...NONE,
+        name: "2 an unread failure over several agents",
+        flags: { unreadFailure: true },
+        turn: 2,
+        shows: "Failed chip",
+      },
+      {
+        ...NONE,
+        name: "3 a pending fork over several agents",
+        flags: { pendingFork: true },
+        turn: 2,
+        shows: "fork glyph",
+      },
+      {
+        ...NONE,
+        name: "4 several agents",
+        turn: 2,
+        shows: "meter",
+      },
+      {
+        ...NONE,
+        name: "4 a turn and a background agent, over an unread done",
+        flags: { unreadDone: true },
+        turn: 1,
+        background: 1,
+        shows: "meter",
+      },
+      {
+        ...NONE,
+        name: "5 one agent running a turn",
+        turn: 1,
+        shows: "running glyph",
+      },
+      {
+        ...NONE,
+        name: "5 a running turn over a terminal failure",
+        terminalFailure: true,
+        turn: 1,
+        shows: "running glyph",
+      },
+      {
+        ...NONE,
+        name: "6 background work only",
+        background: 1,
+        shows: "background glyph",
+      },
+      {
+        ...NONE,
+        name: "7 an unread done",
+        flags: { unreadDone: true },
+        shows: "done glyph",
+      },
+      {
+        ...NONE,
+        name: "7 an unread done over a terminal failure",
+        flags: { unreadDone: true },
+        terminalFailure: true,
+        shows: "done glyph",
+      },
+      {
+        ...NONE,
+        name: "8 a terminal failure",
+        terminalFailure: true,
+        shows: "failure glyph",
+      },
+      {
+        ...NONE,
+        name: "10 a title still generating",
+        generating: true,
+        shows: "spinner",
+      },
+      { ...NONE, name: "11 idle, nothing unread", shows: "nothing" },
+    ];
+
+    beforeEach(() => {
+      setSideStripView("layered");
+      openEpicTabs(["Alpha", "Beta"]);
     });
 
-    it("shows the done glyph for an unread completion", async () => {
-      openEpicTabs(["Alpha"]);
+    afterEach(() => {
+      __resetAgentActivityStoreForTests();
+      useAppLocalNotificationsStore.setState({ byId: {} });
+      indicatorState.value = { epics: {}, chats: {} };
+      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    });
+
+    function setBeta(input: Omit<StatusCase, "name" | "shows">): void {
       indicatorState.value = {
-        epics: {
-          "e-alpha": {
-            unreadFailure: false,
-            unreadDone: true,
-            pendingApproval: false,
-            pendingInterview: false,
-            pendingFork: false,
+        epics: { "e-beta": { ...NO_FLAGS, ...input.flags } },
+        chats: {},
+      };
+      if (input.terminalFailure) {
+        useAppLocalNotificationsStore.setState({
+          byId: {
+            terminal: {
+              id: "terminal",
+              updatedAt: 1,
+              readAt: null,
+              kind: "terminal.closed",
+              sourceRef: "terminal",
+              payload: { kind: "chat", epicId: "e-beta", chatId: "c-term" },
+              message: "Terminal closed",
+              detail: null,
+              displayedUpdatedAt: null,
+            },
           },
-        },
+        });
+      }
+      const turn = Array.from(
+        { length: input.turn },
+        (_, i) => `t${String(i)}`,
+      );
+      const background = Array.from(
+        { length: input.background },
+        (_, i) => `b${String(i)}`,
+      );
+      __setAgentActivityStateForTests(
+        { "e-beta": { working: [...turn, ...background], turn } },
+        "local",
+        "connected",
+      );
+      if (input.generating) {
+        useEpicCanvasStore.getState().markEpicTitlePending("e-beta", "Beta");
+      }
+    }
+
+    /** What a row's trailing edge shows, apart from its close. */
+    function shownBy(row: HTMLElement): string {
+      const slot = within(row).getByTestId("side-tab-trailing");
+      if (slot.querySelector('[data-testid="side-tab-failed-chip"]')) {
+        return "Failed chip";
+      }
+      const waiting = slot.querySelector(
+        '[data-testid="side-tab-waiting-chip"]',
+      );
+      if (waiting !== null) return `${waiting.textContent} chip`;
+      if (slot.querySelector('[data-testid="side-tab-meter"]')) return "meter";
+      const glyph = slot.querySelector("[data-status-glyph]");
+      if (glyph !== null) {
+        return `${glyph.getAttribute("data-status-glyph") ?? ""} glyph`;
+      }
+      if (slot.querySelector('[data-testid^="header-tab-title-generating"]')) {
+        return "spinner";
+      }
+      return "nothing";
+    }
+
+    /** The cell a close button sits in, with whatever yields to it. */
+    function closeCellOf(row: HTMLElement): HTMLElement {
+      const cell = within(row).getByTestId("tab-close-epic-e-beta")
+        .parentElement?.parentElement;
+      if (cell === null || cell === undefined) throw new Error("no close cell");
+      return cell;
+    }
+
+    it.each(STATUS_CASES)("$name: shows $shows", async (row) => {
+      setBeta(row);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      expect(shownBy(screen.getByTestId("tab-epic-e-beta"))).toBe(row.shows);
+    });
+
+    it("has a glyph yield to the close in the one cell it shares, its label still in the row", async () => {
+      setBeta({ ...NONE, turn: 1 });
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const beta = screen.getByTestId("tab-epic-e-beta");
+      const glyph = within(beta).getByRole("status", {
+        name: "Task activity in progress",
+      });
+      expect(closeCellOf(beta).contains(glyph)).toBe(true);
+      expect(within(beta).getAllByRole("status")).toContain(glyph);
+    });
+
+    it("keeps a chip, with the close joining after it", async () => {
+      setBeta({ ...NONE, flags: { pendingApproval: true } });
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const beta = screen.getByTestId("tab-epic-e-beta");
+      const chip = within(beta).getByTestId("side-tab-waiting-chip");
+      const close = within(beta).getByTestId("tab-close-epic-e-beta");
+      expect(closeCellOf(beta).contains(chip)).toBe(false);
+      expect(chip.compareDocumentPosition(close)).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+    });
+
+    it("keeps the meter, with the close joining after it", async () => {
+      setBeta({ ...NONE, turn: 2 });
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const beta = screen.getByTestId("tab-epic-e-beta");
+      const meter = within(beta).getByTestId("side-tab-meter");
+      expect(closeCellOf(beta).contains(meter)).toBe(false);
+      expect(
+        meter.compareDocumentPosition(
+          within(beta).getByTestId("tab-close-epic-e-beta"),
+        ),
+      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    });
+
+    it("shows the active row's status and its close, the close always revealed", async () => {
+      indicatorState.value = {
+        epics: { "e-alpha": { ...NO_FLAGS, unreadDone: true } },
         chats: {},
       };
       await renderStrip("/elsewhere", LEFT_STRIP);
 
-      const row = screen.getByTestId("tab-epic-e-alpha");
-      const leading = within(row).getByTestId("side-tab-leading");
-      expect(
-        leading.querySelector('[data-status-glyph="done"]'),
-      ).not.toBeNull();
+      const alpha = screen.getByTestId("tab-epic-e-alpha");
+      const done = alpha.querySelector('[data-status-glyph="done"]');
+      const close = within(alpha).getByTestId("tab-close-epic-e-alpha");
+      expect(done).not.toBeNull();
+      expect(close.parentElement?.dataset.revealed).toBe("always");
+      expect(close.parentElement?.parentElement?.contains(done)).toBe(false);
+    });
+
+    it("gives a rename input the whole row, with no status and no close", async () => {
+      setBeta({ ...NONE, flags: { pendingApproval: true } });
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      fireEvent.contextMenu(screen.getByTestId("tab-epic-e-beta"));
+      fireEvent.click(await screen.findByText("Edit Title"));
+
+      const beta = screen.getByTestId("tab-epic-e-beta");
+      await within(beta).findByTestId("tab-title-input-epic-e-beta");
+      expect(within(beta).queryByTestId("side-tab-trailing")).toBeNull();
+      expect(within(beta).queryByTestId("side-tab-waiting-chip")).toBeNull();
+      expect(within(beta).queryByTestId("tab-close-epic-e-beta")).toBeNull();
     });
   });
 

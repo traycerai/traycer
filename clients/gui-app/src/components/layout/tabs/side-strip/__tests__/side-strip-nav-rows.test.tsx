@@ -545,13 +545,16 @@ describe("SideTabStrip rows: running work (F3, D5)", () => {
     __resetAgentActivityStoreForTests();
   });
 
-  /** Alpha has two agents mid-turn; nothing is seeded for any other task. */
+  /**
+   * Alpha has one agent mid-turn (a row shows the spinner for one, and the
+   * meter from two); nothing is seeded for any other task.
+   */
   function seedRunningAlpha(): void {
     __setAgentActivityStateForTests(
       {
         "e-alpha": {
-          working: ["agent-1", "agent-2"],
-          turn: ["agent-1", "agent-2"],
+          working: ["agent-1"],
+          turn: ["agent-1"],
         },
       },
       "local",
@@ -567,7 +570,7 @@ describe("SideTabStrip rows: running work (F3, D5)", () => {
 
     const alpha = within(screen.getByTestId("tab-epic-e-alpha"));
     const glyph = alpha
-      .getByTestId("side-tab-leading")
+      .getByTestId("side-tab-trailing")
       .querySelector('[data-status-glyph="running"]');
     if (!(glyph instanceof HTMLElement))
       throw new Error("expected the running task's row to draw a glyph");
@@ -599,7 +602,7 @@ describe("SideTabStrip rows: running work (F3, D5)", () => {
     // counting it, in the meter's own mark.
     expect(
       tile.querySelectorAll('[data-testid="side-tab-meter"] [data-pip="turn"]'),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect(
       tile.querySelector('[data-status-glyph="running"], .font-mono'),
     ).toBe(null);

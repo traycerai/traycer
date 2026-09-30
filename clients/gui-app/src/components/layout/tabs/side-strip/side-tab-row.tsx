@@ -10,7 +10,6 @@ import type {
 import { ChevronRight, X } from "lucide-react";
 import * as m from "motion/react-m";
 import type { MergeSide } from "@/components/epic-canvas/dnd/strip-drag-model";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DropLine } from "@/components/ui/drop-line";
 import { HoverCard } from "@/components/ui/hover-card";
@@ -19,12 +18,8 @@ import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
 import { cn } from "@/lib/utils";
 import { SESSION_TAB_LABEL_CLASS } from "../header-tab-visual";
 import { MonogramChip } from "../monogram-chip";
-import {
-  SIDE_TAB_COLORLESS_TILE_CLASS,
-  type SideTabTile,
-} from "../tab-identity";
+import type { SideTabTile } from "../tab-identity";
 import { SideTabMeter, type SideTabLiveAgents } from "./agent-meter";
-import { sideTabAgentsAreFloor } from "./side-tab-live-agents";
 import { SideTabRailBadge } from "./side-tab-rail-badge";
 import type { RailBadgeKind } from "./rail-badge-kind";
 import {
@@ -34,10 +29,6 @@ import {
   SIDE_TAB_DROP_LINE_SEAT_CLASS,
   SIDE_TAB_GROUP_LINE_SEAT_CLASS,
   SIDE_TAB_HOVER_CLASS,
-  SIDE_TAB_LEADING_BADGE_POSITION_CLASS,
-  SIDE_TAB_LEADING_CLASS,
-  SIDE_TAB_LEADING_TILE_CLASS,
-  SIDE_TAB_LEADING_TILE_SLOT_CLASS,
   SIDE_TAB_RAIL_BADGE_POSITION_CLASS,
   SIDE_TAB_ROW_CLASS,
   SIDE_TAB_SESSION_ACTIVE_CLASS,
@@ -61,8 +52,8 @@ export interface SideGroupLine {
 }
 
 /**
- * A task's disclosure: the chevron button that swaps in for the leading slot
- * while the row is hovered or focused, and the state it toggles.
+ * A task's disclosure: the chevron button that joins the trailing edge, before
+ * the close, while the row is hovered or focused, and the state it toggles.
  */
 export interface SideTabDisclosure {
   readonly expanded: boolean;
@@ -83,6 +74,16 @@ export interface SideTabRowClose {
   readonly testId: string;
   readonly disabled: boolean;
   readonly onClose: () => void;
+}
+
+/**
+ * The one status a row's trailing edge shows. A glyph yields its place to the
+ * close while the row is hovered or focused; a chip or the meter stays, and the
+ * close joins after it.
+ */
+export interface SideTabRowStatus {
+  readonly node: ReactNode;
+  readonly yieldsToClose: boolean;
 }
 
 /**
@@ -109,22 +110,22 @@ export interface SideTabRowProps {
   /** The group line's segment, on a group member. */
   readonly groupLine: SideGroupLine | null;
   /**
-   * Expanded: the status glyph, shown alone in the leading slot when the tab
-   * has neither a custom icon nor a colour.
+   * Expanded: what draws before the title, inline, with its own space after it
+   * (a custom icon's characters, or a component icon); the title starts on the
+   * row's padding otherwise.
    */
-  readonly leading: ReactNode;
-  /**
-   * The tab's tile: the collapsed row's content, and in the expanded row's
-   * leading slot a custom icon, or a monogram when the tab has a colour.
-   */
+  readonly titleIcon: ReactNode | null;
+  /** The tab's tile: the collapsed row's content. */
   readonly tile: SideTabTile;
   /**
-   * The one state that needs the user (D5): the badge on whichever tile is
-   * shown, the meter's attention pip, and what starts the entry pulse.
+   * The one state that needs the user (D5): the collapsed tile's badge, the
+   * meter's attention pip, and what starts the entry pulse.
    */
   readonly badge: RailBadgeKind | null;
-  /** The task's live agents, drawn by the meter. */
+  /** The task's live agents, drawn by the collapsed tile's meter. */
   readonly agents: SideTabLiveAgents;
+  /** Expanded: the one trailing status, or `null` for a row with none. */
+  readonly status: SideTabRowStatus | null;
   /** The chevron of a task with nested agents; `null` on every other row. */
   readonly disclosure: SideTabDisclosure | null;
   /**
@@ -138,23 +139,34 @@ export interface SideTabRowProps {
   readonly hoverCardOnOverflow: boolean;
   readonly leaderBadge: ReactNode | null;
   readonly close: SideTabRowClose | null;
-  readonly waitingLabel: "Approve" | "Reply" | null;
   readonly dropIndicator: "before" | "after" | null;
   /** `"left"` highlights the top half, `"right"` the bottom half. */
   readonly pairPreview: MergeSide | null;
   readonly dragSource: boolean;
 }
 
-/** Shows a hidden trailing control while the row is hovered or holds keyboard focus. */
+/**
+ * Shows a hidden trailing control while the row is hovered or holds keyboard
+ * focus. The fade is 100ms, and instant on keyboard focus and with reduced
+ * motion.
+ */
 const REVEAL_CLASS =
-  "pointer-events-none opacity-0 group-hover/side-tab:pointer-events-auto group-hover/side-tab:opacity-100 group-focus-visible/side-tab:pointer-events-auto group-focus-visible/side-tab:opacity-100 group-has-[:focus-visible]/side-tab:pointer-events-auto group-has-[:focus-visible]/side-tab:opacity-100";
+  "pointer-events-none opacity-0 transition-opacity duration-100 motion-reduce:transition-none group-hover/side-tab:pointer-events-auto group-hover/side-tab:opacity-100 group-focus-visible/side-tab:pointer-events-auto group-focus-visible/side-tab:opacity-100 group-focus-visible/side-tab:duration-0 group-has-[:focus-visible]/side-tab:pointer-events-auto group-has-[:focus-visible]/side-tab:opacity-100 group-has-[:focus-visible]/side-tab:duration-0";
 
 /**
- * Hides what yields its place while the row is hovered or focused: the
- * waiting chip to the close button, the leading icon to the chevron.
+ * Hides what yields its place while the row is hovered or focused: the status
+ * glyph, to the close. It crossfades with the close under the same timing as
+ * `REVEAL_CLASS`.
  */
 const YIELD_TO_CLOSE_CLASS =
-  "group-hover/side-tab:opacity-0 group-focus-visible/side-tab:opacity-0 group-has-[:focus-visible]/side-tab:opacity-0";
+  "transition-opacity duration-100 motion-reduce:transition-none group-hover/side-tab:opacity-0 group-focus-visible/side-tab:opacity-0 group-focus-visible/side-tab:duration-0 group-has-[:focus-visible]/side-tab:opacity-0 group-has-[:focus-visible]/side-tab:duration-0";
+
+/**
+ * The room of a trailing control that joins the row's content: none at rest,
+ * 20px while the row is hovered or focused. It stays in the tab order at rest.
+ */
+const JOIN_ON_REVEAL_CLASS =
+  "w-0 min-w-0 group-hover/side-tab:w-5 group-focus-visible/side-tab:w-5 group-has-[:focus-visible]/side-tab:w-5";
 
 /**
  * The row's per-tab accent colour: the tab's own colour, ignored while the
@@ -191,8 +203,9 @@ function useWaitingPulse(badge: RailBadgeKind | null): {
 
 /**
  * One tab in the vertical strip, as paint only: behaviour arrives through
- * `frame` and the state props. Expanded, the inline order is leading, title,
- * trailing on either strip edge; collapsed, the row is the 40x44 tile itself.
+ * `frame` and the state props. Expanded, the inline order is title, trailing
+ * on either strip edge, with nothing before the title; collapsed, the row is
+ * the 40x44 tile itself.
  */
 export function SideTabRow(props: SideTabRowProps) {
   const { frame } = props;
@@ -264,7 +277,7 @@ export function SideTabRow(props: SideTabRowProps) {
               attention={props.badge}
               size="tile"
             />
-            <CornerBadge badge={props.badge} size="tile" />
+            <CornerBadge badge={props.badge} />
           </>
         ) : (
           <ExpandedContent {...props} titleRef={titleRef} />
@@ -416,23 +429,15 @@ function SideTabAccent(props: {
   );
 }
 
-function CornerBadge(props: {
-  readonly badge: RailBadgeKind | null;
-  readonly size: "tile" | "leading";
-}) {
+function CornerBadge(props: { readonly badge: RailBadgeKind | null }) {
   if (props.badge === null) return null;
   return (
     <span
-      className={cn(
-        props.size === "tile"
-          ? SIDE_TAB_RAIL_BADGE_POSITION_CLASS
-          : SIDE_TAB_LEADING_BADGE_POSITION_CLASS,
-        "pointer-events-none",
-      )}
+      className={cn(SIDE_TAB_RAIL_BADGE_POSITION_CLASS, "pointer-events-none")}
     >
       <SideTabRailBadge
         kind={props.badge}
-        size={props.size}
+        size="tile"
         testId="side-tab-rail-badge"
       />
     </span>
@@ -440,71 +445,18 @@ function CornerBadge(props: {
 }
 
 /**
- * The fixed 16px leading slot: a custom icon on a 16px tile with the status
- * as a badge in the space reserved beside it; otherwise the status glyph
- * alone. A monogram never forces a tile here - on this small a tile the
- * status badge would overlap its corner and read as a tiny growth on the
- * letters (the row's colour lives in its accent bar instead).
- *
- * A task with nested agents keeps that at rest and swaps the icon or glyph
- * for the disclosure chevron while the row is hovered or has keyboard focus.
- */
-function LeadingSlot(props: SideTabRowProps) {
-  const tile = props.tile;
-  const swapped = props.disclosure !== null && YIELD_TO_CLOSE_CLASS;
-  const chevron =
-    props.disclosure === null ? null : (
-      <DisclosureChevron disclosure={props.disclosure} />
-    );
-  if (tile.kind !== "icon") {
-    return (
-      <span
-        data-testid="side-tab-leading"
-        data-leading="glyph"
-        className={cn(
-          SIDE_TAB_LEADING_CLASS,
-          "relative flex shrink-0 items-center justify-center",
-        )}
-      >
-        <span className={cn("flex", swapped)}>{props.leading}</span>
-        {chevron}
-      </span>
-    );
-  }
-  return (
-    <span
-      data-testid="side-tab-leading"
-      data-leading="tile"
-      className={cn(SIDE_TAB_LEADING_TILE_SLOT_CLASS, "relative flex shrink-0")}
-    >
-      <span
-        data-testid="side-tab-leading-tile"
-        className={cn(
-          SIDE_TAB_LEADING_TILE_CLASS,
-          "flex items-center justify-center overflow-hidden",
-          SIDE_TAB_COLORLESS_TILE_CLASS,
-          swapped,
-        )}
-      >
-        {tile.icon}
-      </span>
-      {chevron}
-      <CornerBadge badge={props.badge} size="leading" />
-    </span>
-  );
-}
-
-/**
- * The chevron button in the leading slot. It is a button inside the row's tab,
- * as the close button is: a click toggles the group and never activates the
- * row, and the row's key handler leaves Enter and Space on it to the button.
+ * The chevron button at the trailing edge, before the close. It is a button
+ * inside the row's tab, as the close button is: a click toggles the group and
+ * never activates the row, and the row's key handler leaves Enter and Space on
+ * it to the button. It takes no room until the row is hovered or focused.
  */
 function DisclosureChevron(props: { readonly disclosure: SideTabDisclosure }) {
   const { disclosure } = props;
   return (
     <span
       className={cn(
-        "absolute inset-0 flex items-center justify-center",
+        "flex shrink-0 items-center justify-end",
+        JOIN_ON_REVEAL_CLASS,
         REVEAL_CLASS,
       )}
     >
@@ -520,7 +472,7 @@ function DisclosureChevron(props: { readonly disclosure: SideTabDisclosure }) {
           // A keyboard click has no pointer position or click count.
           disclosure.onToggle(event.detail > 0);
         }}
-        className="flex size-4 items-center justify-center rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         <ChevronRight
           aria-hidden
@@ -542,51 +494,63 @@ function ExpandedContent(
   },
 ) {
   const { titleRef } = props;
+  // A rename input takes the whole row: no icon, status, chevron or close.
+  const renaming = typeof props.title !== "string";
   return (
     <>
-      <LeadingSlot {...props} />
       <span
         data-testid="side-tab-title"
         className={cn(SIDE_TAB_TITLE_CLASS, "flex min-w-0 flex-1 items-center")}
       >
         {typeof props.title === "string" ? (
-          <span className="block min-w-0 flex-1">
-            <span ref={titleRef} className="header-tab-title-text">
-              {props.title}
+          <>
+            {props.titleIcon === null ? null : (
+              <span className="flex shrink-0 items-center">
+                {props.titleIcon}
+              </span>
+            )}
+            <span className="block min-w-0 flex-1">
+              <span
+                ref={titleRef}
+                className={cn(
+                  "header-tab-title-text",
+                  props.tile.kind === "generating" && "text-muted-foreground",
+                )}
+              >
+                {props.title}
+              </span>
             </span>
-          </span>
+          </>
         ) : (
           props.title
         )}
       </span>
-      <span
-        data-testid="side-tab-trailing"
-        className={cn(
-          SIDE_TAB_TRAILING_CLASS,
-          "grid shrink-0 items-center justify-items-end",
-        )}
-      >
-        <TrailingContent
-          active={props.active}
-          onFill={props.session === "active"}
-          leaderBadge={props.leaderBadge}
-          close={props.close}
-          waitingLabel={props.waitingLabel}
-          badge={props.badge}
-          agents={props.agents}
-          meterHidden={props.disclosure?.expanded === true}
-        />
-      </span>
+      {renaming ? null : (
+        <span
+          data-testid="side-tab-trailing"
+          className="flex shrink-0 items-center justify-end"
+        >
+          <TrailingContent
+            active={props.active}
+            onFill={props.session === "active"}
+            leaderBadge={props.leaderBadge}
+            close={props.close}
+            status={props.status}
+            disclosure={props.disclosure}
+          />
+        </span>
+      )}
     </>
   );
 }
 
 /**
- * First match wins: the leader badge; the close button, always on the active
- * row and on hover or keyboard focus elsewhere; then the status, as the first
- * of the waiting chip, the failed chip and the meter (more than one live
- * agent). The status and a hidden close share one grid cell so revealing the
- * close swaps them in place.
+ * The trailing edge, in order: the status, the disclosure chevron, the close.
+ * The leader badge replaces all of it. The close shows always on the active row
+ * and on hover or keyboard focus elsewhere, and where the status is a glyph
+ * the two share one cell and crossfade, so the title does not move. A chip or
+ * the meter stays, and the close, and the chevron, join after it; so does the
+ * status of the active row.
  */
 function TrailingContent(props: {
   readonly active: boolean;
@@ -594,90 +558,72 @@ function TrailingContent(props: {
   readonly onFill: boolean;
   readonly leaderBadge: ReactNode | null;
   readonly close: SideTabRowClose | null;
-  readonly waitingLabel: "Approve" | "Reply" | null;
-  readonly badge: RailBadgeKind | null;
-  readonly agents: SideTabLiveAgents;
-  /** The task's nested agents are showing, so they carry what the meter would. */
-  readonly meterHidden: boolean;
+  readonly status: SideTabRowStatus | null;
+  readonly disclosure: SideTabDisclosure | null;
 }) {
   if (props.leaderBadge !== null) return props.leaderBadge;
-  const close = props.close;
-  const status = close !== null && props.active ? null : trailingStatus(props);
+  const { active, close, status } = props;
+  const shared =
+    status !== null && status.yieldsToClose && close !== null && !active;
   return (
     <>
-      {status === null ? null : (
-        <span
-          className={cn(
-            "col-start-1 row-start-1 flex",
-            close !== null && YIELD_TO_CLOSE_CLASS,
-          )}
-        >
-          {status}
-        </span>
+      {status === null || shared ? null : (
+        <span className="flex shrink-0 items-center">{status.node}</span>
+      )}
+      {props.disclosure === null ? null : (
+        <DisclosureChevron disclosure={props.disclosure} />
       )}
       {close === null ? null : (
         <span
-          data-revealed={props.active ? "always" : "on-hover-or-focus"}
           className={cn(
-            "col-start-1 row-start-1 flex",
-            !props.active && REVEAL_CLASS,
+            "grid shrink-0 items-center justify-items-end",
+            // The close of a stayed status takes no room until revealed; every
+            // other close has its own 20px cell, empty or holding the glyph.
+            status !== null && !shared && !active
+              ? JOIN_ON_REVEAL_CLASS
+              : SIDE_TAB_TRAILING_CLASS,
           )}
         >
-          <Button
-            type="button"
-            size="icon-sm"
-            variant={props.onFill ? "on-fill" : "muted"}
-            aria-label={close.label}
-            data-testid={close.testId}
-            disabled={close.disabled}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              close.onClose();
-            }}
-            className="size-5"
+          {shared ? (
+            // Centred in the cell, on the axis of the close's ×, so the swap
+            // happens in place.
+            <span
+              className={cn(
+                "col-start-1 row-start-1 flex justify-self-center",
+                YIELD_TO_CLOSE_CLASS,
+              )}
+            >
+              {status.node}
+            </span>
+          ) : null}
+          <span
+            data-revealed={active ? "always" : "on-hover-or-focus"}
+            className={cn(
+              "col-start-1 row-start-1 flex",
+              !active && REVEAL_CLASS,
+            )}
           >
-            <X className="size-3" />
-          </Button>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant={props.onFill ? "on-fill" : "muted"}
+              aria-label={close.label}
+              data-testid={close.testId}
+              disabled={close.disabled}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                close.onClose();
+              }}
+              className="size-5"
+            >
+              <X className="size-3" />
+            </Button>
+          </span>
         </span>
       )}
     </>
   );
-}
-
-/** The trailing status of an expanded row, or `null` when it has none to show. */
-function trailingStatus(props: {
-  readonly waitingLabel: "Approve" | "Reply" | null;
-  readonly badge: RailBadgeKind | null;
-  readonly agents: SideTabLiveAgents;
-  readonly meterHidden: boolean;
-}): ReactNode {
-  if (props.waitingLabel !== null) {
-    return (
-      <Badge variant="warning" data-testid="side-tab-waiting-chip">
-        {props.waitingLabel}
-      </Badge>
-    );
-  }
-  if (props.badge === "failed") {
-    return (
-      <Badge variant="destructive" data-testid="side-tab-failed-chip">
-        Failed
-      </Badge>
-    );
-  }
-  // One agent is the leading glyph's to show, unless it is a floor: then the
-  // meter carries the "+" that says more may be running out of view.
-  if (
-    !props.meterHidden &&
-    (props.agents.turn + props.agents.background > 1 ||
-      sideTabAgentsAreFloor(props.agents))
-  ) {
-    return (
-      <SideTabMeter agents={props.agents} attention={props.badge} size="row" />
-    );
-  }
-  return null;
 }
 
 /**

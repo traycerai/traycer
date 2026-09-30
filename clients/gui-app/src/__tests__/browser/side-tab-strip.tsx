@@ -26,6 +26,7 @@ import {
 import type { EdgeSide } from "@/lib/layout/layout-arrangement";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
 import { tabRefKey, type StripItem } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -74,6 +75,8 @@ interface SideTabStripProbe {
   readonly tearOffPreview: () => boolean;
   /** The tab keys a released tear-off asked to open in a new window. */
   readonly detachRequests: () => ReadonlyArray<string>;
+  /** Puts a task's title back to generating, so its row shows the spinner glyph. */
+  readonly markTitlePending: (epicId: string, title: string) => void;
 }
 
 declare global {
@@ -148,6 +151,9 @@ function buildProbe(): SideTabStripProbe {
     items: () => useTabsStore.getState().items.map(itemKeys),
     tearOffPreview: () => useEpicDndStore.getState().headerTearOffPreview,
     detachRequests: () => [...detachRequests],
+    markTitlePending: (epicId, title) => {
+      useEpicCanvasStore.getState().markEpicTitlePending(epicId, title);
+    },
   };
 }
 

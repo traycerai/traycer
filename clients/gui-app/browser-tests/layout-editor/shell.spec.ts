@@ -896,8 +896,6 @@ interface StripTopRead {
     readonly title: string;
     readonly titleRect: Box | null;
     readonly meter: Box | null;
-    readonly tile: Box | null;
-    readonly text: Box | null;
   }>;
   readonly avatar: Box | null;
   readonly tiles: ReadonlyArray<{
@@ -945,7 +943,7 @@ const STRIP_TOP_PROBE = `(() => {
     divider: box(q('[data-testid="side-strip-rail-divider"]')),
     home: box(homeRow),
     homeIcon: box(homeRow?.querySelector("svg") ?? null),
-    homeTitle: box(homeRow?.querySelector('[data-testid="side-tab-title"]') ?? null),
+    homeTitle: box(homeRow?.querySelector(".header-tab-title-text") ?? null),
     tasksLabel: box(q('[data-testid="side-strip-tasks-label"]')),
     // The list's own items - a tile, a split pair, a group header - as the
     // rhythm's units: a pair's members are spaced by its seam, not the gap.
@@ -954,23 +952,11 @@ const STRIP_TOP_PROBE = `(() => {
       .filter((rect) => rect.height > 0),
     inboxIcon: box(q('[data-testid="side-strip-inbox"] svg')),
     inboxMark: box(q('[data-testid="side-strip-inbox-needs-you-badge"]') ?? q('[data-testid="side-strip-inbox-unknown-indicator"]')),
-    rows: [...strip.querySelectorAll('[data-side-tab="expanded"]')].map((row) => {
-      const tile = row.querySelector('[data-testid="side-tab-leading-tile"]');
-      const letters = tile?.querySelector("span[aria-hidden]")?.firstChild ?? null;
-      let text = null;
-      if (letters !== null && letters.nodeType === Node.TEXT_NODE) {
-        const range = document.createRange();
-        range.selectNodeContents(letters);
-        text = box(range);
-      }
-      return {
-        title: (row.querySelector('[data-testid="side-tab-title"]')?.textContent ?? "").trim(),
-        titleRect: box(row.querySelector('[data-testid="side-tab-title"]')),
-        meter: box(row.querySelector('[data-testid="side-tab-meter"]')),
-        tile: box(tile),
-        text,
-      };
-    }),
+    rows: [...strip.querySelectorAll('[data-side-tab="expanded"]')].map((row) => ({
+      title: (row.querySelector('[data-testid="side-tab-title"]')?.textContent ?? "").trim(),
+      titleRect: box(row.querySelector('[data-testid="side-tab-title"]')),
+      meter: box(row.querySelector('[data-testid="side-tab-meter"]')),
+    })),
     avatar: box(q('[data-testid="user-menu-trigger"]')),
     tiles,
   };
@@ -980,8 +966,6 @@ const STRIP_TOP_PROBE = `(() => {
 const STRIP_NAV_TILE = 32;
 /** The rail tile's badge: a 14px disc of the strip's ground (`SIDE_TAB_RAIL_BADGE_CLASS`, D5). */
 const SIDE_TAB_RAIL_BADGE = 14;
-/** Two monogram letters keep at least this much of their tile on each side. */
-const MONOGRAM_SIDE_CLEARANCE = 2.5;
 /** A hairline has to stand off the ground by at least this much to be seen. */
 const RAIL_DIVIDER_CONTRAST_FLOOR = 1.15;
 
@@ -1218,7 +1202,7 @@ function newTaskProblems(read: StripTopRead): string[] {
   return problems;
 }
 
-/** Every row's meter is centred with its title, and its monogram keeps clear of its tile's edges. */
+/** Every row's meter is centred with its title. */
 function rowKitProblems(read: StripTopRead): string[] {
   const problems: string[] = [];
   const middle = (rect: Box): number => rect.y + rect.height / 2;
@@ -1232,20 +1216,11 @@ function rowKitProblems(read: StripTopRead): string[] {
         `"${row.title}": the meter is centred at y=${middle(row.meter).toFixed(1)}, the title at y=${middle(row.titleRect).toFixed(1)}`,
       );
     }
-    if (row.tile !== null && row.text !== null) {
-      const left = row.text.x - row.tile.x;
-      const right = row.tile.x + row.tile.width - (row.text.x + row.text.width);
-      if (left < MONOGRAM_SIDE_CLEARANCE || right < MONOGRAM_SIDE_CLEARANCE) {
-        problems.push(
-          `"${row.title}": the monogram's letters stand ${left.toFixed(1)}px/${right.toFixed(1)}px from its tile's edges, under ${String(MONOGRAM_SIDE_CLEARANCE)}px`,
-        );
-      }
-    }
   }
   return problems;
 }
 
-/** F7 expanded: New Task is the Home row's box, its icon and label level with Home's, and every meter and monogram is placed inside its row. */
+/** F7 expanded: New Task is the Home row's box, its icon and label level with Home's, and every meter is placed inside its row. */
 function expandedTopProblems(read: StripTopRead): string[] {
   return [...newTaskProblems(read), ...rowKitProblems(read)];
 }
@@ -1383,13 +1358,20 @@ async function assertCrossingEase(
     await moveInSteps(page, at(underSnap));
     // Somewhere inside the ease: between the rail and the minimum, joins
     // attached. The ease runs 1.5s and the width is polled for the range, so
-    // a slow frame cannot land the read outside it.
+    // a slow frame cannot land the read outside it - nor can a read taken
+    // before the crossing frame, still at the starting width, pass for one.
     await expect
-      .poll(async () => (await readResize(page)).width, {
-        message:
-          "mid-crossing: the strip's width never eased between the rail and the minimum",
-      })
-      .toBeGreaterThan(input.railWidth + 4);
+      .poll(
+        async () => {
+          const width = (await readResize(page)).width;
+          return width > input.railWidth + 4 && width < input.minWidth - 4;
+        },
+        {
+          message:
+            "mid-crossing: the strip's width never eased between the rail and the minimum",
+        },
+      )
+      .toBe(true);
     const mid = await readResize(page);
     const join = await readJoin(page);
     note(
@@ -1693,10 +1675,11 @@ const LIVE_AGENTS_PROBE = `(() => {
 })()`;
 
 /**
- * D9: the active task's agents nest under its row and inside the strip, and
- * their glyph column sits on the task's title start edge. That alignment is read
- * across two components - the task's title in the row, the glyph in the group -
- * so it is measured here, not from either.
+ * D9: the active task's agents nest under its row and inside the strip, their
+ * guide sits on the task's title start edge, and their glyph column just inside
+ * it. That alignment is read across two components - the task's title in the
+ * row, the guide and glyph in the group - so it is measured here, not from
+ * either.
  */
 async function assertLiveAgents(page: Page): Promise<void> {
   await settleShell(page);
@@ -1707,14 +1690,23 @@ async function assertLiveAgents(page: Page): Promise<void> {
   await settleShell(page);
   const shown = await page.evaluate<LiveAgentsRead>(LIVE_AGENTS_PROBE);
   const violations = violationLog();
-  if (shown.taskTitleX === null || shown.glyphX === null) {
-    violations.add(
-      `no ${shown.taskTitleX === null ? "task title text" : "agent glyph"} to measure`,
-    );
+  if (
+    shown.taskTitleX === null ||
+    shown.glyphX === null ||
+    shown.group === null
+  ) {
+    let missing = "agent group";
+    if (shown.taskTitleX === null) missing = "task title text";
+    else if (shown.glyphX === null) missing = "agent glyph";
+    violations.add(`no ${missing} to measure`);
   } else {
     violations.check(
-      Math.abs(shown.glyphX - shown.taskTitleX) <= 0.5,
-      `the agents' glyph column starts ${(shown.glyphX - shown.taskTitleX).toFixed(1)}px past the task's title start edge, expected 0`,
+      Math.abs(shown.group.x - shown.taskTitleX) <= 0.5,
+      `the agents' guide is at x=${shown.group.x.toFixed(1)}, ${(shown.group.x - shown.taskTitleX).toFixed(1)}px past the task's title start edge, expected 0`,
+    );
+    violations.check(
+      shown.glyphX - shown.group.x >= 1 && shown.glyphX - shown.group.x <= 12,
+      `the agents' glyph column starts ${(shown.glyphX - shown.group.x).toFixed(1)}px past the guide, expected just inside it (1px to 12px)`,
     );
   }
   if (shown.group === null || shown.active === null || shown.strip === null) {
@@ -2369,7 +2361,7 @@ test.describe("the shell with the panel loaded on the left", () => {
     });
   });
 
-  test("the active task's agents nest under its row and inside the strip, their glyph column on its title start edge", async () => {
+  test("the active task's agents nest under its row and inside the strip, their guide on its title start edge", async () => {
     const page = getPage();
     await probe(page, 'setStripView("activity")');
     await setActivity(page);

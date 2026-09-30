@@ -290,17 +290,17 @@ function SideFillableMember(
       session={null}
       tint={null}
       groupLine={props.groupLine}
-      leading={icon}
+      titleIcon={<Plus className="size-3.5 me-1.5" />}
       tile={{ kind: "icon", icon }}
       badge={null}
       agents={NO_LIVE_AGENTS}
+      status={null}
       disclosure={null}
       title={label}
       hoverCardBody={label}
       hoverCardOnOverflow={false}
       leaderBadge={null}
       close={null}
-      waitingLabel={null}
       dropIndicator={props.dropIndicator}
       pairPreview={null}
       dragSource={false}

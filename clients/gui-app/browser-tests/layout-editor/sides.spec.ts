@@ -56,9 +56,8 @@ import { waitForStableBoxes } from "../support/layout-editor/waits.ts";
 //        chip its tint.
 //   L-163. The session row (the Customizing tab) is a SOLID
 //        `--warning-foreground` object with `--background` text.
-//   Row kit. The expanded row's status badge sits beside its leading tile,
-//        clear of the title and not clipped; the group line is ONE
-//        continuous line down the group, the split pair's rows included.
+//   Row kit. The group line is ONE continuous line down the group, the split
+//        pair's rows included.
 //   S-33. With the inspector docked left, the traffic-light reserve moves to
 //        its header and the strip's title row drops to the 12px gutter.
 //   6.1. A right strip sits left of a right-docked inspector, never under it.
@@ -749,13 +748,10 @@ const CHIP_DIFFERS_FLOOR = 1.05;
  * including the split pair's rows inside the pair's padding.
  *
  * This used to also check the 10px status badge on a 16px leading tile, but
- * that combination no longer exists: a monogram row (every task tab in this
- * fixture, `side-tab-strip-seed.ts`) never gets a leading tile of its own any
- * more - `LeadingSlot` in `side-tab-row.tsx` only builds one for a CUSTOM
- * ICON, because a status badge on a tile that small read as a growth on the
- * monogram's letters. Delta's seeded failure still shows - as the "Failed"
- * chip in the row's trailing slot (`trailingStatus`), a different element
- * with its own coverage - so there was nothing left here to measure.
+ * a task row has no leading slot any more: its one status trails
+ * (`sideTabStatusOf`), and Delta's seeded failure shows as the "Failed" chip
+ * there, an element with its own coverage - so there was nothing left here to
+ * measure.
  */
 async function assertRowKit(page: Page): Promise<void> {
   const kit = await page.evaluate<{

@@ -20,12 +20,13 @@ const STATUS_LABEL: Readonly<Record<StripAgentStatus, string>> = {
   background: "background",
 };
 
-/** "<1m", "12m", "2h 5m": how long a running agent has gone, never an age. */
+/** "<1m", "12m", "2h 5m", "3d": how long a running agent has gone, never an age. */
 function formatElapsed(elapsedMs: number): string {
   const minutes = Math.floor(Math.max(0, elapsedMs) / MINUTE_MS);
   if (minutes < 1) return "<1m";
   if (minutes < 60) return `${String(minutes)}m`;
   const hours = Math.floor(minutes / 60);
+  if (hours >= 24) return `${String(Math.floor(hours / 24))}d`;
   const rest = minutes % 60;
   return rest === 0
     ? `${String(hours)}h`
@@ -44,7 +45,10 @@ function ElapsedTime(props: { readonly since: number }): ReactNode {
 
 function Trailing(props: { readonly agent: StripAgent }): ReactNode {
   const { agent } = props;
-  if (agent.status === "turn") return <ElapsedTime since={agent.since} />;
+  if (agent.status === "turn") {
+    // No start time known (`since` is 0): no time, rather than an epoch's worth.
+    return agent.since > 0 ? <ElapsedTime since={agent.since} /> : null;
+  }
   return (
     <span
       className={cn(
