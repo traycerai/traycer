@@ -85,6 +85,7 @@ type SetEnabledVariables = Parameters<SetEnabledMutate>[0];
 type CancelLoginVariables = {
   readonly providerId: string;
   readonly profileId: string | null;
+  readonly holderId: string | null;
 };
 
 // `codex` is disabled with a DETECTED candidate, so it's the one row that
@@ -265,6 +266,10 @@ vi.mock("@/hooks/providers/use-providers-touch-login-mutation", () => ({
 vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => ({
   useProvidersCancelLogin: () => ({
     mutate: fixtures.cancelLoginMutate,
+    mutateAsync: (variables: CancelLoginVariables) => {
+      fixtures.cancelLoginMutate(variables);
+      return Promise.resolve({ cancelled: true });
+    },
     isPending: false,
   }),
 }));

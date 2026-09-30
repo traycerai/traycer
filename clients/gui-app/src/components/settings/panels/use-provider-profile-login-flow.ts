@@ -443,10 +443,12 @@ export function useProviderProfileLoginFlow(
   // comparisons inside mutation callbacks, which run outside render.
   const [attemptId, setAttemptId] = useState(0);
   const cancelRequestedRef = useRef(false);
-  // Latches once `cancelProfile` fires for this flow - a boolean rather than
-  // the cancelled profile id itself, since the ambient case's profileId is
-  // legitimately `null` and would otherwise collide with this ref's own
-  // "nothing cancelled yet" initial value.
+  // Latches once `cancelProfile` sends a release for this attempt - a boolean
+  // rather than the cancelled profile id itself, since the ambient case's
+  // profileId is legitimately `null` and would otherwise collide with this
+  // ref's own "nothing cancelled yet" initial value. Reopened by
+  // `cancelProfile` when that release fails, so a later path can send it
+  // again; `cancelRequestedRef` is what keeps the attempt abandoned meanwhile.
   const cancelledRef = useRef(false);
   // `finishCancellation` can now be reached twice for one press: once from
   // `cancel` itself, and again when a start call that was already in flight
@@ -548,7 +550,23 @@ export function useProviderProfileLoginFlow(
       if (holderId === null && mode !== "reauth" && profileId === null) return;
       if (cancelledRef.current) return;
       cancelledRef.current = true;
-      cancelLogin.mutate({ providerId, profileId, holderId });
+      const thisAttemptId = attemptIdRef.current;
+      // The latch means "a release is on its way", not "released": the flow
+      // already reads `cancelled` by now, so nothing the user can press would
+      // send another. A cancel call that fails leaves this attempt's claim on
+      // the host, so the latch reopens for the next path that learns what the
+      // attempt holds - the start answer already in flight, or the unmount
+      // cleanup - to release it again. `mutateAsync`, not `mutate` with an
+      // `onError`: the promise is the mutation's own `execute()` and settles
+      // after the caller unmounts too, where per-`mutate` callbacks are
+      // dropped (see `beginLogin`). The hook's own `onError` still toasts.
+      void cancelLogin
+        .mutateAsync({ providerId, profileId, holderId })
+        .then(undefined, () => {
+          if (attemptIdRef.current === thisAttemptId) {
+            cancelledRef.current = false;
+          }
+        });
     },
     [cancelLogin, mode, providerId],
   );

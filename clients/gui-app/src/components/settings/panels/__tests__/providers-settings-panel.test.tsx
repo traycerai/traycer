@@ -148,6 +148,11 @@ type SetEnabledVariables = RequestOfMethod<
 >;
 type SetEnabledMutate = (variables: SetEnabledVariables) => void;
 
+type CancelLoginVariables = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.cancelLogin"
+>;
+
 const providerMocks = vi.hoisted(() => ({
   listResult: {
     data: { providers: [] as ProviderCliState[] },
@@ -447,6 +452,10 @@ vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => {
 vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => {
   const useProvidersCancelLogin = () => ({
     mutate: providerMocks.cancelLoginMutate,
+    mutateAsync: (variables: CancelLoginVariables) => {
+      providerMocks.cancelLoginMutate(variables);
+      return Promise.resolve({ cancelled: true });
+    },
     isPending: providerMocks.cancelLoginPending,
   });
   return {

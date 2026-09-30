@@ -699,3 +699,165 @@ describe("useProviderProfileLoginFlow — reopened panel: two same-scope instanc
     viewB.unmount();
   });
 });
+
+describe("useProviderProfileLoginFlow — a failed cancel RPC must not latch out the retry", () => {
+  it("with ownership: sends a SECOND cancel, for the same holder and the now-known profile, once the in-flight start answer lands holding a login", async () => {
+    const recorder = startLoginRecorder();
+    const cancelLoginImpl = vi
+      .fn<(request: CancelLoginRequest) => void>()
+      .mockImplementationOnce(() => {
+        throw new Error("cancel rpc failed");
+      });
+    render(
+      <LoginFlowHarness
+        mode="create"
+        existingProfileId={null}
+        loginCapability={null}
+        supportsLoginOwnership
+        startLoginImpl={recorder.impl}
+        cancelLoginImpl={cancelLoginImpl}
+      />,
+      { wrapper: queryClientWrapper() },
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "start" }));
+      await Promise.resolve();
+    });
+
+    // Ownership cancels at once - the call is still in flight, so this is
+    // the FIRST cancel, and it fails.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "cancel" }));
+      await Promise.resolve();
+    });
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("flow-state").textContent).toBe("cancelled");
+
+    const holderId = (
+      cancelLoginImpl.mock.calls[0]?.[0] as { holderId?: unknown }
+    ).holderId;
+    expect(typeof holderId).toBe("string");
+
+    // The in-flight call now answers - a login the host actually started,
+    // for a profile it minted. `cancelRequestedRef` is still set from the
+    // press, so this is meant to release it too - but the first cancel's
+    // FAILURE must not have latched the flow out of trying again.
+    await act(async () => {
+      recorder.calls[0].resolve(
+        startLoginAnswer({
+          started: true,
+          profileId: "p-new",
+          url: "https://example.test",
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    // Before the fix `cancelledRef` stayed latched by the first (failed)
+    // cancel, so `cancelProfile` returned early here and this second call
+    // never happened - the holder stayed attached to the shared child on the
+    // host with no UI left to retry from. The failed release reopens the
+    // latch, so the answer's release goes out.
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(2);
+    expect(cancelLoginImpl).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ holderId, profileId: "p-new" }),
+    );
+  });
+
+  it("legacy (no ownership): sends a second, null-holder cancel for the named profile once the failed first cancel's start answer lands", async () => {
+    const recorder = startLoginRecorder();
+    const cancelLoginImpl = vi
+      .fn<(request: CancelLoginRequest) => void>()
+      .mockImplementationOnce(() => {
+        throw new Error("cancel rpc failed");
+      });
+    render(
+      <LoginFlowHarness
+        mode="reauth"
+        existingProfileId="p-1"
+        loginCapability={null}
+        supportsLoginOwnership={false}
+        startLoginImpl={recorder.impl}
+        cancelLoginImpl={cancelLoginImpl}
+      />,
+      { wrapper: queryClientWrapper() },
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "start" }));
+      await Promise.resolve();
+    });
+    // A named-profile reauth cancels at once while starting, released
+    // policy or not - and this first attempt fails.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "cancel" }));
+      await Promise.resolve();
+    });
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(1);
+    expect(cancelLoginImpl).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ holderId: null, profileId: "p-1" }),
+    );
+
+    await act(async () => {
+      recorder.calls[0].resolve(
+        startLoginAnswer({
+          started: true,
+          profileId: "p-1",
+          url: "https://example.test",
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    // Same latch, same reopening, on the legacy null-holder path.
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(2);
+    expect(cancelLoginImpl).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ holderId: null, profileId: "p-1" }),
+    );
+  });
+
+  it("existing behavior lock: a SUCCESSFUL first cancel still suppresses the second (no double-cancel on a healthy RPC)", async () => {
+    const recorder = startLoginRecorder();
+    const cancelLoginImpl = vi.fn<(request: CancelLoginRequest) => void>();
+    render(
+      <LoginFlowHarness
+        mode="create"
+        existingProfileId={null}
+        loginCapability={null}
+        supportsLoginOwnership
+        startLoginImpl={recorder.impl}
+        cancelLoginImpl={cancelLoginImpl}
+      />,
+      { wrapper: queryClientWrapper() },
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "start" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "cancel" }));
+      await Promise.resolve();
+    });
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      recorder.calls[0].resolve(
+        startLoginAnswer({
+          started: true,
+          profileId: "p-new",
+          url: "https://example.test",
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    // This is today's `cancelledRef` guarantee and must stay true after the
+    // fix: a healthy cancel is not repeated.
+    expect(cancelLoginImpl).toHaveBeenCalledTimes(1);
+  });
+});
