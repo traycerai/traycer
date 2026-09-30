@@ -3568,6 +3568,12 @@ function mixedScenarioSteps(): readonly MixedScenarioStep[] {
   return steps;
 }
 
+/** Every cut point of the scenario: steps 1..cut in one build, the rest in the other. */
+const MIXED_CUT_POINTS: readonly number[] = Array.from(
+  { length: mixedScenarioSteps().length - 1 },
+  (_, index) => index + 1,
+);
+
 function applyStepRange(
   store: RowFoldStore,
   build: RowFoldBuild,
@@ -3615,17 +3621,28 @@ describe("i. mixed builds: a fold state the other build wrote", () => {
     expect(digest).toBe(V1_4_1_PINNED_SOURCE_SHA256);
   });
 
-  it("(a) a state this build wrote, continued by the v1.4.1 reader", () => {
+  // One test per cut point: each checks every later step against the oracle,
+  // and the whole sweep is more than vitest's 5 s timeout on a CI runner.
+  it("the cut points hand the v1.4.1 reader a capped list", () => {
     const steps = mixedScenarioSteps();
-    const v141OnlyLengths = spanKeysBeforeLengths(V1_4_1_ROW_FOLD_BUILD, steps);
+    const currentLengths = spanKeysBeforeLengths(CURRENT_ROW_FOLD_BUILD, steps);
+    const v141Lengths = spanKeysBeforeLengths(V1_4_1_ROW_FOLD_BUILD, steps);
+    const capped = currentLengths.flatMap((length, index) => {
+      const uncapped = v141Lengths[index];
+      return length === 2 && uncapped !== undefined && uncapped > 2
+        ? [index + 1]
+        : [];
+    });
+    expect(
+      capped.length,
+      `spanKeysBefore lengths per step: this build ${JSON.stringify(currentLengths)}, v1.4.1 ${JSON.stringify(v141Lengths)}`,
+    ).toBeGreaterThan(0);
+  });
 
-    let coveredCutPoints = 0;
-    let witness: {
-      readonly cut: number;
-      readonly cappedLength: number;
-      readonly uncappedLength: number;
-    } | null = null;
-    for (let cut = 1; cut < steps.length; cut += 1) {
+  it.each(MIXED_CUT_POINTS)(
+    "(a) cut %i: a state this build wrote, continued by the v1.4.1 reader",
+    (cut) => {
+      const steps = mixedScenarioSteps();
       const store = new RowFoldStore(`chat-mixed-a-${String(cut)}`);
       applyStepRange(
         store,
@@ -3635,8 +3652,6 @@ describe("i. mixed builds: a fold state the other build wrote", () => {
         cut,
         `cut=${String(cut)}`,
       );
-      const cutState = JSON.parse(store.stateJson()) as TranscriptFoldState;
-      const cappedLength = cutState.region.spanKeysBefore.length;
       applyStepRange(
         store,
         V1_4_1_ROW_FOLD_BUILD,
@@ -3645,28 +3660,13 @@ describe("i. mixed builds: a fold state the other build wrote", () => {
         steps.length,
         `cut=${String(cut)}`,
       );
-      coveredCutPoints += 1;
-      const uncappedLength = v141OnlyLengths[cut - 1];
-      if (
-        witness === null &&
-        cappedLength === 2 &&
-        uncappedLength !== undefined &&
-        uncappedLength > 2
-      ) {
-        witness = { cut, cappedLength, uncappedLength };
-      }
-    }
-    expect(coveredCutPoints).toBe(steps.length - 1);
-    expect(
-      witness,
-      `no cut point witnessed a capped list; v1.4.1-only spanKeysBefore lengths per step were ${JSON.stringify(v141OnlyLengths)}`,
-    ).not.toBeNull();
-  });
+    },
+  );
 
-  it("(b) a state the v1.4.1 build wrote, continued by this build", () => {
-    const steps = mixedScenarioSteps();
-    let coveredCutPoints = 0;
-    for (let cut = 1; cut < steps.length; cut += 1) {
+  it.each(MIXED_CUT_POINTS)(
+    "(b) cut %i: a state the v1.4.1 build wrote, continued by this build",
+    (cut) => {
+      const steps = mixedScenarioSteps();
       const store = new RowFoldStore(`chat-mixed-b-${String(cut)}`);
       applyStepRange(
         store,
@@ -3684,10 +3684,8 @@ describe("i. mixed builds: a fold state the other build wrote", () => {
         steps.length,
         `cut=${String(cut)}`,
       );
-      coveredCutPoints += 1;
-    }
-    expect(coveredCutPoints).toBe(steps.length - 1);
-  });
+    },
+  );
 
   it("(c) new, old, new over one chat", () => {
     const steps = mixedScenarioSteps();
