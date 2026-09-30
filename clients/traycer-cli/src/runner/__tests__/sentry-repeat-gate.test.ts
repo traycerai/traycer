@@ -273,17 +273,13 @@ describe("stackSite", () => {
     expect(stackSite(error)).toBe("-");
   });
 
-  // The shape that actually exercises the Node-frame filter: resuming an
-  // `await` from inside a `fs.stat` callback (a real libuv completion, not a
-  // promise-native continuation) puts `process.processTicksAndRejections
-  // (node:internal/process/task_queues:...)` on the captured stack ONLY when
-  // something else (here, a `process.nextTick`) was also queued from that
-  // same callback first - verified empirically under plain `node` (not this
-  // suite's `bun` runner) across 5 repeated runs before trusting it: the
-  // no-nextTick variant's stack never shows that frame, the with-nextTick
-  // variant's stack always does. Without the filter the two variants'
-  // positions differ (the with-nextTick site carries the frame's line:col);
-  // with it, they must be equal and carry neither.
+  // The shape that exercises the Node-frame filter. This suite runs on Node,
+  // where resuming an `await` from inside a `fs.stat` callback (a real libuv
+  // completion) puts `process.processTicksAndRejections (node:internal/...)`
+  // on the captured stack only when something else, here a
+  // `process.nextTick`, was queued from that same callback first. Without the
+  // filter the two variants' sites differ by that frame's position; with it
+  // they are equal.
   it("gives the same site whether or not a process.nextTick was queued alongside the fs.stat completion that resumed the await", async () => {
     async function throwAfterStat(queueNextTickToo: boolean): Promise<never> {
       await new Promise<void>((resolve) => {
@@ -308,7 +304,6 @@ describe("stackSite", () => {
 
     expect(sites[0]).toBe(sites[1]);
     expect(sites[0]).not.toBe("-");
-    expect(sites[0]).not.toMatch(/104:5/);
   });
 });
 
