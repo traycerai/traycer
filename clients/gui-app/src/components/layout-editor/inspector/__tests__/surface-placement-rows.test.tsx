@@ -16,6 +16,7 @@ import {
   SideStripViewRow,
   TabOverflowRow,
   TabStripPositionRow,
+  WideReadingWidthRow,
 } from "@/components/layout-editor/inspector/rows/surface-placement-rows";
 import { setMobileApp } from "@/lib/mobile-app";
 import { readPendingLayoutLanding } from "@/lib/settings-navigation";
@@ -454,6 +455,64 @@ describe("<ReadingWidthRow />", () => {
         name: "Reset reading width to default: Comfortable",
       }),
     ).toBeNull();
+  });
+});
+
+/**
+ * The slider row beneath Reading width - visible only while "Wide" is
+ * picked (the same conditional-row-visibility precedent the fine-tune
+ * "Display" row uses in `surface-section.tsx`), floored at 1024 (today's
+ * fixed wide column) and reverting to it.
+ */
+describe("<WideReadingWidthRow />", () => {
+  it("renders nothing while reading width is comfortable", () => {
+    const { container } = render(<WideReadingWidthRow />);
+
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("draws the slider at the stored width, with no revert at the default", () => {
+    useLayoutStore.setState({
+      ...DEFAULT_LAYOUT_SNAPSHOT,
+      arrangement: {
+        ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+        readingWidth: "wide",
+      },
+    });
+
+    render(<WideReadingWidthRow />);
+
+    const slider = screen.getByRole("slider", { name: "Wide column width" });
+    expect(slider.getAttribute("aria-valuenow")).toBe("1024");
+    expect(
+      screen.queryByRole("button", {
+        name: "Reset wide column width to default: 1024px",
+      }),
+    ).toBeNull();
+  });
+
+  it("offers a revert once the width differs from the default, and it restores 1024", () => {
+    useLayoutStore.setState({
+      ...DEFAULT_LAYOUT_SNAPSHOT,
+      arrangement: {
+        ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+        readingWidth: "wide",
+        wideReadingWidthPx: 1600,
+      },
+    });
+
+    render(<WideReadingWidthRow />);
+
+    const slider = screen.getByRole("slider", { name: "Wide column width" });
+    expect(slider.getAttribute("aria-valuenow")).toBe("1600");
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Reset wide column width to default: 1024px",
+      }),
+    );
+
+    expect(useLayoutStore.getState().arrangement.wideReadingWidthPx).toBe(1024);
   });
 });
 

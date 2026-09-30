@@ -28,6 +28,8 @@ import {
   unstackRail,
   unstackRailPanel,
   TOOLBAR_REGION_IDS,
+  WIDE_READING_WIDTH_MAX_PX,
+  WIDE_READING_WIDTH_MIN_PX,
   type LayoutArrangement,
   type SideStripView,
   type TabStripPlacement,
@@ -1983,6 +1985,47 @@ describe("resolvePersistedArrangement: the enum fields (L-133)", () => {
       }
     },
   );
+});
+
+/**
+ * `wideReadingWidthPx` is not one of L-133's small enum fields - it is a
+ * clamped number, so it gets its own describe rather than joining the
+ * `it.each` table above (which asserts strict membership, not a range).
+ */
+describe("resolvePersistedArrangement: wideReadingWidthPx (clamped, not enum)", () => {
+  it("falls back to the default on an absent or non-numeric value", () => {
+    expect(resolvePersistedArrangement({}).wideReadingWidthPx).toBe(
+      DEFAULT_ARRANGEMENT.wideReadingWidthPx,
+    );
+    for (const value of ["1200", null, {}, NaN, Infinity, -Infinity]) {
+      expect(
+        resolvePersistedArrangement({ wideReadingWidthPx: value })
+          .wideReadingWidthPx,
+        JSON.stringify(value),
+      ).toBe(DEFAULT_ARRANGEMENT.wideReadingWidthPx);
+    }
+  });
+
+  it("keeps a valid in-range value verbatim", () => {
+    expect(
+      resolvePersistedArrangement({ wideReadingWidthPx: 1600 })
+        .wideReadingWidthPx,
+    ).toBe(1600);
+  });
+
+  it("clamps a value below the floor up to the slider's own minimum", () => {
+    expect(
+      resolvePersistedArrangement({ wideReadingWidthPx: 200 })
+        .wideReadingWidthPx,
+    ).toBe(WIDE_READING_WIDTH_MIN_PX);
+  });
+
+  it("clamps a value above the ceiling down to the slider's own maximum", () => {
+    expect(
+      resolvePersistedArrangement({ wideReadingWidthPx: 100_000 })
+        .wideReadingWidthPx,
+    ).toBe(WIDE_READING_WIDTH_MAX_PX);
+  });
 });
 
 describe("where Add divider puts one when the rail ends in a stack", () => {

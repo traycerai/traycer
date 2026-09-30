@@ -19,6 +19,7 @@ import {
   layoutDurationBucket,
   layoutEditorSessionChangeSummary,
 } from "@/lib/layout/layout-diff";
+import { isMobileApp } from "@/lib/mobile-app";
 import type { SurfaceGroupId } from "@/components/layout-editor/regions/region-grammar";
 import type { RegionId } from "@/lib/layout/region-id";
 import type { LayoutSnapshot } from "@/lib/layout/layout-snapshot";
@@ -159,7 +160,14 @@ export function openLayoutEditor(input: OpenLayoutEditorInput): boolean {
       input.target === null
         ? navigateToSettingsSection("layout")
         : navigateToLayoutRegion(input.target);
-    if (!reached) toast.info("Customize layout needs a wider window.");
+    // No window in the installed app is ever wide enough, so there the only
+    // thing left to say is that the page is not reachable yet.
+    if (!reached)
+      toast.info(
+        isMobileApp()
+          ? "Layout settings are still loading. Try again in a moment."
+          : "Customize layout needs a wider window.",
+      );
     return false;
   }
   if (!acquireLayoutEditorLease()) return false;

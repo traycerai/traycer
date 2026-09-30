@@ -872,6 +872,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     };
 
     this.tray = {
+      showsEpics: true,
       setEpics: (epics) => this.bridge.trayState.setEpics(epics),
       setIndicator: (state) => this.bridge.trayState.setIndicator(state),
       onEpicSelected: (handler) =>

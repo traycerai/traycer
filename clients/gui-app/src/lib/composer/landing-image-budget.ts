@@ -305,9 +305,8 @@ function declaredSizeByHash(
  *     or new-chat row, a stash entry), which is most of them;
  *  2. what the CONTENT declares, for a root whose bytes this partition has never
  *     held - a restored draft naming a digest the recovery legs have not fetched
- *     yet. Charging it now is the reservation those bytes need: recovery writes
- *     them through a path with no budget call of its own, and a root that only
- *     starts costing once it lands could arrive into a full store;
+ *     yet. Recovery also reserves at its resident write site; charging declared
+ *     bytes here keeps ordinary paste admission aware of the pending root;
  *  3. the per-image ceiling, for a root this partition HOLDS but has not
  *     measured. Unknown is not free while the bytes are there, and it is not
  *     permanent either: the store measures what it has not seen at startup, so
@@ -516,7 +515,10 @@ function reserve(
     seenThisCall.add(key);
   }
 
-  if (additionalBytes > 0) {
+  // Residency admission must reject an already-overfull root set too. A
+  // missing hash can have its declared bytes fully charged (additional = 0)
+  // while other resident roots have since filled the remaining capacity.
+  if (additionalBytes > 0 || !skipLiveRoots) {
     const projected =
       referencedBytesOverRoots(liveRoots, declared) +
       outstandingReservedBytes(rootCharge) +

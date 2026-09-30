@@ -127,6 +127,7 @@ describe("what a depiction draws", () => {
           processes: true,
           ramShare: false,
           agentRows: true,
+          display: "full",
         },
         DEFAULT_ARRANGEMENT,
       ),

@@ -25,6 +25,9 @@ import type {
   HeaderStripMember,
 } from "@/stores/tabs/use-header-tabs";
 import type { SplitSide } from "@/stores/tabs/layout";
+import { tabRefKey } from "@/stores/tabs/layout";
+import { useConcealedForTravel } from "./strip-selection-travel";
+import { useStripEntrance } from "./use-strip-entrance";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import {
@@ -100,7 +103,9 @@ export const SplitTabItem = memo(function SplitTabItem(
       state.activeHeaderTab !== null &&
       state.activeHeaderTab.stripItemId === props.item.id,
   );
-  const joined = props.isActive && !isDragging;
+  // While the selection slides here, the traveller draws the joined box.
+  const concealed = useConcealedForTravel(props.item.id);
+  const joined = props.isActive && !isDragging && !concealed;
   const quickActionsTab =
     memberTab(props.item.left) ?? memberTab(props.item.right);
 
@@ -122,6 +127,14 @@ export const SplitTabItem = memo(function SplitTabItem(
       setNodeRef(node);
     },
     [setNodeRef],
+  );
+  // A reopened split comes back through either of its tabs' marks.
+  useStripEntrance(
+    frameRef,
+    [memberTab(props.item.left), memberTab(props.item.right)]
+      .flatMap((tab) => (tab === null ? [] : [tabRefKey(tab)]))
+      .join(" "),
+    "tab",
   );
   return (
     <m.div

@@ -40,21 +40,17 @@ export interface HeaderTabDragGhost {
   readonly indicatorState: NotificationIndicatorState;
 }
 
+// Exactly `HeaderTabAppearance`'s fields. This guard once checked a richer
+// shape (`icon` as a record, `scope`, `assetRefreshKey`, `iconRejected`) that
+// the type no longer has; every real appearance then failed it, the ghost
+// fell back to `null`, and a coloured tab lost its colour (and its icon) for
+// the length of every drag. A type guard's body is not checked against the
+// type it asserts, so keep the two in step - `dnd-store.test.ts` pins it.
 function isHeaderTabAppearance(value: unknown): value is HeaderTabAppearance {
   if (!isRecord(value)) return false;
   return (
     (value.color === null || typeof value.color === "string") &&
-    // ponytail: shallow-checked (record-or-null, not the full discriminated
-    // `icon.kind` union / `scope` shape) - this payload never crosses a real
-    // serialization boundary (same dnd-kit `data` reference the source
-    // component built), so a deep re-validation buys nothing a malformed
-    // value wouldn't already survive as harmlessly (the ghost skips the logo
-    // for that one gesture). Upgrade to full field checks if this payload
-    // ever starts crossing a process/window boundary.
-    (value.icon === null || isRecord(value.icon)) &&
-    (value.scope === null || isRecord(value.scope)) &&
-    typeof value.assetRefreshKey === "number" &&
-    typeof value.iconRejected === "boolean"
+    (value.icon === null || typeof value.icon === "string")
   );
 }
 

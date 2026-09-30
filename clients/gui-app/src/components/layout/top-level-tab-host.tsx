@@ -56,6 +56,7 @@ import {
   type TopLevelFillableTarget,
 } from "@/components/layout/tabs/top-level-tab-dnd";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import { DelayedRoutePendingScreen } from "@/components/loading/route-pending-screen";
 import { PhaseMigrationControllerHost } from "@/components/epic-tabs/phase-migration-controller-host";
 import { PhaseMigrationSurface } from "@/components/epic-tabs/phase-migration-surface";
 import {
@@ -390,7 +391,13 @@ function TopLevelSurfaceMount(props: {
             visible={mount.activity.visible}
             focused={mount.activity.focused}
           >
-            <Suspense fallback={null}>
+            {/* A retained hidden tab must start its loading delay only when
+                the user actually opens it. */}
+            <Suspense
+              fallback={
+                mount.activity.visible ? <DelayedRoutePendingScreen /> : null
+              }
+            >
               <TabSurface tab={mount.tab} />
             </Suspense>
           </SurfacePresentationBoundary>

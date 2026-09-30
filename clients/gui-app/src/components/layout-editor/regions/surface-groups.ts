@@ -103,6 +103,13 @@ export function orderGroupListLabel(group: OrderGroupId): string {
 }
 
 /**
+ * The rail list's line on a phone, which has no rail: the list orders the tab
+ * switcher's flat chip bar, where stacks and dividers mean nothing.
+ */
+export const PHONE_RAIL_INSTRUCTION =
+  "Drag to reorder. Turn a panel off to move it into More.";
+
+/**
  * How a list is operated AND whatever rule holds for the whole of it, as one
  * line for the header that introduces it.
  *

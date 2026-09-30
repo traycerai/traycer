@@ -1012,6 +1012,8 @@ export class MockRunnerHost implements IRunnerHost {
  * gui-app tests can drive a tray click through the mocked surface.
  */
 export class MockTrayState implements ITrayState {
+  // Tests flip it to model a shell whose tray is a no-op.
+  showsEpics = true;
   epics: readonly TrayEpic[] = [];
   indicator: TrayIndicatorState = "idle";
 

@@ -306,6 +306,42 @@ describe("reserveLandingImageBudget", () => {
     extraRoots.length = 0;
   });
 
+  it("rejects residency admission of an already-fully-charged hash when other roots have filled the remaining capacity", () => {
+    // The candidate's declared size exactly covers its own root charge, so
+    // `additionalBytes` for THIS candidate is 0. A check gated on
+    // "only when there is something new to charge" would skip verifying the
+    // projected total here and admit on top of a root set that, on its own,
+    // already fills the budget - which is exactly the gap residency admission
+    // (unlike ordinary paste admission) must not have.
+    const otherRootHash = "1".repeat(64);
+    const missingHash = "2".repeat(64);
+    const otherRootBytes = LANDING_IMAGE_BUDGET_BYTES - 100;
+    useLandingDraftStore.setState({
+      drafts: [
+        makeDraft({
+          id: "draft-other-root",
+          content: imageDoc(otherRootHash, otherRootBytes),
+          lastTouchedAt: 1,
+        }),
+        makeDraft({
+          id: "draft-missing",
+          content: imageDoc(missingHash, 150),
+          lastTouchedAt: 2,
+        }),
+      ],
+      activeDraftId: "draft-missing",
+    });
+
+    // Rooted, and its declared bytes fully cover the reservation - but the
+    // OTHER root alone already leaves less than 150 bytes of headroom.
+    const admitted = tryReserveLandingImageResidency([
+      { hash: missingHash, bytes: 150 },
+    ]);
+    expect(admitted).toBeNull();
+
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  });
+
   it("charges nothing for a DANGLING root with no bytes anywhere", () => {
     // An annotation record whose crop was reclaimed still names its hash. The
     // ceiling would be a permanent tax for bytes nobody holds, and no later

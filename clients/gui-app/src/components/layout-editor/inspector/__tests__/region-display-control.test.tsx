@@ -211,6 +211,24 @@ describe("a region with no `shown` leaf at all (regionHides false)", () => {
   });
 });
 
+describe("a rail panel on a narrow page, where there is no rail", () => {
+  it("names the off state In More - the tab switcher's More menu - and still writes hidden", () => {
+    const original = window.innerWidth;
+    window.innerWidth = 500;
+    try {
+      render(<LiveControl regionId="railAgents" />);
+      expect(optionLabels()).toEqual(["Shown", "In More"]);
+      pick("In More");
+      expect(railAgents().shown).toBe("hidden");
+      cleanup();
+      render(<LiveControl regionId="railPullRequests" />);
+      expect(optionLabels()).toEqual(["Auto", "Shown", "In More"]);
+    } finally {
+      window.innerWidth = original;
+    }
+  });
+});
+
 describe("Microphone's own control (mobile absence, voice-off gating)", () => {
   afterEach(() => {
     setMobileApp(false);

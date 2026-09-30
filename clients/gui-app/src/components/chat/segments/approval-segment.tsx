@@ -2,6 +2,7 @@ import { Check, X } from "lucide-react";
 import { useState } from "react";
 import type { ApprovalDecision } from "@traycer/protocol/persistence/epic/schemas";
 import type { ToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
+import { toolHeaderLine } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import { cn } from "@/lib/utils";
 import { SegmentCard } from "./segment-card";
 import { SegmentRow } from "./segment-row";
@@ -45,7 +46,10 @@ export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
   const header = (
     <ResolvedApprovalHeader
       label={label}
-      inputSummary={inputSummary}
+      // The whole input on one line, cut by the header's own `truncate` at the
+      // row's width (`toolHeaderLine`); the body below still compares against
+      // the persisted summary.
+      inputSummary={toolHeaderLine(inputSummary, inputDetail)}
       decision={decision}
     />
   );

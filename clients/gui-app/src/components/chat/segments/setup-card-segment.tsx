@@ -41,6 +41,7 @@ import { DEFAULT_EPIC_NODE_NAMES } from "@/lib/artifacts/node-display";
 import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { cn } from "@/lib/utils";
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import { LiveElapsed } from "./segment-elapsed";
 
 /**
@@ -158,6 +159,7 @@ export function SetupCardSegment(props: {
 }) {
   const { model, viewTabId, variant } = props;
   const { aggregate, workspaces, createdAt, isActive } = model;
+  const readingWidth = useReadingWidthStyle();
 
   // Open terminal, liveness, and Retry must all address the SAME host the tab
   // is bound to (it can differ from the app-wide active host). Resolve one
@@ -439,7 +441,13 @@ export function SetupCardSegment(props: {
       </div>
       {expanded ? (
         // muted-fill-ok: card variant renders only in a canvas chat tile (inline variant is the Popover arm)
-        <div className="mx-auto w-full max-w-[min(90vw,42rem)] rounded-md border border-border/60 bg-muted/30 p-3">
+        <div
+          className={cn(
+            "mx-auto w-full rounded-md border border-border/60 bg-muted/30 p-3",
+            readingWidth.className,
+          )}
+          style={{ maxWidth: readingWidth.maxWidth }}
+        >
           {workspaceDetail}
         </div>
       ) : null}

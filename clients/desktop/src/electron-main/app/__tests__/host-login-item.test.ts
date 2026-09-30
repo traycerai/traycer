@@ -704,6 +704,172 @@ describe("registerHostLoginItem", () => {
     expect(revalidate).toHaveBeenCalledTimes(7);
     expect(setLoginItemSettings).toHaveBeenCalledTimes(3);
   });
+
+  // Regression coverage for the snapshots observed on real Macs after a
+  // launchctl bootout. These exercise the production snapshot -> guard ->
+  // register flow, rather than a mocked guard: a label SMAppService never
+  // registered reports `not-found`, which means there is no registration to
+  // restore, not an unsafe unknown state that should strand the host.
+  it.each([
+    ["the production bootout snapshot", "enabled", "not-found", false],
+    ["the staging mirror snapshot", "not-found", "enabled", true],
+  ] as const)(
+    "registers through %s (%s, %s, legacy manifest %s)",
+    async (_name, primary, legacy, hasLegacyManifest) => {
+      if (hasLegacyManifest) writeLegacyCliManifest();
+      getLoginItemSettings
+        .mockReturnValueOnce({ status: primary }) // snapshot: primary
+        .mockReturnValueOnce({ status: legacy }); // snapshot: legacy
+      // A missing primary leg has no SMAppService clear, so its next read is
+      // the post-register poll. An enabled primary still has a real clear
+      // and consequently a post-clear status read first.
+      if (primary === "enabled") {
+        getLoginItemSettings
+          .mockReturnValueOnce({ status: "not-registered" }) // post-clear
+          .mockReturnValueOnce({ status: "enabled" }); // post-register
+      } else {
+        getLoginItemSettings.mockReturnValueOnce({ status: "enabled" }); // post-register
+      }
+
+      await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+
+      // The successful agent registration is the important assertion: a
+      // `not-found` snapshot must not merely avoid logging a park. It also
+      // has no clear operation of its own; throwing from a nonexistent
+      // service's clear must never be able to park this cycle.
+      expect(
+        setLoginItemSettings.mock.calls.some(
+          ([options]) =>
+            options.openAtLogin === true &&
+            options.serviceName === "ai.traycer.host.agent.plist",
+        ),
+      ).toBe(true);
+      expect(
+        setLoginItemSettings.mock.calls.some(
+          ([options]) =>
+            options.openAtLogin === false &&
+            options.serviceName ===
+              (primary === "not-found"
+                ? "ai.traycer.host.agent.plist"
+                : "ai.traycer.host.plist"),
+        ),
+      ).toBe(false);
+      expect(existsSync(legacyCliManifestPath())).toBe(false);
+    },
+  );
+
+  it.each([
+    ["primary", "not-supported", "enabled"],
+    ["legacy", "enabled", "not-supported"],
+  ] as const)(
+    "registers when the %s SMAppService leg is not-supported",
+    async (_leg, primary, legacy) => {
+      getLoginItemSettings
+        .mockReturnValueOnce({ status: primary }) // snapshot: primary
+        .mockReturnValueOnce({ status: legacy }); // snapshot: legacy
+      if (primary === "enabled") {
+        getLoginItemSettings
+          .mockReturnValueOnce({ status: "not-registered" }) // post-clear
+          .mockReturnValueOnce({ status: "enabled" }); // post-register
+      } else {
+        getLoginItemSettings.mockReturnValueOnce({ status: "enabled" }); // post-register
+      }
+
+      await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+      expect(
+        setLoginItemSettings.mock.calls.some(
+          ([options]) =>
+            options.openAtLogin === true &&
+            options.serviceName === "ai.traycer.host.agent.plist",
+        ),
+      ).toBe(true);
+      expect(
+        setLoginItemSettings.mock.calls.some(
+          ([options]) =>
+            options.openAtLogin === false &&
+            options.serviceName ===
+              (primary === "not-supported"
+                ? "ai.traycer.host.agent.plist"
+                : "ai.traycer.host.plist"),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it.each([
+    ["primary", "not-found", "enabled"],
+    ["legacy", "enabled", "not-found"],
+    ["primary", "not-supported", "enabled"],
+    ["legacy", "enabled", "not-supported"],
+  ] as const)(
+    "skips the %s missing SMAppService clear even when that clear would throw",
+    async (_leg, primary, legacy) => {
+      getLoginItemSettings
+        .mockReturnValueOnce({ status: primary }) // snapshot: primary
+        .mockReturnValueOnce({ status: legacy }); // snapshot: legacy
+      if (primary === "enabled") {
+        getLoginItemSettings
+          .mockReturnValueOnce({ status: "enabled" }) // post-clear
+          .mockReturnValueOnce({ status: "enabled" }); // post-register
+      } else {
+        getLoginItemSettings.mockReturnValueOnce({ status: "enabled" }); // post-register
+      }
+      const missingServiceName =
+        primary === "not-found" || primary === "not-supported"
+          ? "ai.traycer.host.agent.plist"
+          : "ai.traycer.host.plist";
+      setLoginItemSettings.mockImplementation((options) => {
+        if (
+          options.openAtLogin === false &&
+          options.serviceName === missingServiceName
+        ) {
+          throw new Error("missing SMAppService clear must not run");
+        }
+      });
+
+      await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+      expect(setLoginItemSettings).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          openAtLogin: false,
+          serviceName: missingServiceName,
+        }),
+      );
+    },
+  );
+
+  it("still parks on an unreadable primary SMAppService status", async () => {
+    getLoginItemSettings
+      .mockImplementationOnce(() => {
+        throw new Error("SMAppService status unreadable");
+      })
+      .mockReturnValueOnce({ status: "enabled" }); // snapshot: legacy
+
+    await expect(registerHostLoginItem(undefined)).resolves.toBe("parked");
+    expect(setLoginItemSettings).not.toHaveBeenCalled();
+    expect(electronLog.warn).toHaveBeenLastCalledWith(
+      "[host-login-item] registration parked: prior registration cannot be restored exactly",
+      {
+        primary: null,
+        legacy: "enabled",
+        legacyManifest: "absent",
+      },
+    );
+  });
+
+  it.each([
+    ["primary", "requires-approval", "enabled"],
+    ["legacy", "enabled", "requires-approval"],
+  ] as const)(
+    "still parks when the %s SMAppService leg requires approval",
+    async (_leg, primary, legacy) => {
+      getLoginItemSettings
+        .mockReturnValueOnce({ status: primary }) // snapshot: primary
+        .mockReturnValueOnce({ status: legacy }); // snapshot: legacy
+
+      await expect(registerHostLoginItem(undefined)).resolves.toBe("parked");
+      expect(setLoginItemSettings).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // Acceptance evidence for the <=1.1.6 deadlock fix: a `present` legacy

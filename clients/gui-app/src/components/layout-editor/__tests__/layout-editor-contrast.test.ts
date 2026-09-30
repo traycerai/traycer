@@ -396,9 +396,11 @@ function sessionTabVisualProps(isActive: boolean) {
     chrome: "own" as const,
     isActive,
     joined: isActive,
+    concealed: false,
     titleControl: null,
     trailingControl: null,
     leaderVisible: false,
+    enabled: true,
   };
 }
 
@@ -581,6 +583,7 @@ describe("layout-editor.css is read, not assumed", () => {
       createElement(TabChrome, {
         isActive: true,
         joined: true,
+        concealed: false,
         color,
         session: true,
       }),
@@ -610,7 +613,7 @@ describe("layout-editor.css is read, not assumed", () => {
       document.querySelectorAll('[data-layout-session-tab="filled"]'),
     ).toHaveLength(1);
     expect(screen.getAllByTestId("tab-chrome-box")).toHaveLength(1);
-    expect(screen.queryByTestId("tab-color-mark")).toBeNull();
+    expect(screen.queryByTestId("tab-color-edge-line")).toBeNull();
 
     // The marker survives in both states, because the dim exemption reads it
     // and a tab the user clicked away from still has to stay lit.

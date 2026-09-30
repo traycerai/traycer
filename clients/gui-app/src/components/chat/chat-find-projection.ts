@@ -35,7 +35,8 @@ import {
   planStatusBadgeLabel,
 } from "@/components/chat/segments/plan-display";
 import { normalizeSearchableText } from "@/lib/find-engine/searchable-text";
-import { formatSingleLine } from "@/lib/text/format-single-line";
+import { collapseToSingleLine } from "@/lib/text/format-single-line";
+import { toolHeaderLine } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import { isThinkingShown } from "@/stores/layout/layout-store";
 import type {
   ActivityGroupModel,
@@ -94,7 +95,6 @@ const BUILT_IN_MARKED_TOKEN_TYPES = [
   "table",
   "text",
 ] as const;
-const CHAT_FIND_PREVIEW_MAX_LENGTH = 180;
 
 interface ChatFindVisibility {
   readonly hideReasoning: boolean;
@@ -704,13 +704,12 @@ function toolSegmentSearchText(segment: ToolSegment): ReadonlyArray<string> {
   if (segment.agentMessageSend !== null) {
     // The header's "Sent message" label is screen-reader-only, so it is not
     // indexed: a find hit on it would highlight nothing. The collapsed
-    // preview is what actually paints.
+    // preview is what actually paints - its whole text, which `line-clamp-2`
+    // cuts at the row's width (`AgentMessagePreview`), so the index carries the
+    // same text the preview element does.
     return [
       normalizeSearchableText(
-        formatSingleLine(segment.agentMessageSend.message, {
-          maxLength: CHAT_FIND_PREVIEW_MAX_LENGTH,
-          ellipsis: "…",
-        }),
+        collapseToSingleLine(segment.agentMessageSend.message),
       ),
     ];
   }
@@ -718,7 +717,8 @@ function toolSegmentSearchText(segment: ToolSegment): ReadonlyArray<string> {
     normalizeSearchableText(
       [
         segment.toolName,
-        segment.inputSummary ?? "",
+        // What the header paints (`toolHeaderLine`), not the capped summary.
+        toolHeaderLine(segment.inputSummary, segment.inputDetail) ?? "",
         segment.error === null || segment.error.length === 0 ? "" : "error",
       ].join(" "),
     ),

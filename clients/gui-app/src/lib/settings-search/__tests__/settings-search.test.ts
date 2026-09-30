@@ -321,6 +321,10 @@ describe("settings search", () => {
         "OS notifications",
         "Voice input",
         "Prevent sleep while running",
+        "Customize layout",
+        "Tab overflow",
+        "Readings on agent rows",
+        "Reading width",
       ]) {
         expect(labelsFor(label, DESKTOP), label).toContain(label);
         expect(labelsFor(label, MOBILE), label).not.toContain(label);

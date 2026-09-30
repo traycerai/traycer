@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronRight, FoldVertical } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TraycerMarkdown } from "@/markdown";
 
@@ -69,6 +70,7 @@ export function CompactionSegment(props: CompactionSegmentProps) {
     props;
   const isStreaming = status === "streaming";
   const isErrored = status === "errored";
+  const readingWidth = useReadingWidthStyle();
   const [expanded, setExpanded] = useState(false);
   const toggleExpanded = (): void => setExpanded((current) => !current);
 
@@ -136,9 +138,11 @@ export function CompactionSegment(props: CompactionSegmentProps) {
       {hasSummary && expanded ? (
         <div
           className={cn(
-            "mx-auto w-full max-w-[min(90vw,42rem)]",
+            "mx-auto w-full",
             "rounded-md border border-border/60 bg-muted/30 p-3",
+            readingWidth.className,
           )}
+          style={{ maxWidth: readingWidth.maxWidth }}
         >
           <TraycerMarkdown
             className={null}

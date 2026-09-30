@@ -1,4 +1,3 @@
-import { withoutTabRecovery } from "@/lib/tab-recovery/history";
 import { useCallback, useState } from "react";
 import { FileDown, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -236,7 +235,7 @@ function SwitcherRowActionsBody(
     else if (kind === "artifact")
       deleteArtifact.mutate(
         { epicId, artifactId: nodeId },
-        { onSuccess: () => withoutTabRecovery(closeOpenTile) },
+        { onSuccess: closeOpenTile },
       );
     setConfirmOpen(false);
   }, [

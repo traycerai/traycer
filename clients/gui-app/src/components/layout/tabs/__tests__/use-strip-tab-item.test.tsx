@@ -29,6 +29,7 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { useStripTabItem, type StripTabItemInput } from "../use-strip-tab-item";
+import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import {
   StripTabContextMenu,
   StripTabTitleInput,
@@ -353,6 +354,7 @@ afterEach(() => {
   useAuthStore.setState({ status: "signed-out" });
   __getOpenEpicRegistryForTests().disposeAll();
   disposeAllChatSessions();
+  useEpicDndStore.setState({ topLevelStripPairPreview: null });
 });
 
 describe("useStripTabItem through a bare presentation", () => {
@@ -535,5 +537,89 @@ describe("TabItem waiting state", () => {
     expect(
       screen.queryByTestId(`header-tab-approval-${EPIC_TAB.id}`),
     ).toBeNull();
+  });
+});
+
+/**
+ * The top strip's hover card converged onto the vertical strip's own
+ * `HoverCard` primitive (fix/layout-regression-and-improvements): same rich
+ * body, same gating. These mirror `side-tab-row.test.tsx`'s hover-card
+ * coverage for the horizontal strip's own `TabItem`.
+ */
+function hoverCard(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    '[data-slot="hover-card-content"]',
+  );
+}
+
+/** Dwells over the tab's title trigger - the hover card's only anchor. */
+function dwellOverTitle(): void {
+  const title = screen.getByTestId(`tab-title-${EPIC_TAB.kind}-${EPIC_TAB.id}`);
+  const trigger = title.parentElement;
+  if (trigger === null) throw new Error("expected a hover card trigger");
+  fireEvent.pointerEnter(trigger, { pointerType: "mouse" });
+  fireEvent.mouseEnter(trigger);
+  act(() => {
+    vi.advanceTimersByTime(1000);
+  });
+}
+
+function renderTabItem(): Promise<void> {
+  const input = makeInput();
+  return renderInApp(
+    <TabItem
+      {...input}
+      chrome="own"
+      includeMotionFrame={false}
+      offsetX={0}
+      showSeparatorAfter={false}
+      showDropIndicatorBefore={false}
+      showDropIndicatorAfter={false}
+    />,
+    IDLE_LEADER,
+    NO_PROMPT_LIT_INDICATORS,
+  );
+}
+
+describe("TabItem hover card", () => {
+  it("opens the vertical strip's rich hover card body on hover", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await renderTabItem();
+    dwellOverTitle();
+    const card = hoverCard();
+    expect(
+      card?.querySelector('[data-testid="side-tab-hover-card-body"]'),
+    ).not.toBeNull();
+    expect(card?.textContent).toContain("Row task");
+  });
+
+  it("keeps the hover card closed while the tab is being renamed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    registerEditableEpic([]);
+    await renderTabItem();
+    const row = await screen.findByTestId(`tab-epic-${EPIC_TAB.id}`);
+    fireEvent.contextMenu(row);
+    fireEvent.click(await screen.findByText("Edit Title"));
+    await screen.findByTestId(`tab-title-input-epic-${EPIC_TAB.id}`);
+    // The rename input replaces the title trigger outright, so there is
+    // nothing left to hover into a card - dwelling on the row itself must
+    // not conjure one either.
+    fireEvent.pointerEnter(row, { pointerType: "mouse" });
+    fireEvent.mouseEnter(row);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(hoverCard()).toBeNull();
+  });
+
+  it("keeps the hover card closed while a pair-merge preview targets this tab", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await renderTabItem();
+    useEpicDndStore.getState().topLevelStripPairPreviewChanged({
+      targetRef: { kind: EPIC_TAB.kind, id: EPIC_TAB.id },
+      side: "left",
+    });
+    dwellOverTitle();
+    expect(hoverCard()).toBeNull();
   });
 });
