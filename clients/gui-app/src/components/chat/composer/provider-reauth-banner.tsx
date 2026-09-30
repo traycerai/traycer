@@ -1,3 +1,4 @@
+import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
 import { AlertTriangle, ExternalLink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useId, useMemo, useState } from "react";
@@ -648,7 +649,9 @@ function OAuthReauthForm({
   const touchLogin = useProvidersTouchLogin();
   const ensurePack = useProvidersEnsurePack();
 
+  const supportsLoginOwnership = useProvidersLoginOwnership();
   const flow = useProviderProfileLoginFlow({
+    supportsLoginOwnership,
     mode: "reauth",
     providerId,
     // No profile picker yet - re-auth always targets the ambient login, not

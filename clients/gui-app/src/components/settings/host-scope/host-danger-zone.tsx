@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
+import type { TraycerRemoved } from "@traycer-clients/shared/platform/runner-host";
 import { toast } from "sonner";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
@@ -9,6 +10,8 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDeregisterHostFromAccount } from "@/hooks/auth/use-deregister-host-mutation";
 import { useRunnerUninstallTraycer } from "@/hooks/runner/use-runner-uninstall-traycer-mutation";
+import { useLocalHostForegroundRun } from "@/hooks/host/use-local-host-foreground-run";
+import { HOST_FOREGROUND_REMOVE_TRAYCER_REASON } from "@/lib/host/host-lifecycle-copy";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
@@ -192,51 +195,32 @@ export function LocalRecoveryDangerZone(): ReactNode {
   );
 }
 
-/**
- * Uninstalling the host is the most host-scoped action there is, so it lives
- * on the host's own page rather than beside app-global resets in General.
- * Local host only — there is no remote uninstall verb.
- */
-function RemoveTraycerRow(): ReactNode {
-  const { hostManagement } = useRunnerHost();
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const uninstall = useRunnerUninstallTraycer();
-  if (hostManagement === null) return null;
+interface RemovedTraycerStatusProps {
+  readonly removed: TraycerRemoved;
+  readonly blockedReason: string | null;
+  readonly reasonId: string;
+  readonly onRetry: () => void;
+}
 
-  if (uninstall.isSuccess) {
-    if (uninstall.data.serviceRegistrationRetained === true) {
-      return (
-        <SettingsRow
-          row={HOST_OVERVIEW.definitions.removalIncomplete}
-          control={
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              data-testid="settings-retry-uninstall"
-              onClick={() => uninstall.mutate()}
-            >
-              Try again
-            </Button>
-          }
-        />
-      );
-    }
-    if (uninstall.data.serviceRegistrationRetained === null) {
-      return (
-        <SettingsRow
-          row={HOST_OVERVIEW.definitions.removalUnverified}
-          control={
-            <span className="text-muted-foreground text-xs">
-              Check terminal
-            </span>
-          }
-        />
-      );
-    }
+function RemovedTraycerStatus(props: RemovedTraycerStatusProps): ReactNode {
+  const { removed, blockedReason, reasonId } = props;
+  const reasonHint =
+    blockedReason === null ? undefined : (
+      <span id={reasonId}>{blockedReason}</span>
+    );
+  // The host's Scheduled Task is not this account's (another Windows user's,
+  // or one whose owner could not be confirmed - main's copy says which): the
+  // removal left it alone on purpose and removed everything of this
+  // account's, so there is nothing to try again. Say so on the finished row.
+  if (removed.serviceWarning !== null) {
     return (
       <SettingsRow
         row={HOST_OVERVIEW.definitions.removed}
+        hint={
+          <span data-testid="settings-remove-traycer-service-warning">
+            {removed.serviceWarning}
+          </span>
+        }
         control={
           <Button
             type="button"
@@ -251,17 +235,107 @@ function RemoveTraycerRow(): ReactNode {
       />
     );
   }
-
-  return (
-    <>
+  if (removed.serviceRegistrationRetained === true) {
+    return (
       <SettingsRow
-        row={HOST_OVERVIEW.definitions.removeTraycer}
+        row={HOST_OVERVIEW.definitions.removalIncomplete}
+        hint={reasonHint}
         control={
           <Button
             type="button"
             variant="destructive"
             size="sm"
-            disabled={uninstall.isPending}
+            disabled={blockedReason !== null}
+            aria-describedby={blockedReason === null ? undefined : reasonId}
+            data-testid="settings-retry-uninstall"
+            onClick={props.onRetry}
+          >
+            Try again
+          </Button>
+        }
+      />
+    );
+  }
+  if (removed.serviceRegistrationRetained === null) {
+    return (
+      <SettingsRow
+        row={HOST_OVERVIEW.definitions.removalUnverified}
+        control={
+          <span className="text-muted-foreground text-xs">Check terminal</span>
+        }
+      />
+    );
+  }
+  return (
+    <SettingsRow
+      row={HOST_OVERVIEW.definitions.removed}
+      control={
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          data-testid="settings-quit-after-uninstall"
+          onClick={() => requestAppQuit()}
+        >
+          Quit Traycer
+        </Button>
+      }
+    />
+  );
+}
+
+/**
+ * Uninstalling the host is the most host-scoped action there is, so it lives
+ * on the host's own page rather than beside app-global resets in General.
+ * Local host only — there is no remote uninstall verb.
+ */
+function RemoveTraycerRow(): ReactNode {
+  const { hostManagement } = useRunnerHost();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const uninstall = useRunnerUninstallTraycer();
+  // THIS machine's host was started in a terminal: removing Traycer would stop
+  // a run this app did not start, and the CLI refuses it. Withheld with the
+  // reason on every control that removes - the row's button, its confirm (a
+  // run that began under an open dialog) and the incomplete state's retry.
+  const blockedReason = useLocalHostForegroundRun()
+    ? HOST_FOREGROUND_REMOVE_TRAYCER_REASON
+    : null;
+  const reasonId = useId();
+  if (hostManagement === null) return null;
+  const reasonHint =
+    blockedReason === null ? undefined : (
+      <span id={reasonId}>{blockedReason}</span>
+    );
+
+  // Only a removal that RAN switches the row. A `declined` one removed
+  // nothing, so the row stays on Remove Traycer and the hook's notice says why.
+  const removed =
+    uninstall.isSuccess && uninstall.data.kind === "removed"
+      ? uninstall.data
+      : null;
+  if (removed !== null) {
+    return (
+      <RemovedTraycerStatus
+        removed={removed}
+        blockedReason={blockedReason}
+        reasonId={reasonId}
+        onRetry={() => uninstall.mutate()}
+      />
+    );
+  }
+
+  return (
+    <>
+      <SettingsRow
+        row={HOST_OVERVIEW.definitions.removeTraycer}
+        hint={reasonHint}
+        control={
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            disabled={uninstall.isPending || blockedReason !== null}
+            aria-describedby={blockedReason === null ? undefined : reasonId}
             data-testid="settings-remove-traycer"
             onClick={() => setConfirmOpen(true)}
           >
@@ -277,7 +351,7 @@ function RemoveTraycerRow(): ReactNode {
         }
       />
       <ConfirmDestructiveDialog
-        blockedReason={null}
+        blockedReason={blockedReason}
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title="Remove Traycer from this computer?"

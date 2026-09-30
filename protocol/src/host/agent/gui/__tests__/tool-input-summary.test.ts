@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { deriveToolInputDetail } from "../tool-input-detail";
 import {
   deriveToolInputSummary,
   toolHeaderLine,
@@ -567,16 +568,28 @@ describe("toolHeaderLine", () => {
   const LONG_COMMAND =
     "cd /repo &&\n  bun run --filter @traycer/protocol vitest run   src/host/agent/gui/__tests__/tool-input-summary.test.ts\n  && echo done and then some more trailing words";
   const LONG_LINE = LONG_COMMAND.trim().replace(/\s+/g, " ");
+  const LONG_PATH =
+    "/Users/someone/.traycer/worktrees/traycerai__traycer-internal/fix-browser-tab-open/traycer-host/src/domain/browser/cells/__tests__/browser-cell-worker-page.test.ts";
 
   function bashSummary(command: string): string | null {
     return deriveToolInputSummary("Bash", { command });
+  }
+
+  // The header as the GUI builds it: from the two PERSISTED fields the host
+  // derived from one raw input, never from the input itself.
+  function headerFor(toolName: string, input: unknown): string | null {
+    return toolHeaderLine(
+      toolName,
+      deriveToolInputSummary(toolName, input),
+      deriveToolInputDetail(toolName, input),
+    );
   }
 
   it("returns the whole collapsed command when the summary is its capped cut", () => {
     const summary = bashSummary(LONG_COMMAND);
     expect(summary?.endsWith("\u2026")).toBe(true);
 
-    const line = toolHeaderLine(summary, {
+    const line = toolHeaderLine("Bash", summary, {
       kind: "command",
       command: LONG_COMMAND,
     });
@@ -588,50 +601,88 @@ describe("toolHeaderLine", () => {
   it("returns a short command's summary unchanged", () => {
     const summary = bashSummary("git status");
     expect(
-      toolHeaderLine(summary, { kind: "command", command: "git status" }),
+      toolHeaderLine("Bash", summary, {
+        kind: "command",
+        command: "git status",
+      }),
     ).toBe("git status");
   });
 
   it("keeps a summary that is not the cap of the detail's input", () => {
     const detail = { kind: "command", command: LONG_COMMAND } as const;
-    expect(toolHeaderLine("Run the protocol tests", detail)).toBe(
+    expect(toolHeaderLine("Bash", "Run the protocol tests", detail)).toBe(
       "Run the protocol tests",
     );
     // Also a capped summary of a DIFFERENT long command.
     const other = bashSummary(
       `${LONG_COMMAND} --different`.replace("cd", "ls"),
     );
-    expect(toolHeaderLine(other, detail)).toBe(other);
+    expect(toolHeaderLine("Bash", other, detail)).toBe(other);
   });
 
-  it("returns the whole value of a single-entry fields detail", () => {
-    const summary = bashSummary(LONG_COMMAND);
+  it("returns a Read's whole path beside its offset and limit", () => {
+    // The shape that stopped at 80: Claude's Read sends more than the path,
+    // so the detail has several fields.
+    const input = { file_path: LONG_PATH, offset: 120, limit: 40 };
+    expect(deriveToolInputSummary("Read", input)?.endsWith("\u2026")).toBe(
+      true,
+    );
+    expect(headerFor("Read", input)).toBe(LONG_PATH);
+  });
+
+  it("returns a command whole beside other fields", () => {
     expect(
-      toolHeaderLine(summary, {
-        kind: "fields",
-        entries: [{ key: "command", label: "Command", value: LONG_COMMAND }],
+      headerFor("Bash", {
+        command: LONG_COMMAND,
+        description: "Run the protocol tests",
+        timeout: 120000,
       }),
     ).toBe(LONG_LINE);
   });
 
-  it("keeps the summary for a multi-entry fields detail", () => {
-    const summary = bashSummary(LONG_COMMAND);
+  it("rebuilds a summary that composes typed fields", () => {
     expect(
-      toolHeaderLine(summary, {
-        kind: "fields",
-        entries: [
-          { key: "command", label: "Command", value: LONG_COMMAND },
-          { key: "cwd", label: "Cwd", value: "/repo" },
-        ],
+      headerFor("read_file", { path: LONG_PATH, startLine: 3, endLine: 9 }),
+    ).toBe(`${LONG_PATH}:3-9`);
+  });
+
+  it("reads a Grep's pattern and path back out of its reconstructed command", () => {
+    expect(
+      headerFor("Grep", {
+        pattern: 'CELL_"worker" \\d+',
+        path: LONG_PATH,
+        "-n": true,
+        "-C": 2,
+        glob: "*.ts",
       }),
-    ).toBe(summary);
+    ).toBe(`CELL_"worker" \\d+ in ${LONG_PATH}`);
+  });
+
+  it("keeps a flag-like Grep pattern as the pattern", () => {
+    expect(headerFor("Grep", { pattern: "-i", path: LONG_PATH })).toBe(
+      `-i in ${LONG_PATH}`,
+    );
+  });
+
+  it("returns a string field that merely parses as JSON whole", () => {
+    const payload = `{"message": "${"x".repeat(100)}"}`;
+    const summary = deriveToolInputSummary("Custom", { payload });
+    expect(summary?.endsWith("\u2026")).toBe(true);
+    expect(headerFor("Custom", { payload })).toBe(payload);
+  });
+
+  it("returns a Codex argv command whole", () => {
+    const argv = ["bash", "-lc", LONG_LINE];
+    expect(headerFor("exec_command", { argv, cwd: "/repo" })).toBe(
+      `bash -lc "${LONG_LINE}"`,
+    );
   });
 
   it("passes a null summary or null detail through", () => {
     expect(
-      toolHeaderLine(null, { kind: "command", command: LONG_COMMAND }),
+      toolHeaderLine("Bash", null, { kind: "command", command: LONG_COMMAND }),
     ).toBeNull();
     const summary = bashSummary(LONG_COMMAND);
-    expect(toolHeaderLine(summary, null)).toBe(summary);
+    expect(toolHeaderLine("Bash", summary, null)).toBe(summary);
   });
 });

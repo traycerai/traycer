@@ -27,6 +27,7 @@ import type {
   ConvergeReadyOk,
   ConvergeReadyVersionPolicy,
   HostControllerStatus,
+  HostRespawnMode,
   InstallVersionOk,
   LocalHostMutationIntent,
   MutationOutcome,
@@ -34,6 +35,7 @@ import type {
   MutationKind,
   LifecycleAdmissionBlock,
   RemoveTraycerOk,
+  ServiceDefinitionRefreshOk,
   ServiceRegistrationOk,
   UninstallOk,
 } from "../../host/host-controller-types";
@@ -189,6 +191,7 @@ class FakeHostController implements IpcHostController {
       removedInstallDir: true,
       deregisteredService: true,
       serviceRegistrationRetained: null,
+      serviceWarning: null,
     },
   };
   removeTraycerResult: MutationOutcome<RemoveTraycerOk> = {
@@ -197,6 +200,7 @@ class FakeHostController implements IpcHostController {
       removedHost: true,
       deregisteredService: true,
       serviceRegistrationRetained: null,
+      serviceWarning: null,
       removedLoginItem: false,
     },
   };
@@ -212,6 +216,11 @@ class FakeHostController implements IpcHostController {
     kind: "ok",
     value: { registered: false },
   };
+  refreshServiceDefinitionResult: MutationOutcome<ServiceDefinitionRefreshOk> =
+    {
+      kind: "ok",
+      value: { result: "current", appliesAt: null },
+    };
   freePortAndRestartResult: MutationOutcome<ActivateInstalledOk> = {
     kind: "ok",
     value: { activated: true },
@@ -237,6 +246,8 @@ class FakeHostController implements IpcHostController {
     reachable: false,
     localAttempt: null,
     removedByUser: false,
+    lastEnsureFailure: null,
+    updateDeferral: null,
     checkedAt: "2026-01-01T00:00:00.000Z",
   };
 
@@ -320,8 +331,17 @@ class FakeHostController implements IpcHostController {
     this.calls.push({ method: "deregisterService", args: [] });
     return this.deregisterServiceResult;
   }
-  async respawn(): Promise<MutationOutcome<ActivateInstalledOk>> {
-    this.calls.push({ method: "respawn", args: [] });
+  async refreshServiceDefinition(): Promise<
+    MutationOutcome<ServiceDefinitionRefreshOk>
+  > {
+    this.calls.push({ method: "refreshServiceDefinition", args: [] });
+    return this.refreshServiceDefinitionResult;
+  }
+  async respawn(
+    intent: LocalHostMutationIntent,
+    mode: HostRespawnMode,
+  ): Promise<MutationOutcome<ActivateInstalledOk>> {
+    this.calls.push({ method: "respawn", args: [intent, mode] });
     return this.respawnResult;
   }
   async recoverIfDown(): Promise<
@@ -649,7 +669,7 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
       { method: "applyStaged", args: ["manual", false] },
       { method: "uninstallHost", args: [true] },
       { method: "removeTraycer", args: [] },
-      { method: "respawn", args: [] },
+      { method: "respawn", args: [{ kind: "background" }, "force"] },
       { method: "registerService", args: [] },
       { method: "deregisterService", args: [] },
       { method: "freePortAndRestart", args: [1234, 7000] },
@@ -774,6 +794,7 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     bridge.options.hostController.registerServiceResult = {
       kind: "failed",
       message: "service registration failed",
+      errorCode: null,
     };
     mgmt.registerHostManagementIpc(bridge as never);
 
@@ -875,7 +896,7 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     expect(hostController.calls).toEqual([
       { method: "installVersion", args: ["latest", true] },
       { method: "uninstallHost", args: [true] },
-      { method: "respawn", args: [] },
+      { method: "respawn", args: [{ kind: "background" }, "force"] },
       { method: "registerService", args: [] },
       { method: "deregisterService", args: [] },
     ]);
@@ -964,7 +985,12 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     const result = await bridge.handlers.get(
       RunnerHostInvoke.traycerFreePortAndRestart,
     )!(null, { port: 7000, pid: 1234, processName: "rogue" });
-    expect(result).toEqual({ port: 7000, pid: 1234, processName: "rogue" });
+    expect(result).toEqual({
+      kind: "applied",
+      port: 7000,
+      pid: 1234,
+      processName: "rogue",
+    });
     expect(bridge.options.hostController.calls).toContainEqual({
       method: "freePortAndRestart",
       args: [1234, 7000],
@@ -1187,6 +1213,7 @@ describe("host-management IPC - traycerHostConvergeReady delegates to HostContro
     bridge.options.hostController.convergeReadyResult = {
       kind: "failed",
       message: "no host installed",
+      errorCode: null,
     };
 
     const result = await bridge.handlers.get(
@@ -1196,6 +1223,7 @@ describe("host-management IPC - traycerHostConvergeReady delegates to HostContro
     expect(result).toEqual({
       kind: "failed",
       message: "no host installed",
+      errorCode: null,
     });
   });
 });

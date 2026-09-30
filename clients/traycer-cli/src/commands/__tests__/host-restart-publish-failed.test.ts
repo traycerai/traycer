@@ -189,7 +189,7 @@ function writeManifest(opts: {
 }
 
 describe("host restart survives a CLI upgrade publication failure (Codex P1 #2)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     workHome = mkdtempSync(
       join(tmpdir(), "traycer-host-restart-publish-failed-test-"),
     );
@@ -197,6 +197,10 @@ describe("host restart survives a CLI upgrade publication failure (Codex P1 #2)"
     process.env.HOME = workHome;
     process.env.USERPROFILE = workHome;
     vi.resetModules();
+    // HOME-safety guard: prove the redirect actually took before any test
+    // can touch a real path under it.
+    const { hostHomeDir } = await import("../../store/paths");
+    expect(hostHomeDir("production").startsWith(workHome)).toBe(true);
     mocks.controllerCalls = [];
     mocks.failRenameOnceFor = null;
     mocks.corruptCopyDestSuffix = null;
@@ -242,6 +246,7 @@ describe("host restart survives a CLI upgrade publication failure (Codex P1 #2)"
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
 
     // Must resolve, not reject - this is the regression: before the fix

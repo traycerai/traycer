@@ -360,9 +360,20 @@ export interface TranscriptWalkRegion {
   readonly lastUserTimestampBefore: number | null;
   /**
    * The attempt turn keys the span {@link from} falls in collected before it,
-   * in first-seen order. Records at or after {@link from} can still add
-   * attempts to that span, and two or more mark every turn in it - these
-   * included.
+   * in first-seen order - its first two at most. Records at or after
+   * {@link from} can still add attempts to that span, and two or more mark
+   * every turn in it - these included. Once it holds two, nothing the region
+   * adds or loses moves any of those turns' marks, so the rest are not kept.
+   *
+   * A state written before that cap carries the whole list, and one written
+   * after it is read by a build without the cap: either reads the same, so the
+   * cap is not a new {@link TRANSCRIPT_FOLD_STATE_VERSION}. Two kept keys mark
+   * the span as the whole list does; a dropped turn that gains a record is
+   * re-decided by the walk itself, and a removal or rewrite before the region
+   * widens the walk to the whole chat, which rebuilds the span; and a dropped
+   * turn re-described for another reason keeps the mark its stored rows carry.
+   * A whole list a build without the cap left is re-decided by each walk until
+   * the next region is seated, which keeps two.
    */
   readonly spanKeysBefore: readonly string[];
   /**

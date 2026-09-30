@@ -27,6 +27,12 @@ export interface HostOverviewVersionAnswer {
   readonly degrade: OverviewDegradeReason | null;
   readonly desktopBridge: DesktopAppUpdatesBridge | null;
   readonly onInstallationHelp: () => void;
+  /**
+   * THIS machine's host was started in a terminal: nothing here can finish an
+   * update over it, so Update now gives way to this sentence saying what does
+   * (`hostForegroundUpdateLine`). `null` otherwise.
+   */
+  readonly foregroundUpdateLine: string | null;
 }
 
 /**
@@ -121,7 +127,10 @@ function VersionCardControls(props: {
           onHelp={props.answer.onInstallationHelp}
         />
       ) : (
-        <UpdateNowControl summary={summary} />
+        <UpdateNowControl
+          summary={summary}
+          foregroundUpdateLine={props.answer.foregroundUpdateLine}
+        />
       )}
       {props.inFlight ? null : (
         <Button
@@ -149,9 +158,22 @@ function VersionCardControls(props: {
 /** Update now, only when there is a newer version this host can install. */
 function UpdateNowControl(props: {
   readonly summary: HostOverviewUpdatesSummary;
+  readonly foregroundUpdateLine: string | null;
 }): ReactNode {
   const { summary } = props;
   if (summary.updatableVersion === null) return null;
+  // The install would reach the CLI and be refused (`E_HOST_NOT_SERVICE_RUN`),
+  // so say what finishes it instead of offering a button that cannot.
+  if (props.foregroundUpdateLine !== null) {
+    return (
+      <p
+        className="min-w-0 text-right text-ui-sm text-muted-foreground"
+        data-testid="host-overview-update-foreground"
+      >
+        {props.foregroundUpdateLine}
+      </p>
+    );
+  }
   return (
     <Button
       type="button"

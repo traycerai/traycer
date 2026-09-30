@@ -3,8 +3,10 @@ import { NO_INSTALL_PHASE_HOOKS } from "../installer/install";
 import { withCliUpdateContender } from "../host/update-contender";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
+import { refuseUpdateOverUnstartableService } from "../host/update-service-unstartable";
 import { hostHomeDir } from "../store/paths";
 import { applyHostWithAttempt } from "../host/update-mutation";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
 import { readHostHeldVersion } from "@traycer/protocol/config/installation";
 import { readHostInstallRecord } from "../manifest/host-install";
 import { createRegistryYankLookup } from "../registry/client";
@@ -35,9 +37,12 @@ import type { CommandFn, CommandResult } from "../runner/runner";
 // convergence: Desktop's `applyStagedCliOwned` reads `postSwapError` off this
 // exit-0 envelope and renders "installed, not converged" with a Doctor
 // pointer, and it reserves the thrown-error path for applies that did not
-// commit at all (where its recovery is "retry with force"). Exiting non-zero
-// on a failed post-swap start would route a committed swap into that
-// wrong-recovery branch.
+// commit at all (where its recovery is "retry with force"). Desktop now trusts
+// a terminal `ok` line over a non-zero exit, so the exit code no longer picks
+// its branch - the contract stands on the primitive/composite split below,
+// which this command's help states. `host install` and
+// `host ensure` are composites of the other kind and exit non-zero on a
+// failed post-swap start.
 //
 // `host update` is the composite and answers the other question - it stages,
 // applies, then health-probes, and FAILS (`E_HOST_UPDATE_HEALTH_CHECK_FAILED`)
@@ -82,6 +87,14 @@ export interface HostApplyArgs {
    * which keeps the acquire-or-refuse path exactly as it was.
    */
   readonly attemptAdoption: string | null;
+  /**
+   * `--lifecycle-origin`, recorded in the adoption proof the post-swap start
+   * publishes (`host/lifecycle-origin.ts`). A direct `host apply` carries its
+   * caller's origin; only `host update`'s own apply leg is `maintenance`.
+   * `desktop` also refuses to apply over a host started in a terminal
+   * (`ApplyHostOptions.lifecycleOrigin`).
+   */
+  readonly lifecycleOrigin: HostStartOrigin;
 }
 
 export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
@@ -92,6 +105,23 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
       noService: args.noService,
       acceptStoreFormatLoss: args.acceptStoreFormatLoss,
     });
+    // Before the lock, the busy gate or the stop: an apply whose stop and
+    // restart go through a service this account could not start again.
+    // `--respect-hold` is the desktop's launch-time apply and nothing else, an
+    // AUTOMATIC path: it parks over a disabled task, or over another account's
+    // task under a host started through it, exactly as `host update` does. An
+    // explicit apply (no `--respect-hold`) is refused over the second, and
+    // goes on over the first: it swaps, keeps the task disabled and says so.
+    // Over another account's task with no host of this account's running
+    // through it, either apply goes on and says so (`preSwapWarning`).
+    // `--no-service` touches no service at all.
+    const preSwapWarning = args.noService
+      ? null
+      : await refuseUpdateOverUnstartableService(
+          ctx.runtime.environment,
+          ctx.runtime.logger,
+          args.respectHold ? "host apply --respect-hold" : "host apply",
+        );
     const adoption = await resolveAttemptAdoptionFromNonce(
       hostHomeDir(ctx.runtime.environment),
       args.attemptAdoption,
@@ -162,26 +192,40 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
         // (`held !== installed`) rather than by deleting the record - so there
         // is nothing to clear and no clear/ABA race. The `respectHold` guard
         // above is this command's only hold interaction.
-        return applyHostWithAttempt(capability, contenderOptions, {
-          environment: ctx.runtime.environment,
-          force: args.force,
-          noService: args.noService,
-          expectedStageFingerprint: args.expectedStageFingerprint,
-          expectedStagedVersion: null,
-          acceptStoreFormatLoss: args.acceptStoreFormatLoss,
-          onProgress: (info) => ctx.progress(info),
-          onWillCommitStaged: null,
-          onWillDisruptHost: null,
-          // `host apply` advances no attempt record of its own: Desktop
-          // drives its own lane around this call and reads the outcome.
-          hooks: NO_INSTALL_PHASE_HOOKS,
-        });
+        return applyHostWithAttempt(
+          capability,
+          contenderOptions,
+          args.lifecycleOrigin,
+          {
+            environment: ctx.runtime.environment,
+            force: args.force,
+            noService: args.noService,
+            expectedStageFingerprint: args.expectedStageFingerprint,
+            expectedStagedVersion: null,
+            acceptStoreFormatLoss: args.acceptStoreFormatLoss,
+            onProgress: (info) => ctx.progress(info),
+            onWillCommitStaged: null,
+            onWillDisruptHost: null,
+            // `host apply` advances no attempt record of its own: Desktop
+            // drives its own lane around this call and reads the outcome.
+            hooks: NO_INSTALL_PHASE_HOOKS,
+          },
+        );
       },
     );
-    const activation = activationOf(outcome);
+    // The swap ran over another account's task with no host of this
+    // account's behind it: the lifecycle had no registration of its own to
+    // refuse, so the pre-claim read's warning is the one the result carries.
+    const reported: ApplyHostOutcome =
+      outcome.outcome === "applied" &&
+      outcome.postSwapWarning === null &&
+      preSwapWarning !== null
+        ? { ...outcome, postSwapWarning: preSwapWarning }
+        : outcome;
+    const activation = activationOf(reported);
     ctx.runtime.logger.info("Host apply command completed", {
       environment: ctx.runtime.environment,
-      outcome: outcome.outcome,
+      outcome: reported.outcome,
       activation,
     });
     return {
@@ -190,8 +234,8 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
       // answer "what happened to the service after the swap?" into one - the
       // question exit 0 does NOT answer here. See the success-contract note
       // above, and `activationOf` for why it is not called "converged".
-      data: { ...outcome, activation },
-      human: humanSummary(outcome),
+      data: { ...reported, activation },
+      human: humanSummary(reported),
       exitCode: 0,
     };
   };
@@ -256,6 +300,10 @@ function humanSummary(outcome: ApplyHostOutcome): string {
   // serving the old bytes, alive, while the start never ran.
   if (outcome.postSwapError !== null) {
     return `applied host ${outcome.record.version}, but the post-swap start/restart request failed: ${outcome.postSwapError} - liveness was not checked; run 'traycer host status' to see what is running, then 'traycer host doctor'`;
+  }
+  // Applied, and not a failure: the service was left as its owner has it.
+  if (outcome.postSwapWarning !== null) {
+    return `applied host ${outcome.record.version}. ${outcome.postSwapWarning.message}`;
   }
   if (!outcome.runningActivated) {
     return `applied host ${outcome.record.version}, but no start was run, so the new bytes are not active yet - run 'traycer host status' to see what is running`;

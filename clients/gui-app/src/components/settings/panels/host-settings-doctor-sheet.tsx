@@ -65,8 +65,14 @@ export type DoctorSheetSource =
       readonly onBridgeLogs: () => Promise<readonly string[]>;
       /** True while that bridge read is in flight. */
       readonly bridgeLogsPending: boolean;
-      /** Runs a local-only repair on this computer via the CLI bridge. */
-      readonly onLocalFix: (issue: HostDoctorIssue) => void;
+      /**
+       * Runs a local-only repair on this computer via the CLI bridge, and
+       * calls `onApplied` once only if the repair was applied.
+       */
+      readonly onLocalFix: (
+        issue: HostDoctorIssue,
+        onApplied: () => void,
+      ) => void;
       readonly localFixPendingCode: string | null;
     };
 

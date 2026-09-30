@@ -4,16 +4,30 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withUpdateContender } from "@traycer-clients/shared/host-update";
 
-// This file needs a mock on `../../service/spawn-edge-bounds` that no other
-// adoption test file may carry (`vi.mock` is file-wide, so it would poison
-// every other suite's real window if placed anywhere shared). It exists to
-// prove the fail-closed direction of `adoptionGrantExpired`: a `NaN` window
-// must expire every grant, never admit one.
-vi.mock("../../service/spawn-edge-bounds", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../service/spawn-edge-bounds")>();
-  return { ...actual, HOST_START_ADOPTION_MAX_AGE_MS: Number.NaN };
-});
+// This file needs a mock on the shared leaf that no other adoption test file
+// may carry (`vi.mock` is file-wide, so it would poison every other suite's
+// real window if placed anywhere shared). It exists to prove the fail-closed
+// direction of `adoptionGrantExpired`: a `NaN` window must expire every
+// grant, never admit one.
+//
+// Targets `@traycer-clients/shared/host-start-adoption/spawn-edge-bounds`
+// directly, NOT this project's own `../../service/spawn-edge-bounds` (a thin
+// `export *` wrapper around it, post-#2267 extraction): `adoptionGrantExpired`
+// lives in `@traycer-clients/shared/host-start-adoption/index.ts`, which
+// imports `HOST_START_ADOPTION_MAX_AGE_MS` from `"./spawn-edge-bounds"` -
+// i.e. the SHARED file, a different module specifier than the CLI wrapper.
+// Mocking the wrapper does not affect what `index.ts` itself imports, so the
+// override would never reach `adoptionGrantExpired` at all.
+vi.mock(
+  "@traycer-clients/shared/host-start-adoption/spawn-edge-bounds",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-start-adoption/spawn-edge-bounds")
+      >();
+    return { ...actual, HOST_START_ADOPTION_MAX_AGE_MS: Number.NaN };
+  },
+);
 
 const homeRef = vi.hoisted(() => ({ current: "" }));
 vi.mock("../../store/paths", () => ({
@@ -69,6 +83,7 @@ describe("adoptionGrantExpired — fail-closed under a NaN window", () => {
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
         // Sanity: the proof really was published, fresh, with a live parent.
         const raw = await readFile(
@@ -105,6 +120,7 @@ describe("adoptionGrantExpired — fail-closed under a NaN window", () => {
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
         const proof = JSON.parse(
           await readFile(
@@ -140,6 +156,7 @@ describe("adoptionGrantExpired — fail-closed under a NaN window", () => {
           capability,
           options(hostHomeDir),
           serviceLabel,
+          "terminal",
         );
 
         const result = await consumeHostStartAdoption("production", null, null);

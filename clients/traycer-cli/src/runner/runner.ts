@@ -1,7 +1,10 @@
 import * as Sentry from "@sentry/node";
+import { HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE } from "@traycer/protocol/host/lifecycle-constants";
 import { errorFromUnknown } from "../logger";
+import { withBoundedWaitProgress } from "./bounded-wait-progress";
 import {
   CLI_ERROR_CODES,
+  type CliError,
   EXPECTED_CLI_ERROR_CODES,
   toCliError,
 } from "./errors";
@@ -18,6 +21,11 @@ import {
   resolveRuntimeContext,
   type RuntimeContext,
 } from "./runtime";
+import {
+  cliSentryRepeatKey,
+  defaultRepeatGateIo,
+  recordCliFailureForSentry,
+} from "./sentry-repeat-gate";
 
 // Context handed to every CommandFn. `progress(info)` is a thin
 // convenience mirroring output.progress so command bodies don't have
@@ -85,7 +93,9 @@ export async function runCommand(
   // that exit happens. See `finishAfterProcessFatal` in exit.ts.
   markCommandStarted();
   try {
-    result = await fn(ctx);
+    // The waits deep inside the body report through `ctx.progress` too, so
+    // Desktop's idle timer sees each one begin (bounded-wait-progress.ts).
+    result = await withBoundedWaitProgress(ctx.progress, () => fn(ctx));
   } catch (err) {
     markCommandSettled();
     const cliErr = toCliError(err);
@@ -94,25 +104,44 @@ export async function runCommand(
     // reporting those made the CLI a quarter of the account's error volume.
     // A skipped code still leaves a breadcrumb, so an unexpected capture
     // later in the same process shows what preceded it.
-    if (EXPECTED_CLI_ERROR_CODES.has(cliErr.code)) {
+    const expected = EXPECTED_CLI_ERROR_CODES.has(cliErr.code);
+    if (expected) {
       Sentry.addBreadcrumb({
         category: "cli",
         message: "CLI command failed with an expected code",
         data: { code: cliErr.code },
       });
-    } else {
-      Sentry.captureException(err);
     }
-    runtime.logger.error(
-      "CLI command failed",
-      {
+    // An automatic update parked over a service this account cannot start
+    // again is an expected state, not a failure: one INFO line naming the
+    // code (which says why - disabled, or another account's task), never an
+    // ERROR with a stack. The park stays visible in the log once per run, and
+    // the host's reconciler latches on the exit, so it runs about once per
+    // state change (`host/update-service-unstartable.ts`).
+    if (cliErr.exitCode === HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE) {
+      runtime.logger.info("CLI command deferred", {
         code: cliErr.code,
         exitCode: cliErr.exitCode,
         emittedAsJson: runtime.json,
-      },
-      errorFromUnknown(err),
-    );
+      });
+    } else {
+      runtime.logger.error(
+        "CLI command failed",
+        {
+          code: cliErr.code,
+          exitCode: cliErr.exitCode,
+          emittedAsJson: runtime.json,
+        },
+        errorFromUnknown(err),
+      );
+    }
     output.emitError(cliErr.code, cliErr.message, cliErr.details);
+    // The log line and the envelope go out before the repeat gate's file read,
+    // the first yield on this path: a process-fatal handler that fires inside
+    // that await must find the command's answer already written.
+    if (!expected) {
+      await reportCommandFailure(runtime, cliErr, err);
+    }
     // The error envelope was just written to a possibly-piped stdout, and the
     // Sentry client is still live. `finishAndExit` flushes the first and shuts
     // down the second before letting the loop end - see exit.ts for why the
@@ -161,4 +190,31 @@ export async function runCommand(
   // truncation turned on, and it is unrelated to the teardown abort the rest
   // of that helper addresses. See std-write.ts and exit.ts.
   await finishAndExit(result.exitCode);
+}
+
+// Reports a failure the classification above let through, once per kind per
+// machine per window (see sentry-repeat-gate.ts). A build without a DSN has no
+// client, and then there is nothing to gate and no ledger to write.
+async function reportCommandFailure(
+  runtime: RuntimeContext,
+  cliErr: CliError,
+  err: unknown,
+): Promise<void> {
+  if (Sentry.getClient() === undefined) return;
+  const decision = await recordCliFailureForSentry(
+    runtime.environment,
+    cliSentryRepeatKey(cliErr.code, err, cliErr.message),
+    defaultRepeatGateIo,
+  );
+  if (decision.kind === "report") {
+    Sentry.captureException(err, {
+      extra: { repeatsSinceLastReport: decision.repeatsSinceLastReport },
+    });
+    return;
+  }
+  Sentry.addBreadcrumb({
+    category: "cli",
+    message: "CLI command failure repeated inside the report window",
+    data: { code: cliErr.code, repeatsInWindow: decision.repeatsInWindow },
+  });
 }

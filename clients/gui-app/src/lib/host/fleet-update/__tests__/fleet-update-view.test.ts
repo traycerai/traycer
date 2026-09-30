@@ -496,6 +496,38 @@ describe("projectFleetUpdateView — retained last-known phase (lastKnownKind)",
   });
 });
 
+describe("projectFleetUpdateView — error code", () => {
+  it("a failed attempt carries error.code beside errorMessage", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({
+          phase: "failed",
+          execution: "terminal",
+          error: {
+            code: "E_HOST_STORE_FORMAT_FLOOR",
+            message: "refused by the floor",
+            phase: "applying",
+          },
+        }),
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("failed");
+    expect(view.errorMessage).toBe("refused by the floor");
+    expect(view.errorCode).toBe("E_HOST_STORE_FORMAT_FLOOR");
+  });
+
+  it("errorCode is null when the attempt has no error", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({ operation: attemptOperation({}) }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.errorCode).toBeNull();
+  });
+});
+
 describe("projectFleetUpdateView — liveness", () => {
   it("liveness: interrupted overrides the phase and projects failed", () => {
     const view = projectFleetUpdateView({
@@ -1292,6 +1324,7 @@ function recordObservation(
     targetVersion: "2.0.0",
     phase: "preparing",
     errorMessage: null,
+    errorCode: null,
     // Un-probed by default, which is what a parked or terminal record carries
     // and what every case here that is not ABOUT liveness should assert
     // against — `live` is the exceptional verdict, so it has to be asked for.

@@ -15,6 +15,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import { callHostRpcAtEndpoint } from "../internal/host-rpc";
 import { readHostInstallRecord } from "../manifest/host-install";
 import { readHostStagedRecord } from "../manifest/host-staged";
+import { reportBoundedWait } from "../runner/bounded-wait-progress";
 import type { Environment } from "../runner/environment";
 import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
 import {
@@ -202,6 +203,10 @@ export async function observeAttemptRecoveryEvidence(
   // The running leg is typed AGAINST the install record (D9), so the record
   // this observation already read is what classifies it - never a second
   // `install.json` read that could disagree with the installed leg beside it.
+  //
+  // Each read below can spend a full host RPC, and `host update-verify` makes
+  // four in a row; each reports as it begins (bounded-wait-progress.ts).
+  reportBoundedWait("reading the running host's state");
   const runningBefore = await readRunningObservation(
     environment,
     installed.runtime,
@@ -209,6 +214,7 @@ export async function observeAttemptRecoveryEvidence(
   );
   // A host restart while collecting evidence is itself an ambiguity. Re-read
   // the live RPC/metadata proof rather than comparing just the release string.
+  reportBoundedWait("reading the running host's state again");
   const runningAfter = await readRunningObservation(
     environment,
     installed.runtime,
@@ -665,18 +671,24 @@ async function placedFileFingerprint(
     typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
   const nonBlock =
     typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0;
-  let pathBefore: Stats;
-  try {
-    pathBefore = await lstat(path);
-  } catch (error) {
-    return errorCode(error) === "ENOENT" ? null : "unreadable";
-  }
-  if (!pathBefore.isFile()) return "unreadable";
+  const noControllingTerminal =
+    typeof constants.O_NOCTTY === "number" ? constants.O_NOCTTY : 0;
+  // The type check and the read are one operation on one descriptor: no path
+  // check comes before the open, so nothing can be swapped in between. A
+  // non-regular file is opened but never read. O_NONBLOCK keeps a FIFO open
+  // from waiting for a writer, and O_NOCTTY keeps a terminal device from
+  // becoming this process's controlling terminal.
   let handle;
   try {
-    handle = await open(path, constants.O_RDONLY | noFollow | nonBlock);
+    handle = await open(
+      path,
+      constants.O_RDONLY | noFollow | nonBlock | noControllingTerminal,
+    );
   } catch (error) {
-    return errorCode(error) === "ENOENT" ? null : "unreadable";
+    if (errorCode(error) !== "ENOENT") return "unreadable";
+    // Without O_NOFOLLOW (Windows) the open follows a link, so ENOENT can mean
+    // a link to nothing. Only a path with no entry at all is absent.
+    return (await pathHasNoEntry(path)) ? null : "unreadable";
   }
   try {
     const before = await handle.stat();
@@ -686,10 +698,8 @@ async function placedFileFingerprint(
     const pathStats = await lstat(path);
     if (
       !pathStats.isFile() ||
-      !sameRegularFileIdentity(pathBefore, before) ||
       !sameRegularFileIdentity(before, after) ||
       !sameRegularFileIdentity(before, pathStats) ||
-      pathBefore.size !== before.size ||
       before.size !== after.size ||
       before.size !== pathStats.size
     ) {
@@ -703,6 +713,15 @@ async function placedFileFingerprint(
     return "unreadable";
   } finally {
     await handle.close().catch(() => undefined);
+  }
+}
+
+async function pathHasNoEntry(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return false;
+  } catch (error) {
+    return errorCode(error) === "ENOENT";
   }
 }
 

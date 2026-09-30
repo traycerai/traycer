@@ -14,6 +14,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { AppHeader } from "@/components/layout/header/app-header";
 import { HostBootCard } from "@/components/centered-card";
 import { HostBootSurface } from "@/components/host/host-boot-surface";
+import { HostEnsureFailureMessage } from "@/components/host/host-ensure-failure-message";
 import { LocalBootstrapAttempts } from "@/components/host/local-bootstrap-attempts";
 import {
   BootstrapLogDisclosure,
@@ -61,6 +62,16 @@ import {
   useRunnerHostOrNull,
 } from "@/providers/use-runner-host";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
+import { useRunnerHostLifecycleQuery } from "@/hooks/runner/use-runner-host-lifecycle-query";
+import { useRunnerHostLifecycleSetMutation } from "@/hooks/runner/use-runner-host-lifecycle-set-mutation";
+import {
+  NO_LOCAL_HOST_DESKTOP_LEAD,
+  NO_LOCAL_HOST_DESKTOP_TAIL,
+  NO_LOCAL_HOST_INSTALL_COMMAND,
+  NO_LOCAL_HOST_RUN_HERE_APPLIED,
+  NO_LOCAL_HOST_RUN_HERE_LABEL,
+  hostLifecycleSetRefusalCopy,
+} from "@/lib/host/host-lifecycle-copy";
 import { appLogger, describeLogError } from "@/lib/logger";
 import {
   admitsLocalPlane,
@@ -416,6 +427,7 @@ function presentationFromLifecycle(args: {
     progress: args.lifecycle.provisioning.progress,
     lastProgress: args.lifecycle.provisioning.lastProgress,
     provisioningError: args.lifecycle.provisioning.error,
+    ensureFailure: args.lifecycle.provisioning.ensureFailure,
     provisioning: args.lifecycle.provisioning.isProvisioning,
     removed: args.lifecycle.provisioning.removed,
     hostBusy: args.lifecycle.provisioning.hostBusy,
@@ -460,6 +472,7 @@ export function SurfaceReadinessFallback(props: {
 }): ReactNode {
   const controller = useHostReadinessController();
   const presentation = controller.defaultHostPresentation;
+  const runnerHost = useRunnerHostOrNull();
   // The auth-restore wait is a WAIT, not a terminal, and it can sit between
   // the attach cover and the narrator's card on any launch. It therefore wears
   // the shared boot surface - same card, same idle sentence, same Show details
@@ -479,6 +492,17 @@ export function SurfaceReadinessFallback(props: {
         />
       </div>
     );
+  }
+  // The same "no host" state on a DESKTOP launched with no local host (the
+  // `none` lifecycle mode): the phone's copy would send the person to connect
+  // a host "from this device", which is not what this machine needs - it can
+  // run one again, and that is the one choice only this card can offer.
+  if (
+    props.readiness.kind === "mobile-no-host" &&
+    runnerHost !== null &&
+    runnerHost.hostLifecycle !== null
+  ) {
+    return <DesktopNoLocalHostFallback presentation={presentation} />;
   }
   // No install-progress read here any more. Every kind that HAD progress to
   // show (`loading-host`, `provisioning-host`, the slow-host card) belongs to
@@ -852,6 +876,110 @@ function fallbackContent(
   }
 }
 
+/**
+ * The no-host card for a desktop launched in `none`. "Run a host here
+ * instead" writes the lifecycle policy back to Background; turning the local
+ * host lanes on is restart-to-apply, so the card then says so and offers the
+ * quit rather than pretending the host is starting. The follow-up state comes
+ * from the lifecycle view, so a `traycer host lifecycle set` made from the CLI
+ * reads the same way.
+ */
+function DesktopNoLocalHostFallback(props: {
+  readonly presentation: DefaultHostReadinessPresentation;
+}): ReactNode {
+  const viewQuery = useRunnerHostLifecycleQuery();
+  const setMode = useRunnerHostLifecycleSetMutation();
+  const [failure, setFailure] = useState<string | null>(null);
+  const view = viewQuery.data;
+  const switchedOn = view !== undefined && view.desired.mode !== "none";
+  const openSettings: ReadinessFallbackAction = {
+    label: "Open settings",
+    testId: "no-local-host-open-settings",
+    variant: "outline",
+    disabled: false,
+    pending: false,
+    onClick: props.presentation.openSettings,
+  };
+  const fallback: ReadinessFallback = {
+    title: null,
+    message: null,
+    body: (
+      <div className="flex flex-col gap-2">
+        <p
+          className="text-ui-sm text-muted-foreground"
+          data-testid="desktop-no-local-host"
+        >
+          {switchedOn ? (
+            NO_LOCAL_HOST_RUN_HERE_APPLIED
+          ) : (
+            <>
+              {NO_LOCAL_HOST_DESKTOP_LEAD}{" "}
+              <code className="font-mono">{NO_LOCAL_HOST_INSTALL_COMMAND}</code>{" "}
+              {NO_LOCAL_HOST_DESKTOP_TAIL}
+            </>
+          )}
+        </p>
+        {failure === null ? null : (
+          <p
+            className="text-ui-sm text-destructive"
+            data-testid="no-local-host-run-here-error"
+          >
+            {failure}
+          </p>
+        )}
+      </div>
+    ),
+    footer: null,
+    actions: switchedOn
+      ? [
+          {
+            label: "Quit Traycer",
+            testId: "no-local-host-quit",
+            variant: "default",
+            disabled: false,
+            pending: false,
+            onClick: () => {
+              requestAppQuit();
+            },
+          },
+          openSettings,
+        ]
+      : [
+          {
+            label: NO_LOCAL_HOST_RUN_HERE_LABEL,
+            testId: "no-local-host-run-here",
+            variant: "default",
+            disabled: view === undefined || setMode.isPending,
+            pending: setMode.isPending,
+            onClick: () => {
+              setFailure(null);
+              setMode.mutate(
+                {
+                  request: { mode: "background", stop: null },
+                  source: "no-host-card",
+                },
+                {
+                  onSuccess: (result) => {
+                    if (result.kind === "failed") {
+                      setFailure(hostLifecycleSetRefusalCopy(result.reason));
+                    }
+                  },
+                },
+              );
+            },
+          },
+          openSettings,
+        ],
+  };
+  return (
+    <FallbackFrame
+      fallback={fallback}
+      testId="host-ready-gate-desktop-no-local-host"
+      messageTestId={null}
+    />
+  );
+}
+
 function provisioningErrorFallback(
   presentation: DefaultHostReadinessPresentation,
 ): ReadinessFallback {
@@ -859,9 +987,11 @@ function provisioningErrorFallback(
     // The same heading the narrator's settled cold-start face uses: both cards
     // say "this machine's host didn't start", and they say it identically.
     title: "Traycer Host didn't start",
-    message:
-      presentation.provisioningError?.message ??
-      "Could not start Traycer Host.",
+    // The failure's own words, in the body with the narrator's settled arm's
+    // clamp rather than the card's message slot: a CLI message can run long.
+    // Main's record first - it is the same failure when this card's Retry
+    // produced it, and the only one when a launch ensure did.
+    message: null,
     // THE DIAGNOSTICS, and this card had none. It is drawn when this machine's
     // install just failed, and it WINS over the window narrator on that state
     // (`gateCardReadiness`) - which meant the narrator's settled arm, the one
@@ -874,6 +1004,14 @@ function provisioningErrorFallback(
     // card has a real action row that already carries `Open settings`.
     body: (
       <LocalHostBodyShell>
+        <HostEnsureFailureMessage
+          message={
+            presentation.ensureFailure?.message ??
+            presentation.provisioningError?.message ??
+            "Could not start Traycer Host."
+          }
+          code={presentation.ensureFailure?.code ?? null}
+        />
         <LocalBootstrapAttempts />
         <BootstrapLogDisclosure
           onConfigureShell={presentation.configureShell}

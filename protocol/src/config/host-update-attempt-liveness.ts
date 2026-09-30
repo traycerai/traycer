@@ -1,8 +1,11 @@
 import {
-  compareProcessStartIdentity,
+  compareObservedProcessStart,
   isProcessStartIdentity,
 } from "@traycer/protocol/host/lifecycle/process-start-identity";
-import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle/process-start-identity";
+import type {
+  ObservedProcessStart,
+  ProcessStartIdentity,
+} from "@traycer/protocol/host/lifecycle/process-start-identity";
 import type {
   HostUpdateAttemptRead,
   HostUpdateAttemptRecord,
@@ -342,14 +345,18 @@ export type AttemptHolderProcessLiveness = "alive" | "dead" | "indeterminate";
  * - An unknown identity comparison yields `indeterminate`, never
  *   `alive-different`. Treating "cannot compare" as "recycled pid" is what
  *   would let a reader declare a live holder an impostor.
+ *
+ * `observed` is a verifying read: the exact token, or - only when a Windows
+ * exact read was denied - WMI's creation time, compared by
+ * `compareObservedProcessStart` (see the protocol's process-start-identity).
  */
 export function composeAttemptHolderVerdict(
   liveness: AttemptHolderProcessLiveness,
   recordedIdentity: ProcessStartIdentity | null,
-  observedIdentity: ProcessStartIdentity | null,
+  observed: ObservedProcessStart | null,
 ): AttemptHolderLivenessVerdict {
   if (liveness === "dead") return "dead";
-  switch (compareProcessStartIdentity(recordedIdentity, observedIdentity)) {
+  switch (compareObservedProcessStart(recordedIdentity, observed)) {
     case "same":
       return "alive-same";
     case "different":

@@ -32,6 +32,7 @@ const ACTIVE_VIEW: FleetUpdateView = {
   blockingSessionCount: null,
   blockingBreakdown: null,
   errorMessage: null,
+  errorCode: null,
 };
 
 const IDLE_VIEW: FleetUpdateView = {
@@ -46,6 +47,7 @@ const IDLE_VIEW: FleetUpdateView = {
   blockingSessionCount: null,
   blockingBreakdown: null,
   errorMessage: null,
+  errorCode: null,
 };
 
 function harness(): {

@@ -344,7 +344,7 @@ function GenericToolSegment(props: ToolSegmentProps) {
   // The header shows the whole input on one line and its span truncates it at
   // the row's width (see `toolHeaderLine`); `summary` stays the persisted,
   // capped line for everything that compares against it below.
-  const headerLine = toolHeaderLine(inputSummary, inputDetail);
+  const headerLine = toolHeaderLine(toolName, inputSummary, inputDetail);
   const stackedHeader = variant === "card" && isStreaming;
   const headerLayout: ToolHeaderLayout = stackedHeader ? "stacked" : "inline";
   const headerElapsed = resolveToolHeaderElapsed({

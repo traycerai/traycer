@@ -310,6 +310,7 @@ export interface ProviderProfileLoginFlowCodePaste {
 }
 
 interface UseProviderProfileLoginFlowInput {
+  readonly supportsLoginOwnership: boolean;
   readonly mode: ProviderProfileLoginFlowMode;
   readonly providerId: ProviderCliState["providerId"];
   /** Reauth mode always targets this existing profile - the flow awaits THIS
@@ -418,6 +419,7 @@ export function useProviderProfileLoginFlow(
   input: UseProviderProfileLoginFlowInput,
 ): ProviderProfileLoginFlow {
   const {
+    supportsLoginOwnership,
     mode,
     providerId,
     existingProfileId,
@@ -441,11 +443,36 @@ export function useProviderProfileLoginFlow(
   // comparisons inside mutation callbacks, which run outside render.
   const [attemptId, setAttemptId] = useState(0);
   const cancelRequestedRef = useRef(false);
-  // Latches once `cancelProfile` fires for this flow - a boolean rather than
-  // the cancelled profile id itself, since the ambient case's profileId is
-  // legitimately `null` and would otherwise collide with this ref's own
-  // "nothing cancelled yet" initial value.
+  // Latches once `cancelProfile` sends a release for this attempt - a boolean
+  // rather than the cancelled profile id itself, since the ambient case's
+  // profileId is legitimately `null` and would otherwise collide with this
+  // ref's own "nothing cancelled yet" initial value. Reopened by
+  // `cancelProfile` when that release fails, so a later path can send it
+  // again; `cancelRequestedRef` is what keeps the attempt abandoned meanwhile.
   const cancelledRef = useRef(false);
+  // Whether the release `cancelledRef` stands for is still in flight, and the
+  // release a later path asked for while it was: the start answer that lands
+  // during a pending cancel names the profile the host actually holds, and a
+  // cancel that then fails is retried for that profile rather than only
+  // reopening the latch after the answer has already been consumed.
+  const releaseInFlightRef = useRef(false);
+  const deferredReleaseRef = useRef<{
+    readonly profileId: string | null;
+  } | null>(null);
+  // Releases the user asked for that the host never acknowledged: a holder
+  // whose cancel call failed with nothing left in its attempt to send it
+  // again - the start answer had already landed, or a fresh press had
+  // already moved the attempt on. Kept by holder rather than by attempt,
+  // since the attempt is what the next press replaces; drained at that press
+  // before its own attempt begins, and at unmount. Only ownership holders
+  // belong here: a legacy release is a scope cancel, and sent at the next
+  // press it would end the very login that press attaches to.
+  const owedReleasesRef = useRef<
+    ReadonlyArray<{
+      readonly holderId: string;
+      readonly profileId: string | null;
+    }>
+  >([]);
   // `finishCancellation` can now be reached twice for one press: once from
   // `cancel` itself, and again when a start call that was already in flight
   // answers. The second visit may still have a login to cancel on the host;
@@ -462,6 +489,9 @@ export function useProviderProfileLoginFlow(
   const lastAnswerRef = useRef<ProviderStartLoginAnswer | null>(null);
   const restartCountRef = useRef(0);
   const attemptIdRef = useRef(0);
+  // Latched at the press: later handshakes must not change the cancellation
+  // policy of a start already sent anonymously to an older host.
+  const holderIdRef = useRef<string | null>(null);
   // Two-sided settlement join for the current attempt (see `settleAttempt`'s
   // doc comment): `awaitLogin` and `submitLoginCode` can resolve in either
   // order, so each side latches its own verdict into one of these refs and
@@ -509,6 +539,10 @@ export function useProviderProfileLoginFlow(
       retryPackFirst: boolean,
     ) => void
   >(() => {});
+  // Same shape for `settleOwedReleases`: the unmount cleanup below must call
+  // it without depending on it, or the mutation's own state changes would
+  // re-run that effect and drain the owed releases mid-flow.
+  const settleOwedReleasesRef = useRef<() => void>(() => {});
 
   const clearRepollTimer = useCallback((): void => {
     if (repollTimerRef.current !== null) {
@@ -531,22 +565,124 @@ export function useProviderProfileLoginFlow(
     return () => {
       unmountedRef.current = true;
       clearRepollTimer();
+      settleOwedReleasesRef.current();
     };
   }, [clearRepollTimer]);
 
+  const oweRelease = useCallback(
+    (holderId: string, profileId: string | null): void => {
+      owedReleasesRef.current = [
+        ...owedReleasesRef.current.filter(
+          (release) => release.holderId !== holderId,
+        ),
+        { holderId, profileId },
+      ];
+    },
+    [],
+  );
+
+  // Sends every owed release once more, best effort: the host keys a
+  // holder's cancel by the holder alone, so one that already landed is a
+  // no-op there, and one that fails again is owed again for the next press
+  // or the unmount. The hook's own `onError` toasts each failure.
+  const settleOwedReleases = useCallback((): void => {
+    const owed = owedReleasesRef.current;
+    if (owed.length === 0) return;
+    owedReleasesRef.current = [];
+    for (const release of owed) {
+      void cancelLogin
+        .mutateAsync({
+          providerId,
+          profileId: release.profileId,
+          holderId: release.holderId,
+        })
+        .then(
+          () => {},
+          () => {
+            oweRelease(release.holderId, release.profileId);
+          },
+        );
+    }
+  }, [cancelLogin, oweRelease, providerId]);
+
   const cancelProfile = useCallback(
     (profileId: string | null): void => {
-      // Reauth always targets a real login child - a specific profile, or
-      // the ambient/no-profile-picker identity when `existingProfileId` is
-      // null (the in-chat banner's OAuth reconnect). Create mode's `null`
-      // means the host never minted a profile-scoped child, so there is
-      // nothing to cancel.
-      if (mode !== "reauth" && profileId === null) return;
-      if (cancelledRef.current) return;
+      // A holder can release a create attempt before its profile ID arrives.
+      // Legacy create has no safe scope to cancel until the host names one;
+      // legacy reauth's null profile is the ambient scope.
+      const holderId = holderIdRef.current;
+      if (holderId === null && mode !== "reauth" && profileId === null) return;
+      if (cancelledRef.current) {
+        // A release is already on its way, or has landed. What this path
+        // learned - usually the profile the start answer named - is kept
+        // while that release is still in flight, so one that fails can be
+        // sent again for it; once a release has landed there is nothing
+        // left to retry.
+        if (releaseInFlightRef.current) {
+          deferredReleaseRef.current = { profileId };
+        }
+        return;
+      }
       cancelledRef.current = true;
-      cancelLogin.mutate({ providerId, profileId });
+      const thisAttemptId = attemptIdRef.current;
+      // The latch means "a release is on its way", not "released": the flow
+      // already reads `cancelled` by now, so nothing the user can press would
+      // send another. A cancel call that fails leaves this attempt's claim on
+      // the host. If a later path asked for a release while this one was in
+      // flight, that release is sent now with what it learned; otherwise the
+      // latch reopens for the next path that learns what the attempt holds -
+      // the start answer still in flight, or the unmount cleanup - and a
+      // holder's release is owed besides, since a settled attempt has no such
+      // path left and a fresh press replaces the attempt without one. Sent
+      // with `mutateAsync`, not `mutate` with an `onError`: the promise is
+      // the mutation's own `execute()` and settles after the caller unmounts
+      // too, where per-`mutate` callbacks are dropped (see `beginLogin`). The
+      // hook's own `onError` still toasts.
+      const send = (target: string | null): void => {
+        releaseInFlightRef.current = true;
+        deferredReleaseRef.current = null;
+        if (holderId !== null) {
+          owedReleasesRef.current = owedReleasesRef.current.filter(
+            (release) => release.holderId !== holderId,
+          );
+        }
+        void cancelLogin
+          .mutateAsync({ providerId, profileId: target, holderId })
+          .then(
+            () => {
+              if (attemptIdRef.current !== thisAttemptId) return;
+              releaseInFlightRef.current = false;
+              deferredReleaseRef.current = null;
+            },
+            () => {
+              const owe = (): void => {
+                if (holderId === null) return;
+                oweRelease(holderId, target);
+                // A hook that has already unmounted has no press and no
+                // cleanup left to drain what it owes, so the one retry it
+                // gets goes now; the drain's own failure only re-owes.
+                if (unmountedRef.current) settleOwedReleasesRef.current();
+              };
+              if (attemptIdRef.current !== thisAttemptId) {
+                // A fresh press has already reset the attempt's refs; the
+                // claim this call failed to release is still the host's.
+                owe();
+                return;
+              }
+              releaseInFlightRef.current = false;
+              const deferred = deferredReleaseRef.current;
+              if (deferred !== null) {
+                send(deferred.profileId);
+                return;
+              }
+              owe();
+              cancelledRef.current = false;
+            },
+          );
+      };
+      send(profileId);
     },
-    [cancelLogin, mode, providerId],
+    [cancelLogin, mode, oweRelease, providerId],
   );
 
   // The user-visible half of a cancel: the flow is over as far as this
@@ -708,6 +844,11 @@ export function useProviderProfileLoginFlow(
       clearRepollTimer();
       attemptIdRef.current += 1;
       const thisAttemptId = attemptIdRef.current;
+      const holderId = supportsLoginOwnership ? crypto.randomUUID() : null;
+      holderIdRef.current = holderId;
+      cancelledRef.current = false;
+      releaseInFlightRef.current = false;
+      deferredReleaseRef.current = null;
       awaitOutcomeRef.current = null;
       submitOutcomeRef.current = "none";
       successPayloadRef.current = null;
@@ -752,6 +893,7 @@ export function useProviderProfileLoginFlow(
       void startProviderLoginUntilSettled({
         request: {
           providerId,
+          holderId,
           profileId: existingProfileId,
           createProfile:
             mode === "create"
@@ -934,7 +1076,10 @@ export function useProviderProfileLoginFlow(
         (error: unknown) => {
           if (startAbandoned()) return;
           if (cancelRequestedRef.current) {
-            finishCancellation(null);
+            // A failed start names no login to cancel. Ownership callers
+            // already released their claim at the press; legacy callers
+            // must not turn this failure into an ambient scope cancel.
+            reportCancellation();
             return;
           }
           fail(
@@ -953,7 +1098,6 @@ export function useProviderProfileLoginFlow(
       existingProfileId,
       fail,
       failureMessages,
-      finishCancellation,
       loginCapability,
       mode,
       providerId,
@@ -961,6 +1105,7 @@ export function useProviderProfileLoginFlow(
       restart,
       settleAttempt,
       startLogin,
+      supportsLoginOwnership,
       submitLoginCode,
       touchLogin,
     ],
@@ -970,6 +1115,7 @@ export function useProviderProfileLoginFlow(
   // from inside async mutation callbacks, well after the first commit.
   useEffect(() => {
     beginLoginRef.current = beginLogin;
+    settleOwedReleasesRef.current = settleOwedReleases;
   });
 
   const start = useCallback(
@@ -985,8 +1131,13 @@ export function useProviderProfileLoginFlow(
       ) {
         return;
       }
+      // Ahead of the fresh attempt: a holder the last attempt failed to
+      // release is sent again now, before this press claims a new one.
+      settleOwedReleases();
       cancelRequestedRef.current = false;
       cancelledRef.current = false;
+      releaseInFlightRef.current = false;
+      deferredReleaseRef.current = null;
       cancellationReportedRef.current = false;
       restartCountRef.current = 0;
       Analytics.getInstance().track(AnalyticsEvent.ProviderProfileLinkStarted, {
@@ -1003,7 +1154,14 @@ export function useProviderProfileLoginFlow(
         providerLoginAnswerWantsPackRetry(lastAnswerRef.current),
       );
     },
-    [awaitLogin.isPending, beginLogin, mode, providerId, state.kind],
+    [
+      awaitLogin.isPending,
+      beginLogin,
+      mode,
+      providerId,
+      settleOwedReleases,
+      state.kind,
+    ],
   );
 
   const commitPending =
@@ -1015,6 +1173,14 @@ export function useProviderProfileLoginFlow(
   const cancel = useCallback((): void => {
     if (commitPending) return;
     cancelRequestedRef.current = true;
+    if (holderIdRef.current !== null && state.kind !== "start") {
+      const profileId =
+        state.kind === "waiting"
+          ? state.profileId
+          : (liveLoginRef.current?.profileId ?? existingProfileId);
+      finishCancellation(profileId);
+      return;
+    }
     if (state.kind === "starting") {
       if (mode === "reauth" && existingProfileId !== null) {
         finishCancellation(existingProfileId);
@@ -1047,12 +1213,10 @@ export function useProviderProfileLoginFlow(
       finishCancellation(state.profileId);
       return;
     }
-    if (
-      mode === "reauth" &&
-      state.kind === "start" &&
-      existingProfileId !== null
-    ) {
-      finishCancellation(existingProfileId);
+    if (state.kind === "start") {
+      // The panel can close before its first start effect runs. It owns no
+      // login at that point, even if the profile's ID is already known.
+      reportCancellation();
     }
   }, [
     commitPending,

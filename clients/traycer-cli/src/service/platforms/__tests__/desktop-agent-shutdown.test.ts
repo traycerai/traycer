@@ -1,14 +1,51 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { rmSync } from "node:fs";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   forceStopHostProcess,
   forceStopHostProcessReporting,
   requestCooperativeShutdown,
   requestCooperativeShutdownReporting,
 } from "../desktop-agent-shutdown";
+import { ownProcessStartIdentity } from "../../../store/process-identity";
+import { hostHomeDir } from "../../../store/paths";
 import {
   isServiceMutationAuthorityError,
   withServiceMutationAuthority,
 } from "../../mutation-authority";
+
+// HOME is redirected to a private temp dir BEFORE anything reads it:
+// `store/paths` binds `homedir()` at module load, so without this the suite
+// would resolve this machine's REAL `~/.traycer`.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const { mkdtempSync: makeTempDir } = await import("node:fs");
+  const { join: joinPath } = await import("node:path");
+  if (osHome.current === "") {
+    osHome.current = makeTempDir(
+      joinPath(actual.tmpdir(), "traycer-desktop-agent-shutdown-test-home-"),
+    );
+  }
+  return { ...actual, homedir: () => osHome.current };
+});
+
+beforeAll(() => {
+  expect(osHome.current).not.toBe("");
+  expect(hostHomeDir("production").startsWith(osHome.current)).toBe(true);
+});
+
+afterAll(() => {
+  rmSync(osHome.current, { recursive: true, force: true });
+});
 
 // The cooperative flow's own contract: claim -> commit -> wait for REAL
 // exit, with every failure mode mapped to a distinct outcome the caller
@@ -23,6 +60,8 @@ const MOCKS = vi.hoisted(() => ({
   callHostRpcAtEndpoint: vi.fn(),
   loggerWarn: vi.fn(),
   getPublishedProcessIdentityVerdict: vi.fn(),
+  verifyProcessIdentityAsync: vi.fn(),
+  matchLiveProcessStartIdentity: vi.fn(),
 }));
 
 vi.mock("../../../host/pid-metadata", async (importOriginal) => {
@@ -41,9 +80,22 @@ vi.mock("../../../host/pid-metadata", async (importOriginal) => {
 // `getPublishedProcessIdentityVerdict` is the seam `incumbent-check.test.ts`
 // stubs the identical way for the identical reason: it shells out to a real
 // OS process probe, which has no place in a hermetic unit suite.
-vi.mock("../../../store/process-identity", () => ({
-  getPublishedProcessIdentityVerdict: MOCKS.getPublishedProcessIdentityVerdict,
-}));
+//
+// `verifyProcessIdentityAsync` and `matchLiveProcessStartIdentity` are
+// added here too - the async seam the cooperative leg's fix must route
+// through instead of the sync `isProcessAlive`/`matchLiveProcessStartIdentity`
+// probes, and the sync probes this file's mock of `store/cli-lock` stubs.
+vi.mock("../../../store/process-identity", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../store/process-identity")>();
+  return {
+    ...actual,
+    getPublishedProcessIdentityVerdict:
+      MOCKS.getPublishedProcessIdentityVerdict,
+    verifyProcessIdentityAsync: MOCKS.verifyProcessIdentityAsync,
+    matchLiveProcessStartIdentity: MOCKS.matchLiveProcessStartIdentity,
+  };
+});
 
 vi.mock("../../../store/cli-lock", async (importOriginal) => {
   const actual =
@@ -90,6 +142,14 @@ beforeEach(() => {
   MOCKS.callHostRpcAtEndpoint.mockReset();
   MOCKS.loggerWarn.mockReset();
   MOCKS.getPublishedProcessIdentityVerdict.mockReset();
+  MOCKS.verifyProcessIdentityAsync.mockReset();
+  // A safe default so a test that forgets to stage this mock reads as "not
+  // proven dead" rather than as `undefined` forever - unmocked, a poll that
+  // never resolves "dead" runs out its REAL exit-grace timeout (~32s) before
+  // reporting hung, which is what timed out these tests during the seam's
+  // rollout rather than failing them cleanly.
+  MOCKS.verifyProcessIdentityAsync.mockResolvedValue("alive-same");
+  MOCKS.matchLiveProcessStartIdentity.mockReset();
 });
 
 afterEach(() => {
@@ -99,8 +159,10 @@ afterEach(() => {
 describe("requestCooperativeShutdown", () => {
   it("claims, commits, and reports stopped only after the pid is observed gone", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
-    // Alive for the pre-flight check, gone on the first post-commit poll.
-    MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+    // Alive for the pre-flight gone-check, gone on the first post-commit poll.
+    MOCKS.verifyProcessIdentityAsync
+      .mockResolvedValueOnce("alive-same")
+      .mockResolvedValue("dead");
     MOCKS.callHostRpcAtEndpoint
       .mockResolvedValueOnce({ granted: { token: "tok-1" } })
       .mockResolvedValueOnce({ committed: true });
@@ -136,7 +198,9 @@ describe("requestCooperativeShutdown", () => {
 
   it("puts the caller's intent verbatim on the lifecycle.claimShutdown params - a 'restart' request must not become a 'shutdown' claim", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
-    MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+    MOCKS.verifyProcessIdentityAsync
+      .mockResolvedValueOnce("alive-same")
+      .mockResolvedValue("dead");
     MOCKS.callHostRpcAtEndpoint
       .mockResolvedValueOnce({ granted: { token: "tok-intent-restart" } })
       .mockResolvedValueOnce({ committed: true });
@@ -147,8 +211,10 @@ describe("requestCooperativeShutdown", () => {
     expect(restartClaimParams.intent).toBe("restart");
 
     MOCKS.callHostRpcAtEndpoint.mockReset();
-    MOCKS.isProcessAlive.mockReset();
-    MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+    MOCKS.verifyProcessIdentityAsync.mockReset();
+    MOCKS.verifyProcessIdentityAsync
+      .mockResolvedValueOnce("alive-same")
+      .mockResolvedValue("dead");
     MOCKS.callHostRpcAtEndpoint
       .mockResolvedValueOnce({ granted: { token: "tok-intent-shutdown" } })
       .mockResolvedValueOnce({ committed: true });
@@ -183,7 +249,7 @@ describe("requestCooperativeShutdown", () => {
 
   it("reports no-host without any RPC when the recorded pid is PROVEN dead", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
-    MOCKS.isProcessAlive.mockReturnValue(false);
+    MOCKS.verifyProcessIdentityAsync.mockResolvedValue("dead");
     const outcome = await requestCooperativeShutdown(
       "production",
       "stop",
@@ -198,7 +264,7 @@ describe("requestCooperativeShutdown", () => {
       ...LIVE_METADATA,
       websocketUrl: "https://example.com/rpc",
     });
-    MOCKS.isProcessAlive.mockReturnValue(true);
+    MOCKS.verifyProcessIdentityAsync.mockResolvedValue("alive-same");
     const outcome = await requestCooperativeShutdown(
       "production",
       "stop",
@@ -210,7 +276,7 @@ describe("requestCooperativeShutdown", () => {
 
   it("maps a denied claim to busy and never commits", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
-    MOCKS.isProcessAlive.mockReturnValue(true);
+    MOCKS.verifyProcessIdentityAsync.mockResolvedValue("alive-same");
     MOCKS.callHostRpcAtEndpoint.mockResolvedValueOnce({ denied: "busy" });
 
     const outcome = await requestCooperativeShutdown(
@@ -225,7 +291,7 @@ describe("requestCooperativeShutdown", () => {
 
   it("maps an RPC failure to unreachable with the cause, never to stopped", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
-    MOCKS.isProcessAlive.mockReturnValue(true);
+    MOCKS.verifyProcessIdentityAsync.mockResolvedValue("alive-same");
     MOCKS.callHostRpcAtEndpoint.mockRejectedValue(
       new Error("dial timeout after 5000ms"),
     );
@@ -245,7 +311,7 @@ describe("requestCooperativeShutdown", () => {
 
   it("maps a commit denial (claim expired) to unreachable", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
-    MOCKS.isProcessAlive.mockReturnValue(true);
+    MOCKS.verifyProcessIdentityAsync.mockResolvedValue("alive-same");
     MOCKS.callHostRpcAtEndpoint
       .mockResolvedValueOnce({ granted: { token: "tok-2" } })
       .mockResolvedValueOnce({ denied: "expired-or-unknown" });
@@ -265,7 +331,9 @@ describe("requestCooperativeShutdown", () => {
   it("reports hung when the committed host outlives the exit grace", async () => {
     vi.useFakeTimers();
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
-    MOCKS.isProcessAlive.mockReturnValue(true);
+    // Never dead: the gone-check passes and the exit-wait poll never
+    // resolves, so the wait runs out its own timeout.
+    MOCKS.verifyProcessIdentityAsync.mockResolvedValue("alive-same");
     MOCKS.callHostRpcAtEndpoint
       .mockResolvedValueOnce({ granted: { token: "tok-3" } })
       .mockResolvedValueOnce({ committed: true });
@@ -280,6 +348,67 @@ describe("requestCooperativeShutdown", () => {
     await vi.advanceTimersByTimeAsync(40_000);
 
     await expect(pending).resolves.toEqual({ kind: "hung", pid: 4242 });
+  });
+});
+
+// The cooperative leg's liveness/identity checks must route through the
+// ASYNC probe (`verifyProcessIdentityAsync`) end to end, never through the
+// synchronous ones (`isProcessAlive` from `store/cli-lock`,
+// `matchLiveProcessStartIdentity`) - those block the event loop on a
+// platform probe (`ps`/`tasklist`) for as long as it takes, which is exactly
+// what the async seam exists to avoid on this path.
+describe("the supervisor teardown's cooperative leg never probes synchronously", () => {
+  it("routes through verifyProcessIdentityAsync end to end with a pre-identity (processStartIdentity: null) record", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    // The gone-check (not gone) first, then the exit-wait poll (exited) -
+    // ONE seam, two different call sites in sequence.
+    MOCKS.verifyProcessIdentityAsync
+      .mockResolvedValueOnce("alive-same")
+      .mockResolvedValue("dead");
+    MOCKS.callHostRpcAtEndpoint
+      .mockResolvedValueOnce({ granted: { token: "tok-u8-null-identity" } })
+      .mockResolvedValueOnce({ committed: true });
+
+    const outcome = await requestCooperativeShutdown(
+      "production",
+      "restart",
+      "shutdown",
+    );
+
+    expect(MOCKS.isProcessAlive).not.toHaveBeenCalled();
+    expect(MOCKS.matchLiveProcessStartIdentity).not.toHaveBeenCalled();
+    expect(MOCKS.verifyProcessIdentityAsync).toHaveBeenCalled();
+    expect(outcome).toEqual({ kind: "stopped" });
+  });
+
+  it("routes through verifyProcessIdentityAsync end to end with a valid recorded identity string", async () => {
+    const identity = ownProcessStartIdentity();
+    if (identity === null) {
+      throw new Error(
+        "test fixture: ownProcessStartIdentity() was null on this platform",
+      );
+    }
+    MOCKS.readHostPidMetadata.mockResolvedValue({
+      ...LIVE_METADATA,
+      processStartIdentity: identity,
+    });
+    MOCKS.verifyProcessIdentityAsync
+      .mockResolvedValueOnce("alive-same")
+      .mockResolvedValue("dead");
+    MOCKS.callHostRpcAtEndpoint
+      .mockResolvedValueOnce({ granted: { token: "tok-u8-with-identity" } })
+      .mockResolvedValueOnce({ committed: true });
+
+    const outcome = await requestCooperativeShutdown(
+      "production",
+      "restart",
+      "shutdown",
+    );
+
+    expect(MOCKS.isProcessAlive).not.toHaveBeenCalled();
+    expect(MOCKS.matchLiveProcessStartIdentity).not.toHaveBeenCalled();
+    expect(MOCKS.verifyProcessIdentityAsync).toHaveBeenCalled();
+    expect(outcome).toEqual({ kind: "stopped" });
   });
 });
 
@@ -402,9 +531,12 @@ describe("forceStopHostProcess", () => {
 
   it("reports stopped when SIGTERM alone is honored, without ever escalating to SIGKILL", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
-    // Alive for the pre-flight check, gone on the first post-SIGTERM poll -
-    // same shape as requestCooperativeShutdown's "stopped" case above.
-    MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+    // The pre-identity pre-flight gate is still the sync `isProcessAlive` -
+    // alive, so the signal proceeds. The post-SIGTERM exit wait
+    // (`waitForCooperativeExit`, shared with the cooperative leg) is the
+    // ASYNC seam: gone on its first poll.
+    MOCKS.isProcessAlive.mockReturnValueOnce(true);
+    MOCKS.verifyProcessIdentityAsync.mockResolvedValue("dead");
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 
     const outcome = await forceStopHostProcess("production", "stop");
@@ -431,8 +563,13 @@ describe("forceStopHostProcess", () => {
         return true;
       });
     // Alive right up until SIGKILL actually lands - proves SIGTERM's own
-    // wait ran to its full timeout rather than exiting early.
+    // wait ran to its full timeout rather than exiting early. The pre-flight
+    // gate stays the sync `isProcessAlive`; both exit waits (post-SIGTERM,
+    // post-SIGKILL) share the ASYNC `waitForCooperativeExit` seam.
     MOCKS.isProcessAlive.mockImplementation(() => !sigkillSent);
+    MOCKS.verifyProcessIdentityAsync.mockImplementation(async () =>
+      sigkillSent ? "dead" : "alive-same",
+    );
 
     const pending = forceStopHostProcess("production", "stop");
     // SHUTDOWN_FORCE_EXIT_MS (30s) + STOP_EXIT_GRACE_MARGIN_MS (2s), plus
@@ -466,6 +603,9 @@ describe("forceStopHostProcess", () => {
       return true;
     });
     MOCKS.isProcessAlive.mockImplementation(() => !sigkillSent);
+    MOCKS.verifyProcessIdentityAsync.mockImplementation(async () =>
+      sigkillSent ? "dead" : "alive-same",
+    );
     MOCKS.removeHostPidMetadata.mockRejectedValue(
       new Error("EACCES: permission denied"),
     );
@@ -545,8 +685,9 @@ describe("forceStopHostProcess", () => {
     it("identity 'current' lets the pid be signalled, exactly like a proven-alive legacy pid.json", async () => {
       MOCKS.readHostPidMetadata.mockResolvedValue(IDENTITY_METADATA);
       MOCKS.getPublishedProcessIdentityVerdict.mockResolvedValue("current");
-      // Gone on the first post-SIGTERM poll.
-      MOCKS.isProcessAlive.mockReturnValue(false);
+      // Gone on the first post-SIGTERM poll - the ASYNC exit-wait seam, not
+      // the (unused here) sync `isProcessAlive`.
+      MOCKS.verifyProcessIdentityAsync.mockResolvedValue("dead");
       const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 
       const outcome = await forceStopHostProcess("production", "stop");
@@ -626,8 +767,10 @@ describe("forceStopHostProcess", () => {
           .mockResolvedValueOnce("current") // pre-SIGTERM check
           .mockResolvedValueOnce("mismatch"); // pre-SIGKILL revalidation
         // Alive throughout the SIGTERM wait, so it survives to the
-        // revalidation point instead of exiting cleanly first.
-        MOCKS.isProcessAlive.mockReturnValue(true);
+        // revalidation point instead of exiting cleanly first - the exit
+        // wait is the ASYNC seam here, since an identity-bearing record never
+        // consults the sync `isProcessAlive` fallback.
+        MOCKS.verifyProcessIdentityAsync.mockResolvedValue("alive-same");
         const killSpy = vi
           .spyOn(process, "kill")
           .mockImplementation(() => true);
@@ -654,7 +797,7 @@ describe("forceStopHostProcess", () => {
         MOCKS.getPublishedProcessIdentityVerdict
           .mockResolvedValueOnce("current")
           .mockResolvedValueOnce("indeterminate");
-        MOCKS.isProcessAlive.mockReturnValue(true);
+        MOCKS.verifyProcessIdentityAsync.mockResolvedValue("alive-same");
         const killSpy = vi
           .spyOn(process, "kill")
           .mockImplementation(() => true);
@@ -685,7 +828,9 @@ describe("forceStopHostProcess", () => {
             if (signal === "SIGKILL") sigkillSent = true;
             return true;
           });
-        MOCKS.isProcessAlive.mockImplementation(() => !sigkillSent);
+        MOCKS.verifyProcessIdentityAsync.mockImplementation(async () =>
+          sigkillSent ? "dead" : "alive-same",
+        );
 
         const pending = forceStopHostProcess("production", "stop");
         await vi.advanceTimersByTimeAsync(40_000);
@@ -728,7 +873,8 @@ describe("forceStopHostProcess", () => {
       MOCKS.readHostPidMetadata
         .mockResolvedValueOnce(LIVE_METADATA) // signalHostForForcedStop's read -> actedOn
         .mockResolvedValueOnce({ ...LIVE_METADATA, pid: 9999 }); // wrapper's re-read: a replacement
-      MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+      MOCKS.isProcessAlive.mockReturnValueOnce(true);
+      MOCKS.verifyProcessIdentityAsync.mockResolvedValue("dead");
       vi.spyOn(process, "kill").mockImplementation(() => true);
 
       const outcome = await forceStopHostProcess("production", "stop");
@@ -744,7 +890,8 @@ describe("forceStopHostProcess", () => {
           ...LIVE_METADATA,
           processStartIdentity: "darwin:1700000000.000000",
         });
-      MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+      MOCKS.isProcessAlive.mockReturnValueOnce(true);
+      MOCKS.verifyProcessIdentityAsync.mockResolvedValue("dead");
       vi.spyOn(process, "kill").mockImplementation(() => true);
 
       const outcome = await forceStopHostProcess("production", "stop");
@@ -757,7 +904,8 @@ describe("forceStopHostProcess", () => {
       MOCKS.readHostPidMetadata
         .mockResolvedValueOnce(LIVE_METADATA)
         .mockResolvedValueOnce(null);
-      MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+      MOCKS.isProcessAlive.mockReturnValueOnce(true);
+      MOCKS.verifyProcessIdentityAsync.mockResolvedValue("dead");
       vi.spyOn(process, "kill").mockImplementation(() => true);
 
       const outcome = await forceStopHostProcess("production", "stop");
@@ -770,7 +918,8 @@ describe("forceStopHostProcess", () => {
       MOCKS.readHostPidMetadata
         .mockResolvedValueOnce(LIVE_METADATA)
         .mockResolvedValueOnce({ ...LIVE_METADATA });
-      MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+      MOCKS.isProcessAlive.mockReturnValueOnce(true);
+      MOCKS.verifyProcessIdentityAsync.mockResolvedValue("dead");
       vi.spyOn(process, "kill").mockImplementation(() => true);
 
       const outcome = await forceStopHostProcess("production", "stop");
@@ -795,7 +944,9 @@ describe("onHostAddressed", () => {
 
   it("cooperative: fires once, after the liveness read and before the claim, for a live host", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
-    MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+    MOCKS.verifyProcessIdentityAsync
+      .mockResolvedValueOnce("alive-same")
+      .mockResolvedValue("dead");
     const onHostAddressed = vi.fn();
     MOCKS.callHostRpcAtEndpoint.mockImplementation(async (method: string) => {
       // The report precedes the first RPC.
@@ -818,7 +969,7 @@ describe("onHostAddressed", () => {
 
   it("cooperative: still fires when the claim then fails - the host was addressed whatever the RPC did", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
-    MOCKS.isProcessAlive.mockReturnValue(true);
+    MOCKS.verifyProcessIdentityAsync.mockResolvedValue("alive-same");
     MOCKS.callHostRpcAtEndpoint.mockRejectedValue(new Error("dial failed"));
     const onHostAddressed = vi.fn();
 
@@ -846,7 +997,7 @@ describe("onHostAddressed", () => {
     ).resolves.toEqual({ kind: "no-metadata" });
 
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
-    MOCKS.isProcessAlive.mockReturnValue(false);
+    MOCKS.verifyProcessIdentityAsync.mockResolvedValue("dead");
     await expect(
       requestCooperativeShutdownReporting(
         "production",
@@ -861,7 +1012,8 @@ describe("onHostAddressed", () => {
 
   it("forced: fires once the pid is verified live, before SIGTERM", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
-    MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+    MOCKS.isProcessAlive.mockReturnValueOnce(true);
+    MOCKS.verifyProcessIdentityAsync.mockResolvedValue("dead");
     const onHostAddressed = vi.fn();
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
       expect(onHostAddressed).toHaveBeenCalledTimes(1);

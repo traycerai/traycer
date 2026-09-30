@@ -63,7 +63,10 @@ import {
   type NegotiatedMethodVersion,
 } from "@/hooks/host/use-host-negotiated-method-version";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
-import { toastFromHostError } from "@/lib/host-error-toast";
+import {
+  toastFromHostError,
+  toastFromHostErrorWithDetail,
+} from "@/lib/host-error-toast";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { FleetUpdateAttemptPosition } from "@/lib/host/fleet-update/fleet-update-view";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -166,6 +169,11 @@ export function useHostOverviewUpdates(input: {
   readonly checkDegrade: OverviewDegradeReason | null;
   readonly installDegrade: OverviewDegradeReason | null;
   readonly busy: boolean;
+  /**
+   * THIS machine's host was started in a terminal: the version picker's line
+   * in place of its installs (`hostForegroundUpdateLine`), or `null`.
+   */
+  readonly foregroundUpdateLine: string | null;
   /**
    * The dispatching panel mount's token (D8), threaded to all three update
    * dispatches so an `accepted` answer can be attributed to the mount that
@@ -348,8 +356,12 @@ export function useHostOverviewUpdates(input: {
             onAccepted: () => setInstallFailure(null),
           });
         },
+        // WITH the detail: on the local-maintenance fallback a lane refusal
+        // (`deferred`, `busy`) arrives as a plain `RPC_ERROR` whose message IS
+        // the reason - a host started in a terminal, say - and the bare
+        // fallback sentence would drop it.
         onError: (error) =>
-          toastFromHostError(error, "Couldn't start the update."),
+          toastFromHostErrorWithDetail(error, "Couldn't start the update."),
       },
     );
   };
@@ -627,6 +639,7 @@ export function useHostOverviewUpdates(input: {
       ),
       installingVersion,
       disabled: input.busy,
+      foregroundUpdateLine: input.foregroundUpdateLine,
       onInstall: (version, acceptStoreFormatLoss) =>
         install(version, false, acceptStoreFormatLoss, null),
       awaitingFirstCheck: actionableManifest === null,

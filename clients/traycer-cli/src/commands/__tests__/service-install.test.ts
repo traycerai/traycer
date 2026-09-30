@@ -150,6 +150,7 @@ function baseArgs(overrides: Partial<ServiceInstallArgs>): ServiceInstallArgs {
     // No parent segment: every existing case is a solo invocation, which is
     // exactly the acquire-or-refuse path these tests already assert.
     attemptAdoption: null,
+    lifecycleOrigin: "terminal",
     ...overrides,
   };
 }

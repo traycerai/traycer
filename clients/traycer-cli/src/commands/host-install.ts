@@ -6,6 +6,7 @@ import {
   type InstallSourceArg,
 } from "../installer";
 import { assertHostNotBusy } from "../host/busy-check";
+import { refuseDesktopDisruptionOfForegroundRun } from "../host/foreground-host-run";
 import {
   formatCredentialProvisionNote,
   maybeProvisionCredential,
@@ -36,6 +37,7 @@ import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { hostHomeDir } from "../store/paths";
 import { resolveChatStoreSurveyRoots } from "../host/chat-store-survey-roots";
 import { commitHostInstallSourceWithAttempt } from "../host/update-mutation";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
 import {
   gateStoreFormatFloor,
   ungatedStoreFormatFloorEvidence,
@@ -138,6 +140,12 @@ export interface HostInstallArgs {
   readonly acceptStoreFormatLoss: boolean;
   /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
   readonly attemptAdoption: string | null;
+  /**
+   * `--lifecycle-origin`, recorded in the adoption proof the post-swap start
+   * publishes (`host/lifecycle-origin.ts`). `desktop` also refuses to replace
+   * a host started in a terminal (`refuseDesktopDisruptionOfForegroundRun`).
+   */
+  readonly lifecycleOrigin: HostStartOrigin;
 }
 
 /**
@@ -304,6 +312,17 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             capability,
             contenderOptions,
             async () => {
+              // A desktop install never replaces a host a person started in a
+              // terminal: refused before the busy probe and the commit's stop,
+              // and the catch below scrubs the staged download. Bytes-only
+              // (`--no-service-register`) stops nothing and is not refused.
+              if (!args.noServiceRegister) {
+                await refuseDesktopDisruptionOfForegroundRun(
+                  "host install",
+                  ctx.runtime.environment,
+                  args.lifecycleOrigin,
+                );
+              }
               if (args.ifIdle) {
                 await assertHostNotBusy(ctx.runtime.environment);
               }
@@ -317,6 +336,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
               return commitHostInstallSourceWithAttempt(
                 capability,
                 contenderOptions,
+                args.lifecycleOrigin,
                 {
                   environment: ctx.runtime.environment,
                   staged,
@@ -365,9 +385,13 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
     // verifies the winner's credential rather than failing).
     // Best-effort throughout: any failure is a warning, never a failed
     // install - an unprovisioned host self-heals on the next minting client.
+    // A registration refused or kept disabled started no host, so there is
+    // nothing for the credential probe to dial.
     const credentialProvision = await maybeProvisionCredential(
       ctx,
-      handle !== null && handle.state.postSwapError === null
+      handle !== null &&
+        handle.state.postSwapError === null &&
+        handle.state.postSwapWarning === null
         ? handle.state.postSwapAction
         : "none",
       authPreflight,
@@ -379,11 +403,17 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             stoppedBeforeSwap: handle.state.stoppedBeforeSwap,
             postSwapAction: handle.state.postSwapAction,
             postSwapError: handle.state.postSwapError,
+            // Additive: a reader built before it sees the install succeed,
+            // as it did.
+            serviceWarning: handle.state.postSwapWarning,
           }
         : null;
     let human = `installed host ${result.record.version} (executable=${result.record.executablePath})`;
     if (handle !== null && handle.state.postSwapError !== null) {
       human = `${human}; ${formatServiceLifecycleWarning(handle.state.postSwapAction, handle.state.postSwapError)}`;
+    }
+    if (handle !== null && handle.state.postSwapWarning !== null) {
+      human = `${human}; ${handle.state.postSwapWarning.message}`;
     }
     // Restate the unauthenticated warning on the terminal line - the
     // pre-flight's copy printed before a potentially long download and
@@ -412,7 +442,15 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         credentialProvision,
       },
       human,
-      exitCode: 0,
+      // A post-swap start that failed is a failed install to a shell: the
+      // bytes are committed but nothing is serving them, and a script that
+      // gates on the exit status (the dev-desktop loops) used to go on to
+      // report "service registered". The payload is unchanged - Desktop
+      // trusts a terminal `ok` line over a non-zero exit on both of its
+      // runners and reads `serviceLifecycle.postSwapError` exactly as before.
+      // Not `host apply`'s contract: that primitive's exit 0 answers "did the
+      // swap commit?" by design (see host-apply.ts).
+      exitCode: handle !== null && handle.state.postSwapError !== null ? 1 : 0,
     };
   };
 }

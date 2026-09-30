@@ -23,6 +23,7 @@ const REQUEST: ProviderStartLoginRequest = {
   providerId: "codex",
   profileId: null,
   createProfile: null,
+  holderId: null,
 };
 
 function answer(
