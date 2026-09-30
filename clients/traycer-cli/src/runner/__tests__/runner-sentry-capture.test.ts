@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RepeatDecision, RepeatGateIo } from "../sentry-repeat-gate";
 
 // The runner used to report EVERY thrown command error to Sentry, before
 // `toCliError` had classified it. Three expected outcomes - an expired token,
@@ -9,26 +10,54 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // everything else is still captured. What must NOT change is what the caller
 // sees - the local log line, the NDJSON error envelope and the exit code are
 // the command's answer and are independent of whether we told Sentry.
+//
+// A non-expected code is also gated per-machine-per-window by
+// sentry-repeat-gate.ts (see that module's own test file for the gate's
+// logic); this file mocks the gate itself so every case here exercises
+// runner.ts's wiring to it - `getClient()`, the decision branch, and the
+// arguments passed through - without touching a real ledger file.
 
 interface Breadcrumb {
   readonly category: string;
   readonly message: string;
-  readonly data: { readonly code: string };
+  readonly data: Record<string, unknown>;
 }
 
 const sentryMocks = vi.hoisted(() => ({
-  captureException: vi.fn<(err: unknown) => void>(),
+  captureException: vi.fn<(err: unknown, context: unknown) => void>(),
   addBreadcrumb: vi.fn<(crumb: unknown) => void>(),
   close: vi.fn<(timeout: number) => Promise<boolean>>(() =>
     Promise.resolve(true),
   ),
+  getClient: vi.fn<() => object | undefined>(),
 }));
 
 vi.mock("@sentry/node", () => ({
-  captureException: (err: unknown) => sentryMocks.captureException(err),
+  captureException: (err: unknown, context: unknown) =>
+    sentryMocks.captureException(err, context),
   addBreadcrumb: (crumb: unknown) => sentryMocks.addBreadcrumb(crumb),
   close: (timeout: number) => sentryMocks.close(timeout),
+  getClient: () => sentryMocks.getClient(),
 }));
+
+const repeatGateMocks = vi.hoisted(() => ({
+  recordCliFailureForSentry: vi.fn<
+    (
+      environment: string,
+      key: string,
+      io: RepeatGateIo,
+    ) => Promise<RepeatDecision>
+  >(),
+}));
+
+vi.mock("../sentry-repeat-gate", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../sentry-repeat-gate")>();
+  return {
+    ...actual,
+    recordCliFailureForSentry: repeatGateMocks.recordCliFailureForSentry,
+  };
+});
 
 const stdoutChunks: string[] = [];
 
@@ -42,6 +71,12 @@ describe("runner Sentry capture", () => {
     sentryMocks.captureException.mockReset();
     sentryMocks.addBreadcrumb.mockReset();
     sentryMocks.close.mockReset().mockResolvedValue(true);
+    // A build with a live DSN has a client; individual tests override this
+    // to exercise the "no client" early return.
+    sentryMocks.getClient.mockReset().mockReturnValue({});
+    repeatGateMocks.recordCliFailureForSentry
+      .mockReset()
+      .mockResolvedValue({ kind: "report", repeatsSinceLastReport: 0 });
     vi.spyOn(process.stdout, "write").mockImplementation(((
       chunk: string | Uint8Array,
       callback: (() => void) | undefined,
@@ -176,7 +211,9 @@ describe("runner Sentry capture", () => {
     await runThrowing(err);
 
     expect(sentryMocks.captureException).toHaveBeenCalledTimes(1);
-    expect(sentryMocks.captureException).toHaveBeenCalledWith(err);
+    expect(sentryMocks.captureException).toHaveBeenCalledWith(err, {
+      extra: { repeatsSinceLastReport: 0 },
+    });
     expect(sentryMocks.addBreadcrumb).not.toHaveBeenCalled();
   });
 
@@ -185,7 +222,9 @@ describe("runner Sentry capture", () => {
 
     await runThrowing(err);
 
-    expect(sentryMocks.captureException).toHaveBeenCalledWith(err);
+    expect(sentryMocks.captureException).toHaveBeenCalledWith(err, {
+      extra: { repeatsSinceLastReport: 0 },
+    });
     expect((terminalEnvelope()?.error as Record<string, unknown>).code).toBe(
       "E_UNEXPECTED",
     );
@@ -194,9 +233,90 @@ describe("runner Sentry capture", () => {
   it("captures a non-Error throw", async () => {
     await runThrowing("just a string");
 
-    expect(sentryMocks.captureException).toHaveBeenCalledWith("just a string");
+    expect(sentryMocks.captureException).toHaveBeenCalledWith("just a string", {
+      extra: { repeatsSinceLastReport: 0 },
+    });
     expect((terminalEnvelope()?.error as Record<string, unknown>).code).toBe(
       "E_UNEXPECTED",
     );
+  });
+
+  it("does not capture, and does not consult the repeat gate, when there is no live Sentry client", async () => {
+    const { CLI_ERROR_CODES, CliError } = await import("../errors");
+    sentryMocks.getClient.mockReturnValue(undefined);
+    const err = new CliError({
+      code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
+      message: "extract failed",
+      details: null,
+      exitCode: 1,
+    });
+
+    await runThrowing(err);
+
+    expect(repeatGateMocks.recordCliFailureForSentry).not.toHaveBeenCalled();
+    expect(sentryMocks.captureException).not.toHaveBeenCalled();
+    expect(sentryMocks.addBreadcrumb).not.toHaveBeenCalled();
+  });
+
+  it("leaves a repeat breadcrumb instead of capturing when the gate says suppress", async () => {
+    const { CLI_ERROR_CODES, CliError } = await import("../errors");
+    repeatGateMocks.recordCliFailureForSentry.mockResolvedValue({
+      kind: "suppress",
+      repeatsInWindow: 4,
+    });
+    const err = new CliError({
+      code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
+      message: "extract failed",
+      details: null,
+      exitCode: 1,
+    });
+
+    await runThrowing(err);
+
+    expect(sentryMocks.captureException).not.toHaveBeenCalled();
+    expect(sentryMocks.addBreadcrumb).toHaveBeenCalledTimes(1);
+    const crumb = sentryMocks.addBreadcrumb.mock.calls[0][0] as Breadcrumb;
+    expect(crumb.category).toBe("cli");
+    expect(crumb.message).toBe(
+      "CLI command failure repeated inside the report window",
+    );
+    expect(crumb.data.code).toBe("E_HOST_INSTALL_FAILED");
+    expect(crumb.data.repeatsInWindow).toBe(4);
+  });
+
+  it("captures with the gate's repeatsSinceLastReport count when the gate says report", async () => {
+    const { CLI_ERROR_CODES, CliError } = await import("../errors");
+    repeatGateMocks.recordCliFailureForSentry.mockResolvedValue({
+      kind: "report",
+      repeatsSinceLastReport: 3,
+    });
+    const err = new CliError({
+      code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
+      message: "extract failed",
+      details: null,
+      exitCode: 1,
+    });
+
+    await runThrowing(err);
+
+    expect(sentryMocks.captureException).toHaveBeenCalledWith(err, {
+      extra: { repeatsSinceLastReport: 3 },
+    });
+    expect(sentryMocks.addBreadcrumb).not.toHaveBeenCalled();
+  });
+
+  it("never consults the repeat gate for an expected code", async () => {
+    const { CLI_ERROR_CODES, CliError } = await import("../errors");
+
+    await runThrowing(
+      new CliError({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message: "host is busy",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+
+    expect(repeatGateMocks.recordCliFailureForSentry).not.toHaveBeenCalled();
   });
 });

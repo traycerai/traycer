@@ -2,6 +2,7 @@ import * as Sentry from "@sentry/node";
 import { errorFromUnknown } from "../logger";
 import {
   CLI_ERROR_CODES,
+  type CliError,
   EXPECTED_CLI_ERROR_CODES,
   toCliError,
 } from "./errors";
@@ -18,6 +19,11 @@ import {
   resolveRuntimeContext,
   type RuntimeContext,
 } from "./runtime";
+import {
+  cliSentryRepeatKey,
+  defaultRepeatGateIo,
+  recordCliFailureForSentry,
+} from "./sentry-repeat-gate";
 
 // Context handed to every CommandFn. `progress(info)` is a thin
 // convenience mirroring output.progress so command bodies don't have
@@ -101,7 +107,7 @@ export async function runCommand(
         data: { code: cliErr.code },
       });
     } else {
-      Sentry.captureException(err);
+      await reportCommandFailure(runtime, cliErr, err);
     }
     runtime.logger.error(
       "CLI command failed",
@@ -161,4 +167,31 @@ export async function runCommand(
   // truncation turned on, and it is unrelated to the teardown abort the rest
   // of that helper addresses. See std-write.ts and exit.ts.
   await finishAndExit(result.exitCode);
+}
+
+// Reports a failure the classification above let through, once per kind per
+// machine per window (see sentry-repeat-gate.ts). A build without a DSN has no
+// client, and then there is nothing to gate and no ledger to write.
+async function reportCommandFailure(
+  runtime: RuntimeContext,
+  cliErr: CliError,
+  err: unknown,
+): Promise<void> {
+  if (Sentry.getClient() === undefined) return;
+  const decision = await recordCliFailureForSentry(
+    runtime.environment,
+    cliSentryRepeatKey(cliErr.code, err, cliErr.message),
+    defaultRepeatGateIo,
+  );
+  if (decision.kind === "report") {
+    Sentry.captureException(err, {
+      extra: { repeatsSinceLastReport: decision.repeatsSinceLastReport },
+    });
+    return;
+  }
+  Sentry.addBreadcrumb({
+    category: "cli",
+    message: "CLI command failure repeated inside the report window",
+    data: { code: cliErr.code, repeatsInWindow: decision.repeatsInWindow },
+  });
 }
