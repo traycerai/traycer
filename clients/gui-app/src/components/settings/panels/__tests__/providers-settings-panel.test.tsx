@@ -3353,6 +3353,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "ambient",
       createProfile: null,
+      holderId: null,
     });
   });
 
@@ -3977,6 +3978,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      holderId: null,
     });
     expect(typeof startOptions.onSuccess).toBe("function");
 
@@ -4564,6 +4566,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "ambient",
       createProfile: null,
+      holderId: null,
     });
     // From here on the re-poll's timer is the only thing being waited on -
     // drive it deterministically instead of sleeping out the real delay.
@@ -4690,6 +4693,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "ambient",
+      holderId: null,
     });
 
     act(() => {
@@ -5307,6 +5311,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "managed-pending",
+      holderId: null,
     });
     expect(providerMocks.awaitLoginMutate).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -5385,6 +5390,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "managed-1",
+      holderId: null,
     });
     expect(screen.queryByText("Switching account")).toBeNull();
 
@@ -5507,6 +5513,7 @@ describe("<ProvidersSettingsPanel />", () => {
           providerId: "claude-code",
           profileId: "work-profile",
           createProfile: null,
+          holderId: null,
         },
         expect.anything(),
       );
@@ -5661,6 +5668,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       createProfile: null,
+      holderId: null,
     });
 
     await act(() => {
@@ -5729,6 +5737,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       createProfile: null,
+      holderId: null,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
@@ -5736,6 +5745,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "managed-1",
+      holderId: null,
     });
 
     await act(() => {
@@ -6353,6 +6363,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "claude-code",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      holderId: null,
     });
   });
 
@@ -6416,6 +6427,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "claude-code",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: true },
+      holderId: null,
     });
   });
 
@@ -6528,6 +6540,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      holderId: null,
     });
   });
 
@@ -7129,6 +7142,7 @@ describe("<ProvidersSettingsPanel />", () => {
         label: "Work",
         shareSkillsAndPlugins: false,
       },
+      holderId: null,
     });
 
     const [, startOptions] = firstStartLoginCall();

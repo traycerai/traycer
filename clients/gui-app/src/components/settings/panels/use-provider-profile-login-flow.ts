@@ -310,6 +310,7 @@ export interface ProviderProfileLoginFlowCodePaste {
 }
 
 interface UseProviderProfileLoginFlowInput {
+  readonly supportsLoginOwnership: boolean;
   readonly mode: ProviderProfileLoginFlowMode;
   readonly providerId: ProviderCliState["providerId"];
   /** Reauth mode always targets this existing profile - the flow awaits THIS
@@ -418,6 +419,7 @@ export function useProviderProfileLoginFlow(
   input: UseProviderProfileLoginFlowInput,
 ): ProviderProfileLoginFlow {
   const {
+    supportsLoginOwnership,
     mode,
     providerId,
     existingProfileId,
@@ -462,6 +464,9 @@ export function useProviderProfileLoginFlow(
   const lastAnswerRef = useRef<ProviderStartLoginAnswer | null>(null);
   const restartCountRef = useRef(0);
   const attemptIdRef = useRef(0);
+  // Latched at the press: later handshakes must not change the cancellation
+  // policy of a start already sent anonymously to an older host.
+  const holderIdRef = useRef<string | null>(null);
   // Two-sided settlement join for the current attempt (see `settleAttempt`'s
   // doc comment): `awaitLogin` and `submitLoginCode` can resolve in either
   // order, so each side latches its own verdict into one of these refs and
@@ -536,15 +541,14 @@ export function useProviderProfileLoginFlow(
 
   const cancelProfile = useCallback(
     (profileId: string | null): void => {
-      // Reauth always targets a real login child - a specific profile, or
-      // the ambient/no-profile-picker identity when `existingProfileId` is
-      // null (the in-chat banner's OAuth reconnect). Create mode's `null`
-      // means the host never minted a profile-scoped child, so there is
-      // nothing to cancel.
-      if (mode !== "reauth" && profileId === null) return;
+      // A holder can release a create attempt before its profile ID arrives.
+      // Legacy create has no safe scope to cancel until the host names one;
+      // legacy reauth's null profile is the ambient scope.
+      const holderId = holderIdRef.current;
+      if (holderId === null && mode !== "reauth" && profileId === null) return;
       if (cancelledRef.current) return;
       cancelledRef.current = true;
-      cancelLogin.mutate({ providerId, profileId });
+      cancelLogin.mutate({ providerId, profileId, holderId });
     },
     [cancelLogin, mode, providerId],
   );
@@ -708,6 +712,9 @@ export function useProviderProfileLoginFlow(
       clearRepollTimer();
       attemptIdRef.current += 1;
       const thisAttemptId = attemptIdRef.current;
+      const holderId = supportsLoginOwnership ? crypto.randomUUID() : null;
+      holderIdRef.current = holderId;
+      cancelledRef.current = false;
       awaitOutcomeRef.current = null;
       submitOutcomeRef.current = "none";
       successPayloadRef.current = null;
@@ -752,6 +759,7 @@ export function useProviderProfileLoginFlow(
       void startProviderLoginUntilSettled({
         request: {
           providerId,
+          holderId,
           profileId: existingProfileId,
           createProfile:
             mode === "create"
@@ -934,7 +942,10 @@ export function useProviderProfileLoginFlow(
         (error: unknown) => {
           if (startAbandoned()) return;
           if (cancelRequestedRef.current) {
-            finishCancellation(null);
+            // A failed start names no login to cancel. Ownership callers
+            // already released their claim at the press; legacy callers
+            // must not turn this failure into an ambient scope cancel.
+            reportCancellation();
             return;
           }
           fail(
@@ -953,7 +964,6 @@ export function useProviderProfileLoginFlow(
       existingProfileId,
       fail,
       failureMessages,
-      finishCancellation,
       loginCapability,
       mode,
       providerId,
@@ -961,6 +971,7 @@ export function useProviderProfileLoginFlow(
       restart,
       settleAttempt,
       startLogin,
+      supportsLoginOwnership,
       submitLoginCode,
       touchLogin,
     ],
@@ -1015,6 +1026,14 @@ export function useProviderProfileLoginFlow(
   const cancel = useCallback((): void => {
     if (commitPending) return;
     cancelRequestedRef.current = true;
+    if (holderIdRef.current !== null && state.kind !== "start") {
+      const profileId =
+        state.kind === "waiting"
+          ? state.profileId
+          : (liveLoginRef.current?.profileId ?? existingProfileId);
+      finishCancellation(profileId);
+      return;
+    }
     if (state.kind === "starting") {
       if (mode === "reauth" && existingProfileId !== null) {
         finishCancellation(existingProfileId);
@@ -1047,12 +1066,10 @@ export function useProviderProfileLoginFlow(
       finishCancellation(state.profileId);
       return;
     }
-    if (
-      mode === "reauth" &&
-      state.kind === "start" &&
-      existingProfileId !== null
-    ) {
-      finishCancellation(existingProfileId);
+    if (state.kind === "start") {
+      // The panel can close before its first start effect runs. It owns no
+      // login at that point, even if the profile's ID is already known.
+      reportCancellation();
     }
   }, [
     commitPending,

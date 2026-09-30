@@ -1,3 +1,4 @@
+import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
 import {
   useCallback,
   useEffect,
@@ -89,7 +90,9 @@ export function ProviderProfileReauthPanel({
   // Freeze the row as it was on entry; it is the only record of who this
   // profile was when the user started, and everything below wants exactly it.
   const [entryProfile] = useState(profile);
+  const supportsLoginOwnership = useProvidersLoginOwnership();
   const flow = useProviderProfileLoginFlow({
+    supportsLoginOwnership,
     mode: "reauth",
     providerId: state.providerId,
     existingProfileId: entryProfile.profileId,

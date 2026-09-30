@@ -1,3 +1,4 @@
+import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
 import {
   type ProviderCliState,
   type ProviderId,
@@ -752,6 +753,7 @@ function SignInToEnableButton(props: {
   readonly onEnable: (providerId: ProviderId) => void;
 }) {
   const { state, enablementPending, isLocalHost, onEnable } = props;
+  const supportsLoginOwnership = useProvidersLoginOwnership();
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useHostScopedProvidersAwaitLogin();
   const ensurePack = useProvidersEnsurePack();
@@ -883,11 +885,12 @@ function SignInToEnableButton(props: {
       startLogin.data ?? null,
     );
     setStartProgress({ kind: "opening" });
+    const holderId = supportsLoginOwnership ? crypto.randomUUID() : null;
     void startProviderLoginUntilSettled({
       // Ambient login, not a managed profile: onboarding has no profile
       // management surface, and the account a first sign-in creates is the
       // provider's own CLI login.
-      request: { providerId, profileId: null, createProfile: null },
+      request: { providerId, profileId: null, createProfile: null, holderId },
       startLogin: (request) => startLogin.mutateAsync(request),
       ensurePack: () => ensurePack.mutateAsync({ providerId }),
       retryPackFirst,
@@ -908,7 +911,7 @@ function SignInToEnableButton(props: {
           ? providerLoginAnswerHeldForNobody(result, state.loginCapability)
           : providerLoginAnswerStillStarting(result);
         if (heldForNobody) {
-          cancelLogin.mutate({ providerId, profileId: null });
+          cancelLogin.mutate({ providerId, profileId: null, holderId });
         }
         if (unmountedRef.current) return;
         setStartProgress(null);

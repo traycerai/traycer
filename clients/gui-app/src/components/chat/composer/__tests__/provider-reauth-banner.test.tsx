@@ -131,6 +131,10 @@ vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => ({
     isPending: mocks.cancelLoginPending,
   }),
 }));
+vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({
+  useProvidersLoginOwnership: () => false,
+  useProvidersLoginOwnershipForClient: () => false,
+}));
 vi.mock("@/hooks/providers/use-providers-submit-login-code-mutation", () => ({
   useProvidersSubmitLoginCode: () => ({
     mutate: mocks.submitLoginCodeMutate,
@@ -1559,6 +1563,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(mocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "claude-code",
       profileId: null,
+      holderId: null,
     });
   });
 
@@ -1704,6 +1709,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(mocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "claude-code",
       profileId: null,
+      holderId: null,
     });
   });
 

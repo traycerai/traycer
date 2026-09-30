@@ -233,6 +233,7 @@ function LoginFlowHarness(props: {
   });
 
   const flow = useProviderProfileLoginFlow({
+    supportsLoginOwnership: false,
     mode: props.mode,
     providerId: PROVIDER_ID,
     existingProfileId: props.existingProfileId,
@@ -342,6 +343,7 @@ describe("useProviderProfileLoginFlow - releasing a login the host is still hold
     expect(cancelLoginImpl).toHaveBeenCalledWith({
       providerId: PROVIDER_ID,
       profileId: "p-new",
+      holderId: null,
     });
   });
 
@@ -390,6 +392,7 @@ describe("useProviderProfileLoginFlow - releasing a login the host is still hold
     expect(cancelLoginImpl).toHaveBeenCalledWith({
       providerId: PROVIDER_ID,
       profileId: "p-new",
+      holderId: null,
     });
   });
 
@@ -426,6 +429,7 @@ describe("useProviderProfileLoginFlow - releasing a login the host is still hold
     expect(cancelLoginImpl).toHaveBeenCalledWith({
       providerId: PROVIDER_ID,
       profileId: "p-new",
+      holderId: null,
     });
   });
 
@@ -468,6 +472,7 @@ describe("useProviderProfileLoginFlow - releasing a login the host is still hold
     expect(cancelLoginImpl).toHaveBeenCalledWith({
       providerId: PROVIDER_ID,
       profileId: "p-new",
+      holderId: null,
     });
   });
 
@@ -647,6 +652,7 @@ describe("useProviderProfileLoginFlow - cancelling an ambient reauth while the p
     expect(cancelLoginImpl).toHaveBeenCalledWith({
       providerId: PROVIDER_ID,
       profileId: null,
+      holderId: null,
     });
   });
 
@@ -658,6 +664,7 @@ describe("useProviderProfileLoginFlow - cancelling an ambient reauth while the p
     expect(cancelLoginImpl).toHaveBeenCalledWith({
       providerId: PROVIDER_ID,
       profileId: null,
+      holderId: null,
     });
   });
 });

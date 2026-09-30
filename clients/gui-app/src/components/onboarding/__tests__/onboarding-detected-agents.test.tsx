@@ -269,6 +269,11 @@ vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => ({
   }),
 }));
 
+vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({
+  useProvidersLoginOwnership: () => false,
+  useProvidersLoginOwnershipForClient: () => false,
+}));
+
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => fixtures.openLink,
 }));
@@ -1638,6 +1643,7 @@ describe("SignInToEnableButton releasing a login nobody is coming back for", () 
     expect(fixtures.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: null,
+      holderId: null,
     });
     expect(fixtures.awaitLoginMutate).not.toHaveBeenCalled();
     expect(screen.getByRole("alert").textContent).toBe(
@@ -1665,6 +1671,7 @@ describe("SignInToEnableButton releasing a login nobody is coming back for", () 
     expect(fixtures.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: null,
+      holderId: null,
     });
   });
 
@@ -1693,6 +1700,7 @@ describe("SignInToEnableButton releasing a login nobody is coming back for", () 
     expect(fixtures.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: null,
+      holderId: null,
     });
   });
 
