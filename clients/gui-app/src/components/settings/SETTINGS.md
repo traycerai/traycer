@@ -6267,7 +6267,13 @@ set-state-in-effect` forbids the effect form, and an effect would also
     promises self-recovery is worse than one that says nothing, since it is the
     reason someone would leave a host removed and expect it back. The
     deregistered-host re-enrollment gap itself is a recorded product follow-up,
-    not a client-side fix.
+    not a client-side fix. A successful removal returns Settings to the active
+    host (`scope.returnToActive`): left pinned to the removed id, the page fell
+    to the `vanished` notice ("<uuid> is no longer registered") as soon as the
+    lists refreshed. `vanished` stays the answer for a host that disappears
+    out from under the page (removed from another window or device); following
+    the active host after a removal the user just confirmed is not the silent
+    retarget that row forbids.
 
   **The recovery console is GONE.** `host-recovery-console.tsx` was what
   remained of the old CLI-bridge page and the last `IHostManagement` consumer

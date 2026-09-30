@@ -8,6 +8,7 @@ import {
   type Mock,
 } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -471,5 +472,49 @@ describe("HostDangerZone", () => {
       within(dialog).getByRole("button", { name: "Remove from account" }),
     );
     expect(removeFromAccountSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns Settings to the active host once the removal succeeds, and not before", () => {
+    // Left pinned to the removed id, the page fell to the `vanished` notice
+    // ("<uuid> is no longer registered") the moment the lists refreshed - for a
+    // removal the user had just confirmed.
+    const returnToActive = vi.fn();
+    const captured: { onSuccess: (() => void) | null } = { onSuccess: null };
+    removeFromAccountSpy.mockImplementationOnce(
+      (
+        _variables: undefined,
+        callbacks: { readonly onSuccess: () => void },
+      ) => {
+        captured.onSuccess = callbacks.onSuccess;
+      },
+    );
+    render(
+      <HostDangerZone
+        scope={hostScopeFixture({
+          host: remoteHost("host-b"),
+          status: "ready",
+          client: SOME_CLIENT,
+          returnToActive,
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("settings-remove-host-from-account"));
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Remove from account",
+      }),
+    );
+    // In flight, or refused: the host is still on the account, so the page
+    // must stay on it.
+    expect(returnToActive).not.toHaveBeenCalled();
+
+    const { onSuccess } = captured;
+    if (onSuccess === null) {
+      throw new Error("expected mutate to be called with an onSuccess");
+    }
+    act(() => {
+      onSuccess();
+    });
+    expect(returnToActive).toHaveBeenCalledOnce();
   });
 });
