@@ -887,6 +887,43 @@ export function moveRailEntry(
   };
 }
 
+/**
+ * A panel reordered among panels alone, `toIndex` counted the same way: the
+ * phone's flat chip bar draws no divider or stack, so a move there must
+ * leave both exactly where they are - every divider and stack stays
+ * immediately after the SAME panel it already followed, wherever that panel
+ * now stands, rather than after whatever panel now occupies its old ARRAY
+ * slot. `normalizeRail` then keeps or splits a stack whose members the new
+ * order no longer holds adjacent.
+ */
+export function movePanelAmongPanels(
+  arrangement: LayoutArrangement,
+  panelId: string,
+  toIndex: number,
+): LayoutArrangement {
+  const panelIds = arrangement.rail.flatMap((entry) =>
+    entry.kind === "panel" ? [entry.id] : [],
+  );
+  const fromIndex = panelIds.findIndex((id) => id === panelId);
+  if (fromIndex < 0) return arrangement;
+  const reordered = movedWithin(panelIds, fromIndex, toIndex);
+  const markersAfter = new Map<RailRegionId | null, RailEntry[]>();
+  let anchor: RailRegionId | null = null;
+  for (const entry of arrangement.rail) {
+    if (entry.kind === "panel") {
+      anchor = entry.id;
+      continue;
+    }
+    markersAfter.set(anchor, [...(markersAfter.get(anchor) ?? []), entry]);
+  }
+  const rail: RailEntry[] = [...(markersAfter.get(null) ?? [])];
+  for (const id of reordered) {
+    rail.push({ kind: "panel", id });
+    rail.push(...(markersAfter.get(id) ?? []));
+  }
+  return { ...arrangement, rail: normalizeRail(rail) };
+}
+
 /** A new divider at `index`, on an id no divider has held before. */
 export function insertRailDivider(
   arrangement: LayoutArrangement,

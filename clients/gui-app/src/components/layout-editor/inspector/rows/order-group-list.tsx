@@ -30,6 +30,7 @@ import {
   insertRailDivider,
   movedWithin,
   moveRailEntry,
+  movePanelAmongPanels,
   type LayoutArrangement,
   type OrderGroupId,
 } from "@/lib/layout/layout-arrangement";
@@ -39,7 +40,7 @@ import type {
   RegionId,
   ToolbarRegionId,
 } from "@/lib/layout/region-id";
-import { normalizeRail, railDividerInsertIndex } from "@/lib/layout/rail";
+import { railDividerInsertIndex } from "@/lib/layout/rail";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 
 /**
@@ -264,17 +265,7 @@ function OrderGroupRows(props: {
               onStack: null,
             }))}
             onMove={(id, toIndex) => {
-              const target = panelIds.at(toIndex);
-              if (target === undefined) return;
-              // Moved to where the panel it lands on stands in the whole
-              // rail, exactly as the desktop list would place it; the rail's
-              // own normalization then keeps or splits the stacks around it.
-              const moved = moveRailEntry(
-                arrangement,
-                id,
-                arrangement.rail.findIndex((entry) => entry.id === target),
-              );
-              writeArrangement({ ...moved, rail: normalizeRail(moved.rail) });
+              writeArrangement(movePanelAmongPanels(arrangement, id, toIndex));
             }}
           />
         );

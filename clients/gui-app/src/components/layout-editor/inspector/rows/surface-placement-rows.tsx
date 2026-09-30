@@ -399,6 +399,12 @@ export function WideReadingWidthRow(): ReactNode {
             writeArrangementField("wideReadingWidthPx", next[0]);
             setDraftPx(null);
           }}
+          // Radix skips `onValueCommit` when the drag ends back at its
+          // starting value, which would otherwise leave `draftPx` set and
+          // the row reading a stale draft past the next external write (a
+          // revert, an undo, another window) - see the docstring above.
+          onPointerUp={() => setDraftPx(null)}
+          onPointerCancel={() => setDraftPx(null)}
         >
           <SliderTrack size="default">
             <SliderRange />

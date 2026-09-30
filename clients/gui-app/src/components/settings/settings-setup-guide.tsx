@@ -33,7 +33,16 @@ export function SettingsSetupGuide(props: {
     active === null
       ? []
       : setupGuideStepsFor(active.id, { layoutEditor: editorAvailable });
-  const step = active === null ? null : (steps[active.step] ?? null);
+  // Resumed progress is stored against the guide's FULL step count
+  // (`setupGuideLength`), but a shell that cannot open the layout editor
+  // filters that door's trailing step out of `steps`. A step persisted at or
+  // past that point clamps to the last step this shell actually shows,
+  // rather than indexing past the filtered array and vanishing.
+  const displayStep =
+    active === null || steps.length === 0
+      ? 0
+      : Math.min(active.step, steps.length - 1);
+  const step = active === null ? null : (steps[displayStep] ?? null);
   // Resolved above the early returns, because it is a hook: the lit moment
   // belongs to the step that asked for it and ends when that step does,
   // however it ends - Continue, Escape, or the surface closing (L-50).
@@ -51,7 +60,7 @@ export function SettingsSetupGuide(props: {
   if (active === null || step === null) return null;
   if (customizing) return null;
   if (step.section !== props.section) return null;
-  const last = active.step + 1 === steps.length;
+  const last = displayStep + 1 === steps.length;
   const go = (index: number): void => {
     const target = steps[index];
     if (target.section !== step.section)
@@ -60,11 +69,11 @@ export function SettingsSetupGuide(props: {
   return (
     <Suspense fallback={null}>
       <Coachmark
-        id={`${active.id}-${active.step}`}
+        id={`${active.id}-${displayStep}`}
         title={step.title}
         content={step.content}
         progress={{
-          step: active.step + 1,
+          step: displayStep + 1,
           total: steps.length,
         }}
         rootRef={props.rootRef}
@@ -76,10 +85,10 @@ export function SettingsSetupGuide(props: {
         onClose={() => complete(active.id)}
         onTarget={revealSetting}
         back={
-          active.step > 0
+          displayStep > 0
             ? () => {
                 useOnboardingStore.getState().retreatSetup();
-                go(active.step - 1);
+                go(displayStep - 1);
               }
             : null
         }
@@ -98,7 +107,7 @@ export function SettingsSetupGuide(props: {
                     navigateToSettingsSection("getting-started");
                   } else {
                     useOnboardingStore.getState().advanceSetup();
-                    go(active.step + 1);
+                    go(displayStep + 1);
                   }
                 },
               }

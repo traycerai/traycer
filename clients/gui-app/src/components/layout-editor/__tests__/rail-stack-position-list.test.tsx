@@ -358,6 +358,25 @@ describe("the rail list on a phone, which has no rail", () => {
     expect(rail().filter((entry) => entry.kind !== "panel")).toEqual(
       before.filter((entry) => entry.kind !== "panel"),
     );
+    // The filtered check above passes even if the stack or the divider
+    // physically slid to a different ARRAY index (it would still equal
+    // itself); this checks the whole rail, positions included - the divider
+    // and the stack link stay directly after the SAME panel they already
+    // followed (Artifacts, Agents), not after whatever panel this move left
+    // sitting at their old raw index.
+    const stackEntry = before.find((entry) => entry.kind === "stack");
+    const dividerEntry = before.find((entry) => entry.kind === "divider");
+    if (stackEntry === undefined || dividerEntry === undefined) {
+      throw new Error("fixture must seed a stack and a divider");
+    }
+    expect(rail()).toEqual([
+      { kind: "panel", id: panels[2] },
+      { kind: "panel", id: panels[0] },
+      stackEntry,
+      { kind: "panel", id: panels[1] },
+      dividerEntry,
+      ...panels.slice(3).map((id) => ({ kind: "panel", id })),
+    ]);
   });
 });
 
