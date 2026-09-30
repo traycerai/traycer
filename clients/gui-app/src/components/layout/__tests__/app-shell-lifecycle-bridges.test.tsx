@@ -688,11 +688,15 @@ describe("<AppShell />", () => {
       expect(screen.getByTestId("app-status-bar")).not.toBeNull();
     });
 
-    it("draws it under the header placement, which withholds the strip everywhere else", async () => {
-      // `placement` names which of two surfaces hosts the gauge, and this
-      // viewport has only one of them: the mobile header keeps its controls
-      // either way, so a strip gated on `placement` here would be off for
-      // every phone whose device-local store happens to say `header`.
+    it("draws the strip on `header` placement too, and the header still gives up its own glyphs to it", async () => {
+      // `placement` names which of two surfaces hosts the gauge on a DESKTOP
+      // window; a phone has no separate status-bar surface for it to name, so
+      // the footer's own switch is what decides the strip here, and the
+      // header hides its usage/resource glyphs whenever that switch is on -
+      // neither reads `placement` (L-162). A strip gated on `placement`
+      // instead would be off for every phone whose device-local store
+      // happens to say `header`, and a header un-gated on the footer would
+      // draw the same reading twice.
       selectMobileFooter("header");
       setViewportWidth(MOBILE_VIEWPORT_WIDTH);
       expect(useLayoutStore.getState().arrangement.usageHost).toBe("header");
@@ -702,12 +706,8 @@ describe("<AppShell />", () => {
       await screen.findByTestId("app-shell-child");
 
       expect(screen.getByTestId("app-status-bar")).not.toBeNull();
-      // And the header keeps both of its own controls beside it - the strip
-      // does not displace them the way it does under desktop `placement`.
-      expect(screen.getByTestId("rate-limit-header-button")).not.toBeNull();
-      expect(
-        screen.getByTestId("resource-monitor-header-button"),
-      ).not.toBeNull();
+      expect(screen.queryByTestId("rate-limit-header-button")).toBeNull();
+      expect(screen.queryByTestId("resource-monitor-header-button")).toBeNull();
     });
 
     it("unmounts the strip while the software keyboard is up", async () => {

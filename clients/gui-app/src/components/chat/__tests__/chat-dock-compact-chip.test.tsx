@@ -9,6 +9,10 @@ import {
 import { ToolbarIconButton } from "@/components/home/toolbar/toolbar-buttons";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { DiffLineCounts } from "@/lib/file-change-diff-hunks";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 
 interface ChipProps {
   readonly icon: ReactElement;
@@ -248,9 +252,18 @@ describe("<ChatDockCompactChip />", () => {
   // the thing that actually goes wrong - a state added to the toolbar chip and
   // forgotten on the dock chip, or the other way round.
   it("borrows the toolbar chip's material and states", () => {
+    // The dock chip has no Toolbar-style setting of its own and is always
+    // bordered (its pressed state reads against the border, not a fill
+    // alone), so it is read off the toolbar chip's BORDERED style - the one
+    // whose material vocabulary it actually borrows - not whichever style
+    // Layout ▸ Composer ▸ Toolbar currently has picked.
+    useLayoutStore.getState().setRegionValues("model", {
+      toolbarStyle: "bordered",
+    });
     render(<ToolbarIconButton aria-label="probe" />);
     const square = classesOf(screen.getByRole("button", { name: "probe" }));
     cleanup();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 
     renderChip(baseProps());
     const chip = classesOf(screen.getByTestId("chip"));
