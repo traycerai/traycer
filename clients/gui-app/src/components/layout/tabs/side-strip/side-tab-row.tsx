@@ -31,7 +31,8 @@ import {
   SIDE_TAB_HOVER_CLASS,
   SIDE_TAB_RAIL_BADGE_POSITION_CLASS,
   SIDE_TAB_ROW_CLASS,
-  SIDE_TAB_SECTION_ROW_CLASS,
+  SIDE_TAB_TWO_LINE_ROW_CLASS,
+  SIDE_TAB_TWO_LINE_TRAILING_CLASS,
   SIDE_TAB_SESSION_ACTIVE_CLASS,
   SIDE_TAB_TILE_ACCENT_RING_CLASS,
   SIDE_TAB_TILE_ACTIVE_CLASS,
@@ -71,7 +72,7 @@ export interface SideTabDisclosure {
 /**
  * What the Activity view's sections change about an expanded row: the title's
  * weight and tone, and, on a Needs you or To review row, the second line that
- * makes it a 46px two-line row. The Layered view passes `null`.
+ * makes it a 52px two-line row. The Layered view passes `null`.
  */
 export interface SideRowSection {
   /** `strong` is a loud row's bold title, `muted` an idle one's. */
@@ -369,10 +370,8 @@ function SideTabPairPreview(props: {
 }
 
 function sectionRowHeight(section: SideRowSection | null): string | undefined {
-  if (section === null) return undefined;
-  return section.detail === null
-    ? SIDE_TAB_SECTION_ROW_CLASS.oneLine
-    : SIDE_TAB_SECTION_ROW_CLASS.twoLine;
+  if (section === null || section.detail === null) return undefined;
+  return SIDE_TAB_TWO_LINE_ROW_CLASS;
 }
 
 function expandedFill(
@@ -584,7 +583,7 @@ function ExpandedContent(
           // A two-line row's trailing content sits on its title line.
           className={cn(
             "flex shrink-0 items-center justify-end",
-            detail !== null && "mt-1 self-start",
+            detail !== null && SIDE_TAB_TWO_LINE_TRAILING_CLASS,
           )}
         >
           <TrailingContent

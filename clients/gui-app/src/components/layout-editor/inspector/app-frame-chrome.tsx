@@ -66,7 +66,8 @@ import {
   SIDE_TAB_ACTIVE_CLASS,
   SIDE_TAB_LEADING_CLASS,
   SIDE_TAB_ROW_CLASS,
-  SIDE_TAB_SECTION_ROW_CLASS,
+  SIDE_TAB_TWO_LINE_ROW_CLASS,
+  SIDE_TAB_TWO_LINE_TRAILING_CLASS,
   SIDE_TAB_TILE_ACTIVE_CLASS,
   SIDE_TAB_TILE_CLASS,
   SIDE_TAB_TITLE_CLASS,
@@ -545,10 +546,7 @@ function AppFrameTaskRow(props: {
       className={cn(
         "flex items-center",
         SIDE_TAB_ROW_CLASS,
-        section !== null &&
-          (twoLine
-            ? SIDE_TAB_SECTION_ROW_CLASS.twoLine
-            : SIDE_TAB_SECTION_ROW_CLASS.oneLine),
+        twoLine && SIDE_TAB_TWO_LINE_ROW_CLASS,
         section === null || section === "idle"
           ? "text-muted-foreground"
           : "text-foreground",
@@ -568,7 +566,12 @@ function AppFrameTaskRow(props: {
         </span>
       )}
       {twoLine ? (
-        <span className="mt-1 flex shrink-0 items-center self-start">
+        <span
+          className={cn(
+            "flex shrink-0 items-center",
+            SIDE_TAB_TWO_LINE_TRAILING_CLASS,
+          )}
+        >
           {twoLineStatusOf(SAMPLE_NEEDS_YOU_ROW, null)?.node}
         </span>
       ) : (

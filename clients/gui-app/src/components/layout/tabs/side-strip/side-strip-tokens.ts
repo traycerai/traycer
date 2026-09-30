@@ -48,13 +48,16 @@ export const SIDE_STRIP_LIST_CLASS: Readonly<
 export const SIDE_TAB_ROW_CLASS = "h-8 rounded-lg px-2 gap-2";
 /**
  * The Activity view's rows by section (owner default: the loud rows are the
- * tall ones): Needs you and To review draw a second line in 46px, Working and
- * Idle one line in 28px.
+ * tall ones): Needs you and To review draw a second line in 52px, Working and
+ * Idle keep the strip's one-line row, `SIDE_TAB_ROW_CLASS`'s 32px.
  */
-export const SIDE_TAB_SECTION_ROW_CLASS = {
-  twoLine: "h-11.5",
-  oneLine: "h-7",
-} as const;
+export const SIDE_TAB_TWO_LINE_ROW_CLASS = "h-13";
+/**
+ * A two-line row's trailing cell sits on its title's line: the 20px cell's
+ * centre 7px below the row's content top, where the centred title/detail pair
+ * (34px in the 52px row) puts the title's centre.
+ */
+export const SIDE_TAB_TWO_LINE_TRAILING_CLASS = "mt-1.75 self-start";
 /**
  * The strip's own ground, so a badge reads as cut out of what it sits on: the
  * canvas on a narrow window, the shell ground on a wide one.

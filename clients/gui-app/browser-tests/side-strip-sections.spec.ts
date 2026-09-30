@@ -30,16 +30,16 @@ const row = (page: Page, id: string): Locator =>
 const closeWrapper = (page: Page, id: string): Locator =>
   row(page, id).getByTestId(`tab-close-epic-fixture-${id}`).locator("..");
 
-test("draws Needs you and To review rows 46px tall and Working and Idle rows 28px tall", async ({
+test("draws Needs you and To review rows 52px tall and Working and Idle rows 32px tall", async ({
   page,
 }) => {
   await openStrip(page);
 
   for (const id of ["staging", "onboarding", "release", "migration"]) {
-    expect((await boxOf(row(page, id))).height).toBe(46);
+    expect((await boxOf(row(page, id))).height).toBe(52);
   }
   for (const id of ["gui", "cookie", "host", "layout", "launch", "react"]) {
-    expect((await boxOf(row(page, id))).height).toBe(28);
+    expect((await boxOf(row(page, id))).height).toBe(32);
   }
 });
 

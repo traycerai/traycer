@@ -18,7 +18,8 @@ import {
   SIDE_STRIP_RAIL_SECTION_SEPARATOR_CLASS,
   SIDE_TAB_HOVER_CLASS,
   SIDE_TAB_ROW_CLASS,
-  SIDE_TAB_SECTION_ROW_CLASS,
+  SIDE_TAB_TWO_LINE_ROW_CLASS,
+  SIDE_TAB_TWO_LINE_TRAILING_CLASS,
   SIDE_TAB_TITLE_CLASS,
 } from "./side-strip-tokens";
 import { StripNeedsYouPill } from "./strip-needs-you-pill";
@@ -281,7 +282,7 @@ function StripPromptRow(props: {
       className={cn(
         "group/side-tab flex items-center text-start text-foreground outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50 [-webkit-app-region:no-drag]",
         SIDE_TAB_ROW_CLASS,
-        SIDE_TAB_SECTION_ROW_CLASS.twoLine,
+        SIDE_TAB_TWO_LINE_ROW_CLASS,
         SIDE_TAB_HOVER_CLASS,
       )}
     >
@@ -296,7 +297,12 @@ function StripPromptRow(props: {
         </span>
         {sectionStyleOf(entry.row).detail}
       </span>
-      <span className="mt-1 flex shrink-0 items-center self-start">
+      <span
+        className={cn(
+          "flex shrink-0 items-center",
+          SIDE_TAB_TWO_LINE_TRAILING_CLASS,
+        )}
+      >
         {wait?.node}
       </span>
     </button>
