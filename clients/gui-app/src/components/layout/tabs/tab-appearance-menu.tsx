@@ -187,10 +187,11 @@ function EpicOrganizationMenu(props: {
  * organization and whether the Labels window is editable.
  *
  * The tab strip already resolved every open tab's context when it mounted.
- * Standing in with that answer while this tab's own lookup is in flight puts
+ * Standing in with that answer until this tab's own lookup first answers puts
  * the organization items in the menu the moment it opens, instead of after a
- * round trip to the cloud. Once the own lookup settles its answer is the only
- * one read, so a task deleted since the strip's batch drops its items.
+ * round trip to the cloud. From then on only the own answer is read, even
+ * while it refreshes, so a task deleted since the strip's batch stays without
+ * its items.
  */
 function useTabTaskContext(
   epicId: string,
@@ -202,7 +203,7 @@ function useTabTaskContext(
     enabled: organization?.supported ?? false,
   });
   const standIn =
-    userId === null || !contexts.isFetching
+    userId === null || !contexts.isPending
       ? null
       : findCachedTaskContext(queryClient, { hostId: null, userId }, epicId);
   const answered = contexts.tasksById.get(epicId);

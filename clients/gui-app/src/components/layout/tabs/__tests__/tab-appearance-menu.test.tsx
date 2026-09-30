@@ -103,6 +103,7 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
       tasksById,
       localHomedTaskIds: new Set(query.data?.localHomedTaskIds ?? []),
       isFetching: query.isFetching,
+      isPending: query.isPending,
       error: query.error,
       refetch: () => Promise.resolve(),
       refetchBatches: [],
@@ -387,6 +388,55 @@ describe("tab appearance and grouping controls", () => {
         ).toBeNull();
         expect(screen.queryByText("Tab appearance")).toBeNull();
         expect(screen.queryByRole("menuitem", { name: /Retry/i })).toBeNull();
+      },
+    );
+
+    it.each(unresolvedResolutions)(
+      "keeps the controls away while the tab's own lookup refetches after settling as $status",
+      async (resolution) => {
+        queryClient.setQueryData(
+          stripBatchKey("user-1"),
+          taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+        );
+        // The first answer settles the lookup; every later call stays in
+        // flight, which is what a background refetch looks like to the menu.
+        organizationState.loadTaskContext
+          .mockResolvedValueOnce({
+            tasks: { "epic-a": resolution },
+            localHomedTaskIds: [],
+          })
+          .mockReturnValue(
+            new Promise<GetTaskContextsResponse>(() => undefined),
+          );
+        renderMenu();
+        await waitFor(() =>
+          expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull(),
+        );
+        const ownLookupKey = hostQueryKeys.epicTaskContexts(
+          "host-1",
+          "user-1",
+          ["epic-a"],
+        );
+
+        act(() => {
+          void queryClient.refetchQueries({
+            queryKey: ownLookupKey,
+            exact: true,
+          });
+        });
+
+        await waitFor(() =>
+          expect(organizationState.loadTaskContext).toHaveBeenCalledTimes(2),
+        );
+        expect(queryClient.isFetching({ queryKey: ownLookupKey })).toBe(1);
+        expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+        expect(
+          screen.queryByRole("menuitem", { name: "Task appearance" }),
+        ).toBeNull();
+        expect(
+          screen.queryByRole("menuitem", { name: "Add to group" }),
+        ).toBeNull();
+        expect(screen.queryByText("Tab appearance")).toBeNull();
       },
     );
 

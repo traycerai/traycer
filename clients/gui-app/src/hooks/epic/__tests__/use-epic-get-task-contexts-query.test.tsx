@@ -189,6 +189,57 @@ describe("useEpicGetTaskContexts", () => {
     });
   });
 
+  it("is pending until a batch first answers, and not while an answered batch refetches", async () => {
+    // `isFetching` cannot tell these two apart, which is what a reader needs to
+    // know to keep trusting a settled answer through its own refresh.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    let answerFirst: (response: GetTaskContextsResponse) => void = () =>
+      undefined;
+    request.mockImplementationOnce(
+      () =>
+        new Promise<GetTaskContextsResponse>((resolve) => {
+          answerFirst = resolve;
+        }),
+    );
+    const { result } = renderHook(
+      () => useEpicGetTaskContexts(["epic-a"], USER_ID, { enabled: true }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledTimes(1);
+    });
+    expect(result.current.isPending).toBe(true);
+    expect(result.current.isFetching).toBe(true);
+
+    await act(async () => {
+      answerFirst({
+        tasks: {
+          "epic-a": {
+            status: "found",
+            task: listTaskLight("epic-a", "Title epic-a"),
+          },
+        },
+      });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(false);
+    });
+
+    request.mockImplementationOnce(
+      () => new Promise<GetTaskContextsResponse>(() => undefined),
+    );
+    act(() => {
+      void result.current.refetch();
+    });
+    await waitFor(() => {
+      expect(result.current.isFetching).toBe(true);
+    });
+    expect(result.current.isPending).toBe(false);
+  });
+
   it("merges @1.4 recent activity into found rows and leaves it absent for older responses", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
