@@ -1,3 +1,4 @@
+import { useProvidersLoginOwnershipForClient } from "@/hooks/providers/use-providers-login-ownership";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
@@ -169,7 +170,9 @@ export function AddProviderProfileDialog({
   const ensurePack = useProvidersEnsurePackForClient(client);
   const recolorProfile = useRecolorProviderProfileForClient(client);
   const renameProfile = useRenameProviderProfileForClient(client);
+  const supportsLoginOwnership = useProvidersLoginOwnershipForClient(client);
   const flow = useProviderProfileLoginFlow({
+    supportsLoginOwnership,
     mode: "create",
     providerId: state.providerId,
     existingProfileId: null,

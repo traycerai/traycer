@@ -23,6 +23,13 @@ type AwaitLoginVariables = {
   readonly providerId: string;
   readonly profileId: string | null;
 };
+// Mirrors `providers.cancelLogin`'s request fields the mocked hook forwards -
+// same rationale as `AwaitLoginVariables` above.
+type CancelLoginVariables = {
+  readonly providerId: string;
+  readonly profileId: string | null;
+  readonly holderId: string | null;
+};
 // Mirrors only the fields the ambient flow hook actually reads off
 // `providers.awaitLogin`'s response (`codeRejected`, `state.auth.status`,
 // `refusal`) - not the full `ProviderCliState` schema, since the mocked hook
@@ -128,8 +135,16 @@ vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => ({
 vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => ({
   useProvidersCancelLogin: () => ({
     mutate: mocks.cancelLoginMutate,
+    mutateAsync: (variables: CancelLoginVariables) => {
+      mocks.cancelLoginMutate(variables);
+      return Promise.resolve({ cancelled: true });
+    },
     isPending: mocks.cancelLoginPending,
   }),
+}));
+vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({
+  useProvidersLoginOwnership: () => false,
+  useProvidersLoginOwnershipForClient: () => false,
 }));
 vi.mock("@/hooks/providers/use-providers-submit-login-code-mutation", () => ({
   useProvidersSubmitLoginCode: () => ({
@@ -1559,6 +1574,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(mocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "claude-code",
       profileId: null,
+      holderId: null,
     });
   });
 
@@ -1704,6 +1720,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(mocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "claude-code",
       profileId: null,
+      holderId: null,
     });
   });
 

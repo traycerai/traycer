@@ -28,6 +28,20 @@ const hostHomeDir: string = hostHomeDirValue;
 const barrierDir: string = barrierDirValue;
 const script: string = scriptPath;
 
+// See the node actuator's `writeBarrier`: a stat-visible barrier path is not
+// necessarily a complete one, since `writeFile` truncates-then-writes. A
+// same-directory temp path plus `rename` makes it atomic. The temp name is
+// per-CALL (not just per-process): `descendant()`'s SIGTERM handler and its
+// normal release path can both target `descendant-exited`, and a temp name
+// keyed only on the pid would let those two calls share one temp file.
+let barrierWriteSeq = 0;
+async function writeBarrier(path: string, content: string): Promise<void> {
+  barrierWriteSeq += 1;
+  const tmpPath = `${path}.tmp-${process.pid}-${barrierWriteSeq}`;
+  await writeFile(tmpPath, content);
+  await rename(tmpPath, path);
+}
+
 async function waitFor(path: string): Promise<void> {
   const deadline = Date.now() + MAX_WAIT_MS;
   while (Date.now() < deadline) {
@@ -56,34 +70,24 @@ async function waitForProcessGone(pid: number): Promise<boolean> {
   return false;
 }
 
-// Publishes a barrier file the test reads back by CONTENT, not just
-// existence. `writeFile` truncates-then-streams: a reader that stats the
-// path between those two steps can observe an empty file. Writing to a temp
-// name in the same directory and renaming over the real name makes the
-// publish atomic from the reader's side - it only ever observes the file
-// absent or fully written.
-async function publish(path: string, content: string): Promise<void> {
-  const tmp = `${path}.tmp-${process.pid}`;
-  await writeFile(tmp, content);
-  await rename(tmp, path);
-}
-
 async function descendant(): Promise<void> {
-  // `on` + latch, not `once`: the supervisor signals this descendant through
-  // its group and then directly. A second TERM must not restore Node's
-  // default signal action while the first handler is publishing its barrier.
+  // `on` + latch, not `once`: see the node actuator's `descendant()`. A
+  // repeated TERM must not hit the default action mid-write.
   let termHandled = false;
   process.on("SIGTERM", () => {
     if (termHandled) return;
     termHandled = true;
-    void publish(
+    void writeBarrier(
       join(barrierDir, "descendant-exited"),
       String(process.pid),
     ).then(() => process.exit(0));
   });
-  await publish(join(barrierDir, "descendant-ready"), String(process.pid));
+  await writeBarrier(join(barrierDir, "descendant-ready"), String(process.pid));
   await waitFor(join(barrierDir, "descendant-release"));
-  await publish(join(barrierDir, "descendant-exited"), String(process.pid));
+  await writeBarrier(
+    join(barrierDir, "descendant-exited"),
+    String(process.pid),
+  );
 }
 
 async function actuatorWrapper(): Promise<void> {
@@ -163,11 +167,14 @@ async function supervisor(): Promise<void> {
     }
     // E normally writes this from its signal handler. C records the barrier
     // too so the handoff cannot disappear before the reap is observable.
-    await publish(
+    await writeBarrier(
       join(barrierDir, "descendant-exited"),
       String(descendantPid ?? -1),
     );
-    await publish(join(barrierDir, "supervisor-exited"), String(process.pid));
+    await writeBarrier(
+      join(barrierDir, "supervisor-exited"),
+      String(process.pid),
+    );
     process.exit(0);
   };
   process.once("SIGTERM", () => {
@@ -195,7 +202,7 @@ async function supervisor(): Promise<void> {
           // "bind-actuator" stdout line and then immediately reads this
           // file. Publishing first raced the write - the reader could
           // observe the stdout line before the file existed.
-          await publish(
+          await writeBarrier(
             join(barrierDir, "wrapper-bind"),
             JSON.stringify({
               wrapperPid,
@@ -288,7 +295,7 @@ async function helper(): Promise<void> {
               readonly wrapperPid: number;
               readonly descendantPid: number;
             };
-            await publish(
+            await writeBarrier(
               join(barrierDir, "helper-rebound"),
               JSON.stringify({
                 helperPid: process.pid,
