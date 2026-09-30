@@ -347,7 +347,14 @@ describe("runner Sentry capture", () => {
     );
   });
 
-  it("emits the error envelope (and logs the failure) before consulting the repeat gate", async () => {
+  // This pins only the NDJSON envelope's order relative to the gate.
+  // `runtime.logger.error("CLI command failed", ...)` cannot be pinned the
+  // same way without mocking a production module: `createCliLogger`
+  // (../logger.ts) writes error lines through `appendFileSync` to a log
+  // file, not to stdout/stderr, so nothing this suite already spies on
+  // observes it - and this suite deliberately mocks only `@sentry/node` and
+  // `../sentry-repeat-gate`, not `../logger` or `node:fs`.
+  it("emits the error envelope before consulting the repeat gate", async () => {
     const { CLI_ERROR_CODES, CliError } = await import("../errors");
     const err = new CliError({
       code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,

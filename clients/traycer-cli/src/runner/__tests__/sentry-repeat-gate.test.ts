@@ -142,14 +142,25 @@ describe("messageTemplate", () => {
   // non-word character, so an apostrophe inside a word ("host's",
   // "Desktop's") is left as plain text rather than swallowed as `'<q>'`.
   it("leaves apostrophes inside words as text, while still folding a genuinely quoted value", () => {
-    const withoutParen =
+    // The varying cause sits BETWEEN the two apostrophes - "host's" ...
+    // "Desktop's" - which is exactly where the round-1 regex
+    // (`/'[^']*'/g`, with no non-word-character anchor) collapsed it: it
+    // opened a quoted span at the FIRST apostrophe and closed it at the
+    // SECOND, swallowing everything between as `'<q>'` regardless of what
+    // varied there. A variant that only changed text AFTER the second
+    // apostrophe would still differ under that old regex too, so it would
+    // not have caught the bug - this pair only differs in the part the old
+    // regex ate.
+    const econnrefused =
       "the running host's RPC endpoint is unreachable (ECONNREFUSED); Desktop's agent will restart it";
-    const withParen =
-      "the running host's RPC endpoint is unreachable (ECONNREFUSED); Desktop's agent will restart it (the pid file names a process that is not the host)";
+    const pidFileStale =
+      "the running host's RPC endpoint is unreachable (the pid file names a process that is not the host); Desktop's agent will restart it";
 
-    expect(messageTemplate(withoutParen)).not.toBe(messageTemplate(withParen));
-    expect(messageTemplate(withoutParen)).toContain("host's");
-    expect(messageTemplate(withoutParen)).toContain("Desktop's");
+    expect(messageTemplate(econnrefused)).not.toBe(
+      messageTemplate(pidFileStale),
+    );
+    expect(messageTemplate(econnrefused)).toContain("host's");
+    expect(messageTemplate(econnrefused)).toContain("Desktop's");
   });
 
   it("still folds a quoted property name after a non-word character", () => {
@@ -218,6 +229,81 @@ describe("stackSite", () => {
     error.stack = "no frames in here at all";
 
     expect(stackSite(error)).toBe("-");
+  });
+
+  // Whether Node's own event-loop frame (`processTicksAndRejections`) or the
+  // module-entry frame shows up in a captured stack depends on timing and the
+  // Node version, not on where the CLI's own code threw - so both must be
+  // skipped, and skipping them must not change the site two otherwise-
+  // identical CLI frame lists produce.
+  it("skips Node's own frames: a stack with them inserted gives the SAME site as one without, and neither position leaks through", () => {
+    const withNodeFrames = new Error("boom");
+    withNodeFrames.stack = [
+      "Error: boom",
+      "    at throwHelper (/app/src/runner/thing.ts:10:5)",
+      "    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)",
+      "    at callSite (/app/src/runner/thing.ts:20:9)",
+      "    at Object.<anonymous> (/app/src/runner/thing.ts:30:3)",
+      "    at node:internal/main/run_main_module:33:47",
+    ].join("\n");
+
+    const withoutNodeFrames = new Error("boom");
+    withoutNodeFrames.stack = [
+      "Error: boom",
+      "    at throwHelper (/app/src/runner/thing.ts:10:5)",
+      "    at callSite (/app/src/runner/thing.ts:20:9)",
+      "    at Object.<anonymous> (/app/src/runner/thing.ts:30:3)",
+    ].join("\n");
+
+    const site = stackSite(withNodeFrames);
+    expect(site).toBe(stackSite(withoutNodeFrames));
+    expect(site).not.toContain("104:5");
+    expect(site).not.toContain("33:47");
+  });
+
+  it('returns "-" when the only positioned frames are Node\'s own', () => {
+    const error = new Error("boom");
+    error.stack = [
+      "Error: boom",
+      "    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)",
+      "    at node:internal/main/run_main_module:33:47",
+    ].join("\n");
+
+    expect(stackSite(error)).toBe("-");
+  });
+
+  // Verified empirically (15 runs of a standalone script under this same
+  // runtime) before trusting it as a test: an extra `setImmediate` queued
+  // ahead of time on one of the two calls does not change the captured site,
+  // because the awaited macrotask boundary is not part of the synchronous
+  // frame list `stackSite` reads - the two calls still throw from the SAME
+  // call site inside the loop below.
+  it("gives the same site across an awaited setImmediate, regardless of what else was queued first", async () => {
+    async function throwAfterImmediate(): Promise<never> {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      throwHelper();
+    }
+
+    const sites: string[] = [];
+    for (let i = 0; i < 2; i += 1) {
+      if (i === 1) {
+        // Queue an extra setImmediate ahead of time on the second iteration
+        // only - a difference in what else was pending, not in the site.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      }
+      try {
+        await throwAfterImmediate();
+      } catch (error) {
+        sites.push(stackSite(error));
+      }
+    }
+
+    expect(sites[0]).toBe(sites[1]);
+    expect(sites[0]).not.toBe("-");
   });
 });
 
@@ -532,7 +618,7 @@ describe("recordCliFailureForSentry", () => {
     expect(writeMock).not.toHaveBeenCalled();
   });
 
-  it("still returns the decision, without throwing, when the write fails", async () => {
+  it("returns a report decision unchanged, without throwing, when the write fails", async () => {
     const io = fakeRepeatGateIo({
       read: async () => null,
       write: async () => {
@@ -543,6 +629,58 @@ describe("recordCliFailureForSentry", () => {
     const decision = await recordCliFailureForSentry("dev", "key-z", io);
 
     expect(decision).toEqual({ kind: "report", repeatsSinceLastReport: 0 });
+  });
+
+  // A suppress decision cannot be remembered if the write that would have
+  // recorded it fails - the next run would read the SAME on-disk window and
+  // suppress again, silently, forever. So a write failure downgrades a
+  // suppress to a fresh report instead of returning it unchanged; a report
+  // decision (the case above) has nothing to lose from the same failure and
+  // is returned as-is.
+  it("downgrades a suppress decision to a fresh report when the write fails", async () => {
+    const nowMs = 1_000_000;
+    const openWindowLedger = JSON.stringify({
+      version: 1,
+      entries: {
+        "key-suppress": {
+          windowStartMs: nowMs - 10 * 60 * 1000,
+          suppressed: 2,
+        },
+      },
+    });
+    const io = fakeRepeatGateIo({
+      now: () => nowMs,
+      read: async () => openWindowLedger,
+      write: async () => {
+        throw new Error("disk full");
+      },
+    });
+
+    const decision = await recordCliFailureForSentry("dev", "key-suppress", io);
+
+    expect(decision).toEqual({ kind: "report", repeatsSinceLastReport: 0 });
+  });
+
+  it("control: the same ledger with a write that succeeds gives the real suppress decision", async () => {
+    const nowMs = 1_000_000;
+    const openWindowLedger = JSON.stringify({
+      version: 1,
+      entries: {
+        "key-suppress": {
+          windowStartMs: nowMs - 10 * 60 * 1000,
+          suppressed: 2,
+        },
+      },
+    });
+    const io = fakeRepeatGateIo({
+      now: () => nowMs,
+      read: async () => openWindowLedger,
+      write: async () => {},
+    });
+
+    const decision = await recordCliFailureForSentry("dev", "key-suppress", io);
+
+    expect(decision).toEqual({ kind: "suppress", repeatsInWindow: 3 });
   });
 
   it("passes cliSentryRepeatLedgerPath(environment) to both read and write", async () => {

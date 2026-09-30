@@ -16,13 +16,13 @@ import { isErrnoException } from "./errors";
 // are counted in a small file under the CLI home, and the count rides on the
 // next report of that kind once the window has passed.
 //
-// Fail-open by construction: a ledger that cannot be read reports, exactly as
-// the runner did before the gate existed. One that can be read but not written
-// (a full disk, a home made read-only) turns the gate off on that machine: no
-// window is ever recorded, so every run reports, again as before the gate, and
-// the count on those reports is stale. Concurrent invocations race on the
-// file; the race costs at most an extra report or a lost count, never a missed
-// first report.
+// Fail-open by construction: a ledger that cannot be read or cannot be written
+// reports, exactly as the runner did before the gate existed. A machine whose
+// ledger stops being writable (a full disk, a home made read-only) therefore
+// has the gate off until it is writable again: every run reports, even inside
+// a window the file recorded earlier, and the counts on those reports are not
+// reliable. Concurrent invocations race on the file; the race costs at most an
+// extra report or a lost count, never a missed first report.
 
 export const CLI_SENTRY_REPEAT_WINDOW_MS = 60 * 60 * 1000;
 // Dropped on write whatever their count, so a failure that stopped leaves no
@@ -91,14 +91,19 @@ export function cliSentryRepeatKey(
 }
 
 // The first stack positions of a thrown Error, `line:col` without their paths.
-// Stable for one build on one machine, which is all a per-machine gate needs; a
-// new CLI build is a new key and one fresh report. Frames with no position
-// (`native`, `<anonymous>`) are skipped. "-" when there is no stack to read.
+// Node's own frames (`node:internal/...`) are skipped: whether the event-loop
+// frame appears depends on what else happened to be queued, child-process
+// internals end on one of two paths by timing, and their positions move with
+// the Node version. Measured, keeping them split one failure over two keys.
+// What remains is the CLI's own code, fixed for a build: a new CLI build is a
+// new key and one fresh report. Frames with no position (`<anonymous>`,
+// `Promise.all (index N)`) are skipped too. "-" when there is no stack to read.
 export function stackSite(error: unknown): string {
   if (!(error instanceof Error) || typeof error.stack !== "string") return "-";
   const positions: string[] = [];
   for (const line of error.stack.split("\n")) {
     if (!/^\s+at\s/.test(line)) continue;
+    if (/\(node:|^\s+at (async )?node:/.test(line)) continue;
     const position = /:(\d+):(\d+)\)?\s*$/.exec(line);
     if (position === null) continue;
     positions.push(`${position[1]}:${position[2]}`);
@@ -230,8 +235,12 @@ export async function recordCliFailureForSentry(
       entries: Object.fromEntries(next),
     });
   } catch {
-    // The decision still stands: a report goes out, and a suppression is
-    // inside a window the file already recorded. Only this count is lost.
+    // Nothing this run decided can be remembered, so the next run reads the
+    // same file and decides the same way. Report rather than suppress on
+    // state the gate can no longer keep.
+    if (decision.kind === "suppress") {
+      return { kind: "report", repeatsSinceLastReport: 0 };
+    }
   }
   return decision;
 }
