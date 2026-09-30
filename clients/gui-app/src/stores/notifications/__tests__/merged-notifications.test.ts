@@ -830,6 +830,62 @@ describe("merged notifications feed", () => {
     });
   });
 
+  it("routes a parked managed-command delivery back to the chat holding it", () => {
+    expect(
+      rowFromHostEntry({
+        id: "managed-command.delivery:command-3",
+        updatedAt: 10,
+        readAt: null,
+        kind: "host.operation.finished",
+        sourceRef: "command-3",
+        severity: "needs_action",
+        outcome: "completed",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        payload: {
+          kind: "managed_command_delivery_parked",
+          operation: "managed-command.delivery",
+          title: "Command output is waiting",
+          message:
+            "A managed command finished but the chat couldn't receive it.",
+          commandId: "command-3",
+          epicId: "epic-1",
+          chatId: "chat-1",
+        },
+      }),
+    ).toMatchObject({
+      title: "Command output is waiting",
+      body: "A managed command finished but the chat couldn't receive it.",
+      payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+    });
+  });
+
+  it("leaves a legacy parked-delivery row (no epicId/chatId) with no destination", () => {
+    const row = rowFromHostEntry({
+      id: "managed-command.delivery:command-4",
+      updatedAt: 10,
+      readAt: null,
+      kind: "host.operation.finished",
+      sourceRef: "command-4",
+      severity: "needs_action",
+      outcome: "completed",
+      epicId: null,
+      chatId: null,
+      payload: {
+        kind: "managed_command_delivery_parked",
+        operation: "managed-command.delivery",
+        title: "Command output is waiting",
+        message: "A managed command finished but the chat couldn't receive it.",
+        commandId: "command-4",
+      },
+    });
+    expect(row).toMatchObject({
+      title: "Command output is waiting",
+      body: "A managed command finished but the chat couldn't receive it.",
+    });
+    expect(row.payload).toBeNull();
+  });
+
   it("renders a newer host's unknown operation payload from its common fields, with no destination", () => {
     const row = rowFromHostEntry({
       id: "testbox.provision:command-2",
