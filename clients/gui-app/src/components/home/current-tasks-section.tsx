@@ -40,7 +40,8 @@ import {
 } from "@/hooks/epic/use-epic-set-pinned-mutation";
 import { useCurrentTasks } from "@/hooks/home/use-current-tasks";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
-import { useTaskWorktreeMetadata } from "@/hooks/worktree/use-task-worktree-metadata-query";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useTaskWorktreeMetadataForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import {
@@ -89,14 +90,11 @@ export function CurrentTasksSection(): ReactNode {
     chatIds: [],
     enabled: epicIds.length > 0,
   });
-  // The same worktree read History makes, so a row can show its task's PRs.
-  const { worktreesByEpicId } = useTaskWorktreeMetadata(epicIds);
   const newWindowFlow = useHistoryOpenInNewWindowFlow();
   const groupRowProps = {
     onRowKeyDown,
     onSetPinned,
     pendingPinIds,
-    worktreesByEpicId,
     newWindowFlow,
   };
   const isEmpty = epicIds.length === 0;
@@ -195,10 +193,6 @@ function CurrentTaskGroup(props: {
   readonly onSetPinned: (item: HistoryItem, pinned: boolean) => void;
   readonly pendingPinIds: ReadonlySet<string>;
   readonly onRowKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
-  readonly worktreesByEpicId: ReadonlyMap<
-    string,
-    readonly WorktreeHostEntryV12[]
-  >;
   readonly newWindowFlow: HistoryNewWindowFlow;
 }): ReactNode {
   const headingId = useId();
@@ -230,9 +224,6 @@ function CurrentTaskGroup(props: {
             onRowKeyDown={props.onRowKeyDown}
             onSetPinned={props.onSetPinned}
             isPinPending={props.pendingPinIds.has(item.epicId)}
-            worktrees={
-              props.worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES
-            }
             newWindowFlow={props.newWindowFlow}
           />
         ))}
@@ -263,11 +254,11 @@ function CurrentTaskRow(props: {
   readonly onSetPinned: (item: HistoryItem, pinned: boolean) => void;
   readonly isPinPending: boolean;
   readonly onRowKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
-  readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly newWindowFlow: HistoryNewWindowFlow;
 }): ReactNode {
   const openItem = useHistoryOpenItem({ onSelectEpic: null, onOpenItem: null });
   const item = props.item;
+  const worktrees = useCurrentTaskWorktrees(item);
   const isPhase = item.taskType === "phase";
   const isOpen = useEpicCanvasStore(
     (state) => state.resolveTabIdForEpic(item.epicId) !== null,
@@ -328,9 +319,25 @@ function CurrentTaskRow(props: {
       pinAlwaysVisible
       showOpenBadge={false}
       isOpen={isOpen}
-      worktrees={props.worktrees}
+      worktrees={worktrees}
     />
   );
+}
+
+// Current tasks spans every host, so each row reads its own task's worktrees
+// (where its PRs come from) from the host that owns the task, falling back to
+// the window's host for a cloud task. Reading per row also means a row hidden
+// behind "Show more" probes nothing until it is shown.
+function useCurrentTaskWorktrees(
+  item: HistoryItem,
+): readonly WorktreeHostEntryV12[] {
+  const client = useHostClientForHostId(item.hostId ?? null);
+  const epicIds = useMemo(() => [item.epicId], [item.epicId]);
+  const { worktreesByEpicId } = useTaskWorktreeMetadataForClient(
+    client,
+    epicIds,
+  );
+  return worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES;
 }
 
 function pinnedTasksUnavailableNotice(pinnedCount: number): string {

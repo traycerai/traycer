@@ -20,6 +20,35 @@ const testState = vi.hoisted(() => ({
   isNewWindowAvailable: false,
 }));
 
+// Stands in for a host's client: what a row needs from one is only that the
+// worktree read is handed the client of the host it asked for.
+interface FakeHostClient {
+  readonly hostId: string | null;
+}
+
+const hostClients = vi.hoisted(() => {
+  const clientsByHostId = new Map<string | null, FakeHostClient>();
+  return {
+    askedHostIds: [] as Array<string | null>,
+    worktreeReads: [] as Array<{
+      readonly client: FakeHostClient | null;
+      readonly epicIds: readonly string[];
+    }>,
+    clientFor: (hostId: string | null): FakeHostClient => {
+      const existing = clientsByHostId.get(hostId);
+      if (existing !== undefined) return existing;
+      const created: FakeHostClient = { hostId };
+      clientsByHostId.set(hostId, created);
+      return created;
+    },
+    reset: (): void => {
+      clientsByHostId.clear();
+      hostClients.askedHostIds.length = 0;
+      hostClients.worktreeReads.length = 0;
+    },
+  };
+});
+
 const pinSupport = vi.hoisted(() =>
   vi.fn<(hostId: string | null) => boolean>(),
 );
@@ -75,14 +104,36 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
 }));
 
-// Reads the host-wide worktree listing through `useHostClient()`, which this
-// fixture has no provider for. Rows only need the per-task result.
+// A row reads its own task's worktrees from the host that owns the task. Both
+// hooks resolve a host runtime this fixture has no provider for, so the client
+// lookup hands out one recognisable fake per host id and the worktree read
+// records which client and task ids it was asked about.
+vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-client-for-host-id")
+    >();
+  return {
+    ...actual,
+    useHostClientForHostId: (hostId: string | null): FakeHostClient => {
+      hostClients.askedHostIds.push(hostId);
+      return hostClients.clientFor(hostId);
+    },
+  };
+});
+
 vi.mock("@/hooks/worktree/use-task-worktree-metadata-query", () => ({
-  useTaskWorktreeMetadata: () => ({
-    worktreesByEpicId: testState.worktreesByEpicId,
-    isFetching: false,
-    error: null,
-  }),
+  useTaskWorktreeMetadataForClient: (
+    client: FakeHostClient | null,
+    epicIds: readonly string[],
+  ) => {
+    hostClients.worktreeReads.push({ client, epicIds });
+    return {
+      worktreesByEpicId: testState.worktreesByEpicId,
+      isFetching: false,
+      error: null,
+    };
+  },
 }));
 
 // The real flow reads the router and the desktop windows bridge, neither of
@@ -296,6 +347,7 @@ describe("<CurrentTasksSection />", () => {
     testState.setPinnedMutate.mockReset();
     testState.pendingPinIds = new Set();
     testState.worktreesByEpicId = new Map();
+    hostClients.reset();
     testState.openInBackground.mockReset();
     testState.requestOpenInNewWindow.mockReset();
     testState.isNewWindowAvailable = false;
@@ -751,6 +803,64 @@ describe("<CurrentTasksSection />", () => {
       expect(
         within(rowItem("b")).queryByTestId("task-history-prs-epic-b"),
       ).toBeNull();
+    });
+  });
+
+  describe("worktree reads", () => {
+    const readEpicIds = () =>
+      new Set(hostClients.worktreeReads.flatMap((read) => read.epicIds));
+    const clientReadFor = (epicId: string) =>
+      hostClients.worktreeReads.find((read) => read.epicIds.includes(epicId))
+        ?.client;
+
+    it("reads a task's worktrees from the host that owns it, and from the window's host when it names none", () => {
+      setGroups({
+        open: [
+          task("a", { hostId: "host-b", isLocalHome: true }),
+          task("c", {}),
+        ],
+      });
+      renderSection();
+
+      expect(hostClients.askedHostIds).toContain("host-b");
+      expect(hostClients.askedHostIds).toContain(null);
+      expect(clientReadFor("epic-a")).toBe(hostClients.clientFor("host-b"));
+      expect(clientReadFor("epic-c")).toBe(hostClients.clientFor(null));
+      expect(hostClients.clientFor("host-b")).not.toBe(
+        hostClients.clientFor(null),
+      );
+    });
+
+    it("reads only the task each row shows", () => {
+      setGroups({ open: [task("a", {}), task("b", {})] });
+      renderSection();
+
+      expect(hostClients.worktreeReads.map((read) => read.epicIds)).toEqual(
+        expect.arrayContaining([["epic-a"], ["epic-b"]]),
+      );
+      expect(
+        hostClients.worktreeReads.every((read) => read.epicIds.length === 1),
+      ).toBe(true);
+    });
+
+    it("reads nothing for rows hidden behind 'Show more' until they are shown", () => {
+      setGroups({ open: tasks("o", 7) });
+      renderSection();
+
+      expect(rowIds()).toHaveLength(5);
+      expect([...readEpicIds()].toSorted()).toEqual([
+        "epic-o1",
+        "epic-o2",
+        "epic-o3",
+        "epic-o4",
+        "epic-o5",
+      ]);
+
+      fireEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
+
+      expect(rowIds()).toHaveLength(7);
+      expect(readEpicIds().has("epic-o6")).toBe(true);
+      expect(readEpicIds().has("epic-o7")).toBe(true);
     });
   });
 
