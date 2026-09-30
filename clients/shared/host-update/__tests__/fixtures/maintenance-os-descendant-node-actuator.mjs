@@ -23,8 +23,20 @@ if (
 // is atomic within a single filesystem, which every barrier directory here
 // is (always created under the same host home / temp root as the file it
 // receives).
+//
+// The temp path is per-CALL, not just per-process: the descendant's own
+// SIGTERM handler and its normal release path can both target
+// `descendant-exited` (one process, two code paths that race each other),
+// so a temp name keyed only on `process.pid` lets two concurrent
+// `writeBarrier` calls share one temp file - overlapping `writeFile`s, and
+// the second `rename` throwing ENOENT once the first has already moved it.
+// Two full `writeBarrier` calls racing to publish the SAME target through
+// DIFFERENT temp files are fine either way: both renames succeed, and
+// whichever lands second just republishes the same content.
+let barrierWriteSeq = 0;
 async function writeBarrier(path, content) {
-  const tmpPath = `${path}.tmp-${process.pid}`;
+  barrierWriteSeq += 1;
+  const tmpPath = `${path}.tmp-${process.pid}-${barrierWriteSeq}`;
   await writeFile(tmpPath, content);
   await rename(tmpPath, path);
 }

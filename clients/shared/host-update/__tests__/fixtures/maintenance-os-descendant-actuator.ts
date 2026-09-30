@@ -30,9 +30,14 @@ const script: string = scriptPath;
 
 // See the node actuator's `writeBarrier`: a stat-visible barrier path is not
 // necessarily a complete one, since `writeFile` truncates-then-writes. A
-// same-directory temp path plus `rename` makes it atomic.
+// same-directory temp path plus `rename` makes it atomic. The temp name is
+// per-CALL (not just per-process): `descendant()`'s SIGTERM handler and its
+// normal release path can both target `descendant-exited`, and a temp name
+// keyed only on the pid would let those two calls share one temp file.
+let barrierWriteSeq = 0;
 async function writeBarrier(path: string, content: string): Promise<void> {
-  const tmpPath = `${path}.tmp-${process.pid}`;
+  barrierWriteSeq += 1;
+  const tmpPath = `${path}.tmp-${process.pid}-${barrierWriteSeq}`;
   await writeFile(tmpPath, content);
   await rename(tmpPath, path);
 }
