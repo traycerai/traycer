@@ -7,6 +7,7 @@
  */
 
 import { quoteArg } from "@traycer/protocol/host/agent/gui/tool-input-detail";
+import type { ToolInputDetail } from "@traycer/protocol/persistence/epic/content-blocks";
 
 const SUMMARY_MAX = 80;
 const ELLIPSIS = "…";
@@ -53,6 +54,37 @@ function trim(value: string): string {
 export function toSummaryLine(value: string): string | null {
   const singleLine = trim(value);
   return singleLine.length === 0 ? null : singleLine;
+}
+
+/**
+ * A segment HEADER's one-line text. The persisted summary is capped at
+ * {@link SUMMARY_MAX} characters for the places that want a short line (the
+ * approval card, find previews, the recent-decisions log). A header is sized by
+ * layout instead: its text span truncates itself at the width the row actually
+ * has, which follows the reading width. So when the summary is exactly this
+ * cap's cut of an input the detail still holds whole, the header gets that
+ * whole input on one line and its own CSS ends it - rather than every command
+ * stopping at 80 characters however wide the column is.
+ *
+ * Exact, not a guess: the whole input is used only when re-applying the cap to
+ * it reproduces the persisted summary, so a summary that is some other line (a
+ * description, a reconstructed command) is never replaced.
+ */
+export function toolHeaderLine(
+  summary: string | null,
+  detail: ToolInputDetail | null,
+): string | null {
+  if (summary === null || detail === null) return summary;
+  const whole =
+    detail.kind === "command"
+      ? detail.command
+      : detail.entries.length === 1
+        ? detail.entries[0].value
+        : null;
+  if (whole === null) return summary;
+  // An input within the cap re-caps to itself, so this is the whole input
+  // exactly when the summary is its cut, and the summary itself otherwise.
+  return trim(whole) === summary ? whole.trim().replace(/\s+/g, " ") : summary;
 }
 
 function summarizeFileRange(record: Record<string, unknown>): string | null {
