@@ -161,6 +161,24 @@ async function waitForFile(path: string, maxWaitMs: number): Promise<void> {
   throw new Error(`timed out waiting for ${path}`);
 }
 
+// The fixtures now write every barrier file atomically (temp path + a
+// same-directory rename), so a stat-visible file is never a
+// truncated-but-not-yet-written one - but this content check is a second,
+// independent guard for `term-grace-started`, the one caller actually seen
+// failing on that race (`readFile` returning "" and `Number("")` being 0).
+async function waitForNonEmptyFile(
+  path: string,
+  maxWaitMs: number,
+): Promise<void> {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    const content = await readFile(path, "utf8").catch(() => "");
+    if (content.length > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`timed out waiting for non-empty ${path}`);
+}
+
 function spawnAttemptCompetitor(
   hostHomeDir: string,
   barrierDir: string,
@@ -607,7 +625,7 @@ describe("withUpdateContender - canonical first-run boundary", () => {
 
     process.kill(rebound.supervisorPid, "SIGTERM");
     await waitForFile(join(barrierDir, "descendant-term-received"), 10_000);
-    await waitForFile(join(barrierDir, "term-grace-started"), 10_000);
+    await waitForNonEmptyFile(join(barrierDir, "term-grace-started"), 10_000);
     const graceStartedAt = Number(
       await readFile(join(barrierDir, "term-grace-started"), "utf8"),
     );
